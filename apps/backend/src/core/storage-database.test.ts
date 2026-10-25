@@ -558,6 +558,46 @@ describe("StorageDatabase read observation", () => {
     expect(db.readStoreRow("items", "k1")).toEqual({ id: "k1", n: 1 });
     expect(fetched).toHaveLength(2);
   });
+
+  test.each(["commit", "rollback"] as const)(
+    "keyed reads reuse the pending revision before %s",
+    async (outcome) => {
+      const directory = await dataDir();
+      const events: string[] = [];
+      const fetched: number[] = [];
+      const db = database(directory, {
+        observe: (event) => events.push(event),
+        observeFetch: (length) => fetched.push(length),
+      });
+      db.writeStore("records", { kept: { n: 1 }, removed: { n: 2 } });
+      const observer = database(directory);
+      const committedRevision = observer.storeRevision("records");
+      const update = () =>
+        db.transaction(() => {
+          db.writeStore("records", { kept: { n: 3 }, added: { n: 4 } });
+          expect(db.storeRevision("records")).not.toBe(committedRevision);
+          expect(observer.storeRevision("records")).toBe(committedRevision);
+          events.length = 0;
+          fetched.length = 0;
+          expect(db.readStoreRow("records", "kept")).toEqual({ n: 3 });
+          expect(db.readStoreRow("records", "added")).toEqual({ n: 4 });
+          expect(db.readStoreRow("records", "removed")).toBeUndefined();
+          expect(events).toEqual(["read", "read", "read"]);
+          expect(fetched).toEqual([]);
+          if (outcome === "rollback") throw new Error("rollback pending cache");
+        });
+      if (outcome === "rollback") expect(update).toThrow("rollback pending cache");
+      else update();
+      const expected =
+        outcome === "commit"
+          ? { kept: { n: 3 }, added: { n: 4 } }
+          : { kept: { n: 1 }, removed: { n: 2 } };
+      expect(db.readStore("records")?.value).toEqual(expected);
+      expect(observer.readStore("records")?.value).toEqual(expected);
+      expect(db.readStoreRow("records", "kept")).toEqual(expected.kept);
+      expect(db.readStoreRow("records", "added")).toEqual(expected.added);
+    },
+  );
 });
 
 describe("StorageDatabase space reclamation", () => {

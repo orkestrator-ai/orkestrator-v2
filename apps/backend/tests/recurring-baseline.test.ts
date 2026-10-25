@@ -1,4 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { FeaturePlanningService } from "../src/core/feature-planning.js";
+import { recurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
+import { StorageService } from "../src/core/storage.js";
 import {
   DEFAULT_SCENARIOS,
   compareBaselines,
@@ -151,6 +157,75 @@ const STORAGE_PER_ATTEMPT = {
 const DOMAINS = ["feature-planning", "build-pipeline", "looped-review", "multi-review"] as const;
 
 describe("driven workflow supervision baseline (step 08)", () => {
+  test.each([0, 30])(
+    "a cold feature-planning pass fetches one plan row with %s historical plans",
+    async (history) => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "ork-planning-bytes-"));
+      const storage = new StorageService(directory);
+      const writer = new StorageService(directory);
+      const activity = mock(async () => "working" as const);
+      const service = new FeaturePlanningService(storage, async <T>() => undefined as T, {
+        keyedScheduling: true,
+        autoAdvance: false,
+        provider: async () => ({
+          agent: "codex",
+          createSession: async () => "session-1",
+          send: async () => {},
+          status: async () => "running",
+          activity,
+          messages: async () => [],
+          structured: async () => null,
+          abort: async () => {},
+        }),
+      });
+      try {
+        await storage.init();
+        for (let index = 0; index < history; index += 1)
+          await storage.createFeaturePlan("project-1");
+        const plan = await storage.createFeaturePlan("project-1");
+        const timestamp = new Date().toISOString();
+        await storage.startFeaturePlanning({
+          version: 1,
+          operationId: "operation-1",
+          featureId: plan.id,
+          projectId: "project-1",
+          kind: "feature",
+          userMessage: "synthetic",
+          environmentId: "env-planning",
+          phase: "running",
+          providerSessionId: "session-1",
+          startedAt: timestamp,
+          dispatchedAt: timestamp,
+          updatedAt: timestamp,
+          backendRevision: 0,
+        });
+        await service.init();
+        await writer.init();
+        // A foreign write makes the plan cache stale before each pass. Otherwise
+        // a whole-store regression could fetch zero bytes from a warm cache.
+        for (let pass = 0; pass < 2; pass += 1) {
+          const updated = await writer.updateFeaturePlan(plan.id, { title: `fixture-${pass}` });
+          recurringWorkMetrics.reset();
+          await recurringWorkMetrics.observe("feature-planning-tick", () =>
+            service.advanceNow(plan.id),
+          );
+          const counts = recurringWorkMetrics.snapshot().kinds["feature-planning-tick"]!;
+          const storageBytes = counts.bytes;
+          expect(counts.workUnits["storage-read"]).toBe(1);
+          expect(storageBytes).toBeGreaterThan(0);
+          expect(storageBytes).toBe(JSON.stringify(updated).length);
+        }
+        expect(activity).toHaveBeenCalledTimes(2);
+      } finally {
+        await service.shutdown();
+        writer.close();
+        storage.close();
+        recurringWorkMetrics.reset();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("is deterministic, content-free, and keyed selection no longer scales with history", async () => {
     const fixture = { completedPerStore: 30, activePerStore: 2, windowMs: 90_000 };
     const first = await runWorkflowBaseline(fixture);
@@ -198,6 +273,9 @@ describe("driven workflow supervision baseline (step 08)", () => {
     // serves it and it still counts. A whole-store tick also lists the store
     // first.
     expect(keyed["feature-planning"].storageReads).toBe(keyed["feature-planning"].attempts);
+    // The driven fixture's plan cache is warm. Cold passes above assert the
+    // one-row byte cost independently of the amount of stored history.
+    expect(keyed["feature-planning"].storageBytes).toBe(0);
     expect(rollback["feature-planning"].storageReads).toBe(
       rollback["feature-planning"].attempts * (1 + fixture.activePerStore),
     );

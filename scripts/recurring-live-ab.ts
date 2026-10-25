@@ -268,6 +268,55 @@ function cliRunner(profile: string) {
     });
 }
 
+type CliResult = { status: number | null; stdout: string };
+type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
+
+/** Wait for the CLI to exit before profile cleanup, escalating a stuck cancellation. */
+function asyncCliRunner(profile: string): AsyncCli {
+  const configDir = mkdtempSync(path.join(os.tmpdir(), "recurring-live-ab-cli-"));
+  return (args, signal) => {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        "bun",
+        ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args],
+        {
+          env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
+      let stdout = "";
+      let failure: Error | undefined;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const stop = (error: Error) => {
+        failure ??= error;
+        child.kill("SIGTERM");
+        killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1_000);
+      };
+      const abort = () => stop(new Error("Soak CLI interrupted", { cause: signal?.reason }));
+      const timeout = setTimeout(() => stop(new Error("Soak CLI timed out")), 10 * 60_000);
+      signal?.addEventListener("abort", abort, { once: true });
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        if (stdout.length + chunk.length > 16 * 1024 * 1024)
+          stop(new Error("Soak CLI output exceeded limit"));
+        else stdout += chunk;
+      });
+      child.once("error", (error) => {
+        failure ??= error;
+      });
+      child.once("close", (status) => {
+        clearTimeout(timeout);
+        clearTimeout(killTimer);
+        signal?.removeEventListener("abort", abort);
+        if (failure) reject(failure);
+        else resolve({ status, stdout });
+      });
+      if (signal?.aborted) abort();
+    });
+  };
+}
+
 function fixtureEnvironments(cli: ReturnType<typeof cliRunner>): FixtureEnvironment[] {
   const result = cli(["environment", "list", "--json"]);
   let envelope: { result?: unknown };
@@ -429,7 +478,7 @@ const SOAK_SAMPLES = 3;
 const SOAK_SAMPLE_GAP_MS = 5_000;
 const SOAK_STEP_TIMEOUT = "10m";
 
-function cliJson(result: ReturnType<ReturnType<typeof cliRunner>>): unknown {
+function cliJson(result: CliResult): unknown {
   if (result.status !== 0) return null;
   try {
     return (JSON.parse(result.stdout) as { result?: unknown }).result ?? null;
@@ -439,8 +488,10 @@ function cliJson(result: ReturnType<ReturnType<typeof cliRunner>>): unknown {
 }
 
 /** The fixture project, read from the environments the profile seeded. */
-function fixtureProjectId(cli: ReturnType<typeof cliRunner>): string | null {
-  const listed = cliJson(cli(["environment", "list", "--json"])) as { items?: unknown[] } | null;
+async function fixtureProjectId(cli: AsyncCli, signal?: AbortSignal): Promise<string | null> {
+  const listed = cliJson(await cli(["environment", "list", "--json"], signal)) as {
+    items?: unknown[];
+  } | null;
   for (const raw of listed?.items ?? []) {
     const projectId = (raw as Record<string, unknown>).projectId;
     if (typeof projectId === "string" && projectId) return projectId;
@@ -456,7 +507,7 @@ const soakRuntime = {
 
 export async function measureSoak(
   gateway: ReturnType<typeof gatewayFor>,
-  cli: ReturnType<typeof cliRunner>,
+  cli: AsyncCli,
   options: Pick<Options, "soakCycles" | "soakEnvironments" | "settleMs">,
   backendRssKiB: () => number | null,
   signal?: AbortSignal,
@@ -482,24 +533,32 @@ export async function measureSoak(
     leaks: [],
     backendRssKiB: { baseline: backendRssKiB(), final: null },
   };
-  const projectId = runtime.fixtureProjectId(cli);
+  const projectId = await runtime.fixtureProjectId(cli, signal);
   if (!projectId) throw new Error("Soak found no fixture project");
-  const step = (args: string[]) => cli([...args, "--timeout", SOAK_STEP_TIMEOUT, "--json"]);
+  const step = async (args: string[]) => {
+    signal?.throwIfAborted();
+    const value = await cli([...args, "--timeout", SOAK_STEP_TIMEOUT, "--json"], signal);
+    signal?.throwIfAborted();
+    return value;
+  };
   for (let cycle = 1; cycle <= options.soakCycles; cycle += 1) {
     for (const kind of options.soakEnvironments) {
       signal?.throwIfAborted();
       const created = cliJson(
-        cli([
-          "environment",
-          "create",
-          "--project",
-          projectId,
-          "--type",
-          kind,
-          "--name",
-          `soak-${kind}-${cycle}`,
-          "--json",
-        ]),
+        await cli(
+          [
+            "environment",
+            "create",
+            "--project",
+            projectId,
+            "--type",
+            kind,
+            "--name",
+            `soak-${kind}-${cycle}`,
+            "--json",
+          ],
+          signal,
+        ),
       ) as { environment?: { id?: unknown } } | null;
       const id = created?.environment?.id;
       if (typeof id !== "string" || !id) {
@@ -513,14 +572,14 @@ export async function measureSoak(
       ];
       for (const [name, args] of lifecycle) {
         signal?.throwIfAborted();
-        if (step(args).status !== 0) {
+        if ((await step(args)).status !== 0) {
           result.failures.push({ cycle, kind, step: name });
           break;
         }
       }
       // Always delete, so one failed step does not leave the soak's
       // environment behind to read as a leak.
-      if (step(["environment", "delete", id, "--wait", "deleted"]).status !== 0) {
+      if ((await step(["environment", "delete", id, "--wait", "deleted"])).status !== 0) {
         result.failures.push({ cycle, kind, step: "delete" });
       }
     }
@@ -599,6 +658,7 @@ const armRuntime = {
   gatewayFor,
   processSamples,
   cliRunner,
+  asyncCliRunner,
   measureFreshness,
   measureSoak,
   countGuardLines,
@@ -668,8 +728,13 @@ export async function runArm(
         if (owned(current)) {
           owner ??= current;
           log(`${profile}: stopping`);
-          if (runtime.mise(["dev:stop", "--profile", profile]).status !== 0)
-            throw new Error("Owned profile stop failed");
+          if (runtime.mise(["dev:stop", "--profile", profile]).status !== 0) {
+            // Stop may report failure for an already stopped profile. Reset
+            // still owns its resources, but only after verifying it is stopped.
+            const stopped = checkedStatus();
+            if (stopped.status !== "stopped" || stopped.live?.launcher !== false)
+              throw new Error("Owned profile stop failed");
+          }
         } else if (!exited) child.kill("SIGTERM");
         for (let waited = 0; !exited && waited < 60_000; waited += 1_000)
           await runtime.sleep(1_000);
@@ -759,7 +824,7 @@ export async function runArm(
       log(`${profile}: soak, ${options.soakCycles} cycles`);
       result.soak = await runtime.measureSoak(
         gateway,
-        runtime.cliRunner(profile),
+        runtime.asyncCliRunner(profile),
         options,
         () => runtime.processSamples(checkedStatus().pids).backend?.rssKiB ?? null,
         signal,
@@ -851,8 +916,8 @@ function printSummary(results: RunResult[]): void {
   if (soaks.length > 0) {
     lines.push(
       "",
-      "| Arm | Repeat | Soak cycles | Failed steps | Leaked gauges | Backend RSS MiB (before/after) |",
-      "| --- | --- | --- | --- | --- | --- |",
+      "| Arm | Repeat | Soak cycles | Failed steps | Footprint measurement | Leaked gauges | Backend RSS MiB (before/after) |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
     );
     for (const run of soaks) {
       const soak = run.soak!;
@@ -861,9 +926,9 @@ function printSummary(results: RunResult[]): void {
         `| ${run.arm} | ${run.repeat} | ${soak.cyclesCompleted}/${soak.cyclesRequested} | ${
           soak.failures.map((entry) => `${entry.kind} ${entry.step} #${entry.cycle}`).join(", ") ||
           "none"
-        } | ${
+        } | ${missingFootprints(soak).join(", ") || "measured"} | ${
           soak.leaks.map((leak) => `${leak.gauge} ${leak.baseline}→${leak.final}`).join(", ") ||
-          "none"
+          (missingFootprints(soak).length > 0 ? "unmeasured" : "none")
         } | ${mib(soak.backendRssKiB.baseline)}/${mib(soak.backendRssKiB.final)} |`,
       );
     }
@@ -905,17 +970,37 @@ async function main(signal: AbortSignal): Promise<number> {
   printSummary(results);
   // A soak passes only with every step done, every gauge back at its
   // baseline and no guard lines in the profile's logs.
+  return resultExitCode(results);
+}
+
+function missingFootprints(soak: SoakResult): string[] {
+  return [
+    soak.baseline === null ? "baseline unavailable" : "",
+    soak.final === null ? "final unavailable" : "",
+  ].filter(Boolean);
+}
+
+function resultExitCode(results: Array<Pick<RunResult, "error" | "soak" | "guardLines">>): number {
   return results.some(
     (run) =>
       run.error ||
       (run.soak &&
-        (run.soak.failures.length > 0 || run.soak.leaks.length > 0 || run.guardLines !== 0)),
+        (missingFootprints(run.soak).length > 0 ||
+          run.soak.failures.length > 0 ||
+          run.soak.leaks.length > 0 ||
+          run.guardLines !== 0)),
   )
     ? 1
     : 0;
 }
 
-export const __testing = { armRuntime, freshnessRuntime, soakRuntime };
+export const __testing = {
+  armRuntime,
+  freshnessRuntime,
+  soakRuntime,
+  printSummary,
+  resultExitCode,
+};
 
 if (import.meta.main) {
   process.exitCode = await withTerminationSignals(main);

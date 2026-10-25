@@ -36,7 +36,7 @@ The desktop native paging case saw prepend index 1 instead of an index greater t
 
 ## Todo 0090 folded-group paging tests — 2026-10-25
 
-- **Original command:** `ORKESTRATOR_E2E_PORT=14390 mise run test:logged -- --name transcript-paging-owner-4w -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=4`, on branch `todo-0090-held-place-drift` (this owner file with six new folded-group cases, 30 cases in all), on arktech-mini.
+- **Original command:** `ORKESTRATOR_E2E_PORT=14390 mise run test:logged -- --name transcript-paging-owner-4w -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=4`, on branch `todo-0090-held-place-drift` (this owner file with four new folded-group test scenarios across two projects: eight added project cases, 30 cases in all), on arktech-mini.
 - **Failures:** two, both this scenario. Desktop native kept prepend index `1` (expected greater than `1`); mobile native's scrollTop stayed `0` (expected greater than 500). An earlier four-worker run of the same file that day failed mobile native once as well. The new folded-group cases passed in every run.
 - **Suite counts:** 28 passed, 2 failed (43.6 s).
 - **Owner reruns:** `-g "paging before prose" --repeat-each 3 --workers 4` passed 12 of 12 (26.4 s); the whole owner with `--workers=1` passed all 30 cases (111.0 s logged).

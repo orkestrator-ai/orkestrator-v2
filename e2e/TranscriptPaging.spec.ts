@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { expectPlaceHeld, holdPosition } from "./transcript-hold";
 import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 async function toolPosition(list: Locator, id: string) {
@@ -317,6 +318,13 @@ async function foldedLine(list: Locator) {
     ).orkTranscriptScrollDiagnostics?.();
     return {
       offset: line ? line.getBoundingClientRect().top - el.getBoundingClientRect().top : null,
+      index: Number(
+        line?.closest<HTMLElement>("[data-chat-message-index]")?.dataset.chatMessageIndex,
+      ),
+      visible:
+        line !== null &&
+        line.getBoundingClientRect().bottom > el.getBoundingClientRect().top &&
+        line.getBoundingClientRect().top < el.getBoundingClientRect().top + el.clientHeight,
       count: line?.textContent?.match(/(\d+) tool calls/)?.[1],
       scrollTop: el.scrollTop,
       maxScrollTop: Math.max(0, el.scrollHeight - el.clientHeight),
@@ -367,16 +375,29 @@ for (const view of ["native", "reviewer"]) {
       const after = await foldedLine(list);
       expect(probe.missing).toBe(0);
       // Where the list must stand to hold the line, as far as it can scroll.
-      const needed = after.offset! + after.scrollTop - before.offset!;
-      const reachable = Math.min(Math.max(needed, 0), after.maxScrollTop);
-      expect(Math.abs(after.scrollTop - reachable)).toBeLessThanOrEqual(1);
+      const hold = holdPosition(
+        { ...before, offset: before.offset! },
+        { ...after, offset: after.offset! },
+      );
+      expectPlaceHeld(
+        {
+          anchorStop: 149,
+          anchorIndexBefore: before.index,
+          anchorAfter: after,
+          hold,
+          scrollTopAfter: after.scrollTop,
+        },
+        `${view}: prompt landing at ${height} px`,
+      );
+      expect(hold.errorPx).toBeLessThanOrEqual(1);
       if (height === 300) {
-        expect(needed).toBeLessThanOrEqual(after.maxScrollTop);
+        expect(hold.clampedPx).toBe(0);
         expect(after.outcome).toBe("converged");
         expect(after.scrollTop).toBeGreaterThan(0);
         expect(probe.maxError).toBeLessThanOrEqual(2);
       } else {
         expect(after.maxScrollTop).toBe(0);
+        expect(hold.clampedPx).toBeGreaterThan(8);
         expect(after.outcome).toBe("clamped");
         expect(after.offset! - before.offset!).toBeGreaterThan(8);
       }

@@ -29,9 +29,7 @@ const tools = Array.from({ length: stopCount }, (_, index) => ({
   id: `row-${index}`,
   role: "assistant" as const,
   content: "",
-  createdAt: query.has("clock")
-    ? new Date(Date.parse("2026-10-18T01:00:00.000Z") + index * 7_000).toISOString()
-    : "2026-10-18T01:33:20.000Z",
+  createdAt: "2026-10-18T01:33:20.000Z",
   parts: [
     ...(mixed ? [{ type: "text" as const, content: `Reached stop ${index}.` }] : []),
     {
@@ -194,7 +192,7 @@ function installBackend() {
             value: {
               identity,
               freshness: "current",
-              messages: query.has("fresh") ? structuredClone(tail) : tail,
+              messages: tail,
               historyEpoch: "epoch-1",
               historyCursor: `before-${tailStart}`,
               historyPaging: "direct",

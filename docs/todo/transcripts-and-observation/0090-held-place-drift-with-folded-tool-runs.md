@@ -58,12 +58,14 @@ position.
   section of transcript-scroll.md). A page that coalesces older calls in front
   of the first group grows that group without adding a display row.
 - The live spec's held-place check is clamp-aware (`holdPosition` in
-  `transcript-paging-live.spec.ts`). It works out the scroll position that
-  puts the reader's row back at its old offset, limits it to the list's
-  scroll range, and requires the list to stand within 8 px of it. With room
-  to scroll this is exactly the old "row within 8 px" check. When the list
+  `e2e/transcript-hold.ts`, shared with the fixture and deterministic checks).
+  It works out the scroll position that puts the reader's row back at its old
+  offset, limits it to the list's scroll range, and requires the list to stand
+  within 8 px of it. With room to scroll this is exactly the old "row within
+  8 px" check. When the list
   cannot scroll that far, it must stand at the end of its range. The
-  annotation records `hold.clampedPx` and `hold.errorPx`.
+  annotation records signed `hold.clampedPx` (negative at the top, positive
+  at the bottom) and `hold.errorPx`.
 - Each click also records a content-free `<label>-layout` annotation: the
   first rendered parts' ids, the trail stops their text names, their boxes,
   the fold state, the first rows' keys and heights, and the scroll range. No
@@ -71,7 +73,9 @@ position.
 - The paging fixture (`e2e/fixture/TranscriptPagingFixture.tsx`) gained
   `stops=N` (a live-length trail with a 100-row tail), `paged=N` (history
   behind a cursor, N rows a page) and `prompt` (a user prompt opening the
-  conversation). `e2e/TranscriptPaging.spec.ts` uses them in three new cases:
+  conversation). `e2e/TranscriptPaging.spec.ts` uses them in four new test
+  scenarios (eight added project cases across desktop and mobile Chromium,
+  30 project cases in all):
   - a page coalescing into the folded group at the top (native and
     reviewer): the line holds within 2 px on every probed frame;
   - the prompt landing above the folded group at 300 px (native): the list
@@ -81,6 +85,11 @@ position.
 
   The reviewer view hides the workflow's prompts, so the prompt cases are
   native only.
+- `e2e/TranscriptHold.spec.ts` exercises the shared calculation and live
+  assertion without provider turns: exact holds, signed clamps at both ends,
+  drift, the 8 px error limit, missing or invisible anchors, and the
+  `landedAbove`/`maxScrollTop` gate. The prompt fixture cases call that same
+  assertion with measured browser geometry.
 
 ## Outstanding work
 
@@ -147,6 +156,30 @@ Fixture runs (`ORKESTRATOR_E2E_PORT=14390`, desktop and mobile Chromium):
   pre-existing `paging before prose` scenario, recorded under open flake
   [0483](../../tests/flaky-tests/native-agents-and-transcripts/0483-transcript-paging-prepend-index-timing.md).
   The new cases passed.
+
+### 2026-10-25 (review fixes)
+
+The hold calculation and assertion now live in `e2e/transcript-hold.ts`, shared
+by the live spec and provider-free tests. Upward clamps retain their signed
+displacement (`-56` for the disappearing-header example); downward clamps
+remain positive. The unused fixture `clock` and `fresh` options were removed.
+
+- `mise run test:logged -- --name transcript-hold-check-final -- mise run check`:
+  passed formatting, lint and all typechecks.
+- `ORKESTRATOR_E2E_PORT=14490 mise run test:logged -- --name transcript-hold-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptHold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1`:
+  all 30 paging fixture cases passed. One new deterministic rejection test
+  initially expected a custom message for a missing numeric measurement;
+  its message expectation was corrected.
+- `ORKESTRATOR_E2E_PORT=14491 mise run test:logged -- --name transcript-hold-deterministic -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptHold.spec.ts --workers=1 --output output/playwright/transcript-hold`:
+  all 24 deterministic project cases passed.
+- `mise run test:logged -- --name transcript-hold-regression -- mise run test`:
+  root/agent-support, bridge and protocol groups passed. The workspace group
+  remained queued for shared worker capacity for over eleven minutes without
+  starting; the aggregate was stopped (exit 130), so there is no full-suite
+  pass claim.
+
+Live provider turns were not repeated for this review: the same helper and
+assertion now execute automatically without the live opt-in.
 
 ## Constraints and rationale
 

@@ -26,7 +26,7 @@ const browserTimer: StartupTimer = {
  */
 export async function startApp({
   render,
-  hydrate = hydrateAgentModelCatalogCache,
+  hydrate = () => hydrateAgentModelCatalogCache({ seed: true }),
   timeoutMs = 2_000,
   timer = browserTimer,
   warn = (message, error) => console.warn(message, error),

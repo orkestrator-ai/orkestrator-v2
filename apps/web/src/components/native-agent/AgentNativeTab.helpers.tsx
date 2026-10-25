@@ -46,6 +46,8 @@ import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { getNativeAgentModelCatalog } from "@/lib/backend";
+import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
+import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
@@ -460,6 +462,7 @@ export function UnassignedNativeAgentComposer({
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
   const modelCatalogRequestsRef = useRef(new Map<string, Promise<AgentModel[]>>());
+  const modelCatalogInFlightRef = useRef(new Set<string>());
   const modelCatalogEnvironmentRef = useRef(environmentId);
   const modelCatalogMountedRef = useRef(false);
   const modelCatalogRetriedRef = useRef(new Set<string>());
@@ -558,6 +561,7 @@ export function UnassignedNativeAgentComposer({
     if (modelCatalogEnvironmentRef.current === environmentId) return;
     modelCatalogEnvironmentRef.current = environmentId;
     modelCatalogRequestsRef.current.clear();
+    modelCatalogInFlightRef.current.clear();
     modelCatalogRetriedRef.current.clear();
     setModels([]);
   }, [environmentId]);
@@ -568,22 +572,28 @@ export function UnassignedNativeAgentComposer({
   // so switching the picker never clears the catalogue or repeatedly starts a
   // provider whose account genuinely has no models.
   useEffect(() => {
-    const ensureAgent =
-      platform === "cursor" || platform === "grok" || platform === "pi" ? platform : undefined;
-    const requestKey = `${environmentId}:${ensureAgent ?? "snapshot"}`;
-    if (ensureAgent && models.some((model) => model.platform === ensureAgent)) return;
+    // Every platform is asked for by name, so whichever one the user has
+    // switched on downloads its list on first use.
+    const ensureAgent = platform;
+    const requestKey = `${environmentId}:${ensureAgent}`;
+    if (models.some((model) => model.platform === ensureAgent)) return;
     if (modelCatalogRequestsRef.current.has(requestKey)) return;
-    const request = ensureAgent
-      ? getNativeAgentModelCatalog(environmentId, ensureAgent)
-      : getNativeAgentModelCatalog(environmentId);
+    const request = getNativeAgentModelCatalog(environmentId, ensureAgent);
     modelCatalogRequestsRef.current.set(requestKey, request);
+    modelCatalogInFlightRef.current.add(requestKey);
     void request
       .then((catalog) => {
+        modelCatalogInFlightRef.current.delete(requestKey);
         modelCatalogRetriedRef.current.delete(requestKey);
         // The backend has already normalized and durably cached these models.
         // Mirror its response even if this tab became inactive while first-use
         // discovery ran, so every other mounted launcher sees the new snapshot.
         syncCachedAcpModels(catalog);
+        // A first-run download lands in the backend's durable cache only; pull
+        // it into the store the launch dialogs read from.
+        if (catalog.some((model) => model.platform === ensureAgent)) {
+          void hydrateAgentModelCatalogCache().catch(() => undefined);
+        }
         if (
           !modelCatalogMountedRef.current ||
           modelCatalogEnvironmentRef.current !== environmentId
@@ -602,6 +612,7 @@ export function UnassignedNativeAgentComposer({
         });
       })
       .catch((error) => {
+        modelCatalogInFlightRef.current.delete(requestKey);
         if (modelCatalogRequestsRef.current.get(requestKey) === request) {
           modelCatalogRequestsRef.current.delete(requestKey);
         }
@@ -611,7 +622,6 @@ export function UnassignedNativeAgentComposer({
         // remain manually retryable by switching platforms, without creating a
         // background restart loop for an unavailable provider.
         if (
-          ensureAgent &&
           modelCatalogMountedRef.current &&
           modelCatalogEnvironmentRef.current === environmentId &&
           !modelCatalogRetriedRef.current.has(requestKey)
@@ -622,6 +632,37 @@ export function UnassignedNativeAgentComposer({
         console.warn("[AgentNativeTab] Failed to load native model catalogue:", error);
       });
   }, [environmentId, modelCatalogRetryRevision, models, platform]);
+  // A host that was not signed in when the picker first asked has nothing to
+  // list. Focus is a useful retry signal for host probes after an external
+  // sign-in, but must not restart environment bridges (Cursor, Grok or Pi).
+  // An explicit Settings refresh may update any platform. Never invalidate a
+  // request that is still in flight.
+  useEffect(() => {
+    const retryEmptyPlatform = (includeBridgeBacked: boolean) => {
+      if (models.some((model) => model.platform === platform)) return;
+      if (
+        !includeBridgeBacked &&
+        platform !== "claude" &&
+        platform !== "codex" &&
+        platform !== "opencode"
+      ) {
+        return;
+      }
+      const requestKey = `${environmentId}:${platform}`;
+      if (modelCatalogInFlightRef.current.has(requestKey)) return;
+      modelCatalogRequestsRef.current.delete(requestKey);
+      modelCatalogRetriedRef.current.delete(requestKey);
+      setModelCatalogRetryRevision((revision) => revision + 1);
+    };
+    const retryHostOnFocus = () => retryEmptyPlatform(false);
+    const retryAfterRefresh = () => retryEmptyPlatform(true);
+    window.addEventListener("focus", retryHostOnFocus);
+    window.addEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
+    return () => {
+      window.removeEventListener("focus", retryHostOnFocus);
+      window.removeEventListener(MODEL_CATALOG_REFRESHED_EVENT, retryAfterRefresh);
+    };
+  }, [environmentId, models, platform]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,

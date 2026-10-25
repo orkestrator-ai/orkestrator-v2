@@ -38,6 +38,7 @@ import { resolveSession, sessionActivity, type ResolvedSession } from "./session
 import type {
   ExecuteOutcome,
   MutationActionHandler,
+  PreparedMutation,
   PublicActionContext,
   PublicActionHandler,
 } from "./types.js";
@@ -185,7 +186,7 @@ export function dispatchOutcome(
   };
 }
 
-interface StartInput extends AgentSelection {
+export interface StartInput extends AgentSelection {
   environmentId: string;
   prompt: string;
   title?: string;
@@ -225,76 +226,103 @@ const sessionStart: MutationActionHandler<StartInput> = {
     };
   },
   async prepare(input, context) {
-    const environment = await requireEnvironment(context, input.environmentId);
-    assertReadyForAgents(environment);
-    assertAttachmentSupport(input.agent, input.attachments);
-    const resolved = await resolveSelection(input, environment, context);
-    return {
-      resolved: {
-        agent: input.agent,
-        model: resolved.model ?? null,
-        reasoningEffort: resolved.reasoningEffort ?? null,
-        fastMode: resolved.fastMode ?? null,
-        mode: input.mode ?? "build",
-      },
-      resources: { environmentId: environment.id, projectId: environment.projectId },
-      async execute(operation) {
-        const requestId = operation.operationId;
-        const jobId = createHash("sha256")
-          .update(environment.id)
-          .update("\0")
-          .update(requestId)
-          .digest("hex")
-          .slice(0, 24);
-        const tabId = `agent-job-${jobId}`;
-        const sessionId = encodePublicSessionId(environment.id, tabId);
-        await operation.update({
-          stage: "staging-attachments",
-          resources: { dispatchRequestId: requestId, tabId, sessionId },
-        });
-        const attachments = await stageAttachments(
-          context,
-          environment,
-          operation.operationId,
-          input.attachments,
-        );
-        await operation.update({
-          stage: "dispatching",
-          resources: { dispatchRequestId: requestId, tabId, sessionId },
-        });
-        // The same durable job path the desktop and Control MCP use: stable
-        // tab and session identity from (environment, request ID), and an
-        // exactly-once first prompt. The tab is created without focusing it.
-        const job = await context.invoke<{ tabId: string; status: string; error?: string }>(
-          "launch_native_agent_job",
-          {
-            environmentId: environment.id,
-            requestId,
-            agent: input.agent,
-            prompt: input.prompt,
-            conversationMode: input.mode ?? "build",
-            ...(input.title ? { title: input.title } : {}),
-            ...(resolved.model ? { modelId: resolved.model } : {}),
-            ...(resolved.reasoningEffort ? { reasoningId: resolved.reasoningEffort } : {}),
-            ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
-            ...(input.literal ? { literal: true } : {}),
-            ...(attachments.length ? { attachments } : {}),
-            activateTab: false,
-          },
-        );
-        const outcome = dispatchOutcome(job.status, job.error, {
-          sessionId,
-          tabId: job.tabId,
-          runId: operation.operationId,
-        });
-        return {
-          ...outcome,
-          resources: { sessionId, tabId: job.tabId, dispatchRequestId: requestId },
-        };
-      },
-    };
+    return prepareSessionStart(input, context);
   },
 };
+
+/**
+ * What a new agent tab adds beyond `session.start`: a button action's job
+ * completion hook, and a step once the provider accepted the first prompt.
+ */
+export interface SessionStartExtras {
+  completionAction?: "refresh-pr-after-agent-completion";
+  afterAccepted?: (environment: Environment) => Promise<void>;
+}
+
+/**
+ * `session.start`'s admission and execution, shared by the button actions
+ * that open an agent tab with a fixed prompt (`pr.create`, `pr.resolve`).
+ */
+export async function prepareSessionStart(
+  input: StartInput,
+  context: PublicActionContext,
+  extras: SessionStartExtras = {},
+  existing?: Environment,
+) {
+  const environment = existing ?? (await requireEnvironment(context, input.environmentId));
+  assertReadyForAgents(environment);
+  assertAttachmentSupport(input.agent, input.attachments);
+  const resolved = await resolveSelection(input, environment, context);
+  return {
+    resolved: {
+      agent: input.agent,
+      model: resolved.model ?? null,
+      reasoningEffort: resolved.reasoningEffort ?? null,
+      fastMode: resolved.fastMode ?? null,
+      mode: input.mode ?? "build",
+    },
+    resources: { environmentId: environment.id, projectId: environment.projectId },
+    async execute(operation) {
+      const requestId = operation.operationId;
+      const jobId = createHash("sha256")
+        .update(environment.id)
+        .update("\0")
+        .update(requestId)
+        .digest("hex")
+        .slice(0, 24);
+      const tabId = `agent-job-${jobId}`;
+      const sessionId = encodePublicSessionId(environment.id, tabId);
+      await operation.update({
+        stage: "staging-attachments",
+        resources: { dispatchRequestId: requestId, tabId, sessionId },
+      });
+      const attachments = await stageAttachments(
+        context,
+        environment,
+        operation.operationId,
+        input.attachments,
+      );
+      await operation.update({
+        stage: "dispatching",
+        resources: { dispatchRequestId: requestId, tabId, sessionId },
+      });
+      // The same durable job path the desktop and Control MCP use: stable
+      // tab and session identity from (environment, request ID), and an
+      // exactly-once first prompt. The tab is created without focusing it.
+      const job = await context.invoke<{ tabId: string; status: string; error?: string }>(
+        "launch_native_agent_job",
+        {
+          environmentId: environment.id,
+          requestId,
+          agent: input.agent,
+          prompt: input.prompt,
+          conversationMode: input.mode ?? "build",
+          ...(input.title ? { title: input.title } : {}),
+          ...(resolved.model ? { modelId: resolved.model } : {}),
+          ...(resolved.reasoningEffort ? { reasoningId: resolved.reasoningEffort } : {}),
+          ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
+          ...(input.literal ? { literal: true } : {}),
+          ...(attachments.length ? { attachments } : {}),
+          ...(extras.completionAction ? { completionAction: extras.completionAction } : {}),
+          activateTab: false,
+        },
+      );
+      const outcome = dispatchOutcome(job.status, job.error, {
+        sessionId,
+        tabId: job.tabId,
+        runId: operation.operationId,
+      });
+      if (job.status === "accepted") {
+        // Advisory follow-up: the run is already the provider's.
+        await extras.afterAccepted?.(environment).catch(() => undefined);
+      }
+      return {
+        ...outcome,
+        resources: { sessionId, tabId: job.tabId, dispatchRequestId: requestId },
+      };
+    },
+  } satisfies PreparedMutation;
+}
 
 interface PromptInput {
   sessionId: string;
@@ -482,5 +510,3 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
 };
 
 export const SESSION_HANDLERS: PublicActionHandler[] = [sessionStart, sessionPrompt];
-
-export type { StartInput };

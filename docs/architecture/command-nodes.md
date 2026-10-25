@@ -553,6 +553,11 @@ remain and use the same paths.
   controller commands that reuse the button and local-coordinator logic
   with the node's own defaults and model catalogue
   (`commands-registry-controller-workflows.ts`).
+- **Operator clients too.** An external Control MCP client and the
+  `orkestrator` CLI reach the same leaves through public actions with a
+  `nodeId` (`--node`), routed by the command node with the caller's
+  authority relayed to the leaf; see
+  [control-mcp.md](control-mcp.md#leaf-nodes).
 - **Delegations and wakes behave as locally.** Mail across the node link is
   same-project coordinator mail (see
   [agent-messaging.md](agent-messaging.md#node-mail)): it wakes the worker,

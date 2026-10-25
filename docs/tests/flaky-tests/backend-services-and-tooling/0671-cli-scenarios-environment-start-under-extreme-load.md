@@ -24,6 +24,13 @@
 - **Assessment:** the host load average exceeded 100 during validation. This observation remains unresolved because the case failed alone too; it does not independently confirm a flake or its cause. No implementation, assertion, deadline or skip changed for this recurrence.
 
 
+## Leaf-node review fixes validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios`; nine credential-free local scenarios, serial in the scenario runner, alongside the repository suite and other worktrees on this host.
+- **Result:** eight passed; `client-exit` failed after 9.0 s with `no receipt was printed on interruption`. The command exited 1 after 57.3 s.
+- **Owning-scenario rerun:** `mise run test:logged -- --name cli-client-exit-alone -- mise run test:cli:scenarios -- --scenario client-exit` passed (12.9 s; command 13.6 s, exit 0).
+- **Evidence:** failing log `orkestrator-test-run.VXmIMe/cli-scenarios.log.gz`; manifests `output/cli-scenarios/2026-10-25T19-32-32-561Z-2e5152bb/manifest.json` and `output/cli-scenarios/2026-10-25T19-33-47-233Z-e8e3c26e/manifest.json`. Both runs reported no cleanup errors.
+- **Assessment:** confirmed recurrence of this existing flake. The scenario sends SIGINT after a fixed 2.5 s, which can precede receipt admission/response under load. No assertion, delay, timeout, or skip changed; status remains open.
 ## Interaction review fixes validation — 2026-10-25
 
 - **Revision:** `db35fb35f` plus the interaction review fixes on `todo-0001-agent-interactions-db4f03351da7`, macOS arm64, Bun 1.4.4.

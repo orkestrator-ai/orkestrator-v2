@@ -84,6 +84,17 @@ Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
 (compressed on aggregate completion). The original aggregate remains failed.
 No skips, assertions or timeouts were changed.
 
+## Leaf-node Control MCP parity validation, 2026-10-25
+
+`mise run test:logged -- --name full-test -- mise run test` at `e8fa18152` plus
+the leaf-node parity changes (no bridge code changed) failed `a cold app-server
+child > two pre-plugin answers stay stale until late plugins are observed and
+confirmed` at line 273: expected `stale`, received `ready` (43.47 ms). Codex
+reported 2360 pass, 40 skip and 1 fail across 88 files (29.82 s). The complete
+unchanged owner then passed alone (30 of 30) with
+`bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1`.
+Evidence: `orkestrator-test-run.A7erFE/bridges.log.gz`. The original aggregate
+remains failed; nothing was changed.
 
 ## Interaction review fixes validation — 2026-10-25
 

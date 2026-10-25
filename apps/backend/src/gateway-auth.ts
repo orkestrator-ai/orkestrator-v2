@@ -511,7 +511,11 @@ export class GatewayAuth {
         request,
         response,
         requestMetrics,
-        viaGrant ? { refuseCommand: isWorkspaceExcludedCommand } : undefined,
+        viaGrant
+          ? { refuseCommand: isWorkspaceExcludedCommand }
+          : controllerId
+            ? { controllerId }
+            : undefined,
       );
       return;
     }
@@ -566,7 +570,10 @@ export class GatewayAuth {
       [BACKEND_CAPABILITIES.summaryReads]: 1,
     };
     if (this.ctx.loopbackClientUrl) capabilities[BACKEND_CAPABILITIES.loopbackClientGateway] = 1;
-    if (identity.nodeMode) capabilities[BACKEND_CAPABILITIES.nodeAttachment] = 1;
+    if (identity.nodeMode) {
+      capabilities[BACKEND_CAPABILITIES.nodeAttachment] = 1;
+      capabilities[BACKEND_CAPABILITIES.publicActionRelay] = 1;
+    }
     const hello: BackendHello = {
       schemaVersion: BACKEND_HELLO_SCHEMA_VERSION,
       installationId: parseBackendId(identity.installationId, "installationId"),

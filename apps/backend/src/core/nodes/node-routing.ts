@@ -207,13 +207,16 @@ export async function routeToNode<T>(input: {
   args: Record<string, unknown>;
   requestKey?: string;
   outcomes: NodeOutcomeLedger;
+  /** Overrides the command-name classification (a routed `public_action` read). */
+  read?: boolean;
 }): Promise<RoutedResult<T>> {
   if (isNodeExcludedCommand(input.command)) {
     throw new Error(`${input.command} cannot be run on another node from here.`);
   }
+  const read = input.read ?? isNodeReadCommand(input.command);
   if (!input.link || !input.link.connected) {
     throw new NodeUnavailableError(
-      isNodeReadCommand(input.command)
+      read
         ? "That node is not connected; its last-known state is shown."
         : "That node is not connected, so changes to it are disabled.",
     );
@@ -221,7 +224,7 @@ export async function routeToNode<T>(input: {
   try {
     return { outcome: "ok", result: await input.link.invoke<T>(input.command, input.args) };
   } catch (error) {
-    if (error instanceof NodeOutcomeUnknownError && !isNodeReadCommand(input.command)) {
+    if (error instanceof NodeOutcomeUnknownError && !read) {
       const requestKey = input.requestKey ?? randomUUID();
       const record = await input.outcomes.record({
         nodeId: input.nodeId,

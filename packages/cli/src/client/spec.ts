@@ -40,6 +40,7 @@ export interface ParsedCommand {
 export interface CommandOutcome {
   action: string;
   result: unknown;
+  node?: import("@orkestrator/protocol/public-api").PublicNodeTag;
   receipt?: PublicReceipt;
   warnings?: string[];
   connection?: PublicConnectionIdentity;
@@ -71,6 +72,8 @@ export interface CommandContext {
 export interface GlobalOptions {
   connection?: string;
   profile?: string;
+  /** `--node`: a leaf node ID, or `all` for an aggregate read. */
+  node?: string;
   output: "human" | "json" | "id" | "jsonl";
   help: boolean;
   version: boolean;

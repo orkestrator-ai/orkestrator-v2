@@ -416,6 +416,74 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Read one page of a session's turns, each with the backend's change projection.",
   },
+  "review.launch": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata", "provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Start an environment's Multi Review, as the Multi Review button does: reviewers, consolidation, then optional Fix and PR, with saved defaults for what is omitted; an active review is reused.",
+  },
+  "review.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "List an environment's Multi Reviews, newest first.",
+  },
+  "review.get": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "Read one Multi Review: phase, reviewers, consolidation, Fix and PR steps.",
+  },
+  "review.open": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Open or focus a Multi Review's root tab or its Fix tab; starts no work.",
+  },
+  "review.address": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Address a Multi Review's findings: hand them to its Fix session (the Address findings button).",
+  },
+  "review.cancel": {
+    version: 1,
+    mutation: true,
+    effects: ["process", "provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Cancel a running Multi Review; its record and tabs are kept.",
+  },
+  "pr.create": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session", "external-repository"],
+    observation: "run",
+    milestone: "D",
+    summary:
+      "Start the Create PR agent session in an environment (the PR tab): commit, push and open a pull request against the target branch. It never merges.",
+  },
+  "pr.resolve": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session", "external-repository"],
+    observation: "run",
+    milestone: "D",
+    summary:
+      "Start the Resolve Conflicts agent session in an environment (the Resolve tab): merge the target branch, resolve and validate conflicts, commit and push.",
+  },
   "attention.list": {
     version: 1,
     mutation: false,
@@ -481,6 +549,15 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary:
       "Place a message in one tab's inbox; external messages are never injected into a turn.",
+  },
+  "node.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "List this machine and the leaf nodes (remote machines) it controls, and whether each can run actions; pass its nodeId to any other action to run it there.",
   },
   "schedule.list": {
     version: 1,
@@ -711,6 +788,8 @@ export const PUBLIC_ERROR_EXIT = {
   "not-found": PUBLIC_EXIT.notFound,
   "ambiguous-target": PUBLIC_EXIT.notFound,
   "history-expired": PUBLIC_EXIT.notFound,
+  // No node with that ID is registered on this command node.
+  "node-not-found": PUBLIC_EXIT.notFound,
   // 4 — the client could not reach or authenticate to the selected backend.
   "connection-failed": PUBLIC_EXIT.connection,
   "connection-not-configured": PUBLIC_EXIT.connection,
@@ -719,6 +798,8 @@ export const PUBLIC_ERROR_EXIT = {
   "identity-mismatch": PUBLIC_EXIT.connection,
   "response-invalid": PUBLIC_EXIT.connection,
   "transport-uncertain": PUBLIC_EXIT.connection,
+  // The named leaf node is registered but not connected (or disabled).
+  "node-unavailable": PUBLIC_EXIT.connection,
   // 5 — an observer's own deadline passed; the operation may still be running.
   "deadline-exceeded": PUBLIC_EXIT.deadline,
   // 130/143 — SIGINT/SIGTERM stopped the observer (see PUBLIC_SIGNAL_EXIT); the
@@ -729,6 +810,8 @@ export const PUBLIC_ERROR_EXIT = {
   // 7 — the provider may or may not have received the work.
   "dispatch-unknown": PUBLIC_EXIT.unknownDispatch,
   "run-unknown": PUBLIC_EXIT.unknownDispatch,
+  // The command node lost a leaf's answer; the same request key replays there.
+  "node-outcome-unknown": PUBLIC_EXIT.unknownDispatch,
   // 8 — conflicts, unsupported capabilities, and refused state transitions.
   conflict: PUBLIC_EXIT.conflict,
   "request-conflict": PUBLIC_EXIT.conflict,
@@ -746,6 +829,8 @@ export const PUBLIC_ERROR_EXIT = {
   "session-idle": PUBLIC_EXIT.conflict,
   "interaction-stale": PUBLIC_EXIT.conflict,
   "dispatch-parked": PUBLIC_EXIT.conflict,
+  // The leaf is too old to run public actions for this node, or this node is in leaf mode.
+  "node-unsupported": PUBLIC_EXIT.conflict,
 } as const;
 
 export type PublicErrorCode = keyof typeof PUBLIC_ERROR_EXIT;
@@ -1010,12 +1095,56 @@ export interface PublicBackendIdentity {
   generation: string;
 }
 
+// ---------------------------------------------------------------------------
+// Node targeting
+
+/**
+ * `node` value that runs an aggregate read on this node and every node it
+ * controls, tagging each item with its `nodeId`.
+ */
+export const PUBLIC_ALL_NODES = "all";
+
+/** Reads that accept `node: "all"`. Every other action takes one node. */
+export const PUBLIC_AGGREGATE_ACTIONS: readonly PublicActionName[] = Object.freeze([
+  "project.list",
+  "environment.list",
+  "attention.list",
+]);
+
+/** Actions that always run on the node the caller is connected to. */
+export const PUBLIC_LOCAL_ONLY_ACTIONS: readonly PublicActionName[] = Object.freeze(["node.list"]);
+
+export function isPublicAggregateAction(action: PublicActionName): boolean {
+  return PUBLIC_AGGREGATE_ACTIONS.includes(action);
+}
+
+const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+/** A syntactically valid node target: a node ID from `node.list`, or `all`. */
+export function isPublicNodeTarget(value: unknown): value is string {
+  return typeof value === "string" && NODE_ID_PATTERN.test(value);
+}
+
+/**
+ * Which node ran a routed action. `backend` stays the node the caller is
+ * connected to, so the client's identity check still holds; this names the
+ * leaf whose store holds the operation and its receipt.
+ */
+export interface PublicNodeTag {
+  nodeId: string;
+  name: string;
+  /** The leaf's backend generation when it answered. */
+  generation?: string;
+}
+
 export interface PublicSuccessEnvelope<T = unknown> {
   schemaVersion: PublicApiSchemaVersion;
   action: string;
   ok: true;
   connection?: PublicConnectionIdentity;
   backend?: PublicBackendIdentity;
+  /** Present when the action ran on another node (`request.node`). */
+  node?: PublicNodeTag;
   result: T;
   receipt?: PublicReceipt;
   warnings?: string[];
@@ -1027,6 +1156,8 @@ export interface PublicErrorEnvelope {
   ok: false;
   connection?: PublicConnectionIdentity;
   backend?: PublicBackendIdentity;
+  /** Present when the action was sent to another node (`request.node`). */
+  node?: PublicNodeTag;
   error: PublicError & { exitCode: number };
   /** Present whenever admission may have happened, so the caller can recover. */
   receipt?: PublicReceipt;
@@ -1042,6 +1173,13 @@ export interface PublicActionRequest {
   actionVersion: number;
   input: Record<string, unknown>;
   request?: PublicRequestKey;
+  /**
+   * Run on this node (a `nodeId` from `node.list`), routed by the command
+   * node the caller is connected to; `all` for an aggregate read. Omitted:
+   * the connected node. Send it only to a backend whose capabilities set
+   * `features.nodeRouting`; an older one ignores it.
+   */
+  node?: string;
 }
 
 /**
@@ -1134,6 +1272,8 @@ export interface PublicCapabilities {
     promptAttachments: boolean;
     selectedSlashCommands: boolean;
     enqueue: boolean;
+    /** `request.node` routes an action to a leaf node (and `all` aggregates reads). */
+    nodeRouting?: boolean;
   };
 }
 
@@ -1214,6 +1354,16 @@ export function isPublicActionResponse(value: unknown): value is PublicActionRes
       isRecord(value.backend) &&
       typeof value.backend.installationId === "string" &&
       typeof value.backend.generation === "string"
+    )
+  ) {
+    return false;
+  }
+  if (
+    value.node !== undefined &&
+    !(
+      isRecord(value.node) &&
+      typeof value.node.nodeId === "string" &&
+      typeof value.node.name === "string"
     )
   ) {
     return false;

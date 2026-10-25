@@ -226,6 +226,9 @@ describe("public action input contract", () => {
       "environment.delete": "always",
       "environment.exec": "voice",
       "session.interaction.resolve": "voice:approval",
+      // Both push to the remote.
+      "pr.create": "voice",
+      "pr.resolve": "voice",
       "run.discard": "always",
       "host.update.apply": "always",
       "host.gh.update": "always",

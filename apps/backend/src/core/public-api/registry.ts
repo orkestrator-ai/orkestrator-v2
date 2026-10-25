@@ -8,7 +8,9 @@ import { EXEC_HANDLERS } from "./actions-exec.js";
 import { HOST_HANDLERS } from "./actions-host.js";
 import { LAUNCH_HANDLERS } from "./actions-launch.js";
 import { MAIL_HANDLERS } from "./actions-mail.js";
+import { NODE_HANDLERS } from "./actions-nodes.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
+import { REVIEW_HANDLERS } from "./actions-reviews.js";
 import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
 import { SCHEDULE_HANDLERS } from "./actions-schedules.js";
 import { SESSION_COMMAND_HANDLERS } from "./actions-session-commands.js";
@@ -41,9 +43,11 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...SESSION_CONTROL_HANDLERS,
     ...TRANSCRIPT_HANDLERS,
     ...CHANGE_HANDLERS,
+    ...REVIEW_HANDLERS,
     ...ATTENTION_HANDLERS,
     ...TICKET_HANDLERS,
     ...MAIL_HANDLERS,
+    ...NODE_HANDLERS,
     ...SCHEDULE_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
@@ -71,6 +75,7 @@ export function publicFeatures(): PublicCapabilities["features"] {
     promptAttachments: true,
     selectedSlashCommands: true,
     enqueue: true,
+    nodeRouting: true,
   };
 }
 

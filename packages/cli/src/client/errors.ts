@@ -1,4 +1,8 @@
-import type { PublicErrorCode, PublicReceipt } from "@orkestrator/protocol/public-api";
+import type {
+  PublicErrorCode,
+  PublicReceipt,
+  PublicNodeTag,
+} from "@orkestrator/protocol/public-api";
 
 /**
  * A failure the client reports with a stable public error code. Messages must
@@ -6,6 +10,7 @@ import type { PublicErrorCode, PublicReceipt } from "@orkestrator/protocol/publi
  */
 export class CliError extends Error {
   readonly code: PublicErrorCode;
+  readonly node?: PublicNodeTag;
   readonly details?: Record<string, unknown>;
   readonly receipt?: PublicReceipt;
   readonly retryable?: boolean;
@@ -17,6 +22,7 @@ export class CliError extends Error {
     message: string,
     options: {
       details?: Record<string, unknown>;
+      node?: PublicNodeTag;
       receipt?: PublicReceipt;
       retryable?: boolean;
       action?: string;
@@ -25,6 +31,7 @@ export class CliError extends Error {
     super(message);
     this.name = "CliError";
     this.code = code;
+    this.node = options.node;
     this.details = options.details;
     this.receipt = options.receipt;
     this.retryable = options.retryable;

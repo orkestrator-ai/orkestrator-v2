@@ -9,6 +9,14 @@ import { DEFAULT_WAIT_MS, TIMEOUT_OPTION } from "./common.js";
 
 /** One line per item for people; machines read `--json` or `--follow --jsonl`. */
 export function attentionLine(item: PublicAttentionItem): string {
+  const tagged = item as PublicAttentionItem & { nodeId?: string; nodeName?: string };
+  const prefix = tagged.nodeId
+    ? `[${tagged.nodeName ?? tagged.nodeId} --node ${tagged.nodeId}]  `
+    : "";
+  return prefix + attentionDetail(item);
+}
+
+function attentionDetail(item: PublicAttentionItem): string {
   if (item.kind === "interaction") {
     return `${item.blocking ? "waiting" : "pending"}  ${item.agent} in ${item.environmentName}: ${item.title}  (${item.sessionId} ${item.interactionId} rev ${item.revision})`;
   }
@@ -19,9 +27,11 @@ export function attentionLine(item: PublicAttentionItem): string {
 }
 
 function itemKey(item: PublicAttentionItem): string {
-  if (item.kind === "interaction") return `interaction:${item.interactionId}:${item.revision}`;
-  if (item.kind === "setup") return `setup:${item.environmentId}:${item.at}`;
-  return `run:${item.operationId}:${item.state}`;
+  if (item.kind === "interaction")
+    return `${(item as { nodeId?: string }).nodeId ?? ""}:interaction:${item.interactionId}:${item.revision}`;
+  if (item.kind === "setup")
+    return `${(item as { nodeId?: string }).nodeId ?? ""}:setup:${item.environmentId}:${item.at}`;
+  return `${(item as { nodeId?: string }).nodeId ?? ""}:run:${item.operationId}:${item.state}`;
 }
 
 export const attentionCommands: CommandSpec[] = [
@@ -53,6 +63,9 @@ export const attentionCommands: CommandSpec[] = [
       const input: Record<string, unknown> = {};
       if (parsed.options.cursor !== undefined) input.cursor = parsed.options.cursor;
       if (parsed.options.limit !== undefined) input.limit = parsed.options.limit;
+      if (parsed.options.follow === true && context.global.node === "all") {
+        throw new CliError("invalid-input", "--follow follows one node; pass its --node");
+      }
       if (parsed.options.follow !== true) {
         if (context.global.output === "jsonl") {
           throw new CliError("invalid-input", "--jsonl needs --follow");
@@ -65,7 +78,12 @@ export const attentionCommands: CommandSpec[] = [
           human: [
             ...(page.items.length ? page.items.map(attentionLine) : ["Nothing needs attention."]),
             ...(page.more ? [`and ${page.more} more (raise --limit)`] : []),
-            `cursor: ${page.cursor}`,
+            // With --node all, cursors are per node.
+            ...(page.cursor
+              ? [`cursor: ${page.cursor}`]
+              : ((page as { nodes?: Array<{ name: string; cursor?: string }> }).nodes ?? [])
+                  .filter((node) => node.cursor)
+                  .map((node) => `cursor (${node.name}): ${node.cursor}`)),
           ],
         };
       }

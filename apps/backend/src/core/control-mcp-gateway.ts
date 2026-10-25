@@ -2,7 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { controlMcpConfirmationRule } from "@orkestrator/protocol/control-mcp";
 import {
   isPublicActionName,
+  isPublicAggregateAction,
   PUBLIC_ACTION_NAMES,
+  PUBLIC_LOCAL_ONLY_ACTIONS,
   PUBLIC_ACTIONS,
   publicSuccessEnvelope,
   type PublicActionName,
@@ -11,6 +13,7 @@ import { PUBLIC_ACTION_CLI_COMMANDS } from "@orkestrator/protocol/public-api-cli
 import { PUBLIC_ACTION_INPUTS } from "@orkestrator/protocol/public-api-inputs";
 import {
   allowed,
+  onNode,
   runPublicAction,
   runStatus,
   type ControlMcpCaller,
@@ -122,6 +125,12 @@ export function describeAction(caller: ControlMcpCaller, action: PublicActionNam
     capability: contract.capability,
     ...(contract.confirmWhen ? { confirmWhen: contract.confirmWhen } : {}),
     requestId: descriptor.mutation ? "required" : "refused",
+    // run_action's nodeId: one node, or `all` for an aggregate read.
+    nodeId: PUBLIC_LOCAL_ONLY_ACTIONS.includes(action)
+      ? "refused"
+      : isPublicAggregateAction(action)
+        ? "optional; all aggregates every node"
+        : "optional",
     input: contract.input,
     examples: contract.examples.slice(0, 2),
     waitConditions,
@@ -175,17 +184,20 @@ const FIND_INPUT = leanSchema<{ query?: string; group?: string }>({
 const DESCRIBE_INPUT = leanSchema<{ action: string }>({ action: text("e.g. session.prompt") }, [
   "action",
 ]);
+const NODE_ID = text("From node.list; omit for this machine.");
 const RUN_INPUT = leanSchema<{
   action: string;
   input?: Record<string, unknown>;
   requestId?: string;
   confirmToken?: string;
+  nodeId?: string;
 }>(
   {
     action: text(),
     input: { type: "object", description: "The action's input; see describe_action." },
     requestId: text("Mutations only."),
     confirmToken: text(),
+    nodeId: text("From node.list; all for every machine's lists."),
   },
   ["action"],
 );
@@ -194,11 +206,13 @@ const STATUS_INPUT = leanSchema<{
   requestId?: string;
   action?: string;
   waitSeconds?: number;
+  nodeId?: string;
 }>({
   operationId: text(),
   requestId: text(),
   action: text(),
   waitSeconds: integer(0, 20),
+  nodeId: NODE_ID,
 });
 
 export function registerGatewayTools(server: McpServer, caller: ControlMcpCaller): void {
@@ -250,12 +264,18 @@ export function registerGatewayTools(server: McpServer, caller: ControlMcpCaller
     "run_action",
     {
       description:
-        "Run one action from find_actions with its input. Mutations need requestId (reuse it only to retry). If the result is confirmation-required, read its description aloud, get a yes, and repeat the identical call with confirmToken.",
+        "Run one action from find_actions with its input. Mutations need requestId (reuse it only to retry). nodeId runs it on another machine from node.list. If the result is confirmation-required, read its description aloud, get a yes, and repeat the identical call with confirmToken.",
       inputSchema: RUN_INPUT,
       annotations: { idempotentHint: true },
     },
-    async ({ action, input, requestId, confirmToken }) => {
-      const envelope = await runPublicAction(caller, action, input ?? {}, requestId, confirmToken);
+    async ({ action, input, requestId, confirmToken, nodeId }) => {
+      const envelope = await runPublicAction(
+        onNode(caller, nodeId),
+        action,
+        input ?? {},
+        requestId,
+        confirmToken,
+      );
       return envelopeToolResult(envelope, profile, sayForEnvelope(envelope));
     },
   );
@@ -264,11 +284,11 @@ export function registerGatewayTools(server: McpServer, caller: ControlMcpCaller
     "run_status",
     {
       description:
-        "Read a run by operationId or requestId (with action). waitSeconds (0-20) waits for it to settle; prefer 0 and check back later.",
+        "Read a run by operationId or requestId (with action), with the nodeId it ran on. waitSeconds (0-20) waits for it to settle; prefer 0 and check back later.",
       inputSchema: STATUS_INPUT,
       annotations: readOnly,
     },
-    async ({ operationId, requestId, action, waitSeconds }) => {
+    async ({ operationId, requestId, action, waitSeconds, nodeId }) => {
       if (Boolean(operationId) === Boolean(requestId)) {
         return envelopeToolResult(
           adapterError("run.get", "invalid-input", "Pass operationId or requestId"),
@@ -276,7 +296,7 @@ export function registerGatewayTools(server: McpServer, caller: ControlMcpCaller
         );
       }
       const outcome = await runStatus(
-        caller,
+        onNode(caller, nodeId),
         operationId ? { operationId } : { requestId, ...(action ? { action } : {}) },
         waitSeconds ?? 0,
       );

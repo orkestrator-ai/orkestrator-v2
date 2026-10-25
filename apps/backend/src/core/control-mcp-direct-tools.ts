@@ -1,16 +1,18 @@
 import { fromJsonSchema, type JsonSchemaType, type McpServer } from "@modelcontextprotocol/server";
 import { controlMcpConfirmationRule } from "@orkestrator/protocol/control-mcp";
 import {
+  isPublicAggregateAction,
   PUBLIC_ACTION_NAMES,
   PUBLIC_ACTIONS,
   PUBLIC_API_LIMITS,
+  PUBLIC_LOCAL_ONLY_ACTIONS,
   type PublicActionName,
 } from "@orkestrator/protocol/public-api";
 import {
   PUBLIC_ACTION_INPUTS,
   type PublicActionInputSchema,
 } from "@orkestrator/protocol/public-api-inputs";
-import { allowed, runPublicAction, type ControlMcpCaller } from "./control-mcp-caller.js";
+import { allowed, onNode, runPublicAction, type ControlMcpCaller } from "./control-mcp-caller.js";
 import { sayForEnvelope } from "./control-mcp-gateway.js";
 import { envelopeToolResult } from "./control-mcp-results.js";
 
@@ -40,6 +42,17 @@ const REQUEST_ID = {
   maxLength: PUBLIC_API_LIMITS.requestIdMaxChars,
   description: "Idempotency key: new for each request, reused only to retry the same one.",
 } as const;
+const NODE_ID = {
+  type: "string",
+  minLength: 1,
+  maxLength: 200,
+  description: "Run on that node (a nodeId from node_list). Omit for this machine.",
+} as const;
+const AGGREGATE_NODE_ID = {
+  ...NODE_ID,
+  description:
+    "Run on that node (a nodeId from node_list), or all for this machine and every node it controls, each item tagged with its nodeId. Omit for this machine.",
+} as const;
 const CONFIRM_TOKEN = {
   type: "string",
   minLength: 1,
@@ -60,6 +73,9 @@ export function directToolSchema(
       ...base.properties,
       ...(mutation ? { requestId: REQUEST_ID } : {}),
       ...(confirmable ? { confirmToken: CONFIRM_TOKEN } : {}),
+      ...(PUBLIC_LOCAL_ONLY_ACTIONS.includes(action)
+        ? {}
+        : { nodeId: isPublicAggregateAction(action) ? AGGREGATE_NODE_ID : NODE_ID }),
     },
     required: mutation ? [...base.required, "requestId"] : base.required,
   };
@@ -111,11 +127,11 @@ export function registerDirectTools(server: McpServer, caller: ControlMcpCaller)
         },
       },
       async (args) => {
-        const { confirmToken, ...input } = (args ?? {}) as Record<string, unknown>;
+        const { confirmToken, nodeId, ...input } = (args ?? {}) as Record<string, unknown>;
         const requestId = descriptor.mutation ? input.requestId : undefined;
         if (descriptor.mutation) delete input.requestId;
         const envelope = await runPublicAction(
-          caller,
+          onNode(caller, typeof nodeId === "string" ? nodeId : undefined),
           action,
           input,
           typeof requestId === "string" ? requestId : undefined,

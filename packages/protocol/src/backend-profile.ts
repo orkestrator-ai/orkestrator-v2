@@ -182,6 +182,11 @@ export const BACKEND_CAPABILITIES = {
   summaryReads: "summary-reads",
   /** `attach_controller` / `detach_controller` and node mode (command nodes). */
   nodeAttachment: "node-attachment",
+  /**
+   * `public_action` accepts `relayedAuthority` from an attached command node,
+   * so a Control MCP credential's operations stay its own on this leaf.
+   */
+  publicActionRelay: "public-action-relay",
 } as const;
 
 const MAX_CAPABILITIES = 64;

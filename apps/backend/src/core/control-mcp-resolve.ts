@@ -16,6 +16,9 @@ export interface TargetCandidate {
   aliases: string[];
   environmentId?: string;
   projectId?: string;
+  /** The machine it is on, when candidates span machines (`nodeId: all`). */
+  nodeId?: string;
+  nodeName?: string;
 }
 
 export type TargetResolution =

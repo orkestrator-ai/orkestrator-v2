@@ -178,6 +178,39 @@ export class NodePortal {
     return result;
   }
 
+  /**
+   * Forward one `public_action` to a node (`request.node`). Classified by the
+   * action rather than the command name: a read is never recorded as
+   * outcome-unknown, and only a mutation refreshes that node's summaries.
+   */
+  async routePublicAction(
+    nodeId: BackendId,
+    request: Record<string, unknown>,
+    options: { read: boolean; requestKey?: string; timeoutMs?: number },
+  ): Promise<RoutedResult<unknown>> {
+    const link = this.options.nodes.isLeaf() ? null : this.options.nodes.link(nodeId);
+    const result = await routeToNode({
+      nodeId,
+      link:
+        link && options.timeoutMs !== undefined
+          ? {
+              get connected() {
+                return link.connected;
+              },
+              invoke: <T>(command: string, args?: Record<string, unknown>) =>
+                link.invoke<T>(command, args, { timeoutMs: options.timeoutMs }),
+            }
+          : link,
+      command: "public_action",
+      args: request,
+      read: options.read,
+      ...(options.requestKey ? { requestKey: options.requestKey.slice(0, 128) } : {}),
+      outcomes: this.outcomes,
+    });
+    if (result.outcome === "ok" && !options.read) void this.readModel.requestHydrate(nodeId);
+    return result;
+  }
+
   /** Where the relay forwards one node's traffic; `null` while not connected. */
   relayTarget(nodeId: BackendId): RelayTarget | null {
     if (this.options.nodes.isLeaf()) return null;

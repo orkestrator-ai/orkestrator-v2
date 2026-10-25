@@ -473,6 +473,12 @@ async function evaluateRun(
 
 // `environment.launch` observes runs too, but registers its own reconciler in
 // `actions-launch.ts`, which imports this module.
-for (const action of ["session.start", "session.prompt", "session.command"] as const) {
+for (const action of [
+  "session.start",
+  "session.prompt",
+  "session.command",
+  "pr.create",
+  "pr.resolve",
+] as const) {
   registerReconciler(action, observeRun);
 }

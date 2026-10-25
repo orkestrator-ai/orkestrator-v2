@@ -34,18 +34,47 @@ export const PUBLIC_OPERATION_RECORD_VERSION = 1;
  * read another's operations. It is always set in-process from the caller's
  * credential, never read from request input.
  */
-export type PublicAuthority = "operator" | `control-mcp:${string}`;
+export type PublicAuthority =
+  | "operator"
+  | `control-mcp:${string}`
+  /** A command node's Control MCP credential, acting on this leaf. */
+  | `node:${string}`;
 
 const CONTROL_MCP_AUTHORITY = /^control-mcp:[a-z0-9][a-z0-9-]{0,47}$/;
+const RELAYED_AUTHORITY =
+  /^node:[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}\/control-mcp:[a-z0-9][a-z0-9-]{0,47}$/;
 
 export function isPublicAuthority(value: unknown): value is PublicAuthority {
-  return value === "operator" || (typeof value === "string" && CONTROL_MCP_AUTHORITY.test(value));
+  return (
+    value === "operator" ||
+    (typeof value === "string" &&
+      (CONTROL_MCP_AUTHORITY.test(value) || RELAYED_AUTHORITY.test(value)))
+  );
 }
 
 export function controlMcpAuthority(credentialId: string): PublicAuthority {
   const authority = `control-mcp:${credentialId}`;
   if (!isPublicAuthority(authority)) throw new Error("Control MCP credential ID is invalid");
   return authority;
+}
+
+/**
+ * The authority a leaf records for a command node's credential: a namespace
+ * of its own, so it can neither collide with nor read the leaf's operator or
+ * its own Control MCP credentials. The command node's operator stays the
+ * leaf's operator (the same user, holding the leaf's gateway token).
+ */
+export function relayedAuthority(
+  controllerId: string,
+  authority: PublicAuthority,
+): PublicAuthority {
+  if (authority === "operator") return "operator";
+  if (!CONTROL_MCP_AUTHORITY.test(authority)) {
+    throw new Error("Only a Control MCP credential's authority can be relayed");
+  }
+  const relayed = `node:${controllerId}/${authority}`;
+  if (!isPublicAuthority(relayed)) throw new Error("Relayed authority is invalid");
+  return relayed;
 }
 
 export interface PublicOperationRecord {

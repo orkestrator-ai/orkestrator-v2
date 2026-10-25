@@ -2922,6 +2922,11 @@ export class StorageAgentMail extends StorageDrafts {
           attempts,
           nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
           lastHoldReason: reason,
+          ...(pendingEntry?.coalescing &&
+          pendingEntry.retryAt &&
+          Date.parse(pendingEntry.retryAt) > Date.now()
+            ? { coalescing: true as const, retryAt: pendingEntry.retryAt }
+            : {}),
         };
         if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
         else store.pendingInject.push(next);
@@ -2949,6 +2954,12 @@ export class StorageAgentMail extends StorageDrafts {
           ).toISOString(),
           lastHoldReason: reason,
           ...(outcome.outcome === "verify" ? { verifyRequestId: outcome.requestId } : {}),
+          ...(outcome.outcome === "retry" &&
+          pendingEntry?.coalescing &&
+          pendingEntry.retryAt &&
+          Date.parse(pendingEntry.retryAt) > Date.now()
+            ? { coalescing: true as const, retryAt: pendingEntry.retryAt }
+            : {}),
         };
         if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
         else store.pendingInject.push(next);

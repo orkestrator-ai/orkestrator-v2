@@ -23,6 +23,7 @@ import {
   waitingStatus,
   type CoordinatorStatusWakeTimers,
   type CoordinatorWaitingBlocker,
+  type CoordinatorStatusWakeOptions,
 } from "./coordinator-status-wakes.js";
 
 /** Timers the test advances by hand; the system clock moves with them. */
@@ -82,7 +83,10 @@ type WorldSetup = {
 
 let setup: WorldSetup | null = null;
 
-async function createWorld(settings: Partial<AgentMessagingSettings> = {}): Promise<WorldSetup> {
+async function createWorld(
+  settings: Partial<AgentMessagingSettings> = {},
+  overrides: CoordinatorStatusWakeOptions = {},
+): Promise<WorldSetup> {
   const timers = new ManualTimers();
   const activity = new Map<string, AgentActivityState | "unknown">();
   const excerpts = new Map<string, string>();
@@ -95,6 +99,7 @@ async function createWorld(settings: Partial<AgentMessagingSettings> = {}): Prom
       lastAssistantExcerpt: async (environmentId, tabId) =>
         excerpts.get(`${environmentId}:${tabId}`),
       waitingBlocker: async (environmentId, tabId) => blockers.get(`${environmentId}:${tabId}`),
+      ...overrides,
     },
   });
   if (Object.keys(settings).length > 0) {
@@ -270,6 +275,79 @@ describe("coordinator status wakes", () => {
     expect(world.wakes(coordinator)).toBe(1);
     expect(await world.undelivered(coordinator)).toEqual([]);
   });
+
+  test.each(["batch-full", "held"] as const)(
+    "a joined notice returned as %s retains its deadline and accepts later notices",
+    async (outcome) => {
+      const context = await createWorld();
+      const { world } = context;
+      const coordinator = await world.main();
+      // Control the drain explicitly so every pending sibling is present before claiming.
+      await world.mail.shutdown();
+      const send = (id: string, body: string, hold = false) =>
+        world.storage.sendAgentMail(
+          { kind: "system", projectId: world.projectId, source: "workflow", resourceId: id },
+          {
+            requestId: id,
+            toEnvironmentId: coordinator.environmentId,
+            toTabId: coordinator.tabId,
+            body,
+          },
+          hold ? { coalesceMs: COORDINATOR_STATUS_COALESCE_MS } : {},
+        );
+      const reports = outcome === "batch-full" ? 4 : 1;
+      for (let index = 0; index < reports; index += 1)
+        await send(`report-${index}`, "x".repeat(outcome === "batch-full" ? 31_000 : 10));
+      const notice = await send("held-notice", "n".repeat(16_000), true);
+      const deadline = new Date(
+        context.timers.now() + COORDINATOR_STATUS_COALESCE_MS,
+      ).toISOString();
+      const key = `${coordinator.environmentId}\0${coordinator.logicalSessionKey}`;
+      if (outcome === "held") world.holdNext.add(key);
+      await world.deliver();
+      const pending = () =>
+        world.storage.listPendingAgentMailInjects(100, {
+          includeCoalescing: true,
+          includeDeferred: true,
+        });
+      expect(
+        (await pending()).find((entry) => entry.message.id === notice.id)?.coalescingUntil,
+      ).toBe(deadline);
+      // Remove the immediate messages so only held notices could start a turn.
+      const mailbox = (await pending()).find((entry) => entry.message.id === notice.id)!.mailbox;
+      await world.storage.resetAgentMailInjectBackoff(mailbox.mailboxId);
+      for (const entry of await pending()) {
+        if (entry.message.id === notice.id) continue;
+        const claimed = await world.storage.beginAgentMailInject(
+          mailbox.mailboxId,
+          entry.message.id,
+          mailbox.incarnationId,
+        );
+        if (claimed)
+          await world.storage.finishAgentMailInject(mailbox.mailboxId, entry.message.id, {
+            outcome: "accepted",
+          });
+      }
+      await world.finishTurn(coordinator);
+      const wakes = world.wakes(coordinator);
+      await advance(context, 3_000);
+      const later = await send("later-notice", "later", true);
+      const held = await pending();
+      expect(held.find((entry) => entry.message.id === notice.id)?.coalescingUntil).toBe(deadline);
+      expect(held.find((entry) => entry.message.id === later.id)?.coalescingUntil).toBe(deadline);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(wakes);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS - 3_000 + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(wakes + 1);
+      expect(
+        world
+          .carriers(coordinator)
+          .at(-1)!
+          .map((entry) => entry.messageId),
+      ).toEqual([notice.id, later.id]);
+    },
+  );
 
   test("a held notice never starts a turn of its own before its window ends", async () => {
     const context = await createWorld();
@@ -1057,6 +1135,50 @@ describe("coordinator status wakes", () => {
       expect(world.received(coordinator)[2]).toContain("without sending a report");
     });
 
+    test("waiting excerpt and blocker reads start together on the serialized wake queue", async () => {
+      const excerptStarted = Promise.withResolvers<void>();
+      const blockerStarted = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const context = await createWorld(
+        {},
+        {
+          lastAssistantExcerpt: async () => {
+            excerptStarted.resolve();
+            await release.promise;
+            return "Please decide";
+          },
+          waitingBlocker: async () => {
+            blockerStarted.resolve();
+            await release.promise;
+            return "approval-and-question";
+          },
+        },
+      );
+      const { world, activity } = context;
+      const worker = await world.addEnvironment("waiting-worker", { launched: true });
+      const coordinator = await world.main();
+      activity.set(`${worker.environmentId}:${worker.tabId}`, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      try {
+        await excerptStarted.promise;
+        // With sequential reads this cannot resolve until the excerpt is released.
+        await Promise.race([
+          blockerStarted.promise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("blocker read did not start concurrently")), 500),
+          ),
+        ]);
+      } finally {
+        release.resolve();
+      }
+      await world.coordinator.statusWakes.settled();
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.carriers(coordinator)[0]![0]!.body).toContain("cannot approve or answer");
+      expect(world.carriers(coordinator)[0]![0]!.body).toContain("Please decide");
+    });
+
     test("a waiting episode starting or ending announces a coordinator change", async () => {
       const context = await createWorld();
       const { world, activity } = context;
@@ -1417,9 +1539,9 @@ describe("waiting blockers", () => {
     const question = waitingStatus(delegation, "e", "t", undefined, "question")!;
     expect(question.headline).toBe("is waiting for an answer to a question");
     expect(question.details[0]).toContain("cannot answer on its behalf");
-    expect(waitingStatus(delegation, "e", "t", undefined, "approval-and-question")!.headline).toBe(
-      "is waiting for an approval and an answer to a question",
-    );
+    const combined = waitingStatus(delegation, "e", "t", undefined, "approval-and-question")!;
+    expect(combined.headline).toBe("is waiting for an approval and an answer to a question");
+    expect(combined.details[0]).toContain("cannot approve or answer on its behalf");
     // The key is the episode, never the blocker: a later read cannot resend it.
     expect(waitingStatus(delegation, "e", "t", undefined, "question")!.key).toBe(
       waitingStatus(delegation, "e", "t")!.key,

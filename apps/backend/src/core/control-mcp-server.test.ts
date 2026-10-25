@@ -2153,6 +2153,38 @@ describe("Orkestrator control MCP server", () => {
         ],
       },
     }));
+    let remoteActivity = "working";
+    let remoteAvailable = true;
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_self",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: remoteAvailable,
+          view: { displayName: "Build box" },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [
+            {
+              ref: { environmentId: "remote-worker" },
+              projectId: "p-leaf",
+              name: "Remote worker",
+              status: "running",
+              activity: remoteActivity,
+            },
+          ],
+        },
+      ],
+    }));
     const credential = server.issueCoordinatorCredential({
       role: "coordinator",
       projectId: "project-1",
@@ -2178,12 +2210,26 @@ describe("Orkestrator control MCP server", () => {
     expect(polled).toMatchObject({
       total: 1,
       environments: [{ id: "env-worker", agentActivityState: "working" }],
+      otherNodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          environments: [{ environmentId: "remote-worker", activity: "working" }],
+        },
+      ],
       repeatedRead: true,
     });
     expect(String(polled?.instruction)).toContain("Do not wait, sleep, poll");
 
     // A different question is not the same poll, and a real change clears it.
     expect(await list({ status: "running" })).not.toHaveProperty("repeatedRead");
+    remoteActivity = "waiting";
+    expect(await list()).not.toHaveProperty("repeatedRead");
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      expect(await list()).not.toHaveProperty("repeatedRead");
+    expect(await list()).toHaveProperty("repeatedRead", true);
+    remoteAvailable = false;
+    expect(await list()).not.toHaveProperty("repeatedRead");
     worker = { ...worker, agentActivityState: "idle" };
     expect(await list()).not.toHaveProperty("repeatedRead");
   });

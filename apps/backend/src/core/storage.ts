@@ -193,6 +193,20 @@ export class StorageService extends StoragePublicOperations {
     return { workspaces: Object.values(store.workspaces), workflows: store.workflows };
   }
 
+  /** Keep the draft snapshot stable through the coordinator write. Lock order is drafts, then coordinator. */
+  async mutateCoordinatorWorkspaceWithComposeDrafts(
+    projectId: string,
+    mutate: (
+      current: CoordinatorWorkspace | null,
+      drafts: Awaited<ReturnType<StorageService["listComposeDrafts"]>>,
+    ) => CoordinatorWorkspace | null,
+  ): Promise<CoordinatorWorkspace | null> {
+    return this.enqueueComposeDraftMutation(async () => {
+      const drafts = Object.values(await this.loadComposeDrafts());
+      return this.mutateCoordinatorWorkspace(projectId, (current) => mutate(current, drafts));
+    });
+  }
+
   async mutateCoordinatorWorkspace(
     projectId: string,
     mutate: (current: CoordinatorWorkspace | null) => CoordinatorWorkspace | null,

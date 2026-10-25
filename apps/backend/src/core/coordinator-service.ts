@@ -464,8 +464,11 @@ export class CoordinatorService {
     if (drafts.some((draft) => composeDraftHasContent(draft.value))) return false;
     const mail = await this.storage
       .getAgentMailMailbox(runtimeId, item.tabId, { limit: 1 })
-      .catch(() => null);
-    if (mail && mail.total > 0) return false;
+      .catch((error: unknown) => {
+        if (error instanceof AgentMailError && error.code === "recipient-not-found") return null;
+        return "unavailable" as const;
+      });
+    if (mail === "unavailable" || (mail && mail.total > 0)) return false;
     const work = await this.storage.listCoordinatorWorkflowAssociations(workspace.projectId);
     return !work.some(
       (association) =>
@@ -503,36 +506,47 @@ export class CoordinatorService {
       //
       // With no main open this starts the main coordinator; otherwise it adds
       // the next side agent. There is never a second main.
-      const created = coordinatorMainConversation(existing)
-        ? conversation(existing.id, "side", nextSideOrdinal(existing))
-        : conversation(existing.id, "main");
-      if (title?.trim() && created.role === "main") created.title = title.trim();
-      const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-        if (!current) throw new Error("Coordinator workspace disappeared");
-        const now = new Date().toISOString();
-        // Re-checked against the record being written: a conversation
-        // assigned since the read above is no longer unused.
-        const conversations = current.conversations.map((item) =>
-          unused.has(item.id) && !item.closedAt && !item.agent && item.role === "side"
-            ? { ...item, closedAt: now }
-            : item,
-        );
-        if (
-          conversations.filter((item) => !item.closedAt).length >=
-          MAX_OPEN_COORDINATOR_CONVERSATIONS
-        ) {
-          throw new Error("Coordinator conversation limit reached");
-        }
-        if (created.role === "main" && coordinatorMainConversation(current)) {
-          throw new Error("This project already has a main coordinator");
-        }
-        return {
-          ...current,
-          conversations: retainCoordinatorConversations([...conversations, created]),
-          selectedConversationId: created.id,
-          updatedAt: now,
-        };
-      });
+      const workspace = await this.storage.mutateCoordinatorWorkspaceWithComposeDrafts(
+        projectId,
+        (current, drafts) => {
+          if (!current) throw new Error("Coordinator workspace disappeared");
+          const now = new Date().toISOString();
+          // Re-checked against the record being written: a conversation
+          // assigned since the read above is no longer unused.
+          const conversations = current.conversations.map((item) =>
+            unused.has(item.id) &&
+            !item.closedAt &&
+            !item.agent &&
+            !item.providerSessionId &&
+            item.role === "side" &&
+            !drafts.some(
+              (draft) =>
+                draft.ownerType === "environment" &&
+                draft.ownerId === coordinatorRuntimeId(current.id, item.id) &&
+                composeDraftHasContent(draft.value),
+            )
+              ? { ...item, closedAt: now }
+              : item,
+          );
+          if (
+            conversations.filter((item) => !item.closedAt).length >=
+            MAX_OPEN_COORDINATOR_CONVERSATIONS
+          ) {
+            throw new Error("Coordinator conversation limit reached");
+          }
+          const remaining = { ...current, conversations };
+          const created = coordinatorMainConversation(remaining)
+            ? conversation(current.id, "side", nextSideOrdinal(remaining))
+            : conversation(current.id, "main");
+          if (title?.trim() && created.role === "main") created.title = title.trim();
+          return {
+            ...current,
+            conversations: retainCoordinatorConversations([...conversations, created]),
+            selectedConversationId: created.id,
+            updatedAt: now,
+          };
+        },
+      );
       if (!workspace) throw new Error("Coordinator workspace disappeared");
       await this.storage.pruneCoordinatorAttachmentDirectories(
         workspace.id,

@@ -709,7 +709,7 @@ export function waitingStatus(
     terminal: false,
     headline: WAITING_HEADLINES[blocker ?? "unknown"],
     details: [
-      `Waiting since ${since}. A person has to answer it in the worker's tab; the coordinator cannot ${blocker === "question" ? "answer" : "approve"} on its behalf.`,
+      `Waiting since ${since}. A person has to answer it in the worker's tab; the coordinator cannot ${blocker === "approval-and-question" ? "approve or answer" : blocker === "question" ? "answer" : "approve"} on its behalf.`,
       ...(excerpt ? [`Last message: ${boundedLine(excerpt)}`] : []),
     ],
     tools: [
@@ -1180,20 +1180,26 @@ export class CoordinatorStatusWakes {
           .then((state) => (state === "unavailable" ? undefined : state.name))
           .catch(() => undefined)
       : (await this.storage.getEnvironment(association.resourceId))?.name;
-    const excerpt = remote
-      ? await remote
-          .lastAssistantExcerpt(association.nodeId!, association.resourceId, delegation.workerTabId)
-          .catch(() => undefined)
-      : await this.options
-          .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
-          .catch(() => undefined);
-    const blocker = remote
-      ? await remote
-          .waitingBlocker?.(association.nodeId!, association.resourceId, delegation.workerTabId)
-          .catch(() => undefined)
-      : await this.options
-          .waitingBlocker?.(association.resourceId, delegation.workerTabId)
-          .catch(() => undefined);
+    const [excerpt, blocker] = await Promise.all([
+      remote
+        ? remote
+            .lastAssistantExcerpt(
+              association.nodeId!,
+              association.resourceId,
+              delegation.workerTabId,
+            )
+            .catch(() => undefined)
+        : this.options
+            .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
+            .catch(() => undefined),
+      remote
+        ? remote
+            .waitingBlocker?.(association.nodeId!, association.resourceId, delegation.workerTabId)
+            .catch(() => undefined)
+        : this.options
+            .waitingBlocker?.(association.resourceId, delegation.workerTabId)
+            .catch(() => undefined),
+    ]);
     const nodeName = remote
       ? await remote.nodeName(association.nodeId!).catch(() => association.nodeId!)
       : null;

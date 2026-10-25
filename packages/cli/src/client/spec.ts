@@ -71,6 +71,8 @@ export interface CommandContext {
 export interface GlobalOptions {
   connection?: string;
   profile?: string;
+  /** `--node`: a leaf node ID, or `all` for an aggregate read. */
+  node?: string;
   output: "human" | "json" | "id" | "jsonl";
   help: boolean;
   version: boolean;

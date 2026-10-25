@@ -119,6 +119,8 @@ describe("Control MCP profiles", () => {
       "list_agents",
       "get_tab_state",
       "get_tab_transcript",
+      "list_multi_reviews",
+      "get_multi_review",
       "overview",
       "read_session",
       ...GATEWAY_TOOL_NAMES,

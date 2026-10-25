@@ -100,7 +100,9 @@ async function activeRunFor(
         (record) =>
           (record.action === "session.start" ||
             record.action === "session.prompt" ||
-            record.action === "session.command") &&
+            record.action === "session.command" ||
+            record.action === "pr.create" ||
+            record.action === "pr.resolve") &&
           record.resources.sessionId === session.sessionId &&
           !!record.resources.dispatchRequestId &&
           dispatched.includes(record.resources.dispatchRequestId),

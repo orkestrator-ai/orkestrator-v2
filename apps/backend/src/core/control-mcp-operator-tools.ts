@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { PublicActionName } from "@orkestrator/protocol/public-api";
+import { PUBLIC_ALL_NODES, type PublicActionName } from "@orkestrator/protocol/public-api";
 import {
   encodePublicSessionId,
+  type PublicNodeList,
   type PublicProjectSummary,
   type PublicTicketDetail,
   type PublicTicketSummary,
@@ -10,6 +11,7 @@ import {
 import {
   allowed,
   dispatchAs,
+  onNode,
   runPublicAction,
   type ControlMcpCaller,
 } from "./control-mcp-caller.js";
@@ -18,6 +20,7 @@ import {
   launchOptions,
   launchSelectionReport,
   launchSettingsTiers,
+  type ControlMcpInvoker,
 } from "./control-shared-actions.js";
 
 /**
@@ -58,7 +61,131 @@ export const OPERATOR_TOOL_ACTIONS: Readonly<Record<string, readonly PublicActio
     send_prompt_to_tab: ["session.prompt"],
     list_mailboxes: ["mail.mailboxes"],
     send_message: ["mail.send"],
+    list_nodes: ["node.list"],
+    // The coordinator's Multi Review tools, by name, over review.*.
+    launch_multi_review: ["review.launch"],
+    start_multi_review: ["review.launch"],
+    list_multi_reviews: ["review.list"],
+    get_multi_review: ["review.get"],
+    open_multi_review: ["review.open"],
+    open_multi_review_fix: ["review.open"],
+    address_multi_review: ["review.address"],
+    cancel_multi_review: ["review.cancel"],
+    // The action bar's PR and Resolve buttons.
+    create_pr: ["pr.create"],
+    resolve_conflicts: ["pr.resolve"],
   });
+
+/** A node refusal of a legacy tool, worded with its public error code. */
+export class ControlMcpNodeError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "ControlMcpNodeError";
+  }
+}
+
+export interface OperatorNode {
+  /** The caller acting on that node: public actions and composed reads both go there. */
+  caller: ControlMcpCaller;
+  /** Raw registry reads on that node. */
+  invoke: ControlMcpInvoker;
+  /** `{nodeId, node}` for a result from another node; `{}` for this one. */
+  tag: JsonRecord;
+}
+
+/**
+ * The machine a legacy tool's `nodeId` names, checked against `node.list` so
+ * the refusals carry the public codes (`node-not-found`, `node-unavailable`,
+ * `node-unsupported`). Reads are routed with `invoke_on_node`; public actions
+ * go through `request.node` under the caller's relayed authority.
+ */
+export async function operatorNode(
+  caller: ControlMcpCaller,
+  nodeId: string | undefined,
+): Promise<OperatorNode> {
+  const local = onNode(caller, undefined);
+  if (!nodeId) return { caller: local, invoke: local.invoke, tag: {} };
+  if (nodeId === PUBLIC_ALL_NODES) {
+    throw new ControlMcpNodeError(
+      "invalid-input",
+      "This tool acts on one machine; all is only for list_projects and list_environments",
+    );
+  }
+  const listed = await dispatchAs<PublicNodeList>(local, "node.list", {});
+  if (!listed.ok) throw new ControlMcpNodeError(listed.error.code, listed.error.message);
+  const node = listed.result.items.find((item) => item.nodeId === nodeId);
+  if (!node) {
+    throw new ControlMcpNodeError(
+      "node-not-found",
+      listed.result.mode === "leaf"
+        ? "This node is in leaf mode; act on other machines from its command node"
+        : `No node has ID ${nodeId}; list_nodes names them`,
+    );
+  }
+  if (node.self) return { caller: local, invoke: local.invoke, tag: {} };
+  if (!node.available) {
+    throw new ControlMcpNodeError(
+      "node-unavailable",
+      `${node.name} is not connected (${node.state})`,
+    );
+  }
+  if (!node.publicActions) {
+    throw new ControlMcpNodeError(
+      "node-unsupported",
+      `${node.name}: ${node.reason ?? "unsupported"}`,
+    );
+  }
+  const routed: ControlMcpInvoker = async <T>(command: string, args: JsonRecord = {}) => {
+    const answer = await local.invoke<{ outcome: string; result?: T }>("invoke_on_node", {
+      nodeId,
+      command,
+      args,
+    });
+    if (answer.outcome !== "ok") {
+      throw new ControlMcpNodeError(
+        "node-outcome-unknown",
+        `The connection to ${node.name} was lost before it answered`,
+      );
+    }
+    return answer.result as T;
+  };
+  return {
+    caller: { ...onNode(caller, nodeId), readInvoke: routed },
+    invoke: routed,
+    tag: { nodeId, node: node.name },
+  };
+}
+
+/** Every machine a legacy list reads with `nodeId: all`, and the ones it could not. */
+export async function operatorAllNodes(caller: ControlMcpCaller) {
+  const local = onNode(caller, undefined);
+  const listed = await dispatchAs<PublicNodeList>(local, "node.list", {});
+  if (!listed.ok) throw new ControlMcpNodeError(listed.error.code, listed.error.message);
+  const reachable: OperatorNode[] = [];
+  const unavailable: JsonRecord[] = [];
+  for (const node of listed.result.items) {
+    if (node.self) {
+      reachable.push({
+        caller: local,
+        invoke: local.invoke,
+        tag: { nodeId: node.nodeId, node: node.name },
+      });
+    } else if (node.available && node.publicActions) {
+      const routed = await operatorNode(caller, node.nodeId);
+      reachable.push(routed);
+    } else {
+      unavailable.push({
+        nodeId: node.nodeId,
+        node: node.name,
+        reason: node.reason ?? node.state,
+      });
+    }
+  }
+  return { reachable, unavailable };
+}
 
 export function operatorToolListed(caller: ControlMcpCaller, tool: string): boolean {
   const actions = OPERATOR_TOOL_ACTIONS[tool];
@@ -130,13 +257,17 @@ function legacyTicketDetail(ticket: PublicTicketDetail): JsonRecord {
 export async function operatorListProjects(caller: ControlMcpCaller) {
   const pages = await allPages<PublicProjectSummary>(caller, "project.list", {});
   if ("envelope" in pages) return failure(pages.envelope);
-  const projects = pages.items.map((project) => ({
-    id: project.id,
-    name: project.name,
-    addedAt: project.addedAt,
-    order: project.order,
-    hasLocalCheckout: typeof project.localPath === "string" && project.localPath.length > 0,
-  }));
+  const projects = pages.items.map((project) => {
+    const tagged = project as PublicProjectSummary & { nodeId?: string; nodeName?: string };
+    return {
+      id: project.id,
+      name: project.name,
+      addedAt: project.addedAt,
+      order: project.order,
+      hasLocalCheckout: typeof project.localPath === "string" && project.localPath.length > 0,
+      ...(tagged.nodeId ? { nodeId: tagged.nodeId, node: tagged.nodeName } : {}),
+    };
+  });
   return legacyResult({ projects, total: projects.length });
 }
 
@@ -233,14 +364,15 @@ async function selectionFor(
   input: { agent: AgentPlatform; modelId?: string; reasoningId?: string },
 ): Promise<JsonRecord> {
   try {
+    const read = caller.readInvoke ?? caller.invoke;
     const [options, environment] = await Promise.all([
-      launchOptions(caller.invoke, projectId, environmentId),
+      launchOptions(read, projectId, environmentId),
       environmentId
-        ? caller.invoke<unknown>("get_environment", { environmentId })
+        ? read<unknown>("get_environment", { environmentId })
         : Promise.resolve(undefined),
     ]);
     const tiers = await launchSettingsTiers(
-      caller.invoke,
+      read,
       projectId,
       environment && typeof environment === "object" ? (environment as JsonRecord) : undefined,
     );
@@ -437,5 +569,52 @@ export async function operatorSendMessage(
       placement: result.placement,
     },
     receipt: envelope.receipt,
+  });
+}
+
+export async function operatorListNodes(caller: ControlMcpCaller) {
+  const envelope = await runPublicAction(
+    onNode(caller, undefined),
+    "node.list",
+    {},
+    undefined,
+    undefined,
+  );
+  if (!envelope.ok) return failure(envelope);
+  const list = envelope.result as PublicNodeList;
+  const self = list.items.find((item) => item.self);
+  return legacyResult({
+    self: self ? { nodeId: self.nodeId, name: self.name, mode: list.mode } : null,
+    nodes: list.items
+      .filter((item) => !item.self)
+      .map((item) => ({
+        nodeId: item.nodeId,
+        name: item.name,
+        available: item.available,
+        state: item.state,
+        mode: item.mode,
+        version: item.version,
+        publicActions: item.publicActions,
+        ...(item.reason ? { reason: item.reason } : {}),
+      })),
+    controlledBy: list.controlledBy,
+    total: list.items.length - (self ? 1 : 0),
+  });
+}
+
+/** One public action as a legacy-named tool: the public envelope, or the legacy error. */
+export async function operatorAction(
+  caller: ControlMcpCaller,
+  action: PublicActionName,
+  input: JsonRecord,
+  requestId: string | undefined,
+  confirmToken?: unknown,
+) {
+  const envelope = await runPublicAction(caller, action, input, requestId, confirmToken);
+  if (!envelope.ok) return failure(envelope);
+  return legacyResult({
+    ...(envelope.result as JsonRecord),
+    ...(envelope.receipt ? { receipt: envelope.receipt } : {}),
+    ...(envelope.node ? { nodeId: envelope.node.nodeId, node: envelope.node.name } : {}),
   });
 }

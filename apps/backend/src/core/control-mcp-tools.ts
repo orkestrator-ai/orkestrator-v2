@@ -35,12 +35,14 @@ import {
   terminalSessionId,
   validateSelection,
 } from "./control-shared-actions.js";
-import type { ControlMcpCaller } from "./control-mcp-caller.js";
+import { onNode as callerOnNode, type ControlMcpCaller } from "./control-mcp-caller.js";
+import { PUBLIC_ALL_NODES } from "@orkestrator/protocol/public-api";
 import { registerCoordinatorWorkflowTools } from "./control-mcp-coordinator-tools.js";
 import {
   asArray,
   assertCoordinatorLaunchBaseOnBranch,
   isRecord,
+  listNodeIdField,
   nodeIdField,
   nonEmptyString,
   readAnnotations,
@@ -50,7 +52,9 @@ import {
 import { registerDirectTools } from "./control-mcp-direct-tools.js";
 import { registerGatewayTools } from "./control-mcp-gateway.js";
 import {
+  ControlMcpNodeError,
   operatorAddTicketComment,
+  operatorAllNodes,
   operatorCreateTicket,
   operatorGetTicket,
   operatorLaunchEnvironment,
@@ -58,12 +62,14 @@ import {
   operatorListMailboxes,
   operatorListProjects,
   operatorListTickets,
+  operatorNode,
   operatorSendMessage,
   operatorSendPrompt,
   operatorToolListed,
   operatorUpdateTicket,
 } from "./control-mcp-operator-tools.js";
 import { registerVoiceTools } from "./control-mcp-voice.js";
+import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-tools.js";
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
@@ -402,6 +408,30 @@ export type CoordinatorPollGuard = (key: string, fingerprint: string) => JsonRec
  * their capability; operator tools by the public actions they use and the
  * credential's profile.
  */
+/** Tickets, mailboxes and projects of a coordinator are its own node's. */
+function coordinatorNodeRefused(nodeId: string | undefined): void {
+  if (nodeId) {
+    throw new Error(
+      "This tool acts on the coordinator's own node; other nodes take mail and launches.",
+    );
+  }
+}
+
+/** A legacy result from another machine names it. */
+function withNodeTag<T extends { structuredContent?: unknown; content: unknown[] }>(
+  result: T,
+  tag: JsonRecord,
+): T {
+  if (!("nodeId" in tag) || !isRecord(result.structuredContent) || "isError" in result)
+    return result;
+  const structuredContent = { ...result.structuredContent, ...tag };
+  return {
+    ...result,
+    structuredContent,
+    content: [{ type: "text" as const, text: JSON.stringify(structuredContent) }],
+  };
+}
+
 function filteredToolServer(server: McpServer, listed: (tool: string) => boolean): McpServer {
   return {
     registerTool: ((name: string, ...rest: unknown[]) =>
@@ -527,29 +557,35 @@ export async function createControlMcp(
     if (!nodes) throw new Error("nodeId is available to coordinators only.");
     return nodes.targetOrSelf(nodeId);
   };
+  const onNodeResult = (target: NodeTarget | null): JsonRecord =>
+    target ? { nodeId: target.nodeId, node: target.nodeName } : {};
   /** The invoker for one environment's node, after checking it is this project's worker there. */
   const environmentInvoker = async (
     nodeId: string | undefined,
     environmentId: string,
-  ): Promise<{ inv: ControlMcpInvoker; target: NodeTarget | null }> => {
+  ): Promise<{ inv: ControlMcpInvoker; target: NodeTarget | null; where: JsonRecord }> => {
+    if (operator) {
+      // An operator's nodeId names any machine; no project scope applies.
+      const node = await operatorNode(operator, nodeId);
+      return { inv: node.invoke, target: null, where: node.tag };
+    }
     const target = await onNode(nodeId);
-    if (!target) return { inv: invoke, target: null };
+    if (!target) return { inv: invoke, target: null, where: {} };
     await target.environment(environmentId);
-    return { inv: target.invoke, target };
+    return { inv: target.invoke, target, where: onNodeResult(target) };
   };
-  const onNodeResult = (target: NodeTarget | null): JsonRecord =>
-    target ? { nodeId: target.nodeId, node: target.nodeName } : {};
 
   server.registerTool(
     "list_projects",
     {
       title: "List Orkestrator projects",
       description: "List safe summaries of the projects configured in Orkestrator.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({ nodeId: operator ? listNodeIdField : nodeIdField }),
       annotations: readAnnotations(),
     },
-    async () => {
-      if (operator) return operatorListProjects(operator);
+    async ({ nodeId }) => {
+      if (operator) return operatorListProjects(callerOnNode(operator, nodeId));
+      coordinatorNodeRefused(nodeId);
       const projects = asArray(await invoke("get_projects"))
         .filter((project) => !coordinatorScope || project.id === coordinatorScope.projectId)
         .map(projectSummary);
@@ -573,6 +609,13 @@ export async function createControlMcp(
         : readAnnotations(),
     },
     async ({ projectId, environmentId, nodeId }) => {
+      if (operator) {
+        const node = await operatorNode(operator, nodeId);
+        return toolResult({
+          ...(await launchOptionsWithDefaults(projectId, environmentId, node.invoke)),
+          ...node.tag,
+        });
+      }
       const target = await onNode(nodeId);
       if (target) {
         // That node's agents and models, its defaults, and its copy's base branch.
@@ -653,11 +696,49 @@ export async function createControlMcp(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         status: z.enum(["running", "stopped", "error", "creating", "stopping"]).optional(),
-        nodeId: nodeIdField,
+        nodeId: operator ? listNodeIdField : nodeIdField,
       }),
       annotations: readAnnotations(),
     },
     async ({ projectId, status, nodeId }) => {
+      if (operator) {
+        if (nodeId === PUBLIC_ALL_NODES && projectId) {
+          throw new ControlMcpNodeError(
+            "invalid-input",
+            "A projectId belongs to one machine: pass its nodeId instead of all",
+          );
+        }
+        const { reachable, unavailable } =
+          nodeId === PUBLIC_ALL_NODES
+            ? await operatorAllNodes(operator)
+            : { reachable: [await operatorNode(operator, nodeId)], unavailable: [] };
+        const failed: JsonRecord[] = [...unavailable];
+        const groups = await Promise.all(
+          reachable.map((node) =>
+            allEnvironments(node.invoke, projectId)
+              .then((all) =>
+                all
+                  .filter((environment) => !status || environment.status === status)
+                  .map((environment) => ({ ...environmentSummary(environment), ...node.tag })),
+              )
+              .catch((error: unknown) => {
+                // One machine failing must not hide the others' environments.
+                if (nodeId !== PUBLIC_ALL_NODES) throw error;
+                failed.push({
+                  ...node.tag,
+                  reason: error instanceof Error ? error.message.slice(0, 300) : "read failed",
+                });
+                return [];
+              }),
+          ),
+        );
+        const environments = groups.flat();
+        return toolResult({
+          environments,
+          total: environments.length,
+          ...(failed.length > 0 ? { unavailableNodes: failed } : {}),
+        });
+      }
       const target = await onNode(nodeId);
       const all = target
         ? await allEnvironments(target.invoke, target.projectId)
@@ -735,6 +816,12 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, nodeId }) => {
+      if (operator) {
+        const node = await operatorNode(operator, nodeId);
+        const environment = await node.invoke<unknown>("get_environment", { environmentId });
+        if (!isRecord(environment)) throw new Error(`Environment not found: ${environmentId}`);
+        return toolResult({ environment: { ...environmentSummary(environment), ...node.tag } });
+      }
       const target = await onNode(nodeId);
       const environment = target
         ? await target.environment(environmentId)
@@ -758,10 +845,10 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, nodeId }) => {
-      const { inv, target } = await environmentInvoker(nodeId, environmentId);
+      const { inv, where } = await environmentInvoker(nodeId, environmentId);
       const layout = await inv<unknown>("get_pane_layout", { environmentId });
       const tabs = paneTabs(layout);
-      return toolResult({ environmentId, ...onNodeResult(target), tabs, total: tabs.length });
+      return toolResult({ environmentId, ...where, tabs, total: tabs.length });
     },
   );
 
@@ -779,6 +866,15 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ projectId, environmentId, nodeId }) => {
+      if (operator) {
+        const node = await operatorNode(operator, nodeId);
+        const snapshot = await node.invoke<unknown>("get_agent_registry", {
+          ...(projectId ? { projectId } : {}),
+          ...(environmentId ? { environmentId } : {}),
+        });
+        if (!isRecord(snapshot)) throw new Error("Agent registry returned no result");
+        return toolResult({ ...snapshot, ...node.tag });
+      }
       const target = await onNode(nodeId);
       if (target) {
         if (environmentId) await target.environment(environmentId);
@@ -819,8 +915,8 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, nodeId }) => {
-      const { inv, target } = await environmentInvoker(nodeId, environmentId);
-      const where = { environmentId, tabId, ...onNodeResult(target) };
+      const { inv, where: node } = await environmentInvoker(nodeId, environmentId);
+      const where = { environmentId, tabId, ...node };
       const [layout, environment] = await Promise.all([
         inv<unknown>("get_pane_layout", { environmentId }),
         inv<unknown>("get_environment", { environmentId }),
@@ -867,7 +963,7 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, limit, nodeId }) => {
-      const { inv, target } = await environmentInvoker(nodeId, environmentId);
+      const { inv, where } = await environmentInvoker(nodeId, environmentId);
       const [layout, environment] = await Promise.all([
         inv<unknown>("get_pane_layout", { environmentId }),
         inv<unknown>("get_environment", { environmentId }),
@@ -884,7 +980,7 @@ export async function createControlMcp(
           return toolResult({
             environmentId,
             tabId,
-            ...onNodeResult(target),
+            ...where,
             agent: native.agent,
             messages: [],
           });
@@ -895,7 +991,7 @@ export async function createControlMcp(
         return toolResult({
           environmentId,
           tabId,
-          ...onNodeResult(target),
+          ...where,
           agent: native.agent,
           ...compact,
           messageWindow: projection.messageWindow,
@@ -917,7 +1013,7 @@ export async function createControlMcp(
       return toolResult({
         environmentId,
         tabId,
-        ...onNodeResult(target),
+        ...where,
         kind: "terminal-output",
         output: stripped.slice(-MAX_TERMINAL_OUTPUT_CHARS),
         truncated:
@@ -937,12 +1033,17 @@ export async function createControlMcp(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+        nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ projectId, status }) => {
+    async ({ projectId, status, nodeId }) => {
       if (operator)
-        return operatorListTickets(operator, { projectId, ...(status ? { status } : {}) });
+        return operatorListTickets(callerOnNode(operator, nodeId), {
+          projectId,
+          ...(status ? { status } : {}),
+        });
+      coordinatorNodeRefused(nodeId);
       const tasks = asArray(await invoke("get_kanban_tasks", { projectId }))
         .filter((task) => !status || task.status === status)
         .map(ticketSummary);
@@ -958,11 +1059,14 @@ export async function createControlMcp(
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         ticketId: z.string().trim().min(1).max(200),
+        nodeId: nodeIdField,
       }),
       annotations: readAnnotations(),
     },
-    async ({ projectId, ticketId }) => {
-      if (operator) return operatorGetTicket(operator, { projectId, ticketId });
+    async ({ projectId, ticketId, nodeId }) => {
+      if (operator)
+        return operatorGetTicket(callerOnNode(operator, nodeId), { projectId, ticketId });
+      coordinatorNodeRefused(nodeId);
       const task = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );
@@ -983,6 +1087,7 @@ export async function createControlMcp(
         description: z.string().max(100_000).default(""),
         acceptanceCriteria: z.string().max(100_000).default(""),
         status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
+        nodeId: nodeIdField,
       }),
       annotations: {
         readOnlyHint: false,
@@ -991,9 +1096,9 @@ export async function createControlMcp(
         openWorldHint: false,
       },
     },
-    async ({ requestId, projectId, title, description, acceptanceCriteria, status }) => {
+    async ({ requestId, projectId, title, description, acceptanceCriteria, status, nodeId }) => {
       if (operator) {
-        return operatorCreateTicket(operator, {
+        return operatorCreateTicket(callerOnNode(operator, nodeId), {
           requestId,
           projectId,
           title,
@@ -1002,6 +1107,7 @@ export async function createControlMcp(
           status,
         });
       }
+      coordinatorNodeRefused(nodeId);
       const project = await invoke<unknown>("get_project", { projectId });
       if (!isRecord(project)) throw new Error(`Project not found: ${projectId}`);
       const task = await invoke<unknown>("add_kanban_task", {
@@ -1031,6 +1137,7 @@ export async function createControlMcp(
           description: z.string().max(100_000).optional(),
           acceptanceCriteria: z.string().max(100_000).optional(),
           status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+          nodeId: nodeIdField,
         })
         .refine(
           ({ title, description, acceptanceCriteria, status }) =>
@@ -1047,9 +1154,16 @@ export async function createControlMcp(
         openWorldHint: false,
       },
     },
-    async ({ projectId, ticketId, requestId, ...updates }) => {
+    async ({ projectId, ticketId, requestId, ...fields }) => {
+      const { nodeId, ...updates } = fields;
       if (operator)
-        return operatorUpdateTicket(operator, { projectId, ticketId, requestId, ...updates });
+        return operatorUpdateTicket(callerOnNode(operator, nodeId), {
+          projectId,
+          ticketId,
+          requestId,
+          ...updates,
+        });
+      coordinatorNodeRefused(nodeId);
       const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );
@@ -1070,6 +1184,7 @@ export async function createControlMcp(
         projectId: z.string().trim().min(1).max(200),
         ticketId: z.string().trim().min(1).max(200),
         text: z.string().trim().min(1).max(20_000),
+        nodeId: nodeIdField,
       }),
       annotations: {
         readOnlyHint: false,
@@ -1078,9 +1193,15 @@ export async function createControlMcp(
         openWorldHint: false,
       },
     },
-    async ({ requestId, projectId, ticketId, text }) => {
+    async ({ requestId, projectId, ticketId, text, nodeId }) => {
       if (operator)
-        return operatorAddTicketComment(operator, { requestId, projectId, ticketId, text });
+        return operatorAddTicketComment(callerOnNode(operator, nodeId), {
+          requestId,
+          projectId,
+          ticketId,
+          text,
+        });
+      coordinatorNodeRefused(nodeId);
       const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );
@@ -1145,7 +1266,9 @@ export async function createControlMcp(
             : "Optional 40-character commit to use as the environment base.",
         ),
         nodeId: nodeIdField.describe(
-          "Coordinators only: launch on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
+          coordinatorScope
+            ? "Launch on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node."
+            : "Launch on that machine (a nodeId from list_nodes); projectId is that machine's project, from list_projects with the same nodeId. Omit for this machine.",
         ),
       }),
       annotations: {
@@ -1157,9 +1280,9 @@ export async function createControlMcp(
     },
     async (input) => {
       if (operator) {
-        if (input.nodeId) throw new Error("nodeId is available to coordinators only.");
-        const { nodeId: _nodeId, ...launch } = input;
-        return operatorLaunchEnvironment(operator, launch);
+        const { nodeId, ...launch } = input;
+        const node = await operatorNode(operator, nodeId);
+        return withNodeTag(await operatorLaunchEnvironment(node.caller, launch), node.tag);
       }
       // Operator credentials launch through environment.launch above.
       if (!coordinatorScope) throw new Error("launch_environment needs a credential");
@@ -1351,8 +1474,8 @@ export async function createControlMcp(
     },
     async ({ nodeId, ...input }) => {
       if (operator) {
-        if (nodeId) throw new Error("nodeId is available to coordinators only.");
-        return operatorLaunchJob(operator, input);
+        const node = await operatorNode(operator, nodeId);
+        return withNodeTag(await operatorLaunchJob(node.caller, input), node.tag);
       }
       const { inv, target } = await environmentInvoker(nodeId, input.environmentId);
       const environment = await inv<unknown>("get_environment", {
@@ -1451,8 +1574,7 @@ export async function createControlMcp(
     },
     async ({ requestId, environmentId, tabId, prompt, conversationMode, nodeId }) => {
       if (operator) {
-        if (nodeId) throw new Error("nodeId is available to coordinators only.");
-        return operatorSendPrompt(operator, {
+        return operatorSendPrompt(callerOnNode(operator, nodeId), {
           requestId,
           environmentId,
           tabId,
@@ -1535,11 +1657,14 @@ export async function createControlMcp(
           q: z.string().trim().max(200).optional(),
           offset: z.number().int().min(0).default(0),
           limit: z.number().int().min(1).max(200).default(100),
+          nodeId: nodeIdField,
         }),
         annotations: readAnnotations(),
       },
-      async ({ q, offset, limit }) => {
-        if (operator) return operatorListMailboxes(operator, { q, offset, limit });
+      async ({ q, offset, limit, nodeId }) => {
+        if (operator)
+          return operatorListMailboxes(callerOnNode(operator, nodeId), { q, offset, limit });
+        coordinatorNodeRefused(nodeId);
         const page = await invoke<unknown>("list_agent_mailboxes", {
           q,
           offset,
@@ -1576,7 +1701,9 @@ export async function createControlMcp(
             ),
           replyToMessageId: z.string().trim().min(1).max(300).optional(),
           nodeId: nodeIdField.describe(
-            "Coordinators only: message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node's environment. A reply to mail from another node goes back to it without nodeId.",
+            coordinatorScope
+              ? "Message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node's environment. A reply to mail from another node goes back to it without nodeId."
+              : "Message an agent on that machine (a nodeId from list_nodes); toEnvironmentId is that machine's environment. Omit for this machine.",
           ),
         }),
         annotations: {
@@ -1588,8 +1715,7 @@ export async function createControlMcp(
       },
       async ({ nodeId, ...input }) => {
         if (operator) {
-          if (nodeId) throw new Error("nodeId is available to coordinators only.");
-          return operatorSendMessage(operator, input);
+          return operatorSendMessage(callerOnNode(operator, nodeId), input);
         }
         const target = await onNode(nodeId);
         if (coordinatorScope) {
@@ -1834,6 +1960,7 @@ export async function createControlMcp(
   if (operator) {
     // Tier 0 and 1 for every operator profile; tier 2 direct tools for all
     // but voice, whose clients load a fixed list at session start.
+    registerOperatorWorkflowTools(server, operator);
     registerVoiceTools(mcp, operator);
     registerGatewayTools(mcp, operator);
     if (operator.profile !== "voice") registerDirectTools(mcp, operator);

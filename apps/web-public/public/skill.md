@@ -89,6 +89,19 @@ How tools work:
   and `isError` is set exactly when `ok` is false.
 - **Long-running work** returns an operation. Poll it with
   `run_status(operationId, waitSeconds≤20)`.
+- **Other machines.** If Orkestrator controls other machines (leaf nodes),
+  `list_nodes` names them. Pass a `nodeId` to any tool to act on that machine;
+  `nodeId: "all"` on `overview`, `list_projects` or `list_environments` covers
+  every machine and tags each item with its `nodeId`. IDs and session handles
+  belong to their machine, so keep passing the same `nodeId`. Errors:
+  `node-not-found`, `node-unavailable` (offline; nothing was sent),
+  `node-unsupported` (that machine needs an update), `node-outcome-unknown`
+  (retry with the same `requestId`).
+- **Reviews and PRs.** `launch_multi_review` runs an environment's Multi Review
+  (saved defaults when you omit reviewers and models; `get_multi_review` to
+  check on it). `create_pr` opens the Create PR agent tab and
+  `resolve_conflicts` the Resolve Conflicts tab; both return a run for
+  `run_status`. They never merge.
 
 ## Option B: the `orkestrator` CLI (same machine or remote)
 
@@ -137,6 +150,18 @@ orkestrator project list --json
 orkestrator environment list --json
 orkestrator session list --environment <ENV_ID> --json
 orkestrator attention --json
+orkestrator node list --json                      # machines this one controls
+orkestrator --node <NODE_ID> environment list --json
+orkestrator --node all environment list --json    # every machine, tagged by node
+```
+
+Review and PR commands (changes; pass `--request-id`):
+
+```bash
+orkestrator review launch <ENV_ID> --request-id review-1   # Multi Review with saved defaults
+orkestrator review get <REVIEW_ID>
+orkestrator pr create <ENV_ID> --request-id pr-1 --wait     # Create PR tab; never merges
+orkestrator pr resolve <ENV_ID> --request-id resolve-1      # Resolve Conflicts tab
 ```
 
 - **Output:** `--json` prints exactly one envelope:
@@ -167,6 +192,8 @@ orkestrator attention --json
 | `connection-not-configured` (exit 4) | No saved connection | `orkestrator connection add …` |
 | `confirmation-required` | A risky MCP action | Confirm with the user, then repeat the call with `confirmToken` |
 | `capability-unavailable` | The credential's profile doesn't allow it | Ask the user for a credential with that capability |
+| `node-unavailable` (exit 4) | That machine is offline or disabled | Ask the user to reconnect it in **Settings → Machines**; nothing was sent |
+| `node-unsupported` (exit 8) | That machine runs an older Orkestrator, or you are connected to a leaf | Ask the user to update it, or connect to its command node |
 
 ## Safety
 

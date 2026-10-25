@@ -19,6 +19,7 @@ import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
 import { ticketCommands } from "./commands/ticket.js";
 import { toolchainCommands } from "./commands/toolchain.js";
+import { workflowCommands } from "./commands/workflows.js";
 import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { CliError } from "./errors.js";
 import { helpFor, SERVE_HELP } from "./help.js";
@@ -38,6 +39,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...environmentCommands,
   ...sessionCommands,
   ...changesCommands,
+  ...workflowCommands,
   ...attentionCommands,
   ...ticketCommands,
   ...mailCommands,
@@ -144,10 +146,17 @@ export async function runClient(
         fetchImpl: options.fetchImpl,
         requestTimeoutMs: parsed.global.requestTimeoutMs,
         signal,
+        ...(parsed.global.node ? { node: parsed.global.node } : {}),
       });
       return session;
     },
   };
+  if (command.spec.local && parsed.global.node) {
+    return output.failure(
+      new CliError("invalid-input", `'${command.spec.path.join(" ")}' does not use --node`),
+      { action },
+    );
+  }
   if (command.spec.local && (parsed.global.connection || parsed.global.profile)) {
     if (!(command.spec.path[0] === "connection" && command.spec.path[1] === "check")) {
       return output.failure(

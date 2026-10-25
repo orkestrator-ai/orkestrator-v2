@@ -127,12 +127,12 @@ The envelope (`PublicSuccessEnvelope` / `PublicErrorEnvelope`):
 | 0 | Requested condition satisfied | |
 | 1 | Operation failed | `operation-failed`, `setup-failed`, `run-failed`, `run-cancelled`, `run-interrupted`, `exec-failed`, `store-capacity` |
 | 2 | Invalid input | `invalid-input`, `input-too-large`, `empty-input`, `unknown-command` |
-| 3 | Target absent, ambiguous or expired | `not-found`, `ambiguous-target`, `history-expired` |
-| 4 | Connection or authentication | `connection-failed`, `auth-failed`, `identity-mismatch`, `profile-unavailable`, `transport-uncertain` |
+| 3 | Target absent, ambiguous or expired | `not-found`, `ambiguous-target`, `history-expired`, `node-not-found` |
+| 4 | Connection or authentication | `connection-failed`, `auth-failed`, `identity-mismatch`, `profile-unavailable`, `transport-uncertain`, `node-unavailable` |
 | 5 | Observer deadline | `deadline-exceeded` |
 | 6 | Interaction required | `interaction-required` |
-| 7 | Unknown dispatch or outcome | `dispatch-unknown`, `run-unknown` |
-| 8 | Conflict or unsupported | `request-conflict`, `revision-conflict`, `namespace-expired`, `busy`, `not-ready`, `not-empty`, `capability-unavailable`, `backend-incompatible` |
+| 7 | Unknown dispatch or outcome | `dispatch-unknown`, `run-unknown`, `node-outcome-unknown` |
+| 8 | Conflict or unsupported | `request-conflict`, `revision-conflict`, `namespace-expired`, `busy`, `not-ready`, `not-empty`, `capability-unavailable`, `backend-incompatible`, `node-unsupported` |
 | 130 / 143 | Observation stopped by SIGINT / SIGTERM (`observation-interrupted`) | |
 
 An HTTP 200 carrying a rejected or unknown outcome is never a success. Errors
@@ -178,6 +178,13 @@ not advertise at its version before sending it.
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
+| `review launch ENV [--reviewer A=M[@E]]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation | provider |
+| `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
+| `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
+| `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
+| `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
+| `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion | provider, external |
+| `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
 | `attention [--follow --jsonl]` | `attention.list` | pending interactions of sessions observed waiting, the caller's settled runs, finished setups | read |
 | `ticket list/get` | `ticket.list/get` | Kanban storage | read |
 | `ticket create/update/comment` | `ticket.create/update/comment` | Kanban storage; the operation ID is the store's request key | metadata |
@@ -218,6 +225,44 @@ Control MCP's `describe_action` reports as each action's CLI equivalent.
 `--wait` classifies receipts with the shared `classifyReceiptForWait`
 (`packages/protocol/src/public-api-wait.ts`), as Control MCP's `run_status`
 does.
+
+## Leaf nodes (`--node`)
+
+Connected to a command node ([command-nodes.md](command-nodes.md)), every
+command can run on one of the leaf nodes it controls: pass the global
+`--node NODE_ID` (IDs from `orkestrator node list`). The CLI sends the same
+`public_action` request with `node` set; the command node forwards it over its
+node link and the leaf runs it, admits its request key and keeps its receipt,
+exactly as if the CLI were connected to the leaf. `run get --node …` and
+`--wait` follow the operation there. The envelope's `backend` stays the
+command node (so the identity check holds) and `node` names the leaf that
+answered.
+
+- **Before anything is routed** the CLI checks that the connected backend
+  advertises `features.nodeRouting`; an older backend would ignore `node` and
+  run the action on itself, so the CLI refuses with `backend-incompatible`.
+- **`--node all`** runs `project list`, `environment list` or `attention` on
+  this node and every node it controls. Every item carries `nodeId` and
+  `nodeName`, `nodes` reports each node (its total, its `nextCursor` or
+  attention `cursor`, or its error), and a node that did not answer is a
+  warning, not a failure. Cursors are per node: page or follow one node with
+  its `--node`. `environment list --project` takes one node. Mutations name
+  one node.
+- **Codes.** `node-not-found` (3): no such node here. `node-unavailable` (4):
+  registered but disabled or not connected; nothing was sent.
+  `node-unsupported` (8): the leaf's Orkestrator is too old to take public
+  actions from its command node, or this node is itself a leaf (its own
+  registry is suspended). `node-outcome-unknown` (7): the link lost the leaf's
+  answer to a mutation; it was not resent, and repeating the identical request
+  with the same `--request-id` replays the leaf's outcome. A leaf's own errors
+  come back unchanged.
+- **Authority.** The CLI is the operator on the command node and on its
+  leaves (the same user holds both gateway tokens). A Control MCP credential's
+  calls are relayed with their own authority instead (see
+  [control-mcp.md](control-mcp.md#leaf-nodes)).
+- **Not copied for a leaf launch:** files a leaf project lacks are not seeded
+  from the command node's project root for `environment launch --node`, as the
+  portal's New Environment does; the leaf's own project files apply.
 
 Paths passed to project commands are on the **backend** host. Prompt, patch,
 stdin, attachment and credential files are read on the machine running the

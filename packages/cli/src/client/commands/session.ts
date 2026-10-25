@@ -27,7 +27,7 @@ import {
   waitForOperation,
 } from "./common.js";
 
-const WAIT_OPTIONS = [
+export const WAIT_OPTIONS = [
   { name: "wait", kind: "boolean" as const, description: "Observe this run until its turn ends." },
   TIMEOUT_OPTION,
   {
@@ -124,9 +124,9 @@ function waitBudget(options: Record<string, unknown>): number {
 }
 
 /** Submit a run; with --wait, a lost response is recovered by request key. */
-async function submitRun<T>(
+export async function submitRun<T>(
   context: CommandContext,
-  action: "session.start" | "session.prompt" | "session.command",
+  action: "session.start" | "session.prompt" | "session.command" | "pr.create" | "pr.resolve",
   input: Record<string, unknown>,
   options: Record<string, unknown>,
 ) {
@@ -140,7 +140,7 @@ async function submitRun<T>(
   };
 }
 
-async function finishRun(
+export async function finishRun(
   context: CommandContext,
   parsed: ParsedCommand,
   base: CommandOutcome,
@@ -172,7 +172,7 @@ async function finishRun(
   };
 }
 
-function validateWaitOptions(options: Record<string, unknown>): void {
+export function validateWaitOptions(options: Record<string, unknown>): void {
   if (options.timeout !== undefined && options.wait !== true) {
     throw new CliError("invalid-input", "--timeout needs --wait");
   }

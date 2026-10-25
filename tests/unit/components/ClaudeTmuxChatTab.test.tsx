@@ -289,6 +289,16 @@ const replyHookMock = mock(
   ) => {},
 );
 
+const holdHookMock = mock(
+  async (
+    _tabId: string,
+    _eventKind: realTmuxClient.HookEventKind,
+    _eventId: string,
+    _held: boolean,
+    _environmentId?: string,
+  ): Promise<realTmuxClient.TmuxHookHoldOutcome> => ({ result: "settled" }),
+);
+
 const submitMock = mock(async (_tabId: string, _text: string, _environmentId?: string) => {});
 
 const switchModelMock = mock(async (_tabId: string, _model: string, _environmentId?: string) => {});
@@ -380,6 +390,13 @@ mock.module("@/lib/claude-tmux-client", () => ({
     response: unknown,
     environmentId?: string,
   ) => replyHookMock(tabId, eventKind, eventId, response, environmentId),
+  holdHook: (
+    tabId: string,
+    eventKind: realTmuxClient.HookEventKind,
+    eventId: string,
+    held: boolean,
+    environmentId?: string,
+  ) => holdHookMock(tabId, eventKind, eventId, held, environmentId),
   submit: (tabId: string, text: string, environmentId?: string) =>
     submitMock(tabId, text, environmentId),
   answerPreToolUse: (
@@ -777,6 +794,7 @@ describe("ClaudeTmuxChatTab", () => {
     sendKeysMock.mockClear();
     answerSelectionPromptMock.mockClear();
     replyHookMock.mockClear();
+    holdHookMock.mockClear();
     submitMock.mockClear();
     switchModelMock.mockClear();
     switchEffortMock.mockClear();
@@ -2206,6 +2224,68 @@ Running 1 Explore agent...
         within(screen.getByRole("group", { name })).getByLabelText("Time remaining 1:30"),
       ).toBeTruthy();
     }
+  });
+
+  test("pauses a terminal-mode countdown through the hook and shows the moved deadline", async () => {
+    const requestedAt = Date.now();
+    const heldAt = requestedAt + 1_000;
+    const payload = { tool_name: "Write", tool_input: { file_path: "/tmp/x" } };
+    holdHookMock.mockImplementationOnce(async () => ({
+      result: "applied",
+      hook: {
+        id: "permission-hold",
+        kind: "PermissionRequest",
+        payload,
+        requestedAt,
+        expiresAt: heldAt + 24 * 60 * 60_000,
+        hold: { available: true, heldAt },
+      },
+    }));
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+    act(() => {
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "permission-hold",
+        event_kind: "PermissionRequest",
+        requested_at: requestedAt,
+        expires_at: requestedAt + 5 * 60_000,
+        hold: { available: true },
+        payload,
+      });
+    });
+
+    const card = screen.getByRole("group", { name: "Claude needs permission" });
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: /^Pause countdown/ }));
+    });
+    expect(holdHookMock).toHaveBeenCalledWith(
+      "tab-1",
+      "PermissionRequest",
+      "permission-hold",
+      true,
+      "env-1",
+    );
+    await waitFor(() =>
+      expect(within(card).getByRole("button", { name: "Resume countdown" })).toBeTruthy(),
+    );
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPermissions[0]).toMatchObject({
+      expiresAt: heldAt + 24 * 60 * 60_000,
+      hold: { available: true, heldAt },
+    });
   });
 
   test("keeps busy during SubagentStop and clears it on top-level Stop", async () => {

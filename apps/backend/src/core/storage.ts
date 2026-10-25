@@ -14,6 +14,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 
 import { StoragePublicOperations } from "./storage-public-operations.js";
+import { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import { parseAgentAccountStore, type AgentAccountStore } from "./agent-accounts-store.js";
 
@@ -21,6 +22,20 @@ const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
 export class StorageService extends StoragePublicOperations {
+  private scheduledJobStoreInstance: ScheduledJobStore | null = null;
+
+  /**
+   * Scheduled jobs: their own database store, one row per schedule, written
+   * only through single-row transactions (see `scheduled-jobs/store.ts`).
+   */
+  scheduledJobStore(): ScheduledJobStore {
+    this.scheduledJobStoreInstance ??= new ScheduledJobStore({
+      database: () => this.database,
+      announce: (scheduleId) => this.announce("scheduled-job", scheduleId),
+    });
+    return this.scheduledJobStoreInstance;
+  }
+
   override async init(): Promise<void> {
     await super.init();
     await this.migrateConfigSchema();

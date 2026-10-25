@@ -21,7 +21,6 @@ function goOnlyProvider(model?: string) {
     {
       openCodeClient: fake.client,
       openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      autoAnswerRequests: false,
     },
   );
   return { fake, provider };

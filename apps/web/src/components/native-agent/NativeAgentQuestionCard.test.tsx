@@ -61,6 +61,26 @@ const TWO_OPTIONS = [
 ];
 
 describe("NativeAgentQuestionCard", () => {
+  test("shows an option's preview verbatim as monospace text", () => {
+    const preview = "<b>not html</b>\n  ├─ src/\n  └─ **not markdown**";
+    render(
+      <NativeAgentQuestionCard
+        interaction={request([
+          question({
+            id: "q0",
+            options: [{ ...TWO_OPTIONS[0]!, preview }, TWO_OPTIONS[1]!],
+          }),
+        ])}
+        onResolve={async () => applied()}
+      />,
+    );
+
+    const previews = screen.getAllByTestId("question-option-preview");
+    expect(previews).toHaveLength(1);
+    expect(previews[0]!.textContent).toBe(preview);
+    expect(previews[0]!.querySelector("b") === null).toBe(true);
+  });
+
   test("hides the free-text field until the user picks Something else", () => {
     render(
       <NativeAgentQuestionCard

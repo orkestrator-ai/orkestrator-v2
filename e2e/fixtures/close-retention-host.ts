@@ -339,7 +339,6 @@ const nativeAgents = new NativeAgentService(storage, invokeInternal, {
         {
           openCodeClient: openCode.client,
           openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-          autoAnswerRequests: false,
         },
       );
     }
@@ -349,7 +348,7 @@ const nativeAgents = new NativeAgentService(storage, invokeInternal, {
     const bridge = bridges[input.agent];
     return createNativeAgentProvider(
       { agent: input.agent, baseUrl: `http://127.0.0.1:${bridge.port}`, authToken: bridge.token },
-      { autoAnswerRequests: false, fetch: recordingFetch },
+      { fetch: recordingFetch },
     );
   },
 });

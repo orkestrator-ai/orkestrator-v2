@@ -152,6 +152,47 @@ describe("provider-neutral interaction adapters", () => {
     ]);
   });
 
+  test("Claude question previews are carried within their budget", async () => {
+    const expiresAt = Date.now() + 60_000;
+    const questionWith = (previews: Array<string | undefined>) => ({
+      id: "question-1",
+      sessionId: "session-1",
+      expiresAt,
+      questions: [
+        {
+          question: "Choose",
+          header: "Choice",
+          options: previews.map((preview, index) => ({
+            label: `option ${index}`,
+            ...(preview === undefined ? {} : { preview }),
+          })),
+        },
+      ],
+    });
+    let questions = [questionWith(["a\n  b", undefined, "x".repeat(5_000)])];
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/questions")) return Response.json({ questions });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+      return Response.json({ status: "idle" });
+    });
+    const options = async () =>
+      (await provider.interactions!.listPendingInteractions("session-1")).requests[0]!.presentation
+        .questions[0]!.options;
+
+    const first = await options();
+    expect(first[0]!.preview).toBe("a\n  b");
+    expect(first[1]!.preview).toBeUndefined();
+    expect(first[2]!.preview).toHaveLength(4_096);
+    expect(first[2]!.preview!.endsWith("…")).toBe(true);
+
+    // Together over the budget: the question still arrives, with no previews.
+    questions = [questionWith(Array.from({ length: 10 }, () => "y".repeat(4_000)))];
+    const second = await options();
+    expect(second).toHaveLength(10);
+    expect(second.every((option) => option.preview === undefined)).toBe(true);
+  });
+
   test("Claude snapshots and exact response mapping satisfy the shared contract", async () => {
     const expiresAt = Date.now() + 60_000;
     let questions: Array<Record<string, unknown>> = [
@@ -993,9 +1034,8 @@ describe("provider-neutral interaction adapters", () => {
     });
   });
 
-  test("HTTP bridge questions remain pending without using the OpenCode observation hook", async () => {
+  test("HTTP bridge questions remain pending without a provider write", async () => {
     const requestedAt = Date.now();
-    let observations = 0;
     let writes = 0;
     const provider = createNativeAgentProvider(codexConnection, {
       fetch: (async (input, init = {}) => {
@@ -1017,16 +1057,12 @@ describe("provider-neutral interaction adapters", () => {
               },
         );
       }) as typeof fetch,
-      onInteractionObservation: () => {
-        observations += 1;
-      },
     });
     await expect(
       provider.interactions!.listPendingInteractions("session-1"),
     ).resolves.toMatchObject({
       requests: [expect.objectContaining({ kind: "question" })],
     });
-    expect(observations).toBe(0);
     expect(writes).toBe(0);
   });
 

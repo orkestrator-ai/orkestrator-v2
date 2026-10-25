@@ -1,6 +1,7 @@
 import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import {
   appendNativeAgentPolicyNote,
+  readOnlyTurnReportedPolicy,
   withoutProviderSandbox,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -74,4 +75,20 @@ export function acpReportedPolicy(
     { ...applied, projectResources: true },
     `${agent} loads a project's own configuration by its own folder trust, whatever this session's policy says.`,
   );
+}
+
+/**
+ * The policy a session reports. A `readOnly` session runs under the
+ * coordinator policy (`effectiveTurnExecutionPolicy`), so it reports that one
+ * until a prompt clears `readOnly`; reporting the session's own would
+ * understate the restrictions in force.
+ */
+export function acpSessionReportedPolicy(
+  state: { policy?: NativeAgentExecutionPolicy; readOnly?: boolean },
+  agent: string,
+): NativeAgentExecutionPolicy | undefined {
+  if (state.readOnly) {
+    return readOnlyTurnReportedPolicy(acpReportedPolicy(coordinatorProcessPolicy(), agent));
+  }
+  return state.policy ? acpReportedPolicy(state.policy, agent) : undefined;
 }

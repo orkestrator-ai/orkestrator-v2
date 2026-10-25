@@ -7,6 +7,7 @@
 
 import type { ClaudeModelCatalogEntry } from "@/types";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+import type { TmuxHookHold } from "@/lib/claude-tmux-client";
 
 /** Diff metadata for edit tool operations */
 export interface ToolDiffMetadata {
@@ -76,4 +77,6 @@ export interface ClaudeQuestionRequest {
   toolUseId?: string;
   /** Absolute time when the unanswered request expires. */
   expiresAt?: number;
+  /** Pause state of the countdown, for a tmux hook that publishes one. */
+  hold?: TmuxHookHold;
 }

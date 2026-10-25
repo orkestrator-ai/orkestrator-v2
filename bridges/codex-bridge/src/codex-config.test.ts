@@ -24,6 +24,7 @@ import {
   codexNetworkDeniedSearchMode,
   codexProjectSkillsConfig,
   codexProjectTrustConfig,
+  codexRequestUserInputConfig,
   codexReadOnlyTurnPolicy,
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
@@ -593,6 +594,32 @@ describe("Codex app-server configuration", () => {
     ]) {
       expect(resolveCodexMaxConcurrentThreads(value)).toBe(DEFAULT_CODEX_MAX_CONCURRENT_THREADS);
     }
+  });
+});
+
+describe("codexRequestUserInputConfig", () => {
+  const policy = {
+    sandbox: "none",
+    approvals: "auto-approve",
+    projectResources: true,
+    networkAccess: "full",
+  } as const;
+
+  test("lets every watched session ask, the coordinator included", () => {
+    for (const id of [
+      "interactive-host",
+      "interactive-container",
+      "coordinator-read-only",
+    ] as const) {
+      expect(codexRequestUserInputConfig({ ...policy, id })).toEqual({
+        "features.default_mode_request_user_input": true,
+      });
+    }
+  });
+
+  test("keeps Codex's refusal for unattended sessions and older backends", () => {
+    expect(codexRequestUserInputConfig({ ...policy, id: "pipeline" })).toEqual({});
+    expect(codexRequestUserInputConfig(undefined)).toEqual({});
   });
 });
 

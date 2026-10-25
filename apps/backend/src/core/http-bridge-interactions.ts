@@ -89,6 +89,27 @@ const CODEX_APPROVAL_AMENDMENT_QUESTION_ID = "codex-approval-amendment";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
+/** One option preview, in characters; longer ones end in an ellipsis. */
+const CLAUDE_QUESTION_PREVIEW_MAX_LENGTH = 4_096;
+/** Every preview in one request together; past it the request carries none. */
+const CLAUDE_QUESTION_PREVIEW_BUDGET = 32_768;
+
+/**
+ * Drop every preview from a question request whose previews together exceed
+ * the budget. Previews are optional context: a request over the snapshot's
+ * byte bound would be refused whole, and the question with it.
+ */
+function withinClaudePreviewBudget(questions: AgentInteractionQuestion[]): void {
+  let total = 0;
+  for (const question of questions) {
+    for (const option of question.options) total += option.preview?.length ?? 0;
+  }
+  if (total <= CLAUDE_QUESTION_PREVIEW_BUDGET) return;
+  for (const question of questions) {
+    for (const option of question.options) delete option.preview;
+  }
+}
+
 export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCapability {
   private readonly interactionTracker = new InteractionSnapshotTracker();
   private readonly providerInteractionIds = new Map<
@@ -212,10 +233,22 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
               option?.description === undefined
                 ? undefined
                 : truncatedText(option.description, "Option"),
+            // Markdown/ASCII (`previewFormat: "markdown"`); the card shows it
+            // verbatim in a monospace block.
+            ...(typeof option.preview === "string" && option.preview.trim()
+              ? {
+                  preview: truncatedText(
+                    option.preview,
+                    "Preview",
+                    CLAUDE_QUESTION_PREVIEW_MAX_LENGTH,
+                  ),
+                }
+              : {}),
           };
         }),
       };
     });
+    withinClaudePreviewBudget(mapped);
     const id = this.normalizedId(sessionId, providerRequestId, "question");
     const createdAt = claudeCreatedAt(request.requestedAt, expiresAt, () =>
       this.interactionTracker.firstSeen(id),
@@ -736,10 +769,12 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const providerRequestId = nonEmptyString(request?.interactionId);
     const requestedAt = request?.requestedAt;
     const expiresAt = request?.expiresAt;
-    // Older bridge builds omitted this field and treated every question as
-    // blocking. Preserve that meaning during a rolling backend/bridge update.
-    const isBlocking = request?.isBlocking !== false;
     const kind = request?.kind;
+    // A parked requestUserInput RPC needs an answer even when Codex's Default
+    // mode reports isBlocking:false. This is distinct from transcript async
+    // questions, which do not pass through this adapter and keep running.
+    // Preserve non-blocking MCP elicitations and the legacy omitted-field default.
+    const isBlocking = kind === "question" || request?.isBlocking !== false;
     if (
       !request ||
       !providerRequestId ||

@@ -23,7 +23,6 @@ import type {
   StorageService,
   BridgeConnection,
   NativeAgentRuntimeProvider,
-  ProviderInteractionObservationEvent,
   PromptAttachment,
   CommandInvoker,
   EnsureNativeAgentSessionInput,
@@ -451,16 +450,6 @@ export class NativeAgentService {
     return this.interactions.getInteractionObservations();
   }
 
-  /** Close the polling race for a provider that applies an immediate legacy response. */
-  recordProviderInteractionObservation(
-    event: ProviderInteractionObservationEvent & {
-      environmentId: string;
-      provider: BuildPipelineAgent;
-    },
-  ): void {
-    return this.interactions.recordProviderInteractionObservation(event);
-  }
-
   /**
    * Reconcile provider-owned pending requests without applying policy.
    *
@@ -501,10 +490,6 @@ export class NativeAgentService {
         this.observeBridgeConnection(agent, environment),
       createProvider: (connection, environmentId, cacheKey) =>
         createNativeAgentProvider(connection, {
-          // Interactive sessions belong to a tab that renders approvals and
-          // questions. Answering them here would run a command the user never saw
-          // and cancel the card that exists to answer it.
-          autoAnswerRequests: false,
           onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
@@ -3804,7 +3789,6 @@ export class NativeAgentService {
       } else {
         this.assertAcceptingWork();
         provider = createNativeAgentProvider(connection, {
-          autoAnswerRequests: false,
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
         });
@@ -3848,7 +3832,7 @@ export class NativeAgentService {
           const cached = this.providerRegistry.cachedForConnection(key, identity);
           if (cached) provider = cached;
           else {
-            provider = createNativeAgentProvider(connection, { autoAnswerRequests: false });
+            provider = createNativeAgentProvider(connection, {});
             this.providerRegistry.cache(key, provider, identity);
           }
         }

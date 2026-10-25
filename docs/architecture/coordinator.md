@@ -563,6 +563,21 @@ Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
 hold automatic delivery. Stored, injected, acknowledged, and completed remain
 distinct states. An injection receipt is not proof that the task finished.
 
+## Scheduled wakes and actions
+
+A coordinator turn cannot wait, so a coordinator that needs to act later
+(after a usage window resets, before a deadline) schedules it:
+`create_schedule` with `at: "03:12"` and `action: {type: "send_message",
+toEnvironmentId: "coordinator", body}` arrives at 03:12 as a reminder that
+starts a turn, even if the conversation's provider was swapped meanwhile.
+Schedules can also send a worker mail, prompt a worker tab, launch a worker
+(resolving the base branch's newest commit when it fires) or call another of
+the coordinator's own tools, with `nodeId` where the tool takes one. Each
+fire runs the coordinator's own tool under its current scope, so read-only
+rules and project boundaries apply unchanged. Main schedules follow the next
+main conversation; a side agent's schedules end with it. See
+[scheduled-jobs.md](scheduled-jobs.md).
+
 ## Status wakes
 
 Besides the delegation wake, a coordinator is woken when other work it started

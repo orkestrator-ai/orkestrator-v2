@@ -32,11 +32,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
-import type {
-  BuildPipelineProvider,
-  ProviderDependencies,
-  ProviderInteractionObservationEvent,
-} from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
 import {
   errorMessage,
   DEFAULT_RECONNECT_DEADLINE_MS,
@@ -74,12 +70,6 @@ export type BuildPipelineServiceOptions = {
   reconnectDeadlineMs?: number;
   structuredResultDeadlineMs?: number;
   transcriptPersistIntervalMs?: number;
-  onInteractionObservation?: (
-    event: ProviderInteractionObservationEvent & {
-      environmentId: string;
-      provider: BuildPipelineAgent;
-    },
-  ) => void | Promise<void>;
   /** Narrow production-provider seam used by deterministic backend tests. */
   providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
   workflowResults?: WorkflowResultService;

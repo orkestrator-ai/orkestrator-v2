@@ -843,6 +843,37 @@ toaster, and the host adds endpoints for the faults:
 
 ### Live paused interactions
 
+The tmux hook transport also has two credential-free qualifications:
+
+```bash
+# Generated hook in a real container tmux session, using the exec-based writer:
+ORKESTRATOR_TMUX_HOLD_CONTAINER_IMAGE=<development-image-tag> \
+  mise run test:logged -- --name tmux-hold-transport -- \
+  bun test --cwd apps/backend ./tests/tmux-hook-hold-transport.test.ts --parallel=1 --only-failures
+# Pinned Claude CLI, scripted loopback model, real elapsed wait beyond 600 s:
+RUN_LIVE_TMUX_HOOK_HOLD=1 ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=750000 \
+  mise run test:logged -- --name tmux-hold-cli -- \
+  bun test --cwd apps/backend ./tests/tmux-hook-hold-live.test.ts --parallel=1
+```
+
+The container case repeats pause/resume three times; a default test also holds
+an empty request file open across a hook poll before completing each write.
+The CLI case uses a temporary home and fake API key, waits for a real
+`PermissionRequest`, holds it for more than 600 seconds, and then approves the
+fixture command. Its elapsed wait is not configurable: shortening it would no
+longer qualify Claude's former hook timeout. The pinned managed Claude binary
+must be installed (or supplied through `ORKESTRATOR_POLICY_CLAUDE_PATH`). Both
+fixtures clean up their own resources. Neither uses host credentials or calls
+an external model.
+
+The launch-policy renderer regression is also exercised against a running
+container in `native-draft-attachments.spec.ts`. On a disposable Docker fixture
+profile, run it with `ORKESTRATOR_AGENT_TEST_DOCKER=1` and
+`--grep 'Docker fixture restricted-network'` through the browser Playwright
+config. It creates its own full-network container, applies the restricted
+session override, checks the provider-sandbox approval description before and
+after reload, and stops/deletes the environment afterwards.
+
 `e2e/agent-testing/paused-interactions-live.spec.ts` checks that a question or
 approval paused from its card waits past ten minutes on a real CLI, and that
 answering it later lets the turn carry on with the answer. It has its own

@@ -36,3 +36,12 @@ number. Not changed here.
 - **Owning-file rerun:** `mise exec -- bun test --cwd apps/backend ./src/core/commands-state-sync.test.ts --parallel=1` passed the complete unchanged file (169 pass, 0 fail).
 - **Evidence:** `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the same wall-clock bound under load. No assertion, deadline or skip changed.
+
+## Reconnect freshness qualification — 2026-10-25
+
+The default two-worker backend aggregate repeated this failure while validating
+renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
+isolated Bun worker; exact commands, failures, durations, counts and evidence are
+recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+The unchanged teardown owner passed; the aggregate measured 336.97 ms against
+its 250 ms bound. No assertion or deadline was changed.

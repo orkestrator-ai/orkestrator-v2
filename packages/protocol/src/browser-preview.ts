@@ -404,8 +404,16 @@ export interface BrowserPreviewShowOnPageResult {
    * `navigation-required`: the preview cannot address the stored route; ask
    * the user to navigate and reselect. `timeout`: the page did not load in
    * time. `navigation-failed`: the load failed or left the preview scope.
+   * `hidden`: the anchor matched an element that renders no box (for example
+   * inside a closed dialog or a collapsed menu), so nothing could be shown.
    */
-  outcome: "shown" | "not-found" | "navigation-required" | "timeout" | "navigation-failed";
+  outcome:
+    | "shown"
+    | "hidden"
+    | "not-found"
+    | "navigation-required"
+    | "timeout"
+    | "navigation-failed";
   navigated: boolean;
   resolution: WebAnnotationAnchorResolution;
   documentGeneration: number;

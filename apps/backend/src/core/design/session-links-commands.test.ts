@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import { BackendRuntime } from "../backend-runtime.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import {
@@ -185,7 +186,12 @@ describe("design session commands with native service and storage", () => {
                 Response.json({ closed: true, retained: true })) as unknown as typeof fetch,
             },
           });
-          const context = { design, storage, nativeAgents: service } as unknown as CommandContext;
+          const context = {
+            design,
+            storage,
+            nativeAgents: service,
+            runtime: new BackendRuntime({ emit: () => undefined }),
+          } as unknown as CommandContext;
           await commands.get("teardown_tab")!(
             { environmentId: "env-1", tabId: "draft-tab", kind: "codex-native" },
             context,

@@ -96,6 +96,8 @@ import {
   PullRequestCheckStatus,
   PullRequestCheckStatusAnnouncement,
 } from "./PullRequestCheckStatus";
+import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
+import { formatObservedAt, hydrationFreshnessNotice } from "@/lib/view-freshness";
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
@@ -317,6 +319,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isRunning,
     hasMergeConflicts,
     checkSummary,
+    monitorSyncStatus,
+    lastSuccessfulCheckAt,
     viewPR,
     hasPR,
     isPRMerged,
@@ -390,6 +394,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const reviewPreparationLaunchDefaults = configuredLaunchDialogDefaultsFor("reviewPreparation");
   const fixReviewIssuesLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
+  const prFreshnessNotice = hydrationFreshnessNotice(monitorSyncStatus, "pull request status");
+  const prLastCheckedAt = formatObservedAt(lastSuccessfulCheckAt);
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
   const multiReviewAutoFix = config.global.agentSettings?.multiReview?.autoFix ?? false;
   const multiReviewAutoPr = config.global.agentSettings?.multiReview?.autoPr ?? false;
@@ -1203,11 +1209,23 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 <>
                   <ToolbarTooltipTrigger
                     tooltip={
-                      isPRMerged
-                        ? "PR has been merged - click to view"
-                        : isPRClosed
-                          ? "PR was closed without merging - click to view"
-                          : "Open PR in the sidebar (⌘-click opens GitHub)"
+                      <>
+                        {isPRMerged
+                          ? "PR has been merged - click to view"
+                          : isPRClosed
+                            ? "PR was closed without merging - click to view"
+                            : "Open PR in the sidebar (⌘-click opens GitHub)"}
+                        {prFreshnessNotice && (
+                          <span className="mt-1 block text-amber-300">
+                            {prFreshnessNotice.detail}
+                          </span>
+                        )}
+                        {prLastCheckedAt && (
+                          <span className="mt-1 block text-muted-foreground">
+                            Last successful check: {prLastCheckedAt}
+                          </span>
+                        )}
+                      </>
                     }
                   >
                     <Button
@@ -1232,6 +1250,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           className={cn(isGrid && "text-xs")}
                         />
                       )}
+                      {prFreshnessNotice && <FreshnessIndicator notice={prFreshnessNotice} />}
                     </Button>
                   </ToolbarTooltipTrigger>
                   {!isPRFinished && checkSummary && checkSummary.total > 0 && (

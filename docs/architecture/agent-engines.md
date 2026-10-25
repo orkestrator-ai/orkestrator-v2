@@ -280,9 +280,13 @@ bridge exists to make that survivable:
   did not run; anything else reconciles against persisted turns via
   `sessions/dispatch-journal.ts`, which is what makes prompt dispatch
   at-most-once.
-- **A circuit breaker,** rather than restarting forever, plus an environment
-  fingerprint that forces a controlled restart when the developer's `PATH`
-  changes.
+- **A circuit breaker,** rather than restarting forever: five start failures
+  within 60 s open it. After a quiet 5-minute cooldown the next demand gets
+  one probe start (half-open, no retries behind it); success closes the
+  breaker, failure re-opens it with the cooldown doubled up to 30 minutes.
+  The backoff sleep between start attempts wakes on `stop()`, so shutdown
+  never waits it out. Plus an environment fingerprint that forces a
+  controlled restart when the developer's `PATH` changes.
 - **A pidfile and process-group termination,** so orphaned children cannot
   outlive the bridge and race over the same `CODEX_HOME`.
 

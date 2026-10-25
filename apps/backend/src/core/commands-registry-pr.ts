@@ -19,12 +19,7 @@ import {
 } from "@orkestrator/protocol/view-sync";
 import {
   LOCAL_SERVER_KINDS,
-  prMonitorService,
-  requestPrMonitorRefresh,
-  wakePrMonitorForCompletion,
   environmentToPrMonitorTarget,
-  syncPrMonitorTracking,
-  reconcileConfirmedMerge,
   asString,
   asRecord,
   assertOnlyKeys,
@@ -149,12 +144,15 @@ export function registerPullRequestCommands(
     env = await reconcileProjectHomeEnvironment(env, storage);
     const target = await projectHomePrTarget(env, storage);
     if (!target.ready) return null;
-    const detection = await detectEnvironmentPullRequest({
-      ...target,
-      branch: env.projectHome ? env.branch : validatePrDetectionBranch(branch),
-      prUrl: null,
-      prState: null,
-    });
+    const detection = await detectEnvironmentPullRequest(
+      {
+        ...target,
+        branch: env.projectHome ? env.branch : validatePrDetectionBranch(branch),
+        prUrl: null,
+        prState: null,
+      },
+      { storage },
+    );
     if (!detection) return null;
     return {
       url: detection.url,
@@ -246,10 +244,13 @@ export function registerPullRequestCommands(
       }
 
       const armMergeReconciliation = async (): Promise<void> => {
-        await syncPrMonitorTracking(context);
+        await context.runtime.prMonitor.sync(context);
         const latest = await context.storage.getEnvironment(id);
         if (latest) {
-          prMonitorService.requestMode(environmentToPrMonitorTarget(latest), "merge-pending");
+          context.runtime.prMonitor.service.requestMode(
+            environmentToPrMonitorTarget(latest),
+            "merge-pending",
+          );
         }
       };
 
@@ -285,7 +286,7 @@ export function registerPullRequestCommands(
             }
 
             if (!cleanupRequested) {
-              await reconcileConfirmedMerge(environment, context);
+              await context.runtime.prMonitor.reconcileConfirmedMerge(environment, context);
               if (!mergedStatePersisted) {
                 // Reconcile the service back to the still-open stored snapshot,
                 // then immediately verify the exact PR URL so persistence can
@@ -305,7 +306,7 @@ export function registerPullRequestCommands(
             // Reconcile the linked task before deletion untracks the environment.
             // The monitor's task effects are idempotent, so a later authoritative
             // poll can safely finish a partial reconciliation.
-            await reconcileConfirmedMerge(environment, context);
+            await context.runtime.prMonitor.reconcileConfirmedMerge(environment, context);
 
             try {
               await deleteEnvironmentTask(id, context, { allowWhileMerging: true });
@@ -343,17 +344,18 @@ export function registerPullRequestCommands(
    * no lifecycle command has run since the backend started.
    */
   register("get_pr_monitor_state", async (args, context) => {
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     // Without `knownGeneration`/`knownRevision` this keeps the legacy
     // `{ entries }` shape, now additively stamped. With them it answers the
     // compact conditional outcome from `view-sync.ts`. Both are captured
     // synchronously so the revision identifies exactly the returned state.
     const request = parseViewSnapshotRequest(args);
+    const service = context.runtime.prMonitor.service;
     if (request.kind === "absent") {
-      return prMonitorService.revisionedSnapshot() satisfies PrMonitorSnapshot;
+      return service.revisionedSnapshot() satisfies PrMonitorSnapshot;
     }
-    return resolveViewSnapshotOutcome(request, prMonitorService.currentRevision(), () => ({
-      entries: prMonitorService.revisionedSnapshot().entries,
+    return resolveViewSnapshotOutcome(request, service.currentRevision(), () => ({
+      entries: service.revisionedSnapshot().entries,
     })) satisfies PrMonitorSnapshotOutcome;
   });
   /**
@@ -367,14 +369,20 @@ export function registerPullRequestCommands(
     if (!isPrMonitorMode(requestedMode)) {
       throw new Error("mode must be normal, create-pending, or merge-pending");
     }
-    await syncPrMonitorTracking(context);
+    await context.runtime.prMonitor.sync(context);
     const environment = await context.storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
-    prMonitorService.requestMode(environmentToPrMonitorTarget(environment), requestedMode);
+    context.runtime.prMonitor.service.requestMode(
+      environmentToPrMonitorTarget(environment),
+      requestedMode,
+    );
   });
   /** Requests an immediate check for an environment already being monitored. */
   register("pr_monitor_refresh", async ({ environmentId }, context) => {
-    await requestPrMonitorRefresh(asString(environmentId, "environmentId"), context);
+    await context.runtime.prMonitor.requestRefresh(
+      asString(environmentId, "environmentId"),
+      context,
+    );
   });
   /**
    * Durably arm the next completed agent turn to re-check a conflicting PR.
@@ -390,7 +398,7 @@ export function registerPullRequestCommands(
       // temporarily unavailable, otherwise a failed tab launch cannot roll it
       // back. Completion reconciliation retries hydration before requesting a
       // check.
-      await syncPrMonitorTracking(context).catch((error) => {
+      await context.runtime.prMonitor.sync(context).catch((error) => {
         console.warn(
           `[pr-monitor] Failed to track armed environment ${id}:`,
           error instanceof Error ? error.message : error,
@@ -412,12 +420,12 @@ export function registerPullRequestCommands(
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
-    await requestPrMonitorRefresh(id, context, "completion");
+    await context.runtime.prMonitor.requestRefresh(id, context, "completion");
   });
   /**
    * One-shot PR discovery for an environment whose agent just ended a turn.
    *
-   * `syncPrMonitorTracking` only polls environments that already have a stored
+   * `PrMonitorRuntime.sync` only polls environments that already have a stored
    * PR or a pending mode, so an agent that runs `gh pr create` itself would
    * otherwise never be discovered — and giving every environment a standing
    * timer to catch that would cost a `gh` call per environment per interval
@@ -429,7 +437,10 @@ export function registerPullRequestCommands(
    */
   register("pr_monitor_probe_environment", async (args, context) => {
     assertOnlyKeys(args, ["environmentId"], "arguments");
-    await wakePrMonitorForCompletion(asString(args.environmentId, "environmentId"), context);
+    await context.runtime.prMonitor.wakeForCompletion(
+      asString(args.environmentId, "environmentId"),
+      context,
+    );
   });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) =>

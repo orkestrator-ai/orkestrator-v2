@@ -1,5 +1,5 @@
-import { expect, mock, test } from "bun:test";
-import { NodeWorkspaceScopes } from "../electron/node-workspaces";
+import { expect, mock, setSystemTime, test } from "bun:test";
+import { NodeWorkspaceScopes, WORKSPACE_DIRECT_RETRY_MS } from "../electron/node-workspaces";
 import {
   editDesktopConnection,
   setDesktopWorkspaceTarget,
@@ -12,30 +12,37 @@ function harness() {
   let destroyed = false;
   let fail = false;
   let open: (() => Promise<void>) | null = null;
+  let directOrigin: string | null = null;
+  const grantIds = new Map<string, number>();
   const context: WorkspaceContext = {
     scope: "window",
     portalScope: null,
     target: null,
     window: { isDestroyed: () => destroyed },
   };
-  const invoke = mock(async (command: string, args: Record<string, unknown>) => {
-    if (command === "close_node_workspace") {
-      revoked.push(String(args.workspaceId));
-      return {};
-    }
-    if (command === "open_node_workspace") {
-      await open?.();
-      if (fail) throw new Error("unreachable");
-      return {
-        workspaceId: `grant-${args.nodeId}`,
-        nodeId: args.nodeId,
-        nodeName: args.nodeId,
-        grant: { token: "grant", expiresAt: Date.now() + 900000 },
-        directOrigins: [],
-        relayBase: "/relay",
-      };
-    }
-    return { displayName: "Command" };
+  const invoke = mock((command: string, args: Record<string, unknown>, scope = "window") => {
+    if (!routes.has(scope)) throw new Error("Scope is released");
+    return (async () => {
+      if (command === "close_node_workspace") {
+        revoked.push(String(args.workspaceId));
+        return {};
+      }
+      if (command === "open_node_workspace") {
+        await open?.();
+        if (fail) throw new Error("unreachable");
+        const grantId = grantIds.get(String(args.nodeId)) ?? 0;
+        grantIds.set(String(args.nodeId), grantId + 1);
+        return {
+          workspaceId: `grant-${args.nodeId}${grantId ? `-${grantId + 1}` : ""}`,
+          nodeId: args.nodeId,
+          nodeName: args.nodeId,
+          grant: { token: "grant", expiresAt: Date.now() + 900000 },
+          directOrigins: directOrigin ? [directOrigin] : [],
+          relayBase: "/relay",
+        };
+      }
+      return { displayName: "Command" };
+    })();
   });
   const scopes = new NodeWorkspaceScopes(invoke);
   const committed = mock(() => undefined);
@@ -58,7 +65,7 @@ function harness() {
       routes.delete(scope);
     },
     epochOf: () => 1,
-    rebindWorkspace: () => undefined,
+    rebindWorkspace: mock((_scope: string, _binding: unknown) => undefined),
   };
   const set = (nodeId: string | null) =>
     setDesktopWorkspaceTarget(
@@ -74,6 +81,9 @@ function harness() {
     committed,
     manager,
     set,
+    direct: (origin: string) => {
+      directOrigin = origin;
+    },
     fail: () => {
       fail = true;
     },
@@ -218,3 +228,83 @@ test("a failed selecting connection edit preserves the leaf and command binding"
     h.scopes.releaseAll();
   }
 });
+
+async function settled() {
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+}
+
+test("closing a realm during a retry keeps command access until both grants are revoked", async () => {
+  setSystemTime(new Date("2026-10-25T00:00:00Z"));
+  const h = harness();
+  try {
+    await h.set("A");
+    let resume!: () => void;
+    h.hold(
+      () =>
+        new Promise<void>((resolve) => {
+          resume = resolve;
+        }),
+    );
+    setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+    h.scopes.noteUse("window");
+    await settled();
+    expect(resume).toBeDefined();
+    expect(
+      Array.from(h.routes.keys()).some((scope) => scope.startsWith("window:workspace-retry:")),
+    ).toBe(true);
+    h.close();
+    resume();
+    await settled();
+    expect(h.revoked.sort()).toEqual(["grant-A", "grant-A-2"]);
+    expect(h.routes.size).toBe(0);
+    expect(h.manager.rebindWorkspace).not.toHaveBeenCalled();
+  } finally {
+    h.scopes.releaseAll();
+    setSystemTime();
+  }
+});
+
+for (const direct of [false, true]) {
+  test(`opening a ${direct ? "direct" : "relayed"} binding ${direct ? "does not arm" : "arms"} use retries`, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () =>
+      Response.json({
+        schemaVersion: 1,
+        installationId: "bk_a",
+        generation: "generation-A",
+        appVersion: "2.30.0",
+        clientApi: { minVersion: 1, maxVersion: 1 },
+        capabilities: {},
+        endpointRole: "client",
+        profile: {
+          revision: 1,
+          displayName: "A",
+          colorToken: "blue",
+          updatedAt: "2026-10-25T00:00:00Z",
+        },
+      }),
+    ) as unknown as typeof fetch;
+    setSystemTime(new Date("2026-10-25T00:00:00Z"));
+    const h = harness();
+    try {
+      if (direct) h.direct("https://direct.test");
+      await h.set("bk_a");
+      expect(h.context.target?.path).toBe(direct ? "direct" : "relay");
+      setSystemTime(new Date(Date.now() + WORKSPACE_DIRECT_RETRY_MS));
+      h.scopes.noteUse("window");
+      await settled();
+      expect(h.manager.bind).toHaveBeenCalledTimes(direct ? 2 : 3);
+      if (!direct) {
+        expect(h.revoked).toContain("grant-bk_a-2");
+        expect(h.context.target?.path).toBe("relay");
+      }
+      expect(
+        Array.from(h.routes.keys()).some((scope) => scope.startsWith("window:workspace-retry:")),
+      ).toBe(false);
+    } finally {
+      h.scopes.releaseAll();
+      globalThis.fetch = originalFetch;
+      setSystemTime();
+    }
+  });
+}

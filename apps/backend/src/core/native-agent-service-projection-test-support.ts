@@ -235,6 +235,7 @@ export async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    environmentFence?: NativeAgentServiceOptions["environmentFence"];
     projectedMessageCacheLimits?: NativeAgentServiceOptions["projectedMessageCacheLimits"];
     directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
     artifactLedger?: NativeAgentServiceOptions["artifactLedger"];
@@ -246,6 +247,7 @@ export async function withService(
   await addEnvironment(storage, setup.environment);
   const service = new NativeAgentService(storage, setup.invoke ?? refusingInvoke, {
     ...(setup.provider ? { provider: setup.provider } : {}),
+    ...(setup.environmentFence ? { environmentFence: setup.environmentFence } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
     ...(setup.interactionMonitorMode

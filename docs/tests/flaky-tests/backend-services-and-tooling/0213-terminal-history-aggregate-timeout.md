@@ -148,3 +148,11 @@ mise run test:logged -- --name terminal-history-recheck -- bun test --cwd apps/b
 Evidence: `orkestrator-test-run.T3LqzB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 under the host temporary directory. The original aggregate remains failed.
 No owning implementation, assertion, deadline or skip was changed.
+
+## Coordinator consistency validation — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name consistency-suite -- mise run test`, on branch `todo-0028-coordinator-consistency-b1b98c1981f1`, with two isolated backend workers and other worktrees validating concurrently.
+- **Failure:** the normalization test timed out at 5002.36 ms; late work then accessed `recent.previousCursor` on a null page at line 297. Backend counts were 11087 passed and one failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name terminal-history-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` passed, exit 0 in 8.4 seconds.
+- **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the existing aggregate timeout, confirmed intermittent by the unchanged owner's isolated pass. No history code, assertion, timeout or skip changed.

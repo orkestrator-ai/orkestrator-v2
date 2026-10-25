@@ -33,10 +33,6 @@ import type {
   OpenCodeModelCatalogEntry,
 } from "./models.js";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
-import {
-  configureTerminalHistoryRetention,
-  pruneTerminalHistoryStorage,
-} from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import {
   claudeModelParameters,
@@ -857,13 +853,13 @@ export function registerProjectCommands(
       { preserveCredentials: true },
     );
     const savedGlobal = (await storage.loadConfig()).global;
-    configureTerminalHistoryRetention({
+    context.runtime.terminals.history.configureRetention({
       enabled: savedGlobal.terminalHistoryEnabled,
       sessionMb: savedGlobal.terminalHistoryRetentionMb,
       globalMb: savedGlobal.terminalHistoryGlobalRetentionMb,
       days: savedGlobal.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(storage.getDataDir());
+    await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void context.runtime.diffStats.sync(context).catch(() => undefined);
@@ -882,7 +878,8 @@ export function registerProjectCommands(
     const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
     return planUsageReader(context, platform, { force });
   });
-  register("update_global_config", async ({ global, preserveInheritedSettings }, { storage }) => {
+  register("update_global_config", async ({ global, preserveInheritedSettings }, context) => {
+    const { storage } = context;
     const updated = await storage.updateGlobalConfig(
       stripRendererCredentials(asRecord(global, "global")),
       {
@@ -897,13 +894,13 @@ export function registerProjectCommands(
             }),
       },
     );
-    configureTerminalHistoryRetention({
+    context.runtime.terminals.history.configureRetention({
       enabled: updated.global.terminalHistoryEnabled,
       sessionMb: updated.global.terminalHistoryRetentionMb,
       globalMb: updated.global.terminalHistoryGlobalRetentionMb,
       days: updated.global.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(storage.getDataDir());
+    await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
     return redactAppConfig(updated);
   });
   register("update_notification_sound_settings", async ({ settings }, { storage }) =>

@@ -105,3 +105,12 @@ mise run test:logged -- --name observation-baseline-recheck -- bun test --cwd ap
 Evidence: `orkestrator-test-run.T3LqzB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 under the host temporary directory. The original aggregate remains failed.
 No owning implementation, assertion, deadline or skip was changed.
+
+## Reconnect freshness qualification — 2026-10-25
+
+The default two-worker backend aggregate repeated this failure while validating
+renderer-only test changes at `33b96fb48`. The complete owners were rerun with one
+isolated Bun worker; exact commands, failures, durations, counts and evidence are
+recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
+The baseline exceeded five seconds in both the aggregate (5025.31 ms) and
+owning-file rerun (5215.64 ms). This observation remains unresolved.

@@ -30,3 +30,11 @@
 - **Owning-file rerun:** `mise run test:logged -- --name desktop-lifecycle-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 in 0.2 seconds.
 - **Evidence:** `orkestrator-test-run.7BXWb1/full-suite.log.gz` and `orkestrator-test-run.wdkpxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the recorded fixed-sleep timing flake; shared-host scheduling remains an unconfirmed hypothesis. No production code, assertions, timeouts or skips changed in this owner.
+
+## Coordinator consistency validation — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name consistency-suite -- mise run test`, on branch `todo-0028-coordinator-consistency-b1b98c1981f1`, with two isolated desktop workers and concurrent worktrees on the host.
+- **Failure:** the original held-quit test expected one quit at line 109 after `exited.resolve()` and `Bun.sleep(5)`, received zero (25.84 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name desktop-lifecycle-isolated -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 in 0.1 seconds.
+- **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of the recorded timing flake, confirmed by the unchanged owner's isolated pass. No desktop source, assertions, timeouts or skips changed.

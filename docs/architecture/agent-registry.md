@@ -33,8 +33,15 @@ Each snapshot also carries per-environment counts.
   read when the card opens and kept current while it is open
   (`EnvironmentAgentSummary`).
 
-The sidebar's working/waiting icon colour still comes from the environment's
-persisted aggregate (`agentActivityState`), which the same observers write.
+The sidebar's working/waiting icon colour comes from the environment's
+persisted aggregate (`agentActivityState`), which the same observers write, and
+stays there (decided 2026-10-25). The aggregate is a persisted, announced
+`environment` field, so every sidebar row is current on reload and for
+environments nobody has opened; moving the icon onto the registry would make
+each row re-read the registry on every native activity invalidation, since the
+registry has no event of its own. Per-tab attention that must not be inferred
+from the aggregate (a delegated worker waiting on a person) is read from that
+tab's own state instead, as the coordinator's waiting marker does.
 
 ## Properties
 

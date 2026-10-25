@@ -755,11 +755,16 @@ in a disposable host worktree (`projectResources: true`), then checks the `/`
 menu against the real provider: one group header per run of a source, in the
 catalogue's order; arrow keys following the rendered order across groups and
 clamping at both ends; a command file added on disk appearing after a refresh;
-and the new row surviving a hard reload. It sends no prompt. On Pi, whose
-session lists nothing until it attaches, it first presses the menu's "Refresh
-commands", which attaches it (todo 0069). It needs
+and the new row surviving a hard reload. It sends no prompt. On Pi it first
+checks that the planted templates are listed before the session attaches,
+with no refresh and no turn, as a `stale` list marked `attachPending` whose
+picker says more commands load when the session starts (todo 0069). It needs
 `ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1`; `ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`
 picks from `claude` (default), `pi` and `grok`.
+`ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container` runs it in a
+containerized environment instead (a profile started with
+`--fixture-environments local,container`), writing the commands into the
+container's `/workspace` through `docker exec` with no policy override.
 
 ```bash
 mise run dev:test --profile qa-picker --fixture --credential-source claude \
@@ -1216,9 +1221,35 @@ both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
 scale without reduction. The Window-menu test always checks the selected label;
 its OS-focus predicate runs only when the host exposes a key window (and an
 active app on macOS).
+The annotation spec also checks pins and Show on page for an offscreen target,
+a target in an open and a closed modal, and a late web font (fixture routes
+`/dialogs` and `/fonts`), result-capture stability and comparison labels
+(`/motion`, `/fonts`, an expired `/account` sign-in), and records client
+selection-to-saved timing in its `baselines` case. Pages still loading are
+probed through `mainFrame.executeJavaScript`: `webContents.executeJavaScript`
+waits for the load event, which a late font holds.
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
-owned by another profile.
+owned by another profile. Its two annotation cases write evidence into the
+fixture container, check paths inside it and wait (up to about 5 minutes, one
+garbage-collection period) for settled-evidence cleanup; the live one needs
+`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`.
+
+`web-annotations-approval-live.spec.ts` (opt-in
+`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1`, provider from
+`ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT`, default Claude) raises a live
+approval, then switches environments in the client, reloads, drops the event
+stream and restarts the profile gracefully and by `SIGKILL`. It stops and
+starts the profile, so run it alone against a profile you started:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=annotation-qa ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1 \
+mise run test:logged -- --name annotation-disruption -- mise run test:agent:browser -- \
+  e2e/agent-testing/web-annotations-approval-live.spec.ts
+```
+
+`ORKESTRATOR_AGENT_TEST_BROWSER=webkit` runs a browser-config spec in WebKit
+(Safari's engine, the iOS wrapper's `WKWebView`) instead of Chromium.
 
 Artifacts are written below `output/agent-testing/<profile-or-run-id>/`, with
 traces and screenshots retained on failure and a JSON result summary. Browser

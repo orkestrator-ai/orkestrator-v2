@@ -30,7 +30,6 @@ import {
   openCodeHealthHeaders,
 } from "./commands-server-health.js";
 import type { LocalServerKind, LocalServerRuntime } from "./local-server-runtime.js";
-import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
@@ -109,7 +108,7 @@ export async function withShortLivedBridge<T>(
   const args = typeof probe.args === "function" ? probe.args(port) : probe.args;
   // OpenCode servers share the host's database; see `opencode-host-start.ts`.
   const releaseOpenCodeHostStart =
-    probe.kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
+    probe.kind === "opencode" ? await localServers.openCodeHostStart.acquire() : () => undefined;
   let child: ReturnType<LocalServerRuntime["spawn"]>;
   try {
     // Shutdown may have begun while the probe waited behind an environment start.

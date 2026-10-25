@@ -161,10 +161,7 @@ import {
   planCommandDispatch,
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
-import {
-  assertEnvironmentAcceptsAgentWork,
-  beginEnvironmentAgentWork,
-} from "./environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { beginChangeTrackingTurn } from "./native-agent-change-tracking.js";
 import {
   beginArtifactDispatchTurn,
@@ -250,6 +247,8 @@ export class NativeAgentService {
 
   /** Cached runtime providers, their bridge generations and their retirement. */
   private readonly providerRegistry: ProviderRegistry;
+  /** Admits each prompt against a replacement or move of its environment. */
+  private readonly environmentFence: NonNullable<NativeAgentServiceOptions["environmentFence"]>;
 
   getTranscriptUpdate(
     input: NativeAgentTranscriptUpdateInput,
@@ -480,6 +479,7 @@ export class NativeAgentService {
     private readonly invoke: CommandInvoker,
     private readonly options: NativeAgentServiceOptions = {},
   ) {
+    this.environmentFence = options.environmentFence ?? new EnvironmentMutationFence();
     this.catalogs = new NativeAgentCatalogCache({
       invoke,
       now: () => this.now(),
@@ -3208,7 +3208,7 @@ export class NativeAgentService {
     persistAmbiguousDispatch = false,
     mailInject = false,
   ): Promise<PersistedNativeAgentSession> {
-    const releaseAgentWork = beginEnvironmentAgentWork(input.environmentId);
+    const releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
     try {
       return await this.promptQueues.withSessionMutationFence(input, () =>
         this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject),
@@ -3252,7 +3252,7 @@ export class NativeAgentService {
         await reconcileProjectHomeEnvironment(home!, this.storage);
       this.assertAcceptingWork();
       // A rebuild or reset of this environment's runtime is in progress.
-      assertEnvironmentAcceptsAgentWork(input.environmentId);
+      this.environmentFence.assertAcceptsAgentWork(input.environmentId);
       const hasAttachments =
         (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {

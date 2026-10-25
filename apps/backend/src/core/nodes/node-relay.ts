@@ -52,6 +52,10 @@ const DROPPED_RESPONSE_HEADERS = new Set([
   "keep-alive",
   "transfer-encoding",
   "content-length",
+  // fetch has already decoded the leaf's gzip/br body, so the bytes relayed
+  // are identity; repeating the leaf's encoding makes the client fail to
+  // decode a plain body (Z_DATA_ERROR, seen as "malformed JSON").
+  "content-encoding",
   "access-control-allow-origin",
   "access-control-allow-credentials",
 ]);

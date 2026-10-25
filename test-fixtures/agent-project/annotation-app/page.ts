@@ -7,6 +7,7 @@ import { FEATURE_TOGGLES, PLANS, SETTINGS_COPY, type FixturePlan } from "./conte
 import {
   ADVERSARIAL_STRINGS,
   FIXTURE_MARKER,
+  LATE_FONT_DELAY_MS,
   ROUTE_VARIANTS,
   SYNTHETIC_SECRETS,
   TEST_IDS,
@@ -19,6 +20,8 @@ export interface FixtureState {
   featureOrder: "default" | "reversed";
   /** Render the Team card twice (duplicate stable ids). */
   duplicateTeam: boolean;
+  /** The fixture sign-in expired: `/account` redirects to `/sign-in`. */
+  sessionExpired: boolean;
   /** Advances on every server-side change; exposed to the page. */
   generation: number;
 }
@@ -27,6 +30,7 @@ export const INITIAL_STATE: Readonly<FixtureState> = Object.freeze({
   cardOrder: "default",
   featureOrder: "default",
   duplicateTeam: false,
+  sessionExpired: false,
   generation: 1,
 });
 
@@ -60,6 +64,12 @@ section{margin:0 0 24px;padding:16px;background:#fff;border:1px solid #d9e2ec;bo
 .long{max-width:720px}
 [data-sensitive]{background:#fff4e5;padding:6px}
 @media (max-width:600px){.plans{grid-template-columns:1fr}}
+@keyframes fixture-slide{from{transform:translateX(0)}to{transform:translateX(160px)}}
+.animated{display:inline-block;padding:8px 12px;background:#d9e2ec;animation:fixture-slide 0.9s ease-in-out infinite alternate}
+.late-font{font-family:"Fixture Late",sans-serif;font-size:20px;line-height:28px;margin:0 0 12px}
+.fonts-settled .late-font{font-size:40px;line-height:72px}
+.spacer{height:2400px;border-left:4px dotted #d9e2ec}
+dialog{border:1px solid #829ab1;border-radius:6px;padding:16px}
 `;
 
 function layout(title: string, route: string, state: FixtureState, body: string): string {
@@ -199,6 +209,76 @@ function embeddedSections(): string {
 <section aria-label="Terms"><h2>Terms</h2><p class="long" data-testid="long-text">${escapeHtml(longText())}</p></section>`;
 }
 
+/** An infinite CSS animation (it moves its own box) beside copy that never moves. */
+function motionSection(): string {
+  return `<section aria-label="Motion"><h1>Release banner</h1>
+<p><span class="animated" data-testid="${TEST_IDS.animatedBanner}">New: synthetic release banner</span></p>
+<p data-testid="${TEST_IDS.staticCopy}">This paragraph does not move while the banner animates.</p></section>`;
+}
+
+/** Bounded delay for the late font route and its font request. */
+export function lateFontDelay(url: URL): number {
+  const value = Number(url.searchParams.get("delay") ?? LATE_FONT_DELAY_MS.default);
+  if (!Number.isFinite(value)) return LATE_FONT_DELAY_MS.default;
+  return Math.min(LATE_FONT_DELAY_MS.max, Math.max(0, Math.round(value)));
+}
+
+/**
+ * A heading in a web font the server answers late. Whatever the font request
+ * returns, the page applies the font's larger metrics once it settles, so the
+ * target below shifts down exactly when a swapped-in web font would move it.
+ * `document.fonts.ready` stays pending until then. The font load holds the
+ * load event unless `lazy` starts it 200 ms after load, as a script font
+ * loader does.
+ */
+function lateFontSection(delay: number, lazy: boolean): string {
+  return `<section aria-label="Late font"><h1 class="late-font" data-testid="${TEST_IDS.lateFontHeading}">Fixture Cloud release notes</h1>
+<p>Text below the heading moves when the font arrives.</p>
+<button type="button" data-testid="${TEST_IDS.fontShiftTarget}">Read the release notes</button></section>
+<script>(() => {
+  const settled = () => document.body.classList.add("fonts-settled");
+  if (typeof FontFace !== "function" || !document.fonts) { settled(); return; }
+  // A fresh URL per load: Chromium reuses a failed font for a repeated URL.
+  const face = new FontFace("Fixture Late", "url(/__fixture/font?delay=${delay}&load=" + Date.now() + Math.random() + ")");
+  const start = () => {
+    document.fonts.add(face);
+    face.load().catch(() => null).finally(settled);
+  };
+  ${lazy ? 'window.addEventListener("load", () => setTimeout(start, 200));' : "start();"}
+})();</script>`;
+}
+
+/** A target inside a modal dialog (closed unless `?open=1`), and one far below the fold. */
+function dialogSection(open: boolean): string {
+  return `<section aria-label="Dialogs"><h1>Workspace settings</h1>
+<button type="button" data-testid="${TEST_IDS.openDialog}">Edit workspace name</button>
+<dialog data-testid="${TEST_IDS.dialog}" aria-label="Edit workspace name">
+  <form method="dialog"><p>Rename the synthetic workspace.</p>
+  <div class="actions"><button value="cancel">Cancel</button>
+  <button value="confirm" data-testid="${TEST_IDS.dialogConfirm}">Save workspace name</button></div></form>
+</dialog></section>
+<div class="spacer" aria-hidden="true"></div>
+<footer><p data-testid="${TEST_IDS.offscreenFooter}">Synthetic footer far below the fold</p></footer>
+<script>(() => {
+  const dialog = document.querySelector('[data-testid="${TEST_IDS.dialog}"]');
+  const open = () => { if (!dialog.open) dialog.showModal(); };
+  document.querySelector('[data-testid="${TEST_IDS.openDialog}"]').addEventListener("click", open);
+  ${open ? "open();" : ""}
+})();</script>`;
+}
+
+function accountSection(): string {
+  return `<section aria-label="Account"><h1>Account</h1>
+<p data-testid="${TEST_IDS.accountPlan}">Team plan for the synthetic workspace, renews on 1 December.</p></section>`;
+}
+
+function signInSection(next: string): string {
+  return `<section aria-label="Sign in"><h1>Your session expired</h1>
+<form onsubmit="return false"><input type="hidden" name="next" value="${escapeHtml(next)}">
+<div class="row"><label for="sign-in-email">Email</label><input id="sign-in-email" type="email" value=""></div>
+<button type="submit" data-testid="${TEST_IDS.signInSubmit}">Sign in again</button></form></section>`;
+}
+
 function hotReloadControl(): string {
   return `<section aria-label="Fixture controls"><button type="button" data-testid="${TEST_IDS.hotReload}">Simulate hot reload</button></section>`;
 }
@@ -303,6 +383,37 @@ export function renderPage(url: URL, state: FixtureState): { title: string; html
     const title = "Pricing — Fixture Cloud";
     const body = `${pricingSection(effective)}${comparisonSection()}${embeddedSections()}${hotReloadControl()}`;
     return { title, html: layout(title, route, effective, body) };
+  }
+  if (url.pathname === ROUTE_VARIANTS.motion) {
+    const title = "Motion — Fixture Cloud";
+    return { title, html: layout(title, route, effective, motionSection()) };
+  }
+  if (url.pathname === ROUTE_VARIANTS.lateFont) {
+    const title = "Release notes — Fixture Cloud";
+    return {
+      title,
+      html: layout(
+        title,
+        route,
+        effective,
+        lateFontSection(lateFontDelay(url), url.searchParams.get("lazy") === "1"),
+      ),
+    };
+  }
+  if (url.pathname === ROUTE_VARIANTS.dialogs) {
+    const title = "Workspace — Fixture Cloud";
+    const body = dialogSection(url.searchParams.get("open") === "1");
+    return { title, html: layout(title, route, effective, body) };
+  }
+  // The server redirects `/account` while the session is expired.
+  if (url.pathname === ROUTE_VARIANTS.account) {
+    const title = "Account — Fixture Cloud";
+    return { title, html: layout(title, route, effective, accountSection()) };
+  }
+  if (url.pathname === ROUTE_VARIANTS.signIn) {
+    const title = "Sign in — Fixture Cloud";
+    const next = url.searchParams.get("next") ?? "/";
+    return { title, html: layout(title, route, effective, signInSection(next)) };
   }
   if (url.pathname === "/") {
     const title = "Fixture Cloud";

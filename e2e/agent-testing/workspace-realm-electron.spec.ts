@@ -22,6 +22,7 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
  * — when one of the window's own environments is selected again.
  */
 
+type RouteUpgradeFixture = { allowDirect: boolean; restore(): void; advance(): void };
 type CaptureFixture = { pending: boolean; release(): void; restore(): void };
 type Project = { id: string; name: string };
 type Environment = { id: string; name: string; status?: string; worktreePath?: string | null };
@@ -239,8 +240,44 @@ test("a leaf's workspace opens in the window's central region without moving or 
       name: `desk-env-${Date.now()}`,
       environmentType: "local",
     });
+    const directOrigin = leaf.origin;
+    // Fail the initial advertised direct probe, then let the loopback
+    // fallback answer. This models a transient failure during realm open.
+    await electronApp.evaluate((_electron, directOrigin) => {
+      const originalFetch = globalThis.fetch;
+      const originalNow = Date.now;
+      const probedGrants = new Set<string>();
+      const fixture: RouteUpgradeFixture = {
+        allowDirect: false,
+        advance: () => {
+          Date.now = () => originalNow() + 5 * 60_000;
+        },
+        restore: () => {
+          globalThis.fetch = originalFetch;
+          Date.now = originalNow;
+        },
+      };
+      (
+        globalThis as typeof globalThis & { routeUpgradeFixture?: RouteUpgradeFixture }
+      ).routeUpgradeFixture = fixture;
+      globalThis.fetch = ((input, init) => {
+        const url = new URL(String(input));
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        if (
+          !fixture.allowDirect &&
+          !probedGrants.has(authorization) &&
+          authorization.startsWith("Bearer okg_") &&
+          url.origin === directOrigin &&
+          url.pathname === "/__orkestrator/hello"
+        ) {
+          probedGrants.add(authorization);
+          return Promise.resolve(new Response("Probe unavailable", { status: 503 }));
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+    }, directOrigin);
     await invoke("add_node", {
-      routes: [{ id: "loopback", kind: "https", enabled: true, origin: leaf.origin }],
+      routes: [{ id: "loopback", kind: "https", enabled: true, origin: directOrigin }],
       token: leaf.token,
     });
     await expect
@@ -302,7 +339,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
             coordinatorPanel: Boolean(document.querySelector('#project-panel-coordinator')),
           })`,
         )) as {
-          target: { nodeId: string } | null;
+          target: { nodeId: string; path: "relay" | "direct" } | null;
           toolbar: boolean;
           sidebar: boolean;
           homeSelected: boolean;
@@ -360,6 +397,60 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
     await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();
     await expect(leafRow).toHaveAttribute("data-selected", "true");
+
+    // The mounted connection panel starts with the relayed snapshot.
+    expect((await realmState())?.target?.path).toBe("relay");
+    const connectionPath = () =>
+      electronApp.evaluate(async ({ webContents }) => {
+        const realm = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"))!;
+        return realm.executeJavaScript(
+          `document.querySelector('[data-testid="connection-path"]')?.getAttribute('data-path') ?? null`,
+        );
+      });
+    const agentTrigger = window.getByRole("button", {
+      name: /^(Open|Close) agent information$/,
+    });
+    await agentTrigger.click();
+    await expect.poll(connectionPath).toBe("relay");
+    await agentTrigger.click();
+
+    // No upgrade while idle. A real renderer command must travel through
+    // getBackend/noteUse, upgrade the route, and reload only this realm.
+    await electronApp.evaluate(() => {
+      const fixture = (
+        globalThis as typeof globalThis & { routeUpgradeFixture: RouteUpgradeFixture }
+      ).routeUpgradeFixture;
+      fixture.allowDirect = true;
+      fixture.advance();
+    });
+    await electronApp.evaluate(async ({ webContents }) => {
+      const realm = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().includes("realm=workspace"))!;
+      await realm.executeJavaScript(`window.orkestrator.invoke("get_backend_profile")`);
+    });
+    await expect
+      .poll(async () => (await realmState())?.target?.path, { timeout: 30_000 })
+      .toBe("direct");
+    const gateway = await electronApp.evaluate(async ({ webContents }) => {
+      const realm = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().includes("realm=workspace"))!;
+      return realm.executeJavaScript(`window.orkestratorGateway.resolveBaseUrl()`);
+    });
+    expect(gateway).toBe(directOrigin);
+    await sameWindow();
+    // Reopen on the reloaded document: mounted UI must consume the new snapshot.
+    await agentTrigger.click();
+    await expect.poll(connectionPath).toBe("direct");
+    await agentTrigger.click();
+    await electronApp.evaluate(() => {
+      (
+        globalThis as typeof globalThis & { routeUpgradeFixture: RouteUpgradeFixture }
+      ).routeUpgradeFixture.restore();
+    });
 
     // Native keyboard input requires the containing window to be focused.
     const windowFocused = await electronApp.evaluate(async ({ app, BrowserWindow }) => {

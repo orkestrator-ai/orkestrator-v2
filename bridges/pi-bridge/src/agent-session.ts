@@ -653,6 +653,9 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // A fresh runtime loaded its resources from scratch, so this read is also
   // the reload any refresh deferred while the session was detached or busy.
   state.commandReloadPending = false;
+  // The attached list replaces any resource-only preview, and a preview still
+  // reading must not publish over it.
+  state.commandPreview = undefined;
   readSessionCommandCatalogue(state, session);
   // The catalogue read at create time may have preceded a provider signing in.
   // Re-selecting from the live session is what makes the picker agree with what

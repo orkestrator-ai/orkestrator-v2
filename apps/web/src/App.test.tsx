@@ -1,5 +1,5 @@
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -20,6 +20,18 @@ import {
   useDockerAvailability,
   useDockerAvailabilityReady,
 } from "@/contexts/DockerAvailabilityContext";
+
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
+import {
+  getTransportConnectivity,
+  resetTransportConnectivityForTests,
+} from "@/lib/transport-connectivity";
+import { CONNECTION_BANNER_DELAY_MS } from "@/components/layout/ConnectionStatusBanner";
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
+import type { ConnectionList } from "@orkestrator/protocol/connections";
+import type { GatewayEventStreamConnectionState } from "@/lib/native/web-gateway";
 
 import * as realLayout from "@/components/layout";
 import * as realTooltip from "@/components/ui/tooltip";
@@ -389,6 +401,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 mock.module("lucide-react", () => ({
+  ...realLucideReactSnapshot,
   Loader2: (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />,
 }));
 
@@ -4039,5 +4052,223 @@ describe("App terminal overlay actions", () => {
       reasoningEffort: "high",
       attachments: undefined,
     });
+  });
+});
+
+// Exercise App's real activation effects with a consumer of the shared read
+// coordinator. The probe keeps the scheduling and rendered-value assertions
+// independent of the layout stubs used by this suite.
+function ConnectivityReadProbe({ read }: { read: () => Promise<string> }) {
+  const { state } = useCoordinatedRead({
+    key: { resource: "app-connectivity-test", target: "active-backend" },
+    read,
+    demand: { intervalMs: 1_000, priority: "critical" },
+    trackState: true,
+  });
+  return <output data-testid="connectivity-data">{state?.value}</output>;
+}
+
+describe("App transport activation", () => {
+  const originalApi = window.orkestrator;
+  const originalGateway = window.orkestratorGateway;
+
+  beforeEach(() => {
+    cleanup();
+    resetAppMocks();
+    resetTransportConnectivityForTests();
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+  });
+
+  afterEach(() => {
+    cleanup();
+    window.orkestrator = originalApi;
+    window.orkestratorGateway = originalGateway;
+    resetTransportConnectivityForTests();
+    resetReadCoordinatorForTests();
+    mock.restore();
+  });
+
+  test.each(["reconnecting", "unreachable", "local-unavailable"] as const)(
+    "pauses reads and retains displayed data during %s, then reconciles once",
+    async (outage) => {
+      spyOn(Date, "now").mockReturnValue(10_000);
+      resetTransportConnectivityForTests(() => 10_000);
+      const bannerClock = installControlledTimeout(CONNECTION_BANNER_DELAY_MS);
+      const reads = installFakeReadCoordinator({ resumeCoalesceMs: 0, random: () => 0 });
+      const read = mock(async () => "last healthy data");
+      const desktopListeners = new Map<string, (payload: ConnectionList) => void>();
+      const local = outage === "local-unavailable";
+      const healthy: ConnectionList = {
+        activeConnectionId: local ? "local" : "remote-1",
+        localAvailable: true,
+        connections: local
+          ? []
+          : [
+              {
+                id: "remote-1",
+                name: "studio",
+                address: "studio.test",
+                kind: "remote",
+                active: true,
+                requiresToken: true,
+                transport: "connected",
+              },
+            ],
+      };
+      window.orkestrator = {
+        window: { setZoomFactor: async () => false },
+        invoke: async () => undefined,
+        isolatedViewState: true,
+        connections: { list: async () => healthy },
+        listen: (event: string, callback: (payload: ConnectionList) => void) => {
+          desktopListeners.set(event, callback);
+          return () => desktopListeners.delete(event);
+        },
+      } as unknown as Window["orkestrator"];
+      delete window.orkestratorGateway;
+      try {
+        const view = render(
+          <>
+            <App />
+            <ConnectivityReadProbe read={read} />
+          </>,
+        );
+        await waitFor(() =>
+          expect(screen.getByTestId("connectivity-data").textContent).toBe("last healthy data"),
+        );
+        expect(read).toHaveBeenCalledTimes(1);
+        const disconnected: ConnectionList = local
+          ? { ...healthy, localAvailable: false }
+          : {
+              ...healthy,
+              connections: healthy.connections.map((connection) => ({
+                ...connection,
+                transport: outage as "reconnecting" | "unreachable",
+              })),
+            };
+        act(() => desktopListeners.get("desktop-connections-changed")!(disconnected));
+        expect(getTransportConnectivity().disconnected).toBe(true);
+        expect(screen.queryByTestId("connection-status-banner") === null).toBe(true);
+        if (local) {
+          expect(screen.getByText(/Local backend stopped/)).toBeTruthy();
+          // The Local recovery panel replaces the generic connection banner.
+          expect(bannerClock.pendingCount()).toBe(0);
+        } else {
+          expect(bannerClock.pendingCount()).toBe(1);
+          await act(async () => {
+            bannerClock.advance();
+          });
+          expect(screen.getByTestId("connection-status-banner").textContent).toContain(
+            "last data received",
+          );
+        }
+        await act(async () => {
+          await reads.clock.advance(10_000);
+        });
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("connectivity-data").textContent).toBe("last healthy data");
+
+        read.mockResolvedValue("reconciled data");
+        act(() => {
+          desktopListeners.get("desktop-connections-changed")!(healthy);
+          desktopListeners.get("desktop-connections-changed")!(healthy);
+        });
+        await act(async () => {
+          await reads.clock.advance(0);
+        });
+        expect(read).toHaveBeenCalledTimes(2);
+        expect(screen.getByTestId("connectivity-data").textContent).toBe("reconciled data");
+        expect(screen.queryByTestId("connection-status-banner") === null).toBe(true);
+        expect(screen.queryByText(/Local backend stopped/) === null).toBe(true);
+
+        act(() => desktopListeners.get("desktop-connections-changed")!(disconnected));
+        const lateConnectionList = desktopListeners.get("desktop-connections-changed")!;
+        view.unmount();
+        expect(desktopListeners.size).toBe(0);
+        expect(getTransportConnectivity().disconnected).toBe(false);
+        expect(reads.coordinator.getDiagnostics().disconnected).toBe(false);
+        lateConnectionList(disconnected);
+        expect(getTransportConnectivity().disconnected).toBe(false);
+        expect(bannerClock.pendingCount()).toBe(0);
+      } finally {
+        cleanup();
+        bannerClock.restore();
+      }
+    },
+  );
+
+  test("starts gateway connectivity on mount, recovers retained reads, and clears its outage on unmount", async () => {
+    spyOn(Date, "now").mockReturnValue(10_000);
+    resetTransportConnectivityForTests(() => 10_000);
+    const bannerClock = installControlledTimeout(CONNECTION_BANNER_DELAY_MS);
+    const reads = installFakeReadCoordinator({ resumeCoalesceMs: 0, random: () => 0 });
+    const read = mock(async () => "gateway data");
+    let state: GatewayEventStreamConnectionState = "disconnected";
+    const listeners = new Set<(state: GatewayEventStreamConnectionState) => void>();
+    const report = (next: GatewayEventStreamConnectionState) => {
+      state = next;
+      for (const listener of listeners) listener(next);
+    };
+    window.orkestrator = {
+      window: { setZoomFactor: async () => false },
+      invoke: async () => undefined,
+      listen: () => () => undefined,
+      eventStreamConnection: {
+        state: () => state,
+        subscribe: (listener: (state: GatewayEventStreamConnectionState) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as Window["orkestrator"];
+    window.orkestratorGateway = { enabled: true };
+    try {
+      const view = render(
+        <>
+          <App />
+          <ConnectivityReadProbe read={read} />
+        </>,
+      );
+      expect(listeners.size).toBe(1);
+      expect(getTransportConnectivity().disconnected).toBe(true);
+      await act(async () => {
+        await reads.clock.advance(10_000);
+        bannerClock.advance();
+      });
+      expect(read).not.toHaveBeenCalled();
+      expect(screen.getByTestId("connection-status-banner")).toBeTruthy();
+      act(() => report("connected"));
+      await act(async () => {
+        await reads.clock.advance(0);
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("connectivity-data").textContent).toBe("gateway data");
+      act(() => report("disconnected"));
+      await act(async () => {
+        await reads.clock.advance(10_000);
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("connectivity-data").textContent).toBe("gateway data");
+      read.mockResolvedValue("recovered gateway data");
+      act(() => {
+        report("connected");
+        report("connected");
+      });
+      await act(async () => {
+        await reads.clock.advance(0);
+      });
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("connectivity-data").textContent).toBe("recovered gateway data");
+      expect(screen.queryByTestId("connection-status-banner") === null).toBe(true);
+      act(() => report("disconnected"));
+      view.unmount();
+      expect(listeners.size).toBe(0);
+      expect(getTransportConnectivity().disconnected).toBe(false);
+      expect(reads.coordinator.getDiagnostics().disconnected).toBe(false);
+      expect(bannerClock.pendingCount()).toBe(0);
+    } finally {
+      cleanup();
+      bannerClock.restore();
+    }
   });
 });

@@ -30,6 +30,30 @@
   }
 }
 
+/* Short panes (about 400% zoom; the toolbar is already one row): the
+   inspector scrolls as one column, so its header and Apply bar do not squeeze
+   the fields to a sliver, and the Layers heading and filter note give their
+   rows to the tree. Both stay available to assistive technology. */
+.design-workspace[data-short] .design-inspector {
+  overflow-y: auto;
+}
+
+.design-workspace[data-short] .design-inspector > form,
+.design-workspace[data-short] .design-inspector > form > * {
+  flex: none;
+  min-height: auto;
+  overflow: visible;
+}
+
+.design-workspace[data-short] .design-hierarchy-note {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .design-workspace *,
   .design-workspace *::before,

@@ -17,6 +17,12 @@ import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore 
 import { useProjectStore } from "@/stores/projectStore";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
+import {
+  connectionListDisconnected,
+  setTransportDisconnected,
+  startTransportConnectivity,
+} from "@/lib/transport-connectivity";
+import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBanner";
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
@@ -331,6 +337,7 @@ function ConnectedApp() {
     [],
   );
   useEffect(() => startStoreResourceSync(), []);
+  useEffect(() => startTransportConnectivity(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
@@ -418,6 +425,8 @@ function ConnectedApp() {
       setActiveConnectionName(activeConnection ? connectionDisplayName(activeConnection) : null);
       // Presentation reads are keyed by server identity; a switch resets them.
       setReadCoordinatorConnection(list.activeConnectionId);
+      // ...and pause while that connection is known to be down.
+      setTransportDisconnected("desktop-connection", connectionListDisconnected(list));
       // So is protected rich transcript content (render caches, artifact reads).
       noteRichContentConnection(list.activeConnectionId);
       setConnectionScopeResolved(true);
@@ -452,6 +461,7 @@ function ConnectedApp() {
       active = false;
       unsubscribeConnections();
       unsubscribeUnavailable?.();
+      setTransportDisconnected("desktop-connection", false);
     };
   }, []);
 
@@ -1180,6 +1190,7 @@ function ConnectedApp() {
             {/* Another node's workspace in a command node's window. */}
             {workspaceRealm && <WorkspaceRealmHost />}
             <AppShell>
+              {!localBackendUnavailableMessage && <ConnectionStatusBanner />}
               {localBackendUnavailableMessage && (
                 <div
                   role="alert"

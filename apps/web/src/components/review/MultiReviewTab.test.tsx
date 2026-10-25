@@ -971,6 +971,25 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
+  test("lays the validation table beside the package transcript on a wide inspector", () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    const split = screen.getByTestId("multi-review-step-split");
+    expect(split.className).toContain("@min-[88rem]:grid-cols-2");
+    const [details, transcript] = Array.from(split.children);
+    expect(details.querySelector("[aria-label='Review validation']")).not.toBeNull();
+    expect(transcript.querySelector("[data-testid='multi-review-transcript-tail']")).not.toBeNull();
+  });
+
   test("stops validation while keeping Multi Review on course for the reviewer step", async () => {
     const workflow = validatingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(workflow);

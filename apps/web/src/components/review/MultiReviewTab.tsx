@@ -917,6 +917,7 @@ function MultiReviewOverviewTab({
     showPauseAction = true,
     activityAt,
     details,
+    splitDetails = false,
     report,
   }: {
     key: MultiReviewStepKey;
@@ -936,6 +937,8 @@ function MultiReviewOverviewTab({
     showPauseAction?: boolean;
     activityAt?: number;
     details?: ReactNode;
+    /** Puts the details beside the transcript on a wide inspector, not above it. */
+    splitDetails?: boolean;
     report?: ReactNode;
   }): MultiReviewFlowNodeView => {
     const runtime = multiReviewStepRuntimeParts(
@@ -954,6 +957,24 @@ function MultiReviewOverviewTab({
     const pause = () => void runStepLifecycle(kind, "pause", commands.pauseStep);
     const resume = () => void runStepLifecycle(kind, "resume", commands.resumeStep);
     const access = multiReviewStepSessionAccess(workflow, kind);
+    const transcriptTabs = inspectorTranscriptTabs(
+      key,
+      <StepTranscriptTail
+        key={kind}
+        workflowId={workflow.id}
+        step={kind}
+        access={{
+          kind: access.kind,
+          step: access.kind === "other-step" ? access.step : undefined,
+        }}
+        live={status.state === "running"}
+        isActive={isActive}
+        assistantLabel={title}
+        containerId={containerId}
+        loadTranscript={loadStepTranscript}
+      />,
+      report,
+    );
     return {
       node: {
         id: key,
@@ -1069,24 +1090,20 @@ function MultiReviewOverviewTab({
       body: (
         <div className="flex flex-1 flex-col space-y-4">
           <StepFacts model={model} runtime={runtime} status={status} />
-          {details}
-          {inspectorTranscriptTabs(
-            key,
-            <StepTranscriptTail
-              key={kind}
-              workflowId={workflow.id}
-              step={kind}
-              access={{
-                kind: access.kind,
-                step: access.kind === "other-step" ? access.step : undefined,
-              }}
-              live={status.state === "running"}
-              isActive={isActive}
-              assistantLabel={title}
-              containerId={containerId}
-              loadTranscript={loadStepTranscript}
-            />,
-            report,
+          {splitDetails && details ? (
+            // Side by side once both fit at a readable width; stacked otherwise.
+            <div
+              data-testid="multi-review-step-split"
+              className="flex flex-1 flex-col gap-4 @min-[88rem]:grid @min-[88rem]:grid-cols-2"
+            >
+              <div className="min-w-0 @min-[88rem]:self-start">{details}</div>
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">{transcriptTabs}</div>
+            </div>
+          ) : (
+            <>
+              {details}
+              {transcriptTabs}
+            </>
           )}
         </div>
       ),
@@ -1118,6 +1135,7 @@ function MultiReviewOverviewTab({
       workflow.pausedStep === "prepare" &&
       Boolean(commands.resumeStep),
     activityAt: latestActivityAt(workflow.stepRuntimes?.prepare, workflow.validationRun),
+    splitDetails: true,
     details: workflow.validationRun ? (
       <ReviewValidationStatus
         environmentId={data.environmentId}

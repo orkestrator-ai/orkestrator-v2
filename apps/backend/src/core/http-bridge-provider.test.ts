@@ -2052,6 +2052,8 @@ describe("HTTP bridge provider", () => {
       permissionMode: "default",
       approvalMode: "default",
     });
+    // A stored pre-approval-mode parameter value is never forwarded.
+    expect(JSON.parse(String(requests[0]!.init.body)).parameterValues).toBeUndefined();
     // The plan turn still carries the approval mode for after the plan is accepted.
     expect(JSON.parse(String(requests[1]!.init.body))).toMatchObject({
       permissionMode: "plan",
@@ -2059,15 +2061,86 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  function codexConfigBridge(current: Record<string, unknown>, durable = true) {
+    return httpProvider((url, init) => {
+      if (url.endsWith("/config") && init.method === "POST") {
+        return Response.json({ status: "updated", durable });
+      }
+      if (url.endsWith("/config")) return Response.json({ ...current, durable: true });
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+  }
+
   test("approval-only Codex updates do not reset plan, fast mode or model configuration", async () => {
-    const { provider, requests } = httpProvider(() => Response.json({ ok: true }), codexConnection);
+    const { provider, requests } = codexConfigBridge({
+      model: "gpt-held",
+      modelReasoningEffort: "high",
+      mode: "plan",
+      fastMode: true,
+    });
     await provider.updateInteractiveControls!("codex-1", { approvalMode: "untrusted" });
     expect(requests).toHaveLength(0);
     await provider.updateInteractiveControls!("codex-1", {
       fastMode: false,
       approvalMode: "on-request",
     });
-    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ fastMode: false });
+    // The bridge's `/config` replaces the whole config, so the rest is restated.
+    expect(requests.map(({ init }) => init.method ?? "GET")).toEqual(["GET", "POST"]);
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      model: "gpt-held",
+      modelReasoningEffort: "high",
+      mode: "plan",
+      fastMode: false,
+    });
+  });
+
+  test("a Codex model pick keeps Plan mode and fast mode and drops the old model's effort", async () => {
+    const { provider, requests } = codexConfigBridge({
+      model: "gpt-old",
+      modelReasoningEffort: "xhigh",
+      mode: "plan",
+      fastMode: true,
+    });
+    await provider.updateInteractiveControls!("codex-1", { modelId: "gpt-new" });
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      model: "gpt-new",
+      mode: "plan",
+      fastMode: true,
+    });
+
+    await provider.updateInteractiveControls!("codex-1", {
+      modelId: "gpt-new",
+      reasoningId: "low",
+    });
+    expect(JSON.parse(String(requests[3]!.init.body))).toEqual({
+      model: "gpt-new",
+      modelReasoningEffort: "low",
+      mode: "plan",
+      fastMode: true,
+    });
+  });
+
+  test("a Codex config update the bridge cannot apply now is retryable", async () => {
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/config") && init.method === "POST") {
+        return Response.json({ error: "running" }, { status: 409 });
+      }
+      return Response.json({ mode: "build", fastMode: false, durable: true });
+    }, codexConnection);
+    await expect(
+      provider.updateInteractiveControls!("codex-1", { modelId: "gpt-new" }),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  test("a durable Codex mode update spares the next send a reconciliation", async () => {
+    const { provider, requests } = codexConfigBridge({ mode: "build", fastMode: false });
+    await provider.updateInteractiveControls!("codex-1", { mode: "plan" });
+    await provider.send("codex-1", "Inspect", { requestId: "request-1", mode: "plan" });
+    expect(requests.map(({ url, init }) => [url.split("/").at(-1), init.method ?? "GET"])).toEqual([
+      ["config", "GET"],
+      ["config", "POST"],
+      ["prompt", "POST"],
+    ]);
   });
 
   test("forwards the Codex approval mode with each prompt", async () => {

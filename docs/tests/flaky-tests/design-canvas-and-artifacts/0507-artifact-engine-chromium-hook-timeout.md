@@ -52,3 +52,7 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 - **Aggregate counts:** Backend 11,012 passed, 79 skipped and three failed across 660 files (642.56 s); root/support 3,405 passed and one failed across 162 files (403.31 s). All other workspace packages, bridges and protocol passed; aggregate exit 1 in 692.6 s logged.
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
+
+## Composer model parameters validation — 2026-10-25
+
+`mise run test` on `todo-0004-composer-model-params-803868a90fcb` (workspace/root/bridges/protocol 4/1/2/1, other worktrees active): the unnamed Chromium policy hook timed out after 5003.86 ms. Backend totals were 11,297 passed, 84 skipped and four failed; the other failures were 0460, 0291 and the branch's own provider-module size limit (fixed on the branch). The complete unchanged owner passed alone: `mise exec -- bun test --cwd apps/backend ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1` (39 pass, 0 fail). Evidence: `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. No assertion, deadline or skip changed.

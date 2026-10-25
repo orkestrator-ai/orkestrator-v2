@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import { RETIRED_PERMISSION_MODE_PARAMETER } from "./native-agent-retired-parameters.js";
 import type {
   CoordinatorWorkflowAssociation,
   CoordinatorWorkspace,
@@ -669,6 +670,8 @@ export abstract class StorageNative extends StorageReviews {
       // model changes. Claude's settings-backed values are session defaults:
       // unsupported models ignore context1m, and switching back must restore
       // the value the session started with rather than losing it permanently.
+      // A `permissionMode` value predates approval modes: no descriptor offers
+      // it any more, so any control update drops it.
       const retainedParameterValues = modelChanged
         ? Object.fromEntries(
             Object.entries(existing.controls?.parameterValues ?? {}).filter(
@@ -680,7 +683,7 @@ export abstract class StorageNative extends StorageReviews {
         : Object.fromEntries(
             Object.entries(existing.controls?.parameterValues ?? {}).filter(
               ([id]) =>
-                (id !== "permissionMode" || update.mode === undefined) &&
+                id !== RETIRED_PERMISSION_MODE_PARAMETER &&
                 !(
                   existing.agent === "claude" &&
                   id === "ultracode" &&

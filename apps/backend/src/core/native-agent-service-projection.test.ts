@@ -2933,7 +2933,13 @@ describe("NativeAgentService", () => {
     ],
     [
       "codex",
-      ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:variant"],
+      [
+        "parameter:thinking",
+        "parameter:context1m",
+        "parameter:audit",
+        "parameter:variant",
+        "parameter:summary",
+      ],
     ],
     [
       "cursor",

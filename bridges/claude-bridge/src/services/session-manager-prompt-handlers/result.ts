@@ -303,14 +303,6 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
         createdAt: new Date().toISOString(),
       });
     }
-    if (resultMsg.subtype === "error_max_budget_usd") {
-      appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-        type: "status",
-        content: "Claude stopped because this session reached its spending cap.",
-        severity: "warning",
-        createdAt: new Date().toISOString(),
-      });
-    }
     if (turn.options?.outputSchema) {
       const failure = structuredOutputFailure(
         "claude",

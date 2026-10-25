@@ -172,6 +172,10 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
+import {
+  sessionHeldDispatchModelUpdate,
+  unofferedDispatchModelMessage,
+} from "./native-agent-dispatch-model.js";
 /**
  * An ensured session, plus the model substitution its creation made. The
  * substitution is reported to the caller only and is never persisted.
@@ -1137,6 +1141,37 @@ export class NativeAgentService {
     return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
       ? { ...session, modelSubstitution }
       : session;
+  }
+
+  /**
+   * Apply a dispatch's explicit model to a runtime whose prompts carry none
+   * (`runsSessionHeldModel`), the way a model pick is applied: through a
+   * control update persisted under the session lease, before anything is
+   * journaled. A model the login's live catalogue positively does not offer is
+   * refused here with the draft intact, rather than reaching the runtime and
+   * failing there. See `native-agent-dispatch-model.ts`.
+   */
+  private async applySessionHeldDispatchModel(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<PersistedNativeAgentSession> {
+    const update = sessionHeldDispatchModelUpdate(input, session);
+    if (!update?.modelId) return session;
+    const availability = await this.resolveDefaultModel(provider, update.modelId);
+    if (availability?.substitution) {
+      throw new PromptRejectedError(
+        unofferedDispatchModelMessage(session.agent, update.modelId, availability.substitution),
+      );
+    }
+    return this.storage.updateNativeAgentSessionControls(
+      session.key,
+      session.providerSessionId,
+      update,
+      async () => {
+        await provider.updateInteractiveControls?.(session.providerSessionId, update);
+      },
+    );
   }
 
   private async resolveDefaultModel(
@@ -3228,7 +3263,7 @@ export class NativeAgentService {
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
-      const session = await this.ensureSession(input);
+      let session: PersistedNativeAgentSession = await this.ensureSession(input);
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
@@ -3240,6 +3275,7 @@ export class NativeAgentService {
         interactionPolicy: session.interactionPolicy,
         phase: input.phase,
       });
+      session = await this.applySessionHeldDispatchModel(input, session, provider);
       /*
        * Decide what this submission executes before anything is journaled or
        * attached. A command that no longer exists, changed, or cannot accept

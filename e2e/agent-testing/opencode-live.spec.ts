@@ -282,8 +282,10 @@ test.describe("live OpenCode", () => {
               const current = await projection(logicalSessionKey);
               if (current?.turn.phase === "error") {
                 throw new Error(
-                  `OpenCode turn failed (${current.turn.error ?? "no error text"}); check that ` +
-                    "ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL belongs to a connected provider",
+                  `OpenCode turn failed (${current.turn.error ?? "no error text"}); ` +
+                    (pinnedModel
+                      ? "check that ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL belongs to a connected provider"
+                      : "the connected providers' default model failed; try pinning a connected model with ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL"),
                 );
               }
               return (

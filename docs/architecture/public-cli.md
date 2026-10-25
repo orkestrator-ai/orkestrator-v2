@@ -98,7 +98,10 @@ The client configuration lives in `ORKESTRATOR_CLI_CONFIG_DIR`, else
 `~/Library/Application Support/orkestrator-cli` (macOS): `connections.json`
 (0600), `credentials/` (0600 files in a 0700 directory), `receipts/`. A config
 file writable by others or a credential file readable by others is refused.
-There is no project-local configuration, so cloning a repository cannot select
+`mise run smoke:cli` checks the platform default from the packed install: with
+a disposable `HOME` and no override, `connection add` creates the directory
+0700 and `connections.json` 0600 there, and a group-writable file is refused
+(exit 4, `connection-not-configured`). There is no project-local configuration, so cloning a repository cannot select
 a backend or hand a worker an operator credential. `add` contacts the backend
 and pins its installation ID unless `--no-check`. URLs with embedded
 credentials are refused; plain `http` is accepted only for loopback and
@@ -175,6 +178,7 @@ not advertise at its version before sending it.
 | `session config get/set` | `session.config.get/set` | live composer controls | provider |
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
+| `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
@@ -190,6 +194,8 @@ not advertise at its version before sending it.
 | `ticket create/update/comment` | `ticket.create/update/comment` | Kanban storage; the operation ID is the store's request key | metadata |
 | `mail mailboxes` | `mail.mailboxes` | agent-mail directory (refused while messaging is disabled) | read |
 | `mail send ENV TAB` | `mail.send` | external agent mail, inbox-only, never injected | metadata |
+| `schedule list/get` | `schedule.list/get` | `ScheduledJobService` ([scheduled-jobs.md](scheduled-jobs.md)) | read |
+| `schedule create/update/pause/resume/run/delete` | `schedule.*` | `ScheduledJobService`; the schedule fires later as its owner | metadata |
 | `run get/wait` | `run.get` | operation store + reconciler | read |
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
@@ -522,6 +528,19 @@ read, so a question that was just answered does not report 6.
   interaction before anything reaches the provider. Stale, replaced, expired or
   malformed answers are refused and never approve; the same answer key does
   not answer twice. A CLI exiting never answers an interaction.
+- **Pausing a countdown**: each listed interaction carries `expiresAt` and,
+  where its deadline's authority publishes one, `hold` (`available`, `heldAt`
+  while paused, `reason`). `session interactions hold SESSION INTERACTION`
+  pauses the countdown and `--resume` restarts a fresh window, through the
+  same `hold_native_agent_interaction` path as the card's timer. The bridge
+  enforces the pause, so a paused request still ends at the 24-hour hold
+  ceiling or the provider's own sooner limit (the moved `expiresAt` in the
+  result). Pausing answers nothing, so it needs no `--revision` and no voice
+  confirmation. An interaction with no countdown (OpenCode), one whose pause
+  is unavailable (`no-extension`) or one whose bridge predates pausing
+  (`bridge-outdated`, or no `hold` at all) is refused with `unsupported`
+  before anything reaches the provider; one that is gone or expired is
+  `interaction-stale`.
 
 ### Transcripts
 
@@ -604,7 +623,18 @@ worktree roots, argv-only driver, owned cleanup, private manifest under
 `client-exit`, `exec`, `wrong-profile`, `project-cascade` (a started and a
 stopped environment deleted by `project remove --cascade`; checkout and origin
 kept) and `project-init` (local only: no remote, a local environment starts
-from the repository's own `main`). `live-session` also lists the session's
+from the repository's own `main`). The container matrix adds
+`foreign-owner`: a container and two volumes (one mounted, one unmounted)
+carrying every label of the scenario's environment except its owner
+(`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,
+`stop` and `delete` run, and must
+stay exactly as created (state, start time, labels), with the command run in
+the environment's own container. Cleanup verifies that all decoy resources
+are absent and reports Docker failures in `cleanupErrors`. `live-session`
+records the model each session reports in force (`session config get`) on
+its `session start`
+manifest entry, beside the pinned model or `null` for the provider default.
+`live-session` also lists the session's
 commands, checks that an unknown and a changed command are refused, runs a
 selected command (Claude's built-in `/context`), and sends `--literal`,
 `--attach` and an `--enqueue` prompt behind a running turn. Options: `--scenario NAME` (repeat),
@@ -679,15 +709,17 @@ Which test proves each scenario class is listed in
   see [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md).
 - Container lifecycle and exec are qualified on Linux Docker and macOS Docker
   Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
-  live Claude, Codex and OpenCode container passes. Remaining gaps include Pi,
-  Cursor and Grok live runs, macOS packed install/config permissions/profile
-  discovery, and a foreign-owner Docker decoy through the CLI; see the
+  live Claude, Codex and OpenCode container passes. The 2026-10-25 evidence
+  completes macOS packed install/config permissions/profile discovery and the
+  foreign-owner Docker decoy through the CLI. Pi, Cursor and Grok live runs
+  and live token-cost measurement remain open; see the
   [qualification evidence and remaining work](../todo/cli-and-slash-commands/0014-cli-qualification.md).
 - Browser-checked in `e2e/agent-testing/cli-ui.spec.ts`: CLI-made project,
   environment and settings changes reach an open and a reloaded renderer;
-  with a live Claude profile, a CLI-started question rehydrates in an
-  inactive, reloaded renderer and the UI's answer completes the CLI's run.
-  Other providers' question cards were not browser-checked.
+  with live Claude and OpenCode profiles, CLI-started questions and approvals
+  rehydrate in an inactive, reloaded renderer and the UI's answer or approval
+  completes the CLI's run. Codex raised neither card in host build mode;
+  Pi, Cursor and Grok card checks await credentials (see the qualification record).
 - To withdraw one action, remove its handler from
   [`registry.ts`](../../apps/backend/src/core/public-api/registry.ts):
   capabilities stop advertising it and clients refuse it before submitting,

@@ -4,7 +4,14 @@ import { processAlive, signalProcess, waitForStopped, withCleanup } from "../pro
 
 /** Snapshot exact owned descendants before quitting, while parent links still exist. */
 export function electronProcessTree(app: Pick<ElectronApplication, "process">): number[] {
-  const root = app.process().pid;
+  let root: number | undefined;
+  try {
+    root = app.process().pid;
+  } catch {
+    // Playwright disposes the handle once Electron has exited (a caller that
+    // quit it first, as the service-preview spec's relaunch does): nothing to own.
+    return [];
+  }
   if (!root) return [];
   const processes = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
   if (processes.status !== 0) throw new Error("Could not enumerate Electron descendants");
@@ -59,4 +66,37 @@ export async function closeElectron(
         Math.min(10_000, timeoutMs),
       ),
   ]);
+}
+
+/**
+ * Close Playwright's Electron handle, waiting at most `timeoutMs`.
+ *
+ * `ElectronApplication.close()` can hang (a wedged quit, a lost connection),
+ * and an unbounded wait in a cleanup path holds everything after it, such as
+ * stopping the spec's Vite group. When `close()` does not finish in time, or
+ * returns with Electron still running, the Electron process tree is killed.
+ */
+export async function closeElectronWithin(
+  app: Pick<ElectronApplication, "close" | "process"> | null | undefined,
+  timeoutMs = 20_000,
+): Promise<"closed" | "killed"> {
+  if (!app) return "closed";
+  // Preserve ownership while parent links and the Playwright handle still exist.
+  const owned = electronProcessTree(app);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    // A rejected close is settled too; whether Electron still runs is checked below.
+    app.close().then(
+      () => true,
+      () => true,
+    ),
+    new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), timeoutMs))),
+  ]).finally(() => clearTimeout(timer));
+  if (!owned.length && !settled) {
+    throw new Error("Electron did not close and exposes no process to stop");
+  }
+  if (!owned.some(processAlive)) return "closed";
+  for (const pid of owned.filter(processAlive)) signalProcess(pid, "SIGKILL");
+  await waitForStopped(owned, 5_000);
+  return "killed";
 }

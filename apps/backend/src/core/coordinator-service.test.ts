@@ -1950,6 +1950,10 @@ describe("project coordinator", () => {
       options: {
         requestedAt?: string;
         workerActivity?: () => Promise<"idle" | "working" | "waiting" | "unknown">;
+        workerBackgroundWork?: () => Promise<boolean>;
+        backgroundWorkHoldMs?: number;
+        /** The worker was launched with its request as a not-yet-dispatched startup prompt. */
+        pendingStartupPrompt?: boolean;
       } = {},
     ): Promise<{
       coordinator: CoordinatorService;
@@ -1972,6 +1976,14 @@ describe("project coordinator", () => {
         }),
         undefined,
         options.workerActivity ? async () => options.workerActivity!() : undefined,
+        {
+          ...(options.workerBackgroundWork
+            ? { workerBackgroundWork: async () => options.workerBackgroundWork!() }
+            : {}),
+          ...(options.backgroundWorkHoldMs !== undefined
+            ? { backgroundWorkHoldMs: options.backgroundWorkHoldMs }
+            : {}),
+        },
       );
       const initial = await coordinator.ensure(project.id);
       const conversation = initial.workspace.conversations[0]!;
@@ -1980,6 +1992,9 @@ describe("project coordinator", () => {
       worker.status = "running";
       worker.setupPhase = "ready";
       worker.setupScriptsComplete = true;
+      if (options.pendingStartupPrompt) {
+        worker.pendingAgentLaunch = true;
+      }
       await storage.addEnvironment(worker);
       // The worker's addressable mailbox comes from its committed pane layout,
       // exactly as it would in a real environment.
@@ -2121,6 +2136,103 @@ describe("project coordinator", () => {
         expect(pending[0]!.mailbox.environmentId === fixture.runtimeId).toBe(false);
         expect(await storage.listUnwokenCoordinatorDelegations()).toHaveLength(0);
       });
+
+    test("a launched worker reading idle before its startup prompt is accepted is not finished", async () => {
+      // The startup tab's session exists and reads idle seconds before the
+      // provider accepts the delegated prompt; the grace period since the
+      // delegation opened has long passed because setup took minutes.
+      const fixture = await delegationFixture({
+        requestedAt: new Date(0).toISOString(),
+        workerActivity: async () => "idle",
+        pendingStartupPrompt: true,
+      });
+
+      await fixture.coordinator.reconcileWorkerDelegations();
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+
+      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
+        fixture.associationId,
+      ]);
+      expect(
+        (await storage.listPendingAgentMailInjects()).some(
+          ({ message }) => message.from.kind === "system",
+        ),
+      ).toBe(false);
+
+      // Accepted, then the delegated turn ran and ended: now it has finished.
+      await storage.updateEnvironment(fixture.workerId, { pendingAgentLaunch: false });
+      await fixture.coordinator.reconcileWorkerDelegations();
+
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      const notices = (await storage.listPendingAgentMailInjects()).filter(
+        ({ message }) => message.from.kind === "system",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.message.subject).toBe("Worker worker finished");
+    });
+
+    test("a worker paused on background work without a report stays delegated", async () => {
+      let background = true;
+      const fixture = await delegationFixture({
+        requestedAt: new Date(0).toISOString(),
+        workerActivity: async () => "idle",
+        workerBackgroundWork: async () => background,
+      });
+
+      await fixture.coordinator.reconcileWorkerDelegations();
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+      expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+
+      // The background work reported, the worker resumed, and its turn ended.
+      background = false;
+      await fixture.coordinator.reconcileWorkerDelegations();
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+    });
+
+    test("a report is released even while the worker's background work runs", async () => {
+      const fixture = await delegationFixture({
+        requestedAt: new Date(0).toISOString(),
+        workerActivity: async () => "idle",
+        workerBackgroundWork: async () => true,
+      });
+      const report = await workerSays(fixture, "background-report", "Done; dev server left up.");
+
+      await fixture.coordinator.reconcileWorkerDelegations();
+
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect((await storage.listPendingAgentMailInjects()).map((item) => item.message.id)).toEqual([
+        report.id,
+      ]);
+    });
+
+    test("a background-work pause is bounded and says why when it runs out", async () => {
+      const fixture = await delegationFixture({
+        requestedAt: new Date(0).toISOString(),
+        workerActivity: async () => "idle",
+        workerBackgroundWork: async () => true,
+        backgroundWorkHoldMs: 0,
+      });
+
+      await fixture.coordinator.reconcileWorkerDelegations();
+
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      const notices = (await storage.listPendingAgentMailInjects()).filter(
+        ({ message }) => message.from.kind === "system",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.message.body).toContain(
+        "work it started in the background was still running",
+      );
+    });
 
     test("a stopped worker with an undelivered request remains delegated through startup", async () => {
       const fixture = await delegationFixture();

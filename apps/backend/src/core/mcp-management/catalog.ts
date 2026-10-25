@@ -168,6 +168,14 @@ async function loadContainerSource(
     // A write into the container is compared against these exact bytes.
     contentDigest: contentDigest(result.bytes),
   };
+  if (spec.noEntries) {
+    try {
+      JSON.parse(text);
+      return { spec, file, parsed: null, state: "ok" };
+    } catch {
+      return { spec, file, parsed: null, state: "invalid", error: "The file is not valid JSON." };
+    }
+  }
   try {
     const parsed = parseSource(spec, text);
     return {
@@ -268,6 +276,14 @@ export async function loadSource(
       error: file.error,
     };
   }
+  if (spec.noEntries) {
+    try {
+      JSON.parse(file.text);
+      return { spec, file, parsed: null, state: "ok" };
+    } catch {
+      return { spec, file, parsed: null, state: "invalid", error: "The file is not valid JSON." };
+    }
+  }
   try {
     const parsed = parseSource(spec, file.text);
     return {
@@ -313,20 +329,25 @@ export async function loadCatalog(
       continue;
     }
     if (!source.parsed) continue;
-    for (const [name, raw] of source.parsed.entries) {
+    const prefix = source.spec.entryNamePrefix ?? "";
+    const disabledReason = source.spec.disabledReason;
+    for (const [key, raw] of source.parsed.entries) {
+      const name = prefix + key;
       entries.push({
         entryId: entryIdFor(source.spec.sourceId, name),
         source,
         name,
         raw,
         definition: codec.decode(raw),
-        issue: source.parsed.entryIssues.get(name),
+        issue: source.parsed.entryIssues.get(key),
         injected: false,
         order: entries.length,
+        ...(disabledReason ? { disabledReason } : {}),
       });
     }
-    for (const [name, issue] of source.parsed.entryIssues) {
-      if (!source.parsed.entries.has(name)) {
+    for (const [key, issue] of source.parsed.entryIssues) {
+      if (!source.parsed.entries.has(key)) {
+        const name = prefix + key;
         entries.push({
           entryId: entryIdFor(source.spec.sourceId, name),
           source,
@@ -336,6 +357,7 @@ export async function loadCatalog(
           issue,
           injected: false,
           order: entries.length,
+          ...(disabledReason ? { disabledReason } : {}),
         });
       }
     }
@@ -639,11 +661,15 @@ function entryActions(
         ? (entry.source.spec.readOnlyReason ?? "This source is read-only.")
         : (entry.source.file?.writeBlock ?? entry.issue));
   const renameBlock = removeBlock ?? entryRenameBlock(entry);
-  const setEnabled = !capabilities.operations.setEnabled.supported
-    ? capabilities.operations.setEnabled
-    : editBlock
+  // A plugin's server is switched by the plugin's settings, not by a saved switch.
+  const setEnabled =
+    entry.source.spec.owner === "plugin" && editBlock
       ? denied(editBlock)
-      : allowed;
+      : !capabilities.operations.setEnabled.supported
+        ? capabilities.operations.setEnabled
+        : editBlock
+          ? denied(editBlock)
+          : allowed;
   return {
     edit: editBlock ? denied(editBlock) : allowed,
     rename: renameBlock ? denied(renameBlock) : allowed,
@@ -837,9 +863,10 @@ export function publicSource(source: LoadedSource): McpConfigSource {
     trust: spec.trust,
     trustReason: spec.trustReason,
     note:
-      spec.provider === "pi" && source.parsed?.subtree.length === 0 && source.parsed.entries.size
+      spec.note ??
+      (spec.provider === "pi" && source.parsed?.subtree.length === 0 && source.parsed.entries.size
         ? PI_BARE_MAP_NOTE
-        : undefined,
+        : undefined),
   };
 }
 

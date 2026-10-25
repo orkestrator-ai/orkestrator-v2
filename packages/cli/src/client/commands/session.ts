@@ -3,6 +3,7 @@ import type {
   PublicAgentOptions,
   PublicInteraction,
   PublicInteractionAnswerInput,
+  PublicInteractionHold,
   PublicSessionCommandList,
   PublicSessionSummary,
   PublicTranscriptPage,
@@ -190,6 +191,18 @@ function controlsInput(options: Record<string, unknown>): Record<string, unknown
   if (options.mode !== undefined)
     input.mode = oneOf(options.mode, ["plan", "build"] as const, "--mode");
   return input;
+}
+
+/** How `interactions list` describes a countdown's pause state. */
+function holdLabel(hold: PublicInteractionHold | undefined): string {
+  if (!hold) return "";
+  if (hold.heldAt !== undefined) {
+    return `  (paused${hold.reason ? `, ${hold.reason}` : ""}; resume with interactions hold --resume)`;
+  }
+  if (hold.available) {
+    return `  (pausable${hold.reason ? `, ${hold.reason}` : ""} with interactions hold)`;
+  }
+  return `  (not pausable${hold.reason ? `: ${hold.reason}` : ""})`;
 }
 
 function parseAnswers(options: Record<string, unknown>): PublicInteractionAnswerInput[] {
@@ -843,6 +856,9 @@ export const sessionCommands: CommandSpec[] = [
         human: interactions.items.length
           ? interactions.items.flatMap((item) => [
               `${item.id}  ${item.kind}  revision ${item.revision}  ${item.title}`,
+              ...(item.expiresAt !== undefined
+                ? [`  expires ${new Date(item.expiresAt).toISOString()}${holdLabel(item.hold)}`]
+                : []),
               ...item.questions.map(
                 (question) =>
                   `  ${question.id}: ${question.prompt} [${question.options.map((option) => option.id).join(", ")}]${question.allowFreeText ? " (free text)" : ""}`,
@@ -933,6 +949,47 @@ export const sessionCommands: CommandSpec[] = [
         warnings,
         connection: session.identity,
         human: receipt ? receiptLines(receipt) : ["resolved"],
+      };
+    },
+  },
+  {
+    path: ["session", "interactions", "hold"],
+    action: "session.interaction.hold",
+    inputFields: { resume: "held" },
+    summary: "Pause one pending interaction's countdown; --resume restarts a fresh window.",
+    description:
+      "The pause is enforced by the provider bridge: a paused request still ends at the 24-hour hold ceiling or the provider's own sooner limit (the moved expiresAt). An interaction with no countdown, or whose bridge predates pausing, is refused (exit 8). Nothing is answered.",
+    positionals: [
+      { name: "session", required: true },
+      { name: "interaction", required: true },
+    ],
+    options: [
+      {
+        name: "resume",
+        kind: "boolean",
+        description: "Resume the countdown instead of pausing it.",
+      },
+      REQUEST_ID_OPTION,
+    ],
+    async run(context, parsed) {
+      const held = parsed.options.resume !== true;
+      const { session, result, receipt, warnings } = await submit(
+        context,
+        "session.interaction.hold",
+        {
+          sessionId: parsed.positionals.session,
+          interactionId: parsed.positionals.interaction,
+          held,
+        },
+        parsed.options,
+      );
+      return {
+        action: "session.interaction.hold",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        human: receipt ? receiptLines(receipt) : [held ? "paused" : "resumed"],
       };
     },
   },

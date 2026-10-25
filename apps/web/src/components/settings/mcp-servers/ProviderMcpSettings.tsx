@@ -367,7 +367,9 @@ export function ProviderMcpSettings() {
           <McpSourceList
             snapshot={current}
             highlightEntryId={
-              liveJoin?.kind === "saved" || liveJoin?.kind === "injected"
+              liveJoin?.kind === "saved" ||
+              liveJoin?.kind === "injected" ||
+              liveJoin?.kind === "plugin"
                 ? liveJoin.entryId
                 : undefined
             }

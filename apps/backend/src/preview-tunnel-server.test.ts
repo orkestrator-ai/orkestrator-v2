@@ -436,6 +436,34 @@ describe("PreviewTunnelServer", () => {
     }
   });
 
+  test("a stopped reader that still pings outlives the liveness interval; a silent one does not", async () => {
+    const intervals = spyOn(globalThis, "setInterval");
+    const controlled = await controlledTunnel(undefined, { pingIntervalMs: 1000 });
+    const heartbeat = intervals.mock.calls.find(([, ms]) => ms === 1000)![0] as () => void;
+    intervals.mockRestore();
+    try {
+      controlled.pauseReader();
+      controlled.upstream.push(Buffer.alloc(1024, 0x73));
+      await waitForTunnelCleanup(() => controlled.downstream.writableLength > 1024);
+      // Several liveness intervals: the server's pings wait behind the unread
+      // data, but the client's own pings arrive.
+      for (let round = 0; round < 3; round += 1) {
+        heartbeat();
+        controlled.ws.ping();
+        await Bun.sleep(5);
+      }
+      heartbeat();
+      expect(controlled.downstream.destroyed).toBe(false);
+      expect(tunnel.stats().sockets).toBe(1);
+      // No frame since the last interval: the client is presumed gone.
+      heartbeat();
+      await waitForTunnelCleanup(() => controlled.downstream.destroyed);
+      await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
+    } finally {
+      controlled.dispose();
+    }
+  });
+
   test.each(["tcp", "relay"] as const)(
     "%s upstream preserves unshifted bytes and EOF across a stopped tunnel reader",
     async (kind) => {

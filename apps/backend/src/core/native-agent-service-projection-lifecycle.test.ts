@@ -25,9 +25,70 @@ import {
   waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { answerResolution, codexConnection, httpProvider } from "./agent-provider-test-support.js";
+import { describeInteraction } from "../../../../bridges/codex-bridge/src/app-server/interactions.js";
 import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 describe("NativeAgentService projection lifecycle", () => {
+  test("a Default-mode Codex RPC question publishes waiting and resumes after an answer", async () => {
+    const question = describeInteraction({
+      interactionId: "default-question",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        isBlocking: false,
+        questions: [{ id: "q", question: "Which?", options: [{ label: "A" }] }],
+      },
+      generation: 1,
+      requestedAt: Date.now(),
+      defaultExpiresAt: Date.now() + 60_000,
+    })!;
+    expect(question.isBlocking).toBe(false);
+    let pending = true;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals: [] });
+      if (url.endsWith("/interactions"))
+        return Response.json({ interactions: pending ? [question] : [] });
+      if (url.endsWith("/interactions/default-question")) {
+        pending = false;
+        return Response.json({ status: "applied" });
+      }
+      return new Response(null, { status: 404 });
+    }, codexConnection);
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "running", messages: [] }),
+      interactions: provider.interactions,
+    });
+    await withService(
+      { prefix: "orkestrator-codex-default-question-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:default-question",
+        };
+        await service.ensureSession(identity);
+        // No mounted renderer or event subscription: authoritative reads alone.
+        const waiting = await service.getProjection(identity);
+        expect(waiting?.turn.phase).toBe("blocked");
+        expect(waiting?.interactions[0]?.blocking).toBe(true);
+        const request = waiting!.interactions[0]!;
+        expect(
+          await provider.interactions!.resolveInteraction(
+            "provider-session",
+            request.id,
+            answerResolution(request),
+          ),
+        ).toMatchObject({ result: "applied" });
+        const resumed = await service.getProjection(identity);
+        expect(resumed?.turn.phase).toBe("running");
+        expect(resumed?.interactions).toEqual([]);
+      },
+    );
+  });
+
   test("keeps non-blocking questions visible without blocking the active turn", async () => {
     const interactions = pendingInteractionSnapshot(10_000, ["question"]);
     interactions.requests[0]!.blocking = false;

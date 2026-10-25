@@ -26,6 +26,7 @@ import {
   type McpTransport,
 } from "@orkestrator/protocol/mcp-management";
 
+import { claudePluginSources, listHostDirectories } from "./claude-plugins.js";
 import { PROVIDER_CODECS } from "./codecs.js";
 import {
   codexProjectTrust,
@@ -36,7 +37,13 @@ import {
   type TextReader,
   type TrustVerdict,
 } from "./native-policy.js";
-import type { ContainerFileReader, SourceSpec, TargetContextInfo } from "./types.js";
+import type {
+  ContainerDirectoryLister,
+  PluginDirectoryListing,
+  ContainerFileReader,
+  SourceSpec,
+  TargetContextInfo,
+} from "./types.js";
 
 export interface ProviderHomes {
   home: string;
@@ -58,6 +65,12 @@ export interface ProviderHomes {
   opencodeDisableProjectConfig?: boolean;
   /** Grok's documented environment switches, verbatim. */
   grokEnv?: GrokPolicyInput["env"];
+  /**
+   * `$CLAUDE_CONFIG_DIR`, where the Claude CLI reads its user settings
+   * (`settings.json`, so `enabledPlugins`); default `~/.claude`. The bridge
+   * still reads `homedir()/.claude.json` and `~/.claude/plugins`.
+   */
+  claudeConfigDir?: string;
 }
 
 function expandTilde(value: string, home: string): string {
@@ -94,6 +107,7 @@ export function resolveProviderHomes(
     opencodeDisableProjectConfig: /^(true|1)$/i.test(
       env.OPENCODE_DISABLE_PROJECT_CONFIG?.trim() ?? "",
     ),
+    claudeConfigDir: envPath(env.CLAUDE_CONFIG_DIR, home),
     grokEnv: {
       claudeMcps: env.GROK_CLAUDE_MCPS_ENABLED,
       cursorMcps: env.GROK_CURSOR_MCPS_ENABLED,
@@ -244,6 +258,7 @@ export interface SourceContext {
   exists(filePath: string): Promise<boolean>;
   /** Bounded read of provider policy files (trust, compat). Defaults to the host. */
   readText?: TextReader;
+  listDirectories?(dir: string): Promise<PluginDirectoryListing>;
   /**
    * Ignored. Grok's `[compat.*] mcps` switches are resolved in this module
    * (env, requirements, user config, managed config), not by the caller.
@@ -717,6 +732,19 @@ export async function providerSources(
           }),
         );
       }
+      for (const spec of await claudePluginSources({
+        home: homes.home,
+        claudeConfigDir: homes.claudeConfigDir,
+        cwd: worktree,
+        includeProjectSources: context.projectResources !== false,
+        readText: read,
+        exists: input.exists,
+        listDirectories:
+          input.listDirectories ?? (input.inContainer ? undefined : listHostDirectories),
+        display: (filePath) => display(filePath, homes, worktree),
+      })) {
+        add(spec);
+      }
       break;
     }
     case "codex": {
@@ -944,12 +972,14 @@ export async function containerSources(
   containerId: string,
   options: ContainerSourceOptions,
   reader?: ContainerFileReader,
+  listDirectories?: ContainerDirectoryLister,
 ): Promise<SourceSpec[]> {
   const specs = await providerSources(provider, {
     context: { kind: "environment", location: "local-worktree", worktreePath: CONTAINER_WORKSPACE },
     homes: CONTAINER_HOMES,
     inContainer: true,
     ...containerProbes(containerId, reader),
+    listDirectories: listDirectories ? (dir) => listDirectories(containerId, dir) : undefined,
     retainedSourceIds: options.overlaySourceIds,
   });
   return specs.map((spec) => {
@@ -958,6 +988,10 @@ export async function containerSources(
     const compat = spec.owner === "compatibility";
     const copied = copiedFromBackend(spec);
     const base = { ...spec, container: { containerId }, allowedRoot: undefined };
+    if (spec.owner === "plugin") {
+      // The container's own plugins, read where its sessions read them.
+      return { ...base, displayPath: inProject ? spec.path : `container:${spec.path}` };
+    }
     if (compat || spec.owner === "managed-policy") {
       return {
         ...base,

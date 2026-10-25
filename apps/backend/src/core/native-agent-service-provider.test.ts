@@ -414,7 +414,6 @@ describe("NativeAgentService", () => {
       },
       {
         openCodeClient: client as never,
-        autoAnswerRequests: false,
         resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
       },
     );
@@ -472,7 +471,6 @@ describe("NativeAgentService", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
       },
     );
 
@@ -657,7 +655,6 @@ describe("NativeAgentService", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
       },
     );
     await withService(
@@ -704,7 +701,6 @@ describe("NativeAgentService", () => {
         {
           openCodeClient: fake.client,
           openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-          autoAnswerRequests: false,
         },
       );
       const send = provider.send.bind(provider);
@@ -781,7 +777,6 @@ describe("NativeAgentService", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
       },
     );
 
@@ -824,7 +819,6 @@ describe("NativeAgentService", () => {
       {
         openCodeClient: fake.client,
         openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        autoAnswerRequests: false,
       },
     );
 

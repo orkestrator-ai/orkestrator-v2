@@ -16,6 +16,7 @@ if (process.env.FAKE_ACP_SPAWN_FILE) {
     JSON.stringify({
       args: process.argv.slice(2),
       folderTrust: process.env.GROK_FOLDER_TRUST,
+      questionTimeoutSecs: process.env.GROK_ASK_USER_QUESTION_TIMEOUT_SECS,
     }) + "\n",
   );
 }

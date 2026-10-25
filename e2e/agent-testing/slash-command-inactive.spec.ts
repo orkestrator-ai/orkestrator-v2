@@ -171,16 +171,6 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
       test.setTimeout(container ? 1_200_000 : 900_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize(DESKTOP_VIEWPORT);
-      // A dev profile's backend reports the Electron version as its own, so
-      // every event-stream reconnect (this case forces one) raises the
-      // "Reload to use the matching version" reminder over the composer's
-      // Send button. Tapping the toast body dismisses it for the session.
-      await page.addLocatorHandler(
-        page.getByText("Reload to use the matching version."),
-        async (reminder) => {
-          await reminder.click();
-        },
-      );
 
       const status = profileStatus(profile);
       expect(status.profile, "dev:status answered for a different profile").toBe(profile);

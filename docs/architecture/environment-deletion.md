@@ -115,7 +115,9 @@ Inside the local-server queue:
    `container`, `volumes` and `network` steps.
 9. Stop local servers, then run the `worktree` step and, only if it
    succeeded, the `branch` step.
-10. Delete environment-keyed records, design canvases and web annotations.
+10. Delete environment-keyed records, design canvases and web annotations;
+    delete the schedules its agents own and pause other owners' schedules
+    aimed at it ([scheduled-jobs.md](scheduled-jobs.md#when-the-owner-or-the-target-goes-away)).
 11. Remove the environment record, then run the `state-dirs` step (bridges are
     already stopped, so nothing is writing there) and delete the pane layout.
 12. Close any terminal that became visible during deletion and release

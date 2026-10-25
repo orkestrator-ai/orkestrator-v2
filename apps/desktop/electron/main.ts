@@ -27,6 +27,7 @@ import {
   PRODUCT_NAME,
   userDataDirectoryName,
 } from "./app-constants.js";
+import { desktopApplicationVersion } from "./app-version.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import {
@@ -48,7 +49,7 @@ import {
   LocalBackendCatalogueStore,
   NativeDeviceCatalogueStore,
 } from "./connection-catalogue-store.js";
-import { PORTAL_EVENT_CHANNEL, registerFederationIpc } from "./federation-ipc.js";
+import { registerFederationIpc } from "./federation-ipc.js";
 import { SshPromptBroker } from "./ssh-prompt-broker.js";
 import { createSshAdapterContext, SshTunnelSupervisor } from "./ssh/index.js";
 import { createUnavailableLocalBackend } from "./unavailable-local-backend.js";
@@ -75,10 +76,11 @@ import type {
   BrowserPreviewManager,
   BrowserPreviewServiceTransport,
 } from "./browser-preview-manager.js";
-import { connectionPreviewBackend, rebindWindowPreviews } from "./preview-connection-backend.js";
+import { connectionPreviewBackend } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
 import {
+  nodePartitionKey,
   PreviewPartitionRetention,
   previewPartitionsInUse,
 } from "./preview-partition-retention.js";
@@ -127,7 +129,11 @@ import {
   projectMenuWindows,
   resolveFocusedWindowContext,
 } from "./window-menu.js";
-import { chromiumSwitchesForRuntime, runtimeProfileFromEnvironment } from "./runtime-profile.js";
+import {
+  chromiumSwitchesForRuntime,
+  previewRetentionTimingForRuntime,
+  runtimeProfileFromEnvironment,
+} from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
   registerApplicationLoggingShutdown,
@@ -158,6 +164,7 @@ import {
 import { ArtifactHostManager } from "./artifact-host-manager.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
+import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -234,12 +241,32 @@ let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
 let previewPartitionRetention: PreviewPartitionRetention | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
-const windowContexts = new Map<number, DesktopWindowContext>();
 /** Workspace realms, by their own renderer's ID. */
 const realmContexts = new RealmContexts<DesktopWindowContext>(
   (id) => sshPrompts?.cancelFor(id),
   (error) => console.warn("[Previews] Failed to close preview transport:", error),
 );
+const desktopWindows = new DesktopWindowContexts<DesktopWindowContext>({
+  realms: realmContexts,
+  connections: () => connectionManager,
+  createPreviews: (context, connectionId, partitionKey) =>
+    createWindowBrowserPreviews(
+      context.window,
+      context.scope,
+      context.slot,
+      connectionId,
+      partitionKey,
+    ),
+  closeRealms: (webContentsId) => workspaceViews?.closeAllFor(webContentsId),
+  cancelPrompts: (webContentsId) => sshPrompts?.cancelFor(webContentsId),
+  releaseWorkspaceGrant: (scope) => nodeWorkspaceScopes?.release(scope),
+  releaseSlot: (slot) => windowSlots.release(slot),
+  setConnectionTitle: (context) => setConnectionTitle(context.window, context.scope),
+  publishConnectionLists: () => publishConnectionLists(),
+  menuChanged: () => createMenu(),
+  logger: console,
+});
+const windowContexts = desktopWindows.windows;
 const installRealmRequestAuth = createRealmRequestAuthInstaller(
   (id) => realmContexts.get(id)?.scope,
   (url, scope) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
@@ -255,15 +282,13 @@ const realmBindings = new Map<
   }
 >();
 
-/** Every renderer: main windows and the realms inside them. */
 function rendererContexts(): DesktopWindowContext[] {
-  return [...windowContexts.values(), ...realmContexts.values()];
+  return desktopWindows.renderers();
 }
 const MAX_DESKTOP_WINDOWS = 32;
 const windowSlots = new DesktopWindowSlotAllocator(MAX_DESKTOP_WINDOWS);
 const windowRequestGate = new DesktopWindowRequestGate();
 let legacyRendererSessionClaimed = false;
-let lastFocusedWindowId: number | null = null;
 const backendProcess = new BackendProcess();
 const getMacOsPermissions = createSerializedMacOsPermissionProbe(() =>
   probeMacOsPermissions({
@@ -300,40 +325,20 @@ function emitToWindow(window: BrowserWindow, event: string, payload: unknown): v
   if (!window.isDestroyed()) window.webContents.send("orkestrator:event", event, payload);
 }
 
-function emitToContents(contents: Electron.WebContents, event: string, payload: unknown): void {
-  if (!contents.isDestroyed()) contents.send("orkestrator:event", event, payload);
-}
-
 function focusedContext(): DesktopWindowContext | null {
   return resolveFocusedWindowContext(
     windowContexts,
     BrowserWindow.getFocusedWindow(),
-    lastFocusedWindowId,
+    desktopWindows.lastFocusedWindowId,
   );
 }
 
-/** End a window's previews when its connection changed; see `rebindWindowPreviews`. */
 function followWindowConnection(context: DesktopWindowContext): void {
-  if (!connectionManager) return;
-  rebindWindowPreviews(context, connectionManager.getConnectionId(context.scope), (connectionId) =>
-    createWindowBrowserPreviews(
-      context.window,
-      context.scope,
-      context.slot,
-      connectionId,
-      // A workspace connection is new on every switch; preview site data
-      // stays with the node, as it would for a direct connection.
-      context.target ? `node:${context.target.nodeId}` : connectionId,
-    ),
-  );
+  desktopWindows.followConnection(context);
 }
 
 function contextForEvent(event?: { sender?: { id: number } }): DesktopWindowContext {
-  const context = event?.sender
-    ? (windowContexts.get(event.sender.id) ?? realmContexts.get(event.sender.id))
-    : null;
-  if (!context) throw new Error("The requesting window is no longer available");
-  return context;
+  return desktopWindows.forEvent(event);
 }
 
 /** IPC context of a requesting main window. */
@@ -354,20 +359,7 @@ function controlScope(context: DesktopWindowContext): string {
 }
 
 function emitToConnection(connectionId: string, event: string, payload: unknown): void {
-  if (!connectionManager) return;
-  for (const context of rendererContexts()) {
-    if (connectionManager.getConnectionId(context.scope) === connectionId) {
-      emitToContents(context.contents, event, payload);
-    }
-    // The portal channel of a realm: its window's command node.
-    if (
-      context.portalScope &&
-      connectionManager.getConnectionId(context.portalScope) === connectionId &&
-      !context.contents.isDestroyed()
-    ) {
-      context.contents.send(PORTAL_EVENT_CHANNEL, event, payload);
-    }
-  }
+  desktopWindows.emitToConnection(connectionId, event, payload);
 }
 
 /** Machine state changes arrive in bursts (connect, hello, stream open); coalesce them. */
@@ -414,7 +406,7 @@ function focusDesktopWindow(id: number): void {
   if (!context || context.window.isDestroyed()) return;
   // Some Linux window managers do not synchronously report native focus back
   // to Electron. The explicit menu choice is still authoritative.
-  lastFocusedWindowId = id;
+  desktopWindows.lastFocusedWindowId = id;
   createMenu();
 }
 
@@ -470,6 +462,13 @@ function previewRetention(): PreviewPartitionRetention {
   return previewPartitionRetention;
 }
 
+/** A node's preview partitions stay while a command node this device uses lists it. */
+function rememberPreviewNode(nodeId: string, commandConnectionId: string): void {
+  void previewRetention()
+    .rememberNode(nodePartitionKey(nodeId), connectionPartitionKey(commandConnectionId))
+    .catch(() => console.warn("[Previews] Failed to record a preview node."));
+}
+
 /** A realm's native views follow it in its window; see `realmChildViewClass`. */
 type RealmViewOwner = { contents: Electron.WebContents; ViewCtor: typeof WebContentsView };
 
@@ -504,10 +503,22 @@ function createWindowBrowserPreviews(
     onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
     logger: console,
   });
-  previewRetention().schedule(connectionPartitionKey(partitionKey), previewTransport, {
-    delayMs: 60_000,
-    intervalMs: 30 * 60_000,
-  });
+  // A window on a command node also reconciles the nodes reached through it.
+  const retentionSource = realm
+    ? previewTransport
+    : {
+        listServices: () => previewTransport.listServices(),
+        listNodes: () => previewBackend.invoke<unknown>("list_nodes", {}),
+        get closed() {
+          return previewTransport.closed;
+        },
+      };
+  // Agent-test profiles may shorten the passes; every other flavor ignores that.
+  previewRetention().schedule(
+    connectionPartitionKey(partitionKey),
+    retentionSource,
+    previewRetentionTimingForRuntime(runtimeFlavor),
+  );
   const transport: BrowserPreviewServiceTransport = {
     acquire: (target, holderId) => previewTransport.acquire(target, holderId),
     release: (serviceKey, holderId) => previewTransport.release(serviceKey, holderId),
@@ -750,7 +761,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         );
         const artifactHosts = createWindowArtifactHosts(createdWindow);
         const webContentsId = createdWindow.webContents.id;
-        windowContexts.set(webContentsId, {
+        const windowClosed = desktopWindows.register({
           window: createdWindow,
           contents: createdWindow.webContents,
           scope,
@@ -763,7 +774,6 @@ async function createWindow(connectionId?: string): Promise<void> {
           target: null,
           realm: null,
         });
-        lastFocusedWindowId = webContentsId;
         registered = true;
         createMenu();
         createdWindow.on("page-title-updated", (event) => {
@@ -782,31 +792,10 @@ async function createWindow(connectionId?: string): Promise<void> {
           emitToOwner("native-event-stream-connected", undefined);
         });
         createdWindow.on("focus", () => {
-          lastFocusedWindowId = webContentsId;
+          desktopWindows.lastFocusedWindowId = webContentsId;
           createMenu();
         });
-        createdWindow.once("closed", () => {
-          const closing = windowContexts.get(webContentsId);
-          workspaceViews?.closeAllFor(webContentsId);
-          closing?.browserPreviewManager.destroyAll();
-          closing?.artifactHosts.dispose();
-          // Owned local listeners and tunnel connections end with the window;
-          // the backend's services and applications keep running.
-          void closing?.previewTransport.disposeAll().catch((error: unknown) => {
-            console.warn("[Previews] Failed to close preview transport:", error);
-          });
-          sshPrompts?.cancelFor(webContentsId);
-          windowContexts.delete(webContentsId);
-          // Closing never stops the node's work; it only revokes the grant.
-          nodeWorkspaceScopes?.release(scope);
-          if (closing?.portalScope) connectionManager?.release(closing.portalScope);
-          connectionManager?.release(scope);
-          windowSlots.release(slot);
-          if (lastFocusedWindowId === webContentsId) {
-            lastFocusedWindowId = windowContexts.keys().next().value ?? null;
-          }
-          createMenu();
-        });
+        createdWindow.once("closed", windowClosed);
       },
     });
     windowAllClosedQuit.markMainWindowCreated();
@@ -893,6 +882,7 @@ function createWorkspaceViews(): WorkspaceViews {
                 (realm) => realm.scope === updated.scope,
               );
               if (!context?.realm) return; // Initial open precedes registration.
+              rememberPreviewNode(updated.target!.nodeId, parent.previewConnectionId);
               const owner: RealmViewOwner = {
                 contents: context.contents,
                 ViewCtor: realmChildViewClass(WebContentsView, context.realm.layout),
@@ -944,6 +934,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     ViewCtor: realmChildViewClass(WebContentsView, record.layout),
   };
   const connectionId = connectionManager.getConnectionId(record.scope);
+  rememberPreviewNode(binding.target.nodeId, parent.previewConnectionId);
   // Preview site data stays with the node, as it would for a direct connection.
   const previews = createWindowBrowserPreviews(
     parent.window,
@@ -1024,11 +1015,8 @@ function registerIpc(): void {
       machineImportEntry: (connectionId) => connections.machineImportEntry(connectionId),
     };
   };
-  const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
-    const senderId = event?.sender?.id;
-    const context = senderId === undefined ? undefined : windowContexts.get(senderId);
-    if (context) setConnectionTitle(context.window, context.scope);
-  };
+  const updateWindowTitle = (event: { sender?: { id: number } } | undefined) =>
+    desktopWindows.updateWindowTitle(event);
   registerMainIpc({
     getBackend: (event) => {
       const scope = scopeForEvent(event);
@@ -1084,7 +1072,7 @@ function registerIpc(): void {
       previewCommandHandover(commandHandoverDeps(event), targetConnectionId),
     handOverCommandNode: async (input, event) => {
       const deps = commandHandoverDeps(event);
-      const result = await handOverCommandNode(deps, input);
+      const result = await handOverCommandNode(deps, input, previewRetention());
       // The window follows the new command node.
       if (input.targetConnectionId !== deps.currentConnectionId) {
         const context = contextForEvent(event);
@@ -1100,19 +1088,7 @@ function registerIpc(): void {
       publishConnectionLists();
       return result;
     },
-    useConnection: async (connectionId, event) => {
-      const context = contextForEvent(event);
-      const list = await editDesktopConnection(
-        context,
-        { kind: "use", connectionId },
-        manager(),
-        () => closeWindowRealms(context),
-      );
-      followWindowConnection(context);
-      updateWindowTitle(event);
-      publishConnectionLists();
-      return list;
-    },
+    useConnection: (connectionId, event) => desktopWindows.useConnection(connectionId, event),
     forgetConnection: async (connectionId, event) => {
       const context = contextForEvent(event);
       const list = await editDesktopConnection(
@@ -1315,7 +1291,7 @@ async function startApplication(): Promise<void> {
   const startLocal = () =>
     backendProcess.start({
       isDev,
-      appVersion: app.getVersion(),
+      appVersion: desktopApplicationVersion(app),
       dataDir,
       appRoot,
       resourceRoot,

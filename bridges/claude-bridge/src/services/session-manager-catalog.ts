@@ -261,7 +261,7 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
     id: status.name,
     name: status.serverInfo?.name || status.name,
     status: mappedStatus,
-    scope: mcpScope(status.scope, status.name),
+    scope: mcpScope(status.scope, status.name, status.source),
     ...(transport ? { transport } : {}),
     toolCount: tools.length,
     ...(tools.length ? { tools } : {}),
@@ -311,8 +311,17 @@ export async function performSessionMcpAction(
 ): Promise<{ url?: string }> {
   const session = sessions.get(sessionId);
   if (!session) throw new Error("Session not found");
+  const live = readableControl(session);
+  // The sign-in link arrives through `onElicitation` as a parked `mcp-url`
+  // card, which only a live CLI has. A probe has no `onElicitation` and is
+  // closed straight after, so reconnecting there would send the link nowhere.
+  if (!live && action !== "reconnect" && action !== "enable" && action !== "disable") {
+    throw new Error(
+      "Claude can sign in to an MCP server only while this session's Claude is running. Send a message, then sign in again; the sign-in link appears as a card in the conversation.",
+    );
+  }
   let probe: Query | undefined;
-  const control = readableControl(session) ?? (probe = createProbe());
+  const control = live ?? (probe = createProbe());
   try {
     if (action === "reconnect") await control.reconnectMcpServer?.(serverId);
     else if (action === "enable") await control.toggleMcpServer?.(serverId, true);

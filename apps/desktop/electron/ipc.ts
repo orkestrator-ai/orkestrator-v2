@@ -440,14 +440,16 @@ export function registerMainIpc({
     if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
     }
+    // A malformed basis is dropped, which keeps the older-renderer rule.
+    const basis =
+      Number.isSafeInteger(navigationBasis) && (navigationBasis as number) >= 0
+        ? { navigationBasis: navigationBasis as number }
+        : {};
     if (service !== undefined) {
       return previews(event).attach({
         tabId: browserPreviewTabId(tabId),
         service: browserPreviewServiceTarget(service),
-        // A malformed basis is dropped, which keeps the older-renderer rule.
-        ...(Number.isSafeInteger(navigationBasis) && (navigationBasis as number) >= 0
-          ? { navigationBasis: navigationBasis as number }
-          : {}),
+        ...basis,
         bounds: browserPreviewBounds(bounds),
         visible,
       });
@@ -455,6 +457,7 @@ export function registerMainIpc({
     return previews(event).attach({
       tabId: browserPreviewTabId(tabId),
       url: browserPreviewUrl(url),
+      ...basis,
       bounds: browserPreviewBounds(bounds),
       visible,
     });

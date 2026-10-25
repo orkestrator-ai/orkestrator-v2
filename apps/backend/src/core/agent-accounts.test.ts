@@ -471,6 +471,33 @@ describe("agent accounts", () => {
       ).rejects.toThrow();
     });
 
+    test("keeps successful reauthentication non-fatal when post-login catalogue lookup fails", async () => {
+      const accountId = await addActiveClaudeAccount("claude-cache-failure");
+      let cacheReads = 0;
+      context.storage.getAgentModelCatalogCache = async () => {
+        cacheReads += 1;
+        throw new Error("catalogue storage unavailable");
+      };
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          executable: "claude",
+          spawnImpl: fakeClaudeLogin("claude-cache-failure"),
+        });
+
+        await expect(settledLogin()).resolves.toMatchObject({
+          state: "succeeded",
+          accountId,
+          mode: "reauthenticate",
+        });
+        await Promise.resolve();
+        expect(cacheReads).toBe(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     test("a failed sign-in keeps the account it was renewing", async () => {
       const accountId = await addActiveClaudeAccount("claude-one");
       const home = path.join(root, "data", "agent-accounts", "claude", accountId);

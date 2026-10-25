@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expect, test } from "bun:test";
 import type { NodeImportEntry } from "@orkestrator/protocol/command-nodes";
 import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
@@ -12,6 +15,16 @@ import {
   type CommandHandoverDeps,
 } from "../electron/command-handover";
 
+import {
+  PreviewPartitionRetention,
+  nodePartitionKey,
+} from "../electron/preview-partition-retention";
+import {
+  browserPreviewPartitionForWindow,
+  browserPreviewServicePartition,
+  connectionPartitionKey,
+} from "../electron/desktop-window-lifecycle";
+
 const id = (node: TestNode) => node.storage.instanceId as BackendId;
 const routes = (node: TestNode) => [
   { id: "primary" as RouteId, kind: "https" as const, enabled: true, origin: node.origin },
@@ -21,10 +34,12 @@ function desktopDeps(
   network: TestNodeNetwork,
   source: TestNode,
   target: TestNode,
+  others: TestNode[] = [],
 ): CommandHandoverDeps {
   const nodes = new Map([
     [source.name, source],
     [target.name, target],
+    ...others.map((node) => [node.name, node] as const),
   ]);
   return {
     currentConnectionId: source.name,
@@ -170,5 +185,124 @@ test("desktop preserves target-only SSH access to a source with no selfAccess", 
   } finally {
     await source.service.stop();
     await target.service.stop();
+  }
+});
+
+test("leaf-window handover preserves registered previews across scheduled reconciliation and forgetting its controller", async () => {
+  const network = new TestNodeNetwork();
+  const source = await network.add("source", { forceRegistration: true });
+  const target = await network.add("target", { forceRegistration: true });
+  const leaf = await network.add("leaf", { forceRegistration: true });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "handover-retention-"));
+  const pendingFile = path.join(directory, "pending.json");
+  const partitionsDir = path.join(directory, "Partitions");
+  const cleared: string[] = [];
+  const retention = new PreviewPartitionRetention({
+    partitionsDir,
+    pendingFile,
+    inUse: () => [],
+    sessionFor: (partition) => ({
+      clearStorageData: async () => {
+        cleared.push(partition);
+      },
+    }),
+  });
+  try {
+    await source.service.addNode({ routes: routes(target), token: target.token });
+    await source.service.addNode({ routes: routes(leaf), token: leaf.token });
+    await settle(40);
+    expect((await leaf.service.status()).mode).toBe("leaf");
+    const partitions = [
+      browserPreviewPartitionForWindow(1, `node:${id(leaf)}`),
+      browserPreviewServicePartition(2, `node:${id(leaf)}`, {
+        backendInstanceId: id(leaf),
+        serviceId: "svc_handover",
+      }),
+    ];
+    for (const partition of partitions)
+      await mkdir(path.join(partitionsDir, partition.replace(/^persist:/, "")), {
+        recursive: true,
+      });
+    await retention.rememberNode(nodePartitionKey(id(leaf)), connectionPartitionKey(source.name));
+    let releaseList!: () => void;
+    let enteredList!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredList = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    const stop = retention.schedule(
+      connectionPartitionKey(source.name),
+      {
+        closed: false,
+        listServices: async () => null,
+        listNodes: async () => {
+          enteredList();
+          await release;
+          return source.service.listNodes();
+        },
+      },
+      { delayMs: 0, intervalMs: 60_000 },
+    );
+    await entered;
+    const deps = desktopDeps(network, source, target, [leaf]);
+    deps.currentConnectionId = leaf.name;
+    const preview = await previewCommandHandover(deps, target.name);
+    if (preview.kind !== "preview") throw new Error("Expected handover");
+    let remoteStarted = false;
+    const invoke = deps.invokeOn;
+    deps.invokeOn = (connection, command, args) => {
+      if (command === "hand_over_command") remoteStarted = true;
+      return invoke(connection, command, args);
+    };
+    let queuedHandover!: () => void;
+    const queued = new Promise<void>((resolve) => {
+      queuedHandover = resolve;
+    });
+    const reserve = retention.handoverNodes.bind(retention);
+    retention.handoverNodes = (...args) => {
+      queuedHandover();
+      return reserve(...args);
+    };
+    const handover = handOverCommandNode(
+      deps,
+      {
+        targetConnectionId: target.name,
+        connectionIds: [],
+        nodeIds: [id(leaf)],
+        includeSelf: false,
+        confirmation: {
+          sourceNodeId: preview.preview.self.nodeId,
+          targetNodeId: preview.preview.targetNodeId,
+          repairs: preview.repairs ?? [],
+          targetInspectionComplete: preview.targetInspectionComplete !== false,
+        },
+      },
+      retention,
+    );
+    await queued;
+    expect(remoteStarted).toBe(false);
+    releaseList();
+    await handover;
+    stop();
+    await settle(40);
+    await retention.reconcileNodes(connectionPartitionKey(source.name), {
+      closed: false,
+      listNodes: () => source.service.listNodes(),
+    });
+    await retention.forgetConnection(connectionPartitionKey(source.name), { includeShared: true });
+    expect(cleared).toEqual([]);
+    const journal = JSON.parse(await readFile(`${pendingFile}.nodes`, "utf8"));
+    expect(journal).toEqual([
+      { key: nodePartitionKey(id(leaf)), commands: [connectionPartitionKey(target.name)] },
+    ]);
+    expect((await target.service.listNodes()).nodes.some((node) => node.nodeId === id(leaf))).toBe(
+      true,
+    );
+  } finally {
+    retention.dispose();
+    await Promise.all([source.service.stop(), target.service.stop(), leaf.service.stop()]);
+    await rm(directory, { recursive: true, force: true });
   }
 });

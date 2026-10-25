@@ -559,6 +559,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `CLAUDE_CLI_PATH` pointing at the managed one. If its `bare` case fails, the
    CLI now unloads launch servers by itself; the restatement is then harmless,
    but update the module's header to say so.
+
+   Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
+   `@inline` plugins the bridge passes, `.mcp.json` before the manifest's
+   `mcpServers`, the `plugin:<plugin>:<server>` names and the live panel's
+   plugin layer). This starts the real CLI three times in a temporary home,
+   with no credentials and no prompt:
+
+   ```bash
+   mise run verify:claude:plugin-mcp-live
+   ```
+
+   A failure means the CLI changed one of the rules recorded under "Claude
+   plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
+   binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash
@@ -762,6 +776,25 @@ hermetic `codex exec` exception.
    `bridges/codex-bridge/src/sessions/refused-cell-tail.ts` and
    `SANDBOX_REFUSALS` in `apps/desktop/scripts/dev/coordinator-live.ts`, or
    the live coordinator suite fails Codex on create, edit and shell.
+
+   Then check that a watched session's question still reaches the card, on
+   the same kind of loopback endpoint and without credits:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-request-user-input.test.ts
+   ```
+
+   Every Orkestrator turn runs in Codex's Default collaboration mode, which
+   refuses `request_user_input` unless the thread turns on the
+   under-development `default_mode_request_user_input` feature
+   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour: an
+   interactive session's call parks as a pausable question, the turn waits for
+   the answer, and a `pipeline` session still gets "unavailable in Default
+   mode". If the feature is renamed or removed, the first case fails: find the
+   new switch, or take `question` back out of the Codex row in
+   `nativeAgentCapabilities()`.
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

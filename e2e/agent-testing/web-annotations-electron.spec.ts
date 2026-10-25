@@ -22,7 +22,10 @@
  * view and back to the editor. Capture pixels and the selection highlight
  * stay on the target at preview zoom 0.8, 1 and 1.5 and at DPR 1 and 2.
  */
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -254,7 +257,7 @@ async function closeElectron(): Promise<void> {
       } catch {}
     }
   }
-  await app.close().catch(() => undefined);
+  await closeElectronWithin(app, 10_000);
   await expect.poll(() => children.filter(alive).length, { timeout: 20_000 }).toBe(0);
 }
 
@@ -643,6 +646,7 @@ exit 91
       VITE_ORKESTRATOR_PROFILE: profile.id,
     },
   });
+  ownProcessGroup(vite);
   const partial = { temporaryRoot, profile, profilePath, rendererUrl, vite } as Stack;
   stack = partial;
   await waitForUrl(rendererUrl);
@@ -692,11 +696,7 @@ test.afterAll(async () => {
   ).catch(() => "probe-unreadable");
   stack = null;
   await current.fixture?.stop().catch(() => undefined);
-  if (current.vite?.pid) {
-    try {
-      process.kill(-current.vite.pid, "SIGTERM");
-    } catch {}
-  }
+  if (current.vite) await stopProcessGroup(current.vite).catch(() => undefined);
   await rm(current.temporaryRoot, { recursive: true, force: true });
   expect(launches, "no Codex session/prompt launch through cleanup or relaunch").toBe("");
 });

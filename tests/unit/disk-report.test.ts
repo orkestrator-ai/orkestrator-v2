@@ -10,6 +10,7 @@ import {
   formatBytes,
   formatReport,
   legacyTurboArtifacts,
+  previewPartitionRows,
   readEnvironments,
 } from "../../scripts/disk-report";
 import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
@@ -115,6 +116,35 @@ describe("disk report", () => {
       "f1b9cc0221797427.tar.zst",
     ]);
     expect(legacyTurboArtifacts(path.join(root, "missing"))).toEqual([]);
+  });
+
+  test("measures preview partitions and counts those cleared for the next start", async () => {
+    const partitions = path.join(root, "Partitions");
+    const names = [
+      "orkestrator-preview-svc-1-0123456789abcdef-0123456789abcdef",
+      "orkestrator-preview-svc-1-0123456789abcdef-fedcba9876543210",
+      "orkestrator-browser-previews-1-0123456789abcdef",
+      "orkestrator-renderer-1-0123456789abcdef",
+    ];
+    for (const name of names) {
+      await mkdir(path.join(partitions, name), { recursive: true });
+      await writeFile(path.join(partitions, name, "Cookies"), "x".repeat(4096));
+    }
+    await writeFile(
+      path.join(root, "preview-partitions-pending.json"),
+      JSON.stringify([names[1], "orkestrator-preview-svc-9-gone", 7]),
+    );
+    const [service, shared] = previewPartitionRows(root);
+    expect(service!.location).toBe(`${partitions}/orkestrator-preview-svc-*`);
+    expect(service!.bytes).toBeGreaterThan(0);
+    expect(service!.orphaned).toStartWith("1 of 2 cleared");
+    expect(shared!.orphaned).toStartWith("0 of 1 cleared");
+    // A profile without previews reports nothing, without failing.
+    const empty = previewPartitionRows(path.join(root, "missing"));
+    expect(empty.map((row) => [row.bytes, row.orphaned])).toEqual([
+      [0, "0 of 0 cleared (0 kB)"],
+      [0, "0 of 0 cleared (0 kB)"],
+    ]);
   });
 
   test("formats sizes and aligns the table", () => {

@@ -174,6 +174,12 @@ newest row, which every window holds.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.
+- Every turn runs in Codex's Default collaboration mode, which refuses
+  `request_user_input`. Threads of a watched session (any policy but
+  `pipeline`) carry `features.default_mode_request_user_input = true`
+  (`codexRequestUserInputConfig`) so the question parks as a card; a pipeline
+  keeps the refusal, because nobody would answer it. Verified against 0.164.0
+  by `live-request-user-input.test.ts` (no credits).
 - A pause (`POST …/approvals/:id/hold`, `…/interactions/:id/hold`) only moves the
   parked request's `InteractionDeadline` to its hold ceiling (24 h, or a
   question's `autoResolutionMs`); expiry still declines or cancels. A hold never

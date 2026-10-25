@@ -688,6 +688,14 @@ one applied (`promptThreadConfig`), and the next build turn reloads it back. A
 coordinator, which already denies `network`, keeps its research mode on a
 read-only turn, as Claude's does under process authority.
 
+Claude, Cursor and Grok also report the fixed read-only policy, not the
+session's, while it applies, so Agent Info does not understate the turn: Claude
+while a turn started with `readOnly` is running (`claudeReportedPolicy`), Cursor
+and Grok while the session's `readOnly` flag is set, which the next prompt
+clears (`cursorAppliedPolicy` in `execution-policy.ts`,
+`acpSessionReportedPolicy`). The reported policy carries
+`READ_ONLY_TURN_POLICY_NOTE` so the summary says why it differs.
+
 ### Approval modes
 
 Within that policy, Claude and Codex sessions also carry a per-session
@@ -715,10 +723,53 @@ between asking and non-asking modes needs a new CLI and is refused while
 background work holds the current one. Codex `on-request` and `auto-review` only
 ask when the agent leaves its sandbox, so on an unsandboxed host they narrow
 `danger-full-access` to `workspace-write`; a container keeps its own boundary.
+There, under `auto-approve`, `on-request` therefore never asks and
+`auto-review` never consults its reviewer, and the composer says so
+(`nativeAgentApprovalModes` with the policy's `sandbox`) rather than mapping
+the pick to `untrusted`; under `ask` the bridge already runs `on-request` as
+`untrusted`.
 
-Legacy bridge environment variables remain accepted temporarily as deprecated
-compatibility overrides. Launchers no longer use them for normal sessions; the
-backend policy is the source of truth.
+No bridge reads the old per-bridge policy environment variables
+(`CURSOR_BRIDGE_SANDBOX`, `PI_BRIDGE_REQUIRE_APPROVAL` and the rest); the
+backend policy is the only source.
+
+### Interaction deadlines and pausing
+
+Every question, approval and elicitation a bridge parks has a deadline after
+which it is denied, cancelled or declined, never approved. The countdown on its
+card can be paused: clicking the timer holds the deadline where it is enforced
+and clicking again restarts a fresh window.
+
+- Bridge timers are `InteractionDeadline`s
+  (`packages/protocol/src/agent-interaction-deadline.ts`). A pause re-arms one
+  at `AGENT_INTERACTION_HOLD_CEILING_MS` (24 h) or the provider's sooner limit,
+  so an unanswered request still ends. Bridges publish `hold`
+  (`AgentInteractionHold`) beside `expiresAt` and serve
+  `POST /session/:id/{family}/:requestId/hold`; the backend reaches it through
+  `holdInteraction` and the `hold_native_agent_interaction` command. A bridge
+  that publishes no `hold` is shown as `bridge-outdated`.
+- Provider limits: Grok stops its turn clock while a request is held (see
+  `bridges/acp-bridge/AGENTS.md`, "Parked request deadlines") but honours an
+  `ask_user_question` timeout the user configured; Pi pauses until its turn
+  budget; a Codex question with `autoResolutionMs` until then; MCP prompts
+  pause but warn that their server may stop waiting first. OpenCode publishes
+  no deadline, so there is nothing to pause.
+- Claude in tmux mode pauses through its hook script: the blocking hooks run
+  as `hook.sh <Kind> hold-v1` with a 48 h hook `timeout`, and the script's wait
+  loop consumes a hold request file and rewrites its timing file
+  (`tmux-hooks.ts`, command `claude_tmux_hold_hook`). A hook without
+  `hold-v1` (an older install, or a CLI started before the upgrade) keeps an
+  unpausable countdown (`hook-outdated`).
+- The public CLI lists `hold` and pauses or resumes a countdown
+  (`session interactions hold`, action `session.interaction.hold`; see
+  [public-cli.md](public-cli.md)).
+
+Claude AskUserQuestion option previews are requested as Markdown
+(`toolConfig.askUserQuestion.previewFormat`) and shown verbatim in a monospace
+block on the question card (`AgentInteractionOption.preview`, bounded per
+option and per request). Codex questions reach the card because interactive
+threads turn on `default_mode_request_user_input`; pipeline threads keep
+Codex's Default-mode refusal.
 
 ## Cursor Agent
 

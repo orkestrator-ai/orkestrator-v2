@@ -24,6 +24,7 @@ class FakeRemote implements CoordinatorRemoteAccess {
   workflows = new Map<string, RemoteWorkflowRecord>();
   excerpt: string | undefined;
   requestPending = false;
+  backgroundWorkPending = false;
   collected: string[] = [];
 
   async workerState(): Promise<RemoteWorkerState> {
@@ -33,6 +34,7 @@ class FakeRemote implements CoordinatorRemoteAccess {
       tab: this.tab,
       name: "remote-worker",
       requestPending: this.requestPending,
+      backgroundWorkPending: this.backgroundWorkPending,
     };
   }
 
@@ -116,6 +118,44 @@ describe("remote delegations", () => {
     expect(world.wakes(main)).toBe(1);
   });
 
+  test("idle remote turns hold while background work runs, then close when it ends", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    remote.tab = "idle";
+    remote.backgroundWorkPending = true;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    setSystemTime(new Date(Date.now() + 60_000));
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    expect(world.wakes(main)).toBe(0);
+    remote.backgroundWorkPending = false;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("completed");
+  });
+
+  test("remote background holds restart on resumed work and expire after two minutes", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    remote.tab = "idle";
+    remote.backgroundWorkPending = true;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    setSystemTime(new Date(Date.now() + 60_000));
+    remote.tab = "working";
+    await world.coordinator.reconcileWorkerDelegations();
+    setSystemTime(new Date(Date.now() + 40 * 60_000));
+    remote.tab = "idle";
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    setSystemTime(new Date(Date.now() + 120_000));
+    await world.coordinator.reconcileWorkerDelegations();
+    expect(await delegationState(world, association.id)).toMatchObject({
+      state: "completed",
+      backgroundWorkTimeoutMs: 120_000,
+    });
+    await world.deliver();
+    expect(world.received(main)[0]).toContain("none of it reported for 2 minutes");
+  });
+
   test("an unreachable node changes nothing, and a worker never seen working waits out the grace", async () => {
     const { world, remote, association } = await remoteWorld();
     remote.available = false;
@@ -167,6 +207,7 @@ describe("remote delegations", () => {
     expect(world.wakes(main)).toBe(0);
 
     remote.tab = "idle";
+    remote.backgroundWorkPending = true;
     await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
     await world.deliver();
 

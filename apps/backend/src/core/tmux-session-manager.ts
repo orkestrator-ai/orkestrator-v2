@@ -55,6 +55,7 @@ import {
   preToolUseResponse,
   probeThinkingDisplaySupport,
   replyToHook,
+  requestHookHold,
   sessionHookPaths,
   uninstallWorkspaceHooks,
   workspaceHookPaths,
@@ -828,6 +829,10 @@ export class TmuxSession {
         this.infoEvents.splice(0, this.infoEvents.length - TMUX_INFO_EVENT_LIMIT);
       }
     }
+    this.emitHookFrame(context, event, emittedPayload);
+  }
+
+  private emitHookFrame(context: CommandContext, event: PendingHookEvent, payload: unknown): void {
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
       tab_id: this.tabId,
@@ -835,9 +840,10 @@ export class TmuxSession {
       session_id: this.sessionId,
       event_id: event.id,
       event_kind: event.kind,
-      payload: emittedPayload,
+      payload,
       requested_at: event.requestedAt,
       expires_at: event.expiresAt,
+      ...(event.hold ? { hold: event.hold } : {}),
     });
   }
 
@@ -1294,6 +1300,24 @@ export class TmuxSession {
 
   async replyHook(kind: string, id: string, response: unknown): Promise<void> {
     await replyToHook(this.backend, this.sessionHookPaths, kind, id, response);
+  }
+
+  /**
+   * Pause or resume a blocking hook's countdown. A moved deadline is
+   * re-emitted as the same hook event, so every listener updates the card it
+   * already shows; blocking hooks are otherwise emitted once.
+   */
+  async holdHook(
+    kind: string,
+    id: string,
+    held: boolean,
+    context: CommandContext,
+  ): Promise<Awaited<ReturnType<typeof requestHookHold>>> {
+    const outcome = await requestHookHold(this.backend, this.sessionHookPaths, kind, id, held);
+    if (outcome.result === "applied" && outcome.hook) {
+      this.emitHookFrame(context, outcome.hook, outcome.hook.payload);
+    }
+    return outcome;
   }
 
   async answerPreToolUse(id: string, decision: string, reason?: string): Promise<void> {

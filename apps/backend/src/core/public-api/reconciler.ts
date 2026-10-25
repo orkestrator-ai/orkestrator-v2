@@ -193,6 +193,7 @@ for (const action of [
   "session.steer",
   "session.stop",
   "session.interaction.resolve",
+  "session.interaction.hold",
   "run.discard",
   "run.cancel",
 ] as const) {

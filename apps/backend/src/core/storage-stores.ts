@@ -11,6 +11,7 @@ import {
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotation-store-layout.js";
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
+import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
 import {
   TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
   TRANSCRIPT_ARTIFACT_STORE_LAYOUT,
@@ -99,6 +100,7 @@ const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
   ...TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
   ...USAGE_HISTORY_STORE_LAYOUTS,
+  ...SCHEDULED_JOBS_STORE_LAYOUTS,
 };
 
 const PREFIX_STORE_LAYOUTS: ReadonlyArray<readonly [string, StoreLayout]> = [

@@ -31,3 +31,11 @@
 - **Owning-scenario rerun:** `mise run test:logged -- --name cli-client-exit-alone -- mise run test:cli:scenarios -- --scenario client-exit` passed (12.9 s; command 13.6 s, exit 0).
 - **Evidence:** failing log `orkestrator-test-run.VXmIMe/cli-scenarios.log.gz`; manifests `output/cli-scenarios/2026-10-25T19-32-32-561Z-2e5152bb/manifest.json` and `output/cli-scenarios/2026-10-25T19-33-47-233Z-e8e3c26e/manifest.json`. Both runs reported no cleanup errors.
 - **Assessment:** confirmed recurrence of this existing flake. The scenario sends SIGINT after a fixed 2.5 s, which can precede receipt admission/response under load. No assertion, delay, timeout, or skip changed; status remains open.
+## Interaction review fixes validation — 2026-10-25
+
+- **Revision:** `db35fb35f` plus the interaction review fixes on `todo-0001-agent-interactions-db4f03351da7`, macOS arm64, Bun 1.4.4.
+- **Original command:** `mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios`.
+- **Result:** eight scenarios passed; `client-exit` failed with `no receipt was printed on interruption` (9.9 s). Its environment cleanup succeeded. The repository tests were running concurrently.
+- **Owner rerun:** `mise run test:logged -- --name cli-client-exit -- mise run test:cli:scenarios --scenario client-exit` passed (12.8 s including preparation).
+- **Evidence:** `output/cli-scenarios/2026-10-25T18-25-16-554Z-488fa2fd/manifest.json`; private failure log `orkestrator-test-run.C5xhRf/cli-scenarios.log.gz` in the host temporary directory.
+- **Assessment:** confirmed recurrence of the intermittent interruption-receipt failure; no timeout, assertion, skip or implementation was changed to hide it.

@@ -22,6 +22,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | `docker/`, container lifecycle, firewall, Playwright in containers | [`docker/AGENTS.md`](docker/AGENTS.md) |
 | OpenCode provider, SDK pin or `patches/` | [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md#maintaining-the-opencode-integration) |
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
+| Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
@@ -200,7 +201,8 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:browser`, or `mise run test:agent:browser:isolated` for
   real-stack flows), the design canvas (`mise run test:agent:design:isolated`),
   Electron main/preload/IPC (`mise run test:agent:electron`), Docker lifecycle
-  (`mise run test:agent:docker`), the published CLI
+  (`mise run test:agent:docker`), service preview origins, forwarding and
+  fixtures (`mise run test:preview:browser`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
 
@@ -1349,12 +1351,13 @@ seeding each one from the host installation when it has the same pinned version
 so the default normally costs a local copy rather than a download, and enabling
 that same selection in the profile so the platforms it provisions are the ones
 the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
-not need all five; the flag is rejected by `mise run dev`, which keeps the
-durable per-installation selection. Do not remove this to save startup time
-without checking what the run launches: Claude, Codex and OpenCode fall back to
-a PATH lookup, but Cursor and Grok resolve only through the managed toolchain,
-so a profile that provisions nothing fails their session creation with
-`enabled but not installed yet`. Anything the host cannot seed is downloaded at
+not need all six; the flag is rejected by `mise run dev`, which keeps the
+durable per-installation selection. An agent-test profile runs only agents
+present in its own managed toolchain. Claude, Codex, OpenCode and Pi fall back
+to a PATH lookup only outside agent-test profiles; inside one, a missing agent
+fails with `<Agent> is not installed in this agent-test profile's toolchain`.
+Cursor and Grok resolve only through the managed toolchain everywhere.
+Anything the host cannot seed is downloaded at
 startup, which needs network access; an agent-test profile that cannot prepare
 its toolchains logs the reason and exits rather than waiting on a retry dialog.
 

@@ -1,7 +1,7 @@
 # Coordinator adapter review validation under shared-host load
 
 - **ID:** 0725
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-24
 - **Snapshot:** `efbe4cf56` after `b86f4039b` on `todo-0026-coordinator-read-only-adapters-d18c30e4bc68`.
 - **Original command:** `mise run test:logged -- --name repository-tests-final -- mise run test`.
@@ -48,6 +48,10 @@ was changed.
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `start uses and persists both explicit and configured roots; generic reads stay within the worktree` | 5039.82ms |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `retargeting an accepted alias keeps creation and cleanup at the original physical root` | 5197.75ms |
 | `apps/backend/tests/tmux-commands-teardown.test.ts` | `Electron tmux environment teardown > an unlinked live socket retains session attribution, cleanup and startup retry state` | 5316.55ms |
+
+## Triage 2026-10-25
+
+Environmental: load averages reached 124.51/102.99/63.65 on 18 cores. Terminal history (0213) and OpenCode host (0723) passed alone; preview interactive (0672), container Git (0175), Mermaid (0512), agent accounts (0239) and public API (0261) also failed alone at that same load, so those reruns say nothing beyond the host state. The unrerun extras do not establish flakes.
 
 ## Worktree alias recurrence during coordinator consistency validation — 2026-10-25
 

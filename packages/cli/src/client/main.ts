@@ -12,6 +12,7 @@ import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
 import { hostCommands } from "./commands/host.js";
+import { scheduleCommands } from "./commands/schedule.js";
 import { mailCommands } from "./commands/mail.js";
 import { serviceCommands } from "./commands/service.js";
 import { projectCommands } from "./commands/project.js";
@@ -43,6 +44,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...attentionCommands,
   ...ticketCommands,
   ...mailCommands,
+  ...scheduleCommands,
   ...runCommands,
   ...toolchainCommands,
   ...hostCommands,

@@ -53,6 +53,14 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
 
+## Claude plugin MCP branch — 2026-10-25
+
+Recurred in a four-worker backend run on the todo 0121 branch
+(`cd apps/backend && bun test --preload ../../tests/setup-node.ts src tests --parallel=4`;
+backend 11,302 passed, 85 skipped, 13 failed). The unchanged owning file
+passed alone (39 pass, 0 fail; aggregate failure was the `(unnamed)` hook timeout at 5,001.40 ms). The branch does not touch this owner; no
+implementation, assertion, timeout or skip changed.
+
 ## Composer model parameters validation — 2026-10-25
 
 `mise run test` on `todo-0004-composer-model-params-803868a90fcb` (workspace/root/bridges/protocol 4/1/2/1, other worktrees active): the unnamed Chromium policy hook timed out after 5003.86 ms. Backend totals were 11,297 passed, 84 skipped and four failed; the other failures were 0460, 0291 and the branch's own provider-module size limit (fixed on the branch). The complete unchanged owner passed alone: `mise exec -- bun test --cwd apps/backend ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1` (39 pass, 0 fail). Evidence: `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. No assertion, deadline or skip changed.
@@ -65,3 +73,12 @@ Full failure names, counts, evidence paths and unresolved limitations are in [07
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/core/transcript-artifacts/content-server.engines.test.ts` from `apps/backend` passed, 39 of 39.
 - **Aggregate counts:** backend 11,077 passed, 84 skipped, 2 failed across 658 files (698.8 s); the other failure was 0247.
 - **Assessment:** recurrence of the existing intermittent hook timeout; nothing changed.
+
+## Voice qualification review fixes — 2026-10-25
+
+- **Change:** `9b1b42be8`; only CLI voice examples and their tests changed.
+- **Original command:** `mise run test:logged -- --name voice-suite -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the same host.
+- **Failure:** the unnamed Chromium policy hook exceeded its five-second deadline (5001.05 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name artifact-engine-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed, exit 0 in 178.3 seconds logged.
+- **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** recurrence of this tracked intermittent hook failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.

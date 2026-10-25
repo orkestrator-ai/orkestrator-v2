@@ -1,7 +1,7 @@
 # Per-machine accounts branch validation
 
 - **ID:** 0801
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-25, macOS arm64 (18 cores), Bun 1.4.2.
 - **Branch:** `todo-0722-per-machine-accounts-43dab4042230` on `ba7cc8d4`. It
   changes the accounts overview, the account store and its protocol types, a
@@ -135,3 +135,7 @@ skips, unexpected failures or retries. Its report remains at
 `output/agent-testing/qa-browser-5f9c0d93-2df/browser/results.json`.
 No iOS, Electron-only or opt-in Docker/provider qualification was required by
 these preference/UI changes.
+
+## Triage 2026-10-25
+
+Environmental: host load averaged about 59 on 18 cores during and after the run, and each failure sat at a five-second or 40-second budget with the owner passing alone. Owner cases: [0785](../coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md), [0723](../backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md), 0507/0697, 0512, [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md)/[0800](../agent-bridges/0800-codex-command-catalogue-armed-delay-race.md) and [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). The test-diagnostics findings were branch defects. `media-stream.browser.test.ts` has no owner case; it is reported to the lead.

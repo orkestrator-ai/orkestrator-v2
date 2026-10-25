@@ -76,6 +76,11 @@ import {
   addExistingProject,
   createProjectFromScratch,
 } from "./commands-helpers.js";
+import {
+  persistHostCatalog,
+  seedEnabledHostModelCatalogs,
+  seedHostModelCatalogIfMissing,
+} from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 
 /**
@@ -90,6 +95,27 @@ export const FIRST_USE_BRIDGE_READY_TIMEOUT_MS = 30_000;
 /** The fetch receives only the budget left after bridge readiness work. */
 export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()): number {
   return Math.max(1_000, deadline - now);
+}
+
+/** Wait for a host probe only while the picker still has first-use budget. */
+async function waitForFirstUseSeed(
+  seed: Promise<boolean>,
+  deadline: number,
+): Promise<boolean | undefined> {
+  const remaining = Math.max(0, deadline - Date.now());
+  if (remaining === 0) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      seed,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), remaining);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
@@ -497,41 +523,19 @@ export function registerProjectCommands(
       throw new Error(`Project not found: ${projectId}`);
     }
     const catalog = await refreshHostModelCatalog(context, agent);
-
-    if (catalog.agent === "claude") {
-      await context.storage.cacheAgentModelCatalog("claude", catalog.models);
-    } else if (catalog.agent === "codex") {
-      await context.storage.cacheAgentModelCatalog("codex", asCachedCodexModels(catalog.models));
-    } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
-      await context.storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
-    } else {
-      if (!projectId) throw new Error("OpenCode refresh requires a project target");
-      const discoveredModels = catalog.models.map((model) => ({
-        id: model.id,
-        name: model.label,
-        provider: model.id.split("/")[0] || "opencode",
-        variants: model.reasoning?.map((option) => option.id).filter((id) => id !== "default"),
-        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-        ...(typeof model.supportsImageInput === "boolean"
-          ? { supportsImageInput: model.supportsImageInput }
-          : {}),
-      }));
-      // Host discovery deliberately runs outside the worktree trust boundary,
-      // so it cannot see repository-defined providers. Augment the existing
-      // project snapshot instead of narrowing it to host-only configuration.
-      const existingModels =
-        (await context.storage.getOpenCodeModelCatalog(projectId))?.models ?? [];
-      const mergedModels = new Map(existingModels.map((model) => [model.id, model]));
-      for (const model of discoveredModels) {
-        mergedModels.set(model.id, model);
-      }
-      await context.storage.cacheOpenCodeModelCatalog(projectId, Array.from(mergedModels.values()));
-    }
+    await persistHostCatalog(context, catalog, projectId);
 
     return { agent: catalog.agent, modelCount: catalog.models.length };
   });
   register("get_agent_model_catalog_cache", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+    assertOnlyKeys(args, ["seed"], "arguments");
+    // Only the application's own startup asks for this: it waits here in the
+    // background (the renderer bounds its wait and keeps the promise live) so a
+    // first launch downloads every enabled platform's list. Other readers, such
+    // as the control surface, must get the cache as it stands.
+    if (args.seed === true) {
+      await seedEnabledHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
+    }
     let cache = await context.storage.getAgentModelCatalogCache();
     if (!cache.pi?.models.length) {
       const config = await context.storage.loadConfig();
@@ -561,14 +565,17 @@ export function registerProjectCommands(
     const ensureAgent = args.ensureAgent;
     if (
       ensureAgent !== undefined &&
+      ensureAgent !== "claude" &&
+      ensureAgent !== "codex" &&
+      ensureAgent !== "opencode" &&
       ensureAgent !== "cursor" &&
       ensureAgent !== "grok" &&
       ensureAgent !== "pi"
     ) {
-      throw new Error("ensureAgent must be one of: cursor, grok, pi");
+      throw new Error("ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi");
     }
     const environment = await storage.getEnvironment(id);
-    const cache = await storage.getAgentModelCatalogCache();
+    let cache = await storage.getAgentModelCatalogCache();
     if (!environment) {
       const coordinator = await resolveCoordinatorRuntime(storage, id);
       if (coordinator.status === "not-coordinator") {
@@ -602,9 +609,32 @@ export function registerProjectCommands(
       const openCodeModelProviders = normalizeOpenCodeModelProviders(
         config.global.openCodeModelProviders,
       );
-      const openCodeSnapshot = qualified.has("opencode")
+      let openCodeSnapshot = qualified.has("opencode")
         ? await storage.getOpenCodeModelCatalog(projectId)
         : null;
+      let coordinatorSeedFailed = false;
+      const hostSeeded =
+        ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
+      const alreadyCatalogued =
+        ensureAgent === "opencode"
+          ? Boolean(openCodeSnapshot?.models.length)
+          : ensureAgent === "claude" || ensureAgent === "codex"
+            ? Boolean(cache[ensureAgent]?.models.length)
+            : false;
+      if (hostSeeded && qualified.has(ensureAgent) && !alreadyCatalogued) {
+        const deadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+        const seeded = await waitForFirstUseSeed(
+          seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
+            projectId,
+          }),
+          deadline,
+        );
+        coordinatorSeedFailed = seeded !== true;
+        cache = await storage.getAgentModelCatalogCache();
+        if (ensureAgent === "opencode") {
+          openCodeSnapshot = await storage.getOpenCodeModelCatalog(projectId);
+        }
+      }
       const openCodeModels = (openCodeSnapshot?.models ?? []).filter((model) =>
         isSelectableOpenCodeProvider(model.provider, openCodeModelProviders),
       );
@@ -627,7 +657,9 @@ export function registerProjectCommands(
         models: coordinatorModels,
         status: coordinatorModels.some((model) => model.platform === ensureAgent)
           ? ("ready" as const)
-          : ("empty" as const),
+          : coordinatorSeedFailed
+            ? ("failed" as const)
+            : ("empty" as const),
       };
     }
     // Bounds the extra work a first-use read may add, so the model picker
@@ -635,7 +667,64 @@ export function registerProjectCommands(
     // first-use branch consumes it; a read served from the durable cache is
     // unaffected.
     let firstUseDeadline: number | null = null;
-    if (ensureAgent && !cache[ensureAgent]?.models.length) {
+    const config = await storage.loadConfig();
+    const openCodeModelProviders = normalizeOpenCodeModelProviders(
+      config.global.openCodeModelProviders,
+    );
+    let openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
+    const runningOpenCodeBridge =
+      environment.environmentType === "local"
+        ? await peekLocalAgentBridge(environment.id, context, "opencode")
+        : environment.containerId
+          ? await peekContainerAgentBridge(environment.containerId, "opencode")
+          : null;
+    const openCodeCatalogInput = {
+      environmentId: id,
+      agent: "opencode" as const,
+      logicalSessionKey: `model-catalog:${id}`,
+    };
+    const liveOpenCodeModels =
+      context.nativeAgents && runningOpenCodeBridge
+        ? await context.nativeAgents.listModelCatalogForCache(openCodeCatalogInput).catch(() => [])
+        : [];
+    // Read after the raw catalogue, whose read reports connectivity too.
+    const liveConnectedProviderIds =
+      context.nativeAgents && liveOpenCodeModels.length > 0
+        ? await context.nativeAgents
+            .connectedModelProviders(openCodeCatalogInput)
+            .catch(() => undefined)
+        : undefined;
+    // Claude, Codex and OpenCode are not seeded through a per-environment
+    // bridge here: Claude and Codex catalogues are host-wide, and OpenCode's is
+    // cached per project from the same host-level probe. A fresh installation
+    // downloads them through the short-lived host probe the Settings refresh
+    // uses. A host that is not signed in yet simply stays empty and is retried
+    // once it is.
+    let seedFailed = false;
+    const hostSeeded =
+      ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
+    const hostModelsAlreadyAvailable =
+      ensureAgent === "claude"
+        ? Boolean(environment.claudeModelCatalog?.models.length || cache.claude?.models.length)
+        : ensureAgent === "codex"
+          ? Boolean(cache.codex?.models.length)
+          : ensureAgent === "opencode"
+            ? Boolean(openCodeSnapshot?.models.length || liveOpenCodeModels.length)
+            : false;
+    if (hostSeeded && !hostModelsAlreadyAvailable) {
+      firstUseDeadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+      const seeded = await waitForFirstUseSeed(
+        seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
+          projectId: environment.projectId,
+        }),
+        firstUseDeadline,
+      );
+      seedFailed = seeded !== true;
+      cache = await storage.getAgentModelCatalogCache();
+      if (ensureAgent === "opencode") {
+        openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
+      }
+    } else if (!hostSeeded && ensureAgent && !cache[ensureAgent]?.models.length) {
       // The empty-tab picker is the first consumer on a fresh installation, so
       // there may be neither a live bridge nor a durable last-known-good list.
       // Start only the platform the user is trying to select; eagerly starting
@@ -686,33 +775,6 @@ export function registerProjectCommands(
     // The live catalogue is already filtered by the provider, but a cache
     // written before the allowlist changed is not. Filter here too so the
     // renderer never receives a provider the user excluded.
-    const config = await storage.loadConfig();
-    const openCodeModelProviders = normalizeOpenCodeModelProviders(
-      config.global.openCodeModelProviders,
-    );
-    const openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
-    const runningOpenCodeBridge =
-      environment.environmentType === "local"
-        ? await peekLocalAgentBridge(environment.id, context, "opencode")
-        : environment.containerId
-          ? await peekContainerAgentBridge(environment.containerId, "opencode")
-          : null;
-    const openCodeCatalogInput = {
-      environmentId: id,
-      agent: "opencode" as const,
-      logicalSessionKey: `model-catalog:${id}`,
-    };
-    const liveOpenCodeModels =
-      context.nativeAgents && runningOpenCodeBridge
-        ? await context.nativeAgents.listModelCatalogForCache(openCodeCatalogInput).catch(() => [])
-        : [];
-    // Read after the raw catalogue, whose read reports connectivity too.
-    const liveConnectedProviderIds =
-      context.nativeAgents && liveOpenCodeModels.length > 0
-        ? await context.nativeAgents
-            .connectedModelProviders(openCodeCatalogInput)
-            .catch(() => undefined)
-        : undefined;
     // A live report is authoritative, so a provider it omits is not offered
     // at all. Without one, the report persisted with the durable catalogue may
     // be stale — the user can have signed in since — so its disconnected
@@ -813,12 +875,16 @@ export function registerProjectCommands(
       ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
     ];
     if (!ensureAgent) return result;
-    const ensuredFetch = { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent];
+    const ensuredStatus = hostSeeded
+      ? seedFailed
+        ? "failed"
+        : "ok"
+      : { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent].status;
     return {
       models: result,
       status: result.some((model) => model.platform === ensureAgent)
         ? ("ready" as const)
-        : ensuredFetch.status === "ok"
+        : ensuredStatus === "ok"
           ? ("empty" as const)
           : ("failed" as const),
     };
@@ -1027,6 +1093,8 @@ export async function cleanupProjectForRemoval(
   commands: RegistryDependencies["commands"],
 ): Promise<void> {
   const { storage } = context;
+  // The coordinator's schedules go with the project; others aimed at it pause.
+  context.scheduledJobs?.projectRemoved(id);
   const coordinator =
     typeof storage.getCoordinatorWorkspace === "function"
       ? await storage.getCoordinatorWorkspace(id)

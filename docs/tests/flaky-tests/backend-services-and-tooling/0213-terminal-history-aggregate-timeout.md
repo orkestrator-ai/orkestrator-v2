@@ -156,3 +156,40 @@ No owning implementation, assertion, deadline or skip was changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name terminal-history-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` passed, exit 0 in 8.4 seconds.
 - **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the existing aggregate timeout, confirmed intermittent by the unchanged owner's isolated pass. No history code, assertion, timeout or skip changed.
+
+## CLI qualification review validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name cli-review-repository -- mise run test`
+  on `todo-0014-cli-qualification-060fd6539163`, review fixes committed as
+  `2c04e0b1b`, Bun 1.4.4 on macOS arm64. Workspace/root/bridge/protocol
+  reservations were 4/1/2/1 slots; the backend used two isolated workers.
+  Other worktrees were validating concurrently; observed host load averages
+  after the failure were 27.78/41.35/43.48.
+- **Failure:** `terminal history > pages fixed history backwards and rejects a cursor for another history`
+  in `apps/backend/src/core/terminal-history.test.ts` timed out after
+  5001.99 ms against the 5000 ms deadline. Its late work then expected
+  `row-1250` from an undefined page row at line 280, producing the one
+  between-tests error.
+- **Unchanged complete owner rerun:**
+  `mise run test:logged -- --name cli-review-terminal-history-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`
+  passed, exit 0, 7.0 seconds.
+- **Evidence:** `orkestrator-test-run.ghZqRk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and outer `orkestrator-test-run.xNm4oB/cli-review-repository.log.gz` below
+  the platform temporary directory.
+- **Completed aggregate:** backend 11433 passed, 89 skipped, one failed and
+  one between-tests error across 11523 tests in 680 files (620.12 seconds).
+  All other workspace packages and the root/support, bridge and protocol
+  groups passed. The logged aggregate exited 1 after 1228.6 seconds, including
+  host-capacity queue waits.
+- **Assessment:** recurrence of the existing intermittent aggregate deadline.
+  Shared-host contention remains a hypothesis. No terminal-history code,
+  assertions, deadlines or skips changed; the aggregate failure is retained.
+
+## Live provider review validation — 2026-10-25
+
+The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
+complete unchanged owner passed alone with one isolated worker. Exact failure
+text, durations, commands, suite counts and retained evidence are recorded in
+[0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
+No implementation, assertion, deadline or skip changed; the original aggregate
+remains failed.

@@ -96,14 +96,27 @@ jobs:
           echo "$GITHUB_WORKSPACE/binaries" >> "$GITHUB_PATH"
 
       # The Claude execution-policy qualification runs the pinned CLI's real
-      # Linux sandbox, which needs bubblewrap and socat. Ubuntu 24.04's AppArmor
-      # policy also denies the unprivileged user namespaces bubblewrap creates.
-      - name: Install Claude sandbox dependencies
+      # Linux sandbox, which needs bubblewrap and socat. Ubuntu's AppArmor
+      # policy denies the unprivileged user namespaces bubblewrap creates, and
+      # its bwrap profiles strip capabilities from a namespace nested inside
+      # one, which the CLI's seccomp helper creates ("nested userns is
+      # capability-restricted"). Both checks below fail here, not in the tests.
+      # The CLI's shell-completion tests run the generated scripts in zsh and
+      # fish, which the runner image does not ship.
+      - name: Install Claude sandbox and completion shell dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap socat
+          sudo apt-get install --yes --no-install-recommends bubblewrap socat zsh fish
           sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_unconfined=0
+          for profile in bwrap-userns-restrict unprivileged_userns; do
+            if [ -f "/etc/apparmor.d/$profile" ]; then
+              sudo apparmor_parser --remove "/etc/apparmor.d/$profile"
+            fi
+          done
           bwrap --unshare-all --ro-bind / / true
+          bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc -- \
+            unshare --user --map-root-user true
 
       - name: Run complete non-iOS suite
         env:

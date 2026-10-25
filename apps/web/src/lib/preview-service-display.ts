@@ -1,7 +1,9 @@
 import type { BrowserPreviewTransportState } from "@orkestrator/protocol/browser-preview";
 import {
   normalizePreviewPath,
+  requiresListenerOwner,
   type PreviewCapabilities,
+  type PreviewEndpointSnapshot,
   type PreviewErrorCategory,
   type PreviewServiceDefinition,
   type PreviewServiceSnapshot,
@@ -98,6 +100,10 @@ export function serviceReadiness(snapshot: PreviewServiceSnapshot): {
     const category = endpoint.failure?.category;
     if (category === "environment-stopped") return { label: "stopped", tone: "problem" };
     if (category === "target-unmapped") return { label: "not published", tone: "problem" };
+    if (category === "target-unverified" && endpoint.listener === "other-environment")
+      return { label: "another environment's server", tone: "problem" };
+    if (category === "target-unverified" && requiresListenerOwner(definition))
+      return { label: "waiting for server", tone: "starting" };
     return { label: "unavailable", tone: "problem" };
   }
   const { tcp, http } = endpoint.readiness;
@@ -106,6 +112,57 @@ export function serviceReadiness(snapshot: PreviewServiceSnapshot): {
   if (http.state === "ok") return { label: `ready · ${http.statusClass ?? "http"}`, tone: "ready" };
   if (tcp.state === "ok") return { label: "ready", tone: "ready" };
   return { label: "available", tone: "unknown" };
+}
+
+/**
+ * How the backend tied the service to its environment, for route details.
+ * A user registration is a statement, not proof: say what it will show.
+ */
+export function serviceOwnershipLabel(
+  endpoint: Pick<PreviewEndpointSnapshot, "ownership" | "listener">,
+): string | null {
+  switch (endpoint.ownership) {
+    case "owned-container":
+      return "owned container";
+    case "managed-process":
+      return "started in this environment";
+    case "user-registered":
+      return endpoint.listener === "other-environment"
+        ? "user-registered · another environment's process is listening"
+        : "user-registered · any process listening on this port is shown";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Services an unregistered port could be a moved copy of, for example a dev
+ * server that took the next free port: same scheme, a target kind the link
+ * can mean, another port. Nearest first, at most `max`. They are offered for
+ * the user to choose; nothing is moved on its own.
+ */
+export function relocationCandidates(
+  services: readonly PreviewServiceSnapshot[],
+  suggestion: Pick<PreviewServiceDefinition, "targetKind" | "applicationPort"> &
+    Partial<Pick<PreviewServiceDefinition, "scheme">>,
+  max = 3,
+): PreviewServiceSnapshot[] {
+  const kinds: PreviewServiceDefinition["targetKind"][] =
+    suggestion.targetKind === "container" ? ["container"] : ["worktree", "backend-host"];
+  const distance = (service: PreviewServiceSnapshot) =>
+    Math.abs(service.definition.applicationPort - suggestion.applicationPort);
+  return services
+    .filter(
+      ({ definition }) =>
+        definition.enabled &&
+        kinds.includes(definition.targetKind) &&
+        definition.scheme === (suggestion.scheme ?? "http") &&
+        definition.applicationPort !== suggestion.applicationPort,
+    )
+    .sort(
+      (a, b) => distance(a) - distance(b) || a.definition.label.localeCompare(b.definition.label),
+    )
+    .slice(0, max);
 }
 
 /** `web · container:3000 · ready` */
@@ -120,7 +177,11 @@ export type DiagnosisAction =
   | "choose-service"
   | "reconnect"
   | "open-top-level"
-  | "use-relay";
+  | "use-relay"
+  | "confirm-association";
+
+/** Opens a loopback link in a preview tab from a terminal or chat link. */
+export const PREVIEW_LINK_GESTURE = "⌘⇧-click (Ctrl+Shift-click)";
 
 export interface ServiceDiagnosis {
   severity: "info" | "warning" | "error";
@@ -186,6 +247,32 @@ export function diagnoseService(
         ? "Use the container relay to reach it without recreating the container, or add a port mapping (requires recreation)."
         : "Add a port mapping for this port in environment settings. Saving a mapping requires recreating the container.",
       actions: relay ? ["use-relay", "configure-mapping"] : ["configure-mapping", "retry"],
+    };
+  }
+  if (failure === "target-unverified" && endpoint.listener === "other-environment") {
+    return {
+      severity: "warning",
+      title: `Another environment's server is on port ${definition.applicationPort}`,
+      detail: `A server another environment started is not shown here. Start this environment's server; if it moved to another port, ${PREVIEW_LINK_GESTURE} the address it prints in this environment to move this service there.`,
+      actions: ["retry"],
+    };
+  }
+  if (failure === "target-unverified" && requiresListenerOwner(definition)) {
+    const port = definition.applicationPort;
+    const why =
+      endpoint.listener === "unattributed"
+        ? `A process this environment did not start is listening on port ${port}.`
+        : endpoint.listener === "unchecked"
+          ? `This backend host cannot check which process listens on port ${port}.`
+          : `Start the development server from this environment's terminal or an agent here.`;
+    return {
+      severity: "info",
+      title: `Waiting for this environment's server on port ${port}`,
+      detail: `${why} This service came from the project's entry port, which every local environment shares, so it opens only a server this environment started. Confirm to show whatever listens on port ${port} instead.`,
+      actions:
+        endpoint.listener === "unchecked" && !endpoint.failure?.retryable
+          ? ["confirm-association"]
+          : ["retry", "confirm-association"],
     };
   }
   if (failure === "target-unverified") {

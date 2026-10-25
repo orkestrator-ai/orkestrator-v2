@@ -6,6 +6,7 @@ import {
   isObject,
   provider,
   sessionPayload,
+  whenFileExists,
   write,
   type JsonObject,
 } from "./fake-agent-context.js";
@@ -28,6 +29,83 @@ export function announceCommands(sessionId: string): void {
         availableCommands: JSON.parse(readFileSync(path, "utf8")) as unknown,
       },
     },
+  });
+}
+
+/**
+ * Answers a composer RPC (`session/set_config_option`, `session/set_mode`,
+ * `session/set_model`). Each request is first logged to
+ * `FAKE_ACP_CONFIG_REQUEST_FILE` as `<method> <json params>`, so a test can
+ * see that a patch has reached the agent. When `FAKE_ACP_HOLD_CONFIG_FILE` is
+ * set the answer waits until the test creates that file, which keeps the
+ * patch in flight on the bridge for as long as the test needs: a race between
+ * a patch and another request then always overlaps instead of depending on
+ * which loopback request the bridge happens to read first.
+ */
+function answerConfigRpc(message: JsonObject, answer: () => void): void {
+  const requestFile = process.env.FAKE_ACP_CONFIG_REQUEST_FILE;
+  if (requestFile) {
+    appendFileSync(requestFile, `${String(message.method)} ${JSON.stringify(message.params)}\n`);
+  }
+  const holdFile = process.env.FAKE_ACP_HOLD_CONFIG_FILE;
+  if (holdFile) whenFileExists(holdFile, answer);
+  else answer();
+}
+
+function answerSetConfigOption(message: JsonObject): void {
+  const failOnceFile = process.env.FAKE_ACP_FAIL_CONFIG_ONCE_FILE;
+  if (failOnceFile && !existsSync(failOnceFile)) {
+    appendFileSync(failOnceFile, "failed\n");
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      error: { code: -32603, message: "fake configuration failure" },
+    });
+    return;
+  }
+  const params = isObject(message.params) ? message.params : {};
+  const configId = typeof params.configId === "string" ? params.configId : "";
+  const option = cursorConfig.configOptions.find((entry) => entry.id === configId);
+  if (option) option.currentValue = params.value as never;
+  write({
+    jsonrpc: "2.0",
+    id: message.id,
+    result: { configOptions: cursorConfig.configOptions },
+  });
+}
+
+function answerSetMode(message: JsonObject): void {
+  const params = isObject(message.params) ? message.params : {};
+  const modeId = typeof params.modeId === "string" ? params.modeId : "agent";
+  if (provider === "grok") grokConfig.modes.currentModeId = modeId;
+  else cursorConfig.modes.currentModeId = modeId;
+  write({ jsonrpc: "2.0", id: message.id, result: {} });
+}
+
+function answerSetModel(message: JsonObject): void {
+  const failOnceFile = process.env.FAKE_ACP_FAIL_MODEL_ONCE_FILE;
+  if (failOnceFile && !existsSync(failOnceFile)) {
+    appendFileSync(failOnceFile, "failed\n");
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      error: { code: -32603, message: "fake model configuration failure" },
+    });
+    return;
+  }
+  const params = isObject(message.params) ? message.params : {};
+  const modelId =
+    typeof params.modelId === "string" ? params.modelId : grokConfig.models.currentModelId;
+  grokConfig.models.currentModelId = modelId;
+  const meta = isObject(params._meta) ? params._meta : {};
+  const current = grokConfig.models.availableModels.find((model) => model.modelId === modelId);
+  if (current && typeof meta.reasoningEffort === "string" && current._meta) {
+    current._meta.reasoningEffort = meta.reasoningEffort;
+  }
+  write({
+    jsonrpc: "2.0",
+    id: message.id,
+    result: { _meta: { model: { Ok: modelId } } },
   });
 }
 
@@ -183,60 +261,15 @@ export function handleSessionMessage(message: JsonObject): boolean {
     return true;
   }
   if (message.method === "session/set_config_option" && typeof message.id === "number") {
-    const failOnceFile = process.env.FAKE_ACP_FAIL_CONFIG_ONCE_FILE;
-    if (failOnceFile && !existsSync(failOnceFile)) {
-      appendFileSync(failOnceFile, "failed\n");
-      write({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32603, message: "fake configuration failure" },
-      });
-      return true;
-    }
-    const params = isObject(message.params) ? message.params : {};
-    const configId = typeof params.configId === "string" ? params.configId : "";
-    const option = cursorConfig.configOptions.find((entry) => entry.id === configId);
-    if (option) option.currentValue = params.value as never;
-    write({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { configOptions: cursorConfig.configOptions },
-    });
+    answerConfigRpc(message, () => answerSetConfigOption(message));
     return true;
   }
   if (message.method === "session/set_mode" && typeof message.id === "number") {
-    const params = isObject(message.params) ? message.params : {};
-    const modeId = typeof params.modeId === "string" ? params.modeId : "agent";
-    if (provider === "grok") grokConfig.modes.currentModeId = modeId;
-    else cursorConfig.modes.currentModeId = modeId;
-    write({ jsonrpc: "2.0", id: message.id, result: {} });
+    answerConfigRpc(message, () => answerSetMode(message));
     return true;
   }
   if (message.method === "session/set_model" && typeof message.id === "number") {
-    const failOnceFile = process.env.FAKE_ACP_FAIL_MODEL_ONCE_FILE;
-    if (failOnceFile && !existsSync(failOnceFile)) {
-      appendFileSync(failOnceFile, "failed\n");
-      write({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32603, message: "fake model configuration failure" },
-      });
-      return true;
-    }
-    const params = isObject(message.params) ? message.params : {};
-    const modelId =
-      typeof params.modelId === "string" ? params.modelId : grokConfig.models.currentModelId;
-    grokConfig.models.currentModelId = modelId;
-    const meta = isObject(params._meta) ? params._meta : {};
-    const current = grokConfig.models.availableModels.find((model) => model.modelId === modelId);
-    if (current && typeof meta.reasoningEffort === "string" && current._meta) {
-      current._meta.reasoningEffort = meta.reasoningEffort;
-    }
-    write({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { _meta: { model: { Ok: modelId } } },
-    });
+    answerConfigRpc(message, () => answerSetModel(message));
     return true;
   }
   if (message.method === "session/load" && typeof message.id === "number") {

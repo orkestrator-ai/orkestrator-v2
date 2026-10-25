@@ -35,7 +35,8 @@
  * live providers (design-live.spec.ts), and the packaged `file://` renderer;
  * like the other Electron specs, the renderer is served by Vite.
  */
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./electron-fixtures";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
@@ -50,7 +51,7 @@ import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profi
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { closeElectron, electronProcessTree } from "./design-electron-cleanup";
-import { stopProcessGroup, waitForStopped, withCleanup } from "../process-cleanup";
+import { ownProcessGroup, stopProcessGroup, waitForStopped, withCleanup } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
@@ -169,6 +170,7 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
         VITE_ORKESTRATOR_PROFILE: profile.id,
       },
     });
+    ownProcessGroup(vite);
     await waitForUrl(rendererUrl);
     app = await electron.launch({
       executablePath: electronExecutable,

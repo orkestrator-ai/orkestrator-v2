@@ -1,4 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import type { ArtifactHostApi, ArtifactHostEvent } from "@orkestrator/protocol/artifact-host-ipc";
@@ -234,6 +237,7 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
         VITE_ORKESTRATOR_PROFILE: profile.id,
       },
     });
+    ownProcessGroup(vite);
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
       executablePath: electronExecutable,
@@ -494,12 +498,8 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
     });
     expect(greeting).toContain("Hello, After artifact host");
   } finally {
-    await launchedApp?.close().catch(() => undefined);
-    if (vite?.pid) {
-      try {
-        process.kill(-vite.pid, "SIGTERM");
-      } catch {}
-    }
+    await closeElectronWithin(launchedApp).catch(() => undefined);
+    if (vite) await stopProcessGroup(vite).catch(() => undefined);
     await contentServer?.close().catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }

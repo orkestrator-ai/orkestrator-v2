@@ -71,3 +71,19 @@ Original evidence: host temporary directory
 `orkestrator-test-run.xfA2Oh/settings-browser-components.log.gz` and
 `output/playwright/test-results/VirtuosoFollow-live-transc-300c0-up-and-re-engages-at-bottom-desktop-chromium/`.
 No follow implementation, assertion, timeout or skip changed.
+
+## Transcript arrival validation — 2026-10-25
+
+- Original command: `mise run test:logged -- --name browser-suite -- mise run test:browser`.
+  Nine component workers ran 760 cases: 655 passed, 102 skipped and three
+  failed in 424.9 s. Desktop follow re-engagement at `VirtuosoFollow.spec.ts:43`
+  retained `false` instead of `auto` after five seconds; the other two failures
+  were the already recorded native branch suggestions.
+- The complete unchanged owner passed both desktop cases, with two existing
+  mobile skips, in 4.0 s:
+  `ORKESTRATOR_E2E_PORT=1462 mise run test:logged -- --name follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/follow-owner`.
+- Evidence: `orkestrator-test-run.A0y1lR/browser-suite.log.gz` in the host
+  temporary directory and `output/playwright/follow-owner/.last-run.json`.
+  Repository and isolated application validation were active during the
+  aggregate. Host contention remains a hypothesis; no owning spec, assertion,
+  timeout or skip changed.

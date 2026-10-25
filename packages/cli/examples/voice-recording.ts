@@ -82,6 +82,7 @@ export function classifyToolResult(body: unknown): {
   ok: boolean;
   code?: string;
 } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) body = {};
   const payload = body as { error?: { code?: number | string } };
   const result = (
     body as {
@@ -92,8 +93,14 @@ export function classifyToolResult(body: unknown): {
       };
     }
   ).result;
-  const text = result?.content?.map((entry) => entry.text ?? "").join("\n") ?? "";
-  const envelope = result?.structuredContent;
+  const text = Array.isArray(result?.content)
+    ? result.content.map((entry) => (typeof entry?.text === "string" ? entry.text : "")).join("\n")
+    : "";
+  const rawEnvelope = result?.structuredContent;
+  const envelope =
+    rawEnvelope && typeof rawEnvelope === "object" && !Array.isArray(rawEnvelope)
+      ? rawEnvelope
+      : undefined;
   const valid =
     !payload.error &&
     result?.isError !== true &&
@@ -144,6 +151,25 @@ export type RecordingEntry = RecordedCall | RecordedToolList;
 
 const MAX_ID_LENGTH = 700;
 const MAX_RESULT_IDS = 200;
+// These containers hold public resource metadata. Never descend into transcript,
+// question, schema/example, file, or other arbitrary content objects.
+const RESOURCE_CONTAINERS = new Set([
+  "receipt",
+  "resources",
+  "result",
+  "items",
+  "target",
+  "candidates",
+  "ids",
+  "execution",
+  "interactions",
+  "attention",
+  "running",
+  "projects",
+  "environments",
+  "sessions",
+]);
+const INVALID_SESSION = "invalid-session-identity";
 const ID_KEYS = new Set([
   "id",
   "projectId",
@@ -167,14 +193,15 @@ export function targetsOf(args: Record<string, unknown>): Partial<Record<TargetK
   const targets: Partial<Record<TargetKind, string>> = {};
   const project = idValue(source.projectId);
   const environment = idValue(source.environmentId);
-  const tab = idValue(source.tabId);
+  const tab = source.tabId;
   let session = idValue(source.sessionId);
-  if (!session && environment && tab) {
+  if (!session && source.environmentId !== undefined && tab !== undefined) {
     try {
-      session = encodePublicSessionId(environment, tab);
+      if (typeof source.environmentId !== "string" || typeof tab !== "string") throw new Error();
+      session = encodePublicSessionId(source.environmentId, tab);
     } catch {
-      // An invalid environment or tab ID cannot name a session; the
-      // environment ID is still scored on its own.
+      // Keep the attempted session target without persisting malformed text.
+      session = INVALID_SESSION;
     }
   }
   const operation = idValue(source.operationId) ?? idValue(source.expectedOperationId);
@@ -187,7 +214,7 @@ export function targetsOf(args: Record<string, unknown>): Partial<Record<TargetK
   return targets;
 }
 
-/** Every ID a result returned (bounded), so later calls can be checked against them. */
+/** Resource IDs in allowlisted result fields (bounded), excluding free text. */
 export function idsInResult(structured: unknown): string[] {
   const found = new Set<string>();
   const stack: Array<{ value: unknown; depth: number }> = [{ value: structured, depth: 0 }];
@@ -197,12 +224,22 @@ export function idsInResult(structured: unknown): string[] {
     visited += 1;
     if (!value || typeof value !== "object" || depth > 8) continue;
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      const id = ID_KEYS.has(key) ? idValue(child) : undefined;
+      const id =
+        ID_KEYS.has(key) &&
+        typeof child === "string" &&
+        (child.startsWith("ses_")
+          ? decodePublicSessionId(child) !== null
+          : /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(child))
+          ? child
+          : undefined;
       if (id) found.add(id);
-      else if (typeof child === "string" && child.startsWith("ses_")) {
-        const handle = idValue(child);
-        if (handle) found.add(handle);
-      } else if (child && typeof child === "object") stack.push({ value: child, depth: depth + 1 });
+      else if (
+        (Array.isArray(value) || RESOURCE_CONTAINERS.has(key)) &&
+        child &&
+        typeof child === "object"
+      ) {
+        stack.push({ value: child, depth: depth + 1 });
+      }
     }
   }
   return [...found].slice(0, MAX_RESULT_IDS);
@@ -237,6 +274,16 @@ export function recordCall(
       resultIds: idsInResult(structured),
     },
   };
+}
+
+/** Content-free transport failure for a recognized call attempt. */
+export function recordFailure(
+  tool: string,
+  args: Record<string, unknown>,
+  code: string,
+  ms: number,
+): RecordedCall {
+  return { ...recordCall(tool, args, {}, ms).entry, code };
 }
 
 export function parseRecording(text: string): RecordingEntry[] {

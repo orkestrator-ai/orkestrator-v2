@@ -46,6 +46,12 @@
 
 import { appendFile } from "node:fs/promises";
 import {
+  TERMINAL_EXECUTION_PHASES,
+  type PublicExecutionPhase,
+} from "@orkestrator/protocol/public-api";
+import { isTerminalPublicReceipt } from "@orkestrator/protocol/public-api-wait";
+import type { PublicReceipt } from "@orkestrator/protocol/public-api";
+import {
   parseRecording,
   payloadOf,
   percentile,
@@ -238,7 +244,9 @@ async function main() {
         ? await client.call("answer_question", { ...answer, confirmToken })
         : first;
       approvalConfirmed =
-        Boolean(confirmToken) && confirmed.structured.ok !== false && detail?.kind !== "question";
+        Boolean(confirmToken) &&
+        confirmed.structured.ok === true &&
+        (detail?.kind === "command-approval" || detail?.kind === "file-approval");
       answered =
         confirmed.structured.ok === false
           ? `refused: ${confirmed.structured.error?.code}`
@@ -262,9 +270,12 @@ async function main() {
           after = next?.execution?.state ?? next?.state;
           const askedAgain =
             after === "waiting-for-input" &&
-            !next?.execution?.interactions?.some((item) => item.id === pending.id);
-          if (askedAgain || !["pending", "running", "waiting-for-input"].includes(after ?? ""))
-            break;
+            next?.execution?.interactions?.some((item) => item.id !== pending.id);
+          const terminal = next?.execution
+            ? TERMINAL_EXECUTION_PHASES.includes(next.execution.state as PublicExecutionPhase)
+            : next?.state !== undefined &&
+              isTerminalPublicReceipt(next as Pick<PublicReceipt, "state">);
+          if (askedAgain || terminal) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
         answered += after ? `; run then ${after}` : "";

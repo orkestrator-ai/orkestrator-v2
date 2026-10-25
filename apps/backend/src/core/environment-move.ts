@@ -9,16 +9,9 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
-import { syncPrMonitorTracking, invalidatePendingPrMonitorSync } from "./commands-pr-monitor.js";
 import { assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
 import { enqueueEnvironmentLifecycleOperation } from "./commands-environment.js";
-import {
-  beginEnvironmentMove,
-  bindEnvironmentMovePaths,
-  endEnvironmentMove,
-  isEnvironmentBeingReplaced,
-  setEnvironmentMoveRecoveryPending,
-} from "./environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   defaultSessionRelocationHomes,
   relocateAgentSessionState,
@@ -100,7 +93,7 @@ export function assertEnvironmentMovable(
   if (environment.lifecycleOperation || context.runtime.environments.isMerging(environment.id)) {
     throw new Error("Another operation is running for this environment");
   }
-  if (isEnvironmentBeingReplaced(environment.id)) {
+  if (context.runtime.environments.fence.isBeingReplaced(environment.id)) {
     throw new Error("Another operation is running for this environment");
   }
   if (environment.status === "creating" || environment.status === "stopping") {
@@ -131,7 +124,7 @@ export function moveEnvironmentTask(
     return Promise.reject(new Error("Backend is shutting down; environments cannot be moved"));
   }
   try {
-    if (!beginEnvironmentMove(environmentId)) {
+    if (!context.runtime.environments.fence.beginMove(environmentId)) {
       return Promise.reject(new Error("This environment is already being moved"));
     }
   } catch (error) {
@@ -143,9 +136,9 @@ export function moveEnvironmentTask(
       context.runtime.localServers.enqueueEnvironmentOperation(environmentId, () =>
         moveEnvironmentOnce(environmentId, destinationDir, context, options),
       ),
-    ).finally(() => endEnvironmentMove(environmentId));
+    ).finally(() => context.runtime.environments.fence.endMove(environmentId));
   } catch (error) {
-    endEnvironmentMove(environmentId);
+    context.runtime.environments.fence.endMove(environmentId);
     throw error;
   }
 }
@@ -203,7 +196,7 @@ async function moveEnvironmentOnce(
     ? path.resolve(environment.worktreeBaseDir)
     : getWorktreeBaseDir(context);
 
-  bindEnvironmentMovePaths(environment.id, [from, fromResolved, to]);
+  context.runtime.environments.fence.bindMovePaths(environment.id, [from, fromResolved, to]);
   const startedAt = new Date().toISOString();
   let record: WorktreeMoveRecord = {
     from,
@@ -281,7 +274,13 @@ async function moveEnvironmentOnce(
     commitAttempted = true;
     await commitMove(storage, environment.id, record, destinationRoot);
     committed = true;
-    return await completeCommittedMove(environment, record, context, options.sessionHomes);
+    return await completeCommittedMove(
+      environment,
+      record,
+      context,
+      context.runtime.environments.fence,
+      options.sessionHomes,
+    );
   } catch (error) {
     // A storage write can publish before its notification rejects. Re-read
     // authority before deciding whether any filesystem rollback is allowed.
@@ -294,7 +293,7 @@ async function moveEnvironmentOnce(
     // A path commit is irreversible here: provider state may already have moved.
     // Retain the journal for startup to retry all idempotent completion stages.
     if (committed) {
-      setEnvironmentMoveRecoveryPending(environment.id, true);
+      context.runtime.environments.fence.setMoveRecoveryPending(environment.id, true);
       return storage.updateEnvironment(environment.id, {
         lifecycleOperation: null,
         lifecycleOperationStartedAt: null,
@@ -327,7 +326,7 @@ async function moveEnvironmentOnce(
         () => false,
       );
     }
-    setEnvironmentMoveRecoveryPending(environment.id, !rolledBack);
+    context.runtime.environments.fence.setMoveRecoveryPending(environment.id, !rolledBack);
     await storage
       .updateEnvironment(environment.id, {
         lifecycleOperation: null,
@@ -371,7 +370,7 @@ async function quiesceLocalEnvironment(
   // Release the worktree watcher and fetch schedule of the old folder.
   context.runtime.diffStats.invalidatePendingSync();
   context.runtime.diffStats.service.pause(environment.id);
-  invalidatePendingPrMonitorSync();
+  context.runtime.prMonitor.invalidatePendingSync();
   if (environment.worktreePath)
     context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
 }
@@ -510,6 +509,7 @@ async function completeCommittedMove(
   environment: Environment,
   record: WorktreeMoveRecord,
   context: Pick<CommandContext, "storage"> & Partial<CommandContext>,
+  fence: EnvironmentMutationFence,
   sessionHomes?: SessionRelocationHomes,
 ): Promise<Environment> {
   const failures = await relocateAgentSessionState(
@@ -528,7 +528,7 @@ async function completeCommittedMove(
   await context.storage.clearBackendTerminalSessionIds?.(environment.id);
   if (context.emit) await afterMove(context as CommandContext);
   if (failures.length) {
-    setEnvironmentMoveRecoveryPending(environment.id, true);
+    fence.setMoveRecoveryPending(environment.id, true);
     return context.storage.updateEnvironment(environment.id, {
       lifecycleOperation: null,
       lifecycleOperationStartedAt: null,
@@ -541,14 +541,14 @@ async function completeCommittedMove(
     lifecycleOperationStartedAt: null,
     lifecycleError: null,
   });
-  setEnvironmentMoveRecoveryPending(environment.id, false);
+  fence.setMoveRecoveryPending(environment.id, false);
   return completed;
 }
 
 async function afterMove(context: CommandContext): Promise<void> {
   // Terminal panes still name sessions that were closed in the old folder.
   await context.runtime.diffStats.sync(context);
-  await syncPrMonitorTracking(context);
+  await context.runtime.prMonitor.sync(context);
 }
 
 /** Removes a copied-from worktree, but only from inside the folder it was created in. */
@@ -602,12 +602,13 @@ export async function recoverInterruptedEnvironmentMove(
   environment: Environment,
   storage: StorageService,
   worktreeRoot: string,
+  fence: EnvironmentMutationFence,
   sessionHomes?: SessionRelocationHomes,
 ): Promise<void> {
   const record = environment.worktreeMove;
   if (!record) return;
-  setEnvironmentMoveRecoveryPending(environment.id, true);
-  bindEnvironmentMovePaths(environment.id, [
+  fence.setMoveRecoveryPending(environment.id, true);
+  fence.bindMovePaths(environment.id, [
     record.from,
     record.fromCanonical ?? record.from,
     record.to,
@@ -633,7 +634,7 @@ export async function recoverInterruptedEnvironmentMove(
     await repairWorktree(projectPath, record.to);
     await relinkSubmodules(record.to, record.submodules);
     await commitMove(storage, environment.id, committedRecord, destinationRoot);
-    await completeCommittedMove(environment, committedRecord, { storage }, sessionHomes);
+    await completeCommittedMove(environment, committedRecord, { storage }, fence, sessionHomes);
     return;
   }
   if (record.phase === "committed") {
@@ -653,12 +654,12 @@ export async function recoverInterruptedEnvironmentMove(
       ? `An interrupted move left a copy of this environment at ${record.to}; the environment still uses ${record.from}.`
       : "Orkestrator stopped while moving this environment. Its files were left where they were; move it again.",
   });
-  setEnvironmentMoveRecoveryPending(environment.id, false);
+  fence.setMoveRecoveryPending(environment.id, false);
 }
 
 /** Startup: settles every move a previous backend process left unfinished. */
 export async function recoverInterruptedEnvironmentMoves(
-  context: Pick<CommandContext, "storage" | "worktreeDir">,
+  context: Pick<CommandContext, "storage" | "worktreeDir" | "runtime">,
   options: { sessionHomes?: SessionRelocationHomes } = {},
 ): Promise<void> {
   const environments = await context.storage.loadEnvironments();
@@ -668,6 +669,7 @@ export async function recoverInterruptedEnvironmentMoves(
       environment,
       context.storage,
       getWorktreeBaseDir(context),
+      context.runtime.environments.fence,
       options.sessionHomes,
     ).catch(async (error: unknown) => {
       await context.storage

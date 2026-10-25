@@ -58,3 +58,49 @@ test("failed machine config has an accessible retry without switching away", asy
   await expect(page.getByRole("alert")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test("container budgets survive Settings section changes on the selected machine", async ({
+  page,
+}) => {
+  const chooseSection = async (name: string) => {
+    const picker = page.getByRole("combobox", { name: "Settings section" });
+    if (await picker.isVisible()) {
+      await picker.click();
+      await page.getByRole("option", { name, exact: true }).click();
+    } else {
+      await page.getByRole("button", { name, exact: true }).click();
+    }
+  };
+  await page.goto("/settings-machines");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await chooseSection("Container");
+  await expect(page.getByText(/On this Docker:.*8 GB memory/)).toBeVisible();
+  for (const mode of ["Custom", "No limits", "Built-in default"]) {
+    await page.getByRole("button", { name: mode, exact: true }).click();
+    if (mode === "Custom") await page.getByRole("spinbutton", { name: "Memory (GB)" }).fill("4");
+    await page.getByRole("button", { name: "Save limits" }).click();
+    await expect(page.getByRole("button", { name: "Save limits" })).toBeEnabled();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const limits = JSON.parse(localStorage.getItem("settings-machine:other") ?? "{}").global
+            ?.containerResourceLimits;
+          return limits === undefined
+            ? "default"
+            : limits.memoryMiB === 4096
+              ? "custom"
+              : "unrestricted";
+        }),
+      )
+      .toBe(mode === "Custom" ? "custom" : mode === "No limits" ? "unrestricted" : "default");
+    await chooseSection("General");
+    await chooseSection("Container");
+    await expect(page.getByRole("button", { name: mode, exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    if (mode === "Custom")
+      await expect(page.getByRole("spinbutton", { name: "Memory (GB)" })).toHaveValue("4");
+  }
+  expect(await page.evaluate(() => localStorage.getItem("settings-machine:leaf"))).toBeNull();
+});

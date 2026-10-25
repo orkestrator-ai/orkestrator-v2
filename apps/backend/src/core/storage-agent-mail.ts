@@ -171,6 +171,11 @@ export type PendingAgentMailInject = {
   verifyRequestId?: string;
   retryAttempts?: number;
   verificationAttempts?: number;
+  /**
+   * A status notice still inside its coalescing hold, listed only when asked
+   * for: it may join a batch going to the same mailbox, never start one.
+   */
+  coalescingUntil?: string;
 };
 
 /**
@@ -2596,7 +2601,7 @@ export class StorageAgentMail extends StorageDrafts {
 
   async listPendingAgentMailInjects(
     limit = 100,
-    options: { includeDeferred?: boolean } = {},
+    options: { includeDeferred?: boolean; includeCoalescing?: boolean } = {},
   ): Promise<PendingAgentMailInject[]> {
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
@@ -2615,8 +2620,10 @@ export class StorageAgentMail extends StorageDrafts {
       retryAttempts,
       verificationAttempts,
       verifyRequestId,
+      coalescing,
     } of entries) {
-      if (retryAt && Date.parse(retryAt) > now) continue;
+      const held = Boolean(retryAt && Date.parse(retryAt) > now);
+      if (held && !(coalescing && options.includeCoalescing)) continue;
       const deferred = Boolean(nextAttemptAt && Date.parse(nextAttemptAt) > now);
       if (deferred && !options.includeDeferred) continue;
       const mailbox = store.mailboxes[mailboxId];
@@ -2629,6 +2636,7 @@ export class StorageAgentMail extends StorageDrafts {
         ...(verifyRequestId ? { verifyRequestId } : {}),
         ...(retryAttempts ? { retryAttempts } : {}),
         ...(verificationAttempts ? { verificationAttempts } : {}),
+        ...(held && retryAt ? { coalescingUntil: retryAt } : {}),
       });
       if (pending.length >= Math.max(1, Math.min(limit, AGENT_MAIL_MAX_PENDING_INJECTS))) break;
     }
@@ -2823,11 +2831,18 @@ export class StorageAgentMail extends StorageDrafts {
     });
   }
 
+  /**
+   * Claim one pending message for dispatch. `joinCoalescing` lets a status
+   * notice still inside its coalescing hold ride along with a batch already
+   * going to this mailbox: the hold only exists to gather notices into one
+   * wake, and that wake is happening now.
+   */
   async beginAgentMailInject(
     mailboxId: string,
     messageId: string,
     incarnationId: string,
     verificationRequestId?: string,
+    options: { joinCoalescing?: boolean } = {},
   ): Promise<AgentMailMessage | null> {
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
@@ -2847,7 +2862,9 @@ export class StorageAgentMail extends StorageDrafts {
       );
       if (
         pendingEntry?.verifyRequestId !== verificationRequestId ||
-        (pendingEntry?.retryAt && Date.parse(pendingEntry.retryAt) > Date.now()) ||
+        (pendingEntry?.retryAt &&
+          Date.parse(pendingEntry.retryAt) > Date.now() &&
+          !(options.joinCoalescing && pendingEntry.coalescing)) ||
         (pendingEntry?.nextAttemptAt && Date.parse(pendingEntry.nextAttemptAt) > Date.now())
       )
         return null;
@@ -2905,6 +2922,11 @@ export class StorageAgentMail extends StorageDrafts {
           attempts,
           nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
           lastHoldReason: reason,
+          ...(pendingEntry?.coalescing &&
+          pendingEntry.retryAt &&
+          Date.parse(pendingEntry.retryAt) > Date.now()
+            ? { coalescing: true as const, retryAt: pendingEntry.retryAt }
+            : {}),
         };
         if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
         else store.pendingInject.push(next);
@@ -2932,6 +2954,12 @@ export class StorageAgentMail extends StorageDrafts {
           ).toISOString(),
           lastHoldReason: reason,
           ...(outcome.outcome === "verify" ? { verifyRequestId: outcome.requestId } : {}),
+          ...(outcome.outcome === "retry" &&
+          pendingEntry?.coalescing &&
+          pendingEntry.retryAt &&
+          Date.parse(pendingEntry.retryAt) > Date.now()
+            ? { coalescing: true as const, retryAt: pendingEntry.retryAt }
+            : {}),
         };
         if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
         else store.pendingInject.push(next);

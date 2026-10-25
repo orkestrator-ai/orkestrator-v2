@@ -60,3 +60,16 @@ Recurred in a four-worker backend run on the todo 0121 branch
 backend 11,302 passed, 85 skipped, 13 failed). The unchanged owning file
 passed alone (39 pass, 0 fail; aggregate failure was the `(unnamed)` hook timeout at 5,001.40 ms). The branch does not touch this owner; no
 implementation, assertion, timeout or skip changed.
+
+## Composer model parameters validation — 2026-10-25
+
+`mise run test` on `todo-0004-composer-model-params-803868a90fcb` (workspace/root/bridges/protocol 4/1/2/1, other worktrees active): the unnamed Chromium policy hook timed out after 5003.86 ms. Backend totals were 11,297 passed, 84 skipped and four failed; the other failures were 0460, 0291 and the branch's own provider-module size limit (fixed on the branch). The complete unchanged owner passed alone: `mise exec -- bun test --cwd apps/backend ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1` (39 pass, 0 fail). Evidence: `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. No assertion, deadline or skip changed.
+
+## Coordinator consistency gaps (todo 0028) — 2026-10-25
+
+- **Change:** branch `todo-0028-coordinator-consistency-b1b98c1981f1`; no transcript-artifact code changed.
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` on macOS arm64, Bun 1.4.4.
+- **Failure:** `executable document policy in chromium > (unnamed)` hook timed out after 5000.93 ms.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/core/transcript-artifacts/content-server.engines.test.ts` from `apps/backend` passed, 39 of 39.
+- **Aggregate counts:** backend 11,077 passed, 84 skipped, 2 failed across 658 files (698.8 s); the other failure was 0247.
+- **Assessment:** recurrence of the existing intermittent hook timeout; nothing changed.

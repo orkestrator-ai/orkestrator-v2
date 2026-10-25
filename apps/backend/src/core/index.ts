@@ -73,7 +73,7 @@ import {
 import { McpManagementService } from "./mcp-management/service.js";
 import {
   createCommandRegistry,
-  shutdownPrMonitorTracking,
+  scheduleMergeCleanupRecovery,
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
@@ -132,7 +132,11 @@ import { AgentRegistry } from "./agent-registry.js";
 import { tmuxManager } from "./tmux-session-manager.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
-import { lastAssistantText } from "./coordinator-status-wakes.js";
+import {
+  lastAssistantText,
+  waitingBlocker,
+  type CoordinatorWaitingBlocker,
+} from "./coordinator-status-wakes.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
@@ -148,11 +152,6 @@ import {
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
 import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
-import {
-  configureTerminalHistoryRetention,
-  flushTerminalHistories,
-  pruneTerminalHistoryStorage,
-} from "./terminal-history.js";
 import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
@@ -412,6 +411,7 @@ export class OrkestratorBackend {
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
+        prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
       });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
@@ -503,6 +503,7 @@ export class OrkestratorBackend {
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
+        waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
       },
     );
     context.coordinators = this.coordinators;
@@ -606,6 +607,7 @@ export class OrkestratorBackend {
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
@@ -1089,6 +1091,26 @@ export class OrkestratorBackend {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
+    return lastAssistantText((await this.workerProjection(environmentId, tabId, 6))?.messages);
+  }
+
+  /**
+   * Whether a waiting worker tab is blocked on an approval or a question, from
+   * its pending interactions rather than its activity state, which cannot say.
+   */
+  private async waitingBlocker(
+    environmentId: string,
+    tabId: string,
+  ): Promise<CoordinatorWaitingBlocker | undefined> {
+    return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
+  }
+
+  /** A short projection read of one worker tab with a deadline; null when unavailable. */
+  private async workerProjection(
+    environmentId: string,
+    tabId: string,
+    messageLimit: number,
+  ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     const session = (await this.context.storage.listNativeAgentSessions()).find(
       (candidate) =>
@@ -1102,18 +1124,17 @@ export class OrkestratorBackend {
       timer.unref?.();
     });
     try {
-      const projection = await Promise.race([
+      return await Promise.race([
         this.nativeAgents
           .getProjection({
             environmentId,
             agent: session.agent,
             logicalSessionKey,
-            messageLimit: 6,
+            messageLimit,
           })
           .catch(() => null),
         deadline,
       ]);
-      return lastAssistantText(projection?.messages);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -1126,7 +1147,7 @@ export class OrkestratorBackend {
    * — never per idle observation, and never for a fenced pre-dispatch idle,
    * which the observer refuses to apply (step 07). It reaches the PR monitor's
    * completion wakeup via `pr_monitor_probe_environment` →
-   * `wakePrMonitorForCompletion` (step 05).
+   * `PrMonitorRuntime.wakeForCompletion` (step 05).
    */
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(
@@ -1217,13 +1238,13 @@ export class OrkestratorBackend {
       );
     });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
-    configureTerminalHistoryRetention({
+    this.runtime.terminals.history.configureRetention({
       enabled: terminalHistoryConfig.terminalHistoryEnabled,
       sessionMb: terminalHistoryConfig.terminalHistoryRetentionMb,
       globalMb: terminalHistoryConfig.terminalHistoryGlobalRetentionMb,
       days: terminalHistoryConfig.terminalHistoryRetentionDays,
     });
-    await pruneTerminalHistoryStorage(this.context.storage.getDataDir());
+    await this.runtime.terminals.history.pruneStorage(this.context.storage.getDataDir());
     if (!this.terminalStartupReconciled) {
       // A terminal session id names state owned by this backend process. On a
       // renderer-only reload the backend stays alive and the id remains valid;
@@ -1955,7 +1976,6 @@ export class OrkestratorBackend {
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
-    shutdownPrMonitorTracking();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {
       try {
@@ -2009,7 +2029,7 @@ export class OrkestratorBackend {
         }
         this.workflowAdmission.close();
         await lifecycleDrain;
-        await flushTerminalHistories(true);
+        await this.runtime.terminals.history.flush(true);
         await this.runtime.localServers.shutdown({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });

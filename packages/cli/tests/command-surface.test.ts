@@ -343,65 +343,77 @@ describe("shell completion", () => {
   });
 });
 
+// CI installs zsh and fish (`.github/workflows/ci.yml`), so both run there;
+// a host without one skips it.
 describe("native shell completion execution", () => {
-  test("zsh bashcompinit parses option values and offers short flags", () => {
-    const script = completionScript("zsh", CLIENT_COMMANDS);
-    for (const args of [
-      ["--profile", "project", "session", "comm"],
-      ["--connection=session", "project", "rem"],
-      ["session", "-h"],
-    ]) {
-      const run = spawnSync(
-        "zsh",
-        [
-          "-f",
-          "-c",
-          `autoload -Uz compinit; compinit -D
+  test.skipIf(!Bun.which("zsh"))(
+    "zsh bashcompinit parses option values and offers short flags",
+    () => {
+      const script = completionScript("zsh", CLIENT_COMMANDS);
+      for (const args of [
+        ["--profile", "project", "session", "comm"],
+        ["--connection=session", "project", "rem"],
+        ["session", "-h"],
+      ]) {
+        const run = spawnSync(
+          "zsh",
+          [
+            "-f",
+            "-c",
+            // `-u` skips compinit's security audit, which aborts without a
+            // terminal when it finds a completion directory it considers
+            // insecure, as on the GitHub Ubuntu runner.
+            `autoload -Uz compinit; compinit -u -D
 ${script}
 COMP_WORDS=(orkestrator ${args.map((word) => `'${word}'`).join(" ")})
 COMP_CWORD=${args.length}
 _orkestrator
 print -l -- \${COMPREPLY[@]}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(run.status).toBe(0);
-      expect(run.stderr).toBe("");
-      expect(run.stdout.trim().split(/\s+/)).toEqual(
-        args.at(-1) === "comm"
-          ? ["commands", "command"]
-          : args.at(-1) === "rem"
-            ? ["remove"]
-            : ["-h"],
-      );
-    }
-  });
+          ],
+          { encoding: "utf8" },
+        );
+        expect(run.status).toBe(0);
+        expect(run.stderr).toBe("");
+        expect(run.stdout.trim().split(/\s+/)).toEqual(
+          args.at(-1) === "comm"
+            ? ["commands", "command"]
+            : args.at(-1) === "rem"
+              ? ["remove"]
+              : ["-h"],
+        );
+      }
+    },
+  );
 
   test.skipIf(!Bun.which("fish"))(
     "fish parses collisions, equals forms, list/duration values and short flags",
     () => {
       const script = completionScript("fish", CLIENT_COMMANDS);
+      const complete = (line: string) => {
+        const run = spawnSync("fish", ["-c", `${script}\ncomplete -C '${line}'`], {
+          encoding: "utf8",
+        });
+        expect(run.status).toBe(0);
+        expect(run.stderr).toBe("");
+        return run.stdout
+          .trim()
+          .split("\n")
+          .map((row) => row.split("\t")[0])
+          .sort();
+      };
       for (const [line, expected] of [
         ["orkestrator --profile project session comm", ["command", "commands"]],
         ["orkestrator --connection=session project rem", ["remove"]],
         ["orkestrator session --profile command comm", ["command", "commands"]],
         ["orkestrator session prompt --attach project --enq", ["--enqueue"]],
         ["orkestrator project remove --timeout session --cas", ["--cascade"]],
-        ["orkestrator session -h", ["--help"]],
       ] as const) {
-        const run = spawnSync("fish", ["-c", `${script}\ncomplete -C '${line}'`], {
-          encoding: "utf8",
-        });
-        expect(run.status).toBe(0);
-        expect(run.stderr).toBe("");
-        expect(
-          run.stdout
-            .trim()
-            .split("\n")
-            .map((row) => row.split("\t")[0])
-            .sort(),
-        ).toEqual([...expected].sort());
+        expect(complete(line)).toEqual([...expected].sort());
       }
+      // The short flag is offered beside its long form. Completing a finished
+      // `-h` is version-dependent (fish 4 offers `--help`, Ubuntu 24.04's fish
+      // 3.7 offers nothing), so ask for the options of a bare `-`.
+      expect(complete("orkestrator session -")).toEqual(expect.arrayContaining(["-h", "--help"]));
     },
   );
 });

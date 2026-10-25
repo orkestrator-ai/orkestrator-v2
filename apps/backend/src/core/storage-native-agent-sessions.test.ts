@@ -1523,6 +1523,25 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("drops a stored pre-approval-mode permissionMode value on any control update", async () => {
+    await withStorage(async (first) => {
+      await first.adoptNativeAgentSession({
+        ...input,
+        agent: "claude",
+        providerSessionId: "provider-session",
+        controls: {
+          modelId: "claude-model",
+          parameterValues: { permissionMode: "acceptEdits", thinking: "adaptive" },
+        },
+      });
+      const updated = await first.updateNativeAgentSessionControls(input.key, "provider-session", {
+        approvalMode: "default",
+      });
+      expect(updated.controls?.parameterValues).toEqual({ thinking: "adaptive" });
+      expect(updated.controls?.approvalMode).toBe("default");
+    });
+  });
+
   test("rejects a replacement expectation when no mapping exists", async () => {
     await withStorage(async (first) => {
       await expect(

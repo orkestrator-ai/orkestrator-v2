@@ -12,3 +12,9 @@
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.8ZKWYk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name merge-0043-rerun-project-copy -- bun test --cwd apps/web ./src/components/federation/ProjectCopyDialog.test.tsx --parallel=1 --only-failures` passed unchanged (exit 0, 12.1 s).
 - **Hypothesis:** timing sensitivity under concurrent host load; the complete unchanged owning file passed with one worker. No root cause has been established. No assertion, deadline, or skip was changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation. The case runs under Bun's default five seconds, and the whole file takes 12 s alone. The last change to the owner (bae046ddf, #1211) predates the observation.
+- **Next step:** if it recurs, give the case an explicit budget or split it; otherwise reclassify it as environmental at the next sweep.

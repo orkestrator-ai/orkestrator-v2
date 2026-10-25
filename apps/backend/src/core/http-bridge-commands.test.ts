@@ -105,6 +105,35 @@ describe("HTTP bridge command transport", () => {
     expect(catalogue.commands.map((command) => command.id)).toEqual(["claude:/review"]);
   });
 
+  test("carries a pre-attach list's attachPending through to the provider catalogue", async () => {
+    const { provider } = httpProvider(
+      (url) =>
+        url.endsWith("/session/session-1/commands")
+          ? Response.json({
+              catalogueVersion: 1,
+              status: "stale",
+              revision: 1,
+              freshness: "ttl",
+              attachPending: true,
+              commands: [
+                {
+                  name: "/review",
+                  id: "pi:template:review",
+                  executionKind: "provider-prompt",
+                  source: "template",
+                },
+              ],
+            })
+          : new Response(null, { status: 404 }),
+      piConnection,
+    );
+    await expect(provider.commandCatalogue!("session-1")).resolves.toMatchObject({
+      status: "stale",
+      attachPending: true,
+      commands: [{ id: "pi:template:review" }],
+    });
+  });
+
   test("never seeds hard-coded Claude rows into a successful empty list", async () => {
     const { provider } = httpProvider((url) =>
       url.endsWith("/session/session-1/commands")

@@ -60,3 +60,36 @@ export async function closeElectron(
       ),
   ]);
 }
+
+/**
+ * Close Playwright's Electron handle, waiting at most `timeoutMs`.
+ *
+ * `ElectronApplication.close()` can hang (a wedged quit, a lost connection),
+ * and an unbounded wait in a cleanup path holds everything after it, such as
+ * stopping the spec's Vite group. When `close()` does not finish in time, or
+ * returns with Electron still running, the Electron process tree is killed.
+ */
+export async function closeElectronWithin(
+  app: Pick<ElectronApplication, "close" | "process"> | null | undefined,
+  timeoutMs = 20_000,
+): Promise<"closed" | "killed"> {
+  if (!app) return "closed";
+  // Preserve ownership while parent links and the Playwright handle still exist.
+  const owned = electronProcessTree(app);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    // A rejected close is settled too; whether Electron still runs is checked below.
+    app.close().then(
+      () => true,
+      () => true,
+    ),
+    new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), timeoutMs))),
+  ]).finally(() => clearTimeout(timer));
+  if (!owned.length && !settled) {
+    throw new Error("Electron did not close and exposes no process to stop");
+  }
+  if (!owned.some(processAlive)) return "closed";
+  for (const pid of owned.filter(processAlive)) signalProcess(pid, "SIGKILL");
+  await waitForStopped(owned, 5_000);
+  return "killed";
+}

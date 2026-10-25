@@ -14,3 +14,7 @@
 - **Evidence:** `orkestrator-test-run.TPZZNA/` under the host temporary directory.
 
 No assertion, timeout or skip was changed for these four tests. Shared-host contention is a possible contributor, not an established cause.
+
+## Triage 2026-10-25
+
+Stays open. Root failures were branch defects fixed in the change; the digest, coordinator and move timeouts are tracked in [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md), [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md). Next step: add an agent-bridges owner case for `bridges/cursor-bridge/src/initial-run.test.ts` `replaces an unused warm agent when a read-only prompt changes its policy` (5001.32 ms; owner passed alone, 18 passed), then mark this record resolved as a run record.

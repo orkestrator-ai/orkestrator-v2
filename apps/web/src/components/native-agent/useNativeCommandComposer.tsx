@@ -57,6 +57,10 @@ const REFRESH_EXPLANATIONS: Record<NativeAgentCommandRefreshOutcome, string> = {
   failed: "Refresh failed.",
 };
 
+/** A list read before the session started; the provider adds the rest on attach. */
+const ATTACH_PENDING_DETAIL =
+  "More commands load when the session starts; refresh to load them now.";
+
 function bounded(text: string): string {
   return text.length > DETAIL_MAX_LENGTH ? `${text.slice(0, DETAIL_MAX_LENGTH - 1)}…` : text;
 }
@@ -71,6 +75,7 @@ function catalogueDetail(
   if (catalogue.status === "unavailable" || catalogue.status === "stale") {
     if (catalogue.error) parts.push(ERROR_EXPLANATIONS[catalogue.error.code]);
   }
+  if (catalogue.status === "stale" && catalogue.attachPending) parts.push(ATTACH_PENDING_DETAIL);
   if (
     catalogue.lastRefresh &&
     (showRefresh || catalogue.status === "stale" || catalogue.status === "unavailable")

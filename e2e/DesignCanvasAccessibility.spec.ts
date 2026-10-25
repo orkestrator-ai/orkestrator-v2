@@ -25,10 +25,10 @@
  *   arrow keys move, Alt+arrows resize, Shift for 10 px) and "Resize frame
  *   <name>". A culled frame is an empty "Frame <name> (offscreen)" region.
  * - Inspector: `complementary "Element inspector"`, a `region` per section,
- *   every control named. Fields are named by CSS property, not their visible
- *   label: "Fill" is "background-color" and "Align items" is "align-items"
- *   (WCAG 2.5.3 label-in-name, matters for speech input). Not changed: tests
- *   and agents address fields by these names.
+ *   every control named by its visible label (WCAG 2.5.3 label in name, for
+ *   speech input): "Fill", not "background-color". The CSS property is in
+ *   `data-property` on the field (and the label's tooltip). Fixed 2026-10-25;
+ *   until then fields were named by property.
  * - Status: a polite sr-only `status` carries conflict/failure, export,
  *   reselect and delete notices; the footer save state is now a `status`
  *   too ("Saving in workspace…" → "Saved in workspace" / "Needs review").
@@ -49,8 +49,11 @@
  *   acknowledgement moved focus from the edited field to the first field; a
  *   successful edit was never announced.
  * - Layer-tree windowing keeps the focused and the selected rows mounted.
- * - Enter on an element row of a frame that is not rendered yet only brings
- *   the frame into view; a second Enter selects. Nothing is announced.
+ * - Enter on an element row of a frame that is not rendered yet brings the
+ *   frame into view, announces "Loading <frame>; the layer is selected when
+ *   it appears" and selects once the frame renders (fixed 2026-10-25; it
+ *   used to need a second Enter, silently). Moving to another frame first
+ *   drops the wait.
  * - Fixed: a frame culled while its layers loaded showed the row "Could not
  *   load layers: Frame closed" (the 400% case hit it on a loaded host)
  *   instead of falling back to the backend hierarchy.
@@ -63,11 +66,12 @@
  * - 200% and 320 px: no horizontal overflow; every control outside the
  *   pannable canvas is reachable by Tab and unclipped when focused; the
  *   journey works.
- * - 400% (320×225): KNOWN DEFECT, not asserted. The toolbar wraps to three
- *   rows and takes about half the height, so the Layers tree and the
- *   inspector fields are clipped to a sliver. They stay focusable and
- *   operable (the edit journey passes there), but a sighted keyboard user
- *   cannot see them. Screenshots are attached.
+ * - 400% (320×225): below 400 px of height the toolbar keeps Layers, the
+ *   design name (and the narrow inspector toggle) and moves every other tool
+ *   into a "More design tools" menu, so it is one row instead of three that
+ *   took half the height. Every focused control is unclipped and uncovered
+ *   (asserted, as at 200%); the menu keeps zoom steps open and returns focus
+ *   to its trigger after an action or a dialog it opened. Fixed 2026-10-25.
  *
  * Still needs a human screen-reader pass: wording and verbosity (treeitem
  * descendants, 30+ inspector fields), live-region timing during bursts of
@@ -166,14 +170,9 @@ async function openCanvas(page: Page, canvasId: string) {
 }
 
 /**
- * Enter on an element row only selects once its frame is live and rendered;
- * before that it just brings the frame into view (no announcement).
+ * Tabs into the tree, focuses (Enter: expand and fit) the Homepage frame and
+ * selects its heading. One Enter selects even before the frame has rendered.
  */
-async function waitForRenderedFrame(page: Page) {
-  await expect(page.frameLocator('iframe[title="Homepage"]').locator("#title")).toBeAttached();
-}
-
-/** Tabs into the tree, focuses (Enter: expand and fit) the Homepage frame and selects its heading. */
 async function selectHeadingByKeyboard(page: Page) {
   const frameRow = layers(page).getByRole("treeitem", { name: /^Homepage, \d+ elements$/ });
   await tabTo(page, frameRow);
@@ -182,7 +181,6 @@ async function selectHeadingByKeyboard(page: Page) {
   const titleRow = layers(page).getByRole("treeitem", { name: "title (h1)" });
   await expect(titleRow).toBeAttached();
   await tabTo(page, titleRow, "ArrowDown", 1);
-  await waitForRenderedFrame(page);
   await page.keyboard.press("Enter");
   await expect(inspectorOf(page)).toBeVisible();
 }
@@ -290,8 +288,8 @@ test("keyboard-only journey keeps focus through acknowledgement, panels, culling
     const inspector = inspectorOf(page);
     const frameRow = tree.getByRole("treeitem", { name: /^Homepage, \d+ elements$/ });
     const titleRow = tree.getByRole("treeitem", { name: "title (h1)" });
-    const color = inspector.getByRole("textbox", { name: "color", exact: true });
-    const display = inspector.getByRole("combobox", { name: "display" });
+    const color = inspector.getByRole("textbox", { name: "Color", exact: true });
+    const display = inspector.getByRole("combobox", { name: "Display", exact: true });
     const moveTitle = page.getByRole("button", { name: "Move frame Homepage" });
     const layersToggle = page.getByRole("button", { name: "Toggle layers" });
     const embedded = page.frameLocator('iframe[title="Homepage"]');
@@ -309,7 +307,6 @@ test("keyboard-only journey keeps focus through acknowledgement, panels, culling
     await expectSettledFocus(page, frameRow);
     await page.keyboard.press("ArrowDown");
     await expectSettledFocus(page, titleRow);
-    await waitForRenderedFrame(page);
     await page.keyboard.press("Enter");
     await expect(inspector).toBeVisible();
     await expect(inspector.getByRole("heading", { name: "h1" })).toBeVisible();
@@ -410,7 +407,6 @@ test("keyboard-only journey keeps focus through acknowledgement, panels, culling
     await page.keyboard.press("ArrowDown");
     await expectSettledFocus(page, titleRow);
     if (!narrow) {
-      await waitForRenderedFrame(page);
       await page.keyboard.press("Enter");
       await expect(titleRow).toHaveAttribute("aria-selected", "true");
       await expect(inspector).toBeVisible();
@@ -430,7 +426,6 @@ test("keyboard-only journey keeps focus through acknowledgement, panels, culling
 
     // (d) Error: a second client changes the frame before the edit is applied.
     if (narrow) {
-      await waitForRenderedFrame(page);
       await page.keyboard.press("Enter");
       await expectSettledFocus(page, display);
     }
@@ -555,15 +550,15 @@ test("layer tree, frame list, inspector and status regions expose stable roles a
         - group:
           - region "Layout":
             - heading "Layout" [level=4]
-            - combobox "display"
+            - combobox "Display"
           - region "Size and spacing":
-            - textbox "width"
-            - textbox "height"
+            - textbox "Width"
+            - textbox "Height"
           - region "Typography":
-            - textbox "font-size"
-            - textbox "color"
+            - textbox "Size"
+            - textbox "Color"
           - region "Appearance":
-            - textbox "background-color"
+            - textbox "Fill"
           - region "Advanced":
             - textbox "New property name"
             - button "Add property"
@@ -583,6 +578,100 @@ test("layer tree, frame list, inspector and status regions expose stable roles a
         .map((element) => element.outerHTML.slice(0, 120)),
     );
     expect(unnamed).toEqual([]);
+    // Label in name (WCAG 2.5.3): each field is named by the label it shows
+    // (fields under the collapsed "More styles" are hidden, so unnamed).
+    const fields = await inspector.locator("[data-property]:visible").all();
+    expect(fields.length).toBeGreaterThan(5);
+    for (const field of fields) {
+      const label = (await field.locator("label").textContent())!.trim();
+      await expect(
+        field.locator('input:not([type="color"]), [role="combobox"]').first(),
+      ).toHaveAccessibleName(label);
+    }
+  });
+});
+
+test("Enter on a layer of an unrendered frame announces the wait and selects once it renders", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await withCanvas(page, async ({ canvasId }) => {
+    await openCanvas(page, canvasId);
+    await watchFocus(page);
+    const narrow = await narrowPane(page);
+    const tree = layers(page);
+    const inspector = inspectorOf(page);
+    const pricing = page.locator('iframe[title="Pricing"]');
+    const plansRow = tree.getByRole("treeitem", { name: "plans (h2)" });
+    // Fit Homepage: Pricing, 3000 px to the right, is culled.
+    const frameRow = tree.getByRole("treeitem", { name: /^Homepage, \d+ elements$/ });
+    await tabTo(page, frameRow);
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("region", { name: "Frame Pricing (offscreen)" })).toHaveCount(1);
+    // Pricing's heading row (End lands on its frame row while its layers load).
+    await page.keyboard.press("End");
+    await expect(plansRow).toBeAttached();
+    await tabTo(page, plansRow, "ArrowDown", 3);
+    // Focusing the row keeps Pricing's chrome mounted offscreen, not rendered.
+    await expect(pricing).toHaveCount(0);
+
+    // Hold the real runtime's inspection reply, leaving the post-render window
+    // open while the user moves focus to a different row in this same frame.
+    await page.evaluate(() => {
+      const state = window as unknown as {
+        heldInspection?: MessageEvent;
+        releaseInspection?: () => void;
+      };
+      const hold = (event: MessageEvent) => {
+        if (event.data?.channel !== "orkestrator-design" || event.data?.result?.tag !== "h2")
+          return;
+        event.stopImmediatePropagation();
+        state.heldInspection = event;
+      };
+      window.addEventListener("message", hold, true);
+      state.releaseInspection = () => {
+        window.removeEventListener("message", hold, true);
+        const event = state.heldInspection!;
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            data: event.data,
+            source: event.source,
+            origin: event.origin,
+          }),
+        );
+      };
+    });
+    // One Enter: Pricing comes into view and the wait is announced.
+    await page.keyboard.press("Enter");
+    await expect(announcer(page)).toHaveText(
+      "Loading Pricing; the layer is selected when it appears",
+    );
+    await expect(pricing).toHaveCount(1);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Boolean((window as unknown as { heldInspection?: MessageEvent }).heldInspection),
+        ),
+      )
+      .toBe(true);
+    const pricingRow = tree.getByRole("treeitem", { name: /^Pricing, \d+ elements$/ });
+    await page.keyboard.press("ArrowUp");
+    await expect(pricingRow).toBeFocused();
+    await expect(inspector).toBeHidden();
+    await page.evaluate(() =>
+      (window as unknown as { releaseInspection: () => void }).releaseInspection(),
+    );
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("heading", { name: "h2" })).toBeVisible();
+    if (narrow) {
+      // The inspector drawer replaces Layers and takes focus.
+      await expect(tree).toBeHidden();
+      await expect(inspector.locator(":focus")).toHaveCount(1);
+    } else {
+      await expect(plansRow).toHaveAttribute("aria-selected", "true");
+      await expectSettledFocus(page, pricingRow);
+    }
+    await expectFocusNeverLost(page);
   });
 });
 
@@ -648,7 +737,7 @@ test("prefers-reduced-motion disables canvas, dialog and popup animation", async
     await expect(dialog).toBeHidden();
     await expect(exportButton).toBeFocused();
     await selectHeadingByKeyboard(page);
-    const display = inspectorOf(page).getByRole("combobox", { name: "display" });
+    const display = inspectorOf(page).getByRole("combobox", { name: "Display", exact: true });
     await tabTo(page, display);
     await page.keyboard.press("Enter");
     const listbox = page.getByRole("listbox");
@@ -727,6 +816,44 @@ async function unreachableControls(page: Page) {
   return { problems, reached: seen.size };
 }
 
+/**
+ * Arrows down an open menu until `item` has focus. Radix moves focus a task
+ * after the key, so each press waits for focus to move before the next.
+ */
+async function arrowTo(page: Page, item: Locator, max = 20) {
+  const focused = () => page.evaluate(() => document.activeElement?.textContent ?? "");
+  for (let presses = 0; presses < max; presses++) {
+    if (await item.evaluate((element) => element === document.activeElement)) return;
+    const before = await focused();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(focused).not.toBe(before);
+  }
+  throw new Error(`ArrowDown never reached ${item}`);
+}
+
+/** `target` lies inside the window and is not covered. */
+const isOnScreen = (target: Locator) =>
+  target.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.top >= -1 &&
+      rect.left >= -1 &&
+      rect.bottom <= window.innerHeight + 1 &&
+      rect.right <= window.innerWidth + 1 &&
+      hit !== null &&
+      (element === hit || element.contains(hit))
+    );
+  });
+
+/** The focused control lies inside the window and is not covered. */
+async function expectOnScreen(target: Locator) {
+  await expect(target).toBeFocused();
+  expect(await isOnScreen(target)).toBe(true);
+}
+
 for (const zoom of [
   { name: "200% zoom", viewport: { width: 640, height: 450 }, deviceScaleFactor: 2 },
   { name: "400% zoom", viewport: { width: 320, height: 225 }, deviceScaleFactor: 4 },
@@ -743,11 +870,7 @@ for (const zoom of [
       deviceScaleFactor: zoom.deviceScaleFactor,
     });
     const page = await context.newPage();
-    // Known defect at 400% (320×225): the wrapped toolbar takes half the height
-    // and the Layers tree and inspector fields are clipped to a sliver, though
-    // still focusable and operable. Reported, not asserted; evidence attached.
-    const outsideKnown400 = (problem: string) =>
-      zoom.name !== "400% zoom" || !/^(tree|inspector):/.test(problem);
+    const short = zoom.viewport.height < 400;
     try {
       await withCanvas(page, async ({ canvasId, frame }) => {
         await openCanvas(page, canvasId);
@@ -761,10 +884,18 @@ for (const zoom of [
             .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
         ).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`${zoom.name}-idle.png`) });
+        const toolbar = page.getByRole("toolbar", { name: "Design tools" });
+        const more = toolbar.getByRole("button", { name: "More design tools" });
+        if (short) {
+          // One row of tools, not three: the panels keep the height.
+          await expect(more).toBeVisible();
+          await expect(toolbar.getByRole("button", { name: "Zoom in" })).toHaveCount(0);
+          expect((await toolbar.boundingBox())!.height).toBeLessThan(zoom.viewport.height / 4);
+        } else await expect(more).toHaveCount(0);
         const idle = await unreachableControls(page);
         await testInfo.attach(`${zoom.name}-idle.json`, { body: JSON.stringify(idle, null, 2) });
-        expect(idle.reached).toBeGreaterThan(15);
-        expect(idle.problems.filter(outsideKnown400)).toEqual([]);
+        expect(idle.reached).toBeGreaterThan(short ? 10 : 15);
+        expect(idle.problems).toEqual([]);
 
         // Select, edit and close the inspector by keyboard at this zoom.
         await selectHeadingByKeyboard(page);
@@ -777,16 +908,97 @@ for (const zoom of [
         await testInfo.attach(`${zoom.name}-inspector.json`, {
           body: JSON.stringify(withInspector, null, 2),
         });
-        expect(withInspector.problems.filter(outsideKnown400)).toEqual([]);
-        const color = inspector.getByRole("textbox", { name: "color", exact: true });
+        expect(withInspector.problems).toEqual([]);
+        const color = inspector.getByRole("textbox", { name: "Color", exact: true });
         await tabTo(page, color);
+        await expectOnScreen(color);
+        // Its visible label is in view with it, not scrolled or clipped away.
+        expect(await isOnScreen(inspector.locator('[data-property="color"] label'))).toBe(true);
         await typeStyle(page, "rgb(0, 120, 0)");
         await expect.poll(async () => (await frame()).revision).toBe(2);
-        await expect(color).toBeFocused();
+        await expectOnScreen(color);
         await tabTo(page, inspector.getByRole("button", { name: "Close inspector" }), "Shift+Tab");
         await page.keyboard.press("Enter");
         await expect(inspector).toBeHidden();
-        await expect(rovingRow(page)).toBeFocused();
+        await expectOnScreen(rovingRow(page));
+
+        if (short) {
+          // The overflow menu: zoom steps keep it open; an action, or a dialog
+          // it opened, returns focus to the trigger.
+          const zoomLabel = () =>
+            page.getByRole("menuitem", { name: /^Zoom \d+%\. Reset to 100%$/ }).textContent();
+          await tabTo(page, more, "Shift+Tab");
+          await page.keyboard.press("Enter");
+          const menu = page.getByRole("menu");
+          await expect(menu).toBeVisible();
+          const before = await zoomLabel();
+          await arrowTo(page, menu.getByRole("menuitem", { name: "Zoom in" }));
+          await expectOnScreen(menu.getByRole("menuitem", { name: "Zoom in" }));
+          await page.keyboard.press("Enter");
+          await expect(menu).toBeVisible();
+          await expect.poll(zoomLabel).not.toBe(before);
+          await page.keyboard.press("Escape");
+          await expect(menu).toBeHidden();
+          await expectSettledFocus(page, more);
+
+          // Checkbox tools run after closing the menu, update their checked
+          // state, and leave focus on the trigger for the next action.
+          for (const [name, activeName] of [
+            ["Preview mode", "Exit preview mode"],
+            ["Design history", "Design history"],
+          ]) {
+            await page.keyboard.press("Enter");
+            const item = menu.getByRole("menuitemcheckbox", { name, exact: true });
+            await arrowTo(page, item);
+            await expect(item).toHaveAttribute("aria-checked", "false");
+            await page.keyboard.press("Enter");
+            await expect(menu).toBeHidden();
+            await expectSettledFocus(page, more);
+            if (name === "Preview mode")
+              await expect(
+                page.getByRole("button", { name: "Exit preview", exact: true }),
+              ).toBeVisible();
+            else
+              await expect(
+                page.getByRole("complementary", { name: "Design history" }),
+              ).toBeVisible();
+            await page.keyboard.press("Enter");
+            const active = menu.getByRole("menuitemcheckbox", { name: activeName, exact: true });
+            await arrowTo(page, active);
+            await expect(active).toHaveAttribute("aria-checked", "true");
+            await page.keyboard.press("Enter");
+            await expect(menu).toBeHidden();
+            await expectSettledFocus(page, more);
+            if (name === "Preview mode")
+              await expect(
+                page.getByRole("button", { name: "Exit preview", exact: true }),
+              ).toBeHidden();
+            else
+              await expect(
+                page.getByRole("complementary", { name: "Design history" }),
+              ).toBeHidden();
+            await page.keyboard.press("Enter");
+            await arrowTo(page, menu.getByRole("menuitemcheckbox", { name, exact: true }));
+            await expect(menu.getByRole("menuitemcheckbox", { name, exact: true })).toHaveAttribute(
+              "aria-checked",
+              "false",
+            );
+            await page.keyboard.press("Escape");
+            await expectSettledFocus(page, more);
+          }
+
+          await page.keyboard.press("Enter");
+          const exportItem = menu.getByRole("menuitem", { name: "Export design to repository" });
+          await arrowTo(page, exportItem);
+          await expectOnScreen(exportItem);
+          await page.keyboard.press("Enter");
+          const dialog = page.getByRole("dialog", { name: "Export design to repository" });
+          await expect(dialog).toBeVisible();
+          await expect(dialog.getByRole("combobox", { name: "Folder" })).toBeFocused();
+          await page.keyboard.press("Escape");
+          await expect(dialog).toBeHidden();
+          await expectSettledFocus(page, more);
+        }
         await expectFocusNeverLost(page);
       });
     } finally {

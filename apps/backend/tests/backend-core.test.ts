@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { __testing as commandTesting } from "../src/core/commands";
 import { OrkestratorBackend } from "../src/core/index";
 import { BackendRuntime } from "../src/core/backend-runtime";
 
@@ -15,7 +14,6 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
-  commandTesting.resetOpenCodeHostStart();
   await Promise.all(
     tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );

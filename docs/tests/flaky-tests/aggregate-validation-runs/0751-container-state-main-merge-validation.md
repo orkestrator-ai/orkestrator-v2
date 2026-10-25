@@ -1,7 +1,7 @@
 # Container state observation main merge validation
 
 - **ID:** 0751
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Parents:** feature `66a9736cc0c663bef147a65fc2d158e1951482dd` and main `d6ed0717d00a9a04ba658ba6c50e0978bc2011a6`, common ancestor `0014505caeed69395b3cc996dd541fcc6df12c23`.
 - **Scope:** the combined merge delta spans backend, desktop, renderer, bridges, Docker, CLI scenarios, protocol and repository tests. The original five conflicted paths and parent IDs were retained before staging in local Git metadata; validation covers the merged result.
@@ -83,3 +83,7 @@ The final focused merged-runtime check, `mise run test:logged -- --name merge-ru
 - **Platform scope:** dedicated Electron, live Docker and iOS scenarios were not repeated for the incoming main delta, which changes none of those platform/lifecycle implementations. The combined backend, bridge and package suites cover their unit and contract paths; the earlier platform outcomes above retain their original dispositions.
 - **Final repository result:** `mise run test:logged -- --name refresh-suite -- mise run test` completed with exit 1 after 510.3 s workspace execution. Root/support passed all 3,382 tests; all bridges and the pinned Codex protocol check passed. Web passed 9,431 tests with ten skips. Backend reported 10,796 passed, 116 skipped and fourteen failed across 10,926 tests in 644 files (414.93 s). The only workspace failure reports were the fourteen OpenCode version assertions described above; the complete conformance owner reproduced them with 56 passes and fourteen failures in 3.10 s.
 - **Refresh evidence:** host temporary group artifacts `orkestrator-test-run.Fc1bqg/`, outer `orkestrator-test-run.4SP4a4/refresh-suite.log.gz`, and `orkestrator-test-run.ATR4zJ/refresh-opencode-policy-owner.log.gz`. These failed exits remain recorded. The remote main head was rechecked and still matched `465e4521e` before committing.
+
+## Triage 2026-10-25
+
+Resolved: the final refresh through `465e4521e` failed only on the fourteen OpenCode assertions, and the OpenCode `1.19.0` vs `1.19.4` assertions are fixed by #1217 (`95c9cb46a`): `apps/backend/src/core/conformance-execution-policy.test.ts:143` now compares with `PINNED_TOOLCHAIN_VERSIONS.opencode`. The earlier merge suite ran beside Docker, browser and Electron validation; its failures are tracked in 0771, [0192](../environments-and-containers/0192-firewall-bootstrap-shell-timeout.md)/[0632](../environments-and-containers/0632-firewall-policy-probe-budget.md), 0259, [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md), 0227, 0260 and 0122. `tests/unit/workspace-setup-preserve.test.ts` (one five-second timeout, passed alone) has no owner case; it is reported to the lead.

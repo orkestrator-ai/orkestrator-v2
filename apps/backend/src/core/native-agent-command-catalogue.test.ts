@@ -185,6 +185,50 @@ describe("NativeAgentCommandCatalogueCache", () => {
     expect(reads).toHaveBeenCalledTimes(3);
   });
 
+  test("a list awaiting its session's attach says so, and keeps saying so through a failure", async () => {
+    const h = harness();
+    let fail = false;
+    const source = provider(async () => {
+      if (fail) throw new Error("boom");
+      return { ...catalogue([row("/template")]), status: "stale", attachPending: true };
+    });
+    const first = await h.cache.read(KEY, "env-1", source, "session-1");
+    expect(first.state).toMatchObject({ status: "stale", attachPending: true });
+    expect(first.state.error).toBeUndefined();
+
+    // The rows kept after a failed re-read are still the pre-attach ones.
+    fail = true;
+    h.advance(30_001);
+    await h.cache.read(KEY, "env-1", source, "session-1");
+    await Bun.sleep(0);
+    expect(h.cache.peek(KEY)!.state).toMatchObject({
+      status: "stale",
+      attachPending: true,
+      error: { code: "provider-error" },
+    });
+
+    // Once the session attached, the ready list drops it.
+    const attached = provider(async () => catalogue([row("/template"), row("/extension")]));
+    h.advance(5_001);
+    await h.cache.read(KEY, "env-1", attached, "session-1");
+    await Bun.sleep(0);
+    const ready = h.cache.peek(KEY)!;
+    expect(ready.state.status).toBe("ready");
+    expect(ready.state.attachPending).toBeUndefined();
+  });
+
+  test("ignores attachPending on a list that is not stale", async () => {
+    const { cache } = harness();
+    const result = await cache.read(
+      KEY,
+      "env-1",
+      provider(async () => ({ ...catalogue([row("/a")]), attachPending: true })),
+      "session-1",
+    );
+    expect(result.state.status).toBe("ready");
+    expect(result.state.attachPending).toBeUndefined();
+  });
+
   test("revision advances only for meaningful changes", async () => {
     const h = harness();
     const source = provider(async () => catalogue([row("/same")]));

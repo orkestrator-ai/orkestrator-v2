@@ -1,4 +1,3 @@
-import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import {
   isReviewValidationRun,
@@ -264,7 +263,10 @@ export async function controlReviewValidation(
   context: CommandContext,
   resultIdValue?: string,
 ): Promise<ReviewValidationRun> {
-  const release = action === "start" ? beginEnvironmentMutation(environmentId) : undefined;
+  const release =
+    action === "start"
+      ? context.runtime.environments.fence.beginMutation(environmentId)
+      : undefined;
   try {
     if (action === "start" && (await context.storage.getEnvironment(environmentId))?.worktreeMove)
       throw new Error("Move recovery is pending. Restart Orkestrator before starting validation.");
@@ -293,7 +295,7 @@ async function controlReviewValidationOnce(
   if (!environment) throw new Error("Review validation environment is unavailable");
   if (action === "start" && (environment.status !== "running" || environment.deletionRequestedAt))
     throw new Error("Review validation requires a running environment");
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   if (action === "start")
     await ensureReviewPackageIsGitExcluded(
       environment,

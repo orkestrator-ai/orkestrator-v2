@@ -1,7 +1,7 @@
 # Native-agent collaborator merge validation
 
 - **ID:** 0699
-- **Status:** open
+- **Status:** environmental
 - **Date observed:** 2026-10-23
 - **Scope:** merged native-agent collaborator refactor and main through `e498ff5b6` (including multi-review evaluation and idle observation).
 - **Merge parents:** `de8ea27df8c694d184a001733f43bd8b40498a48` and `e498ff5b6a934d53f0742157aff4d10d04b9068f`.
@@ -130,3 +130,7 @@ Full suite command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD
 The sole aggregate failure was the registered Codex runtime-environment timeout, reproduced at 15005.86 ms. Its complete unchanged owner passed separately in 0.1 s (see case 0093 for the exact command, counts and evidence). This confirms intermittence, but the original full-suite exit remains 1. Full evidence is `orkestrator-test-run.Dm83Kv/`; wrapper evidence is `orkestrator-test-run.jIdcYh/merge2-tests.log.gz`, below the host temporary directory.
 
 This follow-up used the real-stack browser suite for renderer validation. No Electron main/preload/IPC or iOS changes were introduced by this merge delta; no separate Electron/iOS suite was added. Credentialed live-provider and live Tailscale transport qualification remained opt-in and were not enabled.
+
+## Triage 2026-10-25
+
+Environmental: the repository suite ran at a host load average of up to 91 on 18 cores, and the backend failures were deadline misses across eleven unrelated owners. Seven owners and the root GlobalSettings owner passed alone. Environment move also failed alone at that load (tracked in 0248/0249), and the Firefox favicon sink hit is [0697](../design-canvas-and-artifacts/0697-artifact-engine-firefox-favicon-sink-hit.md). Native branch selection is the deterministic failure in [0493](0493-component-browser-aggregate-timeout-cluster.md). The follow-up merge failed only on 0093, whose owner passed alone.

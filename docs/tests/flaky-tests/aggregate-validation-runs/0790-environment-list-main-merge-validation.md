@@ -59,3 +59,7 @@ Docker, live-provider, CLI-scenario and iOS qualification were not added: this m
 ## Final handoff checks
 
 The flake-registry integrity test passed after adding this record (`merge-flake-index`, 0.2 s). Formatting, index-link checks and the conflict-marker scan were repeated before the merge commit. The original aggregate/browser failures retain their nonzero results; owner passes do not turn those runs green. The native branch-selection and Electron realm-focus assertions remain unresolved.
+
+## Triage 2026-10-25
+
+Stays open. Mermaid (0512), terminal history (0213), browser owners (0342, 0517, 0153, 0174, 0237) and gateway failures (0224, 0494) are tracked; native branch selection is the deterministic failure in [0493](0493-component-browser-aggregate-timeout-cluster.md). Next step: add a web-ui owner case for `apps/web/src/components/federation/RemoteWorkspaceRegion.test.tsx` (five `postMessage` calls instead of zero at line 819; owner passed alone in 2.7 s), and an Electron case for `workspace-realm-electron.spec.ts:409` (Agent information never focused; reproduces alone, so likely not a flake). Then mark this record resolved.

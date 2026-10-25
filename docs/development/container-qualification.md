@@ -47,7 +47,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
-| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
+| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`), design export into an Orkestrator container (`design-container-export.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
@@ -56,7 +56,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm` |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, then the benchmarks (C28), uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
 
 `test:logged` kills a command that prints nothing for 300 s, and Bun prints
@@ -325,6 +325,10 @@ the report records no commands, paths or contents. It prints a table and
 writes JSON to `output/benchmarks/` (git-ignored), removing its own reports
 older than 30 days.
 
+Runtimes get the built-in default budget, as on a new install; set
+`ORKESTRATOR_BENCHMARK_UNRESTRICTED=1` to run them without limits. The report
+records which (`budget`) and the limits Docker applied (`appliedLimits`).
+
 The harness asserts only that rebuilds succeed and no log follower survives.
 Compare the report with these targets by hand. They were set on Linux
 x86_64, 12 CPUs, Docker Engine 29.7.2, no resource budget, restricted mode
@@ -345,6 +349,50 @@ is fixed, or the reason is recorded, before it merges.
 
 Never clear a user's global Docker or cache state to manufacture a cold run;
 "cold" means a new network, volumes and staged inputs per environment.
+
+### Workload budgets
+
+`container-workload-budget.ts` measures realistic workloads in fresh
+containers under each budget condition, on whatever Docker the machine
+talks to. That includes a remote Linux Engine through
+`DOCKER_HOST=ssh://user@host`, because all timing happens inside the
+container.
+
+```bash
+mise exec -- bun apps/backend/scripts/container-workload-budget.ts \
+  --image orkestrator-v2:dev-<hash> \
+  --workloads browser,browser-single,provider,build,combined \
+  --budget budget=2,4096,1024 --budget default=null,8192,4096 [--repeat 3]
+```
+
+Each run creates a container with the condition's `--cpus`, `--memory`
+(equal `--memory-swap`), `--pids-limit` and the `--shm-size` the backend
+would pass, and bypasses the entrypoint. The workloads live in
+`apps/backend/scripts/container-workload/`:
+
+- browser: Playwright Chromium, 3 browsers × 2 heavy pages with tall
+  screenshots.
+- browser-single: one browser, the same 2 pages.
+- provider: 3 Claude Code CLIs × 3 turns, each turn making real Bash and
+  Read tool calls against a loopback mock of the Messages API. No
+  credentials are needed.
+- build: this checkout's HEAD. A cold `bun install` from the container's
+  own empty cache, then a warm reinstall, a Turbo typecheck and a Vite
+  build. An image with a different Bun gets the pinned one first, untimed.
+- combined: the build, one browser and two CLIs at once.
+
+A fork-free sampler records peak anonymous memory, `shmem` and PIDs every
+250 ms. The kernel's `memory.peak`, `pids.peak`, `memory.events` and
+`cpu.stat` are read at the end. The JSON report under `output/benchmarks/`
+has sizes, counts and durations only. Containers are labelled
+`app=orkestrator-workload-budget` and removed.
+
+The built-in default ([container-lifecycle.md](../architecture/container-lifecycle.md#built-in-default))
+was chosen from the 2026-10-25 runs on Docker Desktop arm64 and Linux
+Engine amd64. Their results are in
+[0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md#evidence-2026-10-25).
+Rerun them when a workload grows (a new browser default, a heavier build),
+before you change the default.
 
 ### Exec cost and container change signals
 

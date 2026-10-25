@@ -10,7 +10,10 @@ test.each([
   ["500", 500],
   ["1", 100],
   ["9000", 5000],
+  // Absent, empty, zero and non-numeric values all keep the production 5s grace.
   [undefined, 5000],
+  ["", 5000],
+  ["0", 5000],
   ["invalid", 5000],
 ])("exec worker applies TERM-to-KILL grace %s", async (configured, graceMs) => {
   let now = 0;

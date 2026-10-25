@@ -25,6 +25,7 @@ import { afterEach, describe, expect, jest, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { createServer } from "node:net";
+import { createInterface } from "node:readline";
 
 import { promises as fs } from "node:fs";
 
@@ -214,12 +215,16 @@ export async function spawnBridge(
     stateDirectory?: string;
     env?: NodeJS.ProcessEnv;
   } = {},
+  startup: {
+    reservePort?: () => Promise<number>;
+    spawnChild?: (env: NodeJS.ProcessEnv) => ChildProcessWithoutNullStreams;
+    timeoutMs?: number;
+  } = {},
 ): Promise<{
   child: ChildProcessWithoutNullStreams;
   base: string;
   headers: Record<string, string>;
 }> {
-  const port = options.port ?? (await unusedPort());
   const token = options.token ?? "integration-test-token";
   // A live Orkestrator process exports ACP_STATE_DIR. Inheriting it would
   // restore that environment's sessions into this test bridge, so a
@@ -231,7 +236,6 @@ export async function spawnBridge(
     ACP_PROVIDER: "cursor",
     ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
     ACP_BRIDGE_TOKEN: token,
-    PORT: String(port),
     HOSTNAME: "127.0.0.1",
     ACP_STATE_DIR: stateDirectory,
     // The bridge fingerprints Grok's MCP configuration at every child spawn;
@@ -274,27 +278,65 @@ export async function spawnBridge(
       sessionUpdateMethods: ["cursor/session/update"],
     });
   }
-  const child = spawn(process.execPath, [resolve(here, "index.ts")], {
-    cwd: resolve(here, "../../.."),
-    env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  children.add(child);
-  const base = `http://127.0.0.1:${port}`;
-  await waitFor(
-    async () =>
-      nativeFetch(`${base}/global/health`)
-        .then((response) => response.ok)
-        .catch(() => false),
-    Boolean,
-    BRIDGE_STARTUP_TIMEOUT_MS,
-  );
-  return {
-    child,
-    base,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-  };
+  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  // The released reservation can be claimed by another worker, even one with
+  // the same token. Require this child's post-bind announcement before probing
+  // authentication. A child that loses the bind is retried on a fresh port.
+  const launch =
+    startup.spawnChild ??
+    ((childEnv: NodeJS.ProcessEnv) =>
+      spawn(process.execPath, [resolve(here, "index.ts")], {
+        cwd: resolve(here, "../../.."),
+        env: childEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      }));
+  for (let attempt = 1; ; attempt += 1) {
+    const port = options.port ?? (await (startup.reservePort ?? unusedPort)());
+    const child = launch({ ...env, PORT: String(port) });
+    children.add(child);
+    const base = `http://127.0.0.1:${port}`;
+    let listening = false;
+    const lines = createInterface({ input: child.stdout });
+    lines.on("line", (line) => {
+      if (line.startsWith("ACP bridge (") && line.endsWith(`) listening on 127.0.0.1:${port}`)) {
+        listening = true;
+      }
+    });
+    let ready: "ready" | "exited" | "starting";
+    try {
+      ready = await waitFor(
+        async () => {
+          if (child.exitCode !== null || child.signalCode !== null) return "exited" as const;
+          if (!listening) return "starting" as const;
+          const response = await nativeFetch(`${base}/global/auth-check`, { headers }).catch(
+            () => undefined,
+          );
+          return response?.ok === true ? ("ready" as const) : ("starting" as const);
+        },
+        (state) => state !== "starting",
+        startup.timeoutMs ?? BRIDGE_STARTUP_TIMEOUT_MS,
+      );
+    } catch (error) {
+      await stopChild(child);
+      throw error;
+    } finally {
+      lines.close();
+      // readline pauses its input on close. Keep draining child logs, including
+      // diagnostics listeners that a test attaches after startup.
+      child.stdout.resume();
+    }
+    if (ready === "ready" && child.exitCode === null && child.signalCode === null) {
+      return { child, base, headers };
+    }
+    await stopChild(child);
+    if (options.port !== undefined || attempt === MAX_BRIDGE_START_ATTEMPTS) {
+      throw new Error(`ACP bridge exited while starting on port ${port} (attempt ${attempt})`);
+    }
+  }
 }
+
+/** Fresh-port attempts before a bridge that keeps exiting at startup fails. */
+const MAX_BRIDGE_START_ATTEMPTS = 3;
 
 export async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   try {

@@ -8,6 +8,7 @@ import {
   type ProviderSendOptions,
 } from "./agent-provider-contract.js";
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
+import { withoutRetiredParameterValues } from "./native-agent-retired-parameters.js";
 
 /**
  * The JSON body of `POST /session/:id/prompt` for an HTTP bridge.
@@ -31,7 +32,7 @@ export function bridgePromptBody(
     attachments,
     outputSchema: options.schema,
     readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
-    parameterValues: options.parameterValues,
+    parameterValues: withoutRetiredParameterValues(options.parameterValues),
     persistDefaults: options.persistDefaults,
     ...(options.allowProviderCommands === undefined
       ? {}

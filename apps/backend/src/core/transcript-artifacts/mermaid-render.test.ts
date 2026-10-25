@@ -138,6 +138,12 @@ describe("mermaid rendering", () => {
       const concurrent = new TranscriptPreviewRunner({
         isolation: "process",
         admission: { runningGlobal: 5 },
+        // These cases assert the size limits, not the render deadline (the
+        // watchdog case below owns that). Five Chromium layouts at once on a
+        // four-core CI runner took the 2,000-note diagram past the production
+        // 5 s deadline, so it failed as `render_timeout` before its SVG was
+        // counted. Every other bound stays at its production value.
+        budgets: { mermaidRenderMs: 20_000 },
       });
       try {
         const [atLimit, over, at250, over250, tooMany] = await Promise.all([

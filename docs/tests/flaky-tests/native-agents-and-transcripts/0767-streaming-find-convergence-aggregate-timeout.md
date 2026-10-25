@@ -10,3 +10,9 @@
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=53198 mise run test:logged -- --name main-refresh-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/playwright/main-refresh-streaming-owner` passed (44.6 s logged).
 - **Evidence:** host temporary artifact `orkestrator-test-run.qIrBtp/main-refresh-browser.log.gz`; passing owner summary `orkestrator-test-run.FUNJwm/summary.json`. Original trace under `output/playwright/test-results/StreamingTranscript-scroll-bd9d1-eaming-reapplies-highlights-desktop-chromium/`.
 - **Assessment:** the complete unchanged owner pass confirms an intermittent observation on the merged tree. Aggregate contention or delayed find reconciliation is a hypothesis; the cause is not established. No implementation, assertion, timeout or skip changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** single observation, in the nine-worker component suite.
+- **Next step:** run the owner with two workers and `--repeat-each=5` to see whether it reproduces without the nine-worker suite; if not, and it does not recur, reclassify it as environmental (see [0382](../web-ui/0382-component-browser-parallel-load.md)).

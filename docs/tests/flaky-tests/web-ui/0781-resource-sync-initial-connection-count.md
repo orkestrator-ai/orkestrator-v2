@@ -12,3 +12,9 @@
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.8ZKWYk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name merge-0043-rerun-resource-sync -- bun test --cwd apps/web ./src/lib/resource-sync.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 4.7 s).
 - **Hypothesis:** timing sensitivity under concurrent host load; the complete unchanged owning file passed with one worker. No root cause has been established. No assertion, deadline, or skip was changed.
+
+## Triage 2026-10-25
+
+- **Disposition:** open.
+- **Evidence:** the test waits a fixed `tick(10)` before `resync.mockClear()` (`resource-sync.test.ts:451`). If the initial zero-delay fallback resync runs later than that, it counts against the reconnect assertion.
+- **Next step:** wait until the initial resync has been seen before clearing the mock.

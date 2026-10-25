@@ -1,5 +1,7 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { AppConfig } from "@/types";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { portalStore } from "@/lib/portal/portal-store";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -536,6 +538,31 @@ describe("backend setup wrappers", () => {
       ["get_agent_model_catalog_cache"],
       ["cache_agent_model_catalog", { agent: "claude", models: cache.claude.models }],
     ]);
+  });
+
+  test("seeds the workspace catalogue when requested", async () => {
+    const cache = { schemaVersion: 1 as const };
+    invokeMock.mockResolvedValue(cache);
+
+    await expect(getAgentModelCatalogCache(undefined, { seed: true })).resolves.toEqual(cache);
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_model_catalog_cache", { seed: true });
+  });
+
+  test("reads and seeds the selected machine's catalogue", async () => {
+    const cache = { schemaVersion: 1 as const };
+    const machine = "catalogue-node" as BackendId;
+    const remote = spyOn(portalStore, "invokeOnNode").mockResolvedValue(cache);
+    try {
+      await expect(getAgentModelCatalogCache(machine)).resolves.toEqual(cache);
+      await expect(getAgentModelCatalogCache(machine, { seed: true })).resolves.toEqual(cache);
+      expect(remote.mock.calls).toEqual([
+        [machine, "get_agent_model_catalog_cache", {}],
+        [machine, "get_agent_model_catalog_cache", { seed: true }],
+      ]);
+      expect(invokeMock).not.toHaveBeenCalled();
+    } finally {
+      remote.mockRestore();
+    }
   });
 
   test("distinguishes successful, empty, and failed ensured catalogue outcomes", async () => {

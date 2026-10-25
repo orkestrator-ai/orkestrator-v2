@@ -22,7 +22,10 @@
  * view and back to the editor. Capture pixels and the selection highlight
  * stay on the target at preview zoom 0.8, 1 and 1.5 and at DPR 1 and 2.
  */
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
+import { closeElectronWithin } from "./design-electron-cleanup";
+import { expect, test } from "./electron-fixtures";
+import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -254,7 +257,7 @@ async function closeElectron(): Promise<void> {
       } catch {}
     }
   }
-  await app.close().catch(() => undefined);
+  await closeElectronWithin(app, 10_000);
   await expect.poll(() => children.filter(alive).length, { timeout: 20_000 }).toBe(0);
 }
 
@@ -307,6 +310,23 @@ function inPreview<T>(script: string): Promise<T> {
   ) as Promise<T>;
 }
 
+/**
+ * As `inPreview`, but on the main frame directly: `webContents.executeJavaScript`
+ * waits for a loading page to finish, and a late web font holds the load event.
+ */
+function inPreviewNow<T>(script: string): Promise<T> {
+  return s().app.evaluate(
+    async ({ webContents }, { origin, script }) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin));
+      if (!contents) throw new Error("Fixture preview web contents not found");
+      return contents.mainFrame.executeJavaScript(script, true);
+    },
+    { origin: s().fixture.url, script },
+  ) as Promise<T>;
+}
+
 /** Trusted pointer input, delivered by Chromium like a real click. */
 async function trustedClick(x: number, y: number): Promise<void> {
   await s().app.evaluate(
@@ -325,8 +345,12 @@ async function trustedClick(x: number, y: number): Promise<void> {
   );
 }
 
-async function rectOf(selector: string, index = 0): Promise<WebAnnotationRect | null> {
-  return inPreview(
+async function rectOf(
+  selector: string,
+  index = 0,
+  run: typeof inPreview = inPreview,
+): Promise<WebAnnotationRect | null> {
+  return run(
     `(() => { const el = document.querySelectorAll(${JSON.stringify(selector)})[${index}]; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`,
   );
 }
@@ -383,6 +407,37 @@ async function navigate(route: string): Promise<void> {
   await waitForFixturePage(route);
 }
 
+/**
+ * The fixture's page script ran, without waiting for the load event: a late
+ * web font holds `document.readyState` short of `complete` until it settles.
+ */
+async function waitForFixtureScript(pathname: string): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        inPreviewNow<boolean>(
+          `Boolean(window.__annotationFixture) && location.pathname === ${JSON.stringify(pathname)}`,
+        ).catch(() => false),
+      { timeout: 20_000, intervals: [50] },
+    )
+    .toBe(true);
+}
+
+/**
+ * Reload in the page and wait only for the new document's script. The
+ * preview's own `reload` resolves after the load event, which a late font holds.
+ */
+async function reloadFixtureScript(pathname: string): Promise<void> {
+  await inPreview("window.__previousDocument = true; setTimeout(() => location.reload(), 0); true");
+  await expect
+    .poll(() => inPreviewNow<boolean>("window.__previousDocument !== true").catch(() => false), {
+      timeout: 20_000,
+      intervals: [50],
+    })
+    .toBe(true);
+  await waitForFixtureScript(pathname);
+}
+
 async function waitForFixturePage(route: string): Promise<void> {
   const expected = new URL(route, s().fixture.url);
   await expect
@@ -405,19 +460,26 @@ async function captureElement(selector: string, index = 0, zoom = 1, tabId = TAB
     environmentId: s().environmentId,
   });
   expect(started.status).toBe("selecting");
+  const selectedAt = Date.now();
   await trustedClick((rect.x + rect.width / 2) * zoom, (rect.y + rect.height / 2) * zoom);
-  let status: BrowserPreviewSelectionStatus = started;
-  await expect
-    .poll(
-      async () => {
-        status = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", tabId);
-        return status.status;
-      },
-      { timeout: 20_000 },
-    )
-    .toMatch(/^(captured|error)$/);
+  const status = await awaitCaptureEnd(tabId);
   if (status.status !== "captured") throw new Error(`Capture failed: ${JSON.stringify(status)}`);
+  clientTimings.selectionToSpool.push(Date.now() - selectedAt);
   return { descriptor: status.pending, rect: rect };
+}
+
+/** Client-side latency, recorded per capture for the baseline test. */
+const clientTimings = { selectionToSpool: [] as number[], spoolToSaved: [] as number[] };
+
+/** Poll capture status tightly (25 ms) so the end is timed, not the poll interval. */
+async function awaitCaptureEnd(tabId: string) {
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const status = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", tabId);
+    if (status.status === "captured" || status.status === "error") return status;
+    if (Date.now() > deadline) throw new Error(`Capture did not end: ${JSON.stringify(status)}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 async function readPending(captureId: string): Promise<BrowserPreviewPendingCapture> {
@@ -432,6 +494,7 @@ async function readPending(captureId: string): Promise<BrowserPreviewPendingCapt
 /** The renderer's acknowledged transfer: receipt check, asset stage, create, ack. */
 async function saveCapture(captureId: string, body: string): Promise<Receipt> {
   const environmentId = s().environmentId;
+  const startedAt = Date.now();
   const record = await readPending(captureId);
   const operationId = `create-${captureId}`;
   const existing = await invoke<{ receipt: Receipt | null }>(C.receipt, {
@@ -456,6 +519,7 @@ async function saveCapture(captureId: string, body: string): Promise<Receipt> {
       capture: { ...record.capture, assetIds },
       body,
     });
+    clientTimings.spoolToSaved.push(Date.now() - startedAt);
   }
   await preview("acknowledgePendingCapture", {
     captureId,
@@ -582,6 +646,7 @@ exit 91
       VITE_ORKESTRATOR_PROFILE: profile.id,
     },
   });
+  ownProcessGroup(vite);
   const partial = { temporaryRoot, profile, profilePath, rendererUrl, vite } as Stack;
   stack = partial;
   await waitForUrl(rendererUrl);
@@ -631,11 +696,7 @@ test.afterAll(async () => {
   ).catch(() => "probe-unreadable");
   stack = null;
   await current.fixture?.stop().catch(() => undefined);
-  if (current.vite?.pid) {
-    try {
-      process.kill(-current.vite.pid, "SIGTERM");
-    } catch {}
-  }
+  if (current.vite) await stopProcessGroup(current.vite).catch(() => undefined);
   await rm(current.temporaryRoot, { recursive: true, force: true });
   expect(launches, "no Codex session/prompt launch through cleanup or relaunch").toBe("");
 });
@@ -1126,6 +1187,10 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
       environmentId: s().environmentId,
     });
 
+  // The selected text's immediate parent has no box of its own.
+  await inPreview(
+    `(() => { const paragraph = document.querySelector('[data-testid="long-text"]'); const span = document.createElement("span"); span.style.display = "contents"; span.append(...paragraph.childNodes); paragraph.append(span); return true; })()`,
+  );
   // Text: a native drag selection inside the long paragraph. It is taller
   // than the viewport, so align its top and drag along a line in the middle
   // of the viewport, clear of the capture hint and the edges.
@@ -1147,7 +1212,27 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
     // Exactly the page's own long text: nothing from neighbouring regions.
     expect(longText().includes(quote)).toBe(true);
   }
-  await saveCapture(text.descriptor.captureId, "Tighten this clause.");
+  const textNote = await saveCapture(text.descriptor.captureId, "Tighten this clause.");
+  const textPin = await pinQuery(textNote.annotationId);
+  await preview("showPins", { tabId: TAB_ID, pins: [textPin] });
+  expect(
+    await inPreview<string>(
+      `document.querySelector("[data-orkestrator-pins] [role='img']").style.display`,
+    ),
+  ).toBe("block");
+  // A range in a non-rendered subtree must still disappear.
+  await inPreview(
+    `document.querySelector('[data-testid="long-text"]').style.display = "none"; window.dispatchEvent(new Event("resize")); true`,
+  );
+  await expect
+    .poll(() =>
+      inPreview<string>(
+        `document.querySelector("[data-orkestrator-pins] [role='img']").style.display`,
+      ),
+    )
+    .toBe("none");
+  await preview("clearPins", TAB_ID);
+  await inPreview(`document.querySelector('[data-testid="long-text"]').style.display = ""; true`);
 
   // Region over the canvas chart; confirmed with Enter.
   expect((await start("region")).status).toBe("selecting");
@@ -1687,6 +1772,528 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       await restoreDirectPreview();
     }
   }
+});
+
+/** The pin query `showPins`/`showOnPage` take, built from the saved capture. */
+async function pinQuery(annotationId: string, number = 1) {
+  const { annotation } = await getAnnotation(annotationId);
+  const capture = await captureRecord(annotation.currentCaptureId);
+  return {
+    annotationId,
+    number,
+    target: capture.target,
+    route: capture.page.route,
+    capture: {
+      documentGeneration: capture.documentGeneration,
+      viewport: capture.geometry?.viewport ?? FIXTURE_VIEWPORT,
+    },
+  };
+}
+
+async function pinOnce(pin: Awaited<ReturnType<typeof pinQuery>>) {
+  const [result] = await preview<BrowserPreviewAnchorResult[]>("showPins", {
+    tabId: TAB_ID,
+    pins: [pin],
+  });
+  await preview("clearPins", TAB_ID);
+  return result!.resolution;
+}
+
+function inViewport(rect: WebAnnotationRect | null): boolean {
+  return (
+    rect !== null &&
+    rect.y >= 0 &&
+    rect.y + Math.min(rect.height, 40) <= FIXTURE_VIEWPORT.height &&
+    rect.width > 0
+  );
+}
+
+test("pins and Show on page stay on the target or become explicit offscreen, in a closed modal, and across a late-font shift", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(180_000);
+  const outcomes: string[] = [];
+  const note = (line: string) => outcomes.push(line);
+  try {
+    // Offscreen: a footer 2,400 px below the fold.
+    await navigate(ROUTE_VARIANTS.dialogs);
+    const footer = `[data-testid="${TEST_IDS.offscreenFooter}"]`;
+    const footerNote = await saveCapture(
+      (await captureElement(footer)).descriptor.captureId,
+      "Footer copy",
+    );
+    const footerPin = await pinQuery(footerNote.annotationId);
+    await inPreview("window.scrollTo(0, 0); true");
+    expect(inViewport(await rectOf(footer)), "footer starts offscreen").toBe(false);
+    const offscreen = await pinOnce(footerPin);
+    const offscreenVerdict = verdict(offscreen, await rectOf(footer));
+    note(`offscreen pin: ${offscreen.state}/${offscreen.rule} -> ${offscreenVerdict}`);
+    expect(offscreenVerdict).toBe("matched-correct");
+    const shown = await preview<{ outcome: string; navigated: boolean; resolution: any }>(
+      "showOnPage",
+      { tabId: TAB_ID, pin: footerPin, pins: [], timeoutMs: 10_000 },
+    );
+    note(`offscreen show on page: ${shown.outcome} navigated=${shown.navigated}`);
+    expect(shown).toMatchObject({ outcome: "shown", navigated: false });
+    // Its resolution is the pre-scroll rect; after the scroll a fresh pin
+    // must land on the footer, now in view.
+    expect(shown.resolution.state).toBe("matched");
+    await expect.poll(async () => inViewport(await rectOf(footer))).toBe(true);
+    expect(verdict(await pinOnce(footerPin), await rectOf(footer))).toBe("matched-correct");
+
+    // Modal: a button inside a <dialog> opened with showModal().
+    await inPreview("window.scrollTo(0, 0); true");
+    const opener = await settledRect(`[data-testid="${TEST_IDS.openDialog}"]`);
+    await trustedClick(opener.x + opener.width / 2, opener.y + opener.height / 2);
+    await expect
+      .poll(() =>
+        inPreview<boolean>(`document.querySelector('[data-testid="${TEST_IDS.dialog}"]').open`),
+      )
+      .toBe(true);
+    const confirm = `[data-testid="${TEST_IDS.dialogConfirm}"]`;
+    const modalNote = await saveCapture(
+      (await captureElement(confirm)).descriptor.captureId,
+      "Dialog save label",
+    );
+    const modalPin = await pinQuery(modalNote.annotationId);
+    const open = await pinOnce(modalPin);
+    note(`modal open pin: ${open.state}/${open.rule} -> ${verdict(open, await rectOf(confirm))}`);
+    expect(verdict(open, await rectOf(confirm))).toBe("matched-correct");
+    await inPreview(`document.querySelector('[data-testid="${TEST_IDS.dialog}"]').close(); true`);
+    // Closed: the element still matches by identity but renders no box, so no
+    // pin is drawn (not one at the page's corner) and Show on page says hidden.
+    const [closedResult] = await preview<BrowserPreviewAnchorResult[]>("showPins", {
+      tabId: TAB_ID,
+      pins: [modalPin],
+    });
+    const closed = closedResult!.resolution;
+    const badge = await inPreview<string>(
+      `(() => { const badge = document.querySelector("[data-orkestrator-pins] [role='img']"); return badge ? badge.style.display : "absent"; })()`,
+    );
+    await preview("clearPins", TAB_ID);
+    note(`modal closed pin: ${closed.state}/${closed.rule} badge=${badge}`);
+    expect(closed).toMatchObject({ state: "matched", rect: null });
+    expect(badge).toBe("none");
+    const closedShow = await preview<{ outcome: string; resolution: any }>("showOnPage", {
+      tabId: TAB_ID,
+      pin: modalPin,
+      pins: [],
+      timeoutMs: 5_000,
+    });
+    note(`modal closed show on page: ${closedShow.outcome}/${closedShow.resolution.state}`);
+    expect(closedShow.outcome).toBe("hidden");
+    record(
+      testInfo,
+      "modal-closed",
+      `${closed.state}, badge ${badge}; show on page ${closedShow.outcome}`,
+    );
+
+    // Late font. While a font holds the load event, main resolves pins only
+    // after load, so they land on the target after its shift.
+    const target = `[data-testid="${TEST_IDS.fontShiftTarget}"]`;
+    const settled = () =>
+      inPreviewNow<boolean>(`document.body.classList.contains("fonts-settled")`);
+    const targetNow = () => rectOf(target, 0, inPreviewNow);
+    const blocking = `${ROUTE_VARIANTS.lateFont}?delay=2500`;
+    await navigate(blocking);
+    await expect.poll(settled, { timeout: 15_000 }).toBe(true);
+    const blockingNote = await saveCapture(
+      (await captureElement(target)).descriptor.captureId,
+      "Release notes button",
+    );
+    const blockingPin = await pinQuery(blockingNote.annotationId);
+    await reloadFixtureScript(ROUTE_VARIANTS.lateFont);
+    expect(await settled(), "font still loading").toBe(false);
+    const unshifted = await targetNow();
+    const afterLoad = await pinOnce(blockingPin);
+    const shifted = await targetNow();
+    expect(await settled(), "the pin resolved after the font settled").toBe(true);
+    expect(shifted!.y - unshifted!.y, "the font shift moved the target down").toBeGreaterThan(30);
+    note(
+      `font holding load: pin ${afterLoad.state}/${afterLoad.rule} -> ${verdict(afterLoad, shifted)} after a ${Math.round(shifted!.y - unshifted!.y)} px shift`,
+    );
+    expect(verdict(afterLoad, shifted)).toBe("matched-correct");
+
+    // A font a script loads after the load event: a pin drawn before the
+    // shift follows it through main's live re-resolution.
+    const lazy = `${ROUTE_VARIANTS.lateFont}?delay=2500&lazy=1`;
+    await navigate(lazy);
+    await expect.poll(settled, { timeout: 15_000 }).toBe(true);
+    const lazyNote = await saveCapture(
+      (await captureElement(target)).descriptor.captureId,
+      "Release notes button (lazy font)",
+    );
+    const lazyPin = await pinQuery(lazyNote.annotationId);
+    await reloadFixtureScript(ROUTE_VARIANTS.lateFont);
+    const [drawn] = await preview<BrowserPreviewAnchorResult[]>("showPins", {
+      tabId: TAB_ID,
+      pins: [lazyPin],
+    });
+    const before = await targetNow();
+    expect(await settled(), "pin drawn before the font settled").toBe(false);
+    expect(verdict(drawn!.resolution, before)).toBe("matched-correct");
+    await expect.poll(settled, { timeout: 15_000 }).toBe(true);
+    const after = await targetNow();
+    expect(after!.y - before!.y, "the font shift moved the target down").toBeGreaterThan(30);
+    // The drawn outline (what the user sees) follows the target.
+    const outline = () =>
+      inPreviewNow<WebAnnotationRect | null>(
+        `(() => { const badge = document.querySelector("[data-orkestrator-pins] [role='img']"); const box = badge && badge.previousElementSibling; if (!box || box.style.display === "none") return null; return { x: parseFloat(box.style.left), y: parseFloat(box.style.top), width: parseFloat(box.style.width), height: parseFloat(box.style.height) }; })()`,
+      );
+    await expect
+      .poll(async () => verdict({ ...drawn!.resolution, rect: await outline() }, after), {
+        timeout: 10_000,
+      })
+      .toBe("matched-correct");
+    await preview("clearPins", TAB_ID);
+    note(
+      `lazy font: pin drawn before the shift, live pin matched-correct after a ${Math.round(after!.y - before!.y)} px shift`,
+    );
+  } finally {
+    record(testInfo, "pin-outcomes", outcomes.join("; "));
+    console.log(`[annotation-pins] ${outcomes.join("; ")}`);
+  }
+});
+
+/** Hold a codex destination with a compose draft and send one held request. */
+async function heldRequest(annotationId: string) {
+  const agentTabId = "annotation-result-codex";
+  const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
+    environmentId: s().environmentId,
+  });
+  await invoke("save_pane_layout", {
+    environmentId: s().environmentId,
+    expectedRevision: current?.revision ?? 0,
+    layout: {
+      version: PANE_LAYOUT_VERSION,
+      containerId: null,
+      activePaneId: "annotation-result-pane",
+      root: {
+        kind: "leaf",
+        id: "annotation-result-pane",
+        activeTabId: agentTabId,
+        tabs: [
+          {
+            id: agentTabId,
+            type: "agent-native",
+            nativeAgentData: { environmentId: s().environmentId, platform: "codex" },
+          },
+        ],
+      },
+    },
+  });
+  const { options } = await invoke<{
+    options: Array<{ destination: { tabId: string; logicalSessionKey: string } }>;
+  }>(C.destinations, { environmentId: s().environmentId });
+  const option = options.find((candidate) => candidate.destination.tabId === agentTabId);
+  expect(option, "codex tab offered as a destination").toBeTruthy();
+  const draftKey = `codex:${s().environmentId}:${encodeURIComponent(option!.destination.logicalSessionKey)}`;
+  await invoke("save_compose_draft", {
+    draftKey,
+    ownerType: "environment",
+    ownerId: s().environmentId,
+    value: { text: "Held by the annotation suite", mentions: [], attachments: [] },
+  });
+  const { annotation } = await getAnnotation(annotationId);
+  const preparation = await invoke<{ preparationId: string; bodyHash: string }>(C.requestPrepare, {
+    environmentId: s().environmentId,
+    operation: "implement",
+    destination: option!.destination,
+    annotations: [
+      {
+        annotationId,
+        expectedContentRevision: annotation.contentRevision,
+        expectedCaptureId: annotation.currentCaptureId,
+      },
+    ],
+    instruction: "",
+  });
+  const { request } = await invoke<{ request: WebAnnotationRequest }>(C.requestSend, {
+    environmentId: s().environmentId,
+    preparationId: preparation.preparationId,
+    requestId: `req-result-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    bodyHash: preparation.bodyHash,
+  });
+  const cleanup = async () => {
+    const latest = (
+      await invoke<{ request: WebAnnotationRequest }>(C.requestGet, {
+        environmentId: s().environmentId,
+        requestId: request.id,
+      })
+    ).request;
+    if (latest.state !== "cancelled") {
+      const cancelled = await invoke<{ outcome: string }>(C.requestCancel, {
+        environmentId: s().environmentId,
+        requestId: request.id,
+        expectedRevision: latest.revision,
+      });
+      expect(cancelled.outcome).toBe("cancelled");
+    }
+    await expectNoCodexLaunch();
+    await invoke("delete_compose_draft", { draftKey });
+  };
+  return { request, cleanup };
+}
+
+/** A result (after) capture of `selector`, committed the way the renderer commits it. */
+async function captureResult(
+  selector: string,
+  requestId: string,
+  annotationId: string,
+  point?: () => Promise<{ x: number; y: number }>,
+) {
+  const rect = point ? null : await settledRect(selector);
+  const started = await preview<BrowserPreviewSelectionStatus>("startCapture", {
+    tabId: TAB_ID,
+    mode: "element",
+    environmentId: s().environmentId,
+    annotationId,
+    purpose: "result",
+    result: { requestId },
+  });
+  expect(started.status).toBe("selecting");
+  const at = point
+    ? await point()
+    : { x: rect!.x + rect!.width / 2, y: rect!.y + rect!.height / 2 };
+  await trustedClick(at.x, at.y);
+  const status = await awaitCaptureEnd(TAB_ID);
+  if (status.status !== "captured")
+    throw new Error(`Result capture failed: ${JSON.stringify(status)}`);
+  const pending = await readPending(status.pending.captureId);
+  const assetIds: string[] = [];
+  if (pending.imageDataUrl) {
+    const staged = await invoke<{ asset: { id: string } }>(C.assetStage, {
+      environmentId: s().environmentId,
+      operationId: `asset-${status.pending.captureId}`,
+      mediaType: "image/png",
+      data: pending.imageDataUrl.slice(pending.imageDataUrl.indexOf(",") + 1),
+    });
+    assetIds.push(staged.asset.id);
+  }
+  const meta = pending.result;
+  const committed = await invoke<{ captureId: string }>(C.resultCapture, {
+    environmentId: s().environmentId,
+    operationId: `result-${status.pending.captureId}`,
+    requestId,
+    annotationId,
+    ...(meta
+      ? {
+          zoomFactor: meta.zoomFactor,
+          deviceScaleFactor: meta.deviceScaleFactor,
+          scroll: meta.scroll,
+          stability: meta.stability,
+          masks: meta.masks.map((mask) => ({ source: mask.source, rect: mask.rect })),
+        }
+      : {}),
+    capture: { ...pending.capture, assetIds },
+  });
+  await preview("acknowledgePendingCapture", {
+    captureId: status.pending.captureId,
+    annotationId,
+    backendCaptureId: committed.captureId,
+  });
+  const stored = (await captureRecord(committed.captureId)) as unknown as {
+    comparison?: { differences: string[]; targetMatch: string; stability?: string };
+  };
+  return {
+    stability: meta?.stability ?? null,
+    differences: [...(stored.comparison?.differences ?? [])].sort(),
+    targetMatch: stored.comparison?.targetMatch ?? null,
+  };
+}
+
+test("result captures label stability and comparison differences, and Show on page reports an expired sign-in redirect", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(240_000);
+  const outcomes: string[] = [];
+  const cleanups: Array<() => Promise<void>> = [];
+  const compare = async (
+    label: string,
+    selector: string,
+    request: { request: WebAnnotationRequest },
+    annotationId: string,
+    expected: { stability: "stable" | "unstable"; differences: string[] },
+    point?: () => Promise<{ x: number; y: number }>,
+  ) => {
+    const result = await captureResult(selector, request.request.id, annotationId, point);
+    outcomes.push(
+      `${label}: ${result.stability} [${result.differences.join(",")}] ${result.targetMatch}`,
+    );
+    expect(result.stability, label).toBe(expected.stability);
+    expect(result.differences, label).toEqual([...expected.differences].sort());
+    return result;
+  };
+  try {
+    // A settled page and the same target: nothing to label.
+    await navigate(ROUTE_VARIANTS.motion);
+    const staticCopy = `[data-testid="${TEST_IDS.staticCopy}"]`;
+    const banner = `[data-testid="${TEST_IDS.animatedBanner}"]`;
+    const copyNote = await saveCapture(
+      (await captureElement(staticCopy)).descriptor.captureId,
+      "Static copy",
+    );
+    const copyRequest = await heldRequest(copyNote.annotationId);
+    cleanups.push(copyRequest.cleanup);
+    await compare("same route, settled", staticCopy, copyRequest, copyNote.annotationId, {
+      stability: "stable",
+      differences: [],
+    });
+    // A CSS animation elsewhere on the page does not unsettle this target;
+    // the animated banner itself never settles.
+    // It slides 160 px; the strip from 160 px to its width is always under it.
+    const underBanner = () =>
+      inPreview<{ x: number; y: number }>(
+        `(() => { const el = document.querySelector(${JSON.stringify(banner)}); const row = el.parentElement.getBoundingClientRect(); const box = el.getBoundingClientRect(); return { x: row.x + (160 + el.offsetWidth) / 2, y: box.y + box.height / 2 }; })()`,
+      );
+    await compare(
+      "animated target",
+      banner,
+      copyRequest,
+      copyNote.annotationId,
+      { stability: "unstable", differences: ["target", "unstable"] },
+      underBanner,
+    );
+    // Another route, then another viewport.
+    await navigate(ROUTE_VARIANTS.settings);
+    await compare(
+      "different route",
+      `[data-testid="${TEST_IDS.saveSettings}"]`,
+      copyRequest,
+      copyNote.annotationId,
+      { stability: "stable", differences: ["route", "target"] },
+    );
+    await navigate(ROUTE_VARIANTS.motion);
+    await preview("setBounds", TAB_ID, { x: 0, y: 0, width: 1000, height: 700 });
+    try {
+      await compare("different viewport", staticCopy, copyRequest, copyNote.annotationId, {
+        stability: "stable",
+        differences: ["viewport"],
+      });
+    } finally {
+      await preview("setBounds", TAB_ID, { x: 0, y: 0, ...FIXTURE_VIEWPORT });
+    }
+
+    // A web font (loaded by script after the load event) still loading for
+    // the whole stability window.
+    const fontRoute = `${ROUTE_VARIANTS.lateFont}?delay=6000&lazy=1`;
+    const fontTarget = `[data-testid="${TEST_IDS.fontShiftTarget}"]`;
+    await navigate(fontRoute);
+    await expect
+      .poll(() => inPreview<boolean>(`document.body.classList.contains("fonts-settled")`), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    const fontNote = await saveCapture(
+      (await captureElement(fontTarget)).descriptor.captureId,
+      "Release notes button",
+    );
+    const fontRequest = await heldRequest(fontNote.annotationId);
+    cleanups.push(fontRequest.cleanup);
+    await reloadFixtureScript(ROUTE_VARIANTS.lateFont);
+    await expect
+      .poll(() => inPreviewNow<string>("document.fonts.status"), {
+        timeout: 10_000,
+        intervals: [50],
+      })
+      .toBe("loading");
+    await compare("font loading", fontTarget, fontRequest, fontNote.annotationId, {
+      stability: "unstable",
+      differences: ["unstable"],
+    });
+    await expect
+      .poll(() => inPreviewNow<boolean>(`document.body.classList.contains("fonts-settled")`), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await compare("font settled", fontTarget, fontRequest, fontNote.annotationId, {
+      stability: "stable",
+      differences: [],
+    });
+
+    // Expired sign-in: the page's route now redirects to /sign-in.
+    await navigate(ROUTE_VARIANTS.account);
+    const plan = `[data-testid="${TEST_IDS.accountPlan}"]`;
+    const accountNote = await saveCapture(
+      (await captureElement(plan)).descriptor.captureId,
+      "Account plan copy",
+    );
+    const accountRequest = await heldRequest(accountNote.annotationId);
+    cleanups.push(accountRequest.cleanup);
+    const accountPin = await pinQuery(accountNote.annotationId);
+    await fetch(`${s().fixture.url}/__fixture/state`, {
+      method: "POST",
+      body: JSON.stringify({ sessionExpired: true }),
+    });
+    await navigate(ROUTE_VARIANTS.settings);
+    const redirected = await preview<{ outcome: string; navigated: boolean }>("showOnPage", {
+      tabId: TAB_ID,
+      pin: accountPin,
+      pins: [],
+      timeoutMs: 10_000,
+    });
+    outcomes.push(
+      `expired sign-in show on page: ${redirected.outcome} navigated=${redirected.navigated}`,
+    );
+    expect(redirected).toMatchObject({ outcome: "navigation-required", navigated: true });
+    await expect
+      .poll(() => inPreview<string>("location.pathname"), { timeout: 10_000 })
+      .toBe(ROUTE_VARIANTS.signIn);
+    await compare(
+      "expired sign-in",
+      `[data-testid="${TEST_IDS.signInSubmit}"]`,
+      accountRequest,
+      accountNote.annotationId,
+      { stability: "stable", differences: ["route", "target"] },
+    );
+  } finally {
+    record(testInfo, "result-comparisons", outcomes.join("; "));
+    console.log(`[annotation-comparisons] ${outcomes.join("; ")}`);
+    for (const cleanup of cleanups.reverse()) await cleanup();
+  }
+});
+
+test("baselines: client selection-to-saved timing and backend command latency", async () => {
+  const testInfo = test.info();
+  const median = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted.length ? sorted[Math.floor(sorted.length / 2)]! : null;
+  };
+  const p90 = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted.length
+      ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))]!
+      : null;
+  };
+  const client = Object.fromEntries(
+    Object.entries(clientTimings).map(([key, values]) => [
+      key,
+      {
+        count: values.length,
+        medianMs: median(values),
+        p90Ms: p90(values),
+        maxMs: Math.max(...values),
+      },
+    ]),
+  );
+  const metrics = await invoke<{
+    durations: Record<string, { count: number; totalMs: number; maxMs: number }>;
+  }>(C.metrics, {});
+  const backend = Object.fromEntries(
+    Object.entries(metrics.durations)
+      .filter(([key]) => /^(command_ms|request_|capture)/.test(key))
+      .map(([key, value]) => [
+        key,
+        {
+          count: value.count,
+          meanMs: Math.round(value.totalMs / Math.max(1, value.count)),
+          maxMs: Math.round(value.maxMs),
+        },
+      ]),
+  );
+  const line = JSON.stringify({ client, backend });
+  record(testInfo, "baselines", line.slice(0, 8_000));
+  console.log(`[annotation-baseline] ${line}`);
+  expect(clientTimings.selectionToSpool.length).toBeGreaterThan(0);
+  expect(clientTimings.spoolToSaved.length).toBeGreaterThan(0);
 });
 
 /** The selection highlight's border colour (`browser-preview-annotation-script.ts`). */

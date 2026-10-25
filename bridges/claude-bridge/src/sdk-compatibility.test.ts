@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { READ_ONLY_TOOLS, WAITING_TOOLS } from "./services/read-only-policy.js";
+import { CLAUDE_RESUME_ORPHAN_SUMMARY } from "./services/session-manager-background-tasks.js";
 
 type PackageManifest = {
   dependencies?: Record<string, string>;
@@ -667,4 +668,25 @@ describe("Claude Agent SDK runtime compatibility", () => {
       await rm(fixtureDir, { recursive: true, force: true });
     }
   }, 15_000);
+
+  // The bridge recognises the CLI's resume scan by its exact summary. If an
+  // upgrade rewords it, those tasks fall back to one stopped card each.
+  test("the pinned CLI still settles resume orphans with the summary the bridge matches", async () => {
+    const sdkRoot = await realpath(
+      join(import.meta.dir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk"),
+    );
+    const scope = dirname(sdkRoot);
+    const nativePackage = (await readdir(scope)).find((name) =>
+      name.startsWith("claude-agent-sdk-"),
+    );
+    expect(nativePackage, `no native CLI package beside ${sdkRoot}`).toBeDefined();
+    const files = await readdir(join(scope, nativePackage!));
+    const binary = files.find((name) => name === "claude" || name === "claude.exe");
+    expect(binary, `no CLI binary in ${nativePackage}`).toBeDefined();
+    const bytes = Buffer.from(await Bun.file(join(scope, nativePackage!, binary!)).arrayBuffer());
+    // Both halves: the summary itself, and the scan marker that only that
+    // reconciliation uses, so a match elsewhere cannot pass this.
+    expect(bytes.includes(CLAUDE_RESUME_ORPHAN_SUMMARY)).toBe(true);
+    expect(bytes.includes("__orphan_summary")).toBe(true);
+  }, 30_000);
 });

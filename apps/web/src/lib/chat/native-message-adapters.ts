@@ -1167,6 +1167,9 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   const tasksById = new Map<string, ClaudeBackgroundTaskState>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTaskState>();
   for (const task of Object.values(backgroundTasks)) {
+    // Its launch row already shows how it really ended; the resume scan's
+    // stop would relabel it, under the scan's text instead of its own name.
+    if (isResumeCleanupTask(task)) continue;
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
@@ -1497,7 +1500,8 @@ function isLiveBackgroundTask(status: NativeBackgroundTaskStatus): boolean {
  * the agent's own commands are its work, and listing them beside it reads as
  * work the conversation started. One whose parent has a card here is left to
  * `childBackgroundTasksByParent`; one whose parent has none keeps its own row.
- * Housekeeping the provider marks ambient gets no row at all.
+ * Housekeeping the provider marks ambient gets no row at all, and tasks the
+ * provider cleaned up on resume are counted by `withResumeCleanupNotices`.
  */
 export function rowlessBackgroundTaskMessages(
   tasks: readonly BackgroundTaskSnapshot[],
@@ -1518,6 +1522,7 @@ export function rowlessBackgroundTaskMessages(
   };
   const ownRow = (task: BackgroundTaskSnapshot): boolean =>
     !rendered.has(task.id) &&
+    !isResumeCleanupTask(task) &&
     (isLiveBackgroundTask(task.status) ||
       (anchors.resolve(task.settledAt) !== undefined && !hasLaunchRow(task)));
   const nested = nestedBackgroundTaskIds(
@@ -1549,6 +1554,63 @@ export function rowlessBackgroundTaskMessages(
       task.settledAt ?? messages.at(-1)?.createdAt ?? task.startedAt ?? new Date(0).toISOString(),
     ),
   );
+}
+
+/**
+ * Whether the provider settled this task while resuming, from an earlier
+ * process this session never saw it run in.
+ */
+function isResumeCleanupTask(task: Pick<BackgroundTaskSnapshot, "endReason">): boolean {
+  return task.endReason === "resume-cleanup";
+}
+
+/**
+ * The transcript with one line where the provider cleaned up earlier tasks.
+ *
+ * On resume Claude Code settles every task from the previous process it finds
+ * no ending for, each under the same generic summary and with no name. A card
+ * per task reads as that many agents stopping just now, so the tasks that
+ * settled at the same position share one line placed after it instead. The
+ * position rule is the one settled cards use: one that resolves before the
+ * loaded window gets nothing.
+ */
+export function withResumeCleanupNotices(
+  messages: NativeMessage[],
+  tasks: readonly BackgroundTaskSnapshot[],
+): NativeMessage[] {
+  let anchors: ReturnType<typeof createNativeAgentSettleAnchors> | undefined;
+  const groups = new Map<string, { count: number; settledAt: string }>();
+  for (const task of tasks) {
+    if (!isResumeCleanupTask(task) || task.ambient || !task.settledAt) continue;
+    anchors ??= createNativeAgentSettleAnchors(messages);
+    const anchorId = anchors.resolve(task.settledAt);
+    if (anchorId === undefined) continue;
+    const group = groups.get(anchorId);
+    if (!group) {
+      groups.set(anchorId, { count: 1, settledAt: task.settledAt });
+      continue;
+    }
+    group.count += 1;
+    if (task.settledAt < group.settledAt) group.settledAt = task.settledAt;
+  }
+  if (groups.size === 0) return messages;
+
+  return messages.flatMap((message) => {
+    const group = groups.get(message.id);
+    if (!group) return [message];
+    const content =
+      group.count === 1
+        ? "1 earlier background task was cleaned up"
+        : `${group.count.toLocaleString("en-US")} earlier background tasks were cleaned up`;
+    const notice: NativeMessage = {
+      id: `resume-cleanup:${message.id}`,
+      role: "system",
+      content,
+      parts: [{ type: "status", content, severity: "info" }],
+      createdAt: group.settledAt,
+    };
+    return [message, notice];
+  });
 }
 
 /**

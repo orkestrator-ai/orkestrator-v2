@@ -33,6 +33,47 @@ export const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["sta
 ]);
 
 /**
+ * The summary Claude Code puts on each task its resume scan marks.
+ *
+ * On resume the CLI looks through the previous process's transcript for
+ * background shells, Monitors, workflows and agents with no completion record.
+ * When it finds several, it stops each one with this exact summary and reports
+ * them together to the model in one aggregate notice. Nothing else in the CLI
+ * emits this text. The scan also catches tasks that ended long before. A
+ * Monitor that expires leaves a notice with no `<status>`, which the scan does
+ * not count as an ending.
+ */
+export const CLAUDE_RESUME_ORPHAN_SUMMARY =
+  "Orphaned by a previous Claude Code process exit and reported in an aggregate summary.";
+
+/**
+ * What a terminal edge from the CLI's resume scan means here, if it is one.
+ *
+ * `cleanup`: a task this session has no record of. It ran in a process that is
+ * gone, so the edge carries no name and no real end time, and is housekeeping
+ * rather than work the reader saw. `already-settled`: a task whose ending this
+ * session already recorded, which the scan has no grounds to relabel stopped.
+ * A task still live here is not claimed: it keeps the ordinary stopped edge.
+ *
+ * Only `stopped` edges qualify. The scan marks agents `failed`, because their
+ * in-process state really was lost, and that stays visible.
+ */
+export function resumeOrphanScanOutcome(
+  message: Pick<BackgroundTaskSystemMessage, "subtype" | "status" | "summary">,
+  previous: BackgroundTaskSnapshot | undefined,
+): "cleanup" | "already-settled" | undefined {
+  if (
+    message.subtype !== "task_notification" ||
+    message.status !== "stopped" ||
+    message.summary !== CLAUDE_RESUME_ORPHAN_SUMMARY
+  ) {
+    return undefined;
+  }
+  if (!previous) return "cleanup";
+  return LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) ? undefined : "already-settled";
+}
+
+/**
  * Track one unresolved Bash invocation, up to a bound.
  *
  * Past the bound the invocation is simply not tracked. Throwing here would

@@ -977,8 +977,12 @@ export interface BackgroundTaskSnapshot {
   progressSummary?: string;
   /** Total time the task spent paused, from `task_updated`. */
   pausedMs?: number;
-  /** Why the task ended other than by completing, failing or being stopped. */
-  endReason?: "worker_restart";
+  /**
+   * Why the task ended other than by completing, failing or being stopped.
+   * `resume_cleanup` is the CLI's resume scan settling a task from an earlier
+   * process that this session has no record of; see `resumeOrphanScanOutcome`.
+   */
+  endReason?: "worker_restart" | "resume_cleanup";
 }
 
 export interface BackgroundTaskUsage {

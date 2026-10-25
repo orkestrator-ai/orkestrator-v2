@@ -95,7 +95,7 @@ import {
   writeCoordinatorAttachment,
 } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
-import { tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
+import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
@@ -1839,6 +1839,10 @@ export function SharedNativeAgentController({
             : current,
         );
       }
+      const openingFallback =
+        dispatchRequestId === tabInitialPromptRequestId(data.environmentId, tabId)
+          ? beginTabInitialPromptFallback(dispatchRequestId)
+          : undefined;
       let keepTranscriptConfirmation = false;
       // The provider will never run this id: a resend has to mint a new one.
       let requestIdRetired = false;
@@ -1861,6 +1865,10 @@ export function SharedNativeAgentController({
           return true;
         }
         const outcome = await send(prompt, options);
+        if (openingFallback?.backendOwned) {
+          setOptimisticPrompt(null);
+          return true;
+        }
         const transcriptConfirmed =
           dispatchRequestId !== undefined &&
           transcriptConfirmedRequestIdRef.current === dispatchRequestId;
@@ -1897,8 +1905,10 @@ export function SharedNativeAgentController({
         }
       } catch (error) {
         setOptimisticPrompt(null);
+        if (openingFallback?.backendOwned) return true;
         reportSendError(error instanceof Error ? error.message : String(error));
       } finally {
+        openingFallback?.release();
         submitInFlightRef.current = false;
         setIsSubmitting(false);
         if (restoreComposerFocus) {

@@ -34,10 +34,13 @@
  *
  * Exits 0 when every assertion held, 1 when one did not, 2 on setup errors.
  */
+import type { DesignSnapshotResult } from "@orkestrator/protocol/design-operations";
+import { downgradeReadFailure, finishQualification } from "./design-mixed-version-checks";
+import { isDeepStrictEqual } from "node:util";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -215,10 +218,7 @@ async function main() {
   const action = <T>(name: string, input: Record<string, unknown>) =>
     invoke<T>("design_action", { environmentId, action: name, input });
   const snapshot = (canvasId: string) =>
-    invoke<Result<{ kind: string; problem?: string; backupAvailable?: boolean }>>(
-      "design_snapshot",
-      { environmentId, canvasId },
-    );
+    invoke<Result<DesignSnapshotResult>>("design_snapshot", { environmentId, canvasId });
   const oldCanvas = await action<{ id: string }>("create_canvas", { name: "Old canvas" });
   const { frame } = await action<{ frame: { id: string } }>("create_frame", {
     canvasId: oldCanvas.id,
@@ -348,6 +348,13 @@ async function main() {
     path.join(worktreePath, "designs/for-downgrade.orkdes"),
     "utf8",
   );
+  const beforeDowngrade = await snapshot(oldCanvas.id);
+  check(
+    beforeDowngrade.ok && beforeDowngrade.value.kind === "snapshot",
+    "cannot capture the edited old canvas before downgrade",
+  );
+  const oldRecordPath = path.join(STORE, `${oldCanvas.id}.orkrec`);
+  const oldRecord = await readFile(oldRecordPath, "utf8");
   await stop();
 
   // 4. Downgrade.
@@ -364,6 +371,12 @@ async function main() {
         failure: { code: "transport", message: String(error).slice(0, 200) },
       }));
       reads[label] = result.ok ? result.value.kind : outcome(result);
+      const expectedCanvas =
+        label === "old" && beforeDowngrade.ok && beforeDowngrade.value.kind === "snapshot"
+          ? beforeDowngrade.value.canvas
+          : undefined;
+      const failure = downgradeReadFailure(result, expectedCanvas);
+      check(failure === null, `old backend ${label} read: ${failure}`);
     }
     note("old opens the upgraded directory", { version, reads });
     await stop();
@@ -375,6 +388,10 @@ async function main() {
       "old backend failed for another reason",
     );
   }
+  check(
+    (await readFile(oldRecordPath, "utf8")) === oldRecord,
+    "downgrade changed the old canvas record",
+  );
   // The old release imports the exported file into its own directory.
   dataDir = DOWNGRADE_DATA;
   await start("old");
@@ -425,13 +442,29 @@ async function main() {
   const corrupt = await snapshot(legacyId);
   const facts = {
     oldCanvas: after.ok ? after.value.kind : outcome(after),
-    future: future.ok ? `${future.value.kind}/${future.value.problem}` : outcome(future),
+    future:
+      future.ok && future.value.kind === "record-problem"
+        ? `${future.value.kind}/${future.value.problem}`
+        : outcome(future),
     futureLeftInPlace: (await readdir(STORE)).includes(`${newCanvas.id}.orkrec`),
-    corrupt: corrupt.ok ? `${corrupt.value.kind}/${corrupt.value.problem}` : outcome(corrupt),
-    corruptBackupAvailable: corrupt.ok ? corrupt.value.backupAvailable : undefined,
+    corrupt:
+      corrupt.ok && corrupt.value.kind === "record-problem"
+        ? `${corrupt.value.kind}/${corrupt.value.problem}`
+        : outcome(corrupt),
+    corruptBackupAvailable:
+      corrupt.ok && corrupt.value.kind === "record-problem"
+        ? corrupt.value.backupAvailable
+        : undefined,
   };
   note("new after the round trip", facts);
-  check(facts.oldCanvas === "snapshot", "the old canvas did not survive the round trip");
+  check(
+    after.ok &&
+      after.value.kind === "snapshot" &&
+      beforeDowngrade.ok &&
+      beforeDowngrade.value.kind === "snapshot" &&
+      isDeepStrictEqual(after.value.canvas, beforeDowngrade.value.canvas),
+    "the edited old canvas content did not survive the round trip",
+  );
   check(facts.future === "record-problem/unsupported-version", "future record not fenced");
   check(facts.futureLeftInPlace, "future record was removed");
   check(facts.corrupt === "record-problem/corrupt", "corrupt record not reported");
@@ -447,14 +480,21 @@ try {
   console.error(String(error).slice(0, 2_000));
   exitCode = error instanceof SetupError ? 2 : 1;
 } finally {
-  await stop();
-  if (reportPath) {
-    await writeFile(
-      reportPath,
-      JSON.stringify({ oldVersion, evidence, failures, exitCode }, null, 2),
-    );
+  try {
+    await stop();
+  } finally {
+    try {
+      await finishQualification({
+        reportPath,
+        report: { oldVersion, evidence, failures, exitCode },
+        scratch,
+        keep,
+      });
+    } catch (error) {
+      console.error(`Qualification finalization failed: ${String(error)}`);
+      exitCode = 1;
+    }
   }
-  if (!keep) await rm(scratch, { recursive: true, force: true });
 }
 for (const failure of failures) console.error(`FAIL ${failure}`);
 process.exit(exitCode);

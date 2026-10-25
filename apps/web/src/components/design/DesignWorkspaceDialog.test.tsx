@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import { toast } from "sonner";
 import { resetCapabilities } from "@/lib/design-client";
 import { invoke } from "@/lib/native/backend";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
+import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
+import { awaitComposeDraftWrites, composeDraftKey } from "@/lib/compose-draft-persistence";
+import { nativeComposePersistenceStore } from "@/stores/nativeComposeStore";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -65,6 +68,8 @@ beforeEach(() => {
   useNativeComposeStore.setState({ drafts: new Map() });
   invokeMock.mockClear();
   invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+    if (command === "enqueue_prompt_queue_message") return {};
+    if (command === "get_compose_draft") return null;
     const action = (args as { action?: string } | undefined)?.action;
     if (command === "design_action" && action === "create_canvas") return canvas;
     if (command === "design_action" && action === "delete_canvas") return { deleted: true };
@@ -124,6 +129,8 @@ describe("DesignWorkspaceDialog", () => {
       ],
     });
     invokeMock.mockImplementation(async (command, args) => {
+      if (command === "enqueue_prompt_queue_message") return {};
+      if (command === "get_compose_draft") return null;
       const request = args as { action?: string; filePath?: string };
       if (command === "write_local_file") return write ?? `/tmp/wt/${request.filePath}`;
       if (request.action === "create_canvas") return canvas;
@@ -536,6 +543,7 @@ describe("DesignWorkspaceDialog", () => {
       if (command === "design_action" && request.action === "create_canvas") return canvas;
       if (command === "write_local_file") return `${request.worktreePath}/${request.filePath}`;
       if (command === "enqueue_prompt_queue_message") return queueWrite.promise;
+      if (command === "get_compose_draft") return null;
       throw new Error(`Unexpected command: ${command}`);
     });
     const queueWrite = deferred<unknown>();
@@ -605,6 +613,129 @@ describe("DesignWorkspaceDialog", () => {
       restorePaste();
     }
   });
+
+  for (const enqueueFails of [false, true]) {
+    test(
+      enqueueFails
+        ? "reports enqueue failure and retains prompt and images for fallback"
+        : "removes saved seeded images after hydration, unmount and a pending flush",
+      async () => {
+        const restore = supportPaste();
+        const queueWrite = deferred<unknown>();
+        const flushWrite = deferred<void>();
+        let saved: {
+          value: Record<string, unknown>;
+          revision: number;
+          ownerType: string;
+          ownerId: string;
+        } | null = null;
+        const handler = invokeMock.getMockImplementation()!;
+        invokeMock.mockImplementation(async (command, args) => {
+          if (command === "enqueue_prompt_queue_message") return queueWrite.promise;
+          if (command === "get_compose_draft") return saved;
+          if (command === "delete_compose_draft") {
+            expect((args as { expectedRevision: number }).expectedRevision).toBe(
+              saved?.revision ?? 0,
+            );
+            saved = null;
+            return;
+          }
+          if (command === "save_compose_draft") {
+            const request = args as {
+              value: Record<string, unknown>;
+              expectedRevision: number;
+              ownerType: string;
+              ownerId: string;
+            };
+            if (!saved) await flushWrite.promise;
+            expect(request.expectedRevision).toBe(saved?.revision ?? 0);
+            saved = { ...request, revision: (saved?.revision ?? 0) + 1 };
+            return saved;
+          }
+          return handler(command, args);
+        });
+        const error = spyOn(toast, "error");
+        const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
+          usePaneLayoutStore.getState().addTab(
+            "pane-1",
+            {
+              id: options!.tabId!,
+              type: "plain",
+              initialPrompt: options?.initialPrompt,
+            },
+            "env-1",
+          );
+          return true;
+        });
+        try {
+          mount(createTab);
+          await flush();
+          await pasteImage(brief());
+          fireEvent.change(brief(), { target: { value: "Match the screenshot" } });
+          fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+          await flush();
+          const options = createTab.mock.calls.find(([type]) => type === "claude")![1]!;
+          const sessionKey = createSessionKey("env-1", options.tabId!);
+          const key = composeDraftKey("claude", "env-1", sessionKey);
+          const images = nativeComposeDraft(
+            useNativeComposeStore.getState(),
+            sessionKey,
+          ).attachments;
+          expect(images).toHaveLength(1);
+          if (enqueueFails) {
+            await act(async () => queueWrite.reject(new Error("Queue offline")));
+            expect(error).toHaveBeenCalledWith("Could not send the design opening prompt", {
+              description: "Queue offline",
+            });
+            expect(
+              usePaneLayoutStore
+                .getState()
+                .getAllTabs("env-1")
+                .find((tab) => tab.id === options.tabId)?.initialPrompt,
+            ).toBe(options.initialPrompt);
+            expect(
+              nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+            ).toEqual(images);
+          } else {
+            const hook = renderHook(() =>
+              useNativeComposeDraftPersistence(
+                "claude",
+                "env-1",
+                sessionKey,
+                nativeComposePersistenceStore,
+              ),
+            );
+            await flush();
+            hook.unmount(); // Enqueues the seeded-image save, still waiting for acknowledgement.
+            await act(async () => queueWrite.resolve({}));
+            expect(saved).toBeNull();
+            await act(async () => flushWrite.resolve());
+            await awaitComposeDraftWrites(key);
+            expect(saved!.value).toMatchObject({ text: "", attachments: [] });
+            // A hidden tab can now remount without resurrecting queue-owned images.
+            useNativeComposeStore.getState().clearDraft(sessionKey);
+            renderHook(() =>
+              useNativeComposeDraftPersistence(
+                "claude",
+                "env-1",
+                sessionKey,
+                nativeComposePersistenceStore,
+              ),
+            );
+            await flush();
+            expect(
+              nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+            ).toEqual([]);
+            expect(error).not.toHaveBeenCalled();
+          }
+        } finally {
+          flushWrite.resolve();
+          error.mockRestore();
+          restore();
+        }
+      },
+    );
+  }
 
   test("a pasted image can be removed before launch", async () => {
     const restorePaste = installImagePasteSupport();
@@ -678,6 +809,8 @@ describe("DesignWorkspaceDialog", () => {
 
   function installLaunchCommands(capabilityRead: () => Promise<unknown>) {
     invokeMock.mockImplementation(async (command, args) => {
+      if (command === "enqueue_prompt_queue_message") return {};
+      if (command === "get_compose_draft") return null;
       if (command === "design_capabilities") return capabilityRead();
       if (command === "design_session_link")
         return {
@@ -693,6 +826,13 @@ describe("DesignWorkspaceDialog", () => {
     test(`capability fallback ${outcome} creates once with the intended session support`, async () => {
       const pending = deferred<unknown>();
       installLaunchCommands(() => pending.promise);
+      useConfigStore.getState().updateGlobalConfig({
+        agentSettings: {
+          platforms: {
+            claude: { model: "claude-sonnet-5", reasoningEffort: "high", fastMode: true },
+          },
+        },
+      });
       const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
         usePaneLayoutStore
           .getState()
@@ -738,6 +878,33 @@ describe("DesignWorkspaceDialog", () => {
             command === "design_action" && (args as { action?: string }).action === "create_canvas",
         ),
       ).toHaveLength(1);
+      const agentOptions = createTab.mock.calls.find(([type]) => type === "claude")![1]!;
+      const enqueues = invokeMock.mock.calls.filter(
+        ([command]) => command === "enqueue_prompt_queue_message",
+      );
+      expect(enqueues).toHaveLength(1);
+      expect(enqueues[0]![1]).toMatchObject({
+        queueKey: `claude\u0000${createSessionKey("env-1", agentOptions.tabId!)}`,
+        environmentId: "env-1",
+        message: {
+          id: `initial-prompt:env-1:${agentOptions.tabId}`,
+          requestId: `initial-prompt:env-1:${agentOptions.tabId}`,
+          text: agentOptions.initialPrompt,
+          attachments: [],
+          model: agentOptions.initialAgentModel,
+          ...(agentOptions.initialReasoningEffort
+            ? { effort: agentOptions.initialReasoningEffort }
+            : {}),
+          ...(typeof agentOptions.initialFastMode === "boolean"
+            ? { fastModeEnabled: agentOptions.initialFastMode }
+            : {}),
+          planModeEnabled: false,
+        },
+      });
+      expect(agentOptions.initialAgentModel).toBe("claude-sonnet-5");
+      expect(agentOptions.initialReasoningEffort).toBe("high");
+      expect(agentOptions.initialFastMode).toBe(true);
+      expect(agentOptions.initialConversationMode).toBe("build");
       const links = invokeMock.mock.calls.filter(([command]) => command === "design_session_link");
       expect(links).toHaveLength(outcome === "delayed" ? 1 : 0);
       if (outcome === "ready-without-sessions")
@@ -809,6 +976,8 @@ describe("DesignWorkspaceDialog", () => {
       resetCapabilities();
       const warning = spyOn(toast, "warning");
       invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "enqueue_prompt_queue_message") return {};
+        if (command === "get_compose_draft") return null;
         if (command === "design_capabilities") {
           if (backend === "v1") throw new Error("Unknown backend command: design_capabilities");
           return { ok: true, value: { protocolVersion: 2, sessions: true } };

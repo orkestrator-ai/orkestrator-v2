@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test, type Mock } from "bun:test";
+import { invoke } from "@/lib/native/backend";
+import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { createSessionKey } from "@/lib/utils";
+import { beginTabInitialPromptFallback } from "./tab-initial-prompt";
 import type { TabInfo } from "@/types/paneLayout";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -7,6 +11,9 @@ import {
   tabInitialPromptRequestId,
 } from "./tab-initial-prompt";
 
+const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
+const originalInvoke = invokeMock.getMockImplementation()!;
+const initialComposeState = useNativeComposeStore.getState();
 const initialLayoutState = usePaneLayoutStore.getState();
 
 function seedTab(tab: TabInfo) {
@@ -33,6 +40,8 @@ const tabPrompt = (tabId: string) =>
 
 afterEach(() => {
   usePaneLayoutStore.setState(initialLayoutState, true);
+  useNativeComposeStore.setState(initialComposeState, true);
+  invokeMock.mockImplementation(originalInvoke);
 });
 
 describe("tab initial prompt hand-off", () => {
@@ -97,6 +106,83 @@ describe("tab initial prompt hand-off", () => {
       }),
     );
     expect(tabPrompt("tab-a")).toBeUndefined();
+  });
+
+  test("hand-off marks only live fallback attempts as backend-owned", async () => {
+    const requestId = tabInitialPromptRequestId("env-1", "ownership");
+    const pending = beginTabInitialPromptFallback(requestId);
+    const other = beginTabInitialPromptFallback("another-request");
+    try {
+      await handTabInitialPromptToBackend(
+        { environmentId: "env-1", tabId: "ownership", agent: "codex", prompt: "Brief" },
+        mock(async () => ({}) as never),
+      );
+      expect(pending.backendOwned).toBe(true);
+      expect(other.backendOwned).toBe(false);
+    } finally {
+      pending.release();
+      other.release();
+    }
+  });
+
+  test("cleans a failed opening fallback durably and preserves unrelated input", async () => {
+    const tabId = "cleanup";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const requestId = tabInitialPromptRequestId("env-1", tabId);
+    const seeded = { id: "seeded", type: "image" as const, path: "same.png", name: "seeded.png" };
+    const userImage = { ...seeded, id: "user", name: "user.png" };
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "My follow-up",
+      attachments: [seeded, userImage],
+    });
+    const saved = {
+      draftKey: "cleanup",
+      ownerType: "environment",
+      ownerId: "env-1",
+      revision: 3,
+      value: {
+        text: "Brief",
+        mentions: [{ id: "user-mention" }],
+        attachments: [seeded, userImage],
+        annotations: [{ id: "keep-note" }],
+        metadata: { requestId, modelId: "keep-model" },
+      },
+    };
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "get_compose_draft") return saved;
+      if (command === "save_compose_draft") {
+        const input = args as { value: typeof saved.value; expectedRevision: number };
+        expect(input.expectedRevision).toBe(3);
+        saved.value = input.value;
+        return { ...saved, revision: 4 };
+      }
+      throw new Error(`Unexpected ${command}`);
+    });
+    await handTabInitialPromptToBackend(
+      {
+        environmentId: "env-1",
+        tabId,
+        agent: "claude",
+        prompt: "Brief",
+        options: { attachments: [seeded] },
+      },
+      mock(async () => ({}) as never),
+    );
+    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey)).toMatchObject({
+      text: "My follow-up",
+      attachments: [userImage],
+    });
+    expect(saved.value).toMatchObject({
+      text: "",
+      mentions: [{ id: "user-mention" }],
+      attachments: [userImage],
+      annotations: [{ id: "keep-note" }],
+      metadata: {
+        modelId: "keep-model",
+        requestId: undefined,
+        pendingTranscriptConfirmation: undefined,
+      },
+    });
   });
 
   test("keeps the renderer fallback when the queue write fails", async () => {

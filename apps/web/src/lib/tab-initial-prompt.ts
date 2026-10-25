@@ -1,5 +1,7 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { enqueuePromptQueueMessage } from "@/lib/backend";
+import { composeDraftKey, updateSavedComposeDraft } from "@/lib/compose-draft-persistence";
+import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -13,6 +15,87 @@ export function tabInitialPromptRequestId(environmentId: string, tabId: string):
   return `initial-prompt:${environmentId}:${tabId}`;
 }
 
+// Only live attempts are retained; hand-off marks them before clearing the tab.
+const fallbacks = new Map<string, Set<{ backendOwned: boolean }>>();
+
+export function beginTabInitialPromptFallback(requestId: string) {
+  const attempt = { backendOwned: false };
+  const attempts = fallbacks.get(requestId) ?? new Set();
+  attempts.add(attempt);
+  fallbacks.set(requestId, attempts);
+  return {
+    get backendOwned() {
+      return attempt.backendOwned;
+    },
+    release() {
+      attempts.delete(attempt);
+      if (attempts.size === 0) fallbacks.delete(requestId);
+    },
+  };
+}
+
+/** Remove only input owned by this opening prompt, including an earlier failed fallback. */
+async function removeOpeningPromptDraft(
+  input: {
+    environmentId: string;
+    tabId: string;
+    agent: AgentPlatform;
+    prompt: string;
+    options?: TabInitialPromptOptions;
+  },
+  requestId: string,
+) {
+  const sessionKey = createSessionKey(input.environmentId, input.tabId);
+  const seeded = input.options?.attachments ?? [];
+  const isSeeded = (attachment: { id?: string; path: string }) =>
+    seeded.some(
+      (image) =>
+        image.path === attachment.path && (image.id === undefined || image.id === attachment.id),
+    );
+  const store = useNativeComposeStore.getState();
+  const draft = nativeComposeDraft(store, sessionKey);
+  const restored = draft.requestId === requestId && draft.text === input.prompt;
+  const attachments = draft.attachments.filter((attachment) => !isSeeded(attachment));
+  if (restored || attachments.length !== draft.attachments.length) {
+    store.updateDraft(sessionKey, {
+      attachments,
+      ...(restored
+        ? {
+            text: "",
+            requestId: undefined,
+            pendingTranscriptConfirmation: undefined,
+            submissionError: undefined,
+          }
+        : {}),
+    });
+  }
+  // This also works after the persistence hook has flushed and unmounted.
+  await updateSavedComposeDraft<{
+    text: string;
+    mentions: unknown[];
+    attachments: Array<{ id?: string; path: string }>;
+    metadata?: { requestId?: string; pendingTranscriptConfirmation?: unknown };
+  }>(composeDraftKey(input.agent, input.environmentId, sessionKey), (value) => {
+    const restored = value.metadata?.requestId === requestId && value.text === input.prompt;
+    const attachments = value.attachments.filter((attachment) => !isSeeded(attachment));
+    if (!restored && attachments.length === value.attachments.length) return value;
+    return {
+      ...value,
+      attachments,
+      ...(restored
+        ? {
+            text: "",
+            metadata: {
+              ...value.metadata,
+              requestId: undefined,
+              pendingTranscriptConfirmation: undefined,
+            },
+          }
+        : {}),
+    };
+  });
+}
+
 export interface TabInitialPromptOptions {
   model?: string;
   reasoningEffort?: string;
@@ -20,7 +103,13 @@ export interface TabInitialPromptOptions {
   /** Defaults to Build, as a composer send does. */
   mode?: "build" | "plan";
   /** Already staged in the workspace, as the composer stages them. */
-  attachments?: ReadonlyArray<{ type: "image" | "file"; path: string; filename?: string }>;
+  attachments?: ReadonlyArray<{
+    /** Renderer identity used to remove only the seeded draft attachment. */
+    id?: string;
+    type: "image" | "file";
+    path: string;
+    filename?: string;
+  }>;
 }
 
 /**
@@ -68,7 +157,8 @@ export function buildTabInitialPromptQueueMessage(
  * The caller keeps the prompt on the tab as a renderer fallback until this
  * resolves; once the queue entry is durable the fallback is removed. A mount
  * that wins the race sends the same request id, which the backend treats as
- * already dispatched. On failure the fallback stays and the error propagates.
+ * already dispatched. On enqueue failure the fallback stays and the error propagates.
+ * Successful hand-off also clears owned draft input after pending persistence writes.
  */
 export async function handTabInitialPromptToBackend(
   input: {
@@ -86,5 +176,7 @@ export async function handTabInitialPromptToBackend(
     input.environmentId,
     buildTabInitialPromptQueueMessage(input.agent, requestId, input.prompt, input.options),
   );
+  for (const attempt of fallbacks.get(requestId) ?? []) attempt.backendOwned = true;
   usePaneLayoutStore.getState().clearTabInitialPrompt(input.tabId, input.environmentId);
+  await removeOpeningPromptDraft(input, requestId);
 }

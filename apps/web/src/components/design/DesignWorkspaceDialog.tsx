@@ -32,7 +32,7 @@ import {
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import {
@@ -141,22 +141,12 @@ function designInitialPromptOptions(
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     mode: "build",
     attachments: images.map((image) => ({
+      id: image.id,
       type: image.type,
       path: image.path,
       filename: image.name,
     })),
   };
-}
-
-/** Once the backend queue carries the brief's images, the tab's draft must not send them again. */
-function removeDraftAttachments(sessionKey: string, images: readonly DesignPromptImage[]) {
-  if (images.length === 0) return;
-  const store = useNativeComposeStore.getState();
-  const queued = new Set(images.map((image) => image.path));
-  const current = nativeComposeDraft(store, sessionKey).attachments;
-  const remaining = current.filter((attachment) => !queued.has(attachment.path));
-  if (remaining.length !== current.length)
-    store.updateDraft(sessionKey, { attachments: remaining });
 }
 
 export function DesignWorkspaceDialog({
@@ -406,6 +396,7 @@ export function DesignWorkspaceDialog({
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
+          const promptOptions = designInitialPromptOptions(environmentId, platform, images);
           let created = false;
           try {
             // The prompt stays on the tab as the renderer fallback until the
@@ -415,6 +406,10 @@ export function DesignWorkspaceDialog({
               agentLaunchMode: "native",
               displayTitle: "Design",
               initialPrompt,
+              initialAgentModel: promptOptions.model,
+              initialReasoningEffort: promptOptions.reasoningEffort,
+              initialFastMode: promptOptions.fastMode,
+              initialConversationMode: "build",
             });
             if (created)
               void handTabInitialPromptToBackend({
@@ -422,15 +417,12 @@ export function DesignWorkspaceDialog({
                 tabId,
                 agent: platform,
                 prompt: initialPrompt,
-                options: designInitialPromptOptions(environmentId, platform, images),
-              }).then(
-                () => removeDraftAttachments(sessionKey, images),
-                (reason) =>
-                  console.warn(
-                    "[design] The opening prompt stays with the tab until it mounts:",
-                    reason instanceof Error ? reason.message : reason,
-                  ),
-              );
+                options: promptOptions,
+              }).catch((reason) => {
+                toast.error("Could not send the design opening prompt", {
+                  description: errorText(reason),
+                });
+              });
             return created;
           } finally {
             const store = usePaneLayoutStore.getState();

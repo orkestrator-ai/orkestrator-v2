@@ -309,7 +309,11 @@ same mechanism ([public-cli.md](public-cli.md#leaf-nodes---node)).
   `attention_list`, `list_projects`, `list_environments`, `overview` and
   `resolve_target` reads this node and every node it controls. Each item is
   tagged with `nodeId` and `nodeName`; `nodes` reports each node's total,
-  cursor or error; an unreachable node is a warning, never a failure. Cursors
+  cursor or error. List adapters retain healthy results and unavailable-node details;
+  composed voice summaries and target resolution report an error when a machine
+  could not be read. List helpers drain each node's pages independently. Attention
+  applies `limit` per node and returns every fetched item, so its cursors cannot
+  advance past an omitted event. Cursors
   are per node, and a `projectId` names one node's project, so both refuse
   `all`. `resolve_target` with `all` reports ambiguity across machines rather
   than picking one, and returns the match's `nodeId` in `ids`.

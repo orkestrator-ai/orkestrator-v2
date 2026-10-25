@@ -16,6 +16,7 @@ import {
   type PublicCapabilities,
   type PublicConnectionIdentity,
   type PublicReceipt,
+  type PublicNodeTag,
 } from "@orkestrator/protocol/public-api";
 import { CliError } from "./errors.js";
 import { LocalReceiptStore, type LocalReceipt } from "./receipts.js";
@@ -26,6 +27,7 @@ export interface MutationResult<T = unknown> {
   result: T;
   receipt?: PublicReceipt;
   warnings?: string[];
+  node?: PublicNodeTag;
 }
 
 /**
@@ -37,6 +39,20 @@ export interface MutationResult<T = unknown> {
 export class ClientSession {
   private capabilitiesPromise: Promise<PublicCapabilities> | null = null;
   private transport: GatewayTransport;
+  private readonly readWarnings = new Set<string>();
+  private responseNode?: PublicNodeTag;
+
+  get warnings(): string[] {
+    return [...this.readWarnings];
+  }
+  get nodeTag(): PublicNodeTag | undefined {
+    return (
+      this.responseNode ??
+      (this.options.node && this.options.node !== PUBLIC_ALL_NODES
+        ? { nodeId: this.options.node, name: this.options.node }
+        : undefined)
+    );
+  }
 
   constructor(
     private target: ResolvedTarget,
@@ -164,7 +180,7 @@ export class ClientSession {
     const intentDigest = createHash("sha256")
       .update(canonicalJson({ action, input }))
       .digest("hex");
-    const existing = await this.receipts.find(installationId, action, key);
+    const existing = await this.receipts.find(installationId, action, key, this.options.node);
     if (existing && existing.intentDigest !== intentDigest) {
       throw new CliError(
         "request-conflict",
@@ -181,6 +197,7 @@ export class ClientSession {
       version: 1,
       installationId,
       connection: this.target.identity.name,
+      ...(this.options.node ? { node: this.options.node } : {}),
       action,
       requestId: key,
       namespace,
@@ -198,10 +215,12 @@ export class ClientSession {
       if (error instanceof CliError && error.code === "transport-uncertain") {
         throw new CliError(error.code, error.message, {
           action,
+          node: this.nodeTag,
           details: {
             requestId: key,
             namespace,
-            recovery: `orkestrator run get --request-id ${key} --action ${action}`,
+            ...(this.nodeTag ? { node: this.nodeTag } : {}),
+            recovery: `orkestrator run get --request-id ${key} --action ${action}${this.options.node ? ` --node ${quoteArgument(this.options.node)}` : ""}`,
           },
         });
       }
@@ -209,9 +228,25 @@ export class ClientSession {
     }
     if (response.receipt)
       await this.receipts.update(local, response.receipt).catch(() => undefined);
-    if (!response.ok) throw envelopeError(response);
+    if (!response.ok) {
+      if (response.error.code === "node-outcome-unknown") {
+        throw new CliError(response.error.code, response.error.message, {
+          action,
+          node: this.nodeTag,
+          retryable: response.error.retryable,
+          details: {
+            ...response.error.details,
+            requestId: key,
+            namespace,
+            recovery: `orkestrator run get --request-id ${key} --action ${action}${this.options.node ? ` --node ${quoteArgument(this.options.node)}` : ""}`,
+          },
+        });
+      }
+      throw envelopeError(response);
+    }
     return {
       result: response.result as T,
+      ...(this.nodeTag ? { node: this.nodeTag } : {}),
       ...(response.receipt ? { receipt: response.receipt } : {}),
       ...(response.warnings ? { warnings: response.warnings } : {}),
     };
@@ -251,6 +286,20 @@ export class ClientSession {
       );
     }
     await this.verifyIdentity(raw);
+    if (raw.node) this.responseNode = raw.node;
+    if (!mutation && raw.ok) {
+      for (const warning of raw.warnings ?? []) this.readWarnings.add(warning);
+      const nodes = (
+        raw.result as {
+          nodes?: Array<{ ok: boolean; name: string; nodeId: string; error?: { message: string } }>;
+        } | null
+      )?.nodes;
+      for (const failed of nodes?.filter((entry) => !entry.ok) ?? []) {
+        this.readWarnings.add(
+          `${failed.name} (${failed.nodeId}): ${failed.error?.message ?? "not checked"}`,
+        );
+      }
+    }
     return raw;
   }
 
@@ -275,8 +324,15 @@ export class ClientSession {
 function envelopeError(response: Extract<PublicActionResponse, { ok: false }>): CliError {
   return new CliError(response.error.code, response.error.message, {
     action: response.action,
+    ...(response.node ? { node: response.node } : {}),
     ...(response.error.details ? { details: response.error.details } : {}),
     ...(response.receipt ? { receipt: response.receipt } : {}),
     ...(response.error.retryable !== undefined ? { retryable: response.error.retryable } : {}),
   });
+}
+
+function quoteArgument(value: string): string {
+  return /^[A-Za-z0-9_.:@/+=-]+$/.test(value)
+    ? value
+    : "'" + value.replaceAll("'", "'\"'\"'") + "'";
 }

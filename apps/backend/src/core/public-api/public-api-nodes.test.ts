@@ -1,15 +1,19 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
+import { setActivity } from "./test-provider.js";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   PUBLIC_API_SCHEMA_VERSION,
   type PublicActionResponse,
 } from "@orkestrator/protocol/public-api";
 import type {
+  PublicAggregateAttentionPage,
+  PublicAttentionPage,
   PublicAggregatePage,
   PublicNodeList,
   PublicProjectSummary,
 } from "@orkestrator/protocol/public-api-resources";
 import { call, cleanupNodeTopologies, topology } from "./node-test-support.js";
-import { controlMcpAuthority } from "./operation-ledger.js";
+import { controlMcpAuthority, requestKey } from "./operation-ledger.js";
 
 /**
  * `request.node` end to end: a command node and a leaf, each with real
@@ -293,4 +297,226 @@ describe("node all", () => {
     );
     expect(!scoped.ok && scoped.error.code).toBe("invalid-input");
   });
+});
+
+describe("node regression coverage", () => {
+  test("a local caller cannot claim an attached controller's credential", async () => {
+    const { command, commandId, leaf, leafId } = await topology();
+    const created = await call(
+      command,
+      "ticket.create",
+      { projectId: leaf.projectId, title: "private" },
+      { node: leafId, requestId: "private-key", authority: controlMcpAuthority("alice") },
+    );
+    expect(created.ok).toBe(true);
+    for (const authority of [
+      "control-mcp:alice",
+      "operator",
+      "bad-authority",
+      "node:bk_other/control-mcp:alice",
+    ]) {
+      const response = (await leaf.harness.commands.get("public_action")!(
+        {
+          schemaVersion: 1,
+          action: "run.get",
+          actionVersion: 1,
+          input: { operationId: created.receipt!.operationId },
+          relayedAuthority: { controllerId: commandId, authority },
+        },
+        leaf.harness.context,
+      )) as PublicActionResponse;
+      expect(!response.ok && response.error.code).toBe(
+        authority === "control-mcp:alice" ? "capability-unavailable" : "invalid-input",
+      );
+      expect(response.receipt).toBeUndefined();
+    }
+    const legitimate = await call(
+      command,
+      "run.get",
+      { operationId: created.receipt!.operationId },
+      { node: leafId, authority: controlMcpAuthority("alice") },
+    );
+    expect(legitimate.ok).toBe(true);
+  });
+
+  test("aggregate attention delivers every item covered by per-node cursors", async () => {
+    const { command, leaf, leafId } = await topology();
+    const expected: string[] = [];
+    for (const harness of [command, leaf.harness]) {
+      for (let index = 0; index < 2; index += 1) {
+        const key = `attention-${index}`;
+        const { record } = await harness.storage.admitPublicOperation({
+          authority: "operator",
+          action: "ticket.create",
+          scope: "project:test",
+          requestId: key,
+          requestKey: requestKey("operator", "ticket.create", "project:test", key),
+          fingerprint: "0".repeat(64),
+          generation: "test",
+        });
+        await harness.storage.updatePublicOperation(record.operationId, (current) => ({
+          ...current,
+          state: "succeeded",
+          stage: "completed",
+        }));
+        expected.push(record.operationId);
+      }
+    }
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 100);
+    try {
+      const first = await call<PublicAggregateAttentionPage>(
+        command,
+        "attention.list",
+        { limit: 1 },
+        { node: "all" },
+      );
+      if (!first.ok) throw new Error(first.error.message);
+      expect(first.result.items).toHaveLength(2);
+      expect(first.result.more).toBe(2);
+      expect(first.result.counts.runs).toBe(4);
+      expect(first.result.items.map((item) => item.at)).toEqual(
+        first.result.items
+          .map((item) => item.at)
+          .sort()
+          .reverse(),
+      );
+      const delivered = first.result.items.flatMap((item) =>
+        item.kind === "run" ? [item.operationId] : [],
+      );
+      for (const node of first.result.nodes) {
+        let cursor = node.cursor!;
+        for (let page = 0; page < 4; page += 1) {
+          const next = await call<PublicAttentionPage>(
+            command,
+            "attention.list",
+            { limit: 1, cursor },
+            { node: node.nodeId },
+          );
+          if (!next.ok) throw new Error(next.error.message);
+          delivered.push(
+            ...next.result.items.flatMap((item) => (item.kind === "run" ? [item.operationId] : [])),
+          );
+          cursor = next.result.cursor;
+          if (!next.result.more) break;
+        }
+      }
+      expect(delivered.sort()).toEqual(expected.sort());
+      expect(first.result.nodes.some((node) => node.nodeId === leafId)).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("losing only a committed mutation's response replays one durable side effect", async () => {
+    const { command, leaf, leafNode, leafId } = await topology();
+    const original = leafNode.commands.get("public_action")!;
+    let lost = false;
+    leafNode.commands.set("public_action", async (args) => {
+      const response = await original(args);
+      if (args.action === "ticket.create" && !lost) {
+        lost = true;
+        throw new Error("response lost after commit");
+      }
+      return response;
+    });
+    const input = { projectId: leaf.projectId, title: "one durable ticket" };
+    const first = await call(command, "ticket.create", input, {
+      node: leafId,
+      requestId: "committed-lost",
+    });
+    expect(!first.ok && first.error.code).toBe("node-outcome-unknown");
+    const replay = await call(command, "ticket.create", input, {
+      node: leafId,
+      requestId: "committed-lost",
+    });
+    expect(replay.receipt?.replayed).toBe(true);
+    const listed = await leaf.harness.call<{ items: unknown[] }>("ticket.list", {
+      projectId: leaf.projectId,
+    });
+    expect(listed.ok && listed.result.items).toHaveLength(1);
+  });
+
+  test("disabled and mid-read failed nodes retain healthy aggregate results", async () => {
+    const { command, commandNode, leafNode, leafId } = await topology();
+    const original = leafNode.commands.get("public_action")!;
+    leafNode.commands.set("public_action", async (args) => {
+      if (args.action === "project.list") throw new Error("disconnected during read");
+      return original(args);
+    });
+    const mid = await call<PublicAggregatePage<unknown>>(
+      command,
+      "project.list",
+      {},
+      { node: "all" },
+    );
+    expect(mid.ok && mid.result.nodes.find((node) => node.nodeId === leafId)?.ok).toBe(false);
+    expect(mid.ok && mid.warnings?.length).toBe(1);
+    await commandNode.service.updateNode({ nodeId: leafId, enabled: false });
+    const disabled = await call<PublicAggregatePage<unknown>>(
+      command,
+      "project.list",
+      {},
+      { node: "all" },
+    );
+    expect(
+      disabled.ok && disabled.result.nodes.find((node) => node.nodeId === leafId),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "node-unavailable", message: expect.stringContaining("disabled") },
+    });
+  });
+});
+
+test("aggregate attention orders a blocking leaf question before a newer local run", async () => {
+  const { command, leaf } = await topology();
+  const session = await leaf.harness.call<{ tabId: string }>(
+    "session.start",
+    { environmentId: "env-1", agent: "claude", prompt: "work" },
+    { requestId: "blocking-run" },
+  );
+  if (!session.ok) throw new Error(session.error.message);
+  const providerSessionId = leaf.stub.sends[0]!.sessionId;
+  leaf.stub.pending.push({
+    version: 1,
+    id: "question",
+    provider: "claude",
+    kind: "command-approval",
+    origin: "interactive-native",
+    sessionId: providerSessionId,
+    state: "pending",
+    revision: 1,
+    presentation: { title: "Approve work", questions: [] },
+    createdAt: Date.now() - 1_000,
+    updatedAt: Date.now() - 1_000,
+  } as AgentInteractionRequest);
+  setActivity(leaf.service, "claude", session.result.tabId, providerSessionId, "waiting");
+  const { record } = await command.storage.admitPublicOperation({
+    authority: "operator",
+    action: "ticket.create",
+    scope: "project:test",
+    requestId: "newer",
+    requestKey: requestKey("operator", "ticket.create", "project:test", "newer"),
+    fingerprint: "0".repeat(64),
+    generation: "test",
+  });
+  await command.storage.updatePublicOperation(record.operationId, (current) => ({
+    ...current,
+    state: "succeeded",
+    stage: "completed",
+  }));
+  const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 100);
+  try {
+    const attention = await call<PublicAggregateAttentionPage>(
+      command,
+      "attention.list",
+      { limit: 1 },
+      { node: "all" },
+    );
+    if (!attention.ok) throw new Error(attention.error.message);
+    expect(attention.result.items.map((item) => item.kind)).toEqual(["interaction", "run"]);
+    expect(attention.result.counts).toMatchObject({ interactions: 1, runs: 1 });
+    expect(attention.result.more).toBe(0);
+  } finally {
+    clock.mockRestore();
+  }
 });

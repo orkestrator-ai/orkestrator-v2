@@ -556,7 +556,10 @@ export class NodeLink {
       }
       return payload.result as T;
     } catch (error) {
-      if ((response.ok || controller.signal.aborted) && !(error instanceof NodeRefusalError)) {
+      if (
+        (response.ok || response.status >= 500 || controller.signal.aborted) &&
+        !(error instanceof NodeRefusalError)
+      ) {
         throw new NodeOutcomeUnknownError(`${this.label()} did not finish answering in time.`, {
           cause: error,
         });

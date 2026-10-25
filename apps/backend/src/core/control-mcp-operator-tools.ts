@@ -1,3 +1,4 @@
+import { allPublicPages as allPages } from "./control-mcp-pages.js";
 import { randomUUID } from "node:crypto";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { PUBLIC_ALL_NODES, type PublicActionName } from "@orkestrator/protocol/public-api";
@@ -174,8 +175,15 @@ export async function operatorAllNodes(caller: ControlMcpCaller) {
         tag: { nodeId: node.nodeId, node: node.name },
       });
     } else if (node.available && node.publicActions) {
-      const routed = await operatorNode(caller, node.nodeId);
-      reachable.push(routed);
+      try {
+        reachable.push(await operatorNode(caller, node.nodeId));
+      } catch (error) {
+        unavailable.push({
+          nodeId: node.nodeId,
+          node: node.name,
+          reason: error instanceof Error ? error.message : "Node resolution failed",
+        });
+      }
     } else {
       unavailable.push({
         nodeId: node.nodeId,
@@ -203,30 +211,6 @@ function legacyResult(value: JsonRecord) {
 
 function failure(envelope: ControlMcpEnvelope) {
   return envelopeToolResult(envelope, "full");
-}
-
-async function allPages<T>(
-  caller: ControlMcpCaller,
-  action: PublicActionName,
-  input: JsonRecord,
-): Promise<{ items: T[] } | { envelope: ControlMcpEnvelope }> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 50; page += 1) {
-    const envelope = await runPublicAction(
-      caller,
-      action,
-      { ...input, limit: 200, ...(cursor ? { cursor } : {}) },
-      undefined,
-      undefined,
-    );
-    if (!envelope.ok) return { envelope };
-    const result = envelope.result as { items: T[]; nextCursor?: string };
-    items.push(...result.items);
-    cursor = result.nextCursor;
-    if (!cursor) break;
-  }
-  return { items };
 }
 
 function legacyTicketSummary(ticket: PublicTicketSummary): JsonRecord {
@@ -268,7 +252,15 @@ export async function operatorListProjects(caller: ControlMcpCaller) {
       ...(tagged.nodeId ? { nodeId: tagged.nodeId, node: tagged.nodeName } : {}),
     };
   });
-  return legacyResult({ projects, total: projects.length });
+  return legacyResult({
+    projects,
+    total: projects.length,
+    nodes: pages.nodes,
+    warnings: pages.warnings,
+    unavailableNodes: pages.nodes
+      .filter((node) => !node.ok)
+      .map((node) => ({ nodeId: node.nodeId, node: node.name, reason: node.error?.message })),
+  });
 }
 
 export async function operatorListTickets(

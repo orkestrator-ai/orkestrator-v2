@@ -1,3 +1,4 @@
+import { PromptRejectedError } from "../agent-provider-contract.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 import { cleanupSessionHarnesses, setup } from "./test-provider.js";
@@ -172,4 +173,177 @@ describe("review.*", () => {
     });
     expect(list.ok && list.result.items).toEqual([]);
   });
+});
+
+describe("PR button defaults and lifecycle", () => {
+  for (const button of ["pr.create", "pr.resolve"] as const) {
+    test(`${button} action defaults supply agent/model/reasoning and an explicit model drops inherited Fast`, async () => {
+      const { harness } = await setup();
+      const config = await harness.storage.loadConfig();
+      await harness.storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          agentSettings: {
+            actionDefaults: {
+              pr: { platform: "claude", model: "opus", reasoningEffort: "high", fastMode: true },
+              resolve: {
+                platform: "claude",
+                model: "opus",
+                reasoningEffort: "high",
+                fastMode: true,
+              },
+            },
+          },
+        },
+      });
+      harness.commands.set("get_native_agent_model_catalog", async () => [
+        {
+          platform: "claude",
+          id: "opus",
+          label: "Opus",
+          supportsSpeed: true,
+          reasoning: [{ id: "high", label: "High" }],
+        },
+        { platform: "claude", id: "haiku", label: "Haiku", supportsSpeed: false, reasoning: [] },
+      ]);
+      const job = harness.commands.get("launch_native_agent_job")!;
+      const sent: Record<string, unknown>[] = [];
+      harness.commands.set("launch_native_agent_job", async (args, context) => {
+        sent.push(args);
+        return job(args, context);
+      });
+      const inherited = await harness.call(
+        button,
+        { environmentId: "env-1" },
+        { requestId: "default-pr" },
+      );
+      expect(inherited.ok).toBe(true);
+      expect(sent[0]).toMatchObject({
+        agent: "claude",
+        modelId: "opus",
+        reasoningId: "high",
+        fastMode: true,
+      });
+      const overridden = await harness.call(
+        button,
+        { environmentId: "env-1", agent: "claude", model: "haiku" },
+        { requestId: "explicit-pr" },
+      );
+      expect(overridden.ok).toBe(true);
+      expect(sent[1]).toMatchObject({ agent: "claude", modelId: "haiku" });
+      expect(sent[1]?.fastMode).toBeUndefined();
+      expect(sent[1]?.reasoningId).toBeUndefined();
+    });
+  }
+
+  for (const monitorFails of [false, true]) {
+    test(`PR monitor starts after acceptance and ${monitorFails ? "failure preserves the accepted run" : "replay never starts it twice"}`, async () => {
+      const { harness, stub } = await setup();
+      const watches: unknown[] = [];
+      harness.commands.set("pr_monitor_watch", async (args) => {
+        watches.push(args);
+        if (monitorFails) throw new Error("monitor unavailable");
+      });
+      const input = { environmentId: "env-1" };
+      const first = await harness.call("pr.create", input, { requestId: "watch-pr" });
+      expect(first.receipt?.dispatch?.state).toBe("accepted");
+      expect(first.receipt?.state).toBe("running");
+      await harness.call("pr.create", input, { requestId: "watch-pr" });
+      expect(watches).toEqual([{ environmentId: "env-1", mode: "create-pending" }]);
+      expect(stub.sends).toHaveLength(1);
+    });
+  }
+
+  for (const action of ["pr.create", "pr.resolve"] as const) {
+    test(`${action} defaults to the configured agent and settles on its provider evidence`, async () => {
+      const { harness, service, stub } = await setup();
+      const config = await harness.storage.loadConfig();
+      await harness.storage.saveConfig({
+        ...config,
+        global: { ...config.global, agentSettings: { defaultAgent: "claude" } },
+      });
+      if (action === "pr.resolve")
+        await harness.storage.updateEnvironment("env-1", {
+          prUrl: "https://github.com/acme/site/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+      const refreshes: unknown[] = [];
+      harness.commands.set("pr_monitor_agent_turn_completed", async (args) => {
+        refreshes.push(args);
+      });
+      const started = await harness.call<{ sessionId: string; tabId: string }>(
+        action,
+        { environmentId: "env-1" },
+        { requestId: "complete" },
+      );
+      expect(started.ok).toBe(true);
+      if (action === "pr.resolve")
+        expect(
+          (await harness.storage.getEnvironment("env-1"))?.prRecheckAfterAgentCompletionArmedAt,
+        ).toBeDefined();
+      await service.reconcileAgentActivity();
+      stub.setStatus(async () => "idle");
+      await service.reconcileAgentActivity();
+      const observed = await harness.call("run.get", { operationId: started.receipt!.operationId });
+      expect(observed.receipt?.state).toBe("succeeded");
+      if (action === "pr.resolve") expect(refreshes).toEqual([{ environmentId: "env-1" }]);
+    });
+
+    test(`${action} can be steered and stopped using the original run ID`, async () => {
+      const { setActivity } = await import("./test-provider.js");
+      const { harness, service, stub } = await setup();
+      Object.assign(stub.provider, {
+        activeSteerRun: async () => ({ state: "running", runId: "provider-turn" }),
+        steerSupported: async () => true,
+        steerStatus: async () => "dispatched",
+        performSessionAction: async () => ({ outcome: "applied" }),
+      });
+      const started = await harness.call<{ sessionId: string; tabId: string }>(
+        action,
+        { environmentId: "env-1" },
+        { requestId: "controlled" },
+      );
+      if (!started.ok) throw new Error(started.error.message);
+      const steer = await harness.call(
+        "session.steer",
+        {
+          sessionId: started.result.sessionId,
+          text: "focus",
+          expectedOperationId: started.receipt!.operationId,
+        },
+        { requestId: "steer" },
+      );
+      expect(steer.ok).toBe(true);
+      const stop = await harness.call(
+        "session.stop",
+        { sessionId: started.result.sessionId, expectedOperationId: started.receipt!.operationId },
+        { requestId: "stop" },
+      );
+      expect(stop.ok).toBe(true);
+      setActivity(service, "claude", started.result.tabId, stub.sends[0]!.sessionId, "idle");
+      const observed = await harness.call("run.get", { operationId: started.receipt!.operationId });
+      expect(observed.receipt?.state).toBe("cancelled");
+    });
+
+    test(`${action} dispatch rejection remains failed and never starts the monitor`, async () => {
+      const { harness, stub } = await setup();
+      const watches: unknown[] = [];
+      harness.commands.set("pr_monitor_watch", async (args) => {
+        watches.push(args);
+      });
+      stub.setSend(async () => {
+        throw new PromptRejectedError("provider refused");
+      });
+      const refused = await harness.call(
+        action,
+        { environmentId: "env-1" },
+        { requestId: "rejected" },
+      );
+      expect(!refused.ok && refused.error.code).toBe("operation-failed");
+      expect(refused.receipt?.dispatch?.state).toBe("rejected");
+      expect(watches).toHaveLength(0);
+    });
+  }
 });

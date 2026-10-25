@@ -7,7 +7,6 @@ import {
   isPublicNodeTarget,
   PUBLIC_ACTIONS,
   PUBLIC_ALL_NODES,
-  PUBLIC_API_LIMITS,
   PUBLIC_LOCAL_ONLY_ACTIONS,
   publicErrorEnvelope,
   publicSuccessEnvelope,
@@ -28,7 +27,7 @@ import type { CommandContext } from "../commands-context.js";
 import { NodeUnavailableError } from "../nodes/node-link.js";
 import type { NodeLink } from "../nodes/node-link.js";
 import { boundedMessage, PublicActionError } from "./errors.js";
-import type { PublicAuthority } from "./operation-ledger.js";
+import { isPublicAuthority, type PublicAuthority } from "./operation-ledger.js";
 
 /**
  * `request.node`: run a public action on a leaf node this command node
@@ -398,8 +397,6 @@ async function aggregate(
       answer.response.ok ? "" : `${answer.name}: ${answer.response.error.message}`,
     );
   if (action === "attention.list") {
-    const limit =
-      typeof input.limit === "number" ? input.limit : PUBLIC_API_LIMITS.attentionDefaultItems;
     const items: PublicNodeTagged<PublicAttentionItem>[] = [];
     const counts = { interactions: 0, runs: 0, setups: 0 };
     let more = 0;
@@ -424,8 +421,10 @@ async function aggregate(
     }
     items.sort(attentionOrder);
     const result: PublicAggregateAttentionPage = {
-      items: items.slice(0, limit),
-      more: more + Math.max(0, items.length - limit),
+      // Each cursor covers its entire fetched page. Deliver every fetched item
+      // so advancing any node cursor cannot skip an omitted event.
+      items,
+      more,
       counts,
       nodes,
     };
@@ -467,24 +466,29 @@ async function aggregate(
 export function parseRelayedAuthorityClaim(
   value: unknown,
   command: CommandContext,
+  authenticatedController?: unknown,
 ): RelayedAuthorityClaim | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new PublicActionError("invalid-input", "relayedAuthority is invalid");
   }
   const claim = value as Record<string, unknown>;
-  if (!isBackendId(claim.controllerId) || typeof claim.authority !== "string") {
+  if (
+    !isBackendId(claim.controllerId) ||
+    !isPublicAuthority(claim.authority) ||
+    !claim.authority.startsWith("control-mcp:")
+  ) {
     throw new PublicActionError("invalid-input", "relayedAuthority is invalid");
   }
   const controllerId = claim.controllerId;
   const attached = command.nodes
     ?.listControllers()
     .some((entry) => entry.controllerId === controllerId);
-  if (!attached) {
+  if (!attached || authenticatedController !== controllerId) {
     throw new PublicActionError(
       "capability-unavailable",
       "Only a command node attached to this node can relay a credential",
     );
   }
-  return { controllerId, authority: claim.authority as PublicAuthority };
+  return { controllerId, authority: claim.authority };
 }

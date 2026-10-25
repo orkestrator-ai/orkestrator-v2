@@ -1,3 +1,4 @@
+import { relayController } from "./relay-context.js";
 import {
   isPublicActionName,
   isPublicNamespace,
@@ -24,7 +25,7 @@ import {
   type PublicOperationRecord,
 } from "./operation-ledger.js";
 import { dispatchToNode, parseRelayedAuthorityClaim } from "./node-targets.js";
-import { ensureReconciler } from "./reconciler.js";
+import { ensureReconciler, reconcileOperation } from "./reconciler.js";
 import type {
   ExecuteOutcome,
   MutationActionHandler,
@@ -352,7 +353,7 @@ async function runMutation(
       );
     }
     if (existing.state !== "admitted" || existing.generation === context.generation) {
-      return replayResponse(existing);
+      return replayResponse(await reconcileOperation(existing, context));
     }
     // Prepare before changing ownership. A failed prepare leaves the old
     // generation visible to reconciliation and later same-key retries.
@@ -444,7 +445,11 @@ export function registerPublicActionCommand(
         if (authority !== "operator") {
           throw new PublicActionError("invalid-input", "relayedAuthority is invalid");
         }
-        const claim = parseRelayedAuthorityClaim(args.relayedAuthority, command);
+        const claim = parseRelayedAuthorityClaim(
+          args.relayedAuthority,
+          command,
+          relayController(args),
+        );
         if (claim) authority = relayedAuthority(claim.controllerId, claim.authority);
       } catch (error) {
         return withBackendIdentity(errorResponse(actionName, error), backend);

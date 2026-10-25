@@ -1,3 +1,4 @@
+import { withRelayController } from "../public-api/relay-context.js";
 import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { BACKEND_HELLO_PATH, CLIENT_API_VERSION } from "@orkestrator/protocol/backend-profile";
 import {
@@ -194,7 +195,11 @@ export class TestNodeNetwork {
       if (!handler && !extra) return json(500, { error: `Unknown command: ${body.command}` });
       try {
         const result = extra
-          ? await extra(body.args ?? {})
+          ? await extra(
+              body.command === "public_action" && controller
+                ? withRelayController(body.args ?? {}, controller)
+                : (body.args ?? {}),
+            )
           : await handler!(body.args ?? {}, {
               nodes: node.service,
               nodePortal: node.portal,

@@ -1,3 +1,4 @@
+import { createProject } from "./storage.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import { rpc, type RpcResult } from "./control-mcp-test-support.js";
@@ -223,5 +224,136 @@ describe("Control MCP and leaf nodes", () => {
       }),
     ) as { result: { target: { id: string; nodeId: string } } };
     expect(resolved.result.target).toMatchObject({ id: "env-1", nodeId: mcp.leafId });
+  });
+});
+
+describe("aggregate MCP regressions", () => {
+  test("legacy and voice lists drain over 200 leaf projects and environments", async () => {
+    const mcp = await open();
+    const template = (await mcp.leaf.harness.storage.getEnvironment("env-1"))!;
+    let finalProjectId = "";
+    for (let index = 0; index < 201; index += 1) {
+      const project = await mcp.leaf.harness.storage.addProject({
+        ...createProject(`https://example.invalid/project-${index}.git`),
+        name: `Project ${String(index).padStart(3, "0")}`,
+        order: index + 1,
+      });
+      finalProjectId = project.id;
+      await mcp.leaf.harness.storage.addEnvironment({
+        ...template,
+        id: `env-page-${index}`,
+        projectId: project.id,
+        name: `Environment ${String(index).padStart(3, "0")}`,
+        status: "stopped",
+        order: index + 1,
+      });
+    }
+    const projects = content(await mcp.call(mcp.token, "list_projects", { nodeId: "all" })) as {
+      projects: Array<{ id: string; nodeId: string }>;
+      warnings: string[];
+    };
+    expect(projects.projects).toHaveLength(202);
+    expect(projects.projects).toContainEqual(
+      expect.objectContaining({ id: finalProjectId, nodeId: mcp.leafId }),
+    );
+    expect(projects.warnings).toEqual([]);
+    const environments = content(
+      await mcp.call(mcp.token, "list_environments", { nodeId: "all" }),
+    ) as { environments: unknown[] };
+    expect(environments.environments).toHaveLength(202);
+    const voice = await mcp.credential("voice");
+    const overview = content(await mcp.call(voice, "overview", { nodeId: "all" })) as {
+      result: { counts: { projects: number; environments: { total: number } } };
+    };
+    expect(overview.result.counts).toMatchObject({ projects: 202, environments: { total: 202 } });
+    for (const [kind, query, id] of [
+      ["project", "Project 200", finalProjectId],
+      ["environment", "Environment 200", "env-page-200"],
+    ]) {
+      const resolved = content(
+        await mcp.call(voice, "resolve_target", { nodeId: "all", kind, query }),
+      ) as { result: { target: object } };
+      expect(resolved.result.target).toMatchObject({ id, nodeId: mcp.leafId });
+    }
+  });
+
+  test("legacy projects retain unavailable nodes alongside healthy projects", async () => {
+    const mcp = await open();
+    const project = await mcp.command.storage.addProject(
+      createProject("https://example.invalid/healthy.git"),
+    );
+    mcp.leafNode.online = false;
+    const listed = content(await mcp.call(mcp.token, "list_projects", { nodeId: "all" })) as {
+      projects: Array<{ id: string }>;
+      unavailableNodes: Array<{ nodeId: string }>;
+      warnings: string[];
+    };
+    expect(listed.projects.map((item) => item.id)).toEqual([project.id]);
+    expect(listed.unavailableNodes).toContainEqual(expect.objectContaining({ nodeId: mcp.leafId }));
+    expect(listed.warnings.join(" ")).toContain("leaf machine");
+  });
+
+  test("a disconnect between discovery and resolution preserves healthy environments", async () => {
+    const mcp = await open();
+    const environment = (await mcp.leaf.harness.storage.getEnvironment("env-1"))!;
+    const project = await mcp.command.storage.addProject(
+      createProject("https://example.invalid/local.git"),
+    );
+    await mcp.command.storage.addEnvironment({
+      ...environment,
+      id: "env-healthy",
+      projectId: project.id,
+    });
+    const original = mcp.command.commands.get("public_action")!;
+    let first = true;
+    mcp.command.commands.set("public_action", async (args, context) => {
+      const answer = await original(args, context);
+      if (args.action === "node.list" && first) {
+        first = false;
+        await mcp.commandNode.service.updateNode({ nodeId: mcp.leafId, enabled: false });
+      }
+      return answer;
+    });
+    const listed = content(await mcp.call(mcp.token, "list_environments", { nodeId: "all" })) as {
+      environments: Array<{ id: string }>;
+      unavailableNodes: Array<{ nodeId: string }>;
+    };
+    expect(listed.environments.map((item) => item.id)).toEqual(["env-healthy"]);
+    expect(listed.unavailableNodes).toContainEqual(expect.objectContaining({ nodeId: mcp.leafId }));
+  });
+
+  test("voice surfaces unavailable reads and refuses a project scoped to all nodes", async () => {
+    const mcp = await open();
+    const voice = await mcp.credential("voice");
+    for (const tool of ["overview", "resolve_target"]) {
+      const response = content(
+        await mcp.call(voice, tool, {
+          nodeId: "all",
+          projectId: mcp.leaf.projectId,
+          ...(tool === "resolve_target" ? { query: "sessions", kind: "environment" } : {}),
+        }),
+      ) as { ok: boolean; error: { code: string } };
+      expect(response.ok).toBe(false);
+      expect(response.error.code).toBe("invalid-input");
+    }
+    mcp.leafNode.online = false;
+    for (const [tool, args] of [
+      ["overview", {}],
+      ["resolve_target", { query: "sessions", kind: "environment" }],
+      ["start_work", { environmentId: "env-1", prompt: "work", requestId: "offline-start" }],
+    ] as const) {
+      const response = content(await mcp.call(voice, tool, { ...args, nodeId: mcp.leafId })) as {
+        ok: boolean;
+        error: { code: string };
+      };
+      expect(response.ok).toBe(false);
+      expect(response.error.code).toBe("node-unavailable");
+    }
+    const aggregate = content(await mcp.call(voice, "overview", { nodeId: "all" })) as {
+      ok: boolean;
+      error: { code: string };
+    };
+    expect(aggregate.ok).toBe(false);
+    expect(aggregate.error.code).toBe("node-unavailable");
   });
 });

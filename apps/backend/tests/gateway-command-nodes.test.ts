@@ -1,3 +1,4 @@
+import { relayController } from "../src/core/public-api/relay-context.js";
 import { describe, expect, mock, test } from "bun:test";
 import { createServer } from "node:http";
 import { gzipSync } from "node:zlib";
@@ -90,6 +91,48 @@ describe("AT-04 controller contact", () => {
     });
     expect(nodeHooks.noteControllerContact).toHaveBeenCalledWith("bk_command");
   });
+});
+
+test("public relay identity comes from the authenticated node transport, never request JSON or a workspace grant", async () => {
+  const grant = "okg_relay.secret";
+  const observed: unknown[] = [];
+  const { info } = await startGateway({
+    backend: {
+      invoke: async (_command, args) => {
+        observed.push(relayController(args ?? {}));
+        return { ok: true };
+      },
+    },
+    backendHello: async () => identity,
+    nodeHooks: {
+      ...hooks([]),
+      authenticateGrant: (token) => (token === grant ? Date.now() + 60_000 : null),
+    },
+  });
+  const url = new URL("/__orkestrator/invoke", info.url).toString();
+  for (const [token, controller] of [
+    [info.token, undefined],
+    [info.token, "bk_command"],
+    [grant, "bk_command"],
+  ]) {
+    const response = await requestUrl(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        ...(controller ? { [CONTROLLER_HEADER]: controller } : {}),
+      },
+      body: JSON.stringify({
+        command: "public_action",
+        args: {
+          controllerId: "bk_forged",
+          relayedAuthority: { controllerId: "bk_command", authority: "control-mcp:alice" },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+  }
+  expect(observed).toEqual([undefined, "bk_command", undefined]);
 });
 
 describe("DP-02 client grants at the leaf's gateway", () => {

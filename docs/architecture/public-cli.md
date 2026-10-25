@@ -247,7 +247,9 @@ answered.
   attention `cursor`, or its error), and a node that did not answer is a
   warning, not a failure. Cursors are per node: page or follow one node with
   its `--node`. `environment list --project` takes one node. Mutations name
-  one node.
+  one node. Attention applies `--limit` per node; the combined page may contain
+  more items than that limit. Human attention lines name their owning node,
+  and partial-read warnings are retained in both human and JSON output.
 - **Codes.** `node-not-found` (3): no such node here. `node-unavailable` (4):
   registered but disabled or not connected; nothing was sent.
   `node-unsupported` (8): the leaf's Orkestrator is too old to take public
@@ -272,9 +274,11 @@ client.
 
 Every mutation carries a request key. `--request-id KEY` sets it; otherwise the
 client generates one. Before the request leaves the process the client writes a
-private local receipt (action, key, namespace, installation, intent digest — no
+private local receipt (action, key, namespace, installation, target node, intent digest — no
 payload). A local receipt records intent, not acceptance, and is never
-resubmitted automatically. `orkestrator run receipts` lists them.
+resubmitted automatically. The cache and request-key lookup are scoped to the
+selected node. Recovery commands and receipt hints retain `--node`.
+`orkestrator run receipts` lists them.
 
 In the backend the key is scoped by authority, action, target scope and
 request ID, and bound to a SHA-256 fingerprint of the canonical intent. The

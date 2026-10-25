@@ -173,7 +173,8 @@ export async function runClient(
   try {
     outcome = await command.spec.run(context, command);
   } catch (error) {
-    const connection = session ? (session as ClientSession).identity : undefined;
+    const failedSession = session as ClientSession | null;
+    const connection = failedSession?.identity;
     if (
       signal.aborted &&
       !(error instanceof CliError && error.code === "observation-interrupted")
@@ -182,6 +183,7 @@ export async function runClient(
         action,
         ...(error instanceof CliError && error.receipt ? { receipt: error.receipt } : {}),
         ...(connection ? { connection } : {}),
+        ...(failedSession?.nodeTag ? { node: failedSession.nodeTag } : {}),
       });
     }
     if (error instanceof CliError && error.code === "observation-interrupted") {
@@ -190,11 +192,21 @@ export async function runClient(
         details: error.details,
         ...(error.receipt ? { receipt: error.receipt } : {}),
         ...(connection ? { connection } : {}),
+        ...(failedSession?.nodeTag ? { node: failedSession.nodeTag } : {}),
       });
     }
-    return output.failure(error, { action, ...(connection ? { connection } : {}) });
+    return output.failure(error, {
+      action,
+      ...(connection ? { connection } : {}),
+      ...(failedSession?.nodeTag ? { node: failedSession.nodeTag } : {}),
+    });
   }
-  return output.success(outcome);
+  const activeSession = session as ClientSession | null;
+  return output.success({
+    ...outcome,
+    ...(activeSession?.nodeTag ? { node: activeSession.nodeTag } : {}),
+    warnings: [...new Set([...(outcome.warnings ?? []), ...(activeSession?.warnings ?? [])])],
+  });
 }
 
 /** Bind the real process streams and signals. */

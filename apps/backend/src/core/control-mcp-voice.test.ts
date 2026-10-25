@@ -628,3 +628,56 @@ describe("Control MCP voice core", () => {
     expect(harness.stub.sends).toHaveLength(1);
   });
 });
+
+describe("voice read failures", () => {
+  for (const tool of ["overview", "resolve_target"] as const) {
+    test(`${tool} rejects projectId on all nodes before returning a summary`, async () => {
+      const harness = await open();
+      const voice = await harness.credential("voice");
+      const response = structured(
+        await harness.call(voice.token, tool, {
+          nodeId: "all",
+          projectId: harness.projectId,
+          ...(tool === "resolve_target" ? { query: "sessions", kind: "environment" } : {}),
+        }),
+      );
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("invalid-input");
+    });
+  }
+
+  test("an attention-only overview surfaces a failed aggregate node", async () => {
+    const { publicSuccessEnvelope } = await import("@orkestrator/protocol/public-api");
+    const harness = await open();
+    const credential = await harness.credential("custom", {
+      capabilities: ["sessions.read"],
+      deniedActions: ["session.list", "session.get", "session.transcript", "session.interactions"],
+    });
+    const original = harness.harness.commands.get("public_action")!;
+    harness.harness.commands.set("public_action", async (args, context) => {
+      if (args.action === "attention.list")
+        return publicSuccessEnvelope("attention.list", {
+          items: [],
+          more: 0,
+          counts: { interactions: 0, runs: 0, setups: 0 },
+          nodes: [
+            {
+              nodeId: "bk_unread",
+              name: "Unread machine",
+              ok: false,
+              error: { code: "node-unavailable", message: "not checked" },
+            },
+          ],
+        });
+      return original(args, context);
+    });
+    const response = structured(
+      await harness.call(credential.token, "overview", { nodeId: "all" }),
+    );
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({
+      code: "node-unavailable",
+      message: expect.stringContaining("Unread machine"),
+    });
+  });
+});

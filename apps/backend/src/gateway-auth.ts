@@ -511,7 +511,11 @@ export class GatewayAuth {
         request,
         response,
         requestMetrics,
-        viaGrant ? { refuseCommand: isWorkspaceExcludedCommand } : undefined,
+        viaGrant
+          ? { refuseCommand: isWorkspaceExcludedCommand }
+          : controllerId
+            ? { controllerId }
+            : undefined,
       );
       return;
     }

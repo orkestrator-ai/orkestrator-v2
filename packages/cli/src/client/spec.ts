@@ -40,6 +40,7 @@ export interface ParsedCommand {
 export interface CommandOutcome {
   action: string;
   result: unknown;
+  node?: import("@orkestrator/protocol/public-api").PublicNodeTag;
   receipt?: PublicReceipt;
   warnings?: string[];
   connection?: PublicConnectionIdentity;

@@ -1,7 +1,9 @@
+import { allPublicPages } from "./control-mcp-pages.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   PUBLIC_ALL_NODES,
+  isPublicErrorCode,
   publicSuccessEnvelope,
   type PublicActionName,
 } from "@orkestrator/protocol/public-api";
@@ -11,6 +13,7 @@ import {
   type PublicAgentOptions,
   type PublicAggregateAttentionPage,
   type PublicNodeList,
+  type PublicNodeReadResult,
   type PublicAttentionItem,
   type PublicAttentionPage,
   type PublicEnvironmentSummary,
@@ -21,7 +24,7 @@ import {
 import {
   allowed,
   onNode,
-  readIfAllowed,
+  dispatchAs,
   runPublicAction,
   type ControlMcpCaller,
 } from "./control-mcp-caller.js";
@@ -233,25 +236,59 @@ export function attentionSentence(item: PublicAttentionItem): string {
   return `${item.action} ${item.state}${item.errorCode ? ` (${item.errorCode})` : ""}`;
 }
 
+class VoiceReadError extends Error {
+  constructor(readonly envelope: ControlMcpEnvelope) {
+    super(envelope.ok ? "Read failed" : envelope.error.message);
+  }
+}
+
+function readFailure(error: unknown, profile: ControlMcpCaller["profile"]) {
+  if (!(error instanceof VoiceReadError)) throw error;
+  return envelopeToolResult(error.envelope, profile, sayForEnvelope(error.envelope));
+}
+
+async function readIfAllowed<T>(
+  caller: ControlMcpCaller,
+  action: PublicActionName,
+  input: Record<string, unknown>,
+): Promise<T | null> {
+  if (!allowed(caller, action)) return null;
+  const response = await dispatchAs<T>(caller, action, input);
+  if (!response.ok) throw new VoiceReadError(response);
+  const failed = (response.result as { nodes?: PublicNodeReadResult[] } | null)?.nodes?.find(
+    (node) => !node.ok,
+  );
+  if (failed)
+    throw new VoiceReadError(
+      adapterError(
+        action,
+        isPublicErrorCode(failed.error?.code) ? failed.error.code : "node-unavailable",
+        `${failed.name}: ${failed.error?.message ?? "could not be read"}`,
+      ),
+    );
+  return response.result;
+}
+
 async function allPages<T>(
   caller: ControlMcpCaller,
   action: "project.list" | "environment.list",
   input: Record<string, unknown> = {},
 ): Promise<T[] | null> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await readIfAllowed<{ items: T[]; nextCursor?: string }>(caller, action, {
-      ...input,
-      limit: 200,
-      ...(cursor ? { cursor } : {}),
-    });
-    if (!result) return null;
-    items.push(...result.items);
-    cursor = result.nextCursor;
-    if (!cursor) break;
+  if (!allowed(caller, action)) return null;
+  const pages = await allPublicPages<T>(caller, action, input);
+  if ("envelope" in pages) throw new VoiceReadError(pages.envelope);
+  // A composed summary or resolver cannot claim completeness after omitting a machine.
+  if (pages.warnings.length) {
+    const code = pages.nodes.find((node) => !node.ok)?.error?.code;
+    throw new VoiceReadError(
+      adapterError(
+        action,
+        isPublicErrorCode(code) ? code : "node-unavailable",
+        pages.warnings.join("; "),
+      ),
+    );
   }
-  return items;
+  return pages.items;
 }
 
 async function sessionsOf(
@@ -287,6 +324,14 @@ async function sessionsOf(
 
 async function overview(caller: ControlMcpCaller, projectId?: string) {
   const everywhere = caller.nodeId === PUBLIC_ALL_NODES;
+  if (everywhere && projectId)
+    throw new VoiceReadError(
+      adapterError(
+        "overview",
+        "invalid-input",
+        "A projectId belongs to one node; pass its nodeId instead of all",
+      ),
+    );
   const [projects, environments, attention, nodes] = await Promise.all([
     allPages<PublicProjectSummary>(caller, "project.list"),
     allPages<PublicEnvironmentSummary>(caller, "environment.list", projectId ? { projectId } : {}),
@@ -467,29 +512,33 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
         annotations: readAnnotations,
       },
       async ({ projectId, nodeId }) => {
-        const result = await overview(onNode(caller, nodeId), projectId);
-        const items = result.attention?.items ?? [];
-        const running = result.counts.environments.running;
-        const say = [
-          `${running} environment${running === 1 ? "" : "s"} running, ${result.counts.sessions.working} working.`,
-          items.length
-            ? `Needs attention: ${items.map(attentionSentence).join("; ")}${result.attention?.more ? `; and ${result.attention.more} more` : ""}.`
-            : "Nothing needs attention.",
-        ].join(" ");
-        const first = items[0];
-        return envelopeToolResult(success("overview", result), profile, {
-          say,
-          ...(first && first.kind === "interaction"
-            ? {
-                ids: {
-                  sessionId: first.sessionId,
-                  interactionId: first.interactionId,
-                  revision: first.revision,
-                  ...("nodeId" in first ? { nodeId: (first as Tagged<object>).nodeId } : {}),
-                },
-              }
-            : {}),
-        });
+        try {
+          const result = await overview(onNode(caller, nodeId), projectId);
+          const items = result.attention?.items ?? [];
+          const running = result.counts.environments.running;
+          const say = [
+            `${running} environment${running === 1 ? "" : "s"} running, ${result.counts.sessions.working} working.`,
+            items.length
+              ? `Needs attention: ${items.map(attentionSentence).join("; ")}${result.attention?.more ? `; and ${result.attention.more} more` : ""}.`
+              : "Nothing needs attention.",
+          ].join(" ");
+          const first = items[0];
+          return envelopeToolResult(success("overview", result), profile, {
+            say,
+            ...(first && first.kind === "interaction"
+              ? {
+                  ids: {
+                    sessionId: first.sessionId,
+                    interactionId: first.interactionId,
+                    revision: first.revision,
+                    ...("nodeId" in first ? { nodeId: (first as Tagged<object>).nodeId } : {}),
+                  },
+                }
+              : {}),
+          });
+        } catch (error) {
+          return readFailure(error, profile);
+        }
       },
     );
   }
@@ -504,41 +553,53 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
         annotations: readAnnotations,
       },
       async ({ query, kind, projectId, environmentId, nodeId }) => {
-        const resolution = resolveTarget(
-          query,
-          await targetCandidates(onNode(caller, nodeId), kind, { projectId, environmentId }),
-        );
-        if (resolution.status === "resolved") {
-          const target = candidateView(resolution.target);
-          return envelopeToolResult(success("resolve_target", { target }), profile, {
-            say: `That is ${target.kind} ${target.name}${target.node ? ` on ${target.node}` : ""}.`,
-            ids: {
-              [`${target.kind}Id`]: target.id,
-              ...(target.nodeId ? { nodeId: target.nodeId } : {}),
-            },
-          });
-        }
-        if (resolution.status === "ambiguous") {
-          const candidates = resolution.candidates.map(candidateView);
-          return envelopeToolResult(
-            adapterError(
-              "resolve_target",
-              "ambiguous-target",
-              "More than one match, or no exact match",
-              {
-                candidates,
-              },
-            ),
-            profile,
-            {
-              say: `I'm not sure which you mean: ${candidates.map((candidate) => candidate.name).join(", ")}.`,
-            },
+        try {
+          if (nodeId === PUBLIC_ALL_NODES && projectId)
+            throw new VoiceReadError(
+              adapterError(
+                "resolve_target",
+                "invalid-input",
+                "A projectId belongs to one node; pass its nodeId instead of all",
+              ),
+            );
+          const resolution = resolveTarget(
+            query,
+            await targetCandidates(onNode(caller, nodeId), kind, { projectId, environmentId }),
           );
+          if (resolution.status === "resolved") {
+            const target = candidateView(resolution.target);
+            return envelopeToolResult(success("resolve_target", { target }), profile, {
+              say: `That is ${target.kind} ${target.name}${target.node ? ` on ${target.node}` : ""}.`,
+              ids: {
+                [`${target.kind}Id`]: target.id,
+                ...(target.nodeId ? { nodeId: target.nodeId } : {}),
+              },
+            });
+          }
+          if (resolution.status === "ambiguous") {
+            const candidates = resolution.candidates.map(candidateView);
+            return envelopeToolResult(
+              adapterError(
+                "resolve_target",
+                "ambiguous-target",
+                "More than one match, or no exact match",
+                {
+                  candidates,
+                },
+              ),
+              profile,
+              {
+                say: `I'm not sure which you mean: ${candidates.map((candidate) => candidate.name).join(", ")}.`,
+              },
+            );
+          }
+          return envelopeToolResult(
+            adapterError("resolve_target", "not-found", `Nothing is called ${short(query, 80)}`),
+            profile,
+          );
+        } catch (error) {
+          return readFailure(error, profile);
         }
-        return envelopeToolResult(
-          adapterError("resolve_target", "not-found", `Nothing is called ${short(query, 80)}`),
-          profile,
-        );
       },
     );
   }
@@ -737,48 +798,52 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
         annotations: mutationAnnotations,
       },
       async ({ prompt, projectId, environmentId, agent, name, requestId: key, nodeId }) => {
-        if (Boolean(projectId) === Boolean(environmentId)) {
-          return envelopeToolResult(
-            adapterError("start_work", "invalid-input", "Pass projectId or environmentId"),
-            profile,
-          );
-        }
-        const chosen =
-          agent ?? (await defaultAgent(onNode(caller, nodeId), { projectId, environmentId }));
-        if (!chosen) {
-          return envelopeToolResult(
-            adapterError("start_work", "capability-unavailable", "No agent is enabled"),
-            profile,
-          );
-        }
-        const envelope = environmentId
-          ? await runPublicAction(
-              onNode(caller, nodeId),
-              "session.start",
-              { environmentId, agent: chosen, prompt },
-              key,
-              undefined,
-            )
-          : await runPublicAction(
-              onNode(caller, nodeId),
-              "environment.launch",
-              { projectId, type: "local", agent: chosen, prompt, ...(name ? { name } : {}) },
-              key,
-              undefined,
+        try {
+          if (Boolean(projectId) === Boolean(environmentId)) {
+            return envelopeToolResult(
+              adapterError("start_work", "invalid-input", "Pass projectId or environmentId"),
+              profile,
             );
-        const result = envelope.ok ? (envelope.result as Record<string, unknown>) : {};
-        return envelopeToolResult(envelope, profile, {
-          ...sayForEnvelope(envelope),
-          ...(envelope.ok
-            ? {
-                say: `Started ${chosen}${environmentId ? "" : " in a new environment"}. I'll report when it finishes.`,
-                ids: {
-                  environmentId: (result.environmentId as string | undefined) ?? environmentId,
-                  sessionId: result.sessionId as string | undefined,
-                },
-              }
-            : {}),
-        });
+          }
+          const chosen =
+            agent ?? (await defaultAgent(onNode(caller, nodeId), { projectId, environmentId }));
+          if (!chosen) {
+            return envelopeToolResult(
+              adapterError("start_work", "capability-unavailable", "No agent is enabled"),
+              profile,
+            );
+          }
+          const envelope = environmentId
+            ? await runPublicAction(
+                onNode(caller, nodeId),
+                "session.start",
+                { environmentId, agent: chosen, prompt },
+                key,
+                undefined,
+              )
+            : await runPublicAction(
+                onNode(caller, nodeId),
+                "environment.launch",
+                { projectId, type: "local", agent: chosen, prompt, ...(name ? { name } : {}) },
+                key,
+                undefined,
+              );
+          const result = envelope.ok ? (envelope.result as Record<string, unknown>) : {};
+          return envelopeToolResult(envelope, profile, {
+            ...sayForEnvelope(envelope),
+            ...(envelope.ok
+              ? {
+                  say: `Started ${chosen}${environmentId ? "" : " in a new environment"}. I'll report when it finishes.`,
+                  ids: {
+                    environmentId: (result.environmentId as string | undefined) ?? environmentId,
+                    sessionId: result.sessionId as string | undefined,
+                  },
+                }
+              : {}),
+          });
+        } catch (error) {
+          return readFailure(error, profile);
+        }
       },
     );
   }

@@ -4,6 +4,7 @@ import {
   type PublicConnectionIdentity,
   type PublicErrorEnvelope,
   type PublicReceipt,
+  type PublicNodeTag,
   type PublicSuccessEnvelope,
 } from "@orkestrator/protocol/public-api";
 import { CliError } from "./errors.js";
@@ -43,6 +44,7 @@ export class OutputWriter {
         ok: true,
         ...(outcome.connection ? { connection: outcome.connection } : {}),
         result: outcome.result ?? null,
+        ...(outcome.node ? { node: outcome.node } : {}),
         ...(outcome.receipt ? { receipt: outcome.receipt } : {}),
         ...(outcome.warnings && outcome.warnings.length > 0 ? { warnings: outcome.warnings } : {}),
       };
@@ -56,7 +58,7 @@ export class OutputWriter {
     }
     for (const line of outcome.human ?? defaultHuman(outcome.result)) this.io.stdout(`${line}\n`);
     for (const warning of outcome.warnings ?? []) this.io.stderr(`warning: ${warning}\n`);
-    if (outcome.receipt) this.io.stderr(`${receiptHint(outcome.receipt)}\n`);
+    if (outcome.receipt) this.io.stderr(`${receiptHint(outcome.receipt, outcome.node)}\n`);
     return outcome.exitCodeOverride ?? 0;
   }
 
@@ -70,12 +72,14 @@ export class OutputWriter {
           );
     const exitCode = exitCodeForError(cliError.code);
     const receipt = cliError.receipt ?? context.receipt;
+    const node = cliError.node ?? context.node;
     if (this.mode === "json" || this.mode === "jsonl") {
       const envelope: PublicErrorEnvelope = {
         schemaVersion: PUBLIC_API_SCHEMA_VERSION,
         action: cliError.action ?? context.action ?? "cli",
         ok: false,
         ...(context.connection ? { connection: context.connection } : {}),
+        ...(node ? { node } : {}),
         error: {
           code: cliError.code,
           message: cliError.message,
@@ -89,7 +93,9 @@ export class OutputWriter {
       return exitCode;
     }
     this.io.stderr(`error [${cliError.code}]: ${cliError.message}\n`);
-    if (receipt) this.io.stderr(`${receiptHint(receipt)}\n`);
+    if (typeof cliError.details?.recovery === "string")
+      this.io.stderr(`recover with \`${cliError.details.recovery}\`\n`);
+    if (receipt) this.io.stderr(`${receiptHint(receipt, node)}\n`);
     return exitCode;
   }
 
@@ -101,6 +107,7 @@ export class OutputWriter {
       receipt?: PublicReceipt;
       connection?: PublicConnectionIdentity;
       details?: Record<string, unknown>;
+      node?: PublicNodeTag;
     },
   ): number {
     const code = signal === "SIGINT" ? 130 : 143;
@@ -110,6 +117,7 @@ export class OutputWriter {
         `${JSON.stringify({
           schemaVersion: PUBLIC_API_SCHEMA_VERSION,
           action: context.action,
+          ...(context.node ? { node: context.node } : {}),
           ok: false,
           ...(context.connection ? { connection: context.connection } : {}),
           error: {
@@ -124,13 +132,13 @@ export class OutputWriter {
       return code;
     }
     this.io.stderr(`${message}\n`);
-    if (context.receipt) this.io.stderr(`${receiptHint(context.receipt)}\n`);
+    if (context.receipt) this.io.stderr(`${receiptHint(context.receipt, context.node)}\n`);
     return code;
   }
 }
 
-export function receiptHint(receipt: PublicReceipt): string {
-  return `operation ${receipt.operationId} (${receipt.action}) is ${receipt.state}; inspect with \`orkestrator run get ${receipt.operationId}\``;
+export function receiptHint(receipt: PublicReceipt, node?: PublicNodeTag): string {
+  return `operation ${receipt.operationId} (${receipt.action}) is ${receipt.state}; inspect with \`orkestrator run get ${receipt.operationId}${node ? ` --node ${node.nodeId}` : ""}\``;
 }
 
 export function boundMessage(message: string, max = 500): string {

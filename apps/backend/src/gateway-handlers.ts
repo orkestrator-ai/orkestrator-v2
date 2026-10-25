@@ -1,3 +1,4 @@
+import { withRelayController } from "./core/public-api/relay-context.js";
 import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
@@ -56,7 +57,7 @@ export class GatewayHandlers {
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
-    options: { refuseCommand?: (command: string) => boolean } = {},
+    options: { refuseCommand?: (command: string) => boolean; controllerId?: string } = {},
   ): Promise<void> {
     if (request.method !== "POST") {
       response.writeHead(405, { allow: "POST" });
@@ -112,7 +113,12 @@ export class GatewayHandlers {
     const startedAt = Date.now();
 
     try {
-      const result = await this.ctx.backend.invoke(command, safeArgs);
+      const result = await this.ctx.backend.invoke(
+        command,
+        command === "public_action" && options.controllerId
+          ? withRelayController(safeArgs, options.controllerId)
+          : safeArgs,
+      );
       const responseBody = JSON.stringify({ result });
       this.ctx.metrics.recordInvoke(
         command,

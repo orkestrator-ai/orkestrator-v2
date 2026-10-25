@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { reviewLaunchId } from "./review-recovery.js";
 import { resolveActionDefault, type ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { resolveActionDefaults, resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
@@ -28,6 +28,7 @@ import {
 import type {
   ExecuteOutcome,
   MutationActionHandler,
+  OperationHandle,
   PublicActionContext,
   PublicActionHandler,
   ReadActionHandler,
@@ -95,6 +96,18 @@ function reviewOutcome(value: MultiReviewActionResult): ExecuteOutcome {
   return { state: "succeeded", result, resources };
 }
 
+/** Keep the confirmed surface result available to restart recovery. */
+async function saveReviewOutcome(operation: OperationHandle, value: MultiReviewActionResult) {
+  const outcome = reviewOutcome(value);
+  await operation.update({
+    stage: outcome.state === "partial" ? "review-partial-saved" : "review-success-saved",
+    result: outcome.result,
+    resources: outcome.resources,
+    ...("error" in outcome ? { error: outcome.error } : {}),
+  });
+  return outcome;
+}
+
 type LaunchInput = Omit<LaunchMultiReviewActionInput, "requestId">;
 
 const reviewLaunch: MutationActionHandler<LaunchInput> = {
@@ -119,12 +132,12 @@ const reviewLaunch: MutationActionHandler<LaunchInput> = {
     return {
       resources: { environmentId: environment.id, projectId: environment.projectId },
       async execute(operation) {
-        const reservedId = `public-${createHash("sha256").update(operation.operationId).digest("hex").slice(0, 32)}`;
+        const reservedId = reviewLaunchId(operation.operationId);
         const launched = await context.invoke<MultiReviewActionResult>(
           "launch_controller_multi_review",
           { input: { ...input, requestId: operation.operationId }, reservedId },
         );
-        return reviewOutcome(launched);
+        return saveReviewOutcome(operation, launched);
       },
     };
   },
@@ -187,8 +200,10 @@ function surfaceHandler(
       if (input.surface === "address") requireReviews(context);
       return {
         resources: { environmentId: workflow.environmentId, projectId: workflow.projectId },
-        async execute() {
-          return reviewOutcome(
+        resolved: { workflowId: workflow.id, surface: input.surface },
+        async execute(operation) {
+          return saveReviewOutcome(
+            operation,
             await context.invoke<MultiReviewActionResult>("controller_multi_review_surface", {
               workflowId: input.workflowId,
               surface: input.surface,
@@ -213,6 +228,7 @@ const reviewCancel: MutationActionHandler<{ workflowId: string }> = {
     const service = requireReviews(context);
     return {
       resources: { environmentId: workflow.environmentId, projectId: workflow.projectId },
+      resolved: { workflowId: workflow.id },
       async execute() {
         try {
           const cancelled = await service.cancel(input.workflowId);
@@ -268,7 +284,7 @@ async function buttonSelection(
   const own = agent === action.agent ? action : undefined;
   const model = input.model ?? own?.model;
   const reasoning = input.reasoning ?? (input.model ? undefined : own?.reasoningEffort);
-  const fastMode = input.fastMode ?? own?.fastMode;
+  const fastMode = input.fastMode ?? (input.model ? undefined : own?.fastMode);
   return {
     agent,
     ...(model ? { model } : {}),

@@ -1568,6 +1568,8 @@ export async function startEnvironmentOnce(
         repoConfig.filesToCopy,
         worktreeBaseDir,
         (await pathExists(seedRoot)) ? seedRoot : undefined,
+        // `initLocalProject` records the checkout itself as a local-only project's remote.
+        project.gitUrl === project.localPath,
       );
       // Seed files are copied once; the staging copy is not kept.
       await fs.rm(seedRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -2154,6 +2156,8 @@ export async function createLocalWorktree(
   worktreeBaseDir?: string,
   /** Seed files a command node staged for files this node's project root lacks. */
   seedRoot?: string,
+  /** A `project init` project: no remote, so its own branch is the base. */
+  localOnly = false,
 ): Promise<{ path: string; branch: string; createdFromCommit: string }> {
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   assertWorktreePathUnlinked(baseDir);
@@ -2164,7 +2168,7 @@ export async function createLocalWorktree(
   const startPoint =
     /^[0-9a-f]{40}$/i.test(requestedBase) && (await gitRefExists(projectPath, requestedBase))
       ? requestedBase
-      : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase);
+      : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase, { localOnly });
   const gitBranchExists = await createGitBranchCollisionChecker({
     baseBranch: baseSlug,
     projectPath,

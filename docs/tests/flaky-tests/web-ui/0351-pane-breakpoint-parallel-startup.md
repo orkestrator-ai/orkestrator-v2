@@ -61,3 +61,7 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 ## Session lifecycle review recurrence — 2026-10-23
 
 Both mobile pane-tree variants again found zero `.xterm` elements at their five-second startup deadline in the nine-worker component suite. The complete unchanged owner passed with one worker on a separate fixture port. Exact aggregate counts, owner command, duration, and evidence are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#session-lifecycle-review-validation--2026-10-23). No assertion, timeout, or skip changed.
+
+## Keyboard shortcuts validation — 2026-10-25
+
+The nine-worker `ORKESTRATOR_E2E_PORT=1447 mise run test:logged -- --name browser-suite-isolated-port -- mise run test:browser` run missed both mobile pane-tree terminal startup deadlines at `PaneBreakpoint.spec.ts:121` (zero `.xterm` elements instead of one). Both complete unchanged owning files then passed sequentially with one worker: `ORKESTRATOR_E2E_PORT=1448 mise run test:logged -- --name browser-failed-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/browser-failed-owners` (168.5 seconds logged). No pane implementation, assertion, timeout or skip changed. Initial evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.rMjVIf/browser-suite-isolated-port.log.gz`; screenshots/traces: `output/playwright/test-results/PaneBreakpoint-split-panes-*/`.

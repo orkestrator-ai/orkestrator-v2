@@ -70,3 +70,21 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 - **Suite counts:** backend reported 11013 passed, 79 skipped and one failed across 11093 tests in 660 files (687.40 seconds). Twelve of thirteen workspace build/test tasks passed. The full aggregate completed with this failure and the Codex timeout in case 0210; root/support and protocol-lockfile groups passed.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2BemPO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate finalization; outer run `orkestrator-test-run.LLUEZq`.
 - **Assessment:** confirmed intermittent recurrence of the cleanup/publication ordering symptom. No account implementation, assertion, timeout or skip changed.
+
+## Federated dialog readiness validation — 2026-10-25
+
+- Original command: `mise run test:logged -- --name repo-tests -- mise run test`,
+  Bun 1.4.4, workspace/root/bridges/protocol reservations 4/1/2/1, with other
+  worktrees validating concurrently. The backend used two Bun workers.
+- The same duplicate-login case at `apps/backend/src/core/agent-accounts.test.ts:811`
+  observed a second account directory after rejection (190.66 ms).
+- The complete unchanged owner passed alone in 11.0 seconds (exit 0):
+  `mise run test:logged -- --name account-owner-rerun -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --parallel=1 --only-failures`.
+  The logged runner removed passing output; individual test counts were not retained.
+- Evidence: `orkestrator-test-run.DHlEAe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  after aggregate finalization; the outer run is `orkestrator-test-run.Jjipx9`.
+  Backend counts: 10457 passed, 79 skipped, two failed, one error in 585.85
+  seconds across 615 files. The other failure was terminal-history pagination
+  (see 0213).
+  The account implementation and tests were unchanged. The existing intermittent
+  cleanup/publication ordering symptom remains open.

@@ -148,6 +148,44 @@ const prompt: PublicJsonSchema = {
   maxLength: PUBLIC_API_LIMITS.promptMaxChars,
   description: "Prompt text sent to the agent.",
 };
+const literal: PublicJsonSchema = {
+  type: "boolean",
+  description:
+    "true sends the prompt as plain text: a leading /name never runs a provider command. Omitted: the session's default (a native tab treats a leading /name as a typed command).",
+};
+const enqueue: PublicJsonSchema = {
+  type: "boolean",
+  description:
+    "true queues the prompt behind a busy session in the backend's durable queue instead of refusing it; providers without a queue refuse.",
+};
+const attachments: PublicJsonSchema = {
+  type: "array",
+  maxItems: PUBLIC_API_LIMITS.promptAttachmentsMaxItems,
+  description: `Files sent with the prompt, at most ${PUBLIC_API_LIMITS.promptAttachmentsMaxBytes} decoded bytes in total. The backend writes them into the environment workspace; host paths are never accepted.`,
+  items: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        minLength: 1,
+        maxLength: PUBLIC_API_LIMITS.promptAttachmentNameMaxChars,
+        description: "File name only, without directories.",
+      },
+      type: {
+        type: "string",
+        enum: ["image", "file"],
+        description: "Omitted: image when the bytes are PNG, JPEG, GIF or WebP, otherwise file.",
+      },
+      dataBase64: {
+        type: "string",
+        minLength: 1,
+        description: "The file's bytes, base64-encoded.",
+      },
+    },
+    required: ["name", "dataBase64"],
+    additionalProperties: false,
+  },
+};
 const environmentType: PublicJsonSchema = {
   type: "string",
   enum: ["local", "container"],
@@ -433,8 +471,35 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
     "project.remove": {
       capability: "projects",
       confirmation: "always",
-      input: schema({ projectId }, ["projectId"]),
-      examples: [{ projectId: "project-1" }],
+      input: schema(
+        {
+          projectId,
+          cascade: {
+            type: "boolean",
+            description:
+              "Delete every environment of the project first, each through the normal deletion lifecycle; never deletes the checkout or the remote. Operator credentials only.",
+          },
+        },
+        ["projectId"],
+      ),
+      examples: [{ projectId: "project-1" }, { projectId: "project-1", cascade: true }],
+    },
+    "project.init": {
+      capability: "projects",
+      confirmation: "never",
+      input: schema(
+        {
+          path: {
+            type: "string",
+            minLength: 1,
+            maxLength: PUBLIC_API_LIMITS.pathMaxChars,
+            description:
+              "Absolute path on the backend host: a new or empty directory for the repository.",
+          },
+        },
+        ["path"],
+      ),
+      examples: [{ path: "/Users/me/code/scratch" }],
     },
     "project.config.get": {
       capability: "settings",
@@ -676,6 +741,8 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             description: "Tab title.",
           },
           prompt,
+          literal,
+          attachments,
         },
         ["environmentId", "agent", "prompt"],
       ),
@@ -685,13 +752,79 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           agent: "codex",
           prompt: "Review the open diff.",
         },
+        {
+          environmentId: "env-1",
+          agent: "claude",
+          prompt: "/review is a word here, not a command.",
+          literal: true,
+        },
       ],
     },
     "session.prompt": {
       capability: "sessions.control",
       confirmation: "never",
-      input: schema({ sessionId, prompt, mode: conversationMode }, ["sessionId", "prompt"]),
-      examples: [{ sessionId: EXAMPLE_SESSION_ID, prompt: "Now add a test for it." }],
+      input: schema({ sessionId, prompt, mode: conversationMode, literal, enqueue, attachments }, [
+        "sessionId",
+        "prompt",
+      ]),
+      examples: [
+        { sessionId: EXAMPLE_SESSION_ID, prompt: "Now add a test for it." },
+        { sessionId: EXAMPLE_SESSION_ID, prompt: "After this turn, run the tests.", enqueue: true },
+        {
+          sessionId: EXAMPLE_SESSION_ID,
+          prompt: "What does this screenshot show?",
+          attachments: [{ name: "screen.png", type: "image", dataBase64: "iVBORw0KGgo=" }],
+        },
+      ],
+    },
+    "session.commands": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          refresh: {
+            type: "boolean",
+            description: "Ask the provider for its command list again first.",
+          },
+        },
+        ["sessionId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }],
+    },
+    "session.command": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          command: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description:
+              "Command ID or name from session.commands. An ID is matched exactly; a name must match exactly one command.",
+          },
+          arguments: {
+            type: "string",
+            maxLength: PUBLIC_API_LIMITS.commandArgumentsMaxBytes,
+            description: "Argument text after the command name.",
+          },
+          expectedBindingRevision: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            description:
+              "bindingRevision from session.commands: refuse if the command changed since it was listed.",
+          },
+          enqueue,
+        },
+        ["sessionId", "command"],
+      ),
+      examples: [
+        { sessionId: EXAMPLE_SESSION_ID, command: "/review", arguments: "the open diff" },
+        { sessionId: EXAMPLE_SESSION_ID, command: "/compact" },
+      ],
     },
     "session.stop": {
       capability: "sessions.control",

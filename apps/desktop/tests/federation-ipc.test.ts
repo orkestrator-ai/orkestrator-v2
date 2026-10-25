@@ -123,6 +123,22 @@ describe("federation IPC", () => {
       nodeId: "bk_leaf",
       search: { addProject: "1", createEnvironment: "p" },
     });
+    await call("orkestrator:workspace-views:open", {
+      nodeId: "bk_leaf",
+      request: { projectId: "p", environmentId: "e", dialog: "environment-settings" },
+    });
+    expect(deps.openWorkspaceView).toHaveBeenLastCalledWith(expect.anything(), {
+      nodeId: "bk_leaf",
+      search: { project: "p", environment: "e", dialog: "environment-settings" },
+    });
+    await call("orkestrator:workspace-views:open", {
+      nodeId: "bk_leaf",
+      request: { projectId: "p", dialog: "environment-settings" },
+    });
+    expect(deps.openWorkspaceView).toHaveBeenLastCalledWith(expect.anything(), {
+      nodeId: "bk_leaf",
+      search: { project: "p" },
+    });
     expect(() => call("orkestrator:workspace-views:open", { nodeId: 3 })).toThrow("node ID");
   });
 

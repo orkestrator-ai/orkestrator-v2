@@ -237,6 +237,7 @@ export function toReceipt(record: PublicOperationRecord, replayed: boolean): Pub
     stage: record.stage,
     replayed,
     resources: record.resources,
+    ...(record.result ? { result: record.result } : {}),
     ...(record.dispatch ? { dispatch: record.dispatch } : {}),
     ...(record.execution ? { execution: record.execution } : {}),
     ...(record.error ? { error: record.error } : {}),

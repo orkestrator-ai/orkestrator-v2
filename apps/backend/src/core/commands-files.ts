@@ -1090,11 +1090,31 @@ export async function gitRefExists(worktreePath: string, refName: string): Promi
   );
 }
 
+async function hasOriginRemote(projectPath: string): Promise<boolean> {
+  return runCommand("git", ["-C", projectPath, "remote", "get-url", "origin"], {
+    timeoutMs: 10_000,
+  }).then(
+    () => true,
+    () => false,
+  );
+}
+
 export async function resolveRemoteWorktreeStartPoint(
   projectPath: string,
   baseBranch: string,
+  options: { localOnly?: boolean } = {},
 ): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
+  // A local-only project (`project init`) has no remote at all: its own branch
+  // is the base. Any other checkout without an origin is misconfigured and
+  // still fails below rather than silently starting from local state.
+  if (options.localOnly && !(await hasOriginRemote(projectPath))) {
+    const localRef = `refs/heads/${branch}`;
+    if (!(await gitRefExists(projectPath, localRef))) {
+      throw new Error(`Base branch not found: ${branch}`);
+    }
+    return localRef;
+  }
   try {
     await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
   } catch (error) {

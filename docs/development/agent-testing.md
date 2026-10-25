@@ -755,11 +755,16 @@ in a disposable host worktree (`projectResources: true`), then checks the `/`
 menu against the real provider: one group header per run of a source, in the
 catalogue's order; arrow keys following the rendered order across groups and
 clamping at both ends; a command file added on disk appearing after a refresh;
-and the new row surviving a hard reload. It sends no prompt. On Pi, whose
-session lists nothing until it attaches, it first presses the menu's "Refresh
-commands", which attaches it (todo 0069). It needs
+and the new row surviving a hard reload. It sends no prompt. On Pi it first
+checks that the planted templates are listed before the session attaches,
+with no refresh and no turn, as a `stale` list marked `attachPending` whose
+picker says more commands load when the session starts (todo 0069). It needs
 `ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1`; `ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`
 picks from `claude` (default), `pi` and `grok`.
+`ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container` runs it in a
+containerized environment instead (a profile started with
+`--fixture-environments local,container`), writing the commands into the
+container's `/workspace` through `docker exec` with no policy override.
 
 ```bash
 mise run dev:test --profile qa-picker --fixture --credential-source claude \

@@ -748,6 +748,80 @@ describe("circuit breaker", () => {
     await h.supervisor.ensureReady();
     expect(h.supervisor.getState()).toBe("ready");
   });
+
+  test("after a quiet cooldown one probe start closes the breaker", async () => {
+    let clock = 0;
+    const h = harness({
+      behaviours: [{ failInitialize: true }, { failInitialize: true }, {}],
+      supervisor: { circuitBreakerThreshold: 2, circuitCooldownMs: 1_000, now: () => clock },
+    });
+
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(2);
+    clock = 999;
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(2);
+
+    clock = 1_000;
+    await h.supervisor.ensureReady();
+    expect(h.children).toHaveLength(3);
+    expect(h.supervisor.getState()).toBe("ready");
+    expect(h.supervisor.getHealth().circuitOpen).toBe(false);
+  });
+
+  test("a failed probe re-opens at once, without retries, for a doubled cooldown", async () => {
+    let clock = 0;
+    const h = harness({
+      behaviours: Array.from({ length: 10 }, () => ({ failInitialize: true })),
+      supervisor: {
+        circuitBreakerThreshold: 2,
+        circuitCooldownMs: 1_000,
+        circuitMaxCooldownMs: 3_000,
+        now: () => clock,
+      },
+    });
+
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(2);
+
+    clock = 1_000;
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    // One probe spawn, not a fresh retry ladder.
+    expect(h.children).toHaveLength(3);
+
+    // The next probe waits twice as long.
+    clock = 2_999;
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(3);
+    clock = 3_000;
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(4);
+
+    // Capped: 4 s would exceed the 3 s maximum.
+    clock = 5_999;
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(4);
+    clock = 6_000;
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    expect(h.children).toHaveLength(5);
+  });
+
+  test("concurrent demand during a probe joins it instead of spawning twice", async () => {
+    let clock = 0;
+    const h = harness({
+      behaviours: [{ failInitialize: true }, { failInitialize: true }, {}],
+      supervisor: { circuitBreakerThreshold: 2, circuitCooldownMs: 1_000, now: () => clock },
+    });
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+
+    clock = 1_000;
+    const [first, second] = await Promise.all([
+      h.supervisor.ensureReady(),
+      h.supervisor.ensureReady(),
+    ]);
+    expect(first.id).toBe(second.id);
+    expect(h.children).toHaveLength(3);
+  });
 });
 
 describe("unexpected exit", () => {
@@ -924,6 +998,29 @@ describe("shutdown", () => {
     expect(h.children[0]!.killed.length).toBeGreaterThan(0);
     expect(h.supervisor.getState()).toBe("stopped");
     expect(h.supervisor.isReady()).toBe(false);
+  });
+
+  test("stop wakes a start that is waiting out its backoff", async () => {
+    const h = harness({
+      behaviours: [{ failInitialize: true }, {}],
+      supervisor: { backoffScheduleMs: [60_000] },
+    });
+    const startupResult = h.supervisor.ensureReady().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    for (let i = 0; i < 20 && h.supervisor.getState() !== "backoff"; i += 1) {
+      await flushMicrotasks();
+    }
+    expect(h.supervisor.getState()).toBe("backoff");
+
+    const startedAt = Date.now();
+    await h.supervisor.stop();
+    // Without a cancellable sleep this would wait up to 60 s.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(await startupResult).toBeInstanceOf(AppServerUnavailableError);
+    expect(h.children).toHaveLength(1);
+    expect(h.supervisor.getState()).toBe("stopped");
   });
 
   test("closes stdin then escalates to the process group", async () => {

@@ -107,6 +107,12 @@ export async function createCommandFixtures() {
       terminateProcessTree: (...args) => localServerHooks.terminateProcessTree(...args),
       ...options.localServers,
     },
+    // As in the backend (`index.ts`), so a merged PR's cleanup runs as in production.
+    prMonitor: {
+      scheduleMergeCleanup: (environmentId, context) =>
+        scheduleMergeCleanupRecovery(environmentId, context),
+      ...options.prMonitor,
+    },
   });
   /** A runtime for a hand-built context, released with the fixture's own. */
   const createRuntime = (
@@ -166,7 +172,7 @@ export async function createCommandFixtures() {
     isImmutableCommitRef,
     resolveBrowserOpenCommand,
     resolveFileManagerRevealCommands,
-    shutdownPrMonitorTracking,
+    scheduleMergeCleanupRecovery,
     toClientEnvironment,
   } = await import("../src/core/commands");
 
@@ -1511,15 +1517,11 @@ exit 0
       await shutdownLocalServers();
     } finally {
       setAgentSkillsHomeForTesting(undefined);
-      shutdownRuntimes();
       // Commands like set_environment_pr arm PR monitoring as a side effect;
-      // dropping the entries here keeps a scheduled poll from spawning `gh`
-      // against a fixture worktree later in the run.
-      shutdownPrMonitorTracking();
+      // shutting each runtime down drops those entries, so a scheduled poll
+      // cannot spawn `gh` against a fixture worktree later in the run.
+      shutdownRuntimes();
       resetLocalServerHooks();
-      commandTesting.resetOpenCodeHostStart();
-      commandTesting.resetDockerContainerStateCache();
-      commandTesting.resetTerminalHistory();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );
@@ -1626,7 +1628,6 @@ exit 0
     setAgentSkillsHomeForTesting,
     localServerHooks,
     shutdownLocalServers,
-    shutdownPrMonitorTracking,
     spawnCommand,
     spawnSync,
     spyOn,

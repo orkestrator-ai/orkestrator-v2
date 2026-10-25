@@ -56,6 +56,8 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
+import { hydrationFreshnessNotice } from "@/lib/view-freshness";
 import { MachineDot } from "@/components/federation/MachineDot";
 import { useFederation } from "@/components/federation/FederationProvider";
 import {
@@ -294,6 +296,11 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const diffStats = useEnvironmentDiffStore((s) =>
     changeProjection ? undefined : s.stats.get(environment.id),
   );
+  // Freshness of the legacy mirror; the projection carries its own quality.
+  const diffSyncStatus = useEnvironmentDiffStore((s) =>
+    changeProjection ? "current" : s.syncStatus,
+  );
+  const diffFreshnessNotice = hydrationFreshnessNotice(diffSyncStatus, "change counts");
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
   const isBuildEnvironment = useBuildPipelineStore((s) =>
@@ -610,7 +617,11 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                 (diffStats.additions > 0 ||
                   diffStats.deletions > 0 ||
                   diffStats.filesChanged > 0) && (
-                  <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+                  <span
+                    className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
+                    data-testid="environment-diff-stats"
+                  >
+                    {diffFreshnessNotice && <FreshnessIndicator notice={diffFreshnessNotice} />}
                     {/* The scan stopped before reading every untracked file, so
                       these are a lower bound rather than an exact count. */}
                     {diffStats.truncated && (
@@ -702,6 +713,11 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     {diffStats.truncated && (
                       <p className="text-xs text-muted-foreground">
                         Line counts are approximate: too many untracked files to count them all.
+                      </p>
+                    )}
+                    {diffFreshnessNotice && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        {diffFreshnessNotice.detail}
                       </p>
                     )}
                     <div className="flex items-center gap-2 font-mono text-xs tabular-nums">

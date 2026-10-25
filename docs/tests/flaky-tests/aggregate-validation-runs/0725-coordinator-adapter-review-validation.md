@@ -52,3 +52,15 @@ was changed.
 ## Triage 2026-10-25
 
 Environmental: load averages reached 124.51/102.99/63.65 on 18 cores. Terminal history (0213) and OpenCode host (0723) passed alone; preview interactive (0672), container Git (0175), Mermaid (0512), agent accounts (0239) and public API (0261) also failed alone at that same load, so those reruns say nothing beyond the host state. The unrerun extras do not establish flakes.
+
+## Worktree alias recurrence during coordinator consistency validation — 2026-10-25
+
+`mise run test:logged -- --name committed-consistency-suite -- mise run test`
+repeated the unchanged alias-retargeting test timeout at 5027.50 ms against its
+five-second deadline. The complete owner then passed unchanged:
+`mise run test:logged -- --name worktree-alias-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-environment-worktree-location.test.ts --parallel=1 --only-failures`
+(exit 0, 7.9 seconds). This establishes an intermittent recurrence for that
+owner; it does not reclassify the other unresolved failures above. No worktree
+implementation, assertion, timeout or skip changed. Evidence is
+`orkestrator-test-run.iEyQ7i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory after aggregate completion.

@@ -44,7 +44,7 @@ writers on one `.jsonl`. When touching the prompt path:
   ends under such a turn hands the foreground back (`endClaudeRuntime`).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
-  effective Chrome access, cost budget, plugins and managed credentials cannot change on a live CLI. Adaptive thinking
+  effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking
   can only reset a runtime launched in adaptive mode; bypass mode requires the
   launch capability. A prompt that changes them while the runtime still owes
   work (a live task, an owed continuation, a parked card) is a 409 before

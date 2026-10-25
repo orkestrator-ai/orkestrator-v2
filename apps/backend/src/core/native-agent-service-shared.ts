@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
@@ -449,6 +450,12 @@ export interface NativeAgentServiceOptions {
   changeTracking?: () => NativeAgentChangeTrackingHooks | null | undefined;
   /** Account a live local Claude or Codex bridge (`<agent>:<environmentId>`) was launched on. */
   localBridgeAccountId?: (key: string) => string | undefined;
+  /**
+   * The backend's replacement and move fence (`runtime.environments.fence`),
+   * which admits each prompt. A service built without one gets a private fence
+   * that nothing else closes.
+   */
+  environmentFence?: Pick<EnvironmentMutationFence, "beginAgentWork" | "assertAcceptsAgentWork">;
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */

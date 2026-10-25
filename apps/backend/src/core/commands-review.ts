@@ -1,6 +1,6 @@
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
-import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
   isProjectHomeEnvironment,
@@ -194,13 +194,17 @@ export type ReviewPreparationFileNote = {
   reason: string;
 };
 
-export function createEnvironmentCommandRunner(environment: Environment): EnvironmentCommandRunner {
+/** `fence` is the backend's `context.runtime.environments.fence`; local commands hold a mutation on it. */
+export function createEnvironmentCommandRunner(
+  environment: Environment,
+  fence: Pick<EnvironmentMutationFence, "beginMutation">,
+): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
     if (!environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
     return async (command, args, timeoutMs = 60_000, env) => {
-      const release = beginEnvironmentMutation(environment.id);
+      const release = fence.beginMutation(environment.id);
       try {
         return (
           // `gh` on the host is the backend's resolved copy; inside a
@@ -758,7 +762,7 @@ export async function verifyEnvironmentReviewPackage(
 ): Promise<ReviewPackageVerification> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   try {
     await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
     const contents = await readEnvironmentWorkspaceFile(environment, runner, reference.filePath);
@@ -813,7 +817,7 @@ export async function verifyEnvironmentPullRequest(
     throw new Error("Pull request belongs to a different repository");
   }
 
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   const raw = await runner(
     "gh",
     ["pr", "view", submittedUrl, "--json", "url,headRefName,baseRefName,state"],
@@ -884,7 +888,7 @@ export async function generateLoopedReviewPackage(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const branch = validateGitRefName(targetBranch, "target branch");
-  const runner = createEnvironmentCommandRunner(environment);
+  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
   const baseName = `origin/${branch}`;
   const [headOutput, baseOutput] = await Promise.all([
     runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),

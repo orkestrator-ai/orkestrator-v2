@@ -2,11 +2,14 @@ import { detectDockerTopology } from "./docker-image.js";
 import { containerOomEvents } from "./container-oom-events.js";
 import {
   UNRESTRICTED_LIMITS,
+  builtInResourceDefault,
   type ContainerResourceLimits,
   type ContainerUsageSample,
   type ContainerUsageSnapshot,
   type DockerCapacity,
   type EnvironmentResourcePolicy,
+  type ResourceAxis,
+  type ResourceEnforcement,
 } from "@orkestrator/protocol/container-resources";
 import {
   DOCKER_LABEL_APP,
@@ -28,13 +31,18 @@ import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
 /**
  * Resource budgets and usage telemetry (containers plan step 10).
  *
- * Budgets are opt-in: without a global default or an environment override a
- * runtime is unrestricted, exactly as before, because defaults have to come
- * from measurements rather than guesses. A requested budget is written into
- * the Docker specification and read back from `docker inspect`; the applied
- * value, not the request, is what is reported. Usage comes from one bounded,
- * deduplicated sampler over this installation's containers, and capacity from
- * the daemon (on Docker Desktop, its VM — never the backend host).
+ * A new runtime gets the environment's override, else the budget set in
+ * Settings → Container, else the built-in default for this daemon
+ * (`builtInResourceDefault`: no CPU cap, memory capped at a fraction of the
+ * daemon, a PID ceiling), chosen from measured workloads. An explicit budget
+ * whose limits are all `null` is unrestricted. The budget is resolved only
+ * when a runtime is created, so an existing container keeps what it was
+ * created with until it is rebuilt or updated on purpose. A requested budget
+ * is written into the Docker specification and read back from `docker
+ * inspect`; the applied value, not the request, is what is reported. Usage
+ * comes from one bounded, deduplicated sampler over this installation's
+ * containers, and capacity from the daemon (on Docker Desktop, its VM — never
+ * the backend host).
  */
 
 const MIB = 1024 * 1024;
@@ -42,20 +50,31 @@ const MIB = 1024 * 1024;
 export function resolveResourceLimits(
   environment: Pick<Environment, "containerResourceLimits">,
   global: Pick<AppConfig["global"], "containerResourceLimits">,
-): { limits: ContainerResourceLimits; source: EnvironmentResourcePolicy["source"] } {
+  daemon: ResourceEnforcement,
+): {
+  limits: ContainerResourceLimits;
+  source: EnvironmentResourcePolicy["source"];
+  /** Built-in default axes this daemon cannot enforce, left off. */
+  unenforced: ResourceAxis[];
+} {
   if (environment.containerResourceLimits) {
     return {
       limits: { ...UNRESTRICTED_LIMITS, ...environment.containerResourceLimits },
       source: "environment",
+      unenforced: [],
     };
   }
   if (global.containerResourceLimits) {
     return {
       limits: { ...UNRESTRICTED_LIMITS, ...global.containerResourceLimits },
       source: "global",
+      unenforced: [],
     };
   }
-  return { limits: { ...UNRESTRICTED_LIMITS }, source: "none" };
+  // Never refused: an axis this daemon cannot enforce is dropped and
+  // reported instead, so a rootless daemon without delegation still creates.
+  const { limits, unenforced } = builtInResourceDefault(daemon);
+  return { limits, source: "default", unenforced };
 }
 
 /** Docker create/update arguments. Swap is disabled by pinning it to memory. */
@@ -94,7 +113,9 @@ export function parseAppliedLimits(line: string): ContainerResourceLimits | null
   const [nano = "", memory = "", pids = ""] = line.trim().split("\t");
   const nanoCpus = Number(nano);
   const memoryBytes = Number(memory);
-  const pidsLimit = pids === "<nil>" || pids === "" ? 0 : Number(pids);
+  // An unset PidsLimit is a nil pointer: `<nil>` or, from Docker 29's
+  // templates, `<no value>`.
+  const pidsLimit = pids === "<nil>" || pids === "<no value>" || pids === "" ? 0 : Number(pids);
   if (![nanoCpus, memoryBytes, pidsLimit].every(Number.isFinite)) return null;
   return {
     cpus: nanoCpus > 0 ? Math.round((nanoCpus / 1e9) * 100) / 100 : null,
@@ -245,9 +266,10 @@ export async function dockerCapacity(options: { refresh?: boolean } = {}): Promi
     });
     base = parseDockerInfo(stdout.trim());
   } catch {
-    base = parseDockerInfo("{}");
+    const topology = await detectDockerTopology();
+    base = { ...parseDockerInfo("{}"), rootless: topology.rootless };
   }
-  const value = { ...base, disk: await dockerDisk() };
+  const value = { ...base, disk: await dockerDisk(), builtInDefault: builtInResourceDefault(base) };
   capacityCache = { at: now, value };
   return value;
 }
@@ -258,7 +280,12 @@ export async function dockerAdmissionCapacity(topology?: {
 }): Promise<DockerCapacity> {
   const knownTopology = topology ?? (await detectDockerTopology());
   const capacity = await dockerCapacity();
-  return { ...capacity, rootless: capacity.rootless || knownTopology.rootless };
+  const rootless = capacity.rootless || knownTopology.rootless;
+  return {
+    ...capacity,
+    rootless,
+    builtInDefault: builtInResourceDefault({ ...capacity, rootless }),
+  };
 }
 
 async function dockerDisk(): Promise<DockerCapacity["disk"]> {
@@ -545,9 +572,10 @@ export async function assertEnvironmentBudgetEnforceable(
   topology?: { rootless: boolean },
 ): Promise<void> {
   const config = await context.storage.loadConfig();
+  const capacity = await dockerAdmissionCapacity(topology);
   refuseUnenforceableLimits(
-    resolveResourceLimits(environment, config.global).limits,
-    await dockerAdmissionCapacity(topology),
+    resolveResourceLimits(environment, config.global, capacity).limits,
+    capacity,
     outcome,
   );
 }
@@ -559,8 +587,12 @@ export async function environmentResourcePolicy(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const config = await context.storage.loadConfig();
-  const { limits, source } = resolveResourceLimits(environment, config.global);
-  const capacity = await dockerCapacity();
+  const capacity = await dockerAdmissionCapacity();
+  const { limits, source, unenforced } = resolveResourceLimits(
+    environment,
+    config.global,
+    capacity,
+  );
   const applied =
     environment.containerId && environment.environmentType === "containerized"
       ? await inspectAppliedLimits(environment.containerId)
@@ -568,6 +600,7 @@ export async function environmentResourcePolicy(
   // A runtime can carry a limit the daemon records but does not enforce (one
   // created before this check, or under another daemon); flag it too.
   const unsupported = new Set([
+    ...unenforced,
     ...unsupportedAxes(limits, capacity),
     ...(applied ? unsupportedAxes(applied, capacity) : []),
   ]);
@@ -605,11 +638,12 @@ export async function updateEnvironmentResources(
   const environment = await context.storage.getEnvironment(request.environmentId);
   if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
   const config = await context.storage.loadConfig();
+  const capacity = await dockerAdmissionCapacity();
   const next = resolveResourceLimits(
     { containerResourceLimits: request.limits },
     config.global,
+    capacity,
   ).limits;
-  const capacity = await dockerAdmissionCapacity();
   // Refused even when only stored: the next runtime could not be created with it.
   refuseUnenforceableLimits(next, capacity, "Nothing was changed.");
   if (next.cpus !== null && capacity.cpus !== null && next.cpus > capacity.cpus) {

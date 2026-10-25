@@ -12,6 +12,7 @@ import {
   resolveNativeAgentApprovalMode,
   resolveReasoningId,
   type AgentModel,
+  type AgentModelRef,
   type FallbackExecutionProfileId,
 } from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
+import {
+  mergeReorderedFavoriteModels,
+  useAgentModelFavorites,
+} from "@/hooks/useAgentModelFavorites";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
@@ -420,10 +424,10 @@ export function UnassignedNativeAgentComposer({
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const worktreePath = environment?.worktreePath ?? workspacePath;
   const {
-    favorites,
+    favorites: allFavorites,
     enabledPlatforms: allEnabledPlatforms,
     toggleFavorite,
-    reorderFavorites,
+    reorderFavorites: reorderAllFavorites,
   } = useAgentModelFavorites();
   const enabledPlatforms = useMemo(
     () =>
@@ -431,6 +435,21 @@ export function UnassignedNativeAgentComposer({
         ? allEnabledPlatforms.filter((candidate) => platformFilter.includes(candidate))
         : allEnabledPlatforms,
     [allEnabledPlatforms, platformFilter],
+  );
+  // Favourites are global. One on a platform this composer cannot start (a
+  // coordinator's unqualified platform, or one switched off) would be a
+  // selectable placeholder for a model it cannot run, so it is hidden here;
+  // reordering keeps the hidden ones in their slots.
+  const favorites = useMemo(
+    () => allFavorites.filter((favorite) => enabledPlatforms.includes(favorite.platform)),
+    [allFavorites, enabledPlatforms],
+  );
+  const reorderFavorites = useCallback(
+    (reorderedVisible: AgentModelRef[]) => {
+      const merged = mergeReorderedFavoriteModels(allFavorites, favorites, reorderedVisible);
+      if (merged) reorderAllFavorites(merged);
+    },
+    [allFavorites, favorites, reorderAllFavorites],
   );
   // Same triple App overlay launches use: an environment or repository default
   // must win over the application one, constrained to platforms still enabled.

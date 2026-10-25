@@ -66,3 +66,20 @@ see [0800](0800-codex-command-catalogue-armed-delay-race.md).
 - **Folded from 0810:** `its first answer is stale until a settling re-read confirms the plugin skills` (line 191) missed its own 2 s `waitFor` (2176.95 ms) in a loaded aggregate on 2026-10-25.
 - **Likely cause:** `coldCatalogue` uses a real 20 ms `skillColdSettleMs` timer (line 187). Each case calls `commands.list()` after a `waitFor(state.calls.length === N)`. When the scheduler is slow, the next delayed read runs and settles before that `list()`, so it reports `ready`.
 - **Next step:** drive the settle delay from an injected timer, or hold each fake `listSkills` answer until the test releases it, so the test decides when each delayed read lands.
+
+## 2026-10-25 composer model admission validation
+
+Recurred in `review-tests` (`mise run test:logged -- --name review-tests --
+mise run test`) on `todo-0004-composer-model-params-803868a90fcb` with Bun
+1.4.4. Both cold-child catalogue cases expected `stale` but received `ready`;
+no command catalogue implementation or tests changed in this work.
+
+The complete unchanged owner passed alone (exit 0, 2.1 seconds):
+
+```sh
+mise run test:logged -- --name bridge-catalogue-recheck -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
+(compressed on aggregate completion). The original aggregate remains failed.
+No skips, assertions or timeouts were changed.

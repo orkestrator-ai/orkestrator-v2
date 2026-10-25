@@ -186,3 +186,8 @@ remained opt-in. The unchanged narrow-picker failure is the remaining
 reproducible browser validation limitation; the unit cleanup failure passed its
 complete owning-file rerun. Neither original failing invocation is reported as
 a passing aggregate.
+
+
+## Resource budget review cache recurrence — 2026-10-25
+
+The workspace group of `mise run test:logged -- --name resource-tests -- mise run test` repeated `Electron backend command registry > backend-owned diff statistics > serves the Files panel from the scan the badge already ran` (1586.44 ms). The supposedly empty Git log contained one `status --porcelain=v1 -z --untracked-files=all` command with `--no-optional-locks` and `diff.autoRefreshIndex=false`. The complete unchanged owner passed alone: `mise run test:logged -- --name diff-statistics-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` (exit 0, 14.4 seconds logged). Evidence: host temporary artifact `orkestrator-test-run.9oxrhT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`, compressed after aggregate finalization. This confirms an intermittent recurrence; no diff-cache implementation, assertion, deadline or skip changed.

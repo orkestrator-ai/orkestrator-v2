@@ -96,6 +96,7 @@ import {
   resolveCommandSelection,
   type CommandSelection,
 } from "./commands.js";
+import { awaitCommandPreview, startCommandPreview } from "./command-preview.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
@@ -402,6 +403,10 @@ async function routeGlobal(
       }
       await setSessionReadOnly(state, body.readOnly);
     }
+    // A new tab lists its templates and skills before the first turn. The
+    // read never attaches or runs extension code; the first catalogue read
+    // waits for it (bounded), so starting it here only warms that read.
+    startCommandPreview(state);
     // The backend stores this session id as soon as create returns. A bridge
     // restart before the first prompt used to lose it, so every later status
     // read 404'd and the tab stuck on "session is recovering".
@@ -614,7 +619,9 @@ async function routeSession(
     return json(response, 200, publicQueue(state));
   }
   if (action === "commands" && !subject && request.method === "GET") {
-    // Metadata only: never attaches, hydrates or reloads.
+    // Metadata only: never attaches, hydrates or reloads. A session that has
+    // not attached gets the resource-only read of its templates and skills.
+    await awaitCommandPreview(state);
     return json(response, 200, commandCatalogueResponse(state));
   }
   if (action === "commands" && subject === "refresh" && request.method === "POST") {

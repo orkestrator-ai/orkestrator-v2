@@ -241,7 +241,11 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 - A stream must stay open for 30 s, longer than the gateway's 25 s keepalive,
   before losing it counts as a first failure again. A server that accepts
   connections and drops them at once keeps backing off.
-- The main stream resumes from its cursor. Terminal output has no replay, so
+- The main stream resumes from its cursor. The gateway's 25 s keepalive also
+  advances the cursor: before each keepalive comment it flushes a cursor frame
+  past any events a scoped stream filtered out, so a quiet stream reconnects
+  from a current position instead of replaying the filtered range. Terminal
+  output has no replay, so
   every terminal stream reopen makes that terminal reload its snapshot. This
   is why terminal retries back off too.
 - When the main stream reconnects, terminal streams that are waiting out a
@@ -257,9 +261,20 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   (`CLOSED`). The ladder only takes over from there.
 - Going offline in the browser pauses and resets nothing, because a local
   backend stays reachable without internet.
-- The opt-in terminal WebSocket has its own reconnect loop
-  (`terminal-websocket-client.ts`). When it asks again for the HTTP fallback,
-  that request waits for the fallback's pending retry.
+- The opt-in terminal WebSocket has its own reconnect owner
+  (`terminal-websocket-client.ts`) on the same policy: the socket's first
+  retry waits at most 500 ms, consecutive failures double it to 10 s with
+  equal jitter, and only a socket that stayed ready for 30 s resets it. A
+  denied subscription backs off per terminal on the same jittered ladder and
+  resets once the server accepts it. The socket shares the gateway's jitter
+  source and clock (`eventReconnectRandom`, `eventReconnectNow`). When it asks
+  again for the HTTP fallback, that request waits for the fallback's pending
+  retry.
+- The main stream reports its state (`eventStreamConnection`: `idle`,
+  `connecting`, `connected`, `disconnected`). It stays `disconnected` through
+  backed-off and browser retries until a stream opens. The renderer uses it
+  to pause presentation reads and show the connection banner (see
+  [event-snapshot-recovery.md](event-snapshot-recovery.md#freshness-in-the-ui)).
 
 ## Security notes
 

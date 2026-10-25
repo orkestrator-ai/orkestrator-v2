@@ -250,10 +250,10 @@ adding a test, check where its scenario class is already proved:
 | Client exit | `client-exit` scenario (CLI killed mid-start; a second environment runs; the first settles) |
 | Fast or multiple turns | `public-api-sessions.test.ts` (own-request evidence only, independent sessions, consecutive runs) |
 | Backend or bridge restart | `public-api-recovery.test.ts`, `public-api-exec.test.ts` (dead-generation start interrupted, create settled from state, exec worker reconciled, not re-run) |
-| Pending interaction | `public-api-sessions.test.ts` with a controlled provider (exact answer; stale or malformed never approves; an answered question stops reporting input); live `cli-ui.spec.ts` on any provider (`ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`): a question and an approval each rehydrate in an inactive, reloaded renderer, the UI answer or approval completes the CLI run, and a replayed resolution is refused |
+| Pending interaction | `public-api-sessions.test.ts` with a controlled provider (exact answer; stale or malformed never approves; an answered question stops reporting input); live `cli-ui.spec.ts` on any provider (`ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`): a question and an approval each rehydrate in an inactive, reloaded renderer, the UI answer or approval completes the CLI run, and a replayed resolution is refused; `cli-ui-waits.test.ts` covers answered-card retries, the deadline and empty/new pending interactions |
 | Control race | `public-api-sessions.test.ts` (stop refuses an idle or mismatched run; steering refused where unsupported) |
-| Inactive UI | `cli-ui.spec.ts` (CLI changes reach an open and a reloaded renderer; a live Claude turn asks while another environment is shown, then the page reloads and the answer is given in the UI) |
-| Wrong profile or owner | `wrong-profile` scenario (missing explicit profile); `client-connections.test.ts` (stale descriptor, no fallback); `foreign-owner` container scenario (a container and volume labelled for the same environment but another owner stay untouched through start, exec, list, stop and delete; exec runs in the owned container); `browser-gateway.spec.ts` (gateway refuses a foreign container by ID) |
+| Inactive UI | `cli-ui.spec.ts` (CLI changes reach an open and a reloaded renderer; live Claude and OpenCode questions and approvals arrive while another environment is shown, then the page reloads and the answer is given in the UI) |
+| Wrong profile or owner | `wrong-profile` scenario (missing explicit profile); `client-connections.test.ts` (stale descriptor, no fallback); `foreign-owner` container scenario (a container and two volumes (one mounted, one unmounted) labelled for the same environment but another owner stay untouched through start, exec, list, stop and delete; exec runs in the owned container); `browser-gateway.spec.ts` (gateway refuses a foreign container by ID) |
 | Client configuration | `client-connections.test.ts`; `mise run smoke:cli` (platform default directory from the packed install: 0700 directory, 0600 file, group-writable file refused) |
 | Transcript recovery | `public-api-launch.test.ts` (ordered bounded pages, older cursor); `public-api-sessions.test.ts` (routine reads never read transcripts) |
 | Following | `client-waits.test.ts` (JSONL once per message, gaps flagged). Following polls snapshots; there is no event stream |
@@ -263,9 +263,10 @@ adding a test, check where its scenario class is already proved:
 | Shell completion | `command-surface.test.ts` (table covers every command; bash completes words across IDs) |
 | Live provider turn | `live-session` scenario (opt-in, `--provider`): one bounded turn with a file assertion and a follow-up |
 
-`setup-failure` and `client-exit` run locally only, so the container matrix has
-five credential-free cases. A fake backend that only exercises parsing does not
-count as gateway, backend or provider coverage. Do not claim Docker or live
+`setup-failure`, `client-exit` and `project-init` run locally only. The local
+matrix has nine credential-free cases; the container matrix has seven,
+including `foreign-owner` and `project-cascade`. A fake backend that only
+exercises parsing does not count as gateway, backend or provider coverage. Do not claim Docker or live
 coverage from scripted adapters, or UI rehydration from API polling alone.
 Gaps and the qualification evidence log are in
 [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md).

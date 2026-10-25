@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createForeignOwnerDecoys, DockerClient } from "./docker-decoys.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -150,18 +151,6 @@ function git(cwd: string, args: string[]): string {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
   return result.stdout.trim();
-}
-
-/** Docker CLI, argv only; trimmed stdout. Throws unless `allowFailure`. */
-function docker(args: string[], options: { allowFailure?: boolean } = {}): string {
-  const result = spawnSync("docker", args, {
-    encoding: "utf8",
-    timeout: 60_000,
-  });
-  if (result.status !== 0 && !options.allowFailure) {
-    throw new Error(`docker ${args[0]} failed: ${result.stderr || result.error?.message}`);
-  }
-  return (result.stdout ?? "").trim();
 }
 
 export const SCENARIOS: ScenarioDefinition[] = [
@@ -641,7 +630,7 @@ export const SCENARIOS: ScenarioDefinition[] = [
   {
     name: "foreign-owner",
     description:
-      "A container and volume labelled for the same environment but another owner are never adopted, started, exec'd into, stopped or removed.",
+      "A container and two volumes (mounted and unmounted) labelled for the same environment but another owner stay untouched through the lifecycle.",
     environmentTypes: ["container"],
     async run(context) {
       expectThat(context.dockerImage, "foreign-owner needs --docker-image");
@@ -657,61 +646,25 @@ export const SCENARIOS: ScenarioDefinition[] = [
         `project-id=${fixture.projectId}`,
         `environment-name=${environment.name}`,
       ].flatMap((label) => ["--label", label]);
-      const volume = docker(["volume", "create", ...labels, `ork-${foreignOwner}-decoy`]);
-      context.cleanup.push({
-        label: `remove decoy volume ${volume}`,
-        run: async () => {
-          docker(["volume", "rm", "--force", volume], { allowFailure: true });
-        },
-      });
-      const decoy = docker([
-        "create",
-        "--name",
+      const docker = new DockerClient();
+      const { containerId: decoy, assertUnchanged: unchanged } = createForeignOwnerDecoys(
+        context,
+        labels,
         `ork-${foreignOwner}-decoy`,
-        "--network",
-        "none",
-        ...labels,
-        "--mount",
-        `type=volume,source=${volume},target=/foreign-decoy`,
         context.dockerImage,
-        "true",
-      ]);
-      // Runs before the volume removal pushed above, which it still mounts.
-      context.cleanup.unshift({
-        label: `remove decoy container ${decoy}`,
-        run: async () => {
-          docker(["rm", "--force", decoy], { allowFailure: true });
-        },
-      });
-      const snapshot = () => ({
-        container: docker([
-          "container",
-          "inspect",
-          "--format",
-          "{{.State.Status}} {{.State.StartedAt}} {{.State.FinishedAt}} {{.RestartCount}} {{json .Config.Labels}}",
-          decoy,
-        ]),
-        volume: docker(["volume", "inspect", "--format", "{{json .Labels}}", volume]),
-      });
-      const before = snapshot();
-      expectThat(before.container.startsWith("created "), "the decoy was not left created");
-      const unchanged = (stage: string) => {
-        const now = snapshot();
-        expectThat(
-          now.container === before.container && now.volume === before.volume,
-          `[${stage}] the foreign-owner decoy changed:\n${before.container}\n${now.container}`,
-        );
-      };
+        docker,
+      );
       const labelled = () =>
-        docker([
-          "ps",
-          "--all",
-          "--no-trunc",
-          "--filter",
-          `label=environment-id=${environment.id}`,
-          "--format",
-          '{{.ID}} {{.State}} {{.Label "orkestrator-owner"}}',
-        ])
+        docker
+          .run([
+            "ps",
+            "--all",
+            "--no-trunc",
+            "--filter",
+            `label=environment-id=${environment.id}`,
+            "--format",
+            '{{.ID}} {{.State}} {{.Label "orkestrator-owner"}}',
+          ])
           .split("\n")
           .filter(Boolean)
           .map((line) => {

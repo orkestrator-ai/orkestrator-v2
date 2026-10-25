@@ -43,10 +43,10 @@ a success signal.
   `setup-failure`, `client-exit` and `project-init` are local only, so the
   local matrix has nine cases and the container matrix seven.
 - `wrong-profile` covers a missing explicit profile. `foreign-owner` puts a
-  container and a volume carrying every label of the scenario's environment
-  except the owner beside it, and checks that `environment start`, `exec`,
-  `list`, `stop` and `delete` leave both exactly as created and that exec
-  runs in the owned container.
+  container and two volumes (one mounted, one unmounted) carrying every label
+  of the scenario's environment except the owner beside it, and checks that
+  `environment start`, `exec`, `list`, `stop` and `delete` leave all three
+  exactly as created and that exec runs in the owned container.
 - The run manifest records, per result, `backendReadyMs` (launch to the
   backend's readiness line), and on a live run's `session start --wait`
   entry `model: { requested, resolved }`: the pin (or `null`) and the model
@@ -232,6 +232,27 @@ command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages, exit
 codes, backend start-up time and, for live turns, the pinned and reported
 model).
+
+- **2026-10-25, macOS arm64, review follow-up on `bab01b13`.** Bun 1.4.4,
+  worktree image `orkestrator-v2:dev-1af641a7170c` rebuilt with
+  `mise run docker:build:dev`.
+  - `mise run test:cli:scenarios`: local 9/9 pass (47 s including build),
+    manifest `2026-10-25T18-36-53-741Z-be5e1a2e`.
+  - `bun packages/cli/scripts/run-scenarios.ts --environment-type container
+    --docker-image orkestrator-v2:dev-1af641a7170c`: container 7/7 pass
+    (169 s), including the added unmounted foreign volume; manifest
+    `2026-10-25T18-39-29-682Z-8f32d1f8`. Both matrices record non-null
+    `backendReadyMs` for every case and no cleanup errors.
+  - Real Docker negative control: deleting the unmounted foreign volume
+    made `assertUnchanged` fail; all three decoy resources were then
+    verified absent, including idempotent cleanup of the removed volume.
+  - Deterministic tests cover container and volume removal errors/timeouts,
+    verified and already-absent cleanup, cleanup-only failure retention,
+    readiness measurement and manifest output, and answered-card polling
+    retries, deadline and empty/new pending interactions. These tests use
+    controlled Docker/backend responses and do not qualify live providers.
+  - No provider turns or browser card checks were repeated for these
+    harness and documentation fixes.
 
 - **2026-10-25, macOS (Darwin 27.0.0, arm64), this file.** Branch
   `todo-0014-cli-qualification-060fd6539163` on `00a0cb82`; Bun 1.4.4,
@@ -471,8 +492,13 @@ model).
   needs no Docker; the decoy needs a container environment and the
   worktree image. The decoy carries every label a lookup by environment
   could match (`app`, `environment-id`, `project-id`, `environment-name`)
-  and a foreign `orkestrator-owner`, plus a mounted volume, which is the
-  strongest case a label search could wrongly adopt. Con: it does not cover
+  and a foreign `orkestrator-owner`, plus mounted and unmounted volumes. The
+  unmounted volume can be deleted without Docker's in-use protection, so it
+  exposes an ownership regression that a mounted volume could mask. Cleanup
+  accepts only explicit already-absent responses, verifies absence and records
+  other Docker failures. Deterministic negative controls and cleanup failure
+  coverage are in `packages/cli/tests/scenario-docker-decoys.test.ts`; these
+  checks do not add live Docker qualification evidence. Con: it does not cover
   a container reached by ID, which the CLI cannot name; the gateway check in
   `browser-gateway.spec.ts` keeps covering that.
 - **Config directory check in `smoke:cli` (item 2)** rather than a unit

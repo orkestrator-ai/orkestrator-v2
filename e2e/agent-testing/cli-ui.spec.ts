@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { pendingInteractionIds, waitPastResolved } from "./cli-ui-waits";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -193,32 +194,6 @@ function runSummary(envelope: Envelope<unknown>): string {
     execution: receipt?.execution,
     error: envelope.error,
   });
-}
-
-function pendingInteractionIds(envelope: Envelope<unknown>): string[] {
-  const receipt = (
-    envelope as unknown as {
-      receipt?: { execution?: { interactions?: Array<{ id: string }> } };
-    }
-  ).receipt;
-  return receipt?.execution?.interactions?.map((interaction) => interaction.id) ?? [];
-}
-
-/**
- * `run wait` after the UI resolved `answered`. The renderer submits
- * asynchronously, so for a moment the run can still report those
- * interactions as pending (exit 6); a settled run, or one waiting on another
- * interaction, is returned as is.
- */
-async function waitPastResolved(configDir: string, runId: string, answered: ReadonlySet<string>) {
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    const result = cliRun(configDir, ["run", "wait", runId, "--timeout", "5m"]);
-    const stillAnswered =
-      result.code === 6 && pendingInteractionIds(result.envelope).every((id) => answered.has(id));
-    if (!stillAnswered || Date.now() > deadline) return result;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
 }
 
 /** Reads a file from an environment through `environment exec`. */
@@ -526,7 +501,10 @@ test("a CLI-started question rehydrates in an inactive, reloaded renderer and ta
     await card.getByRole("button", { name: /^blue\b/ }).click();
     await card.getByRole("button", { name: "Submit", exact: true }).click();
 
-    const settled = await waitPastResolved(configDir, runId, new Set([pending!.id]));
+    const settled = await waitPastResolved(
+      () => cliRun(configDir, ["run", "wait", runId, "--timeout", "5m"]),
+      new Set([pending!.id]),
+    );
     expect(settled.code, runSummary(settled.envelope)).toBe(0);
     expect(readEnvironmentFile(configDir, asking, "colour.txt")).toBe("blue");
 
@@ -626,7 +604,10 @@ test("a CLI-started approval rehydrates in an inactive, reloaded renderer and ta
       // A card whose approval is still being submitted stays, disabled.
       await expect(approve.first()).toBeEnabled({ timeout: 60_000 });
       await approve.first().click();
-      settled = await waitPastResolved(configDir, runId, new Set(answering));
+      settled = await waitPastResolved(
+        () => cliRun(configDir, ["run", "wait", runId, "--timeout", "5m"]),
+        new Set(answering),
+      );
       answering = pendingInteractionIds(settled.envelope);
     }
     expect(settled.code, runSummary(settled.envelope)).toBe(0);

@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { StorageService } from "./storage.js";
-import type { StorageDatabase } from "./storage-database.js";
 import { LEGACY_JSON_DIRECTORY, openBackendDatabase } from "./storage-stores.js";
 import {
   readStoredValue,
   seedStore,
   seedUnreadableStore,
   storageFilesContain,
+  storageDatabase,
+  storageInternals,
 } from "./storage-test-support.js";
 
 function workflow(id: string): MultiReviewWorkflow {
@@ -36,13 +37,9 @@ function completed(id: string): MultiReviewWorkflow {
   return { ...workflow(id), phase: "completed" };
 }
 
-function storageDatabase(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
-}
-
 /** The store's private data directory, for inspecting files on disk. */
 function storeDir(storage: StorageService): string {
-  return (storage as unknown as { dataDir: string }).dataDir;
+  return storage.getDataDir();
 }
 
 async function withStorage(
@@ -500,12 +497,7 @@ test.each(["multi", "looped"] as const)(
         const changes: unknown[] = [];
         const unsubscribe = storage.addResourceChangeListener((change) => changes.push(change));
         const scrub = spyOn(
-          storage as unknown as {
-            scrubSensitiveJsonBackups: (
-              file: string,
-              keep: (id: string, value: unknown) => boolean,
-            ) => Promise<void>;
-          },
+          storageInternals(storage).context,
           "scrubSensitiveJsonBackups",
         ).mockRejectedValueOnce(new Error("scrub interrupted"));
         try {

@@ -14,9 +14,60 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
 | `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
-| `apps/backend/src/core/storage-base.ts` | Base of the `StorageService` chain: store names, lease wrappers, and forwarders to its `StorageContext` |
+| `apps/backend/src/core/storage.ts` | `StorageService`, the facade every caller uses: one forwarder per public method |
+| `apps/backend/src/core/storage-repositories.ts` | `StorageRepositories`, which builds every repository over one context |
+| `apps/backend/src/core/storage-files.ts` | `StorageFiles`: the paths of shared stores and of the files beside the database |
+| `apps/backend/src/core/storage-<area>.ts` | One repository per store group (`ProjectsRepository`, `KanbanRepository`, …; see [Code layout](#code-layout)) |
 | `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
 | `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
+
+## Code layout
+
+`StorageService` (`storage.ts`) is a facade with no base class. Its public
+methods are the storage API the rest of the backend uses (mostly through
+`CommandContext.storage`), and each forwards to the repository that owns the
+store. The facade itself only opens and closes the database, runs the
+start-up steps (`init`) and exposes the change journal.
+
+| Repository | File | Stores |
+| --- | --- | --- |
+| `ProjectsRepository` | `storage-projects.ts` | Projects, environments, project removal fences, the project-creation lease |
+| `ConfigRepository` | `storage-config.ts` | `config.json`, `agent-platforms.json`, model catalogues |
+| `SessionsRepository` | `storage-sessions.ts` | Sessions, pane layouts |
+| `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
+| `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions, the interaction journal, prompt-queue persistence and claim recovery |
+| `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
+| `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
+| `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
+| `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail |
+| `KanbanRepository` | `storage-kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
+| `PreviewServicesRepository` | `storage-preview-services.ts` | Preview services and settings, the backend profile and identity |
+| `NodesRepository` | `storage-nodes.ts` | Command-node stores |
+| `PublicOperationsRepository` | `storage-public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
+| `CoordinatorsRepository` | `storage-coordinators.ts` | Coordinator workspaces and workflow associations |
+| `AgentAccountsRepository` | `storage-agent-accounts.ts` | The provider account registry |
+
+A store written by more than one repository is written under the same lease
+by each, or only through transactions; the guard checks that per store.
+
+Every repository takes the one `StorageContext` (`this.context`), the
+`StorageFiles` path helpers (`this.files.kanbanFile()`) and the
+`StorageRepositories` registry (`this.repos.projects`), and keeps only what it
+uses. Repositories call each other through the registry, which is how the
+paths that cross stores work: project removal deletes compose drafts
+(`this.repos.drafts`), session removal deletes the session buffer, public
+operations write projects and environments under those stores' leases
+(`this.repos.projects.enqueueEnvironmentMutation`), and the facade's `init`
+runs prompt-queue claim recovery on the native-session repository. A lease
+wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
+the repository that owns its store, with its target, label and timeout
+unchanged.
+
+Nothing outside the `storage*.ts` files names a repository, the registry or
+`StorageContext`; `storage-writer-guards.test.ts` checks both. Tests that need
+a primitive or a repository helper the facade does not expose use
+`storageInternals(storage)` or `storageDatabase(storage)` from
+`storage-test-support.ts`.
 
 ## What stays a file
 
@@ -105,15 +156,15 @@ from that.
   of a `record` store or of one `envelope` collection. It neither parses nor
   rewrites the other rows, so a write costs O(row) and holders of different
   keys' leases cannot overwrite each other.
-- **`serializeMutation(target, description, operation, options)`**: an
+- **`serialize(target, description, operation, options)`**: an
   asynchronous critical section. An in-process FIFO per target plus a
   cross-process **lease** in the `leases` table (owner token and heartbeat;
   stale after `staleMs`, default 15 s; acquisition times out after
   `acquireTimeoutMs`, default 20 s). The claim-or-reclaim check is one
   transaction, so two waiters cannot both take a stale lease. Lease names are
   data-dir relative (`environments.json`,
-  `project-creation-locks/<sha256>`). The `enqueue*Mutation` methods are thin
-  wrappers over it. Three leases are deliberately held across external I/O
+  `project-creation-locks/<sha256>`). The `enqueue*Mutation` methods of the
+  repositories are thin wrappers over it. Three leases are deliberately held across external I/O
   and size their timeouts for it: native agent sessions (provider create and
   send, 180 s acquire), project creation (Git and `gh`, 90 s stale and 660 s
   acquire) and GitHub completion comment posting.
@@ -158,16 +209,31 @@ rows that an unleased transaction committed after the save's read. An
 buffers the value and commits it whole, and so does `deleteStore`. Each write,
 helper call and `atomically` call on the way must be awaited or returned inside
 the lease, and a lease taken inside `atomically` does not count, because the
-scope commits after it is released. `storage-writer-guards.test.ts` parses the
-`StorageService` chain and enforces all of this per store, following private,
-protected and `#private` helpers to every caller, with no exceptions; a write
-it cannot follow fails.
+scope commits after it is released. `storage-writer-guards.test.ts` parses
+`StorageService` and every class it reaches through a typed field (the
+registry, `StorageFiles` and every repository) and enforces all of this per
+store, with no exceptions; a write it cannot follow fails. It resolves each
+call through the declared types of the fields on the way
+(`this.repos.projects.saveEnvironments()`, `this.context.saveJson()`), and
+follows every repository method, whatever its visibility, to all of its
+callers; only the facade's public methods are entry points.
 The primitives are implemented on `StorageContext` (`storage-context.ts`,
-whose `serialize` also records the lease order) and the chain reaches them
-only through `StorageBase`'s forwarders of the same names. The guard fails a
-layer that touches `this.context` directly, and any class other than
-`StorageBase` that names `StorageContext`, so a repository that takes the
-context has to be added to the scan first.
+whose `serialize` also records the lease order). The guard fails a class
+that holds a `StorageContext` without the facade reaching it, a scanned class
+that uses `this.context` as a value outside a constructor, a scanned class
+that extends another, and any backend code outside the storage files that
+names `StorageContext` or a repository.
+
+Engines with stores of their own (workflow results, the cleanup ledger,
+display tails, web annotations, transcript artifacts, usage history, design
+signals, …) write through `StorageDatabase` directly, outside that scan. The
+same test resolves the store each of those writes names, through constants,
+template literals, small name functions (`webAnnotationStoreName`),
+constructor-set fields and row helpers that take the store as a parameter,
+and fails a write whose store it cannot name or that a repository also
+writes. The import and record upgrades in `storage-stores.ts` and
+`storage-record-upgrades.ts` are exempt: they run inside the migration
+transaction at open, before any writer.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other
@@ -308,7 +374,12 @@ The archive stays that pre-migration copy, except that deletes reach it:
 
 Use `storage-test-support.ts` rather than writing files into a data directory:
 `seedStore`, `seedUnreadableStore`, `readStoredValue`, `hasStore`,
-`deleteStoredValue` and `storageFilesContain`. To exercise the import and the
+`deleteStoredValue` and `storageFilesContain`. `storageDatabase(storage)` and
+`storageInternals(storage)` reach a running service's database, context and
+repositories, for injecting a failure into a primitive or patching one
+repository method. Patch the repository, not the facade: a repository calls
+another repository directly, so a facade method replaced in a test is not
+seen by storage code. To exercise the import and the
 one-shot upgrades, write legacy files into a directory without a database
 (`writeLegacyStore`) or copy a live one out in an older shape
 (`exportStoresAsLegacyJson`). Each opens its own connection,

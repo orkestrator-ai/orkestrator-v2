@@ -40,12 +40,14 @@ import {
   projectRevision,
   repositorySettingsRevision,
 } from "./public-api/revisions.js";
-import { StorageNodes } from "./storage-nodes.js";
 import { StoreCorruptError } from "./storage-database.js";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { applyProjectFolder } from "./storage-projects.js";
 import { defaultRepositoryConfig } from "./storage-shared.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 
 interface NamespaceFile {
   version: 1;
@@ -80,8 +82,14 @@ export type PublicOperationLookup =
  * the key reservation and the record publication happen in one critical
  * section before any side effect runs.
  */
-export class StoragePublicOperations extends StorageNodes {
-  protected publicOperationLimits: {
+export class PublicOperationsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  private publicOperationLimits: {
     maxOperationsPerNamespace: number;
     maxNamespaceBytes: number;
   } = {
@@ -91,26 +99,26 @@ export class StoragePublicOperations extends StorageNodes {
 
   /** Tests only: shrink the per-namespace capacity to exercise refusal. */
   setPublicOperationLimitsForTesting(
-    limits: Partial<StoragePublicOperations["publicOperationLimits"]>,
+    limits: Partial<PublicOperationsRepository["publicOperationLimits"]>,
   ): void {
     this.publicOperationLimits = { ...this.publicOperationLimits, ...limits };
   }
 
-  protected publicOperationsDir(): string {
-    return this.file("public-operations");
+  private publicOperationsDir(): string {
+    return this.context.file("public-operations");
   }
 
-  protected publicOperationIndexFile(): string {
+  private publicOperationIndexFile(): string {
     return path.join(this.publicOperationsDir(), "index.json");
   }
 
-  protected publicOperationNamespaceFile(namespace: string): string {
+  private publicOperationNamespaceFile(namespace: string): string {
     if (!/^ns-[0-9]{13}-[a-f0-9]{8}$/.test(namespace)) throw new Error("Invalid namespace");
     return path.join(this.publicOperationsDir(), `${namespace}.json`);
   }
 
-  protected enqueuePublicOperationMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(
+  private enqueuePublicOperationMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
       path.join(this.publicOperationsDir(), "store"),
       "public operation store",
       operation,
@@ -123,7 +131,7 @@ export class StoragePublicOperations extends StorageNodes {
    */
   private async readStrictJson<T>(file: string): Promise<T | null> {
     try {
-      return this.loadStoreStrict<T>(file)?.value ?? null;
+      return this.context.loadStoreStrict<T>(file)?.value ?? null;
     } catch (error) {
       if (!(error instanceof StoreCorruptError)) throw error;
       throw new PublicActionError(
@@ -179,7 +187,7 @@ export class StoragePublicOperations extends StorageNodes {
     namespace: string,
     operations: PublicOperationRecord[],
   ): Promise<void> {
-    await this.saveSensitiveJson(this.publicOperationNamespaceFile(namespace), {
+    await this.context.saveSensitiveJson(this.publicOperationNamespaceFile(namespace), {
       version: 1,
       namespace,
       operations,
@@ -189,7 +197,7 @@ export class StoragePublicOperations extends StorageNodes {
   private async indexWithCurrent(now: number): Promise<PublicOperationIndex> {
     const loaded = await this.loadPublicOperationIndex();
     const { index, rotated } = currentNamespace(loaded, now);
-    if (rotated) await this.saveSensitiveJson(this.publicOperationIndexFile(), index);
+    if (rotated) await this.context.saveSensitiveJson(this.publicOperationIndexFile(), index);
     return index;
   }
 
@@ -508,10 +516,10 @@ export class StoragePublicOperations extends StorageNodes {
       };
       // The retirement and the namespace deletions commit together: there is
       // no window with an index that forgot the retirement or orphaned records.
-      await this.atomically(async () => {
-        await this.saveSensitiveJson(this.publicOperationIndexFile(), next);
+      await this.context.atomically(async () => {
+        await this.context.saveSensitiveJson(this.publicOperationIndexFile(), next);
         for (const namespace of retired) {
-          await this.deleteStore(this.publicOperationNamespaceFile(namespace));
+          await this.context.deleteStore(this.publicOperationNamespaceFile(namespace));
         }
       });
       return { retired, kept };
@@ -527,8 +535,8 @@ export class StoragePublicOperations extends StorageNodes {
     updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
   ): Promise<Project> {
     // The revision check and the write happen under one projects.json lock.
-    const project = await this.enqueueProjectMutation(async () => {
-      const projects = await this.loadProjects();
+    const project = await this.repos.projects.enqueueProjectMutation(async () => {
+      const projects = await this.repos.projects.loadProjects();
       const current = projects.find((candidate) => candidate.id === projectId);
       if (!current) throw new PublicActionError("not-found", `Project not found: ${projectId}`);
       if (expectedRevision !== undefined && projectRevision(current) !== expectedRevision) {
@@ -540,12 +548,12 @@ export class StoragePublicOperations extends StorageNodes {
       }
       return this.applyProjectUpdates(projects, current, updates);
     });
-    this.announce("project", projectId);
+    this.context.changes.announce("project", projectId);
     return project;
   }
 
   /** Shared body of project metadata edits; the caller holds the project lock. */
-  protected async applyProjectUpdates(
+  private async applyProjectUpdates(
     projects: Project[],
     project: Project,
     updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
@@ -571,7 +579,7 @@ export class StoragePublicOperations extends StorageNodes {
     if (typeof updates.name === "string") project.name = updates.name;
     if ("localPath" in updates) project.localPath = updates.localPath ?? null;
     if ("folder" in updates) applyProjectFolder(project, updates.folder);
-    await this.saveJson(this.projectsFile(), projects);
+    await this.context.saveJson(this.files.projectsFile(), projects);
     return project;
   }
 
@@ -585,8 +593,8 @@ export class StoragePublicOperations extends StorageNodes {
     expectedRevision: string | undefined,
     apply: (current: RepositoryConfig) => RepositoryConfig,
   ): Promise<RepositoryConfig> {
-    const next = await this.enqueueConfigMutation(async () => {
-      const config = await this.loadOwnConfig();
+    const next = await this.repos.config.enqueueConfigMutation(async () => {
+      const config = await this.repos.config.loadOwnConfig();
       const stored = config.repositories[projectId];
       if (
         expectedRevision !== undefined &&
@@ -601,10 +609,10 @@ export class StoragePublicOperations extends StorageNodes {
       const current = structuredClone(stored ?? defaultRepositoryConfig());
       const updated = apply(current);
       config.repositories[projectId] = updated;
-      await this.saveSensitiveJson(this.configFile(), config);
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
       return updated;
     });
-    this.announce("config", "app");
+    this.context.changes.announce("config", "app");
     return next;
   }
 
@@ -630,8 +638,8 @@ export class StoragePublicOperations extends StorageNodes {
       agentSettings?: AgentSettingsTier;
     },
   ): Promise<Environment> {
-    return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
+    return this.repos.projects.enqueueEnvironmentMutation(async () => {
+      const environments = await this.repos.projects.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment)
         throw new PublicActionError("not-found", `Environment not found: ${environmentId}`);
@@ -661,8 +669,8 @@ export class StoragePublicOperations extends StorageNodes {
       const tier = next.agentSettings ? normalizeAgentSettings(next.agentSettings) : undefined;
       if (tier && Object.keys(tier).length > 0) environment.agentSettings = tier;
       else delete environment.agentSettings;
-      await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      await this.repos.projects.saveEnvironments(environments);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }

@@ -1,10 +1,7 @@
 import * as shared from "./storage-shared.js";
+import path from "node:path";
 import { nativeAgentSessionWithControls } from "./native-agent-session-controls.js";
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
-import type {
-  CoordinatorWorkflowAssociation,
-  CoordinatorWorkspace,
-} from "@orkestrator/protocol/coordinator";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
   MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
@@ -86,7 +83,6 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
-import { StorageReviews } from "./storage-reviews.ts";
 import {
   isNativeAgentSteerRejectedOutcome,
   nativeAsyncQuestionItemId,
@@ -103,6 +99,9 @@ import {
   type NativeAgentDisplayTailDeletion,
 } from "./native-agent-display-tail-store.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -169,42 +168,148 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export abstract class StorageNative extends StorageReviews {
-  private displayTailStoreInstance: NativeAgentDisplayTailStore | null = null;
-  async getCoordinatorWorkspaceById(_coordinatorId: string): Promise<CoordinatorWorkspace | null> {
-    throw new Error("Coordinator storage is unavailable in this storage layer");
-  }
-
-  async listCoordinatorWorkspaces(): Promise<CoordinatorWorkspace[]> {
-    throw new Error("Coordinator storage is unavailable in this storage layer");
-  }
+export class NativeAgentSessionsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
 
   /**
-   * Delegations the mail layer must consult before it schedules an injection.
+   * Gives every session whose environment exists an owner. Runs at each start
+   * because callers may still create sessions without one. Each key is written
+   * under its own lease, so this never waits on (or blocks) the whole store.
+   */
+  async migrateNativeAgentSessionOwners(): Promise<void> {
+    const loaded = await this.loadNativeAgentSessions();
+    const environmentById = new Map(
+      (await this.repos.projects.loadEnvironments()).map((environment) => [
+        environment.id,
+        environment,
+      ]),
+    );
+    for (const [key, session] of Object.entries(loaded.sessions)) {
+      if (session.owner || !environmentById.has(session.environmentId)) continue;
+      await this.enqueueNativeAgentSessionMutation(key, async () => {
+        const current = (await this.loadNativeAgentSessions()).sessions[key];
+        const environment = current && environmentById.get(current.environmentId);
+        if (!current || current.owner || !environment) return;
+        await this.saveNativeAgentSession(key, {
+          ...current,
+          owner: {
+            kind: "environment",
+            projectId: environment.projectId,
+            environmentId: environment.id,
+          },
+        });
+      });
+    }
+  }
+
+  private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Serializes one native agent session's read-modify-write in this process
+   * and across backend processes sharing the same data directory.
    *
-   * Declared here rather than only on the composed service because the mail
-   * store sits below the coordinator store in the storage chain and still has
-   * to answer "is this worker's coordinator waiting on it right now?". Empty is
-   * the honest answer for a layer with no coordinator store: no delegation is
-   * open, so nothing is held.
+   * The acquire timeout is sized for the critical section rather than for a
+   * store write, like `ProjectsRepository.withProjectCreationLock`. This lease is
+   * deliberately held across provider I/O: a prompt dispatch keeps it until the
+   * provider has acknowledged the request id, and `getOrCreateNativeAgentSession`
+   * keeps it across the external session create so two processes cannot mint
+   * two provider sessions for one logical key. Those bound at ~90s (the bridge
+   * prompt/attach budget) and ~122s (four 30s ACP create attempts plus backoff)
+   * respectively, so the 20s default would fail a second process that is
+   * waiting on a perfectly healthy holder — and the caller most exposed to that
+   * is environment deletion, whose session cleanup is best-effort and would
+   * therefore leave the deleted environment's record, provider session id and
+   * pending prompt behind.
+   *
+   * This only extends patience with a *live* holder. A holder that dies stops
+   * heartbeating, so the unchanged 15s stale threshold still reclaims the lease.
    */
-  async listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
-    return [];
-  }
+  static readonly NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS = 180_000;
 
   /**
-   * Every coordinator workflow association, so the mail layer can tell which
-   * environments a coordinator created. Empty for the same reason as above.
+   * One lease per session key: a slow provider create or send for one session
+   * no longer stalls every other session in every environment. Keys are
+   * arbitrary strings, so the lease is named by their hash. Writes under it
+   * touch only that key's row (`updateStoreRow`), so holders of different
+   * keys cannot overwrite each other.
+   *
+   * Ordering: the service's per-key work fence, then this lease, then leaf
+   * leases (prompt queue, display tails). Never take a native session lease
+   * while holding another one, a prompt-queue lease or the environment lease.
    */
-  async listAllCoordinatorWorkflowAssociations(): Promise<CoordinatorWorkflowAssociation[]> {
-    return [];
+  private enqueueNativeAgentSessionMutation<T>(
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const digest = createHash("sha256").update(key).digest("hex");
+    return this.context.serialize(
+      this.context.file(path.join("native-agent-session-leases", digest)),
+      "native agent session storage",
+      operation,
+      { acquireTimeoutMs: NativeAgentSessionsRepository.NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS },
+    );
   }
+
+  private enqueueAgentInteractionJournalMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.files.agentInteractionJournalFile(),
+      "agent interaction journal storage",
+      operation,
+    );
+  }
+
+  private async scrubPendingNativeAgentDispatchBackups(
+    key: string,
+    requestId: string,
+  ): Promise<void> {
+    await this.context.transformSensitiveJsonBackups(
+      this.files.nativeAgentSessionsFile(),
+      (records) => {
+        const record = records[key];
+        if (
+          isRecord(record) &&
+          isRecord(record.pendingDispatch) &&
+          record.pendingDispatch.requestId === requestId
+        ) {
+          const next = { ...record };
+          delete next.pendingDispatch;
+          return { ...records, [key]: next };
+        }
+        return records;
+      },
+    );
+  }
+
+  private async scrubPendingNativeAgentSteerBackups(key: string, requestId: string): Promise<void> {
+    await this.context.transformSensitiveJsonBackups(
+      this.files.nativeAgentSessionsFile(),
+      (records) => {
+        const record = records[key];
+        if (
+          isRecord(record) &&
+          isRecord(record.pendingSteer) &&
+          record.pendingSteer.requestId === requestId
+        ) {
+          const next = { ...record };
+          delete next.pendingSteer;
+          return { ...records, [key]: next };
+        }
+        return records;
+      },
+    );
+  }
+
+  private displayTailStoreInstance: NativeAgentDisplayTailStore | null = null;
 
   private announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
     deleted = false,
   ): void {
-    this.announce(
+    this.context.changes.announce(
       "native-agent-session",
       session.environmentId,
       undefined,
@@ -215,7 +320,9 @@ export abstract class StorageNative extends StorageReviews {
 
   async getAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
     return this.enqueueAgentInteractionJournalMutation(async () =>
-      pruneAgentInteractionResolutionJournal(await this.loadAgentInteractionResolutionJournal()),
+      pruneAgentInteractionResolutionJournal(
+        await this.repos.reviews.loadAgentInteractionResolutionJournal(),
+      ),
     );
   }
 
@@ -229,13 +336,13 @@ export abstract class StorageNative extends StorageReviews {
   ): Promise<AgentInteractionResolutionJournal> {
     return this.enqueueAgentInteractionJournalMutation(async () => {
       const current = pruneAgentInteractionResolutionJournal(
-        await this.loadAgentInteractionResolutionJournal(),
+        await this.repos.reviews.loadAgentInteractionResolutionJournal(),
       );
       const next = pruneAgentInteractionResolutionJournal(update(current));
       if (!isAgentInteractionResolutionJournal(next)) {
         throw new Error("Agent interaction resolution journal update is invalid");
       }
-      await this.saveSensitiveJson(this.agentInteractionJournalFile(), next);
+      await this.context.saveSensitiveJson(this.files.agentInteractionJournalFile(), next);
       return next;
     });
   }
@@ -250,8 +357,11 @@ export abstract class StorageNative extends StorageReviews {
    * tab in every environment, and would block the environment deletion that is
    * the user's only way to clear it. So the refusal is scoped to the key.
    */
-  protected async loadNativeAgentSessions(): Promise<LoadedNativeAgentSessions> {
-    const stored = await this.loadJson<unknown>(this.nativeAgentSessionsFile(), () => ({}));
+  async loadNativeAgentSessions(): Promise<LoadedNativeAgentSessions> {
+    const stored = await this.context.loadJson<unknown>(
+      this.files.nativeAgentSessionsFile(),
+      () => ({}),
+    );
     if (!isRecord(stored)) {
       throw new Error("Stored native agent sessions are invalid");
     }
@@ -277,16 +387,16 @@ export abstract class StorageNative extends StorageReviews {
    * sweeps its sessions, so a create that commits after the tombstone could
    * otherwise leave a record behind that the sweep had already passed.
    */
-  protected async saveNativeAgentSession(
+  async saveNativeAgentSession(
     key: string,
     session: PersistedNativeAgentSession | undefined,
     options: { requireLiveEnvironment?: string } = {},
   ): Promise<void> {
     const environmentId = options.requireLiveEnvironment;
-    this.updateStoreRow(this.nativeAgentSessionsFile(), key, () => {
+    this.context.updateStoreRow(this.files.nativeAgentSessionsFile(), key, () => {
       if (environmentId && !coordinatorIdFromRuntimeId(environmentId)) {
-        const environment = this.database.readStoreRow(
-          this.storeForFile(this.environmentsFile())!,
+        const environment = this.context.database.readStoreRow(
+          this.context.storeForFile(this.files.environmentsFile())!,
           environmentId,
         );
         if (!isRecord(environment)) {
@@ -302,7 +412,7 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  protected assertReadableNativeAgentSession(loaded: LoadedNativeAgentSessions, key: string): void {
+  private assertReadableNativeAgentSession(loaded: LoadedNativeAgentSessions, key: string): void {
     if (key in loaded.opaque) {
       throw new Error(
         "Stored native agent session metadata is invalid or uses an unsupported version",
@@ -735,8 +845,8 @@ export abstract class StorageNative extends StorageReviews {
       }
       delete sessions[key];
       await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubSensitiveJsonBackups(
-        this.nativeAgentSessionsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.nativeAgentSessionsFile(),
         (storedKey) => storedKey !== key,
       );
       this.announceNativeAgentRecord(existing, true);
@@ -753,10 +863,10 @@ export abstract class StorageNative extends StorageReviews {
    * Constructed lazily so storage that never shows a native session never
    * runs the one-time cleanup of the old cache files.
    */
-  protected nativeAgentDisplayTailStore(): NativeAgentDisplayTailStore {
+  private nativeAgentDisplayTailStore(): NativeAgentDisplayTailStore {
     this.displayTailStoreInstance ??= new NativeAgentDisplayTailStore({
-      database: () => this.database,
-      legacyRoot: this.dataDir,
+      database: () => this.context.database,
+      legacyRoot: this.context.dataDir,
     });
     return this.displayTailStoreInstance;
   }
@@ -829,17 +939,17 @@ export abstract class StorageNative extends StorageReviews {
         })) || removed;
     }
     // Only a real deletion is worth waking every client for.
-    if (removed) this.announce("native-agent-session", environmentId);
+    if (removed) this.context.changes.announce("native-agent-session", environmentId);
     // Unconditional: a retry after a partial failure finds the sessions
     // already gone, and must still clear the tails that failure left.
     await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
-    await this.scrubSensitiveJsonBackups(
-      this.nativeAgentSessionsFile(),
+    await this.context.scrubSensitiveJsonBackups(
+      this.files.nativeAgentSessionsFile(),
       (_key, record) => !isRecord(record) || record.environmentId !== environmentId,
     );
     // The deleted rows' provider session ids and dispatch journals must not
     // survive in free pages or the WAL either.
-    this.scrubDeletedDatabaseContent();
+    this.context.scrubDeletedDatabaseContent();
   }
 
   async dispatchNativeAgentPromptOnce(
@@ -1168,13 +1278,13 @@ export abstract class StorageNative extends StorageReviews {
           updatedAt: nowIso(),
           revision: queue.revision + 1,
         };
-        await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
         await this.saveNativeAgentSession(key, {
           ...session,
           pendingSteer: pending,
           updatedAt: nowIso(),
         });
-        this.announce("prompt-queue", session.environmentId);
+        this.context.changes.announce("prompt-queue", session.environmentId);
         return pending;
       });
     });
@@ -1229,8 +1339,8 @@ export abstract class StorageNative extends StorageReviews {
         updatedAt: nowIso(),
         revision: queue.revision + 1,
       };
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", session.environmentId);
+      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+      this.context.changes.announce("prompt-queue", session.environmentId);
     });
   }
 
@@ -1521,8 +1631,8 @@ export abstract class StorageNative extends StorageReviews {
     if (!isNonBlankString(environmentId)) {
       throw new Error(`${label} environment ID must not be blank`);
     }
-    return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
+    return this.repos.projects.enqueueEnvironmentMutation(async () => {
+      const environments = await this.repos.projects.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) {
         throw new Error(`${label} environment not found: ${environmentId}`);
@@ -1552,11 +1662,11 @@ export abstract class StorageNative extends StorageReviews {
     );
   }
 
-  protected enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.promptQueuesFile(), "prompt queue storage", operation);
+  enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.promptQueuesFile(), "prompt queue storage", operation);
   }
 
-  protected validatePromptQueueMessages(messages: unknown): asserts messages is unknown[] {
+  validatePromptQueueMessages(messages: unknown): asserts messages is unknown[] {
     if (!Array.isArray(messages)) {
       throw new Error("Prompt queue messages must be an array");
     }
@@ -1576,16 +1686,14 @@ export abstract class StorageNative extends StorageReviews {
     }
   }
 
-  protected validatePromptQueueMessage(
-    message: unknown,
-  ): asserts message is Record<string, unknown> {
+  validatePromptQueueMessage(message: unknown): asserts message is Record<string, unknown> {
     if (!isRecord(message) || !isNonBlankString(message.id)) {
       throw new Error("Prompt queue message must have a non-blank ID");
     }
     this.validatePromptQueueMessages([message]);
   }
 
-  protected async savePromptQueueMutation(
+  async savePromptQueueMutation(
     queues: Record<string, PersistedPromptQueue>,
     queueKey: string,
     environmentId: string,
@@ -1602,7 +1710,7 @@ export abstract class StorageNative extends StorageReviews {
         (candidate) =>
           isRecord(candidate) &&
           candidate.id === previous.dispatchError?.messageId &&
-          this.promptQueueMessageFingerprint(candidate) ===
+          this.repos.prompts.promptQueueMessageFingerprint(candidate) ===
             previous.dispatchError?.messageFingerprint,
       );
     const removedOrigins = this.promptQueueRemovedOrigins(previous, messages, outstandingClaim);
@@ -1618,8 +1726,8 @@ export abstract class StorageNative extends StorageReviews {
       revision: (previous?.revision ?? 0) + 1,
     };
     queues[queueKey] = saved;
-    await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-    this.announce("prompt-queue", environmentId);
+    await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+    this.context.changes.announce("prompt-queue", environmentId);
     this.schedulePromptQueueClaimRecovery(queues);
     return saved;
   }
@@ -1631,7 +1739,7 @@ export abstract class StorageNative extends StorageReviews {
    * Reservation writes the in-flight record directly and never comes through
    * here, so a dispatched item can never be tombstoned.
    */
-  protected promptQueueRemovedOrigins(
+  private promptQueueRemovedOrigins(
     previous: PersistedPromptQueue | undefined,
     messages: readonly unknown[],
     outstandingClaim: PersistedPromptQueue["outstandingClaim"] | null,
@@ -1745,7 +1853,7 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  protected schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {
+  schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {
     if (this.promptQueueClaimRecoveryTimer) {
       clearTimeout(this.promptQueueClaimRecoveryTimer);
       this.promptQueueClaimRecoveryTimer = null;
@@ -1770,7 +1878,7 @@ export abstract class StorageNative extends StorageReviews {
     this.promptQueueClaimRecoveryTimer.unref?.();
   }
 
-  protected async recoverExpiredPromptQueueClaims(): Promise<void> {
+  async recoverExpiredPromptQueueClaims(): Promise<void> {
     await this.enqueuePromptQueueMutation(async () => {
       const queues = await this.loadPromptQueues();
       const now = Date.now();
@@ -1795,27 +1903,27 @@ export abstract class StorageNative extends StorageReviews {
         changed = true;
       }
       if (changed) {
-        await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
         for (const environmentId of changedEnvironmentIds) {
-          this.announce("prompt-queue", environmentId);
+          this.context.changes.announce("prompt-queue", environmentId);
         }
       }
       this.schedulePromptQueueClaimRecovery(queues);
     });
   }
 
-  protected async assertEnvironmentAcceptsBackgroundState(
+  async assertEnvironmentAcceptsBackgroundState(
     environmentId: string,
     label: string,
   ): Promise<Environment> {
     const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
     if (coordinatorId) {
-      const workspace = await this.getCoordinatorWorkspaceById(coordinatorId);
+      const workspace = await this.repos.coordinators.getCoordinatorWorkspaceById(coordinatorId);
       if (!workspace) throw new Error(`${label} coordinator not found: ${coordinatorId}`);
       if (workspace.lifecycleState === "paused") {
         throw new Error(`${label} coordinator is paused`);
       }
-      const project = await this.getProject(workspace.projectId);
+      const project = await this.repos.projects.getProject(workspace.projectId);
       if (!project?.localPath) throw new Error(`${label} coordinator checkout is unavailable`);
       return {
         id: environmentId,
@@ -1836,7 +1944,7 @@ export abstract class StorageNative extends StorageReviews {
         setupScriptsComplete: true,
       } as Environment;
     }
-    const environment = await this.getEnvironment(environmentId);
+    const environment = await this.repos.projects.getEnvironment(environmentId);
     if (!environment) {
       throw new Error(`${label} environment not found: ${environmentId}`);
     }
@@ -1846,9 +1954,9 @@ export abstract class StorageNative extends StorageReviews {
     return environment;
   }
 
-  protected async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
-    const stored = await this.loadJson<Record<string, PersistedPromptQueue>>(
-      this.promptQueuesFile(),
+  async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
+    const stored = await this.context.loadJson<Record<string, PersistedPromptQueue>>(
+      this.files.promptQueuesFile(),
       () => ({}),
     );
     // A first-generation dispatch error was upgraded once at import

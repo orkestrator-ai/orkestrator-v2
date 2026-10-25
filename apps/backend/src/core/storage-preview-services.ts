@@ -23,8 +23,8 @@ import {
   type PreviewServiceDefinition,
 } from "@orkestrator/protocol/preview-services";
 
-import { StorageKanban } from "./storage-kanban.js";
 import { isRecord } from "./storage-shared.js";
+import type { StorageContext } from "./storage-context.js";
 
 /** Idempotency record for one committed registry mutation. */
 export interface PreviewMutationRecord {
@@ -234,23 +234,25 @@ function sanitizeSettings(value: unknown): PreviewSettings {
  * identity, and operator settings are stored here — never resolved host ports,
  * grants, cookies, or connectivity assumptions.
  */
-export class StoragePreviewServices extends StorageKanban {
+export class PreviewServicesRepository {
+  constructor(private readonly context: StorageContext) {}
+
   private previewIdentityPromise: Promise<PreviewBackendIdentity> | null = null;
 
-  protected previewServicesFile(): string {
-    return this.file("preview-services.json");
+  private previewServicesFile(): string {
+    return this.context.file("preview-services.json");
   }
 
-  protected previewSettingsFile(): string {
-    return this.file("preview-settings.json");
+  private previewSettingsFile(): string {
+    return this.context.file("preview-settings.json");
   }
 
-  protected backendIdentityFile(): string {
-    return this.file("backend-identity.json");
+  private backendIdentityFile(): string {
+    return this.context.file("backend-identity.json");
   }
 
-  protected backendProfileFile(): string {
-    return this.file("backend-profile.json");
+  private backendProfileFile(): string {
+    return this.context.file("backend-profile.json");
   }
 
   private enqueuePreview<T>(
@@ -258,11 +260,11 @@ export class StoragePreviewServices extends StorageKanban {
     description: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    return this.serializeMutation(file, description, operation);
+    return this.context.serialize(file, description, operation);
   }
 
   async loadPreviewServiceStore(): Promise<LoadedPreviewServiceStore> {
-    const raw = await this.loadJson<unknown>(this.previewServicesFile(), () => ({}));
+    const raw = await this.context.loadJson<unknown>(this.previewServicesFile(), () => ({}));
     const record = isRecord(raw) ? raw : {};
     const definitions: Record<string, PreviewServiceDefinition> = {};
     const invalid: LoadedPreviewServiceStore["invalid"] = [];
@@ -291,7 +293,7 @@ export class StoragePreviewServices extends StorageKanban {
     mutate: (store: PreviewServiceStore) => { changed: boolean; result: T },
   ): Promise<T> {
     return this.enqueuePreview(this.previewServicesFile(), "preview service storage", async () => {
-      const raw = await this.loadJson<unknown>(this.previewServicesFile(), () => ({}));
+      const raw = await this.context.loadJson<unknown>(this.previewServicesFile(), () => ({}));
       const opaque = isRecord(raw) && isRecord(raw.definitions) ? raw.definitions : {};
       const { store } = await this.loadPreviewServiceStore();
       const { changed, result } = mutate(store);
@@ -301,7 +303,7 @@ export class StoragePreviewServices extends StorageKanban {
         if (previewDefinitionProblem(key, value)) preserved[key] = value;
       }
       store.operations = store.operations.slice(-MAX_OPERATIONS);
-      await this.saveJson(this.previewServicesFile(), {
+      await this.context.saveJson(this.previewServicesFile(), {
         version: 1,
         definitions: { ...preserved, ...store.definitions },
         operations: store.operations,
@@ -324,9 +326,11 @@ export class StoragePreviewServices extends StorageKanban {
   }
 
   private async loadOrCreatePreviewIdentity(): Promise<PreviewBackendIdentity> {
-    const fingerprint = createHash("sha256").update(path.resolve(this.dataDir)).digest("hex");
+    const fingerprint = createHash("sha256")
+      .update(path.resolve(this.context.dataDir))
+      .digest("hex");
     return this.enqueuePreview(this.backendIdentityFile(), "backend identity", async () => {
-      const stored = await this.loadJson<unknown>(this.backendIdentityFile(), () => null);
+      const stored = await this.context.loadJson<unknown>(this.backendIdentityFile(), () => null);
       if (
         isRecord(stored) &&
         isOpaquePreviewId(stored.instanceId) &&
@@ -340,7 +344,7 @@ export class StoragePreviewServices extends StorageKanban {
         );
       }
       const instanceId = `bk_${randomBytes(16).toString("base64url")}`;
-      await this.saveJson(this.backendIdentityFile(), {
+      await this.context.saveJson(this.backendIdentityFile(), {
         version: 1,
         instanceId,
         dataDirFingerprint: fingerprint,
@@ -357,11 +361,11 @@ export class StoragePreviewServices extends StorageKanban {
    */
   async getBackendProfile(): Promise<BackendProfile> {
     const stored = storedBackendProfile(
-      await this.loadJson<unknown>(this.backendProfileFile(), () => null),
+      await this.context.loadJson<unknown>(this.backendProfileFile(), () => null),
     );
     if (stored) return stored;
     const { instanceId } = await this.getPreviewBackendIdentity();
-    return this.serializeMutation(this.backendProfileFile(), "backend profile", () =>
+    return this.context.serialize(this.backendProfileFile(), "backend profile", () =>
       this.loadOrCreateBackendProfile(instanceId),
     );
   }
@@ -373,7 +377,7 @@ export class StoragePreviewServices extends StorageKanban {
   async updateBackendProfile(update: BackendProfileUpdate): Promise<BackendProfile> {
     const parsed = parseBackendProfileUpdate(update);
     const { instanceId } = await this.getPreviewBackendIdentity();
-    return this.serializeMutation(this.backendProfileFile(), "backend profile", async () => {
+    return this.context.serialize(this.backendProfileFile(), "backend profile", async () => {
       const current = await this.loadOrCreateBackendProfile(instanceId);
       if (current.revision !== parsed.expectedRevision) {
         throw new BackendProfileConflictError(current);
@@ -384,14 +388,14 @@ export class StoragePreviewServices extends StorageKanban {
         colorToken: parsed.colorToken ?? current.colorToken,
         updatedAt: new Date().toISOString(),
       };
-      await this.saveJson(this.backendProfileFile(), { version: 1, ...next });
+      await this.context.saveJson(this.backendProfileFile(), { version: 1, ...next });
       return next;
     });
   }
 
   /** Call only under the backend profile lease. */
   private async loadOrCreateBackendProfile(installationId: string): Promise<BackendProfile> {
-    const raw = await this.loadJson<unknown>(this.backendProfileFile(), () => null);
+    const raw = await this.context.loadJson<unknown>(this.backendProfileFile(), () => null);
     const stored = storedBackendProfile(raw);
     if (stored) return stored;
     // An unreadable record is replaced, but past its revision, so an edit
@@ -409,13 +413,16 @@ export class StoragePreviewServices extends StorageKanban {
       colorToken: defaultMachineColor(installationId),
       updatedAt: new Date().toISOString(),
     };
-    await this.saveJson(this.backendProfileFile(), { version: 1, ...profile });
+    await this.context.saveJson(this.backendProfileFile(), { version: 1, ...profile });
     return profile;
   }
 
   async loadPreviewSettings(): Promise<PreviewSettings> {
     return sanitizeSettings(
-      await this.loadJson<unknown>(this.previewSettingsFile(), () => DEFAULT_PREVIEW_SETTINGS),
+      await this.context.loadJson<unknown>(
+        this.previewSettingsFile(),
+        () => DEFAULT_PREVIEW_SETTINGS,
+      ),
     );
   }
 
@@ -424,7 +431,7 @@ export class StoragePreviewServices extends StorageKanban {
   ): Promise<PreviewSettings> {
     return this.enqueuePreview(this.previewSettingsFile(), "preview settings", async () => {
       const next = sanitizeSettings(update(await this.loadPreviewSettings()));
-      await this.saveJson(this.previewSettingsFile(), next);
+      await this.context.saveJson(this.previewSettingsFile(), next);
       return next;
     });
   }

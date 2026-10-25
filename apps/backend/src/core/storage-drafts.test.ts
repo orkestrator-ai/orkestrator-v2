@@ -3,12 +3,13 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import { STORAGE_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
-import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
-
-function storageDatabase(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
-}
+import { STORAGE_DATABASE_FILE } from "./storage-database.js";
+import {
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  storageDatabase,
+} from "./storage-test-support.js";
 
 async function withStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,

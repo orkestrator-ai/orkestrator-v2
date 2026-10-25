@@ -42,7 +42,7 @@ import { syntheticReport } from "./multi-review-efficiency-fixtures.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { StorageService } from "./storage.js";
-import type { StorageDatabase } from "./storage-database.js";
+import { storageDatabase } from "./storage-test-support.js";
 
 jest.setTimeout(120_000);
 
@@ -308,7 +308,7 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
     counts.fenceChecks += 1;
     return originalValidate(...args);
   };
-  const database = (storage as unknown as { database: Record<string, unknown> }).database;
+  const database = storageDatabase(storage) as unknown as Record<string, unknown>;
   const spy = (
     method: string,
     matches: (target: unknown) => boolean,
@@ -636,7 +636,7 @@ test.each([0, 50])(
       await writer.saveMultiReviewWorkflow("active", "env-1", 1, snapshot("active", "reviewing"));
       const first = await writer.claimMultiReviewController("active", "owner-1", 60_000);
       await reader.init();
-      const database = (reader as unknown as { database: StorageDatabase }).database;
+      const database = storageDatabase(reader);
       const sqlite = database.db;
       const query = sqlite.query.bind(sqlite);
       let rowsFetched = 0;
@@ -667,7 +667,7 @@ test.each([0, 50])(
         });
       });
       const expectedBytes = (storage: StorageService) => {
-        const db = (storage as unknown as { database: StorageDatabase }).database;
+        const db = storageDatabase(storage);
         return db.rows("multi-reviews").entry("active")!.bytes;
       };
       const expectOneRow = async (operation: () => Promise<unknown>) => {

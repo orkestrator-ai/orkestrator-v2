@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
 import type { ClientEnvironment, Environment } from "./models.js";
-import type { StorageDatabase } from "./storage-database.js";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { readStoredValue, seedStore, storageDatabase } from "./storage-test-support.js";
 import type { StorageService } from "./storage.js";
 
 /**
@@ -186,7 +185,7 @@ describe("OrkestratorBackend agent activity boot reset", () => {
       async (backend, dataDir) => {
         const storage = (backend as unknown as { context: { storage: StorageService } }).context
           .storage;
-        const database = (storage as unknown as { database: StorageDatabase }).database;
+        const database = storageDatabase(storage);
         const writeStore = database.writeStoreInTransaction.bind(database);
         // Every write to the environments store fails; other stores still work.
         const failing = spyOn(database, "writeStoreInTransaction").mockImplementation(

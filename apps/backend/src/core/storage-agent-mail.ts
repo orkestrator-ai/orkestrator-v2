@@ -48,7 +48,6 @@ import {
   listAgentMailConversations,
   type ConversationMailbox,
 } from "./agent-mail-conversations.ts";
-import { StorageDrafts } from "./storage-drafts.ts";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
   COORDINATOR_DELEGATION_HOLD_REASON,
@@ -60,6 +59,9 @@ import {
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 
 type PersistedMailbox = {
   mailboxId: string;
@@ -491,7 +493,13 @@ function storeByteLength(store: PersistedAgentMailStore): number {
   return Buffer.byteLength(JSON.stringify(store, null, 2), "utf8") + 1;
 }
 
-export class StorageAgentMail extends StorageDrafts {
+export class AgentMailRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
   private readonly agentMailLayoutRevisions = new Map<string, number>();
   private agentMailRuntimeProvider:
     | ((mailbox: {
@@ -504,7 +512,7 @@ export class StorageAgentMail extends StorageDrafts {
       }) => { presence?: MailboxDescriptor["presence"]; title?: string } | undefined)
     | null = null;
 
-  setAgentMailRuntimeProvider(provider: StorageAgentMail["agentMailRuntimeProvider"]): void {
+  setAgentMailRuntimeProvider(provider: AgentMailRepository["agentMailRuntimeProvider"]): void {
     this.agentMailRuntimeProvider = provider;
   }
 
@@ -513,7 +521,7 @@ export class StorageAgentMail extends StorageDrafts {
     | null = null;
 
   /** Set by the coordinator service, which can start a main conversation. */
-  setCoordinatorMailResolver(resolver: StorageAgentMail["coordinatorMailResolver"]): void {
+  setCoordinatorMailResolver(resolver: AgentMailRepository["coordinatorMailResolver"]): void {
     this.coordinatorMailResolver = resolver;
   }
 
@@ -547,7 +555,7 @@ export class StorageAgentMail extends StorageDrafts {
   private async recipientTab(sender: AgentMailSender, input: AgentMailSendInput): Promise<string> {
     await this.ensureAgentMailDirectoryFresh([input.toEnvironmentId]);
     if (sender.kind === "coordinator") {
-      const delegated = (await this.listOpenCoordinatorDelegations()).find(
+      const delegated = (await this.repos.coordinators.listOpenCoordinatorDelegations()).find(
         (association) =>
           association.coordinatorId === sender.coordinatorId &&
           !association.nodeId &&
@@ -579,7 +587,7 @@ export class StorageAgentMail extends StorageDrafts {
     if (!alias && !coordinatorId) {
       return input.toTabId ? input : { ...input, toTabId: await this.recipientTab(sender, input) };
     }
-    const workspaces = await this.listCoordinatorWorkspaces();
+    const workspaces = await this.repos.coordinators.listCoordinatorWorkspaces();
     const projectId =
       sender.kind === "tab" || sender.kind === "coordinator" || sender.kind === "system"
         ? sender.projectId
@@ -608,11 +616,14 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   private enqueueAgentMailMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.agentMailFile(), "agent mail storage", operation);
+    return this.context.serialize(this.files.agentMailFile(), "agent mail storage", operation);
   }
 
   private async loadAgentMailStore(): Promise<PersistedAgentMailStore> {
-    const value = await this.loadJsonCached<unknown>(this.agentMailFile(), emptyStore);
+    const value = await this.context.loadJsonCached<unknown>(
+      this.files.agentMailFile(),
+      emptyStore,
+    );
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Agent mail store is malformed");
     }
@@ -655,7 +666,7 @@ export class StorageAgentMail extends StorageDrafts {
     if (storeByteLength(store) > AGENT_MAIL_MAX_STORE_BYTES) {
       throw new AgentMailError("store-full", "Agent mail store has reached its size limit");
     }
-    await this.saveSensitiveJson(this.agentMailFile(), store);
+    await this.context.saveSensitiveJson(this.files.agentMailFile(), store);
   }
 
   /**
@@ -699,11 +710,11 @@ export class StorageAgentMail extends StorageDrafts {
   async synchronizeAgentMailboxes(): Promise<void> {
     const [projects, environments, layoutsResult, coordinators, coordinatorWorkflows] =
       await Promise.all([
-        this.loadProjects(),
-        this.loadEnvironments(),
-        this.loadPaneLayoutsForReconciliation(),
-        this.listCoordinatorWorkspaces(),
-        this.listAllCoordinatorWorkflowAssociations(),
+        this.repos.projects.loadProjects(),
+        this.repos.projects.loadEnvironments(),
+        this.repos.sessions.loadPaneLayoutsForReconciliation(),
+        this.repos.coordinators.listCoordinatorWorkspaces(),
+        this.repos.coordinators.listAllCoordinatorWorkflowAssociations(),
       ]);
     const coordinatorOrigins = coordinatorOriginsByEnvironment(coordinators, coordinatorWorkflows);
     if (!layoutsResult.available) return;
@@ -711,7 +722,10 @@ export class StorageAgentMail extends StorageDrafts {
       await Promise.all(
         environments.map(
           async (environment) =>
-            [environment.id, await this.getSessionsByEnvironment(environment.id)] as const,
+            [
+              environment.id,
+              await this.repos.drafts.getSessionsByEnvironment(environment.id),
+            ] as const,
         ),
       ),
     );
@@ -874,9 +888,13 @@ export class StorageAgentMail extends StorageDrafts {
       if (changedMailboxIds.size === 0) return;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
       for (const mailboxId of changedMailboxIds) {
-        this.announce("agent-mail", mailboxId, store.mailboxes[mailboxId]?.projectId);
+        this.context.changes.announce(
+          "agent-mail",
+          mailboxId,
+          store.mailboxes[mailboxId]?.projectId,
+        );
       }
     });
     this.agentMailLayoutRevisions.clear();
@@ -897,7 +915,7 @@ export class StorageAgentMail extends StorageDrafts {
 
   private async ensureAgentMailDirectoryFresh(environmentIds: string[]): Promise<void> {
     for (const environmentId of new Set(environmentIds.filter(Boolean))) {
-      const layout = await this.getPaneLayout(environmentId);
+      const layout = await this.repos.sessions.getPaneLayout(environmentId);
       const revision = layout?.revision ?? -1;
       if (this.agentMailLayoutRevisions.get(environmentId) !== revision) {
         await this.synchronizeAgentMailboxes();
@@ -988,7 +1006,10 @@ export class StorageAgentMail extends StorageDrafts {
       environmentId?: string;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const query = options.q?.trim().toLocaleLowerCase();
     const offset = Math.max(0, options.offset ?? 0);
@@ -1092,7 +1113,10 @@ export class StorageAgentMail extends StorageDrafts {
       incarnationId?: string;
     } = {},
   ): Promise<AgentMailMailboxSnapshot> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
     if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
     const offset = Math.max(0, options.offset ?? 0);
@@ -1126,7 +1150,10 @@ export class StorageAgentMail extends StorageDrafts {
     if (addresses.length > AGENT_MAIL_MAX_MAILBOXES) {
       throw new Error(`At most ${AGENT_MAIL_MAX_MAILBOXES} mailboxes may be read at once`);
     }
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
     ).defaultInjectPolicy;
@@ -1152,7 +1179,10 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   async getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
     ).defaultInjectPolicy;
@@ -1268,8 +1298,8 @@ export class StorageAgentMail extends StorageDrafts {
 
   /** Serializes follow-up admission with worker completion, including periodic recovery. */
   withAgentMailWorkerAdmission<T>(environmentId: string, operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(
-      `${this.agentMailFile()}:worker-admission:${environmentId}`,
+    return this.context.serialize(
+      `${this.files.agentMailFile()}:worker-admission:${environmentId}`,
       "worker mail admission",
       operation,
     );
@@ -1416,8 +1446,8 @@ export class StorageAgentMail extends StorageDrafts {
       input.toEnvironmentId,
       sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
     ]);
-    const recipientEnvironment = await this.getEnvironment(input.toEnvironmentId);
-    const config = await this.loadConfig();
+    const recipientEnvironment = await this.repos.projects.getEnvironment(input.toEnvironmentId);
+    const config = await this.repos.config.loadConfig();
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     if (!settings.enabled)
       throw new AgentMailError("messaging-disabled", "Agent messaging is disabled");
@@ -1667,7 +1697,7 @@ export class StorageAgentMail extends StorageDrafts {
         (sender.kind === "tab" || (sender.kind === "node" && sender.role === "agent")) &&
         recipient.ownerKind === "coordinator" &&
         trust === "same-project"
-          ? (await this.listOpenCoordinatorDelegations()).find(
+          ? (await this.repos.coordinators.listOpenCoordinatorDelegations()).find(
               (association) =>
                 // A worker on another node is the same worker only on that node.
                 (sender.kind === "node"
@@ -1825,8 +1855,8 @@ export class StorageAgentMail extends StorageDrafts {
         injectDepth,
         threadDepth: nextThreadDepth,
       });
-      this.announce("agent-mail", destinationId, recipient.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", destinationId, recipient.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return message;
     });
     await this.noticeCoordinatorBudgetHold(placed);
@@ -1978,7 +2008,7 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
       return true;
     });
   }
@@ -1992,7 +2022,7 @@ export class StorageAgentMail extends StorageDrafts {
    */
   async releaseHourlyHeldAgentMail(): Promise<number> {
     const settings = normalizeAgentMessagingSettings(
-      (await this.loadConfig()).global.agentMessaging,
+      (await this.repos.config.loadConfig()).global.agentMessaging,
     );
     const store = await this.loadAgentMailStore();
     const hasHeld = Object.values(store.mailboxes).some((mailbox) =>
@@ -2041,9 +2071,9 @@ export class StorageAgentMail extends StorageDrafts {
       store.revision += 1;
       await this.saveAgentMailStore(store);
       for (const mailbox of changed) {
-        this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+        this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
       }
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
       return changed.size;
     });
   }
@@ -2089,8 +2119,8 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return message;
     });
   }
@@ -2128,7 +2158,7 @@ export class StorageAgentMail extends StorageDrafts {
    */
   async promoteStoredAgentMailForMailbox(environmentId: string, tabId: string): Promise<number> {
     const settings = normalizeAgentMessagingSettings(
-      (await this.loadConfig()).global.agentMessaging,
+      (await this.repos.config.loadConfig()).global.agentMessaging,
     );
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
@@ -2139,8 +2169,8 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return promoted;
     });
   }
@@ -2246,7 +2276,7 @@ export class StorageAgentMail extends StorageDrafts {
     owedDelegations: ReadonlySet<string>,
   ): Promise<number> {
     const settings = normalizeAgentMessagingSettings(
-      (await this.loadConfig()).global.agentMessaging,
+      (await this.repos.config.loadConfig()).global.agentMessaging,
     );
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
@@ -2322,8 +2352,8 @@ export class StorageAgentMail extends StorageDrafts {
       target.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", target.mailboxId, target.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", target.mailboxId, target.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return moved;
     });
   }
@@ -2370,9 +2400,9 @@ export class StorageAgentMail extends StorageDrafts {
       store.revision += 1;
       await this.saveAgentMailStore(store);
       for (const mailbox of changed) {
-        this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+        this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
       }
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
       return released;
     });
   }
@@ -2422,8 +2452,8 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return released;
     });
   }
@@ -2434,7 +2464,7 @@ export class StorageAgentMail extends StorageDrafts {
     messageId: string,
   ): Promise<AgentMailMessage> {
     const settings = normalizeAgentMessagingSettings(
-      (await this.loadConfig()).global.agentMessaging,
+      (await this.repos.config.loadConfig()).global.agentMessaging,
     );
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
@@ -2517,8 +2547,8 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return message;
     });
   }
@@ -2559,7 +2589,7 @@ export class StorageAgentMail extends StorageDrafts {
       const store = await this.loadAgentMailStore();
       const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
       if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
-      const config = await this.loadConfig();
+      const config = await this.repos.config.loadConfig();
       const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
       const defaultPolicy = settings.defaultInjectPolicy;
       const deliversWhenIdle = () =>
@@ -2581,8 +2611,8 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return this.descriptor(mailbox, defaultPolicy);
     });
   }
@@ -2603,7 +2633,10 @@ export class StorageAgentMail extends StorageDrafts {
     limit = 100,
     options: { includeDeferred?: boolean; includeCoalescing?: boolean } = {},
   ): Promise<PendingAgentMailInject[]> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const pending: PendingAgentMailInject[] = [];
     const now = Date.now();
@@ -2659,7 +2692,10 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   async listInterruptedAgentMailInjects(): Promise<PendingAgentMailInject[]> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const interrupted: PendingAgentMailInject[] = [];
     for (const mailbox of Object.values(store.mailboxes)) {
@@ -2680,7 +2716,10 @@ export class StorageAgentMail extends StorageDrafts {
     environmentId: string,
     tabId: string,
   ): Promise<AgentMailMessageSummary[]> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const cutoff =
       Date.now() -
       normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays * 86_400_000;
@@ -2699,7 +2738,10 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   async listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const cutoff =
       Date.now() -
       normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays * 86_400_000;
@@ -2716,7 +2758,10 @@ export class StorageAgentMail extends StorageDrafts {
     cutoff: number;
     mailboxes: ConversationMailbox[];
   }> {
-    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.loadAgentMailStore(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     return {
       revision: store.revision,
@@ -2781,15 +2826,15 @@ export class StorageAgentMail extends StorageDrafts {
       store.revision += 1;
       await this.saveAgentMailStore(store);
       for (const mailbox of changed)
-        this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+        this.context.changes.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.context.changes.announce("agent-mail-summary", "all");
       return marked;
     });
   }
 
   /** One durable startup attempt per queued item, only for a local family worker. */
   async claimAgentMailWorkerStart(environmentId: string, messageId: string): Promise<boolean> {
-    const environment = await this.getEnvironment(environmentId);
+    const environment = await this.repos.projects.getEnvironment(environmentId);
     if (
       !environment ||
       environment.environmentType !== "local" ||
@@ -2976,8 +3021,8 @@ export class StorageAgentMail extends StorageDrafts {
       }
       await this.saveAgentMailStore(store);
       if (announce) {
-        this.announce("agent-mail", mailboxId, mailbox.projectId);
-        this.announce("agent-mail-summary", "all");
+        this.context.changes.announce("agent-mail", mailboxId, mailbox.projectId);
+        this.context.changes.announce("agent-mail-summary", "all");
       }
       return message;
     });
@@ -3001,7 +3046,7 @@ export class StorageAgentMail extends StorageDrafts {
       if (recovered === 0) return 0;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
       return recovered;
     });
   }
@@ -3068,7 +3113,7 @@ export class StorageAgentMail extends StorageDrafts {
       }
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      await this.transformSensitiveJsonBackups(this.agentMailFile(), (record) => {
+      await this.context.transformSensitiveJsonBackups(this.files.agentMailFile(), (record) => {
         const backup = record as unknown as PersistedAgentMailStore;
         if (backup.version !== 1 || !backup.mailboxes) return record;
         for (const [mailboxId, mailbox] of Object.entries(backup.mailboxes)) {
@@ -3091,9 +3136,9 @@ export class StorageAgentMail extends StorageDrafts {
         return backup as unknown as Record<string, unknown>;
       });
       for (const [mailboxId, affectedProjectId] of changedMailboxes) {
-        this.announce("agent-mail", mailboxId, affectedProjectId);
+        this.context.changes.announce("agent-mail", mailboxId, affectedProjectId);
       }
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
     });
   }
 
@@ -3145,7 +3190,7 @@ export class StorageAgentMail extends StorageDrafts {
       if (!changed) return;
       store.revision += 1;
       await this.saveAgentMailStore(store);
-      await this.transformSensitiveJsonBackups(this.agentMailFile(), (record) => {
+      await this.context.transformSensitiveJsonBackups(this.files.agentMailFile(), (record) => {
         const backup = record as unknown as PersistedAgentMailStore;
         if (backup.version !== 1 || !backup.mailboxes) return record;
         for (const [mailboxId, mailbox] of Object.entries(backup.mailboxes)) {
@@ -3162,9 +3207,9 @@ export class StorageAgentMail extends StorageDrafts {
         return backup as unknown as Record<string, unknown>;
       });
       for (const [mailboxId, projectId] of changedMailboxes) {
-        this.announce("agent-mail", mailboxId, projectId);
+        this.context.changes.announce("agent-mail", mailboxId, projectId);
       }
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
     });
   }
 
@@ -3218,9 +3263,9 @@ export class StorageAgentMail extends StorageDrafts {
       store.revision += 1;
       await this.saveAgentMailStore(store);
       for (const [mailboxId, projectId] of changedMailboxes) {
-        this.announce("agent-mail", mailboxId, projectId);
+        this.context.changes.announce("agent-mail", mailboxId, projectId);
       }
-      this.announce("agent-mail-summary", "all");
+      this.context.changes.announce("agent-mail-summary", "all");
     });
   }
 }

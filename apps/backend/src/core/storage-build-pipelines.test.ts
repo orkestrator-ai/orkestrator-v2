@@ -3,8 +3,12 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import type { StorageDatabase } from "./storage-database.js";
-import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
+import {
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  storageDatabase,
+} from "./storage-test-support.js";
 
 async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-build-pipelines-"));
@@ -378,7 +382,7 @@ describe("StorageService build pipelines", () => {
           phase: "building",
           notes: "KEEP-ME",
         });
-        const database = (storage as unknown as { database: StorageDatabase }).database;
+        const database = storageDatabase(storage);
         const revision = database.storeRevision("build-pipelines");
 
         expect(await storage.deleteBuildPipelinesByEnvironment("e1")).toEqual([]);

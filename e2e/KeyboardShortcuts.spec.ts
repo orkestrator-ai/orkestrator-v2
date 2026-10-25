@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("Cmd+Shift+K opens a searchable list of keyboard shortcuts", async ({ page }, testInfo) => {
   await page.goto("/keyboard-shortcuts");
+  await expect(page.getByTestId("terminal").locator("textarea")).toBeAttached();
   await page.keyboard.press("Meta+Shift+K");
 
   const dialog = page.getByTestId("keyboard-shortcuts-dialog");
@@ -93,6 +94,7 @@ for (const modifier of ["Meta", "Control"]) {
 test("short viewport keeps the footer and final shortcut reachable", async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 400 });
   await page.goto("/keyboard-shortcuts");
+  await expect(page.getByTestId("terminal").locator("textarea")).toBeAttached();
   await page.keyboard.press("Meta+Shift+K");
   const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(dialog.getByText("Close", { exact: true })).toBeInViewport({ ratio: 1 });

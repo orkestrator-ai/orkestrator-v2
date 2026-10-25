@@ -122,10 +122,42 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["get_message", "mail"],
   ["get_message_status", "mail"],
   ["ack_message", "mail"],
+  ["create_schedule", "schedules"],
+  ["list_schedules", "schedules"],
+  ["cancel_schedule", "schedules"],
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
+
+/**
+ * What a conversation's credential may do. A side agent reads the project,
+ * talks to the main coordinator and schedules its own reminders; it launches
+ * nothing, so every worker reports to one place.
+ */
+export function coordinatorRoleCapabilities(role: "main" | "side"): string[] {
+  return role === "side"
+    ? ["discovery", "mail", "schedules"]
+    : [
+        "discovery",
+        "tickets",
+        "environments",
+        "jobs",
+        "build-pipelines",
+        "multi-review",
+        "mail",
+        "schedules",
+      ];
+}
+
+/** Whether a coordinator scope may call `tool` (listed and granted). */
+export function coordinatorToolGranted(
+  scope: Pick<CoordinatorControlScope, "capabilities">,
+  tool: string,
+): boolean {
+  const required = COORDINATOR_TOOL_CAPABILITY.get(tool);
+  return Boolean(required && scope.capabilities.includes(required));
+}
 
 export type CoordinatorControlScope = {
   role: "coordinator";

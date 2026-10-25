@@ -10,6 +10,7 @@ import { LAUNCH_HANDLERS } from "./actions-launch.js";
 import { MAIL_HANDLERS } from "./actions-mail.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
 import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
+import { SCHEDULE_HANDLERS } from "./actions-schedules.js";
 import { SESSION_COMMAND_HANDLERS } from "./actions-session-commands.js";
 import { SESSION_CONTROL_HANDLERS } from "./actions-session-controls.js";
 import { SESSION_HANDLERS } from "./actions-sessions.js";
@@ -43,6 +44,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...ATTENTION_HANDLERS,
     ...TICKET_HANDLERS,
     ...MAIL_HANDLERS,
+    ...SCHEDULE_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
     ...HOST_HANDLERS,

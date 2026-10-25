@@ -725,9 +725,9 @@ export const PUBLIC_API_LIMITS = Object.freeze({
   responseMaxBytes: 8 * 1024 * 1024,
   /** Largest request body the client sends. */
   requestMaxBytes: 1024 * 1024,
-  /** Prompt attachments travel inside the 1 MiB request, so their bound is small. */
+  /** Fits with the maximum prompt (including JSON escaping) in the 1 MiB request. */
   promptAttachmentsMaxItems: 8,
-  promptAttachmentsMaxBytes: 512 * 1024,
+  promptAttachmentsMaxBytes: 256 * 1024,
   promptAttachmentNameMaxChars: 128,
   commandArgumentsMaxBytes: 64 * 1024,
   execArgvMaxItems: 256,
@@ -894,6 +894,8 @@ export interface PublicExecutionState {
 }
 
 export interface PublicReceipt {
+  /** Bounded current/final action result, also available for partial outcomes. */
+  result?: Record<string, unknown>;
   operationId: string;
   namespace: string;
   requestId: string;
@@ -1105,7 +1107,8 @@ export function isPublicReceipt(value: unknown): value is PublicReceipt {
     typeof value.updatedAt === "string" &&
     typeof value.retainedUntil === "string" &&
     (value.dispatch === undefined || isRecord(value.dispatch)) &&
-    (value.execution === undefined || isRecord(value.execution))
+    (value.execution === undefined || isRecord(value.execution)) &&
+    (value.result === undefined || isRecord(value.result))
   );
 }
 

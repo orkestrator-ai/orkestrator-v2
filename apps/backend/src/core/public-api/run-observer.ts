@@ -185,19 +185,37 @@ async function evaluateRun(
   record: PublicOperationRecord,
   context: PublicActionContext,
 ): Promise<OperationPatch | null> {
+  if (record.stage === "staging-attachments") {
+    if (record.generation === context.generation) return null;
+    return {
+      state: "interrupted",
+      stage: "completed",
+      dispatch: { state: "not-sent" },
+      execution: {
+        state: "interrupted",
+        evidence: "none",
+        observedAt: new Date(context.now()).toISOString(),
+      },
+      error: {
+        code: "run-interrupted",
+        message: "The backend restarted while staging attachments; nothing was sent or queued",
+      },
+    };
+  }
   if (record.dispatch?.state === "pending" || record.stage === "queueing") {
     return evaluateQueuedRun(record, context);
   }
   if (record.dispatch?.state !== "accepted" && record.dispatch?.state !== "unknown") {
-    if (record.stage !== "dispatching" || record.generation === context.generation) return null;
+    if (record.generation === context.generation) return null;
     const target = await runTarget(record, context);
     if (!target) {
       return {
         state: "interrupted",
         stage: "completed",
+        dispatch: { state: "not-sent" },
         error: {
           code: "run-interrupted",
-          message: "No session was created before the backend restarted",
+          message: "No session was created before the backend restarted; nothing was sent",
         },
       };
     }
@@ -218,6 +236,7 @@ async function evaluateRun(
     return {
       state: "interrupted",
       stage: "completed",
+      dispatch: { state: "not-sent" },
       error: {
         code: "run-interrupted",
         message: "No dispatch was recorded before the backend restarted",

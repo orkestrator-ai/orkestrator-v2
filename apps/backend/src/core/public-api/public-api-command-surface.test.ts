@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { NativeAgentSlashCommand } from "@orkestrator/protocol/native-agent";
-import type { PublicReceipt } from "@orkestrator/protocol/public-api";
+import { PUBLIC_API_LIMITS, type PublicReceipt } from "@orkestrator/protocol/public-api";
 import {
   nativeTabLogicalSessionKey,
   type PublicSessionCommandList,
 } from "@orkestrator/protocol/public-api-resources";
 import { AmbiguousPromptDispatchError, PromptRejectedError } from "../agent-provider-contract.js";
 import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent-provider.js";
+import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import type { PublicApiHarness } from "./test-support.js";
@@ -304,35 +305,46 @@ describe("session.start delivery options", () => {
 });
 
 describe("recovery keeps command intent", () => {
-  test("run retry of a parked typed-command prompt replays the same selection", async () => {
-    const { harness, stub, sessionId, sendOptions } = await idleSession();
-    stub.setSend(async () => {
-      throw new AmbiguousPromptDispatchError("response lost");
+  for (const selected of [false, true]) {
+    test(`run retry after restart preserves a ${selected ? "selected" : "typed"} command and binding revision`, async () => {
+      const { harness, stub, sessionId, sendOptions } = await idleSession();
+      stub.setSend(async () => {
+        throw new AmbiguousPromptDispatchError("response lost");
+      });
+      const parked = await harness.call<{ runId: string }>(
+        selected ? "session.command" : "session.prompt",
+        selected
+          ? {
+              sessionId,
+              command: "/review",
+              arguments: "the diff",
+              expectedBindingRevision: "rev:/review",
+            }
+          : { sessionId, prompt: "/review the diff" },
+        { requestId: "typed-parked" },
+      );
+      expect(parked.receipt?.state).toBe("unknown");
+      expect(sendOptions().at(-1)?.command).toMatchObject({ id: "claude:/review" });
+      stub.setSend(async () => undefined);
+      const restarted = await harness.restart();
+      const retried = await restarted.call(
+        "run.retry",
+        { operationId: parked.receipt!.operationId },
+        { requestId: "typed-retry" },
+      );
+      await restarted.cleanup();
+      expect(retried.ok).toBe(true);
+      expect(stub.sends.at(-1)).toMatchObject({
+        prompt: "/review the diff",
+        requestId: parked.receipt!.operationId,
+      });
+      // The retry carries the resolved selection, never re-resolved text.
+      expect(sendOptions().at(-1)?.command).toMatchObject({
+        id: "claude:/review",
+        bindingRevision: "rev:/review",
+      });
     });
-    const parked = await harness.call<{ runId: string }>(
-      "session.prompt",
-      { sessionId, prompt: "/review the diff" },
-      { requestId: "typed-parked" },
-    );
-    expect(parked.receipt?.state).toBe("unknown");
-    expect(sendOptions().at(-1)?.command).toMatchObject({ id: "claude:/review" });
-    stub.setSend(async () => undefined);
-    const retried = await harness.call(
-      "run.retry",
-      { operationId: parked.receipt!.operationId },
-      { requestId: "typed-retry" },
-    );
-    expect(retried.ok).toBe(true);
-    expect(stub.sends.at(-1)).toMatchObject({
-      prompt: "/review the diff",
-      requestId: parked.receipt!.operationId,
-    });
-    // The retry carries the resolved selection, never re-resolved text.
-    expect(sendOptions().at(-1)?.command).toMatchObject({
-      id: "claude:/review",
-      bindingRevision: "rev:/review",
-    });
-  });
+  }
 });
 
 describe("durable enqueue", () => {
@@ -526,4 +538,272 @@ describe("prompt attachments", () => {
       expect(response.receipt).toBeUndefined();
     }
   });
+});
+
+describe("cold provider catalogue", () => {
+  for (const status of ["loading", "unavailable"] as const) {
+    test(`refreshes ${status} provider rows despite synthetic compact`, async () => {
+      const { harness, service, sessionId, stub } = await idleSession();
+      const cached = service.cachedProjectionSnapshot.bind(service);
+      Object.assign(service, {
+        cachedProjectionSnapshot: (...args: Parameters<typeof cached>) => {
+          const projection = cached(...args);
+          return projection
+            ? {
+                ...projection,
+                slashCommands: [],
+                slashCommandCatalogue: { ...projection.slashCommandCatalogue, status },
+              }
+            : null;
+        },
+      });
+      const response = await harness.call(
+        "session.command",
+        {
+          sessionId,
+          command: "/review",
+          arguments: "diff",
+        },
+        { requestId: `cold-${status}` },
+      );
+      expect(response.ok).toBe(true);
+      expect(stub.sends.at(-1)?.prompt).toBe("/review diff");
+    });
+  }
+});
+
+describe("attachment restart checkpoints", () => {
+  for (const container of [false, true]) {
+    for (const delivery of ["start", "prompt", "enqueue"] as const) {
+      test(`${container ? "container" : "local"} ${delivery} interrupted while staging is not sent`, async () => {
+        const { harness, sessionId, stub } = await idleSession();
+        if (container)
+          await harness.storage.updateEnvironment("env-1", {
+            environmentType: "containerized",
+            containerId: "staging-container",
+            worktreePath: null,
+          });
+        const write = container ? "write_container_file" : "write_local_file";
+        let reached!: () => void;
+        const staging = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        let stop!: () => void;
+        const killed = new Promise<void>((resolve) => {
+          stop = resolve;
+        });
+        harness.commands.set(write, async () => {
+          reached();
+          await killed;
+          throw new Error("simulated process exit");
+        });
+        const action = delivery === "start" ? "session.start" : "session.prompt";
+        const input = {
+          ...(delivery === "start" ? { environmentId: "env-1", agent: "claude" } : { sessionId }),
+          prompt: "with a file",
+          ...(delivery === "enqueue" ? { enqueue: true } : {}),
+          attachments: [{ name: "file.txt", dataBase64: "eA==" }],
+        };
+        const sent = stub.sends.length;
+        const pending = harness.call(action, input, { requestId: "staging" });
+        await staging;
+        const record = (await harness.storage.listActivePublicOperations()).find(
+          (entry) => entry.requestId === "staging",
+        )!;
+        expect(record).toMatchObject({
+          stage: "staging-attachments",
+          resources: { dispatchRequestId: record.operationId, sessionId: expect.any(String) },
+        });
+        expect((await receipt(harness, record.operationId)).state).toBe("running");
+        // Reopen storage while the old writer is paused, as at a process crash.
+        const restarted = await harness.restart();
+        try {
+          const observed = await receipt(restarted, record.operationId);
+          expect(observed).toMatchObject({
+            state: "interrupted",
+            stage: "completed",
+            dispatch: { state: "not-sent" },
+            execution: { state: "interrupted" },
+          });
+          const replay = await restarted.call(action, input, { requestId: "staging" });
+          expect(replay.receipt).toMatchObject({ state: "interrupted", replayed: true });
+          expect(stub.sends.length).toBe(sent);
+        } finally {
+          stop();
+          await pending;
+          await restarted.cleanup();
+        }
+      });
+    }
+  }
+});
+
+describe("container attachment mapping", () => {
+  test("writes container files and dispatches /workspace paths", async () => {
+    const { harness, sessionId, sendOptions } = await idleSession();
+    await harness.storage.updateEnvironment("env-1", {
+      environmentType: "containerized",
+      containerId: "test-container",
+      worktreePath: null,
+    });
+    const writes: unknown[] = [];
+    harness.commands.set("write_container_file", async (args) => {
+      writes.push(args);
+    });
+    const response = await harness.call(
+      "session.prompt",
+      {
+        sessionId,
+        prompt: "look",
+        attachments: [{ name: "notes.txt", dataBase64: "eA==" }],
+      },
+      { requestId: "container-files" },
+    );
+    expect(response.ok).toBe(true);
+    const relative = `.orkestrator/prompt-attachments/${response.receipt!.operationId}/01-notes.txt`;
+    expect(writes).toEqual([
+      { containerId: "test-container", filePath: relative, base64Data: "eA==" },
+    ]);
+    expect(sendOptions().at(-1)?.attachments).toEqual([
+      { type: "file", filename: "notes.txt", path: `/workspace/${relative}` },
+    ]);
+  });
+});
+
+describe("queued attachment persistence and restart evidence", () => {
+  test("queue retains image data URLs and file paths across storage restart", async () => {
+    const { harness, service, stub, providerSessionId, sessionId, tabId } = await idleSession();
+    stub.setStatus(async () => "running");
+    setActivity(service, "claude", tabId, providerSessionId, "working");
+    const image = Buffer.from("89504e470d0a1a0a", "hex").toString("base64");
+    const queued = await harness.call(
+      "session.prompt",
+      {
+        sessionId,
+        prompt: "later",
+        enqueue: true,
+        attachments: [
+          { name: "image.png", dataBase64: image },
+          { name: "file.txt", dataBase64: "eA==" },
+        ],
+      },
+      { requestId: "queued-files" },
+    );
+    expect(queued.ok).toBe(true);
+    const id = queued.receipt!.operationId;
+    const key = nativePromptQueueKey("claude", nativeTabLogicalSessionKey("env-1", tabId));
+    const restarted = await harness.restart();
+    try {
+      const queue = await restarted.storage.getPromptQueue(key);
+      expect(queue?.messages[0]).toMatchObject({
+        id,
+        attachments: [
+          {
+            type: "image",
+            dataUrl: `data:image/png;base64,${image}`,
+            path: expect.stringContaining(id),
+          },
+          { type: "file", path: expect.stringContaining(id) },
+        ],
+      });
+      expect((await receipt(restarted, id)).stage).toBe("queued");
+    } finally {
+      await restarted.cleanup();
+    }
+  });
+
+  for (const evidence of ["not-written", "held", "parked", "evicted"] as const) {
+    test(`previous-generation queueing with ${evidence} evidence`, async () => {
+      const { harness, service, stub, providerSessionId, sessionId, tabId } = await idleSession();
+      stub.setStatus(async () => "running");
+      setActivity(service, "claude", tabId, providerSessionId, "working");
+      const queued = await harness.call(
+        "session.prompt",
+        { sessionId, prompt: "later", enqueue: true },
+        { requestId: `queue-${evidence}` },
+      );
+      const id = queued.receipt!.operationId;
+      const logical = nativeTabLogicalSessionKey("env-1", tabId);
+      const key = nativePromptQueueKey("claude", logical);
+      if (evidence !== "held") await harness.storage.removePromptQueueMessage(key, "env-1", id);
+      if (evidence === "parked" || evidence === "evicted") {
+        const sessionKey = nativeAgentSessionStorageKey("env-1", "claude", logical);
+        const session = (await harness.storage.getNativeAgentSession(sessionKey))!;
+        await (
+          harness.storage as unknown as {
+            saveNativeAgentSession(key: string, value: typeof session): Promise<void>;
+          }
+        ).saveNativeAgentSession(sessionKey, {
+          ...session,
+          ...(evidence === "parked"
+            ? {
+                pendingDispatch: {
+                  requestId: id,
+                  prompt: "later",
+                  createdAt: new Date().toISOString(),
+                },
+              }
+            : { dispatchedRequestIds: ["later-request"] }),
+        });
+      }
+      await harness.storage.updatePublicOperation(id, (record) => ({
+        ...record,
+        stage: evidence === "evicted" ? "executing" : "queueing",
+        dispatch: evidence === "evicted" ? { state: "accepted" } : undefined,
+        generation: "previous-generation",
+      }));
+      const restarted = await harness.restart();
+      try {
+        const observed = await receipt(restarted, id);
+        if (evidence === "not-written")
+          expect(observed).toMatchObject({ state: "interrupted", dispatch: { state: "not-sent" } });
+        if (evidence === "held")
+          expect(observed).toMatchObject({
+            state: "running",
+            stage: "queued",
+            dispatch: { state: "pending" },
+          });
+        if (evidence === "parked")
+          expect(observed).toMatchObject({
+            state: "unknown",
+            dispatch: { state: "unknown", recoverable: true },
+          });
+        if (evidence === "evicted")
+          expect(observed).toMatchObject({
+            state: "unknown",
+            execution: { state: "unknown", evidence: "none" },
+          });
+      } finally {
+        await restarted.cleanup();
+      }
+    });
+  }
+});
+
+describe("combined prompt and attachment budget", () => {
+  for (const prompt of [
+    "😀".repeat(PUBLIC_API_LIMITS.promptMaxChars / 2),
+    "\u0001".repeat(PUBLIC_API_LIMITS.promptMaxChars),
+  ]) {
+    test(`maximum attachments fit with ${Buffer.byteLength(prompt)} prompt bytes`, async () => {
+      const { harness, sessionId } = await idleSession();
+      const input = {
+        sessionId,
+        prompt,
+        attachments: [
+          {
+            name: "file.txt",
+            dataBase64: Buffer.alloc(PUBLIC_API_LIMITS.promptAttachmentsMaxBytes, 1).toString(
+              "base64",
+            ),
+          },
+        ],
+      };
+      expect(Buffer.byteLength(JSON.stringify(input)) + 4096).toBeLessThan(
+        PUBLIC_API_LIMITS.requestMaxBytes,
+      );
+      const response = await harness.call("session.prompt", input, { requestId: "max-budget" });
+      expect(response.ok).toBe(true);
+    });
+  }
 });

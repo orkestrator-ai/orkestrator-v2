@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PUBLIC_API_LIMITS, publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
+import {
+  PUBLIC_API_LIMITS,
+  publicErrorEnvelope,
+  publicSuccessEnvelope,
+} from "@orkestrator/protocol/public-api";
 import type { PublicSessionCommandList } from "@orkestrator/protocol/public-api-resources";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import { completionScript, completionTable } from "../src/client/commands/completion.js";
@@ -57,6 +61,9 @@ async function fixture(): Promise<{ box: ClientSandbox; gateway: FakeGateway }> 
         ],
       };
       return envelope(publicSuccessEnvelope(action, list));
+    }
+    if (action === "run.get") {
+      return envelope(publicSuccessEnvelope(action, null, RECEIPT));
     }
     if (action === "project.init") {
       return envelope(
@@ -135,11 +142,13 @@ describe("selected slash commands", () => {
       "--expected-binding-revision",
       "rev-1",
       "--enqueue",
+      "--wait",
       "--",
       "the",
       "open diff",
     ]);
     expect(sent.code).toBe(0);
+    expect(gateway.requests.some((request) => request.body.args.action === "run.get")).toBe(true);
     expect(inputOf(gateway, "session.command")).toEqual({
       sessionId: "ses_eA",
       command: "/review",
@@ -279,6 +288,7 @@ describe("shell completion", () => {
     );
     expect(table.flags.get("project remove")).toContain("--cascade");
     expect(table.globals).toContain("--json");
+    expect(table.globals).toContain("-h");
   });
 
   test("bash completion completes command words across IDs and flags per command", () => {
@@ -296,6 +306,26 @@ describe("shell completion", () => {
       return result.stdout.trim().split(/\s+/);
     };
     expect(run(["orkestrator", "session", "comm"])).toEqual(["commands", "command"]);
+    for (const option of ["--profile", "--connection"]) {
+      expect(run(["orkestrator", option, "project", "session", "comm"])).toEqual([
+        "commands",
+        "command",
+      ]);
+      expect(run(["orkestrator", `${option}=project`, "session", "comm"])).toEqual([
+        "commands",
+        "command",
+      ]);
+    }
+    expect(run(["orkestrator", "--profile", "=", "project", "session", "comm"])).toEqual([
+      "commands",
+      "command",
+    ]);
+    expect(run(["orkestrator", "session", "--profile", "command", "comm"])).toEqual([
+      "commands",
+      "command",
+    ]);
+    expect(run(["orkestrator", "-h"])).toContain("-h");
+    expect(run(["orkestrator", "--profile", "pro"])).toEqual([""]);
     expect(run(["orkestrator", "project", "remove", "p-1", "--cas"])).toEqual(["--cascade"]);
     expect(run(["orkestrator", "--json", "session", "prompt", "ses_1", "--enq"])).toEqual([
       "--enqueue",
@@ -311,4 +341,146 @@ describe("shell completion", () => {
     const bad = await box.run(["--json", "completion", "tcsh"]);
     expect(bad.code).toBe(2);
   });
+});
+
+describe("native shell completion execution", () => {
+  test("zsh bashcompinit parses option values and offers short flags", () => {
+    const script = completionScript("zsh", CLIENT_COMMANDS);
+    for (const args of [
+      ["--profile", "project", "session", "comm"],
+      ["--connection=session", "project", "rem"],
+      ["session", "-h"],
+    ]) {
+      const run = spawnSync(
+        "zsh",
+        [
+          "-f",
+          "-c",
+          `autoload -Uz compinit; compinit -D
+${script}
+COMP_WORDS=(orkestrator ${args.map((word) => `'${word}'`).join(" ")})
+COMP_CWORD=${args.length}
+_orkestrator
+print -l -- \${COMPREPLY[@]}`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(run.status).toBe(0);
+      expect(run.stderr).toBe("");
+      expect(run.stdout.trim().split(/\s+/)).toEqual(
+        args.at(-1) === "comm"
+          ? ["commands", "command"]
+          : args.at(-1) === "rem"
+            ? ["remove"]
+            : ["-h"],
+      );
+    }
+  });
+
+  test.skipIf(!Bun.which("fish"))(
+    "fish parses collisions, equals forms, list/duration values and short flags",
+    () => {
+      const script = completionScript("fish", CLIENT_COMMANDS);
+      for (const [line, expected] of [
+        ["orkestrator --profile project session comm", ["command", "commands"]],
+        ["orkestrator --connection=session project rem", ["remove"]],
+        ["orkestrator session --profile command comm", ["command", "commands"]],
+        ["orkestrator session prompt --attach project --enq", ["--enqueue"]],
+        ["orkestrator project remove --timeout session --cas", ["--cascade"]],
+        ["orkestrator session -h", ["--help"]],
+      ] as const) {
+        const run = spawnSync("fish", ["-c", `${script}\ncomplete -C '${line}'`], {
+          encoding: "utf8",
+        });
+        expect(run.status).toBe(0);
+        expect(run.stderr).toBe("");
+        expect(
+          run.stdout
+            .trim()
+            .split("\n")
+            .map((row) => row.split("\t")[0])
+            .sort(),
+        ).toEqual([...expected].sort());
+      }
+    },
+  );
+});
+
+describe("cascade final CLI results", () => {
+  for (const partial of [false, true]) {
+    test(`--wait and run observation expose ${partial ? "partial" : "successful"} environment outcomes`, async () => {
+      const { box, gateway } = await fixture();
+      const original = gateway.respond;
+      const result = {
+        environments: {
+          total: 2,
+          deleted: partial ? 1 : 2,
+          failed: partial ? 1 : 0,
+          results: [
+            { environmentId: "env-first", state: "deleted" },
+            partial
+              ? { environmentId: "env-second", state: "failed", error: "cleanup refused" }
+              : { environmentId: "env-second", state: "deleted" },
+          ],
+          truncated: false,
+        },
+      };
+      const final = {
+        ...RECEIPT,
+        action: "project.remove" as const,
+        state: partial ? ("partial" as const) : ("succeeded" as const),
+        result,
+        ...(partial
+          ? { error: { code: "partial-failure" as const, message: "cleanup failed" } }
+          : {}),
+      };
+      let reads = 0;
+      gateway.respond = (request) => {
+        const action = String(request.body.args.action);
+        if (action === "project.remove")
+          return envelope(
+            publicSuccessEnvelope(
+              action,
+              { environments: { total: 2, deleted: 0, failed: 0, results: [] } },
+              {
+                ...final,
+                result: undefined,
+                state: "running",
+                completedAt: undefined,
+                error: undefined,
+              },
+            ),
+          );
+        if (action === "run.get") {
+          reads++;
+          return envelope(publicSuccessEnvelope(action, result, final));
+        }
+        return original(request);
+      };
+      const waited = await box.run(["--json", "project", "remove", "p-1", "--cascade", "--wait"]);
+      expect(waited.code).toBe(partial ? 1 : 0);
+      const output = JSON.parse(waited.out);
+      expect(output.receipt.result).toEqual(result);
+      if (!partial) expect(output.result).toEqual(result);
+      expect(reads).toBeGreaterThan(0);
+      const read = await box.run(["--json", "run", "get", final.operationId]);
+      expect(read.code).toBe(0);
+      expect(JSON.parse(read.out).result).toEqual(result);
+      const observed = await box.run(["--json", "run", "wait", final.operationId]);
+      expect(observed.code).toBe(partial ? 1 : 0);
+      expect(JSON.parse(observed.out).receipt.result).toEqual(result);
+      // A partial mutation replay also carries its retained summary in the error receipt.
+      if (partial) {
+        gateway.respond = (request) =>
+          request.body.args.action === "project.remove"
+            ? envelope(
+                publicErrorEnvelope("project.remove", final.error!, { ...final, replayed: true }),
+              )
+            : original(request);
+        const replay = await box.run(["--json", "project", "remove", "p-1", "--cascade"]);
+        expect(replay.code).toBe(1);
+        expect(JSON.parse(replay.out).receipt.result).toEqual(result);
+      }
+    });
+  }
 });

@@ -95,7 +95,7 @@ auto-start.
    prompt refused busy; the queued prompt completed after a running `sleep 20`
    turn).
 3. **Prompt attachments.** Done. Files travel inside the public action
-   (`attachments: [{ name, type?, dataBase64 }]`), at most 8 files and 512 KiB
+   (`attachments: [{ name, type?, dataBase64 }]`), at most 8 files and 256 KiB
    decoded in total (`PUBLIC_API_LIMITS.promptAttachments*`). Names must not
    contain directories; there is no path field. Name, type, size and SHA-256
    are fingerprinted, never the bytes. After admission the backend writes them
@@ -124,8 +124,9 @@ auto-start.
    scenario and the browser check.
 8. **Shell completion.** Done: `orkestrator completion bash|zsh|fish`,
    generated from the command table, local only, nouns/verbs/flags (no IDs).
-   Evidence: `command-surface.test.ts` (table coverage, bash completion across
-   positional IDs), `bash -n`/`zsh -n` on the generated scripts.
+   Evidence: `command-surface.test.ts` executes Bash, Zsh via bashcompinit,
+   and Fish completions, including option values colliding with command words,
+   equals forms, and short flags.
 9. **Gateway setup in `browser-gateway.spec.ts`.** Evaluated and declined: its
    `invoke` calls are one-line in-page calls, and most (pane layouts,
    terminals, unread flags, pipelines, prompt-queue fixtures) have no public
@@ -206,7 +207,7 @@ intent; the `public-cli.md` header already linked this file and 0014.
 4. **Attachment transport.**
    Options: (a) inside the public action with a size limit; (b) a new gateway
    upload route; (c) backend host paths.
-   Choice: (a), 8 files / 512 KiB.
+   Choice: (a), 8 files / 256 KiB.
    Why: no new listener or route (a constraint of this file); the request key,
    fingerprint and admission rules apply unchanged; (c) is forbidden.
    Pros: one request, one receipt, idempotent. Cons: small limit (prompt plus
@@ -303,9 +304,22 @@ intent; the `public-cli.md` header already linked this file and 0014.
 
 ## Needs verification
 
-- Verified 2026-10-25: `run retry` of a parked typed-command prompt replays the
-  resolved selection (same command ID and binding revision), never re-resolved
-  text (`public-api-command-surface.test.ts`, "recovery keeps command intent").
+- Verified 2026-10-25 after review fixes: the isolated `cli-review-qa` browser
+  check passed (10.8 s). It dismisses optional-tool startup dialogs and waits
+  for the fixture project's sidebar before `project.init`; the new project
+  appears live, a local environment starts, and cascade removal converges live
+  and after reload. Backend public API: 437 passing; CLI: 256 passing;
+  protocol contract/input suites: 25 passing. Backend, CLI, and browser test
+  type checks and changed-file lint passed.
+- Verified 2026-10-25: `run retry` after restart of a parked selected command
+  replays the same command ID, binding revision, and arguments
+  (`public-api-command-surface.test.ts`, "recovery keeps command intent").
+- Restart during local/container attachment staging (start, prompt, enqueue),
+  queued image/file persistence, queue recovery, cold provider catalogue refresh,
+  cascade progress/final observation and byte-bound summaries are covered by
+  the public API command-surface and project-init-cascade tests.
+- Local environment start from a `project.init` checkout is exercised through
+  the public API and real Git, including a checkout with no origin.
 
 ## Related
 

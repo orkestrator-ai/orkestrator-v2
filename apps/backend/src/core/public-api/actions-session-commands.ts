@@ -241,8 +241,9 @@ const sessionCommand: MutationActionHandler<CommandInput> = {
   async prepare(input, context) {
     const session = await resolveSession(context, input);
     assertSessionAcceptsPrompt(context, session, input.enqueue === true);
-    let commands = sessionCommands(session, cachedProjection(context, session));
-    if (commands.length === 0) {
+    const cached = cachedProjection(context, session);
+    let commands = sessionCommands(session, cached);
+    if (cached?.slashCommandCatalogue?.status !== "ready" || !cached.slashCommands?.length) {
       // Nothing read yet for this session (a fresh backend, a cold tab):
       // read the provider's list once rather than refusing a real command.
       commands = sessionCommands(session, (await refreshedProjection(context, session)).projection);

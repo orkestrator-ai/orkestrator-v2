@@ -277,8 +277,21 @@ test("a CLI-initialized project and its cascade removal reach an open renderer",
   const projectName = `cli-init-${suffix}`;
   let projectId: string | undefined;
   try {
+    // This lifecycle check does not use an agent or Docker. Let credential-free
+    // profiles reach the workspace through the ordinary optional-tool dialogs.
+    for (const name of [
+      "Continue Without Claude",
+      "Continue Without Docker",
+      "Continue Without GitHub CLI",
+    ]) {
+      await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
+        button.click(),
+      );
+    }
     await login(page);
     await page.goto(status.browserUrl!);
+    // Establish sidebar hydration before testing live project convergence.
+    await openProject(page, (await fixtureProject(configDir, status)).name, 120_000);
     const created = cli<{ project: ProjectSummary }>(configDir, [
       "project",
       "init",

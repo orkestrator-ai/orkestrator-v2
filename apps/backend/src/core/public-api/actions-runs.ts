@@ -164,7 +164,7 @@ export function createRunReadHandlers(
         }
       }
       const fresh = await reconcileOperation(record, context);
-      return { result: null, receipt: toReceipt(fresh, false) };
+      return { result: fresh.result ?? null, receipt: toReceipt(fresh, false) };
     },
   };
 

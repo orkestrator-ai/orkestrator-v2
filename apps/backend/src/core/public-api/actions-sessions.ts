@@ -248,6 +248,10 @@ const sessionStart: MutationActionHandler<StartInput> = {
           .slice(0, 24);
         const tabId = `agent-job-${jobId}`;
         const sessionId = encodePublicSessionId(environment.id, tabId);
+        await operation.update({
+          stage: "staging-attachments",
+          resources: { dispatchRequestId: requestId, tabId, sessionId },
+        });
         const attachments = await stageAttachments(
           context,
           environment,
@@ -429,6 +433,10 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
       },
       async execute(operation) {
         const requestId = operation.operationId;
+        await operation.update({
+          stage: "staging-attachments",
+          resources: { dispatchRequestId: requestId },
+        });
         const attachments = await stageAttachments(
           context,
           session.environment,

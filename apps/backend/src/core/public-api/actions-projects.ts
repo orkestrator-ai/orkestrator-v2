@@ -261,6 +261,8 @@ const projectUpdate: MutationActionHandler<ProjectUpdateInput> = {
 
 /** Per-environment results kept in the operation record (which is size-bounded). */
 const CASCADE_RESULT_LIMIT = 50;
+// Leave room in the 8 KiB ledger record for identity, resources and errors.
+const CASCADE_SUMMARY_MAX_BYTES = 3_500;
 
 interface CascadeEntry {
   environmentId: string;
@@ -311,16 +313,30 @@ async function deleteEnvironments(
   return results;
 }
 
-function cascadeSummary(results: readonly CascadeEntry[], total: number): Record<string, unknown> {
-  return {
+export function cascadeSummary(
+  results: readonly CascadeEntry[],
+  total: number,
+): Record<string, unknown> {
+  const summary = {
     environments: {
       total,
       deleted: results.filter((entry) => entry.state === "deleted").length,
       failed: results.filter((entry) => entry.state === "failed").length,
-      results: results.slice(0, CASCADE_RESULT_LIMIT),
-      truncated: results.length > CASCADE_RESULT_LIMIT,
+      results: [] as CascadeEntry[],
+      truncated: false,
+      omitted: 0,
     },
   };
+  for (const entry of results.slice(0, CASCADE_RESULT_LIMIT)) {
+    summary.environments.results.push(entry);
+    if (Buffer.byteLength(JSON.stringify(summary)) > CASCADE_SUMMARY_MAX_BYTES) {
+      summary.environments.results.pop();
+      break;
+    }
+  }
+  summary.environments.omitted = results.length - summary.environments.results.length;
+  summary.environments.truncated = summary.environments.omitted > 0;
+  return summary;
 }
 
 /** Fence, clean up and drop the registration of a project with no environments. */
@@ -436,7 +452,7 @@ const projectRemove: MutationActionHandler<{ projectId: string; cascade?: true }
         return runWithContinuation(operation, task, {
           graceMs: 5_000,
           runningStage: "deleting-environments",
-          runningResult: cascadeSummary([], reviewed.length),
+          runningResult: () => operation.current().result ?? cascadeSummary([], reviewed.length),
           onSuccess: (outcome) => outcome,
         });
       },

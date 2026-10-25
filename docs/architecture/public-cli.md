@@ -247,7 +247,12 @@ nothing runs.
 
 Operations persist their resource IDs as soon as they are known, their stage,
 dispatch and execution state, and a small content-free result. `run get OP`
-or `run get --request-id KEY --action ACTION` reads them;
+or `run get --request-id KEY --action ACTION` reads them. Receipts include the
+bounded current/final `result`, including partial cascade outcomes; `run get`,
+`run wait`, and `project remove --wait` expose the latest counts and per-environment
+results. Cascade details use a byte budget and report `truncated` and `omitted`
+when rows cannot fit; aggregate totals remain available.
+
 `not-found` and `history-expired` are distinct and neither is evidence that
 nothing ran.
 
@@ -401,7 +406,7 @@ never replaced.
   steer, and a prompt without `--enqueue` is never queued.
 - **Attachments.** `--attach FILE` (repeatable, on `session start` and
   `session prompt`) reads files on the client machine and sends each file's
-  name and bytes inside the request: at most 8 files and 512 KiB in total, so
+  name and bytes inside the request: at most 8 files and 256 KiB in total, so
   that they fit the 1 MiB request with the prompt. Images (PNG, JPEG, GIF,
   WebP by signature) are sent as images, anything else as files; a provider
   that cannot take one kind refuses (`capability-unavailable`). The backend
@@ -409,7 +414,10 @@ never replaced.
   `.orkestrator/prompt-attachments/<operation ID>/` in the environment
   workspace (the directory the composer stages into) and attaches those
   workspace paths. They live with the workspace and go when the environment is
-  deleted. Names carrying directories are refused, and no input field accepts
+  deleted. A durable staging checkpoint records the session and request identity
+  before any writes. A restart at that checkpoint settles the run as interrupted
+  with `dispatch: not-sent`; it never queues or dispatches it automatically.
+  Names carrying directories are refused, and no input field accepts
   a backend host path. Each attachment's name, type, size and SHA-256 are part
   of the request fingerprint (the bytes never are, and never reach a receipt),
   so a replay with different files conflicts.

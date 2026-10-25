@@ -331,7 +331,7 @@ export const projectCommands: CommandSpec[] = [
         const failure = receiptFailure(final);
         return {
           action: "project.remove",
-          result,
+          result: final.result ?? result,
           receipt: final,
           warnings,
           connection: session.identity,

@@ -174,11 +174,11 @@ ork session transcript "$SESSION" --limit 20
   behind the running turn (the backend sends it later), use `session steer`
   (on providers that support it), or wait for the turn to end.
 - `ork session commands "$SESSION"` lists the session's slash commands;
-  `ork session command "$SESSION" --command /review -- the open diff --wait`
+  `ork session command "$SESSION" --command /review --wait -- the open diff`
   runs one as a selection. An unknown, ambiguous, changed or unavailable
   command fails (exit 3 or 8) and nothing is sent.
 - `--attach FILE` (repeatable) sends local files with `session start` or
-  `session prompt` (at most 8 files, 512 KiB in total); the backend writes them
+  `session prompt` (at most 8 files, 256 KiB in total); the backend writes them
   into the workspace under `.orkestrator/prompt-attachments/`.
 - `session stop SESSION` stops the current turn, not the environment.
 - `environment launch` does create, start and first prompt in one call. Do

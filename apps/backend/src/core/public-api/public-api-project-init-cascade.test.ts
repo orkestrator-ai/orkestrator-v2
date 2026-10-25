@@ -6,9 +6,14 @@ import { resolveRemoteWorktreeStartPoint } from "../commands-files.js";
 import { runCommand } from "../shell.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 import { createPublicActionContext, dispatchPublicAction } from "./dispatch.js";
-import { controlMcpAuthority } from "./operation-ledger.js";
+import { cascadeSummary } from "./actions-projects.js";
+import { boundRecord, recordBytes, requestKey, controlMcpAuthority } from "./operation-ledger.js";
 import { buildPublicHandlerTable } from "./registry.js";
-import { PUBLIC_ACTIONS, PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
+import {
+  PUBLIC_ACTIONS,
+  PUBLIC_API_SCHEMA_VERSION,
+  PUBLIC_OPERATION_RETENTION,
+} from "@orkestrator/protocol/public-api";
 
 /**
  * `project.init` (local-only repository, no network) and `project.remove`
@@ -78,6 +83,25 @@ describe("project.init", () => {
       resolveRemoteWorktreeStartPoint(target, "missing", { localOnly: true }),
     ).rejects.toThrow(/Base branch not found/);
     await expect(resolveRemoteWorktreeStartPoint(target, "main")).rejects.toThrow();
+    const environmentId = await createEnvironment(h, response.result.project.id, "local-env");
+    const started = await h.call(
+      "environment.start",
+      { environmentId },
+      { requestId: "local-start" },
+    );
+    expect(started.ok).toBe(true);
+    let settled = started.receipt!;
+    for (let attempt = 0; settled.state === "running" && attempt < 100; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      settled = (await h.call("run.get", { operationId: settled.operationId })).receipt!;
+    }
+    expect(settled.state).toBe("succeeded");
+    const environment = (await h.storage.getEnvironment(environmentId))!;
+    expect(environment.status).toBe("running");
+    expect(await git(environment.worktreePath!, ["rev-parse", "HEAD"])).toBe(
+      await git(target, ["rev-parse", "HEAD"]),
+    );
+    expect(await git(environment.worktreePath!, ["remote"])).toBe("");
     const replay = await h.call("project.init", { path: target }, { requestId: "init-1" });
     expect(replay.receipt?.replayed).toBe(true);
     expect(await h.storage.loadProjects()).toHaveLength(1);
@@ -231,5 +255,165 @@ describe("project.remove with cascade", () => {
     expect(!response.ok && response.error.code).toBe("capability-unavailable");
     expect(response.receipt).toBeUndefined();
     expect(await h.storage.getEnvironmentsByProject(project.id)).toHaveLength(1);
+  });
+});
+
+describe("cascade observation and restart", () => {
+  test("past grace preserves progress and exposes final partial results", async () => {
+    const h = await harness();
+    const project = await addProject(h, "slow-cascade");
+    const first = await createEnvironment(h, project.id, "slow-first");
+    const second = await createEnvironment(h, project.id, "slow-second");
+    const realDelete = h.commands.get("delete_environment")!;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.commands.set("delete_environment", async (args, context) => {
+      if (args.environmentId === second) {
+        await blocked;
+        throw new Error("cleanup refused on second environment");
+      }
+      return realDelete(args, context);
+    });
+    try {
+      const response = await h.call<{ environments: { deleted: number } }>(
+        "project.remove",
+        { projectId: project.id, cascade: true },
+        { requestId: "slow-remove" },
+      );
+      expect(response.ok).toBe(true);
+      expect(response.receipt?.state).toBe("running");
+      if (!response.ok) throw new Error(response.error.message);
+      expect(response.result.environments.deleted).toBe(1);
+      const running = await h.call("run.get", { operationId: response.receipt!.operationId });
+      expect(running.ok && running.result).toMatchObject({
+        environments: { deleted: 1, failed: 0 },
+      });
+      release();
+      let observed = running;
+      for (let i = 0; observed.receipt?.state === "running" && i < 100; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        observed = await h.call("run.get", { operationId: response.receipt!.operationId });
+      }
+      expect(observed.receipt?.state).toBe("partial");
+      const summary = {
+        environments: {
+          total: 2,
+          deleted: 1,
+          failed: 1,
+          results: [
+            { environmentId: first, state: "deleted" },
+            {
+              environmentId: second,
+              state: "failed",
+              error: "cleanup refused on second environment",
+            },
+          ],
+        },
+      };
+      expect(observed.ok && observed.result).toMatchObject(summary);
+      expect(observed.receipt?.result).toMatchObject(summary);
+      const replay = await h.call(
+        "project.remove",
+        { projectId: project.id, cascade: true },
+        { requestId: "slow-remove" },
+      );
+      expect(replay.ok).toBe(false);
+      expect(replay.receipt?.result).toMatchObject(summary);
+    } finally {
+      release();
+    }
+  }, 15_000);
+
+  for (const removed of [false, true]) {
+    test(`restart with project ${removed ? "removed" : "surviving"} preserves partial progress`, async () => {
+      const h = await harness();
+      const project = await addProject(h, `restart-cascade-${removed}`);
+      const admitted = await h.storage.admitPublicOperation({
+        authority: "operator",
+        action: "project.remove",
+        scope: `project:${project.id}`,
+        requestId: "cascade-crash",
+        requestKey: requestKey(
+          "operator",
+          "project.remove",
+          `project:${project.id}`,
+          "cascade-crash",
+        ),
+        fingerprint: "f".repeat(64),
+        generation: "previous",
+        resources: { projectId: project.id },
+        resolved: { environmentCount: 2 },
+      });
+      const summary = cascadeSummary(
+        [{ environmentId: "already-deleted", name: "first", state: "deleted" }],
+        2,
+      );
+      await h.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
+        ...record,
+        state: "running",
+        stage: "cleanup",
+        result: summary,
+      }));
+      await h.storage.fenceEmptyProjectForRemoval(project.id);
+      if (removed) await h.storage.removeProject(project.id);
+      const restarted = await h.restart();
+      harnesses.push(restarted);
+      const observed = await restarted.call("run.get", {
+        operationId: admitted.record.operationId,
+      });
+      expect(observed.receipt?.state).toBe(removed ? "succeeded" : "interrupted");
+      expect(observed.receipt?.result).toMatchObject(summary);
+      if (!removed)
+        expect(
+          (
+            await restarted.call(
+              "environment.create",
+              { projectId: project.id, type: "local" },
+              { requestId: "after-crash" },
+            )
+          ).ok,
+        ).toBe(true);
+    });
+  }
+
+  test("multibyte failures retain counts and actionable rows within the ledger byte bound", async () => {
+    const h = await harness();
+    const admitted = await h.storage.admitPublicOperation({
+      authority: "operator",
+      action: "project.remove",
+      scope: "project:large",
+      requestId: "large",
+      requestKey: requestKey("operator", "project.remove", "project:large", "large"),
+      fingerprint: "f".repeat(64),
+      generation: "test",
+      resources: { projectId: "large" },
+    });
+    const summary = cascadeSummary(
+      Array.from({ length: 60 }, (_, i) => ({
+        environmentId: `env-${i}`,
+        name: "環境".repeat(20),
+        state: "failed" as const,
+        error: "失敗🔥".repeat(40),
+      })),
+      60,
+    );
+    const bounded = boundRecord({
+      ...admitted.record,
+      state: "partial",
+      result: summary,
+      error: { code: "partial-failure", message: "cleanup failed" },
+    });
+    expect(recordBytes(bounded)).toBeLessThanOrEqual(PUBLIC_OPERATION_RETENTION.maxRecordBytes);
+    expect(bounded.result).toMatchObject({
+      environments: { total: 60, deleted: 0, failed: 60, truncated: true },
+    });
+    const environments = bounded.result!.environments as { results: unknown[]; omitted: number };
+    expect(environments.results.length).toBeGreaterThan(0);
+    expect(environments.omitted).toBe(60 - environments.results.length);
+    await h.storage.updatePublicOperation(admitted.record.operationId, () => bounded);
+    const read = await h.call("run.get", { operationId: admitted.record.operationId });
+    expect(read.receipt?.result).toEqual(summary);
   });
 });

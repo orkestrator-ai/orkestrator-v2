@@ -18,11 +18,13 @@ interface CompletionTable {
   /** Space-joined full command path → its flags. */
   flags: Map<string, string[]>;
   globals: string[];
+  values: Map<string, string[]>;
 }
 
 function flagsOf(options: readonly CommandSpec["options"][number][]): string[] {
   return options.flatMap((option) => [
     `--${option.name}`,
+    ...(option.short ? [`-${option.short}`] : []),
     ...(option.negatable ? [`--no-${option.name}`] : []),
   ]);
 }
@@ -30,18 +32,30 @@ function flagsOf(options: readonly CommandSpec["options"][number][]): string[] {
 export function completionTable(commands: readonly CommandSpec[]): CompletionTable {
   const next = new Map<string, string[]>();
   const flags = new Map<string, string[]>();
+  const values = new Map<string, string[]>();
+  const valueFlags = (options: readonly CommandSpec["options"][number][]) =>
+    flagsOf(options.filter((option) => option.kind !== "boolean"));
+  values.set("", valueFlags(GLOBAL_OPTIONS));
   const add = (prefix: string, word: string) => {
     const words = next.get(prefix) ?? [];
     if (!words.includes(word)) words.push(word);
     next.set(prefix, words);
   };
   for (const command of commands) {
-    command.path.forEach((word, index) => add(command.path.slice(0, index).join(" "), word));
+    command.path.forEach((word, index) => {
+      const prefix = command.path.slice(0, index).join(" ");
+      add(prefix, word);
+      if (!values.has(prefix)) values.set(prefix, valueFlags(GLOBAL_OPTIONS));
+    });
     flags.set(command.path.join(" "), flagsOf(command.options));
+    values.set(command.path.join(" "), [
+      ...valueFlags(GLOBAL_OPTIONS),
+      ...valueFlags(command.options),
+    ]);
   }
   add("", "help");
   add("", "version");
-  return { next, flags, globals: flagsOf(GLOBAL_OPTIONS) };
+  return { next, flags, globals: flagsOf(GLOBAL_OPTIONS), values };
 }
 
 /** Command and flag names are plain ASCII words, safe unquoted in each shell. */
@@ -63,23 +77,43 @@ function bashScript(table: CompletionTable): string {
     ...cases,
     "  esac",
     "}",
+    "_orkestrator_takes_value() {",
+    '  case "$1:$2" in',
+    ...[...table.values]
+      .filter(([, flags]) => flags.length)
+      .map(
+        ([path, flags]) => `    ${flags.map((flag) => `"${path}:${flag}"`).join("|")}) return 0 ;;`,
+      ),
+    "  esac",
+    "  return 1",
+    "}",
     "_orkestrator() {",
-    '  local cur="${COMP_WORDS[COMP_CWORD]}" path="" word i flags=""',
+    '  local cur="${COMP_WORDS[COMP_CWORD]}" command_path="" word i flags="" skip=0',
+    "  COMPREPLY=()",
     "  for ((i = 1; i < COMP_CWORD; i++)); do",
     '    word="${COMP_WORDS[i]}"',
+    '    if ((skip)); then [[ "$word" == "=" ]] || skip=0; continue; fi',
     '    [[ "$word" == "--" ]] && return 0',
+    '    [[ "$word" == --*=* ]] && continue',
+    '    if _orkestrator_takes_value "$command_path" "$word"; then skip=1; continue; fi',
     '    [[ "$word" == -* ]] && continue',
     // Only command words extend the path; IDs and other arguments do not.
-    '    if [[ " $(_orkestrator_next "$path") " == *" $word "* ]]; then path="${path:+$path }$word"; fi',
+    '    if [[ " $(_orkestrator_next "$command_path") " == *" $word "* ]]; then command_path="${command_path:+$command_path }$word"; fi',
     "  done",
-    '  case "$path" in',
+    "  ((skip)) && return 0",
+    '  case "$command_path" in',
     ...flagCases,
     "  esac",
+    "  local candidates candidate",
     '  if [[ "$cur" == -* ]]; then',
-    `    COMPREPLY=($(compgen -W "$flags ${words(table.globals)}" -- "$cur"))`,
+    `    candidates="$flags ${words(table.globals)}"`,
     "  else",
-    '    COMPREPLY=($(compgen -W "$(_orkestrator_next "$path")" -- "$cur"))',
+    '    candidates="$(_orkestrator_next "$command_path")"',
     "  fi",
+    "  for candidate in $candidates; do",
+    '    [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")',
+    "  done",
+    "  return 0",
     "}",
     "complete -o default -F _orkestrator orkestrator",
     "",
@@ -91,7 +125,11 @@ function zshScript(table: CompletionTable): string {
     "#compdef orkestrator",
     '# orkestrator zsh completion (through bashcompinit). Install: orkestrator completion zsh > "${fpath[1]}/_orkestrator"',
     "autoload -U +X bashcompinit && bashcompinit",
-    bashScript(table).split("\n").slice(1).join("\n"),
+    bashScript(table)
+      .split("\n")
+      .slice(1)
+      .join("\n")
+      .replace("_orkestrator() {\n", "_orkestrator() {\n  emulate -L ksh\n"),
   ].join("\n");
 }
 
@@ -103,19 +141,44 @@ function fishScript(table: CompletionTable): string {
     ...[...table.next].map(([prefix, list]) => `    case '${prefix}'\n      echo '${words(list)}'`),
     "  end",
     "end",
+    "function __orkestrator_takes_value",
+    '  switch "$argv[1]:$argv[2]"',
+    ...[...table.values]
+      .filter(([, flags]) => flags.length)
+      .map(
+        ([path, flags]) =>
+          `    case ${flags.map((flag) => `'${path}:${flag}'`).join(" ")}\n      return 0`,
+      ),
+    "  end",
+    "  return 1",
+    "end",
     "function __orkestrator_path",
     "  set -l tokens (commandline -opc)",
     "  set -e tokens[1]",
     "  set -l path ''",
+    "  set -l skip 0",
     "  for token in $tokens",
+    "    if test $skip = 1",
+    "      set skip 0",
+    "      continue",
+    "    end",
     '    if test "$token" = "--"',
     "      echo __rest",
     "      return",
+    "    end",
+    "    string match -q -- '--*=*' $token; and continue",
+    '    if __orkestrator_takes_value "$path" "$token"',
+    "      set skip 1",
+    "      continue",
     "    end",
     "    string match -q -- '-*' $token; and continue",
     "    if contains -- $token (string split ' ' -- (__orkestrator_next $path))",
     '      set path (string trim -- "$path $token")',
     "    end",
+    "  end",
+    "  if test $skip = 1",
+    "    echo __value",
+    "    return",
     "  end",
     '  echo "$path"',
     "end",
@@ -129,12 +192,14 @@ function fishScript(table: CompletionTable): string {
   for (const [path, list] of table.flags) {
     for (const flag of list) {
       lines.push(
-        `complete -c orkestrator -n 'test (__orkestrator_path) = "${path}"' -l '${flag.slice(2)}'`,
+        `complete -c orkestrator -n 'test (__orkestrator_path) = "${path}"' ${flag.startsWith("--") ? `-l '${flag.slice(2)}'` : `-s '${flag.slice(1)}'`}${table.values.get(path)?.includes(flag) ? " -r" : ""}`,
       );
     }
   }
   for (const flag of table.globals) {
-    lines.push(`complete -c orkestrator -l '${flag.slice(2)}'`);
+    lines.push(
+      `complete -c orkestrator ${flag.startsWith("--") ? `-l '${flag.slice(2)}'` : `-s '${flag.slice(1)}'`}${table.values.get("")?.includes(flag) ? " -r" : ""}`,
+    );
   }
   return `${lines.join("\n")}\n`;
 }

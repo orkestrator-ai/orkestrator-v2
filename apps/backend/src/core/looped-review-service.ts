@@ -76,7 +76,6 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
-  type ProviderInteractionObservationEvent,
 } from "./build-pipeline-provider.js";
 import { prPrompt } from "./build-pipeline-prompts.js";
 import {
@@ -379,12 +378,6 @@ export interface LoopedReviewServiceOptions extends KeyedWorkflowServiceOptions 
   ) => AgentToolConnection;
   /** Rejects when the environment's container cannot reach the agent tools server. */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
-  onInteractionObservation?: (
-    event: ProviderInteractionObservationEvent & {
-      environmentId: string;
-      provider: LoopedReviewWorkflow["agent"];
-    },
-  ) => void | Promise<void>;
 }
 
 /** Backend-owned, fenced controller for every looped-review transition. */
@@ -1671,18 +1664,6 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
       {
         ...this.options.providerDependencies,
         workflowResults: this.options.workflowResults,
-        autoAnswerRequests: false,
-        onInteractionObservation: async (event) => {
-          try {
-            await this.options.onInteractionObservation?.({
-              ...event,
-              environmentId: workflow.environmentId,
-              provider: workflow.agent,
-            });
-          } catch {
-            /* diagnostics never control the workflow */
-          }
-        },
       },
     );
     this.providers.set(key, provider);

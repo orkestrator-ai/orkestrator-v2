@@ -16,7 +16,7 @@ import { StorageService } from "../src/core/storage.js";
 
 /**
  * Drives the *real* native activity sweep and native prompt-queue scan
- * (recurring-processes step 07) against fake providers on a manual clock.
+ * against fake providers on a manual clock.
  *
  * Every provider read is counted at the provider boundary, split into the
  * no-touch observation route (`/activity`, OpenCode's event-fed batch) and
@@ -235,8 +235,10 @@ async function runMode(
       retainedGroupPasses += service.observationStatus().backedOffGroups;
       await queues.drainPromptQueues();
       queuePasses += 1;
-      // Let the OpenCode first-idle transcript check settle between ticks.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Let the OpenCode first-idle transcript check settle between ticks. A
+      // macrotask is enough; `setTimeout(0)`'s clamp made the timer the bulk
+      // of the run's wall time and stretched it under host load.
+      await new Promise((resolve) => setImmediate(resolve));
       clock += fixture.tickMs;
     }
     const minutes = fixture.windowMs / 60_000;

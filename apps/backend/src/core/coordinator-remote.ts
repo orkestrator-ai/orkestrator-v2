@@ -28,6 +28,8 @@ export type RemoteWorkerState =
        * that ends now cannot be its answer (always false for older nodes).
        */
       requestPending?: boolean;
+      /** Raw activity continues after the worker's turn ended (absent on older nodes). */
+      backgroundWorkPending?: boolean;
     };
 
 /** A workflow's persisted record on its node: what the local status reducers read. */

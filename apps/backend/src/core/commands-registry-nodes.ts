@@ -1,3 +1,4 @@
+import { workerSessionActivity } from "./worker-session-activity.js";
 import { parseNodeImportEntries } from "@orkestrator/protocol/command-nodes";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { SYNC_CONTROLLER_SETTINGS_COMMAND } from "@orkestrator/protocol/controller-settings";
@@ -253,7 +254,14 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     if (typeof args.environmentId !== "string" || typeof args.tabId !== "string") {
       throw new Error("Expected environmentId and tabId.");
     }
+    const activity = await workerSessionActivity(
+      context.storage,
+      context.nativeAgents,
+      args.environmentId,
+      args.tabId,
+    );
     return {
+      backgroundWorkPending: activity.backgroundWorkPending,
       requestPending: await context.storage.hasUndeliveredCoordinatorRequest(
         args.environmentId,
         args.tabId,

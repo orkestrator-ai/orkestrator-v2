@@ -82,63 +82,6 @@ function harness(
   };
 }
 
-const detection = {
-  environmentId: "env-1",
-  provider: "codex" as const,
-  sessionId: "provider-session",
-  interactionId: "question-1",
-  kind: "question" as const,
-  registration: { origin: "looped-review" as const, interactionPolicy: undefined as never },
-};
-
-describe("NativeAgentInteractionTracker provider-reported observations", () => {
-  test("a detection publishes one blocked observation and a withdrawal settles it", () => {
-    const { tracker, observed } = harness();
-    tracker.recordProviderInteractionObservation({ ...detection, state: "detected" });
-
-    expect(tracker.getInteractionObservations()).toMatchObject([
-      {
-        provider: "codex",
-        kind: "question",
-        workflowSurface: "looped-review",
-        count: 1,
-        providerState: "blocked",
-      },
-    ]);
-    expect(observed).toHaveLength(1);
-    expect(tracker.forTesting().providerReportedInteractions.size).toBe(1);
-
-    tracker.recordProviderInteractionObservation({ ...detection, state: "withdrawn" });
-    expect(tracker.getInteractionObservations()[0]).toMatchObject({
-      providerState: "running",
-      eventualOutcome: "withdrawn",
-    });
-    expect(tracker.forTesting().providerReportedInteractions.size).toBe(0);
-  });
-
-  test("a repeated detection refreshes the record instead of counting twice", () => {
-    const { tracker, advance } = harness();
-    tracker.recordProviderInteractionObservation({ ...detection, state: "detected" });
-    advance(500);
-    tracker.recordProviderInteractionObservation({ ...detection, state: "detected" });
-
-    const [observation] = tracker.getInteractionObservations();
-    expect(observation?.count).toBe(1);
-    expect(observation?.lastDetectedAt).toBe(10_500);
-  });
-
-  test("records nothing unless the monitor observes, or after shutdown", () => {
-    const disabled = harness({ options: { interactionMonitorMode: "disabled" } });
-    disabled.tracker.recordProviderInteractionObservation({ ...detection, state: "detected" });
-    expect(disabled.tracker.getInteractionObservations()).toEqual([]);
-
-    const stopped = harness();
-    stopped.stop();
-    stopped.tracker.recordProviderInteractionObservation({ ...detection, state: "detected" });
-    expect(stopped.tracker.getInteractionObservations()).toEqual([]);
-  });
-});
-
 describe("NativeAgentInteractionTracker pending-interaction reads", () => {
   test("reads the provider once per ten seconds and filters to live requests", async () => {
     const listPendingInteractions = mock(async () => ({

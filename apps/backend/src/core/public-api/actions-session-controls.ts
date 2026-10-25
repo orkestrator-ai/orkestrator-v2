@@ -575,6 +575,15 @@ function publicInteraction(sessionId: string, request: AgentInteractionRequest):
     revision: request.revision,
     blocking: request.blocking !== false,
     ...(typeof request.expiresAt === "number" ? { expiresAt: request.expiresAt } : {}),
+    ...(request.hold
+      ? {
+          hold: {
+            available: request.hold.available,
+            ...(typeof request.hold.heldAt === "number" ? { heldAt: request.hold.heldAt } : {}),
+            ...(request.hold.reason ? { reason: request.hold.reason } : {}),
+          },
+        }
+      : {}),
     title: request.presentation.title.slice(0, 500),
     ...(request.presentation.body ? { body: request.presentation.body.slice(0, 4_000) } : {}),
     questions: request.presentation.questions.slice(0, 16).map((question) => ({
@@ -797,6 +806,122 @@ const interactionResolve: MutationActionHandler<ResolveInput> = {
   },
 };
 
+interface HoldInput extends TargetInput {
+  interactionId: string;
+  held: boolean;
+}
+
+/**
+ * Pause or resume one interaction's countdown. The pause is enforced where the
+ * deadline lives (the bridge), never here: this only forwards the request
+ * through `hold_native_agent_interaction`, the same path the card's timer
+ * uses. Nothing is answered, so it needs no expected revision and no voice
+ * confirmation; a paused request still ends at its hold ceiling or the
+ * provider's own limit.
+ */
+const interactionHold: MutationActionHandler<HoldInput> = {
+  kind: "mutation",
+  action: "session.interaction.hold",
+  parse(input) {
+    onlyActionKeys(input, "session.interaction.hold");
+    const target = sessionTarget(input);
+    const interactionId = requiredString(input, "interactionId", 512);
+    const held = optionalBoolean(input, "held");
+    if (held === undefined) throw invalid("held is required");
+    return {
+      value: { ...target, interactionId, held },
+      scope: `interaction:${target.sessionId}:${interactionId}`,
+      intent: { held },
+    };
+  },
+  async prepare(input, context) {
+    const session = await resolveSession(context, input);
+    const request = (await pendingInteractions(context, session)).find(
+      (candidate) => candidate.id === input.interactionId,
+    );
+    if (!request) {
+      throw new PublicActionError(
+        "interaction-stale",
+        "That interaction is no longer pending (answered, withdrawn or expired)",
+      );
+    }
+    if (typeof request.expiresAt !== "number") {
+      throw new PublicActionError(
+        "unsupported",
+        "This interaction has no countdown; there is nothing to pause",
+      );
+    }
+    if (request.expiresAt <= context.now()) {
+      throw new PublicActionError("interaction-stale", "The interaction has expired");
+    }
+    const alreadyThere = (request.hold?.heldAt !== undefined) === input.held;
+    if (!alreadyThere && request.hold?.available !== true) {
+      const reason = request.hold?.reason ?? "bridge-outdated";
+      throw new PublicActionError(
+        "unsupported",
+        reason === "bridge-outdated"
+          ? "The bridge serving this session predates pausing; it updates when the environment restarts"
+          : "This interaction's countdown cannot be paused",
+        { details: { reason } },
+      );
+    }
+    return {
+      resources: {
+        environmentId: session.environment.id,
+        sessionId: session.sessionId,
+        tabId: session.tab.tabId,
+        interactionId: request.id,
+      },
+      async execute(operation) {
+        await operation.update({ stage: input.held ? "pausing" : "resuming" });
+        const outcome = await context.invoke<{ result: string }>("hold_native_agent_interaction", {
+          ...triple(session),
+          interactionId: request.id,
+          held: input.held,
+        });
+        if (outcome.result === "applied") {
+          // Report the moved deadline when it can be read; the hold itself
+          // already applied, so a failed re-read does not fail the operation.
+          const moved = await pendingInteractions(context, session)
+            .then((requests) => requests.find((candidate) => candidate.id === request.id))
+            .catch(() => undefined);
+          return {
+            state: "succeeded",
+            result: {
+              interactionId: request.id,
+              held: input.held,
+              ...(typeof moved?.expiresAt === "number" ? { expiresAt: moved.expiresAt } : {}),
+            },
+          };
+        }
+        if (outcome.result === "stale" || outcome.result === "already-resolved") {
+          return {
+            state: "failed",
+            error: {
+              code: "interaction-stale",
+              message: "The interaction is no longer pending; nothing was paused",
+            },
+          };
+        }
+        if (outcome.result === "provider-unavailable") {
+          return {
+            state: "failed",
+            error: {
+              code: "connection-failed",
+              message: "The provider is unavailable; the countdown did not change",
+            },
+            retryable: true,
+          };
+        }
+        return {
+          state: "failed",
+          error: { code: "unsupported", message: "The provider refused to pause this countdown" },
+        };
+      },
+    };
+  },
+};
+
 export const SESSION_CONTROL_HANDLERS: PublicActionHandler[] = [
   sessionStop,
   sessionSteer,
@@ -807,4 +932,5 @@ export const SESSION_CONTROL_HANDLERS: PublicActionHandler[] = [
   sessionFork,
   sessionInteractions,
   interactionResolve,
+  interactionHold,
 ];

@@ -19,7 +19,8 @@ import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 
-type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir">;
+type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir"> &
+  Partial<Pick<CommandContext, "runtimeFlavor">>;
 
 export function quoteShell(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -341,20 +342,51 @@ export function resolveManagedBinary(
   return managedBinaryCandidates(context, name).find((candidate) => existsSync(candidate));
 }
 
+const PATH_FALLBACK_AGENT_LABELS = {
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  pi: "Pi",
+} as const;
+
+/**
+ * The managed toolchain copy, else the bare name for a PATH lookup.
+ *
+ * An agent-test profile never falls back: it provisions its own toolchain, and
+ * `checkHostTool` reports a platform it did not provision as unavailable. A
+ * launch that reached the host install anyway would run a version the profile
+ * never pinned, against a login state the isolated profile cannot see.
+ */
+function resolvePathFallbackAgentBinary(
+  context: ManagedBinaryContext,
+  name: keyof typeof PATH_FALLBACK_AGENT_LABELS,
+): string {
+  const managed = resolveManagedBinary(context, name);
+  if (managed) return managed;
+  if (context.runtimeFlavor === "agent-test") {
+    throw new Error(
+      `${PATH_FALLBACK_AGENT_LABELS[name]} is not installed in this agent-test profile's ` +
+        `toolchain; start the profile with ${name} in --agent-platforms.`,
+    );
+  }
+  return name;
+}
+
 export function resolveCodexBinary(context: ManagedBinaryContext): string {
-  return resolveManagedBinary(context, "codex") ?? "codex";
+  return resolvePathFallbackAgentBinary(context, "codex");
 }
 
 export function resolveOpenCodeBinary(context: CommandContext): string {
-  return resolveManagedBinary(context, "opencode") ?? "opencode";
+  return resolvePathFallbackAgentBinary(context, "opencode");
 }
 
 export function resolveClaudeBinary(context: CommandContext): string {
-  return resolveManagedBinary(context, "claude") ?? "claude";
+  return resolvePathFallbackAgentBinary(context, "claude");
 }
 
 /**
- * Pi keeps the PATH fallback the other SDK-backed agents have.
+ * Pi keeps the PATH fallback the other SDK-backed agents have (outside an
+ * agent-test profile; see `resolvePathFallbackAgentBinary`).
  *
  * Unlike Cursor and Grok, `pi` on PATH is the same program the toolchain
  * installs — it is published to npm and installed by its own script — so a user
@@ -363,7 +395,7 @@ export function resolveClaudeBinary(context: CommandContext): string {
  * process.
  */
 export function resolvePiBinary(context: CommandContext): string {
-  return resolveManagedBinary(context, "pi") ?? "pi";
+  return resolvePathFallbackAgentBinary(context, "pi");
 }
 
 /**

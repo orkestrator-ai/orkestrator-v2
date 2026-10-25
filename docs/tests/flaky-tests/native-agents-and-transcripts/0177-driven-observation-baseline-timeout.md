@@ -1,7 +1,7 @@
 # driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges
 
 - **ID:** 0177
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-02
 - **Test:** `driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges`
 - **File:** `apps/backend/tests/recurring-baseline.test.ts:94`
@@ -114,3 +114,32 @@ isolated Bun worker; exact commands, failures, durations, counts and evidence ar
 recorded in [0826](../aggregate-validation-runs/0826-reconnect-freshness-validation.md).
 The baseline exceeded five seconds in both the aggregate (5025.31 ms) and
 owning-file rerun (5215.64 ms). This observation remains unresolved.
+
+## Resolution — 2026-10-25
+
+Investigated for
+[0048](../../../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+("Needs verification"). The timeout is load-only: the case does no hidden
+work and has no hang.
+
+- **Cost on this host (macOS 27.0 arm64, Bun 1.4.2):** one
+  `runNativeObservationBaseline` call took 480 to 544 ms of wall time and
+  200 to 343 ms of CPU over four runs. The case makes two calls (four modes),
+  about 1 s. `bun test … -t "sharing drops reads"` reported 1284 to 1347 ms
+  per run, process start included. That is a fifth of the 5 s budget.
+- **Where the wall time went:** each of the 120 ticks per mode awaited
+  `setTimeout(resolve, 0)` to let the OpenCode first-idle check settle. Bun
+  clamps that timer, so 480 timer waits were about half the wall time, and
+  under host load each wait stretches further. Under synthetic load (30 CPU
+  spinners and 8 `fsync` writers on 18 cores, load average 25 to 28) a call
+  took 784 to 1242 ms.
+- **Fix:** the tick now yields with `setImmediate`, which still runs after
+  every pending microtask. Both the 4-minute test fixture and the default
+  10-minute fixture produce counts identical to the `setTimeout(0)` version.
+  A call now takes about 370 ms idle (default fixture 1167 → 384 ms) and 656 to
+  872 ms under the same synthetic load. The case reports 785 to 881 ms.
+- **Budget:** the case now carries an explicit 30 s timeout, as the workflow
+  baseline beside it (60 s) already did, with a comment. Its assertions
+  (determinism, read counts, discovery budgets on the manual clock) are
+  unchanged, so a logic regression still fails it; only host scheduling time
+  is no longer judged against 5 s.

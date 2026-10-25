@@ -4,6 +4,7 @@
 
 import { invoke } from "@/lib/native/backend";
 import { listen, type UnlistenFn } from "@/lib/native/events";
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { TmuxAgentObservation } from "@orkestrator/protocol/tmux-observation";
 
@@ -65,6 +66,12 @@ export type TmuxEvent =
       payload: unknown;
       requested_at?: number;
       expires_at?: number;
+      /**
+       * Pause state of a blocking hook's countdown. A pause or resume moves the
+       * deadline and re-emits the same hook, so a listener updates the card it
+       * already shows. Absent from an older backend.
+       */
+      hold?: TmuxHookHold;
     }
   | {
       kind: "hook-timed-out";
@@ -133,12 +140,29 @@ export interface TranscriptLine {
   [key: string]: unknown;
 }
 
+/**
+ * Whether a tmux prompt's countdown can be paused. The hook script owns the
+ * deadline; `hook-outdated` is a prompt from a script, or a Claude Code
+ * process, that predates pausing.
+ */
+export type TmuxHookHold = AgentInteractionHold | { available: false; reason: "hook-outdated" };
+
 export interface TmuxPendingHook {
   id: string;
   kind: HookEventKind | string;
   payload: unknown;
   requestedAt?: number;
   expiresAt?: number;
+  hold?: TmuxHookHold;
+}
+
+/** `settled`: the prompt was answered or expired meanwhile. */
+export type TmuxHookHoldResult = "applied" | "unchanged" | "unavailable" | "settled";
+
+export interface TmuxHookHoldOutcome {
+  result: TmuxHookHoldResult;
+  /** The prompt as it stands after the request, when it is still waiting. */
+  hook?: TmuxPendingHook;
 }
 
 export type TranscriptContent =
@@ -394,6 +418,23 @@ export async function answerPreToolUse(
     eventId,
     decision,
     reason,
+  });
+}
+
+/** Pause (`held`) or resume a blocking hook's countdown, where the hook script enforces it. */
+export async function holdHook(
+  tabId: string,
+  eventKind: HookEventKind,
+  eventId: string,
+  held: boolean,
+  environmentId?: string,
+): Promise<TmuxHookHoldOutcome> {
+  return invoke<TmuxHookHoldOutcome>("claude_tmux_hold_hook", {
+    tabId,
+    environmentId,
+    eventKind,
+    eventId,
+    held,
   });
 }
 

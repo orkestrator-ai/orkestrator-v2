@@ -4618,7 +4618,7 @@ describe("activity polling", () => {
     expect(h.runtime.getActivity(sessionId)).toBe("working");
   });
 
-  test("a parked interaction is waiting rather than working", async () => {
+  test("a Default-mode non-blocking RPC question waits until answered", async () => {
     const { h, sessionId } = await workingSession();
     h.child().stdout.pushMessage({
       jsonrpc: "2.0",
@@ -4628,6 +4628,7 @@ describe("activity polling", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "item-1",
+        isBlocking: false,
         questions: [
           {
             id: "language",
@@ -4642,6 +4643,15 @@ describe("activity polling", () => {
 
     expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
     expect(h.runtime.getActivity(sessionId)).toBe("waiting");
+    const request = h.runtime.listInteractions(sessionId)[0]!;
+    expect(request.isBlocking).toBe(false);
+    expect(
+      h.runtime.respondToInteraction(sessionId, request.interactionId, {
+        action: "accept",
+        answers: { language: ["TypeScript"] },
+      }),
+    ).toBe("applied");
+    expect(h.runtime.getActivity(sessionId)).toBe("working");
   });
 
   test("a serverRequest/resolved notification withdraws a parked interaction", async () => {

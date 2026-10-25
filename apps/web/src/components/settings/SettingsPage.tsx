@@ -18,6 +18,7 @@ import {
   Boxes,
   SlidersHorizontal,
   Cable,
+  CalendarClock,
   MessagesSquare,
   Network,
   MonitorPlay,
@@ -39,6 +40,7 @@ import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSet
 import { MessagingSettings } from "./MessagingSettings";
 import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
+import { SchedulesSettings } from "./SchedulesSettings";
 import {
   AccountMachineProvider,
   useAccountMachineStore,
@@ -94,6 +96,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "mcp-servers", label: "MCP servers", icon: <Server className="h-4 w-4" /> },
   { id: "mcp", label: "Control MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
+  { id: "schedules", label: "Schedules", icon: <CalendarClock className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
@@ -109,6 +112,7 @@ const COMMAND_NODE_SECTIONS: ReadonlySet<GlobalSettingsSection | ""> = new Set([
   "machines",
   "review",
   "messaging",
+  "schedules",
   "web-client",
   "mcp",
 ]);
@@ -275,6 +279,8 @@ export function SettingsPage({
                 </div>
               ) : activeSection === "messaging" ? (
                 <MessagingSettings />
+              ) : activeSection === "schedules" ? (
+                <SchedulesSettings />
               ) : isLoading && !initialLoadDone ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

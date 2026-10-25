@@ -358,6 +358,15 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             await target.call("start_environment_background", { environmentId });
           } catch (error) {
             startError = error instanceof Error ? error.message : "Environment start failed";
+            // A lost answer is not a failed start: the node usually started it.
+            // Ask what it is now rather than report a failure and never open
+            // the delegation, which would leave the worker's report unheld.
+            if ((error as { code?: unknown }).code === "outcome-unknown") {
+              const current = await target.environment(environmentId).catch(() => null);
+              if (current?.status === "running" || current?.status === "creating") {
+                startError = undefined;
+              }
+            }
           }
         }
         let coordinatorDelegationOpened = false;

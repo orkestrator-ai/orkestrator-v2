@@ -478,17 +478,21 @@ export class OrkestratorBackend {
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
       image: () => readImageStatus(context),
     });
+    const workerSession = async (environmentId: string, tabId: string) => {
+      const logicalSessionKey = `env-${environmentId}:${tabId}`;
+      return (await storage.listNativeAgentSessions()).find(
+        (candidate) =>
+          candidate.environmentId === environmentId &&
+          candidate.logicalSessionKey === logicalSessionKey,
+      );
+    };
     this.coordinators = new CoordinatorService(
       storage,
       () => this.controlMcp.getSettings(),
       undefined,
       async (environmentId, tabId) => {
         const logicalSessionKey = `env-${environmentId}:${tabId}`;
-        const session = (await storage.listNativeAgentSessions()).find(
-          (candidate) =>
-            candidate.environmentId === environmentId &&
-            candidate.logicalSessionKey === logicalSessionKey,
-        );
+        const session = await workerSession(environmentId, tabId);
         if (!session) return "unknown";
         // The turn view: a worker whose turn ended but whose background tasks
         // still run has answered, and its report must not wait for them. The
@@ -503,6 +507,18 @@ export class OrkestratorBackend {
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
+        // The turn ended (the composer is free) but tasks it started still run.
+        workerBackgroundWork: async (environmentId, tabId) => {
+          const session = await workerSession(environmentId, tabId);
+          if (!session) return false;
+          const key = session.logicalSessionKey;
+          return (
+            this.nativeAgents.sessionActivitySnapshot(environmentId, session.agent, key) ===
+              "working" &&
+            this.nativeAgents.sessionTurnActivitySnapshot(environmentId, session.agent, key) ===
+              "idle"
+          );
+        },
       },
     );
     context.coordinators = this.coordinators;

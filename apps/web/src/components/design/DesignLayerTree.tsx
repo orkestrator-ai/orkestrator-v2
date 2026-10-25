@@ -173,17 +173,12 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
   // treeRef is the latest tree for handlers and effects; `committed` re-renders with it.
   const [committed, setCommitted] = useState<LayerTreeState>(createLayerTree);
   const treeRef = useRef(committed);
-  const mounted = useRef(true);
+  // Always set state: layout effects can commit while a StrictMode or Activity
+  // remount has not rerun passive effects, and the render must not lag the ref.
   const commit = useCallback((next: LayerTreeState) => {
     if (next === treeRef.current) return;
     treeRef.current = next;
-    if (mounted.current) setCommitted(next);
-  }, []);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
+    setCommitted(next);
   }, []);
 
   const frameIds = useMemo(() => frames.map((frame) => frame.id), [frames]);

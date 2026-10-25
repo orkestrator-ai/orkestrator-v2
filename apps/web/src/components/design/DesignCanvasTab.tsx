@@ -96,7 +96,7 @@ export function DesignCanvasTab({
   const prefs = useMemo(() => loadViewPrefs(controller.key), [controller.key]);
   const [viewport, setViewport] = useState<DesignViewport>(prefs.viewport ?? DEFAULT_VIEWPORT);
   const viewportRef = useRef(viewport);
-  const [restored, setRestored] = useState(false);
+  const restored = useRef(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [workspaceWidth, setWorkspaceWidth] = useState(1024);
   const narrow = workspaceWidth < NARROW_WIDTH;
@@ -164,12 +164,20 @@ export function DesignCanvasTab({
   }, [controller.key, focusedFrame, historyOpen, layersOpen, layersWidth, viewport]);
 
   // Restore a saved view once frames and size are known; reset if unusable.
-  if (!restored && canvas && size.width !== 0) {
-    setRestored(true);
+  useEffect(() => {
+    if (restored.current || !canvas || size.width === 0) return;
+    restored.current = true;
+    // Restore after the first commit at the default view, not during render: that
+    // commit is what marks the visible frames live, so small canvases auto-expand
+    // them in the layer tree before the saved view moves them.
+    // oxlint-disable-next-line react/set-state-in-effect
     setViewport(restoreViewport(prefs.viewport, canvas.frames, size));
-    if (prefs.frameId && !canvas.frames.some((frame) => frame.id === prefs.frameId))
+    if (prefs.frameId && !canvas.frames.some((frame) => frame.id === prefs.frameId)) {
+      // Same restore step as above: a saved focus on a missing frame is dropped with it.
+      // oxlint-disable-next-line react/set-state-in-effect
       setFocusedFrame(null);
-  }
+    }
+  }, [canvas, prefs, size]);
 
   useEffect(() => {
     const target = viewportElement.current;

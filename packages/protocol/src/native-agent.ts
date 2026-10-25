@@ -125,7 +125,24 @@ export function resolveReasoningId(
   return fallbackReasoningId(ids, advertisedDefault);
 }
 
-/** Provider-neutral model catalog entry consumed by renderer presentation. */
+/**
+ * Provider-neutral model catalog entry consumed by renderer presentation.
+ *
+ * Reasoning and speed stay first-class fields (`reasoning`,
+ * `defaultReasoningId`, `supportsSpeed`) rather than moving onto
+ * {@link AgentModelParameter} descriptors. Every provider has both axes, so
+ * they are not provider-only controls, and they are read far beyond the
+ * session composer: launch dialogs, Build and Multi Review stages, settings
+ * defaults, the public API and coordinator launch defaults all pick an effort
+ * and a speed before any session (and so any backend composer state) exists,
+ * and they persist the choice as `reasoningId` / `fastMode`, not as a
+ * parameter value. Each provider maps its own vocabulary onto them (OpenCode
+ * variants and Grok effort onto `reasoning`; Cursor's `fast` parameter onto
+ * `supportsSpeed`), and the renderer renders the two fields without branching
+ * on which provider or axis it is. `parameters` carries the axes only some
+ * providers have; those render generically and are filtered only through
+ * {@link isSuppressedComposerParameter}.
+ */
 export interface AgentModel {
   platform: AgentPlatform;
   id: string;
@@ -133,8 +150,10 @@ export interface AgentModel {
   /** Provider label shown beneath the model name; defaults to the platform. */
   providerLabel?: string;
   description?: string;
+  /** The model's reasoning/effort axis, shared by every provider. */
   reasoning?: AgentReasoningOption[];
   defaultReasoningId?: string;
+  /** The model's speed (fast-mode) axis, shared by every provider. */
   supportsSpeed?: boolean;
   supportsMode?: boolean;
   /** Provider context-window size, used by the shared usage meter. */
@@ -897,8 +916,9 @@ export type NativeAgentComposerControl = NativeAgentSelectControl | NativeAgentT
  * compact input bar must not show.
  *
  * Claude's thinking and context choices are settings-backed session defaults,
- * Codex's reasoning summary is configured outside the input bar, and Cursor's
- * variant is a retired pre-combined parameter cross product.
+ * and Cursor's variant is a retired pre-combined parameter cross product. An
+ * entry needs a descriptor that actually produces it: a suppression for a
+ * control nothing advertises is removed rather than kept "just in case".
  *
  * This table is the single definition of that policy. Every projection path
  * and every renderer filters through {@link isSuppressedComposerParameter} so

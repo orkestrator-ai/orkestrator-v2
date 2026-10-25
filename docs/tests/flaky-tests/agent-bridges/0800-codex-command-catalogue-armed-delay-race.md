@@ -27,6 +27,23 @@ host load is not needed to reproduce it. The same hypothesis applies: a
 background catalogue refresh settles between the test's polling condition and
 the final `commands.list()`. Not established.
 
+## 2026-10-25 composer model admission validation
+
+Recurred in `review-tests` (`mise run test:logged -- --name review-tests --
+mise run test`) on `todo-0004-composer-model-params-803868a90fcb` with Bun
+1.4.4. Both cold-child catalogue cases expected `stale` but received `ready`;
+no command catalogue implementation or tests changed in this work.
+
+The complete unchanged owner passed alone (exit 0, 2.1 seconds):
+
+```sh
+mise run test:logged -- --name bridge-catalogue-recheck -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Original aggregate evidence: `orkestrator-test-run.T3LqzB/bridges.log`
+(compressed on aggregate completion). The original aggregate remains failed.
+No skips, assertions or timeouts were changed.
+
 ## PR monitor shutdown validation recurrence — 2026-10-25
 
 - **Original command:** `mise run test:logged -- --name residual-state-suite -- mise run test`, on `todo-0066-residual-module-state-40e8f98a7ef0`, Bun 1.4.4.

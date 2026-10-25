@@ -131,6 +131,24 @@ that this particular case is intermittent.
   temporary directory. No history implementation, assertion, timeout or skip
   was changed.
 
+## Composer model admission validation — 2026-10-25
+
+Recurred in `mise run test:logged -- --name review-tests -- mise run test`
+on `todo-0004-composer-model-params-803868a90fcb`, Bun 1.4.4 on the shared
+macOS host. The unchanged case exceeded its five-second deadline
+(5002.45 ms). The timed-out pagination work also raised a late `row-1250` assertion after cleanup. The backend aggregate reported 11318 passed,
+84 skipped, two failed and one between-tests error across 670 files.
+
+The complete unchanged owner passed alone (exit 0, 7.3 seconds):
+
+```sh
+mise run test:logged -- --name terminal-history-recheck -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.T3LqzB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The original aggregate remains failed.
+No owning implementation, assertion, deadline or skip was changed.
+
 ## Coordinator consistency validation — 2026-10-25
 
 - **Command:** `mise run test:logged -- --name consistency-suite -- mise run test`, on branch `todo-0028-coordinator-consistency-b1b98c1981f1`, with two isolated backend workers and other worktrees validating concurrently.

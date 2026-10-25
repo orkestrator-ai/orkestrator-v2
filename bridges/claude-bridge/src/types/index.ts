@@ -1258,8 +1258,6 @@ export interface PromptOptions {
   requestId?: string;
   agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
   parameterValues?: Record<string, string | boolean>;
-  /** Optional backend-owned budget cap for this session. */
-  maxBudgetUsd?: number;
   attachments?: Array<{
     type: "file" | "image";
     path: string;

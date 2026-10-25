@@ -5973,40 +5973,24 @@ describe("AgentNativeTab", () => {
   test.each([
     ["review", true],
     ["ordinary", false],
-  ] as const)(
-    "hides only the Codex reasoning summary control in a %s tab",
-    async (kind, review) => {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-        ...(await defaultProjection(input)),
-        composerControls: codexSummaryControls,
-      }));
-
-      render(
-        <AgentNativeTab
-          tabId={`tab-codex-${kind}-parameters`}
-          data={identity("codex")}
-          isActive
-          isReviewTab={review}
-        />,
-      );
-
-      expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
-      // The filter must not swallow Codex's other parameter controls.
-      expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
-      expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
-    },
-  );
-
-  test("keeps the reasoning summary control for a platform other than Codex", async () => {
+  ] as const)("hides unsupported Codex summary in a %s tab", async (kind, review) => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       composerControls: codexSummaryControls,
     }));
 
-    render(<AgentNativeTab tabId="tab-cursor-summary" data={freshTab("cursor")} isActive />);
+    render(
+      <AgentNativeTab
+        tabId={`tab-codex-${kind}-parameters`}
+        data={identity("codex")}
+        isActive
+        isReviewTab={review}
+      />,
+    );
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
-    expect(screen.getByText(/Reasoning summary: Automatic/)).toBeTruthy();
+    expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
+    expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
+    expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { MCP_MANAGEMENT_LIMITS } from "@orkestrator/protocol/mcp-management";
+
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -161,6 +163,27 @@ async function cataloguePlugins(): Promise<string[]> {
 }
 
 describe("the catalogue lists exactly the plugins the Claude bridge passes", () => {
+  test("an oversized .claude.json reports the plugin layer the bridge can still read", async () => {
+    materialise({
+      "home/.claude.json": {
+        padding: "x".repeat(MCP_MANAGEMENT_LIMITS.sourceFileMaxBytes),
+        plugins: [{ path: "~/mine" }],
+      },
+      ...plugin("home/mine", "mine"),
+    });
+    expect(await bridgePlugins(false)).toEqual([path.join(fixture.home, "mine")]);
+    const snapshot = await fixture.service.snapshot({
+      targetId: await targetIdFor(fixture, "claude", "environment"),
+    });
+    expect(
+      snapshot.sources.find((source) => source.sourceId === "claude:plugin-discovery"),
+    ).toMatchObject({ state: "oversized" });
+    expect(
+      snapshot.sources.find((source) => source.sourceId === "claude:plugin-discovery")!.note,
+    ).toContain("Global and project plugin layers may be missing");
+    expect(snapshot.freshness).toBe("incomplete");
+  });
+
   for (const config of FIXTURES) {
     for (const projectResources of [false, true]) {
       test(`project resources ${projectResources ? "on" : "off"}: ${config.name}`, async () => {

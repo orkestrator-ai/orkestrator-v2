@@ -14,6 +14,8 @@
  * never from a client, and leave this module only as display text.
  */
 
+import { truncateUtf8 } from "@orkestrator/protocol/mcp-management";
+
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -31,7 +33,7 @@ import {
 } from "@orkestrator/protocol/node/claude-plugin-set";
 
 import type { TextReader } from "./native-policy.js";
-import type { SourceSpec } from "./types.js";
+import type { PluginDirectoryListing, SourceSpec } from "./types.js";
 
 /** Plugin files are the plugin's; reads are bounded like Cursor's and Pi's files. */
 export const CLAUDE_PLUGIN_FILE_MAX_BYTES = 1024 * 1024;
@@ -55,8 +57,8 @@ export interface ClaudePluginSourceInput {
   /** Bounded read; `null` when the file is absent or unreadable. */
   readText: TextReader;
   exists(filePath: string): Promise<boolean>;
-  /** Subdirectories of a folder, for the bridge's plugins-folder scan. Host only. */
-  listDirectories?(dir: string): Promise<string[]>;
+  /** Subdirectories of a folder, for the bridge's plugins-folder scan. */
+  listDirectories?(dir: string): Promise<PluginDirectoryListing>;
   /** Display a path the way every other source does. */
   display(filePath: string): string;
 }
@@ -65,7 +67,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type JsonRead = { state: "absent" } | { state: "invalid" } | { state: "ok"; value: unknown };
+type JsonRead =
+  | { state: "absent" | "unavailable" | "oversized" | "invalid" }
+  | { state: "ok"; value: unknown };
 
 async function readJson(
   input: ClaudePluginSourceInput,
@@ -73,8 +77,8 @@ async function readJson(
   maxBytes = CLAUDE_PLUGIN_FILE_MAX_BYTES,
 ): Promise<JsonRead> {
   const text = await input.readText(filePath);
-  if (text === null) return { state: "absent" };
-  if (Buffer.byteLength(text, "utf8") > maxBytes) return { state: "invalid" };
+  if (text === null) return { state: (await input.exists(filePath)) ? "unavailable" : "absent" };
+  if (Buffer.byteLength(text, "utf8") > maxBytes) return { state: "oversized" };
   try {
     return { state: "ok", value: JSON.parse(text) };
   } catch {
@@ -85,14 +89,16 @@ async function readJson(
 const valueOf = (read: JsonRead): unknown => (read.state === "ok" ? read.value : undefined);
 
 /** Host subdirectories, for the plugins-folder scan. */
-export async function listHostDirectories(dir: string): Promise<string[]> {
+export async function listHostDirectories(dir: string): Promise<PluginDirectoryListing> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(dir, entry.name));
+    return {
+      directories: entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(dir, entry.name)),
+    };
   } catch {
-    return [];
+    return { directories: [] };
   }
 }
 
@@ -104,7 +110,7 @@ export async function listHostDirectories(dir: string): Promise<string[]> {
 async function cliInstalledPlugins(
   input: ClaudePluginSourceInput,
   pluginsDir: string,
-): Promise<{ plugins: ClaudePluginConfig[]; installedIds: string[] }> {
+): Promise<{ plugins: ClaudePluginConfig[]; installedIds: string[]; scanIncomplete?: boolean }> {
   const installed = valueOf(await readJson(input, path.join(pluginsDir, "installed_plugins.json")));
   const record = isRecord(installed) ? installed.plugins : undefined;
   if (record) {
@@ -114,11 +120,12 @@ async function cliInstalledPlugins(
     };
   }
   const plugins: ClaudePluginConfig[] = [];
-  for (const dir of (await input.listDirectories?.(pluginsDir)) ?? []) {
+  const listing = await input.listDirectories?.(pluginsDir);
+  for (const dir of listing?.directories ?? []) {
     if (await input.exists(path.join(dir, ".claude-plugin", "plugin.json")))
       plugins.push({ type: "local", path: dir });
   }
-  return { plugins, installedIds: [] };
+  return { plugins, installedIds: [], scanIncomplete: listing?.incomplete };
 }
 
 function shortHash(value: string): string {
@@ -258,9 +265,9 @@ function pluginState(
 export async function claudePluginSources(input: ClaudePluginSourceInput): Promise<SourceSpec[]> {
   const cwd = input.cwd ?? input.home;
   const pluginsDir = path.join(input.home, ".claude", "plugins");
-  const claudeJson = valueOf(
-    await readJson(input, path.join(input.home, ".claude.json"), Number.POSITIVE_INFINITY),
-  );
+  const claudeJsonPath = path.join(input.home, ".claude.json");
+  const claudeJsonRead = await readJson(input, claudeJsonPath, Number.POSITIVE_INFINITY);
+  const claudeJson = valueOf(claudeJsonRead);
   const projects = isRecord(claudeJson) ? claudeJson.projects : undefined;
   const project = input.cwd && isRecord(projects) ? projects[input.cwd] : undefined;
   const projectLocal =
@@ -279,6 +286,37 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
   );
   const settings = await readPluginSettings(input);
   const specs: SourceSpec[] = [];
+  const discoveryNotes: string[] = [];
+  if (claudeJsonRead.state !== "ok" && claudeJsonRead.state !== "absent")
+    discoveryNotes.push(
+      "Plugin discovery is incomplete: ~/.claude.json could not be read as JSON within the source file size limit. Global and project plugin layers may be missing.",
+    );
+  if (installed.scanIncomplete)
+    discoveryNotes.push(
+      "Plugin discovery is incomplete: the plugins folder scan hit its directory limit or could not finish. Additional plugin folders may be missing.",
+    );
+  if (discoveryNotes.length) {
+    specs.push({
+      sourceId: "claude:plugin-discovery",
+      provider: "claude",
+      scope: "plugin",
+      owner: "plugin",
+      format: "json",
+      label: "Plugin discovery",
+      path: claudeJsonPath,
+      displayPath: input.display(claudeJsonPath),
+      subtree: [],
+      precedence: PLUGIN_PRECEDENCE_BASE,
+      writable: false,
+      readOnlyReason: CLAUDE_PLUGIN_READ_ONLY_REASON,
+      sharedWith: [],
+      maxBytes: CLAUDE_PLUGIN_FILE_MAX_BYTES,
+      createMode: 0o600,
+      noEntries: true,
+      discoveryIncomplete: true,
+      note: discoveryNotes.join(" "),
+    });
+  }
   const names = new Map<string, number>();
   let inspected = 0;
   let omitted = 0;
@@ -317,10 +355,14 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
       maxBytes: CLAUDE_PLUGIN_FILE_MAX_BYTES,
       createMode: 0o600,
     });
-    if (manifestRead.state === "invalid") {
+    if (["invalid", "oversized", "unavailable"].includes(manifestRead.state)) {
       specs.push({
         ...base("plugin.json", manifestPath, `Plugin at ${input.display(pluginDir)}`),
-        note: "Claude Code does not load this plugin: its .claude-plugin/plugin.json is not valid JSON.",
+        note:
+          manifestRead.state === "invalid"
+            ? "Claude Code does not load this plugin: its .claude-plugin/plugin.json is not valid JSON."
+            : `Plugin discovery is incomplete: .claude-plugin/plugin.json ${manifestRead.state === "oversized" ? `exceeds the ${CLAUDE_PLUGIN_FILE_MAX_BYTES}-byte plugin file size limit` : "could not be read within the source file size limit"}.`,
+        discoveryIncomplete: true,
         noEntries: true,
       });
       continue;
@@ -343,24 +385,29 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
         `Another plugin Orkestrator passes is also named "${name}"; Claude Code gives their servers the same names, and this editor does not model which one it keeps.`,
       );
     }
-    const unmodelled: string[] = [];
+    const unmodelled = new Map<string, number>();
+    let unsupportedCount = 0;
+    const unsupported = (reason: string) => {
+      unsupportedCount += 1;
+      const short = truncateUtf8(reason, 160);
+      if (unmodelled.has(short) || unmodelled.size < 3)
+        unmodelled.set(short, (unmodelled.get(short) ?? 0) + 1);
+    };
     const pluginSpecs: SourceSpec[] = [];
-    let offset = 0;
     for (const declaration of claudePluginMcpDeclarations(manifest)) {
       if (declaration.kind === "unmodelled") {
-        unmodelled.push(declaration.reason);
+        unsupported(declaration.reason);
         continue;
       }
       if (declaration.kind === "inline-manifest") {
         pluginSpecs.push({
           ...base("manifest", manifestPath, `Plugin ${name} (plugin.json)`),
-          precedence: precedence(++offset),
         });
         continue;
       }
       const filePath = path.resolve(pluginDir, declaration.relativePath);
       if (!isWithin(pluginDir, filePath)) {
-        unmodelled.push(
+        unsupported(
           `${declaration.relativePath}, which is outside the plugin's folder and not shown here`,
         );
         continue;
@@ -368,7 +415,7 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
       if (declaration.origin === ".mcp.json" && !(await input.exists(filePath))) continue;
       pluginSpecs.push({
         ...base(
-          declaration.origin === ".mcp.json" ? ".mcp.json" : `file:${declaration.relativePath}`,
+          declaration.origin === ".mcp.json" ? ".mcp.json" : `file:${filePath}`,
           filePath,
           declaration.origin === ".mcp.json"
             ? `Plugin ${name}`
@@ -376,11 +423,12 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
         ),
         // The CLI accepts `{ "mcpServers": … }` or a bare map in these files.
         bareMapFallback: true,
-        precedence: precedence(++offset),
       });
     }
-    if (unmodelled.length) {
-      notes.push(`plugin.json also declares servers in ${unmodelled.join("; and ")}.`);
+    if (unsupportedCount) {
+      notes.push(
+        `${unsupportedCount} unsupported declaration${unsupportedCount === 1 ? "" : "s"} omitted from plugin.json; examples: ${[...unmodelled].map(([reason, count]) => `${reason}${count > 1 ? ` (${count} occurrences)` : ""}`).join("; ")}.`,
+      );
       if (!pluginSpecs.length) {
         pluginSpecs.push({
           ...base("manifest", manifestPath, `Plugin ${name} (plugin.json)`),
@@ -388,20 +436,51 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
         });
       }
     }
+    // A repeated path has the same contents each time; only its final merge
+    // position matters (A, B, A must still let A override B).
+    const seenSources = new Set<string>();
+    const unique = pluginSpecs
+      .toReversed()
+      .filter((spec) => {
+        if (seenSources.has(spec.path)) return false;
+        seenSources.add(spec.path);
+        return true;
+      })
+      .reverse();
+    const capacity = Math.min(SOURCES_PER_PLUGIN, CLAUDE_PLUGIN_SOURCES_MAX - specs.length);
+    const retained = unique.slice(-capacity);
+    const omittedDeclarations = unique.length - retained.length;
+    if (omittedDeclarations) {
+      notes.unshift(
+        `${omittedDeclarations} earlier MCP declaration source${omittedDeclarations === 1 ? "" : "s"} omitted by the catalog source limit; this plugin's view is incomplete. The final declarations are shown so listed servers retain their merge winners.`,
+      );
+      for (const spec of retained) spec.discoveryIncomplete = true;
+    }
     // With no rows to carry it, the source says the plugin is off.
-    if (state.disabledReason && pluginSpecs.every((spec) => spec.noEntries))
+    if (state.disabledReason && retained.every((spec) => spec.noEntries))
       notes.unshift(state.disabledReason);
-    for (const spec of pluginSpecs) {
+    for (const [index, spec] of retained.entries()) {
+      if (unsupportedCount) spec.discoveryIncomplete = true;
+      spec.precedence = precedence(index + 1);
       spec.entryNamePrefix = claudePluginServerName(name, "");
       if (state.disabledReason) spec.disabledReason = state.disabledReason;
     }
-    if (notes.length && pluginSpecs[0]) pluginSpecs[0].note = notes.join(" ");
-    specs.push(...pluginSpecs.slice(0, SOURCES_PER_PLUGIN));
+    if (notes.length && retained[0]) retained[0].note = notes.join(" ");
+    specs.push(...retained);
   }
   const last = specs.at(-1);
   if (omitted && last) {
     const more = `${omitted} more plugin folder${omitted === 1 ? "" : "s"} Orkestrator passes to Claude Code ${omitted === 1 ? "was" : "were"} not checked for MCP servers.`;
-    last.note = last.note ? `${last.note} ${more}` : more;
+    last.note = last.note ? `${more} ${last.note}` : more;
+    last.discoveryIncomplete = true;
+  }
+  // Bound all plugin-derived display text, including names and paths, before
+  // any source metadata competes with ordinary editable definition rows.
+  for (const spec of specs) {
+    spec.label = truncateUtf8(spec.label, 256);
+    spec.displayPath = truncateUtf8(spec.displayPath, 512);
+    if (spec.note) spec.note = truncateUtf8(spec.note, 1024);
+    if (spec.disabledReason) spec.disabledReason = truncateUtf8(spec.disabledReason, 512);
   }
   return specs;
 }

@@ -32,6 +32,7 @@ import type { StagedDefaultsWriter } from "./mcp-management/overlay-service.js";
 import type {
   ContainerBootReader,
   ContainerFileReader,
+  ContainerDirectoryLister,
   ContainerFileWriter,
   ContainerPathProbe,
 } from "./mcp-management/types.js";
@@ -303,6 +304,43 @@ export const writeContainerMcpFile: ContainerFileWriter = async (containerId, fi
   }
 };
 
+/** Folder scan fallback, using bounded output and argument-only paths. */
+export const listContainerMcpDirectories: ContainerDirectoryLister = async (containerId, dir) => {
+  try {
+    const { stdout } = await runCommandBuffer(
+      "docker",
+      [
+        "exec",
+        "--user",
+        "node",
+        containerId,
+        "node",
+        "-e",
+        `const fs = require("node:fs"); const path = require("node:path");
+       const dir = process.argv[1]; const result = [];
+       let handle;
+       try { handle = fs.opendirSync(dir); } catch (error) {
+         if (error.code === "ENOENT") { process.stdout.write(JSON.stringify({ directories: [] })); process.exit(0); }
+         throw error;
+       }
+       let incomplete = false;
+       try { let entry; let scanned = 0;
+         while (scanned++ < 1024 && (entry = handle.readSync())) {
+           if (entry.isDirectory()) result.push(path.join(dir, entry.name));
+         }
+         incomplete = scanned > 1024 && handle.readSync() !== null;
+       } finally { handle.closeSync(); }
+       process.stdout.write(JSON.stringify({ directories: result, incomplete }));`,
+        dir,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    return JSON.parse(stdout.toString("utf8")) as Awaited<ReturnType<ContainerDirectoryLister>>;
+  } catch {
+    return { directories: [], incomplete: true };
+  }
+};
+
 /** The container's current boot id; `null` for an image without boot status. */
 export const readContainerBootId: ContainerBootReader = async (containerId) => {
   const observation = await observeContainerBoot(containerId);
@@ -444,6 +482,7 @@ export function mcpContainerOptions(
   context: Pick<CommandContext, "storage">,
 ): Pick<
   McpManagementServiceOptions,
+  | "listContainerDirectories"
   | "readContainerFile"
   | "writeContainerFile"
   | "readContainerBootId"
@@ -453,6 +492,7 @@ export function mcpContainerOptions(
 > {
   return {
     readContainerFile: readContainerMcpFile,
+    listContainerDirectories: listContainerMcpDirectories,
     writeContainerFile: writeContainerMcpFile,
     readContainerBootId: readContainerBootId,
     stagedDefaults: createStagedDefaultsWriter(context),

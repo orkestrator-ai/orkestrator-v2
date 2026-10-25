@@ -37,7 +37,13 @@ import {
   type TextReader,
   type TrustVerdict,
 } from "./native-policy.js";
-import type { ContainerFileReader, SourceSpec, TargetContextInfo } from "./types.js";
+import type {
+  ContainerDirectoryLister,
+  PluginDirectoryListing,
+  ContainerFileReader,
+  SourceSpec,
+  TargetContextInfo,
+} from "./types.js";
 
 export interface ProviderHomes {
   home: string;
@@ -252,6 +258,7 @@ export interface SourceContext {
   exists(filePath: string): Promise<boolean>;
   /** Bounded read of provider policy files (trust, compat). Defaults to the host. */
   readText?: TextReader;
+  listDirectories?(dir: string): Promise<PluginDirectoryListing>;
   /**
    * Ignored. Grok's `[compat.*] mcps` switches are resolved in this module
    * (env, requirements, user config, managed config), not by the caller.
@@ -732,7 +739,8 @@ export async function providerSources(
         includeProjectSources: context.projectResources !== false,
         readText: read,
         exists: input.exists,
-        listDirectories: input.inContainer ? undefined : listHostDirectories,
+        listDirectories:
+          input.listDirectories ?? (input.inContainer ? undefined : listHostDirectories),
         display: (filePath) => display(filePath, homes, worktree),
       })) {
         add(spec);
@@ -964,12 +972,14 @@ export async function containerSources(
   containerId: string,
   options: ContainerSourceOptions,
   reader?: ContainerFileReader,
+  listDirectories?: ContainerDirectoryLister,
 ): Promise<SourceSpec[]> {
   const specs = await providerSources(provider, {
     context: { kind: "environment", location: "local-worktree", worktreePath: CONTAINER_WORKSPACE },
     homes: CONTAINER_HOMES,
     inContainer: true,
     ...containerProbes(containerId, reader),
+    listDirectories: listDirectories ? (dir) => listDirectories(containerId, dir) : undefined,
     retainedSourceIds: options.overlaySourceIds,
   });
   return specs.map((spec) => {

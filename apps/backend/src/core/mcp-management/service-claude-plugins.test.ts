@@ -3,9 +3,19 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { McpManagementSnapshot } from "@orkestrator/protocol/mcp-management";
+import {
+  MCP_MANAGEMENT_LIMITS,
+  utf8ByteLength,
+  type McpManagementSnapshot,
+} from "@orkestrator/protocol/mcp-management";
 
-import { CLAUDE_PLUGIN_READ_ONLY_REASON } from "./claude-plugins.js";
+import {
+  CLAUDE_PLUGIN_FILE_MAX_BYTES,
+  CLAUDE_PLUGIN_READ_ONLY_REASON,
+  claudePluginSources,
+} from "./claude-plugins.js";
+import { fitSnapshotBudget } from "./service.js";
+import { joinLiveMcpServer } from "../../../../web/src/components/settings/mcp-servers/mcp-live-join.js";
 import { createFixture, mutation, targetIdFor, type Fixture } from "./test-support.js";
 
 /**
@@ -437,6 +447,163 @@ describe("Claude plugin MCP sources", () => {
     expect(sources.at(-1)!.note).toBe(
       "6 more plugin folders Orkestrator passes to Claude Code were not checked for MCP servers.",
     );
+  });
+
+  test("a bounded folder scan reports incomplete discovery even when no plugin rows are available", async () => {
+    const sources = await claudePluginSources({
+      home: fixture.home,
+      includeProjectSources: false,
+      readText: async () => null,
+      exists: async () => false,
+      listDirectories: async () => ({ directories: [], incomplete: true }),
+      display: (filePath) => filePath,
+    });
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toMatchObject({ discoveryIncomplete: true, noEntries: true });
+    expect(sources[0]!.note).toContain(
+      "plugins folder scan hit its directory limit or could not finish",
+    );
+  });
+
+  test("many unsupported declarations are summarized without evicting editable rows", async () => {
+    fixture.write(
+      "worktree/.mcp.json",
+      JSON.stringify({ mcpServers: { ordinary: stdio("local") } }),
+    );
+    const manifest = { name: "bundles", mcpServers: Array(10_000).fill("tool.mcpb") };
+    expect(utf8ByteLength(JSON.stringify(manifest))).toBeLessThan(CLAUDE_PLUGIN_FILE_MAX_BYTES);
+    writeInstalled({ "bundles@market": installPlugin("bundles", { manifest }) });
+    const snapshot = await snapshotFor();
+    expect(utf8ByteLength(JSON.stringify(snapshot))).toBeLessThanOrEqual(
+      MCP_MANAGEMENT_LIMITS.catalogMaxBytes,
+    );
+    expect(row(snapshot, "ordinary").actions.edit.supported).toBe(true);
+    expect(snapshot.truncated).toBe(0);
+    expect(pluginSources(snapshot)[0]!.note).toContain("10000 unsupported declarations omitted");
+    expect(pluginSources(snapshot)[0]!.note).toContain("10000 occurrences");
+    expect(utf8ByteLength(pluginSources(snapshot)[0]!.note!)).toBeLessThanOrEqual(1024);
+  });
+
+  test("source metadata is bounded before definition rows are fitted", async () => {
+    fixture.write(
+      "worktree/.mcp.json",
+      JSON.stringify({ mcpServers: { ordinary: stdio("local") } }),
+    );
+    const snapshot = await snapshotFor();
+    const template = snapshot.sources[0]!;
+    snapshot.sources.push(
+      ...Array.from({ length: 64 }, (_, index) => ({
+        ...template,
+        sourceId: `plugin-${index}`,
+        scope: "plugin" as const,
+        owner: "plugin" as const,
+        label: "name".repeat(10_000),
+        displayPath: "path".repeat(10_000),
+        note: "reason".repeat(10_000),
+      })),
+    );
+    snapshot.definitions = fitSnapshotBudget(snapshot, snapshot.definitions);
+    expect(snapshot.definitions.some((definition) => definition.name === "ordinary")).toBe(true);
+    expect(utf8ByteLength(JSON.stringify(snapshot))).toBeLessThanOrEqual(
+      MCP_MANAGEMENT_LIMITS.catalogMaxBytes,
+    );
+  });
+
+  test("retains final declarations and the actual override winner within the per-plugin bound", async () => {
+    const files = Array.from({ length: 9 }, (_, index) => `servers-${index}.json`);
+    writeInstalled({
+      "docs@market": installPlugin("docs", {
+        manifest: { name: "docs", mcpServers: files },
+        mcpJson: { search: stdio("original") },
+        extra: Object.fromEntries(
+          files.map((file, index) => [file, { search: stdio(`override-${index}`) }]),
+        ),
+      }),
+    });
+    const snapshot = await snapshotFor();
+    const sources = pluginSources(snapshot);
+    expect(sources).toHaveLength(8);
+    expect(sources[0]!.note).toContain("2 earlier MCP declaration sources omitted");
+    expect(snapshot.freshness).toBe("incomplete");
+    const winner = snapshot.definitions.find(
+      (definition) => definition.entryId === snapshot.effective["plugin:docs:search"],
+    )!;
+    expect(winner.command).toEqual({ kind: "visible", value: "override-8" });
+    expect(
+      joinLiveMcpServer(snapshot, {
+        provider: "claude",
+        environmentId: "env-1",
+        scope: "plugin",
+        serverName: winner.name,
+      }),
+    ).toMatchObject({ kind: "plugin", entryId: winner.entryId });
+  });
+
+  test("a multi-source plugin consumes only the remaining global capacity and counts both omissions", async () => {
+    const ids: Record<string, string> = {};
+    for (let index = 0; index < 63; index += 1) {
+      const name = `p${String(index).padStart(2, "0")}`;
+      ids[`${name}@market`] = installPlugin(name, {
+        manifest: { name },
+        mcpJson: { a: stdio("a") },
+      });
+    }
+    const files = Array.from({ length: 7 }, (_, index) => `servers-${index}.json`);
+    ids["tail@market"] = installPlugin("tail", {
+      manifest: { name: "tail", mcpServers: files },
+      mcpJson: { a: stdio("original") },
+      extra: Object.fromEntries(files.map((file, index) => [file, { a: stdio(`last-${index}`) }])),
+    });
+    ids["unchecked@market"] = installPlugin("unchecked", {
+      manifest: { name: "unchecked" },
+      mcpJson: { a: stdio("a") },
+    });
+    writeInstalled(ids);
+    const snapshot = await snapshotFor();
+    const sources = pluginSources(snapshot);
+    expect(sources).toHaveLength(64);
+    expect(sources.at(-1)!.note).toContain("7 earlier MCP declaration sources omitted");
+    expect(sources.at(-1)!.note).toContain("1 more plugin folder");
+    expect(row(snapshot, "plugin:tail:a").command).toEqual({ kind: "visible", value: "last-6" });
+    expect(snapshot.freshness).toBe("incomplete");
+  });
+
+  test("duplicate and aliased declaration paths have unique IDs and keep their final position", async () => {
+    writeInstalled({
+      "docs@market": installPlugin("docs", {
+        manifest: { name: "docs", mcpServers: ["a.json", "b.json", "./a.json", "a.json"] },
+        extra: { "a.json": { search: stdio("a") }, "b.json": { search: stdio("b") } },
+      }),
+    });
+    const snapshot = await snapshotFor();
+    expect(pluginSources(snapshot)).toHaveLength(2);
+    expect(new Set(snapshot.sources.map((source) => source.sourceId)).size).toBe(
+      snapshot.sources.length,
+    );
+    expect(new Set(snapshot.definitions.map((definition) => definition.entryId)).size).toBe(
+      snapshot.definitions.length,
+    );
+    const winner = snapshot.definitions.find(
+      (definition) => definition.entryId === snapshot.effective["plugin:docs:search"],
+    );
+    expect(winner!.command).toEqual({ kind: "visible", value: "a" });
+    for (const definition of snapshot.definitions)
+      expect(definition.shadowedBy).not.toBe(definition.entryId);
+  });
+
+  test("oversized manifests name the size limit, not a JSON parse failure", async () => {
+    const dir = installPlugin("large", { mcpJson: { a: stdio("a") } });
+    fixture.write(
+      `${path.relative(fixture.root, dir)}/.claude-plugin/plugin.json`,
+      JSON.stringify({ name: "large", padding: "x".repeat(CLAUDE_PLUGIN_FILE_MAX_BYTES) }),
+    );
+    writeInstalled({ "large@market": dir });
+    const snapshot = await snapshotFor();
+    expect(pluginSources(snapshot)[0]!.note).toContain(
+      `${CLAUDE_PLUGIN_FILE_MAX_BYTES}-byte plugin file size limit`,
+    );
+    expect(pluginSources(snapshot)[0]!.note).not.toContain("not valid JSON");
+    expect(snapshot.freshness).toBe("incomplete");
   });
 
   test("a container lists the plugins in its own home", async () => {

@@ -186,8 +186,10 @@ is not permission to execute. The editor never changes an execution policy.
     the editor build it with the same function
     (`@orkestrator/protocol/node/claude-plugin-set`), each with its own reads,
     and `claude-plugin-mcp-parity.test.ts` runs both over the same files. A
-    container lists the plugins in its own home, except the folder scan
-    (no directory listing through the container reader).
+    container lists the plugins in its own home, including the folder scan
+    through a bounded directory listing. An unreadable or oversized
+    `~/.claude.json` produces a discovery notice and an incomplete snapshot;
+    global and project plugin layers may be missing.
   - The bridge passes every plugin as a `--plugin-dir` plugin, whose id is
     `<name>@inline` (name from `plugin.json`, else the folder). The CLI skips
     one when the first loaded settings layer (local, then project, then user)
@@ -221,8 +223,13 @@ is not permission to execute. The editor never changes an execution policy.
     server or an earlier plugin's (modelling it would need the expanded
     values this editor never resolves), and which of two plugins with the
     same name it keeps (noted). Reads are bounded at 1 MiB per plugin file
-    and 64 plugin sources per snapshot; plugin rows sort after file rows, so a
-    trimmed snapshot drops them first.
+    and 64 plugin sources per snapshot, with at most eight per plugin. Duplicate
+    declaration paths keep their final merge position. When a limit omits
+    sources, the final declarations are retained, omissions are counted and
+    the snapshot is incomplete. Unsupported declaration reasons are deduplicated
+    and summarized; plugin display text is capped before source metadata is
+    fitted to one third of the response budget. Plugin rows sort after file
+    rows, so a trimmed snapshot drops them first.
 - **Team and remote layers are not modelled.** Cursor plugins and team
   settings, OpenCode remote/org configuration and Codex profiles are not file
   sources this editor can read (or Orkestrator never selects them, as with
@@ -737,7 +744,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge-mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | Apply (2026-10-25) | `service-apply.test.ts` (OpenCode idle-gated rebuild, its listing check, user files and containers kept on restart; Codex turn evidence, the open dispatch excluded, not-running, the evidence window), `commands-registry-mcp.test.ts` (OpenCode reload probe re-posts `orkestrator`), `opencode-capabilities.test.ts` (sign-in guidance, error redaction), `http-bridge-mcp-inventory.test.ts` (relay redaction), `apps/backend/tests/opencode-mcp-reload-live.test.ts` (`mise run verify:opencode:mcp-live`: the pinned OpenCode 1.19.4, credential-free) |
-| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings) |
+| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings, including the enabled installed marketplace copy with its inline copy disabled); `apps/backend/tests/claude-plugin-mcp-container.test.ts` (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`, optional `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE`): real production container reader and directory listing with installed, absent and invalid installation state; bounded metadata, declaration omissions and merge winners, oversized manifests and discovery files, duplicate IDs, and rendered settings-now-off notice are regression-tested |
 | UI | `mcp-live-join.test.ts`, `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Environment overlay | `overlay.test.ts` (merge, rebase, tombstones, conflicts, divergence, import, server-map rewrite), `service-overlay.test.ts` (private save, host file unchanged, backend restart, stop/start and rebuild reapply, pending restart, conflicts and both resolutions, divergence blocks edits, import, reapply, reset, unreadable record, defaults refresh and stale token, persistent project writes, container apply plan, network and `localhost` warnings, path audit, sign-in) |

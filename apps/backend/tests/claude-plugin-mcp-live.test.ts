@@ -14,6 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import path from "node:path";
+import { cpSync } from "node:fs";
 
 import type { McpManagementSnapshot } from "@orkestrator/protocol/mcp-management";
 
@@ -164,6 +165,63 @@ function expectJoins(snapshot: McpManagementSnapshot, servers: LiveServer[]): vo
 }
 
 describe.skipIf(!ENABLED)("Claude plugin MCP servers on the pinned CLI", () => {
+  test("the CLI loads the installed marketplace copy when the inline copy is disabled", async () => {
+    json("home/.claude/.claude.json", { hasCompletedOnboarding: true });
+    const relative = ".claude/plugins/cache/fixture-market/installed/1.0.0";
+    const installPath = path.join(fixture.home, relative);
+    json(`home/${relative}/.claude-plugin/plugin.json`, { name: "installed", version: "1.0.0" });
+    json(`home/${relative}/.mcp.json`, { mcpServers: { one: server("installed-marketplace") } });
+    json("home/.claude/plugins/installed_plugins.json", {
+      version: 2,
+      plugins: {
+        "installed@fixture-market": [
+          {
+            scope: "user",
+            installPath,
+            version: "1.0.0",
+            installedAt: new Date().toISOString(),
+            lastUpdated: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    json("home/marketplace/.claude-plugin/marketplace.json", {
+      name: "fixture-market",
+      owner: { name: "Fixture" },
+      plugins: [{ name: "installed", source: "./installed", version: "1.0.0" }],
+    });
+    cpSync(installPath, path.join(fixture.home, "marketplace/installed"), { recursive: true });
+    json("home/.claude/plugins/known_marketplaces.json", {
+      "fixture-market": {
+        source: { source: "directory", path: path.join(fixture.home, "marketplace") },
+        installLocation: path.join(fixture.home, "marketplace"),
+        lastUpdated: new Date().toISOString(),
+      },
+    });
+    json("home/.claude/settings.json", {
+      enabledPlugins: { "installed@inline": false, "installed@fixture-market": true },
+    });
+    const snapshot = await editor(false);
+    expect(editorLoaded(snapshot)).toEqual(["plugin:installed:one"]);
+    expect(snapshot.sources.find((source) => source.label === "Plugin installed")!.note).toContain(
+      'enabled by enabledPlugins["installed@fixture-market"]',
+    );
+    const live = await runCli(["user"]);
+    expect(liveLoaded(live)).toEqual(editorLoaded(snapshot));
+    expect(live.find((entry) => entry.name === "plugin:installed:one")?.args).toContain(
+      "installed-marketplace",
+    );
+    expectJoins(snapshot, live);
+
+    // A negative control proves the installed layer, rather than inline
+    // enablement, supplied that live server.
+    json("home/.claude/settings.json", {
+      enabledPlugins: { "installed@inline": false, "installed@fixture-market": false },
+    });
+    expect(editorLoaded(await editor(false))).toEqual([]);
+    expect(liveLoaded(await runCli(["user"]))).toEqual([]);
+  }, 120_000);
+
   test("the editor's rows, the live rows and the join agree", async () => {
     installFixture();
 

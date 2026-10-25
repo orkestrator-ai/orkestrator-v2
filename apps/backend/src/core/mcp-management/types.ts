@@ -111,6 +111,8 @@ export interface SourceSpec {
   note?: string;
   /** Listed for its note and state only; its servers are not read (an unmodelled declaration). */
   noEntries?: boolean;
+  /** Discovery omitted declarations or could not read a plugin layer. */
+  discoveryIncomplete?: boolean;
 }
 
 /** Bounded read of one file inside a container. Never runs a shell over the path. */
@@ -155,3 +157,15 @@ export type ContainerPathProbe = (
   containerId: string,
   paths: readonly string[],
 ) => Promise<Map<string, "file" | "directory" | "absent"> | null>;
+
+export interface PluginDirectoryListing {
+  directories: string[];
+  /** The scan hit its bound or could not finish. */
+  incomplete?: boolean;
+}
+
+/** Bounded subdirectory listing inside a container for plugin folder discovery. */
+export type ContainerDirectoryLister = (
+  containerId: string,
+  dir: string,
+) => Promise<PluginDirectoryListing>;

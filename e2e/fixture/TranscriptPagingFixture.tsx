@@ -19,12 +19,19 @@ const identity: NativeAgentViewIdentity = {
 const query = new URLSearchParams(window.location.search);
 const mixed = query.has("mixed");
 const short = query.has("short");
-const tailStart = short ? 58 : 40;
-const tools = Array.from({ length: 60 }, (_, index) => ({
+// `paged=N` serves history N source rows at a time behind a cursor, as the live
+// bridges do, so the first click leaves more to load. `stops=N` lengthens the
+// trail and starts the tail 100 rows from its end, like the live window.
+const pageSize = Number(query.get("paged") ?? 0) || undefined;
+const stopCount = Number(query.get("stops") ?? 0) || 60;
+const tailStart = query.has("stops") ? Math.max(0, stopCount - 100) : short ? 58 : 40;
+const tools = Array.from({ length: stopCount }, (_, index) => ({
   id: `row-${index}`,
   role: "assistant" as const,
   content: "",
-  createdAt: "2026-10-18T01:33:20.000Z",
+  createdAt: query.has("clock")
+    ? new Date(Date.parse("2026-10-18T01:00:00.000Z") + index * 7_000).toISOString()
+    : "2026-10-18T01:33:20.000Z",
   parts: [
     ...(mixed ? [{ type: "text" as const, content: `Reached stop ${index}.` }] : []),
     {
@@ -70,9 +77,24 @@ const tail = [
       }))
     : []),
 ];
+// `prompt` starts the conversation with the reader's prompt, as a live one
+// does: the trail's calls coalesce into the boundary group, so the page adds
+// only that one display row above it.
+const prompt = query.has("prompt")
+  ? [
+      {
+        id: "prompt",
+        role: "user" as const,
+        content: "Follow the trail.",
+        createdAt: "2026-10-18T00:59:00.000Z",
+        parts: [{ type: "text" as const, content: "Follow the trail.\n\n".repeat(4).trim() }],
+      },
+    ]
+  : [];
 // Earlier prose leaves enough scroll range to hold the boundary group when
 // the load-earlier header disappears; a row at scrollTop zero would clamp.
 const earlier = [
+  ...prompt,
   ...(short
     ? Array.from({ length: 4 }, (_, index) => ({
         id: `before-${index}`,
@@ -94,22 +116,31 @@ const reviewer: MultiReviewReviewerTranscript = {
   messages: tail,
   transcript: "snapshot",
   historyEpoch: "epoch-1",
-  historyCursor: "before-40",
+  historyCursor: `before-${tailStart}`,
   truncated: true,
 };
 // `slow` holds the page long enough for the reader to move while it loads.
 const pageDelayMs = new URLSearchParams(window.location.search).has("slow") ? 1_500 : 150;
 const pause = () => new Promise((resolve) => setTimeout(resolve, pageDelayMs));
 const loadTranscript = async () => reviewer;
-const loadHistoryPage = async () => {
-  await pause();
+/** One page of `earlier` ending before `cursor` (`before-N`, N a source row). */
+function pageBefore(cursor: string | undefined) {
+  const end = Math.min(Number(cursor?.replace("before-", "") ?? tailStart), tailStart);
+  const start = pageSize ? Math.max(0, end - pageSize) : 0;
+  // `earlier` holds the short fixture's prose rows ahead of the trail rows.
+  const offset = earlier.length - tailStart;
+  const complete = start === 0;
   return {
-    status: "page" as const,
-    messages: earlier,
+    messages: earlier.slice(complete ? 0 : start + offset, end + offset),
     historyEpoch: "epoch-1",
-    complete: true,
+    ...(complete ? {} : { nextCursor: `before-${start}` }),
+    complete,
     truncated: false,
   };
+}
+const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { before: string }) => {
+  await pause();
+  return { status: "page" as const, ...pageBefore(page.before) };
 };
 function installBackend() {
   useEnvironmentStore.setState({
@@ -126,7 +157,7 @@ function installBackend() {
   window.orkestrator = {
     ...window.orkestrator!,
     listen: () => () => {},
-    invoke: async <T,>(command: string) => {
+    invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       let result: unknown;
       switch (command) {
         case "get_native_agent_sync_capabilities":
@@ -163,9 +194,9 @@ function installBackend() {
             value: {
               identity,
               freshness: "current",
-              messages: tail,
+              messages: query.has("fresh") ? structuredClone(tail) : tail,
               historyEpoch: "epoch-1",
-              historyCursor: "before-40",
+              historyCursor: `before-${tailStart}`,
               historyPaging: "direct",
               historyComplete: false,
               messageWindow: { limit: 100, truncated: true, canLoadEarlier: true },
@@ -174,13 +205,7 @@ function installBackend() {
           break;
         case "get_native_agent_message_page":
           await pause();
-          result = {
-            syncVersion: 1,
-            messages: earlier,
-            historyEpoch: "epoch-1",
-            complete: true,
-            truncated: false,
-          };
+          result = { syncVersion: 1, ...pageBefore(args?.before as string | undefined) };
           break;
         case "get_native_agent_discovery_update":
           result = {

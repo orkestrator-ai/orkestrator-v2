@@ -528,14 +528,21 @@ live tail for gaps, duplicates and order without reading model prose.
 
 - **Native conversation** (Claude Haiku, 150 stops by default; set
   `ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex` for GPT-6-Luna). Claude
-  reads with its Read tool, and its tool-only rows coalesce into tall
-  per-minute blocks, the harder case for holding a place. Codex notes each
+  reads with its Read tool, and its tool-only rows coalesce into one folded
+  tool group that each page grows from the front. Codex notes each
   stop in a sentence so that every step gets a row. The backend
   window must be truncated with a cursor, and following the cursor in
   40-message pages must reach the first prompt with every stop in order. In
   the browser, **Load earlier messages** must bring the prompt back, keep the
   reader's row on screen (moving the list off the top when rows land above
   it), and expand a tool row from the loaded page. Then the same after a reload.
+  "Keep" means the list stands within 8 px of the position that puts the row
+  back at its old offset, limited to the list's scroll range. A tool-only run
+  folds into one group, so after the last page the whole transcript can fit
+  the viewport. The prompt then pushes the row down and the list stays at
+  the top, which is the only position it can take. Each click records a
+  content-free `-layout` annotation (part ids, stops, boxes, scroll range)
+  so a drift can be attributed without reading transcript text.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project

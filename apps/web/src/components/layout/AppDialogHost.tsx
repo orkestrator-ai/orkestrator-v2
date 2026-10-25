@@ -1,31 +1,53 @@
 import { lazy, useEffect } from "react";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import {
+  createProjectUpdateHandler,
+  deleteProjectAndEnvironments,
+} from "@/components/sidebar/HierarchicalSidebar";
+import { useEnvironments } from "@/hooks";
+import { useProjects } from "@/hooks/useProjects";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useProjectStore } from "@/stores/projectStore";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("@/components/environments/EnvironmentSettingsDialog"))
     .EnvironmentSettingsDialog,
 }));
 
+const LazyRepositorySettings = lazy(async () => ({
+  default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
+}));
+
 /** Renders the dialog `useAppDialogStore` holds, outside every drawer and row. */
 export function AppDialogHost() {
   const request = useAppDialogStore((state) => state.request);
+  switch (request?.kind) {
+    case "environment-settings":
+      return <EnvironmentSettingsHost environmentId={request.environmentId} />;
+    case "repository-settings":
+      return <RepositorySettingsHost projectId={request.projectId} />;
+    case "delete-project":
+      return <DeleteProjectHost projectId={request.projectId} />;
+    default:
+      return null;
+  }
+}
+
+function EnvironmentSettingsHost({ environmentId }: { environmentId: string }) {
   const close = useAppDialogStore((state) => state.close);
-  const environmentId = request?.kind === "environment-settings" ? request.environmentId : null;
-  const environment = useEnvironmentStore((state) =>
-    environmentId
-      ? (state.environments.find((candidate) => candidate.id === environmentId) ?? null)
-      : null,
+  const environment = useEnvironmentStore(
+    (state) => state.environments.find((candidate) => candidate.id === environmentId) ?? null,
   );
   const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
 
   // The environment disappeared (deleted, or the list was replaced). Drop the
   // request too, so a later environment that reuses the id cannot reopen it.
   useEffect(() => {
-    if (environmentId && !environment) close();
-  }, [close, environment, environmentId]);
+    if (!environment) close();
+  }, [close, environment]);
 
   if (!environment) return null;
   return (
@@ -42,5 +64,76 @@ export function AppDialogHost() {
         onRestart={backend.recreateEnvironment}
       />
     </LazyLoadBoundary>
+  );
+}
+
+/** The request's project, dropping the request once the project is gone. */
+function useRequestedProject(projectId: string) {
+  const close = useAppDialogStore((state) => state.close);
+  const project = useProjectStore(
+    (state) => state.projects.find((candidate) => candidate.id === projectId) ?? null,
+  );
+  useEffect(() => {
+    if (!project) close();
+  }, [close, project]);
+  return { project, close };
+}
+
+function RepositorySettingsHost({ projectId }: { projectId: string }) {
+  const { project, close } = useRequestedProject(projectId);
+  const { updateProject } = useProjects();
+
+  if (!project) return null;
+  return (
+    <LazyLoadBoundary
+      loadingFallback={<LazyDialogLoadingFallback label="Loading repository settings…" />}
+    >
+      <LazyRepositorySettings
+        project={project}
+        open
+        onOpenChange={(open) => {
+          if (!open) close();
+        }}
+        onUpdateProject={createProjectUpdateHandler(updateProject)}
+      />
+    </LazyLoadBoundary>
+  );
+}
+
+function DeleteProjectHost({ projectId }: { projectId: string }) {
+  const { project, close } = useRequestedProject(projectId);
+  const { removeProject } = useProjects();
+  const { deleteEnvironment } = useEnvironments(null);
+  // Includes the project home, which has no sidebar row and is not counted.
+  const environments = useEnvironmentStore((state) => state.environments);
+  const projectEnvironments = environments.filter(
+    (environment) => environment.projectId === projectId,
+  );
+
+  if (!project) return null;
+  return (
+    <DeleteProjectDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+      projectName={project.name}
+      environmentCount={
+        projectEnvironments.filter((environment) => !environment.projectHome).length
+      }
+      onConfirm={async () => {
+        try {
+          await deleteProjectAndEnvironments(
+            projectId,
+            projectEnvironments,
+            deleteEnvironment,
+            removeProject,
+          );
+        } catch (error) {
+          console.error("Failed to delete project:", error);
+          throw error;
+        }
+      }}
+    />
   );
 }

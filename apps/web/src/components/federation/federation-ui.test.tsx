@@ -954,6 +954,124 @@ describe("UI-04: creating inside a project instance", () => {
   });
 });
 
+describe("another machine's menus offer what this machine's do", () => {
+  function installMachineA(respond?: Parameters<typeof installDesktopFake>[0]["respond"]) {
+    const dataset = sharedIdDataset("idle");
+    dataset.projects = [{ ...dataset.projects[0]!, gitUrl: "git@github.com:Acme/App.git" }];
+    return installDesktopFake({
+      list: connectionList([MACHINE_A]),
+      datasets: { a: dataset },
+      ...(respond ? { respond } : {}),
+    });
+  }
+
+  async function openProjectMenu() {
+    await act(async () => {
+      fireEvent.contextMenu(screen.getByTitle("Open app on Machine A"));
+    });
+    return screen.findByRole("menu");
+  }
+
+  test("a project's menu has the local actions, and its dialogs open in that machine's workspace", async () => {
+    const fake = installMachineA();
+    const open = spyOn(window, "open").mockImplementation(() => null);
+    try {
+      renderWithFederation(<RemoteSections />);
+      await waitForRows(1);
+
+      const menu = await openProjectMenu();
+      expect(
+        within(menu)
+          .getAllByRole("menuitem")
+          .map((item) => item.textContent),
+      ).toEqual([
+        "Open Board",
+        "Open Repo on GitHub",
+        "Repository Settings",
+        "New Environment",
+        "Copy to Machine…",
+        "Add to Folder",
+        "Delete Project",
+      ]);
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Open Repo on GitHub" }));
+      expect(open).toHaveBeenCalledWith(
+        "https://github.com/acme/app",
+        "_blank",
+        "noopener,noreferrer",
+      );
+
+      for (const [name, dialog] of [
+        ["Repository Settings", "repository-settings"],
+        ["Delete Project", "delete-project"],
+      ] as const) {
+        fireEvent.click(within(await openProjectMenu()).getByRole("menuitem", { name }));
+        await waitFor(() =>
+          expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
+            type: "select",
+            projectId: "project-1",
+            dialog,
+          }),
+        );
+      }
+      // Deleting is confirmed in the machine's own dialog; nothing is sent yet.
+      expect(fake.calls.filter((call) => /^(remove|delete)_/.test(call.command))).toEqual([]);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  test("an environment's settings, fork and restart reach its own machine", async () => {
+    const fake = installMachineA((call) =>
+      call.command === "fork_environment"
+        ? { id: "env-fork", projectId: "project-1", name: "feature-fork" }
+        : undefined,
+    );
+    renderWithFederation(<RemoteSections />);
+    await waitForRows(1);
+
+    let menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Settings" }));
+    await waitFor(() =>
+      expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
+        type: "select",
+        projectId: "project-1",
+        environmentId: "env-1",
+        dialog: "environment-settings",
+      }),
+    );
+
+    menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Fork container" }));
+    await waitFor(() =>
+      expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
+        type: "select",
+        projectId: "project-1",
+        environmentId: "env-fork",
+      }),
+    );
+    expect(fake.callsTo("a", "fork_environment")[0]!.args).toEqual({
+      environmentId: "env-1",
+      environmentType: "containerized",
+    });
+    expect(fake.callsTo("a", "start_environment_background")[0]!.args).toEqual({
+      environmentId: "env-fork",
+    });
+
+    menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Restart" }));
+    await waitFor(() => expect(fake.callsTo("a", "start_environment_background")).toHaveLength(2));
+    expect(
+      fake.calls
+        .filter((call) => /^(stop|start)_environment/.test(call.command))
+        .slice(-2)
+        .map((call) => [call.command, call.args.environmentId]),
+    ).toEqual([
+      ["stop_environment", "env-1"],
+      ["start_environment_background", "env-1"],
+    ]);
+  });
+});
+
 describe("Machine filter is presentation only", () => {
   test("filter: choosing a machine updates the store without reloading, switching or routing anything", async () => {
     const fake = installTwoMachines();

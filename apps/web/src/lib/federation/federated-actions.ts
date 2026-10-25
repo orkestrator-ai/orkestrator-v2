@@ -30,6 +30,33 @@ export async function stopFederatedEnvironment(
   });
 }
 
+/** Stops, then starts again, as a container's Restart does on its own machine. */
+export async function restartFederatedEnvironment(
+  portal: PortalStore,
+  ref: EnvironmentRef,
+): Promise<void> {
+  await stopFederatedEnvironment(portal, ref);
+  await startFederatedEnvironment(portal, ref);
+}
+
+/**
+ * Forks an environment on its own node and starts the fork there in the
+ * background, as the node's sidebar does. Returns the fork's ID.
+ */
+export async function forkFederatedEnvironment(
+  portal: PortalStore,
+  ref: EnvironmentRef,
+  environmentType: "local" | "containerized",
+): Promise<{ environmentId: string; projectId: string; name: string }> {
+  const fork = await portal.invokeOnNode<{ id: string; projectId: string; name: string }>(
+    ref.backendId,
+    "fork_environment",
+    { environmentId: ref.environmentId, environmentType },
+  );
+  await startFederatedEnvironment(portal, { backendId: ref.backendId, environmentId: fork.id });
+  return { environmentId: fork.id, projectId: fork.projectId, name: fork.name };
+}
+
 /** Persists a drag within one project of its node, in that node's own order. */
 export async function reorderFederatedEnvironments(
   portal: PortalStore,

@@ -7,6 +7,7 @@ import { useEnvironments } from "@/hooks";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useProjects } from "@/hooks/useProjects";
 import { startsOnSelection } from "@/lib/environment-auto-start";
+import { openDialog } from "@/lib/federation/open-workspace";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import {
   onShellMessage,
@@ -24,7 +25,7 @@ import { useUIStore } from "@/stores/uiStore";
  * no sidebar: keep the node's projects and environments loaded, show what
  * the window asks for as a sidebar click would (starting a local environment
  * that needs it), tell the window when the selection changes here, and open
- * the node's Add Project and New Environment dialogs.
+ * the node's Add Project, New Environment, project and environment dialogs.
  */
 export function WorkspaceRealmHost() {
   const dockerReady = useDockerAvailabilityReady();
@@ -154,9 +155,12 @@ export function WorkspaceRealmHost() {
       return;
     }
     if (!request.environmentId) {
+      // A project's dialog reads the project from the node's loaded list.
+      if (request.dialog && (!projectsLoaded || projectsLoading)) return;
       appliedSeq.current = request.seq;
       ui.selectProject(request.projectId);
       if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
+      if (request.dialog) openDialog(request.dialog, request.projectId);
       return;
     }
     const environment = allEnvironments.find((candidate) => candidate.id === request.environmentId);
@@ -172,6 +176,11 @@ export function WorkspaceRealmHost() {
     appliedSeq.current = request.seq;
     ui.setProjectCollapsed(environment.projectId, false);
     ui.selectProjectAndEnvironment(environment.projectId, environment.id);
+    if (request.dialog) {
+      // Opening its settings is not a request to start it.
+      openDialog(request.dialog, environment.projectId, environment.id);
+      return;
+    }
     if (startsOnSelection(environment)) {
       startEnvironment(environment.id).catch((error: unknown) => {
         console.error("[Workspace] Failed to start the opened environment:", error);
@@ -183,6 +192,7 @@ export function WorkspaceRealmHost() {
     environmentsReady,
     projects,
     projectsLoaded,
+    projectsLoading,
     request,
     startEnvironment,
   ]);

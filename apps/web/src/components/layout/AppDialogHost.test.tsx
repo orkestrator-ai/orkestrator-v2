@@ -2,11 +2,16 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import * as realEnvironmentSettingsDialog from "@/components/environments/EnvironmentSettingsDialog";
+import { invoke } from "@/lib/native/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import type { Environment } from "@/types";
+import { useProjectStore } from "@/stores/projectStore";
+import type { Environment, Project } from "@/types";
 
 const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
+const nativeInvoke = invoke as ReturnType<typeof mock>;
+const initialProjects = useProjectStore.getState();
+const project = { id: "project-1", name: "app", gitUrl: "", order: 0 } as unknown as Project;
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
   EnvironmentSettingsDialog: ({
@@ -61,7 +66,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  nativeInvoke.mockReset();
+  useProjectStore.setState(initialProjects, true);
+});
 
 afterAll(() => {
   mock.module(
@@ -111,5 +120,34 @@ describe("AppDialogHost", () => {
       useEnvironmentStore.setState({ environments: [environment("env-1", "reused-id")] });
     });
     expectDomAbsent(screen.queryByRole("dialog"));
+  });
+
+  test("confirms deleting a project, counting its environments but not its home", async () => {
+    // The dialog's own project and environment hooks read the node's list.
+    nativeInvoke.mockImplementation(async (command: string) =>
+      command === "get_projects" ? [project] : undefined,
+    );
+    useProjectStore.setState({ projects: [project], hasLoaded: true });
+    useEnvironmentStore.setState({
+      environments: [
+        environment("env-1", "first-env"),
+        { ...environment("home", "app"), projectHome: true },
+      ],
+    });
+    render(<AppDialogHost />);
+    act(() => {
+      useAppDialogStore.getState().open({ kind: "delete-project", projectId: "project-1" });
+    });
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("remove app from your projects");
+    expect(dialog.textContent).toContain(
+      "This project has 1 environment that will also be deleted",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expectDomAbsent(screen.queryByRole("alertdialog"));
+    expect(useAppDialogStore.getState().request).toBeNull();
+    expect(nativeInvoke.mock.calls.some(([command]) => command === "remove_project")).toBe(false);
   });
 });

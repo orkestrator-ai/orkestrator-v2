@@ -8,6 +8,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { realmSearchParams, type RealmSelectRequest } from "@/lib/federation/workspace-realm";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
@@ -117,6 +118,22 @@ test("initial leaf selection keeps Home through a delayed project snapshot and d
   );
   expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id);
   expect(useUIStore.getState().projectBoardTab).toBe("home");
+});
+
+test("a project dialog asked of the realm opens once the node's projects have loaded", async () => {
+  useAppDialogStore.setState({ request: null });
+  openRealm({ projectId: project.id, dialog: "delete-project" });
+  // The dialog reads the project from the node's list, so it waits for it.
+  expect(useAppDialogStore.getState().request).toBeNull();
+  await act(async () => resolveProjects([project]));
+  await waitFor(() =>
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "delete-project",
+      projectId: project.id,
+    }),
+  );
+  expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+  useAppDialogStore.setState({ request: null });
 });
 
 test("a board choice made while projects load survives Home activation", async () => {

@@ -646,3 +646,30 @@ readiness and lifecycle fixes (`fd22bccea`):
 
 No test was skipped or weakened to hide this failure. The rerun profile was
 stopped and reset after validation.
+
+## Transcript arrival validation — 2026-10-25
+
+- `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  used one worker in a credential-free Codex fixture alongside repository and
+  component checks. The narrow case timed out after 15 seconds clicking the
+  unstable/hidden `Repository settings` button at `browser-gateway.spec.ts:241`.
+  The full run reported 28 passed, 55 skipped and two failures in 550.1 s;
+  the other failure was a blank draft reload recorded in native-agent case 0186.
+- The complete unchanged gateway owner passed all fifteen active cases with
+  nine existing opt-in skips in a fresh credential-free Codex fixture (139.7 s
+  including lifecycle). It used the existing `runIsolatedBrowser` helper with
+  a temporary config selecting only `browser-gateway.spec.ts` and one worker.
+  Both profiles were stopped/reset and the temporary config removed. No
+  assertion, timeout or skip changed; host contention remains a hypothesis.
+- Evidence: host temporary artifacts
+  `orkestrator-test-run.Fnh8OD/isolated-browser.log.gz` and
+  `orkestrator-test-run.eJfvW2/summary.json`; browser reports under
+  `output/agent-testing/qa-browser-7e580128-dac/browser/` and
+  `output/agent-testing/qa-browser-f8b0c5f5-2c7/browser/`.
+
+Exact isolated owner command (the temporary config extended the normal browser
+config with `testMatch: "browser-gateway.spec.ts"`):
+
+```bash
+mise run test:logged -- --name gateway-owner -- bun --eval 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "gateway owner", config: "e2e/agent-testing/playwright.arrival-owner.tmp.config.ts" } });'
+```

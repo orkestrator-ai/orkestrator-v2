@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { MAX_PROJECT_FOLDER_NAME_LENGTH } from "@orkestrator/protocol/project-folders";
 import { parseProjectFolderDragId, projectFolderDragId } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,8 @@ interface SortableProjectFolderProps {
   label?: string;
   /** A repository group rather than a folder: a two-line heading over unindented members. */
   repository?: boolean;
+  /** Rule before a repository, kept inside its measured drop target. */
+  repositorySeparator?: boolean;
   /** A repository group's leading icon, spanning both lines of its heading. */
   icon?: ReactNode;
   /** A repository group's second line. */
@@ -70,6 +73,7 @@ export function SortableProjectFolder({
   onUngroup,
   label = name,
   repository = false,
+  repositorySeparator = false,
   icon,
   subtitle,
   onOpen,
@@ -209,6 +213,11 @@ export function SortableProjectFolder({
       data-project-folder={name}
       className={cn("px-2 py-0.5", isDragging && "z-50 opacity-50")}
     >
+      {repository && repositorySeparator ? (
+        <div className="px-1 py-1">
+          <Separator data-testid="repository-separator" />
+        </div>
+      ) : null}
       <div
         className={cn(
           "relative mx-1 flex items-center rounded-lg border transition-colors",

@@ -488,6 +488,51 @@ body[data-orkestrator-dev-profile]::before {
   }
 }
 
+/*
+ * A transcript row or tool call appended live grows in by its real layout
+ * height, so the bottom-anchored transcript glides up with it instead of
+ * jumping a whole row per update. 0fr -> 1fr keeps tracking content that is
+ * still streaming in during the entrance. The attribute is set from a layout
+ * effect for live arrivals only (never for history, rehydration or a
+ * virtualized remount) and removed when the animation ends
+ * (`lib/transcript-scroll/arrivals.ts`). The 1px floor keeps the virtualizer
+ * from measuring an empty row.
+ */
+:root {
+  --transcript-arrival-duration: 300ms;
+  --transcript-arrival-easing: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes transcript-arrival {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+[data-transcript-arrival] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 1px;
+  animation: transcript-arrival var(--transcript-arrival-duration) var(--transcript-arrival-easing);
+}
+
+[data-transcript-arrival] > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-transcript-arrival] {
+    animation: none;
+  }
+}
+
 @keyframes agent-thinking-shimmer {
   from {
     background-position: 125% 50%;

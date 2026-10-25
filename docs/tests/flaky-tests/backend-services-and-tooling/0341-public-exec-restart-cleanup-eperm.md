@@ -72,3 +72,13 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1 --only-failures` passed, exit 0 (17.0 s logged).
 - **Evidence:** `orkestrator-test-run.k5J28D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate finalization.
 - **Assessment:** recurrence of the existing cleanup flake; host contention is a hypothesis. The test, support helper, assertions, deadlines and skips were unchanged from both merge parents.
+
+## Repository separator validation — 2026-10-25
+
+- **Change:** `146fff6c6` on `repo-group-separators-4be2bb2ba0a0-r1`; sidebar rendering and regression tests only.
+- **Original command:** `mise run test:logged -- --name aggregate-tests -- mise run test`. Workspace/root/bridges/protocol reserved 4/1/2/1 worker slots; backend used two isolated workers. Component-browser and isolated-browser checks also ran on the host.
+- **Failure:** The restart reconciliation case again failed in fixture cleanup with `EPERM` at `test-support.ts:143` after 1115.60 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 12.6 seconds logged.
+- **Aggregate counts:** Backend 11,012 passed, 79 skipped and three failed across 660 files (642.56 s); root/support 3,405 passed and one failed across 162 files (403.31 s). All other workspace packages, bridges and protocol passed; aggregate exit 1 in 692.6 s logged.
+- **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
+- **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.

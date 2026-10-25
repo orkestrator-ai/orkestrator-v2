@@ -465,6 +465,94 @@ test("a repository with one visible environment uses singular summary labels and
   expect(within(heading).getByText("1 machine · 1 environment")).toBeTruthy();
 });
 
+test("repositories are separated by a rule, but projects are not", async () => {
+  const first = machineView();
+  first.projects[0]!.repositoryHint = "github.com/acme/app";
+  const second = machineView({
+    connectionId: "b",
+    backendId: "bk_b" as never,
+    name: "Machine B",
+    colorToken: "rose",
+    projects: [
+      {
+        ref: projectRef("bk_b" as BackendId, "project-1"),
+        key: projectKey(projectRef("bk_b" as BackendId, "project-1")),
+        name: "api",
+        order: 0,
+        repositoryHint: "github.com/acme/api",
+      },
+    ],
+  });
+  const renderList = async (mode: "project" | "repository") => {
+    let result!: ReturnType<typeof render>;
+    await act(async () => {
+      result = render(
+        <MergedProjectList
+          machines={[first, second]}
+          shownIds={new Set(["a", "b"])}
+          mode={mode}
+          renderBoundProject={() => null}
+          onBoundEnvironmentDragEnd={() => undefined}
+        />,
+      );
+    });
+    return result;
+  };
+  const repositories = await renderList("repository");
+  const separators = screen.getAllByTestId("repository-separator");
+  expect(separators).toHaveLength(1);
+  // The rule belongs to the following repository's measured drop target.
+  const separator = separators[0]!;
+  expect(separator.closest("[data-project-folder]")?.getAttribute("data-project-folder")).toBe(
+    "github.com/acme/api",
+  );
+  repositories.unmount();
+
+  await renderList("project");
+  expect(screen.queryByTestId("repository-separator") === null).toBe(true);
+});
+
+for (const { hints, ruledRepositories } of [
+  {
+    hints: ["github.com/acme/app", undefined, "", "github.com/acme/api"],
+    ruledRepositories: ["github.com/acme/api"],
+  },
+  { hints: [undefined, ""], ruledRepositories: [] },
+  { hints: [undefined, "", "github.com/acme/app"], ruledRepositories: ["github.com/acme/app"] },
+]) {
+  test(`repository rules only introduce repository groups in ${JSON.stringify(hints)}`, async () => {
+    const machine = machineView();
+    machine.projects = hints.map((repositoryHint, order) => {
+      const ref = projectRef(machine.backendId!, `project-${order}`);
+      return { ref, key: projectKey(ref), name: `project-${order}`, order, repositoryHint };
+    });
+    machine.environmentsByProject = new Map();
+    await act(async () => {
+      render(
+        <MergedProjectList
+          machines={[machine]}
+          shownIds={new Set([machine.connectionId])}
+          mode="repository"
+          renderBoundProject={() => null}
+          onBoundEnvironmentDragEnd={() => undefined}
+        />,
+      );
+    });
+
+    const list = screen.getByTestId("federated-repository-list");
+    expect(
+      within(list)
+        .queryAllByTestId("repository-separator")
+        .map((separator) =>
+          separator.closest("[data-project-folder]")?.getAttribute("data-project-folder"),
+        ),
+    ).toEqual(ruledRepositories);
+    for (const project of within(list).getAllByTestId("federated-project")) {
+      expect(within(project).queryByTestId("repository-separator") === null).toBe(true);
+    }
+  });
+}
+
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
     render(<MachineDot colorToken="teal" machineName="Machine A" />);

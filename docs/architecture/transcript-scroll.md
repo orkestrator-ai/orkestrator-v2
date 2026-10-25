@@ -16,6 +16,7 @@ writes the transcript's scroll position; React Virtuoso renders and measures.
 | `apps/web/src/lib/transcript-scroll/scroll-input.ts` | Which input will actually move the transcript (nested scrollers, editors, modals) |
 | `apps/web/src/lib/transcript-scroll/prepend.ts` | Pure-prepend detection for `firstItemIndex` |
 | `apps/web/src/lib/transcript-scroll/keep-mounted.ts` | Bounded keep-mounted rule shared by the transcript and inner group viewports |
+| `apps/web/src/lib/transcript-scroll/arrivals.ts` | Live arrivals: which appended rows and group calls grow in, and their entrance |
 | `apps/web/src/hooks/useVirtuosoScrollState.ts` | Hook: lifetime, persistence, activation policy, compatible return shape |
 | `apps/web/src/hooks/useHeldTranscriptPlace.ts` | History paging: semantic place, source indexes, pre-commit re-capture |
 | `patches/react-virtuoso@4.18.19.patch` | `cancelPendingNavigation()` on the Virtuoso handle |
@@ -167,6 +168,30 @@ whose body never exceeds `min(28rem, 55dvh)`, expanded details included.
 - Anchors for members inside an inner viewport are composite: the transcript
   holds the group frame, the inner viewport puts the member back at its
   on-screen offset (absorbing a clamped transcript).
+
+## Live arrivals
+
+With `animateArrivals` (the native tab's `NativeChatShell`), a row a live
+update appends, and a call joining a short (plain-body) tool group, grows in
+by its real layout height over 300 ms (`data-transcript-arrival`,
+`--transcript-arrival-duration`) instead of appearing at full size. As with a
+tool-group fold, a follower is pinned to the end on every resize delivery, so
+the transcript glides up with the growth rather than jumping a row per
+update; growth below a detached reader moves nothing.
+
+- Only a small append counts (`liveArrivals`): the same first key, every
+  previous key kept in order, at most `MAX_LIVE_ARRIVALS` (3) new keys.
+  History pages, a first fill, rehydration and gap refills, removals and a
+  replaced row (the streaming tail renamed, an optimistic prompt replaced by
+  its echo) render at once.
+- Each arrival animates once, from a layout effect at mount, so it is never
+  painted at full size first. One that mounts more than
+  `LIVE_ARRIVAL_WINDOW_MS` after its update (the reader was elsewhere), a
+  virtualized remount, a hidden pane, reduced motion and a body that already
+  scrolls inside its ceiling all render at once.
+- The entrance animates `grid-template-rows` 0fr → 1fr, so content still
+  streaming into the row is tracked; a 1 px floor keeps Virtuoso from
+  measuring an empty row.
 
 ## Streaming Markdown
 

@@ -47,6 +47,12 @@ import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
 import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
 import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
+import {
+  LiveArrivalsContext,
+  useLiveArrivalEntrance,
+  useLiveArrivals,
+  type LiveArrivalBatch,
+} from "@/lib/transcript-scroll/arrivals";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
@@ -95,6 +101,11 @@ interface VirtualizedMessageListProps<TMessage> {
    * e.g. the message a "open full conversation" link jumped to.
    */
   highlightedItemKey?: string | null;
+  /**
+   * Rows (and tool calls in a group) appended live grow in by their layout
+   * height rather than appearing at full size (`lib/transcript-scroll/arrivals.ts`).
+   */
+  animateArrivals?: boolean;
   find?: {
     isActive: boolean;
     /**
@@ -283,6 +294,7 @@ function TranscriptRow({
   rowKey,
   index,
   tracker,
+  arrivals,
   isCurrentFindMessage,
   isHighlighted,
   children,
@@ -290,6 +302,7 @@ function TranscriptRow({
   rowKey: string;
   index: number;
   tracker: TranscriptRowVisibilityTracker;
+  arrivals: LiveArrivalBatch;
   isCurrentFindMessage: boolean;
   isHighlighted: boolean;
   children: ReactNode;
@@ -300,6 +313,7 @@ function TranscriptRow({
     const element = ref.current;
     return element ? tracker.observe(rowKey, element) : undefined;
   }, [rowKey, tracker]);
+  useLiveArrivalEntrance(ref, arrivals, rowKey);
   const visibility = tracker.source(rowKey);
   return (
     <div
@@ -314,7 +328,10 @@ function TranscriptRow({
       )}
     >
       <RichRowVisibilityContext value={visibility}>
-        <ChatFindActiveContext value={isCurrentFindMessage}>{children}</ChatFindActiveContext>
+        <ChatFindActiveContext value={isCurrentFindMessage}>
+          {/* One grid track must contain every root returned by the message. */}
+          <div>{children}</div>
+        </ChatFindActiveContext>
       </RichRowVisibilityContext>
     </div>
   );
@@ -331,6 +348,7 @@ export function VirtualizedMessageList<TMessage>({
   scrollProps,
   virtuosoRef,
   highlightedItemKey = null,
+  animateArrivals = false,
   find,
   annotation,
 }: VirtualizedMessageListProps<TMessage>) {
@@ -380,6 +398,11 @@ export function VirtualizedMessageList<TMessage>({
   // `scrollToIndex` takes the local data index. Everything in this component
   // (find matches, DOM index attributes, protected rows) is local.
   const firstItemIndex = useFirstItemIndex(messages, computeItemKey);
+  const arrivals = useLiveArrivals(
+    messages,
+    (list, index) => computeItemKey(index, list[index]!),
+    animateArrivals,
+  );
   /** Generation of find's own navigation; its match refinement may not outlive the reader moving. */
   const findNavigationRef = useRef<number | null>(null);
   /**
@@ -876,60 +899,63 @@ export function VirtualizedMessageList<TMessage>({
           onUpdateAnnotationComment={annotation.onUpdateComment}
         />
       ) : null}
-      <Virtuoso
-        ref={virtuosoRef}
-        data={messages}
-        context={context}
-        firstItemIndex={firstItemIndex}
-        computeItemKey={(absolute, data) => computeItemKey(absolute - firstItemIndex, data)}
-        itemContent={(absolute, data) => {
-          const index = absolute - firstItemIndex;
-          const rowKey = computeItemKey(index, data);
-          return (
-            <TranscriptRow
-              rowKey={rowKey}
-              index={index}
-              tracker={tracker}
-              isCurrentFindMessage={chatFind.isOpen && chatFind.currentMatch?.itemIndex === index}
-              isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
-            >
-              {renderMessage(
-                index,
-                data,
-                resolvePreviousMessage
-                  ? resolvePreviousMessage(messages, index)
-                  : index > 0
-                    ? (messages[index - 1] ?? null)
-                    : null,
-              )}
-            </TranscriptRow>
-          );
-        }}
-        components={components}
-        // Literal false whenever following may not run: Virtuoso's size and
-        // viewport paths test `followOutput !== false`, so a function that
-        // would return false still lets them scroll.
-        followOutput={
-          pausedLocally || scrollProps.followEnabled === false ? false : scrollProps.followOutput
-        }
-        atBottomStateChange={scrollProps.atBottomStateChange}
-        atBottomThreshold={scrollProps.atBottomThreshold}
-        totalListHeightChanged={scrollProps.totalListHeightChanged}
-        restoreStateFrom={scrollProps.restoreStateFrom}
-        scrollerRef={transcriptScrollerRef}
-        rangeChanged={handleRangeChanged}
-        minOverscanItemCount={keepMounted ?? undefined}
-        // A tool block can be thousands of pixels tall. Using it as Virtuoso's
-        // default probe height overestimates new text/tool rows, briefly pushes
-        // visible history out of the window, then remounts it after measurement.
-        // 320px is near a representative mixed transcript row while still far
-        // below those outliers; it also bounds the cold-fill render count.
-        // Measured and restored rows retain their real heights.
-        defaultItemHeight={320}
-        increaseViewportBy={{ top: 400, bottom: 200 }}
-        style={{ height: "100%" }}
-        className="py-4"
-      />
+      <LiveArrivalsContext value={animateArrivals}>
+        <Virtuoso
+          ref={virtuosoRef}
+          data={messages}
+          context={context}
+          firstItemIndex={firstItemIndex}
+          computeItemKey={(absolute, data) => computeItemKey(absolute - firstItemIndex, data)}
+          itemContent={(absolute, data) => {
+            const index = absolute - firstItemIndex;
+            const rowKey = computeItemKey(index, data);
+            return (
+              <TranscriptRow
+                rowKey={rowKey}
+                index={index}
+                tracker={tracker}
+                arrivals={arrivals}
+                isCurrentFindMessage={chatFind.isOpen && chatFind.currentMatch?.itemIndex === index}
+                isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
+              >
+                {renderMessage(
+                  index,
+                  data,
+                  resolvePreviousMessage
+                    ? resolvePreviousMessage(messages, index)
+                    : index > 0
+                      ? (messages[index - 1] ?? null)
+                      : null,
+                )}
+              </TranscriptRow>
+            );
+          }}
+          components={components}
+          // Literal false whenever following may not run: Virtuoso's size and
+          // viewport paths test `followOutput !== false`, so a function that
+          // would return false still lets them scroll.
+          followOutput={
+            pausedLocally || scrollProps.followEnabled === false ? false : scrollProps.followOutput
+          }
+          atBottomStateChange={scrollProps.atBottomStateChange}
+          atBottomThreshold={scrollProps.atBottomThreshold}
+          totalListHeightChanged={scrollProps.totalListHeightChanged}
+          restoreStateFrom={scrollProps.restoreStateFrom}
+          scrollerRef={transcriptScrollerRef}
+          rangeChanged={handleRangeChanged}
+          minOverscanItemCount={keepMounted ?? undefined}
+          // A tool block can be thousands of pixels tall. Using it as Virtuoso's
+          // default probe height overestimates new text/tool rows, briefly pushes
+          // visible history out of the window, then remounts it after measurement.
+          // 320px is near a representative mixed transcript row while still far
+          // below those outliers; it also bounds the cold-fill render count.
+          // Measured and restored rows retain their real heights.
+          defaultItemHeight={320}
+          increaseViewportBy={{ top: 400, bottom: 200 }}
+          style={{ height: "100%" }}
+          className="py-4"
+        />
+      </LiveArrivalsContext>
     </div>
   );
 }

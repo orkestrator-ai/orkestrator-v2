@@ -102,7 +102,13 @@ function TrackedNativeMessage({
     };
   }, []);
 
-  return <NativeMessage message={message} previousMessage={previousMessage} platform="codex" />;
+  return (
+    <NativeMessage
+      message={message}
+      previousMessage={previousMessage}
+      platform={message.id.startsWith("native-terminal:error:") ? "claude" : "codex"}
+    />
+  );
 }
 
 /** One finished tool run of `count` calls: the bounded-rendering stress case. */
@@ -123,6 +129,9 @@ export function StreamingTranscriptFixture() {
   const query = new URLSearchParams(window.location.search);
   const longTranscript = query.has("long");
   const folding = query.has("fold");
+  // The native tab's live-arrival entrance (`animateArrivals`).
+  const animateArrivals = query.has("arrivals");
+  const shortGroup = query.has("shortGroup");
   const bigGroup = Number(query.get("bigGroup") ?? 0);
   const [messages, setMessages] = useState(() =>
     bigGroup > 0
@@ -130,12 +139,14 @@ export function StreamingTranscriptFixture() {
       : folding
         ? [
             ...initialMessages(longTranscript),
+            // Prose in between keeps a one-call group from joining the run above.
+            ...(shortGroup ? [textMessage(99)] : []),
             {
               id: "live-fold",
               role: "assistant" as const,
               content: "",
               createdAt: "2026-09-21T11:00:00Z",
-              parts: [command(3_000), command(3_001)],
+              parts: shortGroup ? [command(3_000)] : [command(3_000), command(3_001)],
             },
             ...(query.has("foldAbove")
               ? Array.from({ length: 20 }, (_, index) => textMessage(100 + index))
@@ -185,6 +196,27 @@ export function StreamingTranscriptFixture() {
         },
       ];
     });
+  };
+
+  const updateTurn = () => {
+    setMessages((current) => {
+      const last = current.at(-1)!;
+      const content = `${last.content}\n\nMore streamed content in the arriving response.`;
+      return [...current.slice(0, -1), { ...last, content, parts: [{ type: "text", content }] }];
+    });
+  };
+
+  const appendAuthError = () => {
+    setMessages((current) => [
+      ...current,
+      {
+        id: `native-terminal:error:${current.length}`,
+        role: "system",
+        content: "API error: 401 — failed to authenticate",
+        createdAt: new Date().toISOString(),
+        parts: [],
+      },
+    ]);
   };
 
   const saveAndRemount = () => {
@@ -245,6 +277,20 @@ export function StreamingTranscriptFixture() {
             onClick={() =>
               setMessages((current) => {
                 const last = current.at(-1)!;
+                return [
+                  ...current.slice(0, -1),
+                  { ...last, parts: [...last.parts, command(5_000 + last.parts.length)] },
+                ];
+              })
+            }
+          >
+            Append group call
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setMessages((current) => {
+                const last = current.at(-1)!;
                 const settled = last.parts.map((part) => ({
                   ...part,
                   toolState: "success" as const,
@@ -290,6 +336,12 @@ export function StreamingTranscriptFixture() {
       <button type="button" onClick={appendTurn}>
         Append turn
       </button>
+      <button type="button" onClick={updateTurn}>
+        Update turn
+      </button>
+      <button type="button" onClick={appendAuthError}>
+        Append authentication error
+      </button>
       <button type="button" onClick={scrollToToolHistory}>
         Scroll to tool history
       </button>
@@ -306,6 +358,7 @@ export function StreamingTranscriptFixture() {
           key={listGeneration}
           messages={rows}
           computeItemKey={(_, row) => row.id}
+          animateArrivals={animateArrivals}
           renderMessage={(_, row, previous) => (
             <TrackedNativeMessage message={row} previousMessage={previous} />
           )}

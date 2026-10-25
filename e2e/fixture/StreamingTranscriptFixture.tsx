@@ -123,6 +123,9 @@ export function StreamingTranscriptFixture() {
   const query = new URLSearchParams(window.location.search);
   const longTranscript = query.has("long");
   const folding = query.has("fold");
+  // The native tab's live-arrival entrance (`animateArrivals`).
+  const animateArrivals = query.has("arrivals");
+  const shortGroup = query.has("shortGroup");
   const bigGroup = Number(query.get("bigGroup") ?? 0);
   const [messages, setMessages] = useState(() =>
     bigGroup > 0
@@ -130,12 +133,14 @@ export function StreamingTranscriptFixture() {
       : folding
         ? [
             ...initialMessages(longTranscript),
+            // Prose in between keeps a one-call group from joining the run above.
+            ...(shortGroup ? [textMessage(99)] : []),
             {
               id: "live-fold",
               role: "assistant" as const,
               content: "",
               createdAt: "2026-09-21T11:00:00Z",
-              parts: [command(3_000), command(3_001)],
+              parts: shortGroup ? [command(3_000)] : [command(3_000), command(3_001)],
             },
             ...(query.has("foldAbove")
               ? Array.from({ length: 20 }, (_, index) => textMessage(100 + index))
@@ -306,6 +311,7 @@ export function StreamingTranscriptFixture() {
           key={listGeneration}
           messages={rows}
           computeItemKey={(_, row) => row.id}
+          animateArrivals={animateArrivals}
           renderMessage={(_, row, previous) => (
             <TrackedNativeMessage message={row} previousMessage={previous} />
           )}

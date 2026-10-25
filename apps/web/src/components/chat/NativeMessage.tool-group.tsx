@@ -26,6 +26,12 @@ import {
 import { toolRowPreview } from "./NativeMessage.basic-parts";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
 import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
+import {
+  LiveArrivalsContext,
+  useLiveArrivalEntrance,
+  useLiveArrivals,
+  type LiveArrivalBatch,
+} from "@/lib/transcript-scroll/arrivals";
 
 /** Inner `firstItemIndex` start; lowered by members a history page prepends. */
 const INNER_FIRST_ITEM_INDEX_BASE = 1_000_000;
@@ -86,15 +92,22 @@ const ToolGroupEntry = memo(function ToolGroupEntry({
   containerId,
   partKey,
   index,
+  arrivals,
+  entryKey,
 }: {
   part: NativeMessagePart;
   containerId?: string;
   partKey: string;
   /** Local index inside a virtualized body (selection protection). */
   index?: number;
+  /** A short body's live arrivals: a call appended on screen grows in. */
+  arrivals?: LiveArrivalBatch;
+  entryKey?: string;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLiveArrivalEntrance(ref, arrivals ?? null, entryKey ?? "");
   return (
-    <div className="px-2 py-0.5" data-tool-group-entry-index={index}>
+    <div ref={ref} className="px-2 py-0.5" data-tool-group-entry-index={index}>
       <NativeMessagePartRenderer part={part} containerId={containerId} partKey={partKey} />
     </div>
   );
@@ -135,6 +148,11 @@ function PlainToolGroupBody({
   writePlace,
 }: BodyProps & PlaceProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const arrivals = useLiveArrivals(
+    entries,
+    (list, index) => toolGroupEntryKey(list[index]!, index),
+    useContext(LiveArrivalsContext),
+  );
   const onScroll = useCallback(() => {
     const element = ref.current;
     if (!element) return;
@@ -167,14 +185,21 @@ function PlainToolGroupBody({
       className="divide-y divide-divider overflow-y-auto"
       style={{ maxHeight: TOOL_GROUP_BODY_MAX_HEIGHT }}
     >
-      {entries.map((child, index) => (
-        <ToolGroupEntry
-          key={toolGroupEntryKey(child, index)}
-          part={child}
-          containerId={containerId}
-          partKey={entryPartKey(partKey, child, index)}
-        />
-      ))}
+      {entries.map((child, index) => {
+        const key = toolGroupEntryKey(child, index);
+        return (
+          <ToolGroupEntry
+            key={key}
+            entryKey={key}
+            // Only arrivals get the batch, so the memoized entries before them
+            // do not re-render for it.
+            arrivals={arrivals.keys.has(key) ? arrivals : undefined}
+            part={child}
+            containerId={containerId}
+            partKey={entryPartKey(partKey, child, index)}
+          />
+        );
+      })}
     </div>
   );
 }

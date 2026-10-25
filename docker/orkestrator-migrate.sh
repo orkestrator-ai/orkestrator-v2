@@ -185,7 +185,10 @@ case "$command" in
         ;;
     copy-volume)
         [ "$#" -eq 3 ] || { result status=usage; exit 2; }
-        tar -C "$2" --exclude=./.orkestrator/storage-marker.json -cf - . | copy_stream "$3" 1
+        # The archive must carry the extended attributes extraction keeps;
+        # without them a volume rebuild dropped file capabilities.
+        tar -C "$2" --xattrs --xattrs-include='user.*' --xattrs-include=security.capability \
+            --exclude=./.orkestrator/storage-marker.json -cf - . | copy_stream "$3" 1
         ;;
     measure)
         [ "$#" -eq 2 ] || { result status=usage; exit 2; }

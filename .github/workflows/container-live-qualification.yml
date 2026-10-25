@@ -16,6 +16,11 @@ on:
       - "apps/backend/tests/container-lifecycle-fixtures.ts"
       - "apps/backend/tests/container-live-rebuild-*.ts"
       - "apps/backend/tests/container-live-workspace.ts"
+      - "apps/backend/tests/container-xattr-fixture.js"
+      - "docker/orkestrator-migrate.sh"
+      - "docker/entrypoint.sh"
+      - "scripts/qualify-opencode-seeded-data.sh"
+      - "scripts/opencode-seeded-data/**"
 
 # Only pull request runs supersede each other. Scheduled and manual runs need
 # unique groups so a newer pending run cannot replace an older one.
@@ -95,6 +100,10 @@ jobs:
       - name: Live replacement (C14-C19)
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-replacement.test.ts --parallel=1
+
+      - name: Live volume metadata and OpenCode active account data contracts
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name container-data-contracts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-data-contracts.test.ts --parallel=1
 
       - name: Live network (C22, C24, C26)
         if: ${{ !cancelled() }}

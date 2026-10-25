@@ -8,9 +8,12 @@ inputs, per-environment networks, resource budgets, bounded logs) shipped in
 live set has since passed on Docker Desktop for Apple Silicon three times
 (2026-10-17, and twice on 2026-10-23 with two new fault suites). Provider
 session resume after a rebuild is now qualified for every provider except
-Grok. What is still missing needs hardware, accounts or a host this pass did
-not have: a real Linux rootless Engine, a live Grok login, a daemon-wide
-restart, and Linux Engine evidence from the new scheduled CI job.
+Grok. A real Linux rootless Engine ran on 2026-10-25: storage and rebuilds
+pass there, and its gaps moved to
+[0109](0109-rootless-linux-runtime-gaps.md). What is still missing needs
+hardware, accounts or a host this pass did not have: a rootless host without
+`cpu` delegation, a live Grok login, a daemon-wide restart, and Linux Engine
+evidence from the new scheduled CI job.
 
 ## Current state
 
@@ -738,18 +741,19 @@ C10, a daemon disconnect mid-copy and a kill around the rebuild commit, the
 upgrade and rollback with real releases, and the live host-service reply on
 Desktop. What remains of those items:
 
-- Rootless Engine on a real Linux host. Gated features are implemented and
-  were exercised in a nested `docker:dind-rootless`; what that cannot show
-  needs a Linux host running rootless Docker as a systemd user service: cgroup
-  v2 with only some controllers delegated (often `memory pids` without `cpu`),
-  and whether the read-back is then truthful; the `ip_set`, `xt_set` and
-  `nf_tables` modules on a stock kernel (rootless cannot load them; missing
-  ones fail the firewall closed); `host.docker.internal` through slirp4netns
-  or pasta and `container-host-reachability`; UID mapping on bind mounts
-  (seed files, the agent-test fixture remote, staged inputs) and `docker cp`
-  ownership; and the six live suites with `DOCKER_HOST` at the rootless
-  socket. They cannot run against the nested daemon because the backend
-  bind-mounts macOS paths it cannot see.
+- Rootless Engine on a real Linux host: ran 2026-10-25 on Omarchy (kernel
+  7.2.8, x86_64) with Docker 29.9.1 rootless as a systemd user service
+  (RootlessKit 3.3.0, slirp4netns) and `cpu memory pids` delegated
+  ([evidence](../../development/container-qualification.md#rootless-linux-host-2026-10-25)).
+  - Pass: volume storage, migration, rebuild, restore and the copy and
+    commit fault paths (C12, C14–C19, C15 on a rerun, the data contracts);
+    the firewall modules and policy 3 (C23); and the budget read-back (C24).
+  - Fail: staged-input UID mapping (C20), host-service reachability (C22),
+    read-only file binds from `nosuid`/`nodev` sources (two C09 fixtures)
+    and ephemeral port collisions (one C15 run). These are new work in
+    [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md).
+  - What remains here: a host that delegates `memory pids` without `cpu`, to
+    check that the budget read-back stays truthful there.
 - C13 and the C21 live half for Grok. Both need a current host Grok login
   (the host's expired on 2026-10-20 and was still expired on 2026-10-23), and
   the rotation half needs a profile that can be pointed at a disposable Grok
@@ -976,7 +980,8 @@ considered, the choice, why, and its pros and cons.
 - [0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md): the environment settings
   dialog blocked by the projects drawer, found during the container settings
   real-stack run.
-- [0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md),
+- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
+  (what the rootless run found),
   [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md),
   [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)

@@ -4,6 +4,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
   type CSSProperties,
 } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
@@ -46,8 +47,7 @@ export const TiptapMarkdownEditor = forwardRef<
   // matching frontmatter stable as the controlled store echoes rich edits
   // back through `markdown`; re-splitting those echoes could reinterpret body
   // thematic breaks as newly introduced metadata.
-  const initialMarkdownRef = useRef(splitMarkdownFrontmatter(markdown));
-  const { frontmatter, body } = initialMarkdownRef.current;
+  const [{ frontmatter, body }] = useState(() => splitMarkdownFrontmatter(markdown));
 
   useEffect(() => {
     onChangeRef.current = onChange;

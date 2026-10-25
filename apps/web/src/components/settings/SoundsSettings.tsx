@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Play, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -19,21 +19,21 @@ export function SoundsSettings() {
   const { config: settingsConfig, setConfig } = useSettingsConfig();
   const storedSettings = settingsConfig.global.notificationSounds;
   const updateGlobalConfig = useConfigStore((state) => state.updateGlobalConfig);
-  const [settings, setSettings] = useState<NotificationSoundSettings>(() =>
-    normalizeNotificationSoundSettings(storedSettings),
+  const savedSettings = useMemo(
+    () => normalizeNotificationSoundSettings(storedSettings),
+    [storedSettings],
   );
-  const settingsRef = useRef(settings);
+  // The optimistic value while a save is in flight; otherwise the stored config wins.
+  const [pendingSettings, setSettings] = useState<NotificationSoundSettings>(savedSettings);
   const [saving, setSaving] = useState(false);
+  const settings = saving ? pendingSettings : savedSettings;
+  const settingsRef = useRef(settings);
   const saveGenerationRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    if (!saving) {
-      const next = normalizeNotificationSoundSettings(storedSettings);
-      settingsRef.current = next;
-      setSettings(next);
-    }
-  }, [saving, storedSettings]);
+    if (!saving) settingsRef.current = savedSettings;
+  }, [saving, savedSettings]);
 
   const updateSettings = (updates: Partial<NotificationSoundSettings>) => {
     const next = { ...settingsRef.current, ...updates };

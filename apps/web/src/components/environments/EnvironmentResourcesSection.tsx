@@ -65,25 +65,28 @@ export function EnvironmentResourcesSection({
   /** The backend asked for confirmation: the limit is below current use. */
   const [confirmBelowUsage, setConfirmBelowUsage] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [nextPolicy, snapshot, nextCapacity] = await Promise.all([
+  const load = useCallback(
+    () =>
+      Promise.all([
         backend.getEnvironmentResources(environmentId),
         backend.getContainerUsage(),
         backend.getDockerCapacity(),
-      ]);
-      setPolicy(nextPolicy);
-      setCustom(nextPolicy.source === "environment");
-      setDraft(limitsToDraft(nextPolicy.source === "environment" ? nextPolicy.requested : null));
-      setUsage({
-        sample: snapshot.containers.find((entry) => entry.containerId === containerId),
-        stale: snapshot.stale,
-      });
-      setCapacity(nextCapacity);
-    } catch {
-      setPolicy(null);
-    }
-  }, [environmentId, containerId]);
+      ])
+        .then(([nextPolicy, snapshot, nextCapacity]) => {
+          setPolicy(nextPolicy);
+          setCustom(nextPolicy.source === "environment");
+          setDraft(
+            limitsToDraft(nextPolicy.source === "environment" ? nextPolicy.requested : null),
+          );
+          setUsage({
+            sample: snapshot.containers.find((entry) => entry.containerId === containerId),
+            stale: snapshot.stale,
+          });
+          setCapacity(nextCapacity);
+        })
+        .catch(() => setPolicy(null)),
+    [environmentId, containerId],
+  );
 
   useEffect(() => {
     void load();

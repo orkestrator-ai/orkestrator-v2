@@ -20,6 +20,8 @@ import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate"
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import {
   deleteFederatedEnvironment,
+  forkFederatedEnvironment,
+  restartFederatedEnvironment,
   startFederatedEnvironment,
   stopFederatedEnvironment,
 } from "@/lib/federation/federated-actions";
@@ -33,8 +35,13 @@ export interface FederatedEnvironmentActions {
   /** Selects a row of this window's machine; switches to another machine's workspace. */
   open: () => void;
   copyLink: () => void;
+  /** Opens the environment's settings dialog, on its own machine. */
+  openSettings: () => void;
   start: () => void;
   stop: () => void;
+  restart: () => void;
+  /** Forks it on its own machine, starts the fork there and opens it. */
+  fork: (environmentType: "local" | "containerized") => void;
   requestDelete: () => void;
   /** The delete confirmation; render it alongside the row. */
   deleteDialog: ReactNode;
@@ -151,6 +158,42 @@ export function useFederatedEnvironmentActions(
     stop: () => {
       const ref = environment.ref;
       void run("Stop", () => stopFederatedEnvironment(portal, ref));
+    },
+    openSettings: () =>
+      openMachineWorkspace({
+        connectionId: machine.connectionId,
+        projectId: environment.projectId,
+        environmentId: environment.ref.environmentId,
+        dialog: "environment-settings",
+        title: environment.name,
+      }),
+    restart: () => {
+      const ref = environment.ref;
+      void run("Restart", async () => {
+        await restartFederatedEnvironment(portal, ref);
+      });
+    },
+    fork: (environmentType) => {
+      const ref = environment.ref;
+      void run("Fork", async () => {
+        const fork = await forkFederatedEnvironment(portal, ref, environmentType);
+        toast.success(
+          environmentType === "local" ? "Local environment forked" : "Container environment forked",
+          { description: `On ${machine.name}` },
+        );
+        openMachineWorkspace({
+          connectionId: machine.connectionId,
+          projectId: fork.projectId,
+          environmentId: fork.environmentId,
+          title: fork.name,
+        });
+        await run(`Start fork ${fork.name}`, () =>
+          startFederatedEnvironment(portal, {
+            backendId: ref.backendId,
+            environmentId: fork.environmentId,
+          }),
+        );
+      });
     },
     requestDelete: () => setPendingDelete(environment.ref),
     deleteDialog,

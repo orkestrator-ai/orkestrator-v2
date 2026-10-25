@@ -147,7 +147,14 @@ export function TranscriptAnnotationLayer({
     return () => ownerDocument.removeEventListener("selectionchange", readSelection);
   }, [enabled, readSelection, rootRef]);
 
-  useEffect(() => {
+  // Drop anchors (and the open editor) of annotations that no longer exist.
+  // Done while rendering, whenever either input changes.
+  const [prunedFor, setPrunedFor] = useState({ annotations, activeAnnotationId });
+  if (
+    prunedFor.annotations !== annotations ||
+    prunedFor.activeAnnotationId !== activeAnnotationId
+  ) {
+    setPrunedFor({ annotations, activeAnnotationId });
     const annotationIds = new Set(annotations.map((annotation) => annotation.id));
     setAnnotationAnchors((current) => {
       const retained = current.filter((anchor) => annotationIds.has(anchor.annotationId));
@@ -156,7 +163,7 @@ export function TranscriptAnnotationLayer({
     if (activeAnnotationId && !annotationIds.has(activeAnnotationId)) {
       setActiveAnnotationId(null);
     }
-  }, [activeAnnotationId, annotations]);
+  }
 
   useEffect(() => {
     for (const annotation of annotations) {

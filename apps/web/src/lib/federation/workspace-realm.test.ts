@@ -52,6 +52,35 @@ test("only known messages with bounded IDs cross between a window and its realm"
   expect(readFrameEnvelope({ kind: "other", workspaceId: "w", message: {} })).toBeNull();
 });
 
+test("a dialog request crosses only with what it opens on", () => {
+  expect(parseShellMessage({ type: "select", projectId: "p", dialog: "delete-project" })).toEqual({
+    type: "select",
+    projectId: "p",
+    dialog: "delete-project",
+  });
+  expect(
+    parseShellMessage({
+      type: "select",
+      projectId: "p",
+      environmentId: "e",
+      dialog: "environment-settings",
+    }),
+  ).toEqual({ type: "select", projectId: "p", environmentId: "e", dialog: "environment-settings" });
+  // An environment's settings need the environment; any dialog needs a project.
+  expect(
+    parseShellMessage({ type: "select", projectId: "p", dialog: "environment-settings" }),
+  ).toEqual({ type: "select", projectId: "p" });
+  expect(parseShellMessage({ type: "select", dialog: "repository-settings" })).toEqual({
+    type: "select",
+  });
+  expect(parseShellMessage({ type: "select", projectId: "p", dialog: "format-disk" })).toEqual({
+    type: "select",
+    projectId: "p",
+  });
+  const search = realmSearchParams({ projectId: "p", dialog: "repository-settings" });
+  expect(search.get("dialog")).toBe("repository-settings");
+});
+
 test("a realm's coordinator defers to the command node only when grouped by repository", () => {
   expect(realmCoordinatorDefers("repository")).toBe(true);
   // Not yet told by the window: keep deferring rather than flash the conversations.

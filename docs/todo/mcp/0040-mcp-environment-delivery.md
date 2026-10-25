@@ -408,8 +408,8 @@ None left; both earlier questions are answered in decisions 9 and 10.
 
 - [0039-mcp-management.md](0039-mcp-management.md) for the editor, apply paths and
   provider rules.
-- [0021-container-rebuild-state-preservation.md](../containers-and-environments/0021-container-rebuild-state-preservation.md)
-  for state layout and staged inputs, and
+- [container lifecycle](../../architecture/container-lifecycle.md) for state
+  layout and staged inputs, and
   [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)
   for the allowlist and staged-input credentials.
 - [0058-legacy-migration-root-symlink.md](../containers-and-environments/0058-legacy-migration-root-symlink.md)

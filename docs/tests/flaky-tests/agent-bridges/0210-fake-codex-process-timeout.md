@@ -159,3 +159,12 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Unchanged owner:** `mise run test:logged -- --name review-fake-codex-isolated -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1` passed both tests with zero failures (0.1 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2BemPO/bridges.log.gz` after aggregate finalization; outer run `orkestrator-test-run.LLUEZq`.
 - **Assessment:** confirmed intermittent recurrence; host scheduling contention remains a hypothesis. No implementation, assertion, deadline or skip changed.
+
+
+## Activity sort review fixes — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name activity-repository -- mise run test`, on `activity-sort-order-6c8937d415e6-r1` with the activity sorting fixes staged. Workspace/root/bridges/protocol reservations were 4/1/2/1; Codex used one worker. The bridge group waited 125.8 seconds for shared host capacity.
+- **Failure and counts:** `fake Codex app-server process > reports its version and rejects unsupported invocations` timed out at 5000.00 ms. Codex reported 2356 passed, forty skipped and one failed across 2397 tests in 88 files (39.04 seconds); the other four bridge packages passed.
+- **Complete unchanged owner:** `mise run test:logged -- --name activity-codex-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed both tests in 0.1 seconds (exit 0).
+- **Evidence:** `orkestrator-test-run.iufUhv/bridges.log.gz` after aggregate finalization; outer artifact `orkestrator-test-run.Kpp8NC/activity-repository.log.gz`, under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host scheduling remains a hypothesis; no bridge implementation, assertion, timeout or skip changed.

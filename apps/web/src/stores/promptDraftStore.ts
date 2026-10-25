@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { create } from "zustand";
 
@@ -120,15 +120,17 @@ export function usePromptDraftField<T>(
   // reused in-place for a different authoritative request, so carrying the old
   // identity's fallback into the new request would leak its initial answer or
   // navigation index.
-  const identityRef = useRef<FieldIdentity | null>(null);
-  if (
-    identityRef.current === null ||
-    identityRef.current.draftKey !== draftKey ||
-    identityRef.current.field !== field
-  ) {
-    identityRef.current = { draftKey, field, value: initial() };
+  const [fallbackField, setFallbackField] = useState<FieldIdentity>(() => ({
+    draftKey,
+    field,
+    value: initial(),
+  }));
+  let fallback = fallbackField;
+  if (fallback.draftKey !== draftKey || fallback.field !== field) {
+    fallback = { draftKey, field, value: initial() };
+    setFallbackField(fallback);
   }
-  const fallbackValue = identityRef.current.value;
+  const fallbackValue = fallback.value;
   const [localField, setLocalField] = useState<FieldIdentity>(() => ({
     draftKey,
     field,
@@ -146,7 +148,7 @@ export function usePromptDraftField<T>(
           const previous =
             previousField.draftKey === draftKey && previousField.field === field
               ? previousField.value
-              : identityRef.current!.value;
+              : fallbackValue;
           const value =
             typeof action === "function" ? (action as (prev: T) => T)(previous) : action;
           return { draftKey, field, value };
@@ -155,11 +157,11 @@ export function usePromptDraftField<T>(
       }
       const store = usePromptDraftStore.getState();
       const current = store.drafts.get(draftKey)?.[field];
-      const previous = current === undefined ? identityRef.current!.value : (current as T);
+      const previous = current === undefined ? fallbackValue : (current as T);
       const next = typeof action === "function" ? (action as (prev: T) => T)(previous) : action;
       store.setDraftValue(draftKey, field, next);
     },
-    [draftKey, field],
+    [draftKey, field, fallbackValue],
   );
 
   if (draftKey === undefined) {

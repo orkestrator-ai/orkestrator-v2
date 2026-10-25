@@ -206,6 +206,17 @@ export function ProjectSearchBar({
   }, [hits, selectedHitId]);
   const selectedHit = selectedIndex >= 0 ? hits[selectedIndex] : undefined;
 
+  // Relative times are measured from when the search opens.
+  const openSearch = () => {
+    if (open) return;
+    setNow(new Date());
+    setOpen(true);
+  };
+  const handleOpenChange = (next: boolean) => {
+    if (next) openSearch();
+    else setOpen(false);
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -221,7 +232,8 @@ export function ProjectSearchBar({
       ) {
         if (isTypingTarget(event.target) && !open) return;
         event.preventDefault();
-        setOpen((current) => !current);
+        if (!open) setNow(new Date());
+        setOpen(!open);
         return;
       }
 
@@ -235,25 +247,26 @@ export function ProjectSearchBar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open]);
 
-  useEffect(() => {
+  // Closing clears the search; a new query or filter moves the selection back
+  // to the first hit.
+  const [searchScope, setSearchScope] = useState({ open, query, filter });
+  if (searchScope.open !== open || searchScope.query !== query || searchScope.filter !== filter) {
+    setSearchScope({ open, query, filter });
+    setSelectedHitId(null);
     if (!open) {
       setQuery("");
       setFilter("all");
-      setSelectedHitId(null);
-      return;
     }
+  }
 
-    setNow(new Date());
+  useEffect(() => {
+    if (!open) return;
     const timeoutId = window.setTimeout(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     }, 0);
     return () => window.clearTimeout(timeoutId);
   }, [open]);
-
-  useEffect(() => {
-    setSelectedHitId(null);
-  }, [query, filter]);
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
@@ -305,7 +318,7 @@ export function ProjectSearchBar({
     }
   };
 
-  const shortcutLabel = useMemo(searchShortcutLabel, []);
+  const shortcutLabel = useMemo(() => searchShortcutLabel(), []);
   const hasQuery = parseProjectSearchQuery(query).length > 0;
   const projectHeading = hasQuery ? "Projects" : "Recent projects";
   const environmentHeading = hasQuery ? "Environments" : "Recent environments";
@@ -323,7 +336,7 @@ export function ProjectSearchBar({
         data-testid="project-search-trigger"
         aria-label="Search projects and environments"
         aria-keyshortcuts="Meta+K Control+K"
-        onClick={() => setOpen(true)}
+        onClick={openSearch}
         // Borderless, so the padding is purely optical: it puts the icon's ink
         // under the header's "Projects" title (pl-3) and the badge's right edge
         // under the ink of the header's 28px "+" button (pr-2).
@@ -340,7 +353,7 @@ export function ProjectSearchBar({
         </kbd>
       </button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           showCloseButton={false}
           data-testid="project-search-dialog"

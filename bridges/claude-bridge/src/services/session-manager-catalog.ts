@@ -10,6 +10,7 @@ import type {
 import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { mcpScope } from "./mcp-runtime-status.js";
 import {
   claudeExecutableOptions,
   generateMessageId,
@@ -224,13 +225,6 @@ function createProbe(): Query {
     env: { ...process.env },
     ...claudeExecutableOptions(),
   });
-}
-
-function mcpScope(scope: string | undefined, name: string): NativeAgentMcpServer["scope"] {
-  if (name === "orkestrator") return "orkestrator";
-  if (scope?.includes("plugin")) return "plugin";
-  if (scope === "project" || scope === "local") return "project";
-  return "user";
 }
 
 function mcpTransport(status: McpServerStatus): NativeAgentMcpServer["transport"] | undefined {

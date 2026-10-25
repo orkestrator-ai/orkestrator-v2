@@ -158,7 +158,12 @@ export type McpApplyStrategy =
   | "next-query"
   /** Codex: one app-server per environment reloads MCP config process-wide. */
   | "process-reload"
-  /** OpenCode: a server per directory; applies at the next server start. */
+  /**
+   * OpenCode: a server per environment with an instance per directory. A
+   * worktree's instance is rebuilt in place while idle; a container's server
+   * applies at its next start. (The name predates the in-place rebuild and is
+   * kept so older renderers still recognise it.)
+   */
   | "directory-restart"
   /** Cursor: SDK agent reattaches between turns with fresh settings. */
   | "idle-reattach"

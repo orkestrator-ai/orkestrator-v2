@@ -589,6 +589,95 @@ export class ProjectCreationStageError extends Error {
   }
 }
 
+/**
+ * Create a local-only project: `git init -b main`, one empty initial commit,
+ * no remote, then register it. The project's `gitUrl` is the checkout path,
+ * since there is no remote to name; environments start from its local branch
+ * (see `resolveRemoteWorktreeStartPoint`). Nothing reaches the network.
+ *
+ * The path must be new or an empty directory; a pristine repository left by
+ * an earlier attempt (one Orkestrator commit, no remote, clean) resumes, so a
+ * retry after a failure between `git init` and registration succeeds. On
+ * failure, only what this call created is rolled back.
+ */
+export async function initLocalProject(
+  requestedPath: string,
+  storage: StorageService,
+  run: typeof runCommand,
+): Promise<Project> {
+  const projectPath = resolveNewProjectPath(requestedPath);
+  if (path.basename(projectPath).startsWith("-")) {
+    throw new Error("Project folder name cannot begin with a dash");
+  }
+  const targetKey = comparableProjectPath(await canonicalProjectPath(projectPath));
+  const assertPathIsFree = duplicateLocalPathGuard(targetKey, projectPath);
+
+  return storage.withProjectCreationLock(targetKey, async () => {
+    await assertPathIsFree(await storage.loadProjects());
+    let createdRoot: string | null = null;
+    let attemptedGitInit = false;
+    let identity: ProjectDirectoryIdentity | null = null;
+    try {
+      let stats;
+      try {
+        stats = await fs.lstat(projectPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        createdRoot = (await fs.mkdir(projectPath, { recursive: true })) ?? null;
+        stats = await fs.lstat(projectPath);
+      }
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error(PROJECT_PATH_NOT_A_DIRECTORY);
+      }
+      identity = { dev: stats.dev, ino: stats.ino, realPath: await fs.realpath(projectPath) };
+      const entries = await fs.readdir(projectPath);
+      if (entries.length > 0) {
+        const resumable =
+          entries.length === 1 &&
+          entries[0] === ".git" &&
+          (await isResumableScratchRepository(projectPath, run));
+        if (!resumable) throw new Error("Project path must be new or an empty directory");
+      } else {
+        try {
+          attemptedGitInit = true;
+          await run("git", ["-C", projectPath, "init", "-b", "main"], { timeoutMs: 30_000 });
+        } catch (error) {
+          const detail =
+            error instanceof CommandFailedError && error.executableMissing
+              ? "Git is not installed or available on PATH"
+              : conciseError(error);
+          throw new Error(`Could not initialize the Git repository: ${detail}`);
+        }
+        try {
+          await run(
+            "git",
+            [
+              "-C",
+              projectPath,
+              "-c",
+              `user.name=${SCRATCH_COMMIT_AUTHOR}`,
+              "-c",
+              `user.email=${SCRATCH_COMMIT_EMAIL}`,
+              "commit",
+              "--allow-empty",
+              "--no-gpg-sign",
+              "-m",
+              SCRATCH_COMMIT_SUBJECT,
+            ],
+            { timeoutMs: 30_000 },
+          );
+        } catch (error) {
+          throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
+        }
+      }
+      return await storage.addProject(createProject(projectPath, projectPath), assertPathIsFree);
+    } catch (error) {
+      await rollbackScratchRepository({ projectPath, createdRoot, attemptedGitInit, identity });
+      throw error;
+    }
+  });
+}
+
 export async function createProjectFromScratch(
   requestedPath: string,
   storage: StorageService,

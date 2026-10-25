@@ -227,6 +227,44 @@ function idleSession(title: string): SessionState {
   return getSession(session.id)!;
 }
 
+describe("Claude MCP inventory without a live control", () => {
+  test("keeps each init status and layer instead of collapsing to connected or failed", async () => {
+    const session = idleSession("init mcp statuses");
+    await runTurn(session.id, [
+      init({
+        mcp_servers: [
+          { name: "docs", status: "connected", source: "project" },
+          { name: "slow", status: "pending", source: "user" },
+          { name: "oauth", status: "needs-auth" },
+          { name: "off", status: "disabled", source: "local" },
+          {
+            name: "broken",
+            status: "failed",
+            error: "token=sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+          },
+          { name: "odd", status: "warming" },
+          { name: "plugin:tools:search", status: "connected", source: "plugin" },
+        ],
+      }),
+      { type: "result", subtype: "success" },
+    ]);
+    // The turn's process has exited, so the read falls back to the init rows.
+    const servers = await readSessionMcpServers(session.id);
+    expect(servers.map(({ name, status, scope }) => ({ name, status, scope }))).toEqual([
+      { name: "docs", status: "connected", scope: "project" },
+      { name: "slow", status: "connecting", scope: "user" },
+      { name: "oauth", status: "needs-auth", scope: undefined },
+      { name: "off", status: "disabled", scope: "local" },
+      { name: "broken", status: "failed", scope: undefined },
+      { name: "odd", status: "unknown", scope: undefined },
+    ]);
+    const byName = new Map(servers.map((server) => [server.name, server]));
+    expect(byName.get("oauth")?.actions).toEqual(["sign-in", "reconnect", "disable"]);
+    expect(byName.get("off")?.actions).toEqual(["enable"]);
+    expect(byName.get("broken")?.error).not.toContain("abcdefghijklmnopqrstuvwxyz");
+  });
+});
+
 describe("Claude command catalogue", () => {
   test("an empty SDK inventory stays empty: no rows are invented", async () => {
     queryControlOverrides.supportedCommands = mock(async () => []);

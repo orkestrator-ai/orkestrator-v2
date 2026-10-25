@@ -148,7 +148,11 @@ Risky actions are confirmed with a stateless token. Each action's class lives
 beside its schema in `PUBLIC_ACTION_INPUTS`:
 
 - `always`: `project.create`, `project.remove`, `environment.delete`,
-  `environment.recreate` with `discard`, `run.discard`.
+  `environment.recreate` with `discard`, `run.discard`. `project.remove` with
+  `cascade` is refused for every Control MCP credential
+  (`capability-unavailable`): deleting environments is a separate destructive
+  grant that `projects` must not imply, so only the operator's own CLI
+  cascades.
 - `voice` (voice profile only): `environment.stop`, `environment.exec`, and
   `session.interaction.resolve` when it approves a command or file change
   (`answer` or `approve-for-session` on any interaction but a question).

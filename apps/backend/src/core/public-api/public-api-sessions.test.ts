@@ -114,27 +114,32 @@ describe("session.start and request-specific completion", () => {
     expect(run.state).toBe("running");
   });
 
-  test("restart during dispatch without a session settles interrupted", async () => {
-    const { harness } = await setup();
-    const admitted = await harness.storage.admitPublicOperation({
-      authority: "operator",
-      action: "session.start",
-      scope: "environment:env-1",
-      requestId: "orphan-start",
-      requestKey: requestKey("operator", "session.start", "environment:env-1", "orphan-start"),
-      fingerprint: "f".repeat(64),
-      resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
-      generation: "previous-generation",
+  for (const stage of ["executing", "dispatching"]) {
+    test(`restart during ${stage} without a session settles interrupted`, async () => {
+      const { harness } = await setup();
+      const admitted = await harness.storage.admitPublicOperation({
+        authority: "operator",
+        action: "session.start",
+        scope: "environment:env-1",
+        requestId: "orphan-start",
+        requestKey: requestKey("operator", "session.start", "environment:env-1", "orphan-start"),
+        fingerprint: "f".repeat(64),
+        resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
+        generation: "previous-generation",
+      });
+      await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
+        ...record,
+        state: "running",
+        stage,
+        generation: "previous-generation",
+      }));
+      const restarted = await harness.restart();
+      expect(await receipt(restarted, admitted.record.operationId)).toMatchObject({
+        state: "interrupted",
+        dispatch: { state: "not-sent" },
+      });
     });
-    await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
-      ...record,
-      state: "running",
-      stage: "dispatching",
-      generation: "previous-generation",
-    }));
-    const restarted = await harness.restart();
-    expect((await receipt(restarted, admitted.record.operationId)).state).toBe("interrupted");
-  });
+  }
 
   test("restart during a parked prompt dispatch stays recoverable", async () => {
     const { harness, service, stub } = await setup();

@@ -99,14 +99,28 @@ export function OpenFileDialog() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setSelectedIndex(0);
-      return;
-    }
-
+  // Opening or closing, a new search, or another environment's files put the
+  // selection back at the top; closing also clears the query.
+  const [selectionScope, setSelectionScope] = useState({
+    open,
+    refresh,
+    deferredQuery,
+    selectedEnvironmentId,
+  });
+  if (
+    selectionScope.open !== open ||
+    selectionScope.refresh !== refresh ||
+    selectionScope.deferredQuery !== deferredQuery ||
+    selectionScope.selectedEnvironmentId !== selectedEnvironmentId
+  ) {
+    setSelectionScope({ open, refresh, deferredQuery, selectedEnvironmentId });
     setSelectedIndex(0);
+    if (!open) setQuery("");
+  }
+
+  useEffect(() => {
+    if (!open) return;
+
     void refresh();
 
     const timeoutId = window.setTimeout(() => {
@@ -116,10 +130,6 @@ export function OpenFileDialog() {
 
     return () => window.clearTimeout(timeoutId);
   }, [open, refresh]);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [deferredQuery, selectedEnvironmentId]);
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({

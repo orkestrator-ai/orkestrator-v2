@@ -235,12 +235,10 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           stage: "opencode-data",
           target: "/opencode-data",
           root: join(dataHome, "opencode"),
-          files: ["auth.json", "account.json"],
+          // Only the login: OpenCode never reads a host's snapshot/, storage/
+          // or account.json in a container (entrypoint.sh, "/opencode-data").
+          files: ["auth.json"],
           accessOnlyLogin: { file: "auth.json", restrict: restrictOpenCodeAuthSnapshot },
-          directories: [
-            { path: "storage", mode: "entries" },
-            { path: "snapshot", mode: "entries" },
-          ],
         },
       ],
       files: [

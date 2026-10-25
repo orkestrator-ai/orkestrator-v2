@@ -460,6 +460,10 @@ It is tracked as new work in 0090, not here. After rebasing onto `main` at
 fresh profile (`qa-0050-paging2`, bridges rebuilt). The backend checks were
 identical, and the browser drift was the same 124 px.
 
+Resolved in 0090 on 2026-10-25. The 124 px was a clamp: after the first page
+the folded transcript fits its viewport and cannot scroll. The live spec now
+checks the position the list can reach, and both native cases pass.
+
 ### Validation (2026-10-24)
 
 `mise run format:check`, `mise run lint` and `mise run typecheck` passed.

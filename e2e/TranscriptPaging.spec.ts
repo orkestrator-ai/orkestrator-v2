@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { expectPlaceHeld, holdPosition } from "./transcript-hold";
 import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 async function toolPosition(list: Locator, id: string) {
@@ -271,6 +272,135 @@ for (const view of ["native", "reviewer"] as const) {
           diagnostics: await scrollDiagnostics(list),
         }),
       ).toBeLessThanOrEqual(2);
+    });
+  }
+}
+
+/**
+ * The live shape of a long tool-only conversation (todo 0090): the 100-row
+ * window is one folded group of 100 calls and the answer. History merges
+ * into that group, so a page adds no display row (only the prompt, once it
+ * arrives), and the folded line keeps the newest call's part id throughout.
+ */
+async function foldedGroupAtTop(page: import("@playwright/test").Page, query: URLSearchParams) {
+  await page.goto(`/transcript-paging?${query}`);
+  const list = page.locator("[data-transcript-scroller]");
+  await expect(list).toBeVisible();
+  await list.hover();
+  const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+  await expect
+    .poll(async () => {
+      await page.mouse.wheel(0, -4000);
+      const [button, viewport, top] = await Promise.all([
+        load.boundingBox(),
+        list.boundingBox(),
+        list.evaluate((el) => el.scrollTop),
+      ]);
+      return (
+        top <= 1 &&
+        button !== null &&
+        viewport !== null &&
+        button.y >= viewport.y &&
+        button.y + button.height <= viewport.y + viewport.height
+      );
+    })
+    .toBe(true);
+  await expect(list.getByRole("button", { name: /^Show 100 tool calls:/ })).toBeVisible();
+  return { list, load };
+}
+
+/** The folded line's place, the list's scroll range and the controller's last outcome. */
+async function foldedLine(list: Locator) {
+  return list.evaluate((el) => {
+    const line = el.querySelector<HTMLElement>('[data-transcript-part-id="call-149"]');
+    const diagnostics = (
+      el as unknown as { orkTranscriptScrollDiagnostics?: () => { lastOutcome?: string } }
+    ).orkTranscriptScrollDiagnostics?.();
+    return {
+      offset: line ? line.getBoundingClientRect().top - el.getBoundingClientRect().top : null,
+      index: Number(
+        line?.closest<HTMLElement>("[data-chat-message-index]")?.dataset.chatMessageIndex,
+      ),
+      visible:
+        line !== null &&
+        line.getBoundingClientRect().bottom > el.getBoundingClientRect().top &&
+        line.getBoundingClientRect().top < el.getBoundingClientRect().top + el.clientHeight,
+      count: line?.textContent?.match(/(\d+) tool calls/)?.[1],
+      scrollTop: el.scrollTop,
+      maxScrollTop: Math.max(0, el.scrollHeight - el.clientHeight),
+      outcome: diagnostics?.lastOutcome,
+    };
+  });
+}
+
+for (const view of ["native", "reviewer"]) {
+  test(`${view}: a page coalescing into the folded group at the top holds its line`, async ({
+    page,
+  }) => {
+    const query = new URLSearchParams({ stops: "150", paged: "12", prompt: "1" });
+    if (view === "reviewer") query.set("reviewer", "1");
+    const { list, load } = await foldedGroupAtTop(page, query);
+    const before = await foldedLine(list);
+    expect(before.offset).not.toBeNull();
+    await startAnchorProbe(list, "call-149");
+    await load.click();
+    // Twelve calls merged into the group; no display row was added above it.
+    await expect.poll(async () => (await foldedLine(list)).count).toBe("112");
+    await expect(load).toBeVisible();
+    await page.waitForTimeout(800);
+    const probe = await stopAnchorProbe(list);
+    expect(probe.missing).toBe(0);
+    expect(probe.maxError).toBeLessThanOrEqual(2);
+  });
+
+  // The page brings the prompt, the one display row above the group. With room
+  // to scroll the line is held exactly; a transcript that then fits its
+  // viewport cannot scroll, so the controller ends clamped at the top and the
+  // prompt pushes the line down (the 124 px the live spec reported). The
+  // reviewer view hides the workflow's prompts, so only the native tab has it.
+  for (const height of view === "native" ? [300, 1000] : []) {
+    test(`${view}: the prompt landing above the folded group at ${height} px`, async ({ page }) => {
+      await page.setViewportSize({ width: page.viewportSize()!.width, height });
+      const query = new URLSearchParams({ stops: "150", prompt: "1" });
+      if (view === "reviewer") query.set("reviewer", "1");
+      const { list, load } = await foldedGroupAtTop(page, query);
+      const before = await foldedLine(list);
+      await startAnchorProbe(list, "call-149");
+      await load.click();
+      await expect(load).toHaveCount(0);
+      await expect(list.locator('[data-chat-message-key="prompt"]')).toHaveCount(1);
+      await expect.poll(async () => (await foldedLine(list)).outcome).toMatch(/converged|clamped/);
+      await page.waitForTimeout(800);
+      const probe = await stopAnchorProbe(list);
+      const after = await foldedLine(list);
+      expect(probe.missing).toBe(0);
+      // Where the list must stand to hold the line, as far as it can scroll.
+      const hold = holdPosition(
+        { ...before, offset: before.offset! },
+        { ...after, offset: after.offset! },
+      );
+      expectPlaceHeld(
+        {
+          anchorStop: 149,
+          anchorIndexBefore: before.index,
+          anchorAfter: after,
+          hold,
+          scrollTopAfter: after.scrollTop,
+        },
+        `${view}: prompt landing at ${height} px`,
+      );
+      expect(hold.errorPx).toBeLessThanOrEqual(1);
+      if (height === 300) {
+        expect(hold.clampedPx).toBe(0);
+        expect(after.outcome).toBe("converged");
+        expect(after.scrollTop).toBeGreaterThan(0);
+        expect(probe.maxError).toBeLessThanOrEqual(2);
+      } else {
+        expect(after.maxScrollTop).toBe(0);
+        expect(hold.clampedPx).toBeGreaterThan(8);
+        expect(after.outcome).toBe("clamped");
+        expect(after.offset! - before.offset!).toBeGreaterThan(8);
+      }
     });
   }
 }

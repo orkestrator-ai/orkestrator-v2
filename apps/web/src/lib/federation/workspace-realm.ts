@@ -84,6 +84,20 @@ export function realmCoordinatorDefers(grouping: RealmGrouping | null): boolean 
   return grouping === null || grouping === "repository";
 }
 
+/**
+ * A dialog of the realm's node, opened over what the request selects: the
+ * project's for the project dialogs, the environment's for its settings.
+ */
+export type RealmDialog = "repository-settings" | "delete-project" | "environment-settings";
+
+function realmDialog(value: unknown): RealmDialog | undefined {
+  return value === "repository-settings" ||
+    value === "delete-project" ||
+    value === "environment-settings"
+    ? value
+    : undefined;
+}
+
 /** What the window asks its realm to show. */
 export interface RealmSelectRequest {
   type: "select";
@@ -94,6 +108,8 @@ export interface RealmSelectRequest {
   addProject?: true;
   /** Open the node's New Environment dialog for this project. */
   createEnvironmentProjectId?: string;
+  /** Open one of the node's dialogs for the selected project or environment. */
+  dialog?: RealmDialog;
 }
 
 export type ShellToRealmMessage =
@@ -211,6 +227,7 @@ export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): UR
   if (request.addProject) search.set("addProject", "1");
   if (request.createEnvironmentProjectId)
     search.set("createEnvironment", request.createEnvironmentProjectId);
+  if (request.dialog) search.set("dialog", request.dialog);
   return search;
 }
 
@@ -225,6 +242,7 @@ export function realmInitialRequest(): RealmSelectRequest | null {
     boardTab: search.get("boardTab") ?? undefined,
     addProject: search.get("addProject") === "1" ? true : undefined,
     createEnvironmentProjectId: search.get("createEnvironment") ?? undefined,
+    dialog: search.get("dialog") ?? undefined,
   });
   return request?.type === "select" ? request : null;
 }
@@ -257,6 +275,10 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   const environmentId = boundedId(message.environmentId);
   const tab = boardTab(message.boardTab);
   const createEnvironmentProjectId = boundedId(message.createEnvironmentProjectId);
+  const dialog = realmDialog(message.dialog);
+  // A dialog needs what it is for: a project, or an environment for its settings.
+  const dialogTarget =
+    dialog === "environment-settings" ? Boolean(projectId && environmentId) : Boolean(projectId);
   return {
     type: "select",
     ...(projectId ? { projectId } : {}),
@@ -264,6 +286,7 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
     ...(projectId && tab ? { boardTab: tab } : {}),
     ...(message.addProject === true ? { addProject: true as const } : {}),
     ...(createEnvironmentProjectId ? { createEnvironmentProjectId } : {}),
+    ...(dialog && dialogTarget ? { dialog } : {}),
   };
 }
 

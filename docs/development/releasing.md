@@ -162,11 +162,12 @@ Updates**,
 
 ## Minimum macOS version
 
-Electron 44 dropped macOS 12 (Monterey), so the app requires macOS 13
-(Ventura) or later. `build.mac.minimumSystemVersion` (`13.0`) writes
-`LSMinimumSystemVersion` into the app's `Info.plist`, so macOS refuses to open
-it on Monterey with its standard "can't use this version" message instead of
-the app crashing at launch. Raise it when an Electron upgrade raises the floor.
+Electron 44 dropped macOS 12 (Monterey) and Electron 45 keeps that floor, so
+the app requires macOS 13 (Ventura) or later.
+`build.mac.minimumSystemVersion` (`13.0`) writes `LSMinimumSystemVersion` into
+the app's `Info.plist`, so macOS refuses to open it on Monterey with its
+standard "can't use this version" message instead of the app crashing at
+launch. Raise it when an Electron upgrade raises the floor.
 
 electron-builder 26 does not copy this floor into `latest-mac.yml`.
 `scripts/mac-update-feed.ts` adds `minimumSystemVersion: '22.0.0'` (the Darwin

@@ -79,3 +79,21 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 - **Unchanged owner:** `mise run test:logged -- --name agent-accounts-isolated -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --parallel=1 --only-failures` passed the complete file (exit 0, 3.9 seconds). The backend package's configured Node preload was used.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jzcWwc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer run `orkestrator-test-run.cXrTp9`.
 - **Assessment:** the same intermittent extra-directory symptom; no agent-account code, assertions, deadlines or skips changed. The aggregate also loaded an intermediate canvas test fixture and caught new DOM absence assertions; those branch defects were corrected and their owning checks passed separately before the final aggregate rerun.
+
+## Federated dialog readiness validation — 2026-10-25
+
+- Original command: `mise run test:logged -- --name repo-tests -- mise run test`,
+  Bun 1.4.4, workspace/root/bridges/protocol reservations 4/1/2/1, with other
+  worktrees validating concurrently. The backend used two Bun workers.
+- The same duplicate-login case at `apps/backend/src/core/agent-accounts.test.ts:811`
+  observed a second account directory after rejection (190.66 ms).
+- The complete unchanged owner passed alone in 11.0 seconds (exit 0):
+  `mise run test:logged -- --name account-owner-rerun -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --parallel=1 --only-failures`.
+  The logged runner removed passing output; individual test counts were not retained.
+- Evidence: `orkestrator-test-run.DHlEAe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  after aggregate finalization; the outer run is `orkestrator-test-run.Jjipx9`.
+  Backend counts: 10457 passed, 79 skipped, two failed, one error in 585.85
+  seconds across 615 files. The other failure was terminal-history pagination
+  (see 0213).
+  The account implementation and tests were unchanged. The existing intermittent
+  cleanup/publication ordering symptom remains open.

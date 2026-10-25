@@ -26,3 +26,14 @@ not establish the cause.
 
 Original evidence: host temporary directory
 `orkestrator-test-run.GSCek7/bridges.log.gz`, with the outer run under `orkestrator-test-run.iCAyRT`.
+
+## 2026-10-25
+
+Failed again in the `todo-0722-per-machine-accounts` branch's
+`mise run test` aggregate (the branch changes no bridge code), and once in
+three solo runs of the unchanged owner
+(`bun test src/commands/codex-command-catalogue.test.ts --preload
+../../tests/setup-node.ts` from `bridges/codex-bridge`, Bun 1.4.2): it does
+not need aggregate load. The sibling case at line 284 fails the same way;
+see [0800](0800-codex-command-catalogue-armed-delay-race.md).
+

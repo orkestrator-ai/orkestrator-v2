@@ -487,6 +487,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
+      activitySortOrder: "priority",
       zoomLevel: 100,
     });
     useConfigStore.setState((state) => ({
@@ -642,6 +643,51 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => {
       expect(useUIStore.getState().environmentSortMode).toBe("activity");
       expect(screen.getByRole("button", { name: "Sort environments: By activity" })).toBeTruthy();
+    });
+  });
+
+  test("offers priority, newest or oldest first only while sorting by activity", async () => {
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-older",
+        name: "Older environment",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-newer",
+        name: "Newer environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
+    const view = render(<HierarchicalSidebar />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+    await screen.findByRole("menuitemradio", { name: "By project" });
+    expect(screen.queryByRole("menuitemradio", { name: "Priority order" }) === null).toBe(true);
+    expect(screen.queryByRole("menuitemradio", { name: "Oldest first" }) === null).toBe(true);
+    view.unmount();
+
+    useUIStore.getState().setEnvironmentSortMode("activity");
+    render(<HierarchicalSidebar />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By activity" }));
+    expect(
+      (await screen.findByRole("menuitemradio", { name: "Priority order" })).getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Oldest first" }));
+
+    await waitFor(() => {
+      expect(useUIStore.getState().activitySortOrder).toBe("oldest");
+      const rows = Array.from(
+        screen.getByTestId("activity-environment-list").querySelectorAll("[data-environment-id]"),
+      );
+      expect(rows.map((row) => row.getAttribute("data-environment-id"))).toEqual([
+        "env-older",
+        "env-newer",
+      ]);
     });
   });
 
@@ -1367,6 +1413,55 @@ describe("HierarchicalSidebar", () => {
       "env-b",
     ]);
     expect(tiedEnvironments.map((env) => env.id)).toEqual(["env-b", "env-a"]);
+  });
+
+  test("priority order puts unread, then waiting and working, before newer idle activity", () => {
+    const environments = [
+      { ...createdEnvironment, id: "env-idle-new", lastActivityAt: "2026-07-23T10:00:00.000Z" },
+      {
+        ...createdEnvironment,
+        id: "env-working",
+        agentActivityState: "working" as const,
+        lastActivityAt: "2026-07-21T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-waiting",
+        agentActivityState: "waiting" as const,
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-unread",
+        hasUnreadWork: true,
+        lastActivityAt: "2026-07-19T10:00:00.000Z",
+      },
+      { ...createdEnvironment, id: "env-idle-old", lastActivityAt: "2026-07-18T10:00:00.000Z" },
+    ];
+
+    expect(sortEnvironmentsByActivity(environments, [project]).map((env) => env.id)).toEqual([
+      "env-unread",
+      "env-waiting",
+      "env-working",
+      "env-idle-new",
+      "env-idle-old",
+    ]);
+    expect(
+      sortEnvironmentsByActivity(environments, [project], "newest").map((env) => env.id),
+    ).toEqual(["env-idle-new", "env-working", "env-waiting", "env-unread", "env-idle-old"]);
+  });
+
+  test("sorts oldest activity first while keeping the sidebar order for ties", () => {
+    const environments = [
+      { ...createdEnvironment, id: "env-new", lastActivityAt: "2026-07-22T10:00:00.000Z" },
+      { ...createdEnvironment, id: "env-tie-b", order: 1 },
+      { ...createdEnvironment, id: "env-old", lastActivityAt: "2026-07-20T10:00:00.000Z" },
+      { ...createdEnvironment, id: "env-tie-a", order: 0 },
+    ];
+
+    expect(
+      sortEnvironmentsByActivity(environments, [project], "oldest").map((env) => env.id),
+    ).toEqual(["env-tie-a", "env-tie-b", "env-old", "env-new"]);
   });
 
   test("selects a range using the displayed activity order", () => {

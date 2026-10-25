@@ -1605,14 +1605,31 @@ export interface NativeAgentMcpServer {
   id: string;
   name: string;
   status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
-  scope?: "user" | "project" | "orkestrator" | "plugin";
+  scope?: "user" | "project" | "local" | "orkestrator" | "plugin";
   transport?: "stdio" | "sse" | "http";
   toolCount?: number;
   tools?: string[];
   /** Provider error text, redacted and bounded by the adapter. */
   error?: string;
+  /**
+   * What the user can do outside Orkestrator about this server's state, when
+   * no action here can (OpenCode's MCP sign-in). Short, user-facing, never a
+   * credential.
+   */
+  hint?: string;
   actions: NativeAgentMcpServerAction[];
 }
+
+/**
+ * OpenCode completes an MCP OAuth sign-in only when the request that started
+ * it waits for the browser's callback (`mcp.auth.authenticate`, or the CLI's
+ * `opencode mcp auth`). A sign-in started with `mcp.auth.start` alone has no
+ * waiter, and OpenCode's callback server (127.0.0.1:19876 by default) refuses
+ * the browser's redirect as an unknown state (traced in OpenCode 1.19.4). The
+ * CLI runs the whole flow and stores the token where the server reads it.
+ */
+export const OPENCODE_MCP_SIGN_IN_GUIDANCE =
+  "Sign in from a terminal where this environment's OpenCode runs: opencode mcp auth <server>, then reconnect the server.";
 
 export type NativeAgentAuthState =
   | "signed-in"

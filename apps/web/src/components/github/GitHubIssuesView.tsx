@@ -147,9 +147,15 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  useEffect(() => {
+  // Selection and drag belong to one project's board.
+  const [boardProjectId, setBoardProjectId] = useState(projectId);
+  if (boardProjectId !== projectId) {
+    setBoardProjectId(projectId);
     setSelectedIssueNumber(null);
     setActiveIssueNumber(null);
+  }
+
+  useEffect(() => {
     void loadIssues(projectId);
   }, [loadIssues, projectId]);
 

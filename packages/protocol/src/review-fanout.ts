@@ -193,6 +193,8 @@ export interface ReviewWorktreeSnapshotRecord {
 export interface ReviewConsolidationSession {
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
+  /** The one durable reminder to submit a missing tool-mode report was spent. */
+  resultReminderSent?: boolean;
   continuationPrompt?: string;
   sessionKey: string;
   providerSessionId: string;
@@ -528,6 +530,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     record(value) &&
     hasOnlyKeys(value, [
       "restartContinuationSent",
+      "resultReminderSent",
       "continuationPrompt",
       "sessionKey",
       "providerSessionId",
@@ -550,6 +553,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     ]) &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     optionalString(value.continuationPrompt, 100_000) &&
     nonBlank(value.sessionKey) &&
     nonBlank(value.providerSessionId) &&

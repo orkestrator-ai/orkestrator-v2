@@ -20,6 +20,7 @@ import {
   Undo2,
   type LucideIcon,
 } from "lucide-react";
+import { DESIGN_KEYBOARD_SHORTCUTS } from "@/lib/keyboard-shortcuts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -304,7 +305,7 @@ function DesignToolsMenu({ tools, shortcuts }: { tools: DesignTool[]; shortcuts:
 }
 
 export function DesignToolbar(props: DesignToolbarProps) {
-  const { projection } = props;
+  const { projection, layersButtonRef } = props;
   const canvas = projection?.canvas;
   const tools = toolsOf(props);
   const shortcuts: DesignTool = {
@@ -341,7 +342,7 @@ export function DesignToolbar(props: DesignToolbarProps) {
       data-compact={props.compact || undefined}
     >
       <Button
-        ref={props.layersButtonRef}
+        ref={layersButtonRef}
         variant="ghost"
         size="icon"
         className={iconClass}
@@ -399,19 +400,11 @@ export function DesignToolbar(props: DesignToolbarProps) {
   );
 }
 
-export const DESIGN_SHORTCUTS: Array<[string, string]> = [
-  ["Arrow keys", "Move the focused frame (Shift: 10px)"],
-  ["Alt + Arrow keys", "Resize the focused frame"],
-  ["Ctrl/⌘ + Z", "Undo your last design edit"],
-  ["Ctrl/⌘ + Shift + Z, Ctrl + Y", "Redo"],
-  ["Shift + 1", "Fit all frames"],
-  ["Shift + 2", "Zoom to selection"],
-  ["Ctrl/⌘ + 0", "Zoom to 100%"],
-  ["+ / −", "Zoom in / out"],
-  ["P", "Toggle preview mode"],
-  ["Click a frame title", "Select the frame"],
-  ["Delete / Backspace", "Delete the selected frame"],
-  ["Escape", "Cancel a gesture, exit preview, clear selection, close panels"],
-  ["Ctrl/⌘ + scroll, pinch", "Zoom at the pointer"],
-  ["Scroll, Shift + scroll, middle-drag", "Pan the canvas"],
-];
+const modifierNames: Record<string, string> = { "⌘": "Ctrl/⌘", "⇧": "Shift", "⌥": "Alt" };
+
+export const DESIGN_SHORTCUTS: Array<[string, string]> = DESIGN_KEYBOARD_SHORTCUTS.map(
+  (shortcut) => [
+    shortcut.mac.map((key) => modifierNames[key] ?? key).join(" + "),
+    shortcut.description,
+  ],
+);

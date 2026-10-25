@@ -1251,10 +1251,24 @@ export class ReviewFanoutRunner {
       await this.commit();
     }
     if (reviewer.dispatchState === "dispatching") {
-      // Dispatch acceptance is ambiguous after a crash. The stable request id
-      // makes provider reconciliation authoritative; never send it twice.
+      // A durable intent is not acceptance. In particular, session status may
+      // still describe the request replaced by this continuation. Providers
+      // without request-scoped proof stay parked within the idle-poll bound;
+      // neither unknown nor a retired (lost) ID is safe to resend.
+      const acceptance = await provider
+        .dispatchStatus?.(reviewer.providerSessionId, reviewer.requestId)
+        .catch(() => "unknown" as const);
+      await host.assertFence();
+      if (acceptance !== "dispatched") {
+        return this.recordStall(
+          reviewer,
+          "The reviewer dispatch acceptance could not be confirmed",
+        );
+      }
       reviewer.dispatchState = "sent";
       delete reviewer.continuationPrompt;
+      delete reviewer.idleResultPolls;
+      host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0idle`);
       await this.commit();
     }
     if (reviewer.status !== "running") return "continue";
@@ -1286,7 +1300,8 @@ export class ReviewFanoutRunner {
     });
     const { status, error: statusDetail } = observation;
     await host.assertFence();
-    if (status === "idle" && observation.turnSettled === false) return "continue";
+    if ((status === "idle" || status === "error") && observation.turnSettled === false)
+      return "continue";
     const transcript = new PassTranscriptReader(provider, reviewer.providerSessionId, {
       observer: host.efficiency,
       owner: host.efficiencyOwner ?? "multi-review",
@@ -1445,6 +1460,9 @@ export class ReviewFanoutRunner {
         host.finishResultConsumption?.(reviewer.requestId);
         await this.commit();
       } catch (error) {
+        // A lost fence is not a deferred consumption: the owner that took over
+        // consumes the result, and this pass must stop.
+        if (this.isFatal(error)) throw error;
         host.stageResultConsumption?.(reviewer.requestId);
         console.warn(
           `[review-fanout] Deferred result consumption: ${reviewFanoutErrorMessage(error)}`,

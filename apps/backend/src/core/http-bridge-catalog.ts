@@ -15,6 +15,7 @@ import type {
   ProviderCommandCatalogue,
   ProviderCommandRefreshResult,
 } from "./agent-provider-contract.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import {
   assertOk,
@@ -193,6 +194,7 @@ export class HttpBridgeCatalogAdapter {
           actions,
           ...(server?.scope === "user" ||
           server?.scope === "project" ||
+          server?.scope === "local" ||
           server?.scope === "orkestrator" ||
           server?.scope === "plugin"
             ? { scope: server.scope }
@@ -213,7 +215,11 @@ export class HttpBridgeCatalogAdapter {
                   .map((tool) => tool.slice(0, 256)),
               }
             : {}),
-          ...(typeof server?.error === "string" ? { error: server.error.slice(0, 2_000) } : {}),
+          // Redacted here as well as in the bridge: an older or third bridge
+          // may relay a server's error text verbatim.
+          ...(typeof server?.error === "string"
+            ? { error: redactSecrets(server.error).slice(0, 2_000) }
+            : {}),
         },
       ];
     });

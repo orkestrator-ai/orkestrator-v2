@@ -196,6 +196,48 @@ describe("mcp apply live support", () => {
       ).toBe(false),
   );
 
+  test("a substituted call on a must-fail probe passes only when the inventory proves the name gone", () => {
+    const events = parseProbeLog(log);
+    const input = {
+      events,
+      server: "mqu0_alpha",
+      nonce: "N1",
+      reply: probeResult("mqu0_alpha", "v1", "N1"),
+      expect: { reach: false } as const,
+      toolRows: ["tool-invocation:mqu0_beta_probe:completed"],
+    };
+    // The renamed server loaded and the old name did not: removal is proven by
+    // the runtime, whatever tool the model picked.
+    expect(judgeProbe({ ...input, inventory: ["orkestrator", "mqu0_beta"] })).toMatchObject({
+      passed: true,
+      substitutedBy: "mqu0_beta",
+      absenceProvenBy: "inventory",
+    });
+    // Still listed: nothing is proven.
+    expect(judgeProbe({ ...input, inventory: ["mqu0_alpha", "mqu0_beta"] })).toMatchObject({
+      passed: false,
+      reason: 'the model called "mqu0_beta" instead and the session still lists "mqu0_alpha"',
+    });
+    // No inventory: the old rule stands.
+    expect(judgeProbe(input)).toMatchObject({ passed: false, substitutedBy: "mqu0_beta" });
+    expect(judgeProbe(input).reason).toContain("reported no MCP inventory");
+    // The substitute itself must be in the inventory, or the reading is stale.
+    expect(judgeProbe({ ...input, inventory: ["orkestrator"] }).passed).toBe(false);
+    // A failed turn never proves anything.
+    expect(
+      judgeProbe({ ...input, inventory: ["mqu0_beta"], turnError: "provider error" }).passed,
+    ).toBe(false);
+    // A probe that must succeed is never rescued by the inventory.
+    expect(
+      judgeProbe({
+        ...input,
+        server: "mqu0_gamma",
+        expect: { reach: true, tag: "v1" },
+        inventory: ["mqu0_beta"],
+      }).passed,
+    ).toBe(false);
+  });
+
   test("a beta substitution cannot qualify removal even if both names remain exposed", () => {
     const events = parseProbeLog(log);
     events.push({ event: "call", label: "mqu0_beta", tag: "v1", nonce: "N2", pid: 11, at: "t2" });

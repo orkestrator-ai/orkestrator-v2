@@ -179,10 +179,8 @@ export function AnnotationThread({
   useEffect(() => {
     if (loaded) headingRef.current?.focus();
   }, [annotationId, loaded]);
-  useEffect(() => {
-    // Everything present when the thread opens counts as read.
-    if (annotation && seenSequence === null) setSeenSequence(annotation.lastSequence);
-  }, [annotation, seenSequence]);
+  // Everything present when the thread opens counts as read.
+  if (annotation && seenSequence === null) setSeenSequence(annotation.lastSequence);
 
   const mutate = async (label: string, action: () => Promise<unknown>): Promise<boolean> => {
     setMessage(null);

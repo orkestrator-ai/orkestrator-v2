@@ -70,7 +70,11 @@ describe("TerminalContext", () => {
     let consumerRenders = 0;
     const Consumer = memo(function Consumer() {
       useTerminalContext();
-      consumerRenders += 1;
+      // Counted at commit: an effect without dependencies runs once for every
+      // render of this component that commits.
+      useEffect(() => {
+        consumerRenders += 1;
+      });
       return <span>consumer</span>;
     });
 

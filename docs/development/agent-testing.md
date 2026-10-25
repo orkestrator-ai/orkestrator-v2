@@ -467,13 +467,23 @@ mise run dev:stop --profile qa-multi-review
 mise run dev:reset --profile qa-multi-review
 ```
 
-Every case writes a small change into a fresh environment and launches the
-review through the launcher: it right-clicks **Multi Review**, picks each row's
+`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` (2 to 32) adds a scale case. It
+starts an n-reviewer panel alternating Claude and Codex through
+`start_multi_review`, samples the backend's RSS and the reviewers setting up and
+running once a second, fails if more than four were ever seen setting up, and
+writes reviewer latency (p50, p95, max) and peak RSS to `scale.json` in the
+case's output folder. Run it with `-g scale`.
+
+Every case writes a small change into a fresh environment. The other cases
+launch the review through the launcher: it right-clicks **Multi Review**, picks each row's
 model, checks the work summary and duplicate warning, and presses Start. Once a
-reviewer's prompt is sent, it disturbs the review in one of four ways. It
+reviewer's prompt is sent, it disturbs the review in one of five ways. It
 leaves the review unmounted in another environment, reloads the renderer,
-restarts the backend, or `SIGKILL`s the Claude reviewer's bridge. Before
-signalling, it confirms that the bridge is a child of this profile's backend.
+restarts the backend, `SIGKILL`s the Claude reviewer's bridge, or `SIGKILL`s
+only the Claude Code process under that bridge while the bridge stays up.
+Before signalling, it confirms that the bridge is a child of this profile's
+backend, and for the CLI case that exactly one Claude Code process is a direct
+child of that bridge.
 The review must then settle from backend state alone. The case checks the
 snapshot first: phase, reviewer state, reports and consolidation. It also
 checks that each reviewer kept its provider session and start time, that a
@@ -484,11 +494,14 @@ the failure labels each user turn by the follow-up it opens with, never by its
 text. It then checks the
 tab, on return and again after a reload: the graph's node states, the
 inspector's transcript tail, the controls and the reviewer's read-only tab.
-The reviewer transcript read must not be the compatibility fallback, and a
-repeated read with its source token must answer `unchanged`. After a restart
+A repeated reviewer transcript read with its source token must answer
+`unchanged`. After a restart
 both reviewers must complete, because both bridges report a turn the restart
 cut short and the runner continues it once. After a killed Claude bridge the
 Claude reviewer must complete the same way, and the Codex peer must complete.
+After a killed Claude Code process the bridge must be the same process, and the
+Claude reviewer must complete after its restart continuation (the bridge
+reports the signal as `interruption: "restart"`).
 The case records each reviewer's outcome as a Playwright annotation in
 `results.json`. If preparation fails before any
 reviewer starts, the case restarts that step once and records it. Each case
@@ -528,14 +541,21 @@ live tail for gaps, duplicates and order without reading model prose.
 
 - **Native conversation** (Claude Haiku, 150 stops by default; set
   `ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex` for GPT-6-Luna). Claude
-  reads with its Read tool, and its tool-only rows coalesce into tall
-  per-minute blocks, the harder case for holding a place. Codex notes each
+  reads with its Read tool, and its tool-only rows coalesce into one folded
+  tool group that each page grows from the front. Codex notes each
   stop in a sentence so that every step gets a row. The backend
   window must be truncated with a cursor, and following the cursor in
   40-message pages must reach the first prompt with every stop in order. In
   the browser, **Load earlier messages** must bring the prompt back, keep the
   reader's row on screen (moving the list off the top when rows land above
   it), and expand a tool row from the loaded page. Then the same after a reload.
+  "Keep" means the list stands within 8 px of the position that puts the row
+  back at its old offset, limited to the list's scroll range. A tool-only run
+  folds into one group, so after the last page the whole transcript can fit
+  the viewport. The prompt then pushes the row down and the list stays at
+  the top, which is the only position it can take. Each click records a
+  content-free `-layout` annotation (part ids, stops, boxes, scroll range)
+  so a drift can be attributed without reading transcript text.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project

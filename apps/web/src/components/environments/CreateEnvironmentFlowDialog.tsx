@@ -1,6 +1,6 @@
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -186,8 +186,11 @@ export function CreateEnvironmentFlowDialog({
   );
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const localEnvironmentAvailableRef = useRef(localEnvironmentAvailable);
-  dockerAvailableRef.current = dockerAvailable;
-  localEnvironmentAvailableRef.current = localEnvironmentAvailable;
+  // Read after the credential preflight's await, so they track the latest commit.
+  useLayoutEffect(() => {
+    dockerAvailableRef.current = dockerAvailable;
+    localEnvironmentAvailableRef.current = localEnvironmentAvailable;
+  }, [dockerAvailable, localEnvironmentAvailable]);
   const projectName = providedProjectName ?? storedProjectName;
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);

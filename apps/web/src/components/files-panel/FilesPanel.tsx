@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { ChangesView } from "./ChangesView";
@@ -79,9 +79,12 @@ export function FilesPanel() {
     [copyExternalFiles],
   );
 
-  useEffect(() => {
+  // A pending action belongs to the environment it was requested in.
+  const [actionEnvironmentId, setActionEnvironmentId] = useState(environmentId);
+  if (environmentId !== actionEnvironmentId) {
+    setActionEnvironmentId(environmentId);
     setPendingAction(null);
-  }, [environmentId]);
+  }
 
   const requestFileAction = (kind: PendingFileAction["kind"], path: string | string[]) => {
     const paths = Array.isArray(path) ? path : [path];

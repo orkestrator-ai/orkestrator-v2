@@ -99,6 +99,8 @@ type Interaction = { id: string; sessionId: string; kind: string; state: string 
 type Projection = {
   sessionId?: string;
   turn: { phase: string; error?: string };
+  /** The session's live MCP inventory, when it reports one (names only are read). */
+  runtime?: { mcp?: Array<{ name: string }> };
   messages: Message[];
   interactions?: Interaction[];
 };
@@ -648,6 +650,14 @@ test.describe("live MCP apply", () => {
           // Give a slow server a moment to flush its log line.
           await new Promise((resolve) => setTimeout(resolve, 500));
           const rows = toolRows(outcome.fresh);
+          // Read only when a substitution needs judging: the inventory is
+          // the runtime's own word that a probed name is gone.
+          const inventory =
+            !expectation.reach && rows.length > 0
+              ? await projection(tab)
+                  .then((current) => current?.runtime?.mcp?.map((server) => server.name))
+                  .catch(() => undefined)
+              : undefined;
           const verdict = judgeProbe({
             events: events(),
             server,
@@ -656,6 +666,7 @@ test.describe("live MCP apply", () => {
             expect: expectation,
             toolRows: rows,
             turnError: outcome.error,
+            ...(inventory ? { inventory } : {}),
           });
           console.log(
             `[mcp-qualification] ${platform}: probe ${verdict.passed ? "passed" : "failed"}`,
@@ -676,6 +687,9 @@ test.describe("live MCP apply", () => {
             // arguments or output), so a call that never reached a server
             // shows whether it was refused, failed or never attempted.
             ...(rows.length > 0 ? { toolRows: rows } : {}),
+            ...(inventory
+              ? { inventory: inventory.filter((name) => PROBE_SERVER_NAME.test(name)) }
+              : {}),
           };
           return record;
         };
@@ -954,6 +968,19 @@ test.describe("live MCP apply", () => {
             }
           }
           record.operation.afterEvidence = await evidence(result.operation.operationId);
+          if (platform === "codex") {
+            // The real model turn above must both reach the changed tool and
+            // advance that thread's scheduler evidence from pending to applied.
+            for (const tab of new Set(probes.map((entry) => entry.tab))) {
+              const runtime = record.operation.afterEvidence.find((entry) =>
+                entry.label.endsWith(` · ${tab}`),
+              );
+              expect(
+                runtime?.state,
+                `${name}: Codex thread ${tab} adopted the saved configuration`,
+              ).toBe("applied");
+            }
+          }
           return { record, entryId: result.entryId };
         };
 

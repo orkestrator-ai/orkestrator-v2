@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import * as persistence from "@/lib/prompt-queue-persistence";
 import {
   hydratePromptQueue,
@@ -27,9 +28,14 @@ let revision = 0;
 let latest: ReturnType<typeof usePromptQueueDispatchRecovery> | null = null;
 
 function Probe({ agent, sessionKey }: { agent: string; sessionKey: string }) {
-  renderCount += 1;
-  latest = usePromptQueueDispatchRecovery(agent, sessionKey);
-  return <div data-testid="dispatch-error">{latest.dispatchError?.message ?? "none"}</div>;
+  const recovery = usePromptQueueDispatchRecovery(agent, sessionKey);
+  // Recorded at commit: an effect without dependencies runs once for every
+  // render of the probe that commits.
+  useLayoutEffect(() => {
+    renderCount += 1;
+    latest = recovery;
+  });
+  return <div data-testid="dispatch-error">{recovery.dispatchError?.message ?? "none"}</div>;
 }
 
 function error(message: string): PromptQueueDispatchError {

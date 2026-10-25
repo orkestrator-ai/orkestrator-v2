@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
+
+const NO_SUBSCRIPTION = () => {};
 
 /** Formats a live prompt deadline as `m:ss`, or null once it has expired. */
 export function formatPromptDeadline(msRemaining: number): string | null {
@@ -20,22 +22,26 @@ export function usePromptDeadline(expiresAt?: number): {
   remaining: string | null;
   expired: boolean;
 } {
-  const [, setTick] = useState(0);
   const invalid = expiresAt !== undefined && !Number.isFinite(expiresAt);
-  const remaining =
-    expiresAt === undefined || invalid ? null : formatPromptDeadline(expiresAt - Date.now());
 
-  useEffect(() => {
-    if (expiresAt === undefined || invalid) return;
-    // Derived here rather than from `remaining`, which is recomputed from
-    // Date.now() every render and would re-create the interval each second.
-    if (expiresAt - Date.now() <= 0) return;
-    const timer = setInterval(() => {
-      setTick((tick) => tick + 1);
-      if (Date.now() >= expiresAt) clearInterval(timer);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [expiresAt, invalid]);
+  // The wall clock is the external store. The snapshot is the formatted
+  // countdown, which only changes once a second, so ticks between changes do
+  // not re-render.
+  const subscribe = useCallback(
+    (onTick: () => void) => {
+      if (expiresAt === undefined || invalid) return NO_SUBSCRIPTION;
+      if (expiresAt - Date.now() <= 0) return NO_SUBSCRIPTION;
+      const timer = setInterval(() => {
+        onTick();
+        if (Date.now() >= expiresAt) clearInterval(timer);
+      }, 1000);
+      return () => clearInterval(timer);
+    },
+    [expiresAt, invalid],
+  );
+  const readRemaining = () =>
+    expiresAt === undefined || invalid ? null : formatPromptDeadline(expiresAt - Date.now());
+  const remaining = useSyncExternalStore(subscribe, readRemaining, readRemaining);
 
   return {
     remaining,

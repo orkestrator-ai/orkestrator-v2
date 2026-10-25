@@ -348,8 +348,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "lease-expiry",
   ),
   // Step 08 keyed supervision by default (per-workflow due times, 30 s safety
-  // discovery); the adaptive due scheduler is its rollback and the legacy 1 s
-  // tick remains behind `adaptiveScheduling: false`.
+  // discovery); the adaptive due scheduler is its rollback
+  // (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review`). The legacy 1 s
+  // whole-store tick is gone.
   "multi-review-tick": backend(
     "B16",
     "interval",

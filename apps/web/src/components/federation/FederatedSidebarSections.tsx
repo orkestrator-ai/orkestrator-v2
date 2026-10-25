@@ -58,6 +58,7 @@ import {
 } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
+import type { ActivitySortOrder } from "@/stores/uiStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
@@ -557,18 +558,20 @@ export function MergedProjectList({
 }
 
 /**
- * "By activity" across machines: every shown environment, attention first,
+ * "By activity" across machines: every shown environment in the chosen order,
  * each row laid out as this window's own activity rows are.
  */
 export function FederatedActivityList({
   machines,
+  order = "priority",
   renderBoundRow,
 }: {
   machines: readonly MachineView[];
+  order?: ActivitySortOrder;
   /** A whole activity row of this window's own machine. */
   renderBoundRow: (environmentId: string) => ReactNode;
 }) {
-  const rows = activityRows(machines);
+  const rows = activityRows(machines, order);
   return (
     <div className="px-1 pt-2" data-testid="federated-activity-list">
       {rows.length === 0 ? (

@@ -535,8 +535,10 @@ describe("DesignWorkspaceDialog", () => {
       };
       if (command === "design_action" && request.action === "create_canvas") return canvas;
       if (command === "write_local_file") return `${request.worktreePath}/${request.filePath}`;
+      if (command === "enqueue_prompt_queue_message") return queueWrite.promise;
       throw new Error(`Unexpected command: ${command}`);
     });
+    const queueWrite = deferred<unknown>();
     let draftAtLaunch: ReturnType<typeof nativeComposeDraft> | null = null;
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "claude")
@@ -569,6 +571,36 @@ describe("DesignWorkspaceDialog", () => {
       expect(draftAtLaunch!.attachments[0]).toMatchObject({ type: "image" });
       expect(draftAtLaunch!.attachments[0]!.path).toStartWith("/tmp/wt/.orkestrator/clipboard/");
       expect(onOpenChange).toHaveBeenCalledWith(false);
+
+      // The backend queue gets the same brief and image under the tab's
+      // opening-prompt id, so it is sent even if the tab never mounts.
+      const tabId = agentCall![1]!.tabId!;
+      const sessionKey = createSessionKey("env-1", tabId);
+      const queued = invokeMock.mock.calls.find(
+        ([command]) => command === "enqueue_prompt_queue_message",
+      )?.[1] as { queueKey: string; environmentId: string; message: Record<string, unknown> };
+      expect(queued.queueKey).toBe(`claude\u0000${sessionKey}`);
+      expect(queued.message).toMatchObject({
+        id: `initial-prompt:env-1:${tabId}`,
+        requestId: `initial-prompt:env-1:${tabId}`,
+        text: agentCall![1]!.initialPrompt,
+        attachments: [
+          {
+            type: "image",
+            path: draftAtLaunch!.attachments[0]!.path,
+            filename: expect.any(String),
+          },
+        ],
+      });
+      // Until the queue write lands, the draft is the renderer fallback.
+      expect(
+        nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+      ).toHaveLength(1);
+      queueWrite.resolve({});
+      await flush();
+      expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual(
+        [],
+      );
     } finally {
       restorePaste();
     }

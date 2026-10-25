@@ -48,8 +48,7 @@ import { type AgentLaunchSelection } from "@/components/launch/AgentLaunchDialog
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { useLongPressAction } from "@/hooks/useLongPressAction";
-import { promptQueueKey } from "@/lib/prompt-queue-persistence";
-import { createSessionKey } from "@/lib/utils";
+import { handTabInitialPromptToBackend } from "@/lib/tab-initial-prompt";
 import { createUuid } from "@/lib/uuid";
 import {
   usePaneLayoutStore,
@@ -843,68 +842,32 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         return;
       }
 
-      const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
-      const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
       // When neither the dialog nor a configured default named a model, the
       // queued turn falls back to the platform's globally configured one. The tab
       // is left to resolve that itself, which is why it is not passed above.
       const model = requestedModel === "default" ? undefined : requestedModel;
       const reasoningEffort = initialReasoningEffort ?? preferredEffortsByPlatform[agent];
-      const queuedReview =
-        agent === "claude"
-          ? {
-              id: requestId,
-              requestId,
-              text: reviewPrompt,
-              attachments: [],
-              model,
-              effort: reasoningEffort ?? "high",
-              planModeEnabled: false,
-              ...(typeof initialFastMode === "boolean" ? { fastModeEnabled: initialFastMode } : {}),
-            }
-          : agent === "codex"
-            ? {
-                id: requestId,
-                requestId,
-                text: reviewPrompt,
-                attachments: [],
-                model,
-                reasoningEffort: reasoningEffort ?? "high",
-                mode: "build" as const,
-                ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
-              }
-            : {
-                id: requestId,
-                requestId,
-                text: reviewPrompt,
-                attachments: [],
-                model,
-                variant: reasoningEffort,
-                mode: "build" as const,
-                ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
-              };
 
       // Do not await UI lifecycle work after this hand-off. The queue mutation is
       // durable and wakes the backend dispatcher, so unmounting this ActionBar or
       // switching environments cannot delay the review until the tab is opened.
-      void backend
-        .enqueuePromptQueueMessage(
-          promptQueueKey(agent, logicalSessionKey),
-          selectedEnvironmentId,
-          queuedReview,
-        )
-        .then(() => {
-          // Persistence is now authoritative. Remove the renderer fallback before
-          // a later remount can mistake it for an undispatched launch. Both paths
-          // use the same request id, so a mount racing this acknowledgement remains
-          // provider-idempotent.
-          usePaneLayoutStore.getState().clearTabInitialPrompt(tabId, selectedEnvironmentId);
-        })
-        .catch((error) => {
-          toast.error("Could not start review", {
-            description: error instanceof Error ? error.message : String(error),
-          });
+      void handTabInitialPromptToBackend({
+        environmentId: selectedEnvironmentId,
+        tabId,
+        agent,
+        prompt: reviewPrompt,
+        options: {
+          model,
+          reasoningEffort:
+            agent === "claude" || agent === "codex" ? (reasoningEffort ?? "high") : reasoningEffort,
+          mode: "build",
+          ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+        },
+      }).catch((error) => {
+        toast.error("Could not start review", {
+          description: error instanceof Error ? error.message : String(error),
         });
+      });
     },
     [
       actionDefaultFor,

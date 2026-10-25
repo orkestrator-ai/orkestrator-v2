@@ -21,10 +21,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { modelSupportsSpeed } from "@/lib/agent-launch";
+import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { pickHostPath } from "@/lib/host-path-picker";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import {
+  handTabInitialPromptToBackend,
+  type TabInitialPromptOptions,
+} from "@/lib/tab-initial-prompt";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import {
@@ -107,6 +115,49 @@ function removeTab(environmentId: string, tabId: string) {
 }
 
 const errorText = (error: unknown) => failureOf(error).message;
+
+/**
+ * The settings the mounted tab would send its opening prompt with, so the
+ * backend queue and the renderer fallback start the same session.
+ */
+function designInitialPromptOptions(
+  environmentId: string,
+  platform: DesignAgent,
+  images: readonly DesignPromptImage[],
+): TabInitialPromptOptions {
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  const configured = resolvedPlatformSettings(
+    useConfigStore.getState().config,
+    environment?.projectId,
+    environment,
+    platform,
+  );
+  const fastMode = modelSupportsSpeed(platform, buildReviewModelCatalog(), configured.model)
+    ? configured.fastMode
+    : undefined;
+  return {
+    model: configured.model,
+    reasoningEffort: configured.reasoningEffort,
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+    mode: "build",
+    attachments: images.map((image) => ({
+      type: image.type,
+      path: image.path,
+      filename: image.name,
+    })),
+  };
+}
+
+/** Once the backend queue carries the brief's images, the tab's draft must not send them again. */
+function removeDraftAttachments(sessionKey: string, images: readonly DesignPromptImage[]) {
+  if (images.length === 0) return;
+  const store = useNativeComposeStore.getState();
+  const queued = new Set(images.map((image) => image.path));
+  const current = nativeComposeDraft(store, sessionKey).attachments;
+  const remaining = current.filter((attachment) => !queued.has(attachment.path));
+  if (remaining.length !== current.length)
+    store.updateDraft(sessionKey, { attachments: remaining });
+}
 
 export function DesignWorkspaceDialog({
   open,
@@ -357,12 +408,29 @@ export function DesignWorkspaceDialog({
             );
           let created = false;
           try {
+            // The prompt stays on the tab as the renderer fallback until the
+            // backend queue has it; see `handTabInitialPromptToBackend`.
             created = createTab(platform, {
               tabId,
               agentLaunchMode: "native",
               displayTitle: "Design",
               initialPrompt,
             });
+            if (created)
+              void handTabInitialPromptToBackend({
+                environmentId,
+                tabId,
+                agent: platform,
+                prompt: initialPrompt,
+                options: designInitialPromptOptions(environmentId, platform, images),
+              }).then(
+                () => removeDraftAttachments(sessionKey, images),
+                (reason) =>
+                  console.warn(
+                    "[design] The opening prompt stays with the tab until it mounts:",
+                    reason instanceof Error ? reason.message : reason,
+                  ),
+              );
             return created;
           } finally {
             const store = usePaneLayoutStore.getState();

@@ -12,6 +12,7 @@ export default defineConfig({
     "browser-gateway.spec.ts",
     "agent-accounts.spec.ts",
     "design-canvas.spec.ts",
+    "design-container-export.spec.ts",
     "design-live.spec.ts",
     "native-draft-attachments.spec.ts",
     "web-annotations-gateway.spec.ts",

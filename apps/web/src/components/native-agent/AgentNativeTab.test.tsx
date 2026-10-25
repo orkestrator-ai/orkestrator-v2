@@ -6044,6 +6044,52 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("never queues an opening prompt behind a running turn", async () => {
+    // The backend prompt queue may already be running this very prompt under
+    // its stable id. Queueing it again would carry no id and send it twice, so
+    // the tab waits for idle and sends it under the id the backend dedupes.
+    let phase: "running" | "idle" = "running";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        capabilities: { ...projection.capabilities, queue: true },
+        turn: { phase },
+      };
+    });
+    render(
+      <AgentNativeTab
+        tabId="tab-opening-running"
+        data={identity("codex")}
+        isActive
+        initialPrompt="Mock up the sidebar"
+      />,
+    );
+
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    phase = "idle";
+    await act(async () => {
+      dispatchResourceChange({ resource: "native-agent-session", id: "env-1", revision: 2 });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: "Mock up the sidebar",
+      requestId: "initial-prompt:env-1:tab-opening-running",
+    });
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+  });
+
   test("withholds a resumed tab's opening prompt when the session was substituted", async () => {
     // Adoption falls back to creating a fresh session when the provider has
     // forgotten the rollout. "Address every finding" carries no findings of its

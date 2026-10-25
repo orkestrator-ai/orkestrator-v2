@@ -19,10 +19,22 @@ canvas that remembers the file as its save location (`design_open_file`,
 `openDesignFile` in `design/exports.ts`). Create is blocked, with a one-line
 reason and **Check again**, when the backend, storage or renderer is unavailable.
 
+The brief is the new agent tab's opening prompt, and the backend owns sending
+it. `handTabInitialPromptToBackend` (`apps/web/src/lib/tab-initial-prompt.ts`)
+puts it on the tab's durable prompt queue under
+`initial-prompt:<environment>:<tab>` as soon as the tab exists. The backend
+queue dispatcher creates the session, waits until the environment is ready for
+agents and sends it, so switching environment, or never opening the tab, does
+not hold up the first turn. Until that queue write lands, the prompt also
+stays on the tab as a renderer fallback, sent under the same request id, which
+the backend dedupes. The fallback never joins a running turn's id-less queue
+(`noQueue` in the controller's `submit`). The review action's opening prompt
+uses the same helper.
+
 Images pasted into the **New design** brief are written into the environment
-(`.orkestrator/clipboard/`, like a composer paste) and seeded into the new
-agent tab's draft before it mounts, so they travel as attachments of its first
-message. The chat beside the canvas is an ordinary native conversation, so
+(`.orkestrator/clipboard/`, like a composer paste). They travel as attachments
+of the queued prompt, and are also seeded into the new agent tab's draft for
+the fallback until the queue write lands. The chat beside the canvas is an ordinary native conversation, so
 pasting an image into its composer attaches it as usual. New design and Ask
 agent reserve attachment slots as paste events arrive and disable confirmation
 until decoding and file writes settle. Submission freezes further image pastes;

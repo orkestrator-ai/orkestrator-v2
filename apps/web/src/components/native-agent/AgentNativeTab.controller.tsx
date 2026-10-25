@@ -95,6 +95,7 @@ import {
   writeCoordinatorAttachment,
 } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
+import { tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
@@ -1547,9 +1548,13 @@ export function SharedNativeAgentController({
       requestId?: string,
       preparedPrompt = false,
       modeOverride?: "build" | "plan",
-      submitOptions?: { literal?: boolean },
+      submitOptions?: { literal?: boolean; noQueue?: boolean },
     ) => {
       if (submitInFlightRef.current) return false;
+      // A prompt with a stable id must not be queued: the queue carries no id,
+      // so a copy the backend already sent would run twice. Retried by the
+      // caller once the turn ends and this callback changes.
+      if (submitOptions?.noQueue && canQueue) return false;
       // Claim the intent before validation or dispatch. A remount cannot replay
       // it a second time, and every terminal validation return releases it.
       settleHeldSubmit();
@@ -2320,12 +2325,21 @@ export function SharedNativeAgentController({
       return;
     }
     initialPromptSentRef.current = true;
-    void submit(initialPrompt, `initial-prompt:${data.environmentId}:${tabId}`, true).then(
-      (accepted) => {
-        if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
-        else initialPromptSentRef.current = false;
+    // `noQueue`: the backend queue may already have sent this very prompt under
+    // the same id (`handTabInitialPromptToBackend`), so it waits for idle
+    // rather than joining the queue without an id.
+    void submit(
+      initialPrompt,
+      tabInitialPromptRequestId(data.environmentId, tabId),
+      true,
+      undefined,
+      {
+        noQueue: true,
       },
-    );
+    ).then((accepted) => {
+      if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
+      else initialPromptSentRef.current = false;
+    });
   }, [
     backendOwnsStartupPrompt,
     clearTabInitialPrompt,

@@ -614,11 +614,15 @@ rather than a name, and "signed in" is one answer per provider.
 - A session with no explicit model starts on Pi's saved default
   (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
   provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
-  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
-  straight to the first model: a login can refuse models its provider lists,
-  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
-  and under the legacy `openai-codex`). Project settings count only when the
-  session trusts the project.
+  last resort from `lastResortModelId` in `models.ts` (`defaultModelIds` in
+  `agent-session.ts` supplies the preferences). The last resort is the
+  catalogue's first model, except when its provider uses a ChatGPT subscription
+  login (`openai` with OAuth since Pi 1.2.0, or legacy `openai-codex`). Then
+  it is the newest model in pi-ai's ChatGPT-backend catalogue (the
+  `openai-codex` provider's built-in list) that the login offers: the login
+  can refuse other models its provider lists. `models.test.ts` pins this
+  premise against the real SDK; recheck it on every Pi bump. Project settings
+  count only when the session trusts the project.
 - Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
   `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
   developer's saved default or writes `auth.json`/`models-store.json` into
@@ -925,9 +929,10 @@ names at all. Three invariants keep it honest:
 - **Assume no sandbox behind it.** The SDK sandbox lets a command write its
   working directory, which for a coordinator is the user's checkout, so
   `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
-  the sandbox cannot start at all (Windows, Linux without bubblewrap and
-  socat; the launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`)
-  this allowlist is the whole boundary. A command it admits must neither write
+  the sandbox cannot run commands at all (Windows; Linux without bubblewrap
+  and socat, or whose bubblewrap cannot nest the CLI's user namespace; the
+  launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`) it is left
+  off and this allowlist is the whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
   `git ls-remote` are refused rather than left to the sandbox.
 
@@ -1109,7 +1114,8 @@ else is rejected outright. `full` mode skips the firewall entirely.
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
   re-adds Codex's (`chatgpt.com`, `auth.openai.com`, for ChatGPT sign-in),
-  Cursor's, Grok's and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
+  Cursor's, OpenCode's (`opencode.ai`, its own Zen and Go providers), Grok's
+  and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
@@ -1482,11 +1488,13 @@ that a missed event can be recovered.
   or installed dependencies require stopping and starting the profile again.
 - Backend business-logic changes generally require a restart because the
   supervised backend is not a Vite module.
-- Bridge changes need a rebuild first: a profile runs local bridges from
-  `bridges/<name>/dist/index.js`, and `dev:test` bundles only Electron. Run
-  that bridge's `build` script (for example
-  `bun run --cwd bridges/codex-bridge build`), then restart the profile, or
-  the run silently exercises the old bridge.
+- Bridge changes need a profile restart: a profile runs local bridges from
+  `bridges/<name>/dist/index.js`, which `dev:test` builds (through Turbo) only
+  when it starts. The browser and coordinator agent-testing Playwright configs
+  (including the browser-derived Claude warm and paused-interactions configs)
+  refuse to run against a profile whose bridge sources or `dist` changed since
+  then; restart it with `dev:stop` and `dev:test`. The Electron config does not
+  use this freshness guard.
 - Use `dev:reset` only when the scenario requires pristine persisted state. A
   normal implementation loop should preserve the profile so reload and
   rehydration behavior remain testable.

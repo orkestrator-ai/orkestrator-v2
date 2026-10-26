@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type {
-  ContainerResourceLimits,
-  DockerCapacity,
+import {
+  unenforceableAxes,
+  type ContainerResourceLimits,
+  type DockerCapacity,
 } from "@orkestrator/protocol/container-resources";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -106,6 +107,18 @@ const AXIS_LABELS: Record<keyof ContainerResourceLimits, string> = {
   pids: "processes",
 };
 
+function axisList(axes: ReadonlyArray<keyof ContainerResourceLimits>): string {
+  return axes.map((axis) => AXIS_LABELS[axis]).join(" and ");
+}
+
+/** What happens to a budget naming an axis this Docker cannot enforce. */
+export function unenforceableBudgetMessage(
+  axes: ReadonlyArray<keyof ContainerResourceLimits>,
+): string {
+  const [limit, them] = axes.length > 1 ? ["limits", "them"] : ["limit", "it"];
+  return `This Docker engine cannot enforce the ${axisList(axes)} ${limit}, so new containers are refused while it is set. Clear ${them}, or use a Docker engine that can enforce ${them}.`;
+}
+
 /** "8 GB memory · 4096 processes · no CPU limit" */
 export function describeBuiltInDefault(limits: ContainerResourceLimits): string {
   return [
@@ -155,11 +168,15 @@ export function ContainerResourceLimitsSettings({
   // An older backend reports no built-in default and applies none.
   const builtIn = capacity?.builtInDefault;
   const legacyBackend = capacity !== null && !builtIn;
+  // Shown while editing; the backend's answer on save is authoritative. A
+  // capacity without `support` (an older backend) says nothing either way.
+  const draftUnenforceable =
+    mode === "custom" && capacity?.support ? unenforceableAxes(draftToLimits(draft), capacity) : [];
 
   const save = async () => {
     setSaving(true);
     try {
-      await backend.setContainerResourceLimits(
+      const saved = await backend.setContainerResourceLimits(
         mode === "custom"
           ? draftToLimits(draft)
           : mode === "unrestricted"
@@ -168,9 +185,16 @@ export function ContainerResourceLimitsSettings({
         machine,
       );
       setConfig(await backend.getConfig(machine));
-      toast.success("Resource limits saved", {
-        description: "They apply to containers created or rebuilt from now on.",
-      });
+      const unenforceable = saved?.unenforceable ?? [];
+      if (unenforceable.length > 0) {
+        toast.warning("Resource limits saved, but Docker cannot enforce them", {
+          description: unenforceableBudgetMessage(unenforceable),
+        });
+      } else {
+        toast.success("Resource limits saved", {
+          description: "They apply to containers created or rebuilt from now on.",
+        });
+      }
     } catch (err) {
       toast.error("Could not save resource limits", {
         description: err instanceof Error ? err.message : String(err),
@@ -206,9 +230,13 @@ export function ContainerResourceLimitsSettings({
         </p>
         {mode === "default" && builtIn && builtIn.unenforced.length > 0 ? (
           <p className="text-xs text-yellow-700 dark:text-yellow-400">
-            This Docker engine cannot enforce the default{" "}
-            {builtIn.unenforced.map((axis) => AXIS_LABELS[axis]).join(" and ")} limit, so it is left
-            off.
+            This Docker engine cannot enforce the default {axisList(builtIn.unenforced)} limit, so
+            it is left off.
+          </p>
+        ) : null}
+        {draftUnenforceable.length > 0 ? (
+          <p role="alert" className="text-xs text-yellow-700 dark:text-yellow-400">
+            {unenforceableBudgetMessage(draftUnenforceable)}
           </p>
         ) : null}
         {legacyBackend ? (

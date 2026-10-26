@@ -23,6 +23,7 @@ export default defineConfig({
     [path.join(import.meta.dirname, "artifact-sanitizing-reporter.ts"), { suite: "coordinator" }],
   ],
   outputDir: path.join(outputRoot, "artifacts"),
+  globalSetup: path.join(import.meta.dirname, "bridge-builds-setup.ts"),
   globalTeardown: path.join(import.meta.dirname, "coordinator-live-teardown.ts"),
   use: {
     browserName: "chromium",

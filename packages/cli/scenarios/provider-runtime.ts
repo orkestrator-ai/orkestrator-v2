@@ -1,5 +1,6 @@
 import { copyFile, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 
 /**
@@ -12,9 +13,15 @@ import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-plat
  * (`<bridge>/dist` and `package.json`). The published package is unchanged,
  * and the CLI, backend and claude/codex bridges under test are still the
  * packaged ones. A fresh data directory enables only the legacy platforms,
- * so the provider is enabled too; Grok also needs its pinned binary, which
- * never falls back to PATH.
+ * so the provider is enabled too.
+ *
+ * Every provider with a pinned binary gets it installed into the data
+ * directory: an agent-test backend never falls back to PATH (#1270), so a
+ * Claude, Codex, OpenCode, Pi or Grok session would otherwise fail to start.
  */
+
+/** Providers whose agent binary the toolchain pins (`toolchain install --tool`). */
+const PINNED_TOOLS: ReadonlySet<string> = new Set(Object.keys(PINNED_TOOLCHAIN_VERSIONS));
 
 /** Providers whose bridge the package does not ship, with that bridge. */
 export const REPOSITORY_BRIDGES: Readonly<Record<string, string>> = Object.freeze({
@@ -47,7 +54,9 @@ export async function prepareProviderRuntime(options: {
   repositoryRoot?: string;
 }): Promise<ProviderRuntime> {
   const bridge = options.provider ? REPOSITORY_BRIDGES[options.provider] : undefined;
-  if (!options.provider || !bridge) return { serveArgs: [], toolchainTools: [] };
+  const toolchainTools =
+    options.provider && PINNED_TOOLS.has(options.provider) ? [options.provider] : [];
+  if (!options.provider || !bridge) return { serveArgs: [], toolchainTools };
   const repositoryRoot = options.repositoryRoot ?? path.resolve(options.packageRoot, "../..");
   const resourceRoot = path.join(options.root, "resources");
   await mkdir(resourceRoot, { recursive: true, mode: 0o700 });
@@ -73,6 +82,6 @@ export async function prepareProviderRuntime(options: {
   );
   return {
     serveArgs: ["--resource-root", resourceRoot],
-    toolchainTools: options.provider === "grok" ? ["grok"] : [],
+    toolchainTools,
   };
 }

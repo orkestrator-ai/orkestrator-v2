@@ -10,6 +10,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { BACKEND_INSTANCE_DESCRIPTOR_TYPE } from "@orkestrator/protocol/backend-instance";
 import { stagePortableInputs } from "../../../apps/backend/src/core/portable-inputs.js";
 import os from "node:os";
@@ -20,7 +21,8 @@ import {
   INHERITED_AGENT_TOOL_ENV,
   prepareIsolatedBackendEnvironment,
 } from "../scenarios/provider-homes.js";
-import { prepareProviderRuntime } from "../scenarios/provider-runtime.js";
+import { prepareProviderRuntime, REPOSITORY_BRIDGES } from "../scenarios/provider-runtime.js";
+import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 
 /**
  * Live scenarios must never write into the host's provider homes, and may see
@@ -577,6 +579,16 @@ describe("prepareProviderRuntime", () => {
     return { packageRoot, root, dataDir, repo: path.join(base, "repo") };
   }
 
+  test("every manifest agent installs its pinned tool; Cursor and support tools are excluded", async () => {
+    for (const provider of [...Object.keys(PINNED_TOOLCHAIN_VERSIONS), "cursor", "gh"]) {
+      const { packageRoot, root, dataDir } = await layout();
+      const runtime = await prepareProviderRuntime({ root, dataDir, packageRoot, provider });
+      expect(runtime.toolchainTools).toEqual(
+        Object.hasOwn(PINNED_TOOLCHAIN_VERSIONS, provider) ? [provider] : [],
+      );
+    }
+  });
+
   test("packaged providers keep the packaged resources untouched", async () => {
     const { packageRoot, root, dataDir } = await layout();
     for (const provider of [undefined, "claude", "codex", "opencode"]) {
@@ -587,13 +599,15 @@ describe("prepareProviderRuntime", () => {
           packageRoot,
           ...(provider ? { provider } : {}),
         }),
-      ).toEqual({ serveArgs: [], toolchainTools: [] });
+        // An agent-test backend never falls back to PATH, so a packaged
+        // provider still needs its pinned binary.
+      ).toEqual({ serveArgs: [], toolchainTools: provider ? [provider] : [] });
     }
     expect(await readdir(dataDir)).toEqual([]);
   });
 
   test.each([
-    ["pi", "pi-bridge", []],
+    ["pi", "pi-bridge", ["pi"]],
     ["cursor", "cursor-bridge", []],
     ["grok", "acp-bridge", ["grok"]],
   ] as const)(
@@ -628,7 +642,7 @@ describe("prepareProviderRuntime", () => {
     },
   );
 
-  test.each(["pi", "cursor", "grok"])(
+  test.each([...Object.keys(PINNED_TOOLCHAIN_VERSIONS), "cursor"])(
     "startIsolatedBackend wires %s resources and installs only its pinned tools",
     async (provider) => {
       const { packageRoot, root, dataDir } = await layout();
@@ -637,11 +651,12 @@ describe("prepareProviderRuntime", () => {
       await writeFile(
         path.join(packageRoot, "bin", "orkestrator.js"),
         `
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 const args = process.argv.slice(2);
 const dataDir = args[args.indexOf("--data-dir") + 1];
-const platforms = JSON.parse(readFileSync(path.join(dataDir, "agent-platforms.json"), "utf8"));
+const platformFile = path.join(dataDir, "agent-platforms.json");
+const platforms = existsSync(platformFile) ? JSON.parse(readFileSync(platformFile, "utf8")) : { enabled: ${JSON.stringify(LEGACY_ENABLED_AGENT_PLATFORMS)} };
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, platforms }) + "\\n");
 if (args[0] === "toolchain") process.exit(process.env.FAIL_INSTALL === "1" ? 1 : 0);
 writeFileSync(path.join(dataDir, "backend-instance.json"), JSON.stringify({
@@ -666,15 +681,20 @@ setInterval(() => {}, 1000);
           .map((line) => JSON.parse(line));
         const serve = recorded.at(-1);
         expect(serve.args.slice(0, 1)).toEqual(["serve"]);
-        expect(
-          serve.args.slice(
-            serve.args.indexOf("--resource-root"),
-            serve.args.indexOf("--resource-root") + 2,
-          ),
-        ).toEqual(["--resource-root", path.join(root, "resources")]);
+        if (REPOSITORY_BRIDGES[provider]) {
+          expect(
+            serve.args.slice(
+              serve.args.indexOf("--resource-root"),
+              serve.args.indexOf("--resource-root") + 2,
+            ),
+          ).toEqual(["--resource-root", path.join(root, "resources")]);
+        } else {
+          expect(serve.args).not.toContain("--resource-root");
+        }
         expect(serve.platforms.enabled).toContain(provider);
-        expect(recorded).toHaveLength(provider === "grok" ? 2 : 1);
-        if (provider === "grok")
+        // Cursor is the explicit exception; every manifest agent installs before serve.
+        expect(recorded).toHaveLength(provider === "cursor" ? 1 : 2);
+        if (provider !== "cursor")
           expect(recorded[0].args).toEqual([
             "toolchain",
             "install",
@@ -682,7 +702,7 @@ setInterval(() => {}, 1000);
             "--data-dir",
             dataDir,
             "--tool",
-            "grok",
+            provider,
           ]);
       } finally {
         await backend.stop();

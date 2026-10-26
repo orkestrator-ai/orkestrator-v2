@@ -5,6 +5,7 @@ import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { setClaudeLinuxSandboxStatusForTests } from "@orkestrator/protocol/node/claude-linux-sandbox";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Bun's `mock.module(...)` is process-global, so without this restore step the
@@ -2054,6 +2055,57 @@ describe("session routes", () => {
     });
   });
 
+  describe("a turn that requires a sandbox this host cannot run commands in", () => {
+    const reason =
+      "Claude's command sandbox cannot run commands on this host: bubblewrap starts, but AppArmor's bwrap-userns-restrict profile strips capabilities from the user namespace the Claude CLI nests inside it.";
+
+    async function promptOnLinux(body: Record<string, unknown>) {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      setClaudeLinuxSandboxStatusForTests({
+        available: false,
+        failure: "nested-user-namespace",
+        reason,
+      });
+      try {
+        return await jsonRequest("POST", "/session/s-1/prompt", body);
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+        setClaudeLinuxSandboxStatusForTests({ available: true });
+      }
+    }
+
+    test("is refused with the probe's reason before anything is journaled", async () => {
+      mockGetSession.mockImplementation((id) =>
+        id === "s-1"
+          ? ({
+              ...defaultGetSession(id)!,
+              executionPolicy: {
+                id: "interactive-host",
+                sandbox: "provider",
+                approvals: "auto-approve",
+                projectResources: true,
+                networkAccess: "full",
+              },
+            } as never)
+          : undefined,
+      );
+      const refused = await promptOnLinux({ prompt: "List the files", requestId: "sandboxed" });
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toEqual({ error: reason, kind: "sandbox-unavailable" });
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("a session without the provider sandbox is unaffected", async () => {
+      const passed = await promptOnLinux({ prompt: "List the files", requestId: "plain" });
+      expect(passed.status).toBe(202);
+      // A read-only review turn in an ordinary bridge keeps today's behaviour (todo 0190).
+      const review = await promptOnLinux({ prompt: "Review", readOnly: true });
+      expect(review.status).toBe(202);
+    });
+  });
+
   /*
    * A backend from before the version-1 catalogue (ff4026b4e^, #827) talking to
    * this bridge. Its `HttpBridgeCatalogAdapter.slashCommands` read
@@ -2446,7 +2498,10 @@ describe("session routes", () => {
         mockGetPromptDispatchState.mockReturnValueOnce(state);
         const res = await app.request("/session/s-1/dispatch?requestId=r-1");
         expect(res.status).toBe(200);
-        expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+        expect(await jsonBody(res)).toEqual({
+          dispatch: "dispatched",
+          pending: state === "processing",
+        });
       }
       expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "r-1");
     });
@@ -2488,7 +2543,10 @@ describe("session routes", () => {
         // reports dispatched: an explicit positive wins.
         for (const state of ["processing", "already-processed"] as const) {
           mockGetPromptDispatchState.mockReturnValueOnce(state);
-          expect(await read("before-restart")).toEqual({ dispatch: "dispatched" });
+          expect(await read("before-restart")).toEqual({
+            dispatch: "dispatched",
+            pending: state === "processing",
+          });
         }
         expect(mockPersistedDispatchClaimLost).not.toHaveBeenCalled();
         // Read-only: never the touching or hydrating lookups.
@@ -2535,7 +2593,7 @@ describe("session routes", () => {
     test("is not shadowed by GET /session/:id", async () => {
       mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const res = await app.request("/session/s-1/dispatch?requestId=r-1");
-      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched", pending: true });
     });
   });
 
@@ -3225,6 +3283,7 @@ describe("persisted session routes", () => {
         status: "error" as "error" | "idle",
         error: "Claude restarted before this turn finished",
         interruption: "restart" as const,
+        interruptedRequestId: "cut-short",
         createdAt: new Date("2026-01-01"),
         lastActivity: new Date("2026-01-01"),
       };
@@ -3234,11 +3293,14 @@ describe("persisted session routes", () => {
         status: "error",
         error: "Claude restarted before this turn finished",
         interruption: "restart",
+        interruptedRequestId: "cut-short",
       });
 
       // A stale field on a session that is no longer failed explains nothing.
       restored.status = "idle";
-      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty("interruption");
+      const idle = await jsonBody(await app.request("/session/s-1"));
+      expect(idle).not.toHaveProperty("interruption");
+      expect(idle).not.toHaveProperty("interruptedRequestId");
       mockGetSession.mockImplementation(defaultGetSession);
     });
 

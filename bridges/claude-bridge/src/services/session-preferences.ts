@@ -68,6 +68,11 @@ export interface ClaudeTurnInFlightMark {
   bridgeInstanceId: string;
   pid: number;
   startedAt: number;
+  /**
+   * The dispatch request id of the turn in flight, when it had one. Optional
+   * and additive: an older bridge reads the mark without it.
+   */
+  requestId?: string;
 }
 
 function parseTurnInFlightMark(value: unknown): ClaudeTurnInFlightMark | undefined {
@@ -89,6 +94,13 @@ function parseTurnInFlightMark(value: unknown): ClaudeTurnInFlightMark | undefin
     bridgeInstanceId: record.bridgeInstanceId,
     pid: record.pid,
     startedAt: record.startedAt,
+    // A malformed request id drops only itself: the mark still reports the
+    // restart, just without naming the request.
+    ...(typeof record.requestId === "string" &&
+    record.requestId.length > 0 &&
+    record.requestId.length <= 200
+      ? { requestId: record.requestId }
+      : {}),
   };
 }
 

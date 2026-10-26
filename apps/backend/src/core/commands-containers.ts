@@ -117,6 +117,8 @@ import {
 } from "./container-resources.js";
 import {
   defaultInputSourceRoots,
+  grokStagingConfig,
+  grokStagingHome,
   stagePortableInputs,
   stagedInputMountArguments,
 } from "./portable-inputs.js";
@@ -476,11 +478,15 @@ export async function createDockerContainer(
     // Grok writes session databases during startup, so its host directory cannot
     // replace the writable container home. Mount portable inputs separately;
     // entrypoint.sh copies a bounded allowlist.
+    // An agent-test run's Grok login is its own restricted copy, as for
+    // staged inputs (`grokStagingHome`).
     if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
-      const grokHome =
-        context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
-      await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
-      await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
+      const grokRoots = defaultInputSourceRoots(
+        context.runtimeFlavor,
+        AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+      );
+      await bindIfExists(grokStagingHome(grokRoots), "/grok-home");
+      await bindIfExists(grokStagingConfig(grokRoots), "/grok-config");
     }
     // Pi has no vendor account: its credentials are the user's own provider keys
     // in `~/.pi/agent/auth.json`, alongside the model cache and settings. The

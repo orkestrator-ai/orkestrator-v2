@@ -225,9 +225,14 @@ start, so a record or marker from an earlier boot can never release work.
   error. Account startup may invalidate the Codex marker with a pre-readiness
   `docker exec`; this is deliberately best-effort, with failures caught and
   logged so they cannot preempt the readiness result.
-- A boot that fails closed usually exits before the next poll, so the failure
-  reads `container-exited`; the exact code stays in the container's last
-  boot record and its log.
+- A boot that fails closed usually exits before the next poll. Once the
+  container has stopped, the backend reads its final boot record with
+  `docker cp` (which needs no running process) and reports that record's code
+  (`firewall-missing`, `firewall-failed`, …). PID 1 is gone, so the record
+  counts only if its `updatedAt` is not before the run's `State.StartedAt`; a
+  record an earlier start left, or none, reads `container-exited`. A restart
+  during launch can read `entrypoint-failed`: the held entrypoint records its
+  own exit on SIGTERM.
 
 Qualified live by `container-live-readiness.test.ts`: missing firewall
 script, DNS and bootstrap failure, an unwritable status directory, a torn
@@ -245,6 +250,18 @@ new runtime generation invalidates the completion; persistent storage keeps it
 until the workspace generation changes. Setup interrupted by a backend exit is
 fenced as failed and requires an explicit retry; repository commands are never
 rerun automatically.
+
+Setup runs `workspace-setup.sh` under `flock
+/tmp/orkestrator-workspace-setup.lock`. If the setup terminal's host process
+dies, that run carries on inside the container and keeps the lock; the
+backend reports the setup failed and reruns nothing (C10). An explicit retry
+then waits for it rather than starting setup a second time or stopping it
+part-way, and says so first ("An earlier setup run is still running in this
+container … Waiting for it to finish instead of starting setup a second
+time."; `CONTAINER_WORKSPACE_SETUP_COMMAND`). When the earlier run succeeded,
+the script then reports "Workspace already set up" and the retry completes;
+its output went to the terminal that closed. When it failed, the retry runs
+setup itself.
 
 ## Stop and drain
 
@@ -265,16 +282,32 @@ and uncertain operations reconciled on the next start.
 A stop never approves a pending approval. The drain signals the bridge and the
 provider process that raised the request, so nothing is left that could act on
 it (Claude's bridge has no shutdown handler of its own and simply exits). Once
-the stop commits, `withdrawEnvironmentInteractions` drops the environment's
-outstanding requests from every cached session projection in a new announced
-revision, fenced so a refresh that read them before the stop cannot commit
-them back. The public CLI (`session get`, `session interactions`) and the
-coordinator's `get_tab_state` read that projection, so they no longer report a
-dead request as pending. A local stop withdraws only when every bridge
-terminated. Stops that do not go through `stopEnvironmentOnce` (a container
-that dies on its own, recovery copies, replacement) still keep the last
-snapshot until the session reattaches. Qualified live for Claude (C11,
-`e2e/agent-testing/container-approval-stop.spec.ts`).
+the stop commits, `NativeAgentService.environmentRuntimeStopped` does two
+things. It drops the environment's outstanding requests from every cached
+session projection in a new announced revision
+(`withdrawEnvironmentInteractions`), fenced so a refresh that read them before
+the stop cannot commit them back. The public CLI (`session get`,
+`session interactions`) and the coordinator's `get_tab_state` read that
+projection, so they no longer report a dead request as pending. And it settles
+each session's last observed turn activity to `idle`
+(`settleStoppedSessions`), fencing activity reads still in flight: the sweep
+skips environments that are not ready, so a session last seen `waiting` used
+to stay `waiting` while stopped, and `session send` and a move refused it as
+busy. The settle is quiet. No activity transition is announced and no
+completion recorded, because a turn cut off by a stop did not finish:
+announcing one would report a worker as done to its coordinator, drain queued
+prompts into the stopped environment and probe for a PR. The next start reads
+`idle` against `idle`, so it fires no "finished" edge either. A run whose turn
+was cut off settles `interrupted` (evidence `none`) instead of waiting for an
+outcome no bridge can report.
+
+A local stop settles only when every bridge terminated. The quiesce before a
+rebuild or a recovery-copy restore does the same as an explicit stop, and the
+activity sweep catches a container runtime that stopped any other way (found
+exited by lifecycle reconciliation): once per stop, for container
+environments whose status is `stopped`. Qualified live for Claude (C11,
+`e2e/agent-testing/container-approval-stop.spec.ts`); the activity settle is
+covered by `native-agent-service-stopped-runtime.test.ts`.
 
 A stop also clears the renderer's local panes for that environment, together
 with its hydration state. It releases only local views: no native or tmux tab
@@ -419,7 +452,17 @@ an empty candidate commit. When the helper side of a copy dies, the
 producer's remaining output is discarded so both processes settle, rather
 than leaving the rebuild holding its queue and copy slot. Both were found by
 the live rebuild-fault suite (C15), which also covers a kill just before and
-just after the commit write.
+just after the commit write. A step that failed because either side reached
+no daemon is reported as `daemon-unavailable` ("Docker stopped responding
+while the environment's files were being copied"), not as files that failed
+verification. A step that failed without saying so asks the daemon directly
+(a bounded `docker version`), because a `docker cp` cut off mid-stream
+reports its broken stream rather than the outage. Any other failure still
+reads `needs-attention: … failed verification (<reason>)`. The wording is classified in one place
+(`docker-cli-errors.ts`) for the copy steps, operation failure codes and the
+availability check, and the image manifest probe applies the same strict
+"could not find the file" rule, so a daemon lost between the probe's create
+and its copy reads as unavailable (not cached) rather than as a legacy image.
 
 Capacity: the estimate is the source's writable-layer size (`docker ps
 --size`) or the measured source volumes, plus 10% and 512 MiB headroom, checked
@@ -952,7 +995,12 @@ rebuilt, so an existing container keeps what it was created with until it is
 rebuilt or updated on purpose; its resources panel shows the difference.
 Settings writes the global budget only through `set_container_resource_limits`
 (`setContainerResourceLimits`); `null` removes it and restores the built-in
-default. The older `global.containerResources` slider value was never
+default. A budget naming an axis this daemon cannot enforce
+(`unenforceableAxes`) is still saved, since the default may be meant for
+another daemon and an unreachable Docker must not block Settings, but the
+command answers with that axis in `unenforceable`, and Settings warns while
+the field is edited and again when it is saved: every create refuses such a
+budget (below). The older `global.containerResources` slider value was never
 applied and is no longer shown or read.
 
 ### Built-in default
@@ -1045,7 +1093,14 @@ the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer
 <file>'`, otherwise the plain redirect. The writer owns the open file, so
 rotation cannot lose writes behind a still-writing process; it only writes a
 local file and drains its input to end of file, so it never blocks or
-SIGPIPEs its producer.
+SIGPIPEs its producer. Each line is written as it arrives: the image's awk is
+mawk, which block-buffers a piped stdin unless run with `-W interactive`, so
+until 2026-10-26 a quiet, long-lived bridge (most print nothing until a turn
+runs with debug logging on) had no log file at all and the last few KiB of a
+noisy one, the lines a failure diagnosis needs, were held back. The writer
+passes the option only to an awk that accepts it silently (BSD awk rejects
+it, gawk warns and ignores it), and an image built before then keeps the old
+behaviour until it is rebuilt.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,

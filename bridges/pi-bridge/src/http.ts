@@ -26,7 +26,7 @@ import {
   publicInteractions,
   resolveApproval,
 } from "./interactions.js";
-import { listModels, refreshModels } from "./models.js";
+import { listModels, markSessionDefault, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
@@ -111,6 +111,7 @@ import {
   hydrateSessionComposer,
   isSessionClosed,
   SessionClosingError,
+  defaultModelIds,
   listResumableSessions,
   markSessionClosed,
   navigateSessionHistory,
@@ -312,7 +313,11 @@ async function routeGlobal(
     return true;
   }
   if (url.pathname === "/global/models" && request.method === "GET") {
-    json(response, 200, { models: await listModels() });
+    // No session asks this, so the mark is where a session that does not trust
+    // the project starts: Pi's global saved default, then the backend's
+    // fallback. Every host session runs that way; the catalogue is cached
+    // host-wide, so a project's own `.pi/settings.json` is not consulted.
+    json(response, 200, { models: markSessionDefault(await listModels(), defaultModelIds({})) });
     return true;
   }
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {

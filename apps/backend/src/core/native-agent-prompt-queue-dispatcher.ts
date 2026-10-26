@@ -68,12 +68,13 @@ export interface NativeAgentPromptQueueDispatcherHost {
     text: string,
     requestId: string,
   ): Promise<NativeAgentSessionActionOutcome>;
+  /** Returns a retry delay when the previous turn's evidence must settle before dispatch. */
   recordObservedTurnOutcome(
     session: PersistedNativeAgentSession,
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
-  ): Promise<void>;
+  ): Promise<number | void>;
   /** Resolve a parked prompt dispatch as confirmed or permanently retired. */
   settleAmbiguousDispatch(
     input: NativeAgentProjectionInput,
@@ -608,7 +609,16 @@ export class NativeAgentPromptQueueDispatcher {
     );
     // This read is the last look at the previous turn before the next prompt
     // replaces its status; keep its content-free outcome for observers.
-    await this.host.recordObservedTurnOutcome(session, status, statusDetail, provider);
+    const outcomeRetryMs = await this.host.recordObservedTurnOutcome(
+      session,
+      status,
+      statusDetail,
+      provider,
+    );
+    if (outcomeRetryMs !== undefined) {
+      this.queueRetryAt.set(queueKey, Date.now() + outcomeRetryMs);
+      return;
+    }
     await this.host.assertEnvironmentLive(queue.environmentId);
     if (status === "running") {
       const requestId =

@@ -179,6 +179,23 @@ an enclosing `sandbox-exec` profile to deny only the nested sandbox launch; Linu
 removes sandbox dependencies from the child's PATH. Working sandbox dependencies
 are required for the escape and network cases.
 
+CI also runs `conformance-apparmor-live.test.ts` twice on the same Ubuntu
+runner, before and after its existing AppArmor remediation. The opt-in
+`ORKESTRATOR_CLAUDE_APPARMOR_PHASE` must be `restricted` or `remediated`;
+missing opt-in skips the test, but an unexpected host/probe result fails it.
+Set `ORKESTRATOR_POLICY_CLAUDE_PATH` to the pinned native executable (its
+version is checked and every query uses that path). The restricted phase
+requires the real nested namespace refusal, a `provider-configured` backend
+tier, the CLI's `apply-seccomp` failure, successful hook-only reads, a hook
+write refusal, and an HTTP 422 provider-sandbox prompt refusal before dispatch.
+The remediated phase requires `enforced`, a successful sandboxed read and
+provider write control, and a coordinator sandbox write refusal without the
+hook. These use the scripted local endpoint and temporary homes, with no
+external model calls. `ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE` selects the output
+directory for `restricted.json` and `remediated.json`; CI uploads both with
+OS, kernel, revision, pinned CLI version and assertion outcomes. Remediation
+belongs only on a disposable runner; the test never changes host policy.
+
 OpenCode and Grok conformance read actual fixture project configuration using
 the pinned CLI's `debug config` and `inspect --json`. They discover the managed
 binary in the normal toolchain directory, or accept explicit
@@ -320,6 +337,31 @@ mise run test:logged -- --name codex-bridge-example -- \
   bun test ./bridges/codex-bridge/src/example.test.ts \
   --parallel=1 --only-failures
 ```
+
+### Opt-in Pi ChatGPT default-model check
+
+`bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts` sends one real
+provider prompt through `createSession`, `ensureSession` and `dispatchPrompt`,
+with no saved default, host fallback or model override. It requires a current
+`openai` ChatGPT OAuth credential; a legacy `openai-codex` credential cannot
+substitute. The test is skipped in normal suites. To opt in:
+
+```bash
+ORKESTRATOR_PI_CHATGPT_LIVE=1 \
+  mise run test:logged -- --name pi-chatgpt-live -- \
+  bun test ./bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts \
+  --preload ./tests/setup-node.ts \
+  --preload ./bridges/pi-bridge/src/testing/test-isolation.ts \
+  --parallel=1 --only-failures
+```
+
+By default it reads `~/.pi/agent/auth.json`. Set
+`ORKESTRATOR_PI_CHATGPT_AUTH_FILE` to use a disposable login's auth file.
+Only the `openai` credential is copied into a temporary agent directory; the
+refresh token is replaced so the test cannot rotate the source credential.
+The access token must have at least ten minutes remaining. The test checks
+the selected model and an error-free provider answer, then removes its
+temporary home, settings and sessions. It does not read or change host settings.
 
 ### Opt-in preview checks
 

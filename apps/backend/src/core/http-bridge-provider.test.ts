@@ -830,6 +830,12 @@ describe("HTTP bridge provider", () => {
     expect(dispatched.requests[0]!.url).toBe(
       "http://claude.test/session/s%2F1/dispatch?requestId=r%2F1",
     );
+    for (const pending of [true, false, undefined, "true"]) {
+      const { provider } = httpProvider(() => Response.json({ dispatch: "dispatched", pending }));
+      await expect(provider.dispatchStatus?.("s", "r")).resolves.toBe(
+        pending === true ? "pending" : "dispatched",
+      );
+    }
     // The bridge retired the id after a restart: the read-only twin of a 410.
     const lost = httpProvider(() => Response.json({ dispatch: "lost" }));
     await expect(lost.provider.dispatchStatus?.("s", "r")).resolves.toBe("lost");
@@ -2385,6 +2391,121 @@ describe("HTTP bridge provider", () => {
       "/session/session-1",
     ]);
   });
+
+  test("a restart notice about an earlier request is not the watched request's outcome", async () => {
+    const body = { current: {} as Record<string, unknown> };
+    // What the bridge's dispatch journal says about the continuation.
+    let continuation = "dispatched";
+    let pending = true;
+    const { provider } = httpProvider(
+      (url) =>
+        new URL(url).pathname.endsWith("/dispatch")
+          ? Response.json({ dispatch: continuation, pending })
+          : Response.json(body.current),
+      codexConnection,
+    );
+    body.current = {
+      status: "error",
+      error: "Codex restarted before this turn finished.",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    };
+
+    // The interrupted request itself, and a caller watching no request, see it.
+    await expect(readProviderStatus(provider, "session-1", "original")).resolves.toEqual({
+      status: "error",
+      error: "Codex restarted before this turn finished.",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    });
+    expect((await readProviderStatus(provider, "session-1")).interruption).toBe("restart");
+    // The continuation that replaced it was accepted and has not started yet.
+    await expect(readProviderStatus(provider, "session-1", "continuation")).resolves.toEqual({
+      status: "idle",
+      turnSettled: false,
+    });
+    // Without a detail the bridge's notice arrives as data, and reads the same.
+    body.current = { status: "error", interruption: "restart", interruptedRequestId: "original" };
+    await expect(readProviderStatus(provider, "session-1", "continuation")).resolves.toEqual({
+      status: "idle",
+      turnSettled: false,
+    });
+    // A provider that no longer holds the continuation (it restarted, and the
+    // name may be stale) gets no benefit of the doubt.
+    body.current = {
+      status: "error",
+      error: "restarted",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    };
+    for (const answer of ["unknown", "lost"]) {
+      continuation = answer;
+      expect((await readProviderStatus(provider, "session-1", "continuation")).status).toBe(
+        "error",
+      );
+    }
+    continuation = "dispatched";
+    // A finished watched request cannot hide a later request's restart.
+    pending = false;
+    expect(await readProviderStatus(provider, "session-1", "continuation")).toEqual({
+      status: "error",
+      error: "restarted",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    });
+    pending = true;
+    // A bridge that predates the field: the notice is taken at face value.
+    body.current = { status: "error", error: "restarted", interruption: "restart" };
+    expect((await readProviderStatus(provider, "session-1", "continuation")).status).toBe("error");
+    // An unbounded or non-string id names nothing.
+    for (const interruptedRequestId of ["x".repeat(513), 42, ""]) {
+      body.current = {
+        status: "error",
+        error: "restarted",
+        interruption: "restart",
+        interruptedRequestId,
+      };
+      expect(await readProviderStatus(provider, "session-1", "continuation")).toEqual({
+        status: "error",
+        error: "restarted",
+        interruption: "restart",
+      });
+    }
+  });
+
+  test.each([claudeConnection, codexConnection])(
+    "a finished watched request retains a later restart from $agent",
+    async (connection) => {
+      for (const pending of [false, undefined]) {
+        for (const error of ["later turn interrupted", undefined]) {
+          const observation = {
+            status: "error",
+            interruption: "restart",
+            interruptedRequestId: "later-request",
+            ...(error ? { error } : {}),
+          } as const;
+          const { provider, requests } = httpProvider(
+            (url) =>
+              new URL(url).pathname.endsWith("/dispatch")
+                ? Response.json({ dispatch: "dispatched", pending })
+                : Response.json(observation),
+            connection,
+          );
+
+          expect(await readProviderStatus(provider, "session-1", "finished-request")).toEqual(
+            observation,
+          );
+          const dispatchReads = requests.filter((request) =>
+            new URL(request.url).pathname.endsWith("/dispatch"),
+          );
+          expect(dispatchReads).toHaveLength(1);
+          expect(new URL(dispatchReads[0]!.url).searchParams.get("requestId")).toBe(
+            "finished-request",
+          );
+        }
+      }
+    },
+  );
 
   test("ignores an interruption the backend does not know, or one without a failure", async () => {
     const body = { current: {} as Record<string, unknown> };

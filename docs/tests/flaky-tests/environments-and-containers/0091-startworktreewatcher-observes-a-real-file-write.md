@@ -49,3 +49,12 @@ No watcher implementation, assertion, deadline or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name worktree-watcher-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 1.0 seconds.
 - **Evidence:** `orkestrator-test-run.zbtDAc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. The aggregate exited 1 with backend 11197 passed, 95 skipped, two failures and one between-test error across 655 files; the other failure is [0248](0248-move-restart-recovery-submodule-timeout.md). Root/support, bridges, protocol and every other workspace package passed.
 - **Changes:** evidence only; no watcher code, assertions, deadlines or skips changed. The original aggregate remains failed.
+
+## Mail delivery review validation recurrence — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name mail-repository -- mise run test`, Bun 1.4.4, standard workspace/root/bridges/protocol reservations of 4/1/2/1 and two backend workers. Mail fixes are committed as `e4365f43b`; the watcher and its tests are unchanged.
+- **Failure:** `startWorktreeWatcher > observes a real file write` received zero changes after the bounded repeated-write loop (2010.06 ms, `apps/backend/tests/worktree-watcher.test.ts:294`).
+- **Suite counts:** backend 11,918 passed and six failed across 712 files; desktop 1,369 passed and two failed. Root/support, bridges, protocol and all other workspace packages passed. The full command exited 1 after 817.0 seconds.
+- **Complete unchanged owner rerun:** `mise run test:logged -- --name mail-worktree-watcher-rerun -- sh -c 'cd apps/backend && bun test ./tests/worktree-watcher.test.ts --parallel=1 --only-failures'` passed, exit 0 in 1.4 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z9OzLB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer result in `orkestrator-test-run.nVyQ5W/mail-repository.log.gz` under the same temporary root.
+- **Assessment:** an aggregate-only recurrence in this run. Delayed OS event delivery or host contention remain hypotheses. The other failing owners (profile cleanup, submodule moves and Git snapshots) remained non-green when rerun alone. No watcher code, assertions, deadlines or skips changed; the original aggregate remains failed.

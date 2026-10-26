@@ -24,6 +24,15 @@ import {
 } from "./review-fanout-interleaving-support.js";
 
 const SEEDS = interleavingSeeds(24);
+/**
+ * Seeds past the default range that once broke an invariant, run on every
+ * default (unconfigured) CI run alongside it. Keyed by flavour.
+ */
+const REGRESSION_SEEDS: Partial<Record<ScenarioFlavour, readonly number[]>> = process.env
+  .ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS
+  ? {}
+  : // 0112: a takeover mid-continuation counted the old restart twice.
+    { "fence-loss": [861, 1251] };
 
 // The runner logs recoverable faults (deferred result consumption, a failed
 // observation checkpoint) by design; the scenarios provoke hundreds of them.
@@ -59,13 +68,20 @@ async function runSeed(seed: number, flavour: ScenarioFlavour): Promise<Interlea
 
 function suite(flavour: ScenarioFlavour, coverage: (results: InterleavingResult[]) => void) {
   const results: InterleavingResult[] = [];
-  test.each(SEEDS)("seed %i", async (seed) => {
+  test.each([...SEEDS, ...(REGRESSION_SEEDS[flavour] ?? [])])("seed %i", async (seed) => {
     results.push(await runSeed(seed, flavour));
   });
   // Guards the harness itself: the seeds must actually reach the interleavings
   // the suite is named for, or a green run proves nothing.
   test("the seeds exercise what the suite is named for", () => {
     if (results.length < SEEDS.length || SEEDS.length < 8) return;
+    // A continuation journaled before its turn started was read at least once
+    // while status still described the restart it continues (0112).
+    expect(
+      results.some((result) =>
+        Object.values(result.ledgers).some((ledger) => ledger.lateStartReads > 0),
+      ),
+    ).toBe(true);
     expect(Math.max(...results.map((result) => result.maxConcurrentReviewers))).toBeGreaterThan(1);
     coverage(results);
   });
@@ -141,23 +157,23 @@ describe("review fan-out interleavings", () => {
       }
     });
 
-    // review-fanout.ts, the `dispatchState === "dispatching"` branch: a
-    // recovered `dispatching` request becomes `sent` without asking the
-    // provider (`dispatchStatus`), and the HTTP bridges have no `settleTurn`.
-    // The store can hold `dispatching` for a request that never left:
+    // Fixed 2026-10-26 (0112, item 1). The store can hold `dispatching` for a
+    // request that never left:
     // - a peer's commit, saved after this reviewer set `dispatching` in memory
-    //   but before its own commit ran, makes it durable; the fence is then
-    //   lost (or the backend dies) and this reviewer's own commit and send
-    //   never happen (fence-loss 24);
+    //   but before its own commit ran, made it durable; the fence was then
+    //   lost and this reviewer's own commit and send never happened. Fixed by
+    //   applying `dispatching` inside the reviewer's own serialized commit; the
+    //   harness now fails any seed without a crash that leaves one behind;
     // - a send refused before the prompt was written resets to `prepared`, but
-    //   that commit loses the fence (fence-loss 34);
+    //   that commit loses the fence (fence-loss 24, 34);
     // - the backend dies between the durable write and the send (restart 13,
     //   17, 24).
-    // The next owner then watches an idle session that was never prompted.
-    // A tool-transport reviewer gets the result reminder ("your analysis is
-    // already done ... only submit the result") as its first turn, under a
-    // new request id. A structured-output reviewer fails as "idle without
-    // returning its structured report".
+    // The next owner used to watch an idle session that was never prompted: a
+    // tool-transport reviewer got the result reminder as its first turn, and a
+    // structured-output reviewer failed as idle without its report. Now only
+    // the provider's own proof (`dispatched`, or a result for this exact
+    // request) promotes the request; otherwise it parks and fails closed,
+    // because no provider can yet prove an id never arrived (todo 0223).
     test("a dispatch that never reached the provider is not treated as sent", async () => {
       for (const [flavour, seed] of [
         ["fence-loss", 24],
@@ -188,14 +204,17 @@ describe("review fan-out interleavings", () => {
       }
     });
 
-    // review-fanout.ts, the restart-interruption branch: provider status is per
-    // session, not per request. A controller takes over while the old one's
-    // restart continuation is still in transit; the new owner turns the durable
-    // `dispatching` into `sent` and reads status before the continuation lands,
-    // so the bridge still reports the previous turn's `interruption: "restart"`.
-    // The runner attributes it to the continuation, finds the continuation
-    // spent, and fails the reviewer as restarted twice while its continuation
-    // is about to run. Seeds: fence-loss 861, 1251 (outside the CI seed list).
+    // Fixed 2026-10-26 (0112, item 2). Provider status is per session, not per
+    // request: a new owner that read status after the continuation was
+    // journaled but before its turn started still saw the previous turn's
+    // `interruption: "restart"`, attributed it to the continuation, found the
+    // continuation spent and failed the reviewer as restarted twice. The
+    // Claude and Codex bridges now name the interrupted request
+    // (`interruptedRequestId`), and `readProviderStatus` reads a notice about
+    // another request, while the provider reports this one in flight, as
+    // "this request's turn has not settled". The harness
+    // models the late start on half of all continuations. Seeds: fence-loss 861,
+    // 1251, also in the fence-loss suite's CI list.
     test("a takeover mid-continuation does not count the old restart twice", async () => {
       for (const seed of [861, 1251]) {
         const result = await runInterleaving(planScenario(seed, "fence-loss"));

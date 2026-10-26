@@ -853,7 +853,7 @@ export class BuildPipelineReviewFanout {
       const acceptance = await provider
         .dispatchStatus?.(consolidation.providerSessionId, consolidation.requestId)
         .catch(() => "unknown" as const);
-      if (acceptance !== "dispatched") {
+      if (acceptance !== "dispatched" && acceptance !== "pending") {
         return this.countIdlePoll(
           pipeline,
           state,

@@ -1703,7 +1703,7 @@ export class NativeAgentService {
           ? "retired"
           : undefined;
       }
-      if (status !== "dispatched") return undefined;
+      if (status !== "dispatched" && status !== "pending") return undefined;
       return (await this.storage.confirmNativeAgentDispatch(key, requestId))
         ? "confirmed"
         : undefined;
@@ -2950,7 +2950,7 @@ export class NativeAgentService {
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
-  ): Promise<void> {
+  ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
     if (status !== "idle" && status !== "error") return;
@@ -2966,7 +2966,10 @@ export class NativeAgentService {
         try {
           failure =
             (await provider.turnTerminalError(session.providerSessionId, requestId)) ?? undefined;
-        } catch {
+        } catch (error) {
+          if (error instanceof ProviderUnavailableError && error.retryAfterMs !== undefined) {
+            return error.retryAfterMs;
+          }
           // Unreadable: leave the outcome for an observer rather than
           // recording a success nobody proved.
           return;

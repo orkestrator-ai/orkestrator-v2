@@ -5,6 +5,7 @@ import {
   INITIAL_PROMPT_STAGING_DIRECTORY,
   assertValidPromptAttachments,
   assertValidPromptImages,
+  imageMimeTypeForFilename,
   mimeTypeForFilename,
   mimeTypeForImageData,
   promptAttachmentUrl,
@@ -49,6 +50,14 @@ describe("mimeTypeForFilename", () => {
     ["noextension", "image/png"],
   ])("maps %s to %s", (filename, expected) => {
     expect(mimeTypeForFilename(filename)).toBe(expected);
+  });
+
+  test("names no image type for a non-image extension", () => {
+    // `mimeTypeForFilename` defaults to PNG for an image; a caller labelling
+    // an arbitrary file must not inherit that default (todo 0166).
+    expect(imageMimeTypeForFilename("shot.PNG")).toBe("image/png");
+    expect(imageMimeTypeForFilename("notes.txt")).toBeUndefined();
+    expect(imageMimeTypeForFilename("noextension")).toBeUndefined();
   });
 });
 

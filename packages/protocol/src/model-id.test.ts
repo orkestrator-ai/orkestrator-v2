@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
+import {
+  isRootAssistantRecord,
+  normalizeBackendModelId,
+  reportsSessionDefault,
+  sessionDefaultModel,
+} from "@orkestrator/protocol/model-id";
 
 test("the model helpers are available through the package export", async () => {
   const exported = await import("@orkestrator/protocol/model-id");
@@ -38,4 +43,26 @@ describe("isRootAssistantRecord", () => {
     expect(isRootAssistantRecord(null, null)).toBe(false);
     expect(isRootAssistantRecord(null, 0)).toBe(false);
   });
+});
+
+describe("sessionDefaultModel", () => {
+  test("prefers the marked session default over the first entry", () => {
+    const models = [{ id: "first" }, { id: "saved", sessionDefault: true }];
+    expect(sessionDefaultModel(models)?.id).toBe("saved");
+  });
+
+  test("falls back to the first entry, and to nothing for an empty list", () => {
+    const unmarked: { id: string; sessionDefault?: boolean }[] = [
+      { id: "first" },
+      { id: "second" },
+    ];
+    expect(sessionDefaultModel(unmarked)?.id).toBe("first");
+    expect(sessionDefaultModel([])).toBeUndefined();
+  });
+});
+
+test("only Pi reports its session default, so only Pi treats an unmarked catalogue as unknown", () => {
+  expect(reportsSessionDefault("pi")).toBe(true);
+  expect(reportsSessionDefault("claude")).toBe(false);
+  expect(reportsSessionDefault("codex")).toBe(false);
 });

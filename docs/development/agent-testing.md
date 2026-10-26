@@ -918,8 +918,9 @@ token. The whole run takes about 20 minutes.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It
   defaults to `pi=openai/gpt-6-sol`. A profile now also receives the host's
   saved Pi default model, but the pin keeps the run independent of whatever
-  the host saved; without either, the bridge would start on the catalogue's
-  first model (once `gpt-4`), which a ChatGPT-backed OpenAI login refuses.
+  the host saved; without either, the bridge would start on its last resort
+  (for a ChatGPT-backed OpenAI login, the newest ChatGPT-backend model, not
+  the catalogue's first `gpt-4`, which that login refuses).
 
 The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a

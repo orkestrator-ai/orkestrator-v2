@@ -588,6 +588,9 @@ export async function fetchAcpNormalizedModelsAtResult(
           ...(typeof model.supportsImageInput === "boolean"
             ? { supportsImageInput: model.supportsImageInput }
             : {}),
+          // Where a tab with no model starts (Pi's saved default), which the
+          // launch defaults prefer over the first entry.
+          ...(model.sessionDefault === true ? { sessionDefault: true } : {}),
         },
       ];
     });

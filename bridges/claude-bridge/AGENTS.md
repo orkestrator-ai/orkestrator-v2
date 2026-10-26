@@ -195,8 +195,9 @@ invariants keep it honest:
 - **Assume no sandbox behind it.** The SDK sandbox lets a command write its
   working directory, which for a coordinator is the user's checkout, so
   `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
-  the sandbox cannot start at all (Windows, Linux without bubblewrap and
-  socat; the launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`)
-  this allowlist is the whole boundary. A command it admits must neither write
+  the sandbox cannot run commands at all (Windows; Linux without bubblewrap
+  and socat, or whose bubblewrap cannot nest the CLI's user namespace; the
+  launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`) it is left
+  off and this allowlist is the whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
   `git ls-remote` are refused rather than left to the sandbox.

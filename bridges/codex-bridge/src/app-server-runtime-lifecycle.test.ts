@@ -666,6 +666,9 @@ describe("session lifecycle", () => {
       phase: "failed",
       error: CODEX_RESTARTED_MID_TURN_MESSAGE,
       interruption: "restart",
+      // Named, so a workflow does not read the notice as the outcome of a
+      // newer request whose turn has not started yet (todo 0112).
+      interruptedRequestId: "req-interrupted",
     });
     expect(h.events).toContainEqual({
       type: "session.error",

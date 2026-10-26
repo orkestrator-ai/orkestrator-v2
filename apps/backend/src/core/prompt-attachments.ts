@@ -27,12 +27,19 @@ const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 export const DEFAULT_STAGING_DIRECTORY = ".orkestrator/prompt-attachments";
 export const INITIAL_PROMPT_STAGING_DIRECTORY = ".orkestrator/initial-prompt";
 
-export function mimeTypeForFilename(filename: string): string {
+/** The image media type a filename's extension names, if it names one. */
+export function imageMimeTypeForFilename(filename: string): string | undefined {
   const extension = filename.split(".").at(-1)?.toLowerCase();
+  if (extension === "png") return "image/png";
   if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
   if (extension === "gif") return "image/gif";
   if (extension === "webp") return "image/webp";
-  return "image/png";
+  return undefined;
+}
+
+/** An image's media type from its name; PNG when the name does not say. */
+export function mimeTypeForFilename(filename: string): string {
+  return imageMimeTypeForFilename(filename) ?? "image/png";
 }
 
 /**

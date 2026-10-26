@@ -428,48 +428,53 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("settles an ambiguous dispatch the provider can prove landed", async () => {
-    const stub = createProviderStub("cursor", {
-      send: async () => {
-        throw new AmbiguousPromptDispatchError("Response was lost");
-      },
-      dispatchStatus: async () => "dispatched" as const,
-    });
-    await withService(
-      {
-        prefix: "orkestrator-native-dispatch-settled-",
-        provider: async () => stub.provider,
-      },
-      async ({ service, storage }) => {
-        const base = {
-          environmentId: "env-1",
-          agent: "cursor" as const,
-          logicalSessionKey: "env-env-1:tab-1",
-          prompt: "Do the work",
-        };
-        // The acknowledgement was lost, not the prompt. Asking the provider turns
-        // that back into an ordinary accepted dispatch instead of a banner.
-        await expect(service.dispatchIntent({ ...base, requestId: "lost-ack" })).resolves.toEqual({
-          outcome: "accepted",
-          requestId: "lost-ack",
-        });
-        expect(stub.dispatchStatus).toHaveBeenCalledWith("provider-session", "lost-ack");
+  test.each(["dispatched", "pending"] as const)(
+    "settles an ambiguous dispatch the provider reports as %s",
+    async (acceptance) => {
+      const stub = createProviderStub("cursor", {
+        send: async () => {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        },
+        dispatchStatus: async () => acceptance,
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-dispatch-settled-",
+          provider: async () => stub.provider,
+        },
+        async ({ service, storage }) => {
+          const base = {
+            environmentId: "env-1",
+            agent: "cursor" as const,
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Do the work",
+          };
+          // The acknowledgement was lost, not the prompt. Asking the provider turns
+          // that back into an ordinary accepted dispatch instead of a banner.
+          await expect(service.dispatchIntent({ ...base, requestId: "lost-ack" })).resolves.toEqual(
+            {
+              outcome: "accepted",
+              requestId: "lost-ack",
+            },
+          );
+          expect(stub.dispatchStatus).toHaveBeenCalledWith("provider-session", "lost-ack");
 
-        const key = nativeAgentSessionStorageKey(
-          base.environmentId,
-          base.agent,
-          base.logicalSessionKey,
-        );
-        const session = await storage.getNativeAgentSession(key);
-        expect(session?.pendingDispatch).toBeUndefined();
-        // Recording the id is the half that stops a later retry running it twice.
-        expect(session?.dispatchedRequestIds).toContain("lost-ack");
-        await expect(service.getProjection(base)).resolves.not.toHaveProperty(
-          "recoverableDispatch",
-        );
-      },
-    );
-  });
+          const key = nativeAgentSessionStorageKey(
+            base.environmentId,
+            base.agent,
+            base.logicalSessionKey,
+          );
+          const session = await storage.getNativeAgentSession(key);
+          expect(session?.pendingDispatch).toBeUndefined();
+          // Recording the id is the half that stops a later retry running it twice.
+          expect(session?.dispatchedRequestIds).toContain("lost-ack");
+          await expect(service.getProjection(base)).resolves.not.toHaveProperty(
+            "recoverableDispatch",
+          );
+        },
+      );
+    },
+  );
 
   test("only turns a parked dispatch into a recovery choice after the reconcile grace", async () => {
     let now = Date.parse("2026-09-11T10:00:00.000Z");

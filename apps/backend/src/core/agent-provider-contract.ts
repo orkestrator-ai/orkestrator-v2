@@ -145,9 +145,13 @@ export class PromptRejectedError extends Error {
 }
 
 export class ProviderUnavailableError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+  /** Delay the next dispatch while a request's terminal evidence is still settling. */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { cause?: unknown; retryAfterMs?: number }) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ProviderUnavailableError";
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 

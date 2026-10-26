@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
-import { claudeReportedPolicy } from "../services/claude-query-config.js";
+import { claudeReportedPolicy, claudeTurnPolicy } from "../services/claude-query-config.js";
+import { claudeSandboxRefusal } from "../services/claude-execution-sandbox.js";
 import {
   holdPendingRequest,
   type ClaudeHoldFamily,
@@ -879,6 +880,17 @@ session.post("/:id/prompt", async (c) => {
       }
       await answerIdleSteerPrompt(sessionData, prompt, requestId);
       return c.json({ status: "accepted", requestId, local: true });
+    }
+    // A turn that requires a sandbox this host cannot run commands in would
+    // start and then fail every Bash call; refuse it with the reason instead.
+    const sandboxRefusal = claudeSandboxRefusal(
+      claudeTurnPolicy(
+        sessionData.executionPolicy,
+        typeof readOnly === "boolean" ? readOnly : undefined,
+      ),
+    );
+    if (sandboxRefusal) {
+      return c.json({ error: sandboxRefusal, kind: "sandbox-unavailable" }, 422);
     }
     // Refused before anything is journaled: a prompt the session's running CLI
     // cannot take must not be accepted and then dropped by a background send.

@@ -267,6 +267,13 @@ rejects it. The legacy `openai-codex` provider lists `gpt-5.3-codex-spark`
 first and rejects that. See
 [0062](../todo/agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
 
+The bridge's catalogue marks the model a tab with no model would start on
+(`sessionDefault: true`, from the global settings and the fallback only), and
+the backend keeps the mark through normalization and the durable catalogue
+cache. Launches resolved without a session prefer it over the first model:
+Multi Review rows from saved defaults (`concreteRow` in
+`coordinator-launch-defaults.ts`) and every launch dialog's `firstModelFor`.
+
 ### Grok Build
 
 #### Credentials

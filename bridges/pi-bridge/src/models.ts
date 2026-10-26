@@ -339,6 +339,30 @@ export async function resolveModel(
 }
 
 /**
+ * The catalogue with the model a session with no explicit model would start on
+ * marked `sessionDefault`.
+ *
+ * Callers that resolve "use the defaults" without a session — the backend's
+ * Multi Review rows and every launch dialog — otherwise take the first model,
+ * which can be one the login refuses while a tab starts on Pi's saved default
+ * and works. Nothing is marked when no preferred id is offered: a session then
+ * starts on the first model, which is already where those callers fall back.
+ * Rows are copied, so the process-wide cache is never written.
+ */
+export function markSessionDefault(
+  models: readonly AgentModel[],
+  preferredModelIds: readonly string[],
+): AgentModel[] {
+  const defaultId = firstPreferred(
+    preferredModelIds,
+    models.map((model) => model.id),
+  );
+  return models.map((model) =>
+    model.id === defaultId ? { ...model, sessionDefault: true } : model,
+  );
+}
+
+/**
  * The first preferred id the catalogue offers.
  *
  * The catalogue lists only models whose provider has configured auth, which

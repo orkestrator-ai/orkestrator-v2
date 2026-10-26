@@ -1,3 +1,4 @@
+import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
@@ -1838,6 +1839,7 @@ function fixtureForPath() {
     installPathTruncationFixture();
     return <PathTruncationFixture />;
   }
+  if (window.location.pathname === "/pi-launch-defaults") return <PiLaunchDefaultsFixture />;
   if (window.location.pathname === "/multi-review-launch") {
     return <MultiReviewLaunchDialogFixture />;
   }

@@ -574,6 +574,18 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    A failure means the CLI changed one of the rules recorded under "Claude
    plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
    binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
+
+   Re-check the Linux command sandbox on a Linux host. The probe in
+   `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
+   runs a command (bubblewrap, then its `apply-seccomp` helper nesting a user
+   namespace); see "Claude's sandbox on Linux" in
+   `docs/architecture/coordinator.md`. Run
+   `bun test --cwd bridges/claude-bridge ./src/conformance-coordinator-sandbox-live.test.ts --preload ../../tests/setup-node.ts --parallel=1`
+   there, and look in the binary for the bubblewrap arguments and the
+   `apply-seccomp:` messages. If the CLI stops nesting a namespace, or gains a
+   setting that avoids it without weakening isolation (2.1.309's
+   `allowNestedUserNamespaces` removes code-execution isolation, so it is not
+   one), update the probe.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash

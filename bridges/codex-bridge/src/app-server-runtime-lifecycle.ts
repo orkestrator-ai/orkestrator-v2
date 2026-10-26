@@ -1147,7 +1147,12 @@ export class CodexRuntimeLifecycle {
         this.discardOutlivingCommandWindows(turn);
         if (turn.stoppedByShutdown && event.status === "interrupted")
           this.completeRecoveredTurn(turn, event.status);
-        else turn.complete(event.status, event.error);
+        else {
+          turn.complete(event.status, event.error);
+          // A refused model fails the turn before anything streams; without
+          // this it read as idle with an empty reply.
+          if (event.status === "failed" && event.error) turn.recordProviderFailure(event.error);
+        }
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>
           this.runFinalization(context, turn).catch((error) => {

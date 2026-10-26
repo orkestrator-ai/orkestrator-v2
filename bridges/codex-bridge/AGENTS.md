@@ -81,6 +81,14 @@ never when the change is sent: a send waits for the coalesced flush and can be
 dropped, and a note that lands after a read bumps nothing. Never note the
 newest row, which every window holds.
 
+A turn app-server reports failed (`turn/completed` with `status: "failed"`)
+ends with an error `status` line on its last row saying why
+(`messages/turn-failure.ts`; the provider's JSON body is reduced to its
+`error.message`). A refused model fails the turn before anything streams, so
+without it the turn read as idle with an empty reply. The rollout keeps the
+same error on `task_complete`, and the replay adds the same line. The bridge's
+own verdicts (a rejected structured result, a lost rebind) add none.
+
 ## File changes and change evidence
 
 - A `fileChange` row is rendered only from app-server's own per-change `diff`

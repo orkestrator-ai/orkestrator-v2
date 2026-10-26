@@ -28,6 +28,7 @@ import {
   accessOnlyLoginText,
   INPUT_LIMITS,
   defaultInputSourceRoots,
+  grokStagingHome,
   portableInputRevisionDirectory,
   replaceStagedInputFile,
   type InputSourceRoots,
@@ -308,7 +309,7 @@ function hostStagingSources(context: CommandContext): {
     claudeConfigDir: roots.agentTest ? roots.claudeConfigDir : path.join(roots.home, ".claude"),
     claudeJson: path.join(hostHome, ".claude.json"),
     codexHome: roots.agentTest ? roots.codexHome : path.join(roots.home, ".codex"),
-    grokAuth: path.join(hostHome, ".grok", "auth.json"),
+    grokAuth: path.join(grokStagingHome(roots), "auth.json"),
     opencodeAuth: roots.agentTest
       ? roots.xdgDataHome && path.join(roots.xdgDataHome, "opencode", "auth.json")
       : path.join(roots.home, ".local", "share", "opencode", "auth.json"),

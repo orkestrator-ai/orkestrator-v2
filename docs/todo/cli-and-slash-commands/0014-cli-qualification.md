@@ -219,10 +219,11 @@ credential setup is in
   `config.toml`, so the host's configured model is not inherited. The case
   validates the pinned model against a refreshed catalogue (`agent options
   --refresh`) before using it.
-- The packaged `serve` has no managed toolchain, so local live runs resolve
-  `claude`, `codex` and `opencode` from `PATH`. If `opencode` is not on it,
-  prefix the pinned managed copy for the run (on macOS,
-  `PATH="$HOME/Library/Application Support/orkestrator-v2/toolchains/bin/current:$PATH"`).
+- Since #1270 an agent-test backend never falls back to `PATH`, so the
+  harness installs the selected provider's pinned binary (Claude, Codex,
+  OpenCode, Pi or Grok) into the scenario data directory before `serve`, on
+  every live run (changed 2026-10-26 by todo 0166; before that only Grok's
+  was installed and a host provider's session could not start).
 - Live runs use host credentials (`--credential-source`) and cost real tokens.
 
 ### Evidence log
@@ -233,6 +234,20 @@ command, result and limitations. Run artifacts are
 codes, backend start-up time and, for live turns, the pinned and reported
 model).
 
+- **2026-10-26, macOS (Darwin 27.0.0, arm64), todo 0166.** Branch
+  `todo-0166-opencode-attach-prompt-0d17ce147985` on `93018933` plus the
+  0166 fix; Bun 1.4.4, Docker 29.9.2, image
+  `orkestrator-v2:dev-742a66a47e71`, OpenCode 1.19.4 (pinned, installed by
+  the harness), model `opencode-go/gpt-5.6-luna` (provider default),
+  API-key credentials.
+  - Before the harness change the run failed at once: "OpenCode is not
+    installed in this agent-test profile's toolchain" (the #1270 PATH
+    refusal), manifest `2026-10-26T00-35-10-927Z-be855dae`.
+  - `live-session --provider opencode`, local: pass (51.8 s), every stage
+    including `prompt --attach --wait` (exit 0, 4.2 s) and the transcript
+    check; manifest `2026-10-26T00-36-39-580Z-6b222f87`.
+  - Same, container: pass (88.0 s), `prompt --attach --wait` exit 0 (8.3 s);
+    manifest `2026-10-26T00-38-15-570Z-fa598ef6`. No cleanup errors.
 - **2026-10-25, macOS arm64, review follow-up on `bab01b13`.** Bun 1.4.4,
   worktree image `orkestrator-v2:dev-1af641a7170c` rebuilt with
   `mise run docker:build:dev`.
@@ -527,7 +542,8 @@ model).
 - **OpenCode `--attach` lost prompt filed as todo 0166**, not fixed here: it
   belongs to todo 0017's attachment path and needs its own diagnosis. It
   makes OpenCode's `live-session` fail after the parts this file owns
-  (start, file assertion, follow-up, model record) have passed.
+  (start, file assertion, follow-up, model record) have passed. Fixed by
+  0166 on 2026-10-26 (see the evidence log).
 - **Item 5 narrowed, not finished.** Start-up, failure time, flake rate and
   cleanup failures were measurable from the manifests; token cost was not,
   and stays open.

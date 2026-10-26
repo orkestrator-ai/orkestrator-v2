@@ -3,6 +3,7 @@ import { containerOomEvents } from "./container-oom-events.js";
 import {
   UNRESTRICTED_LIMITS,
   builtInResourceDefault,
+  unenforceableAxes,
   type ContainerResourceLimits,
   type ContainerUsageSample,
   type ContainerUsageSnapshot,
@@ -562,6 +563,21 @@ export function refuseUnenforceableLimits(
     "unsupported-topology",
     `This Docker engine${capacity.rootless ? " (rootless)" : ""} cannot enforce the ${names} ${limit} in the environment's budget. ${outcome} Remove ${them} from the budget (Settings → Container, or the environment's resources), or ${remedy}`,
   );
+}
+
+/**
+ * The axes of a budget this daemon would refuse at create
+ * ({@link refuseUnenforceableLimits}). Empty when Docker did not say, which a
+ * create on an unreachable daemon refuses for its own reason.
+ */
+export async function unenforceableOnThisDaemon(
+  limits: ContainerResourceLimits,
+): Promise<ResourceAxis[]> {
+  try {
+    return unenforceableAxes(limits, await dockerAdmissionCapacity());
+  } catch {
+    return [];
+  }
 }
 
 /** {@link refuseUnenforceableLimits} for the budget a new runtime of `environment` would get. */

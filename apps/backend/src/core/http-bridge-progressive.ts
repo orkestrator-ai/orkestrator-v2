@@ -44,6 +44,8 @@ import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 export interface LegacyTranscriptSnapshot {
   messages: unknown[];
   truncated: boolean;
+  /** The bridge answered 404: it has no such session. */
+  missing?: true;
   revision?: number;
   status?: "idle" | "running" | "error";
   error?: string;
@@ -67,7 +69,7 @@ export async function readHttpBridgeLegacyTranscript(input: {
     {},
     input.fetchImpl,
   );
-  if (response.status === 404) return { messages: [], truncated: false };
+  if (response.status === 404) return { messages: [], truncated: false, missing: true };
   assertOk(response, `${input.agent} transcript read`);
   const body = asRecord(
     await boundedJson(response, `${input.agent} transcript read`, { remaining: 16 * 1024 * 1024 }),
@@ -102,9 +104,17 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
   /** Present when summaries may be requested; records what the bridge answered. */
   capabilities?: HttpBridgeTranscriptCapabilities;
 }): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+  /*
+   * `/transcript` answered 404 or 405. Not only an older bridge: every Claude
+   * bridge before 0050 item 3 answered 404 for a persisted session that was
+   * not resident yet, and only `/messages` loads one. So this path stays until
+   * the support-window floor reaches the first Stable release whose Claude
+   * bridge materializes on `/transcript`. A session `/messages` cannot find
+   * either is simply missing, and is not counted as compatibility use.
+   */
   const legacyFallback = async (): Promise<ProviderTranscriptSnapshot> => {
-    compatibilityPathUsage.record("bridge-transcript.messages-fallback");
     const legacy = await input.readLegacy();
+    if (!legacy.missing) compatibilityPathUsage.record("bridge-transcript.messages-fallback");
     return {
       messages:
         legacy.messages.length > input.options.limit

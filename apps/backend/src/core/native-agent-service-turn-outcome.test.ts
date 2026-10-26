@@ -12,7 +12,13 @@ import {
 } from "./native-agent-provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
-import { launchInternals } from "./native-agent-service-test-collaborators.js";
+import { launchInternals, queueInternals } from "./native-agent-service-test-collaborators.js";
+import {
+  openCodeActivityProvider,
+  openCodeFake,
+  waitUntil,
+} from "./agent-provider-test-support.js";
+import { OPEN_CODE_DISPATCH_FAILURE_GRACE_MS } from "./opencode-turn-outcome.js";
 
 /**
  * Turn-outcome bookkeeping and mode preservation on the native queue path:
@@ -57,6 +63,7 @@ function providerStub(agent: BuildPipelineAgent) {
 async function withService(
   provider: NativeAgentRuntimeProvider,
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
+  now: () => number = Date.now,
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-outcome-"));
   const storage = new StorageService(dataDir);
@@ -83,7 +90,7 @@ async function withService(
     async <T>(name: string): Promise<T> => {
       throw new Error(`Unexpected backend command: ${name}`);
     },
-    { provider: async () => provider },
+    { provider: async () => provider, now },
   );
   try {
     await run({ storage, service });
@@ -394,6 +401,88 @@ describe("native turn outcomes", () => {
       });
     });
   });
+
+  test.each([false, true])(
+    "dispatch-only errors settle through the service with a queued follow-up=%s",
+    async (queued) => {
+      let now = 10_000;
+      const fake = openCodeFake();
+      const provider = openCodeActivityProvider(fake, {
+        now: () => now,
+        monitorRetryMs: 1,
+        openCodeStatusReconcileIntervalMs: 60_000,
+      });
+      try {
+        await withService(
+          provider,
+          async ({ service, storage }) => {
+            const input = { environmentId: "env-1", agent: "opencode" as const, logicalSessionKey };
+            const session = await service.dispatchPrompt({
+              ...input,
+              prompt: "read attachment",
+              requestId: "dropped",
+            });
+            await waitUntil(() => fake.subscriptions.length === 1);
+            fake.subscriptions[0]!.push({
+              type: "session.error",
+              properties: {
+                sessionID: session.providerSessionId,
+                error: {
+                  name: "UnknownError",
+                  data: { message: "ImageDecodeError: invalid image" },
+                },
+              },
+            });
+            await waitForCondition(async () => {
+              const snapshot = await provider.sessionStateSnapshot?.(session.providerSessionId);
+              return (
+                snapshot?.notices?.some((notice) => notice.message.includes("ImageDecodeError")) ===
+                true
+              );
+            });
+            markIdle(service, "opencode", session.providerSessionId);
+            expect(await service.sessionTurnOutcome({ ...input, requestId: "dropped" })).toEqual({
+              outcome: "pending",
+            });
+            const queueKey = `opencode\0${logicalSessionKey}`;
+            if (queued) {
+              await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
+                id: "next",
+                text: "follow-up",
+              });
+              await service.drainPromptQueueForSession(input);
+              expect(fake.promptCalls).toHaveLength(1);
+              expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+              expect(
+                (await storage.getNativeAgentSession(session.key))?.turnOutcomes,
+              ).toBeUndefined();
+              expect(queueInternals(service).queueRetryAt.has(queueKey)).toBe(true);
+            }
+            now += 5_000; // Both the provider grace and observer retry have elapsed.
+            if (queued) {
+              queueInternals(service).queueRetryAt.clear();
+              await service.drainPromptQueueForSession(input);
+              expect(fake.promptCalls).toHaveLength(2);
+            }
+            const expected = {
+              outcome: "failed",
+              error: "OpenCode did not accept the prompt: ImageDecodeError: invalid image",
+            } as const;
+            expect(await service.sessionTurnOutcome({ ...input, requestId: "dropped" })).toEqual(
+              expected,
+            );
+            expect(
+              (await storage.getNativeAgentSession(session.key))?.turnOutcomes?.[0],
+            ).toMatchObject({ requestId: "dropped", ...expected });
+            expect(now).toBeGreaterThan(10_000 + OPEN_CODE_DISPATCH_FAILURE_GRACE_MS);
+          },
+          () => now,
+        );
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
 
   test("the drain records a transcript-held failure instead of a success", async () => {
     const stub = providerStub("opencode");

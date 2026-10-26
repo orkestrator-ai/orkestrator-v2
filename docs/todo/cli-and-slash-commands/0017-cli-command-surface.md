@@ -104,7 +104,9 @@ auto-start.
    go with the workspace. Provider attachment support is checked first.
    Evidence: unit tests (staging, paths, conflict on changed bytes, refusals,
    no content in the record) and live Claude (the agent quoted the attached
-   file).
+   file). Live OpenCode too since 2026-10-26, local and container, after
+   [0166](0166-opencode-prompt-attachment-never-dispatched.md) fixed the
+   file part's MIME type.
 4. **Project cascade removal.** Done. `project.remove` with `cascade: true`
    (operator authority only) deletes the environments reviewed at admission one
    by one through `delete_environment`, records a bounded per-environment result

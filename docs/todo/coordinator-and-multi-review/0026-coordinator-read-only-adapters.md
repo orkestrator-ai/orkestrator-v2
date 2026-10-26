@@ -63,8 +63,9 @@ advertises.
     agent) from `apps/backend/src/core/opencode-provider-helpers.ts`.
 - Qualification is one table: `judge` and `coordinatorProviderQualification`
   in `apps/backend/src/core/coordinator-providers.ts`. Claude's tier depends on
-  the host probe `defaultCoordinatorHostCapabilities`: always on macOS, on
-  Linux only with `bwrap` and `socat` on `PATH`, never on Windows.
+  the host probe `defaultCoordinatorHostCapabilities`: always on macOS, never
+  on Windows, and on Linux only when bubblewrap can nest the user namespace the
+  CLI's seccomp helper needs, with `socat` on `PATH` (0145, 2026-10-26).
   **Settings → Agent platforms → Coordinator safety level** defaults to
   `provider-configured`. A platform whose tier is weaker than the setting is
   unavailable, and the tier's `reason` is shown in the picker.
@@ -72,8 +73,8 @@ advertises.
 
   | Platform | Tier | How read-only is held | Gap |
   | --- | --- | --- | --- |
-  | Claude (macOS; Linux with `bwrap` and `socat`) | `enforced` | SDK command sandbox with writes to the checkout denied (`filesystem.denyWrite`), `allowUnsandboxedCommands` off, `failIfUnavailable` on, an allowlist without writing tools, and a bridge `PreToolUse` hook that admits a fixed list of reading commands and refuses their writing arguments; WebFetch and WebSearch are off the allowlist, in `disallowedTools` and refused by the hook | Linux not yet run live on the probe's result |
-  | Claude (Windows; Linux without `bwrap` or `socat`) | `provider-configured` | Same, with the sandbox requested but not required; the hook allowlist is the boundary | No OS containment; not yet run live on Windows |
+  | Claude (macOS; Linux whose bubblewrap nests a user namespace, with `socat`) | `enforced` | SDK command sandbox with writes to the checkout denied (`filesystem.denyWrite`), `allowUnsandboxedCommands` off, `failIfUnavailable` on, an allowlist without writing tools, and a bridge `PreToolUse` hook that admits a fixed list of reading commands and refuses their writing arguments; WebFetch and WebSearch are off the allowlist, in `disallowedTools` and refused by the hook | Linux not yet run live on the probe's result |
+  | Claude (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace) | `provider-configured` | Same, with the sandbox left off (0145); the hook allowlist is the boundary | No OS containment; not yet run live on Windows |
   | Codex | `enforced` | Permission profile that denies filesystem writes and network in the child; the bridge refuses a turn unless app-server echoes the profile back. Hosted web search (`web__run`) is switched off with `web_search = "disabled"`, and the bridge refuses a thread unless `config/read` reads it back | `sleep` is not denied (decided: not needed, item 2) |
   | Pi | `enforced` | In-process `tool_call` gate in the bridge; a name allowlist, so an extension's web tool is refused; research server tools admitted by exact registered name | None known |
   | OpenCode | `provider-configured` (final, item 3) | SDK `plan` agent plus permission rules (`*: deny`, a read-only list, the coordinator's own Orkestrator tools and research tools by exact id, then named denies for `webfetch`, `websearch` and `codesearch`) | Always loads the checkout's project configuration, including command-backed MCP servers in `opencode.json` |
@@ -320,6 +321,12 @@ decisions) is done.
   `enforced`. CI now removes that profile; a stock Ubuntu host is still
   affected, which is tracked in
   [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md).
+  Offline evidence (2026-10-26, 0145): on an Arch/Omarchy host (kernel 7.2.8,
+  bubblewrap 0.13.1, no AppArmor) the probe reports the sandbox available in
+  about 5 ms, Claude qualifies as `enforced`, and all 9 cases of
+  `conformance-coordinator-sandbox-live.test.ts` pass with the pinned CLI
+  2.1.309, including the new `unavailable-hook-reads`. A live coordinator run
+  with a real model on Linux is still owed.
 - [ ] **A research server call on Pi, Cursor and OpenCode, live (rest of item 10).** One
   coordinator turn per platform with the default research setting that
   resolves React's Context7 library ID, as was done for Codex and Claude on
@@ -429,7 +436,9 @@ cons.
 - Cons: the probe is a necessary condition only. A Linux host with `bwrap`
   but no user namespaces still reports `enforced`, and there the required
   sandbox fails the turn rather than running unsandboxed. That failure is
-  safe but visible.
+  safe but visible. (Superseded 2026-10-26 by 0145: the probe now runs
+  bubblewrap with a nested user namespace, and `unavailable` leaves the
+  sandbox off.)
 
 **D3. Deny the checkout in the sandbox, and harden the command filter.**
 

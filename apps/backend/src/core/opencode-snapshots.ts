@@ -350,9 +350,10 @@ export async function openCodeTranscriptSnapshot(
     );
     // A revised message the revert hides is not missing from the reader.
     const hiddenIds = new Set(
-      rawMessages
-        .slice(visibleMessages.length)
-        .flatMap((message) => nonEmptyString(asRecord(asRecord(message)?.info)?.id) ?? []),
+      rawMessages.slice(visibleMessages.length).flatMap((message) => {
+        const id = nonEmptyString(asRecord(asRecord(message)?.info)?.id);
+        return id ? [id] : [];
+      }),
     );
     const omittedIds =
       input.revisedMessageIds?.().filter((id) => !shownIds.has(id) && !hiddenIds.has(id)) ?? [];

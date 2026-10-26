@@ -870,8 +870,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode session revert read");
-      if (asRecord(response.data)) {
-        this.streamState.observeRevert(sessionId, openCodeRevertMarker(response.data), version);
+      const session = asRecord(response.data);
+      const marker = openCodeRevertMarker(session);
+      if (session?.id === sessionId && (session.revert === undefined || marker)) {
+        this.streamState.observeRevert(sessionId, marker, version);
       }
     } catch {
       // The transcript stays readable; only the marker is stale.
@@ -879,13 +881,18 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.streamState.revertMarker(sessionId);
   }
 
-  /** Install the Session a revert action answered with, or ask again on the next read. */
-  private observeRevertResult(sessionId: string, session: unknown): void {
-    if (nonEmptyString(asRecord(session)?.id) === sessionId) {
-      this.streamState.observeRevert(sessionId, openCodeRevertMarker(session));
-    } else {
-      this.streamState.invalidateRevert(sessionId);
-    }
+  /** An action response overtaken by another observation needs an authoritative reread. */
+  private observeRevertResult(sessionId: string, session: unknown, version: number): void {
+    const info = asRecord(session);
+    const marker = openCodeRevertMarker(session);
+    if (
+      info?.id === sessionId &&
+      (info.revert === undefined || marker) &&
+      this.streamState.observeRevert(sessionId, marker, version)
+    )
+      return;
+    // Keep the last observed marker while a later read resolves ambiguous ordering.
+    this.streamState.invalidateRevert(sessionId);
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
@@ -1292,9 +1299,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         return { outcome: "applied" };
       }
       // Both answer with the updated Session. Its revert marker is what the
-      // transcript hides, so install it now rather than wait for the
-      // `session.updated` that carries the same marker.
+      // transcript hides. Only install an answer if no observation overtook
+      // the request; otherwise the next read reconciles with session.get.
       if (action.kind === "undo") {
+        const version = this.streamState.revertVersion(sessionId);
         const response = await this.client.session.revert(
           {
             sessionID: sessionId,
@@ -1302,15 +1310,16 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.observeRevertResult(sessionId, response.data);
+        this.observeRevertResult(sessionId, response.data, version);
         return { outcome: "applied" };
       }
       if (action.kind === "redo") {
+        const version = this.streamState.revertVersion(sessionId);
         const response = await this.client.session.unrevert(
           { sessionID: sessionId },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.observeRevertResult(sessionId, response.data);
+        this.observeRevertResult(sessionId, response.data, version);
         return { outcome: "applied" };
       }
       // No share/unshare: OpenCode 1.19.1 discontinued session sharing, so

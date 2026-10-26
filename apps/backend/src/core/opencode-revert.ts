@@ -20,8 +20,9 @@ import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 
 export type OpenCodeRevertMarker = { messageId: string; partId?: string };
 
-/** Wider than any OpenCode id; a longer one is not OpenCode's and is ignored. */
-const MAX_REVERT_ID_LENGTH = 256;
+/** Allow caller-owned ids with four hex digits per request-id character,
+ * including long system-dispatched request ids, while bounding retained input. */
+const MAX_REVERT_ID_LENGTH = 16 * 1024;
 
 function boundedId(value: unknown): string | undefined {
   const id = nonEmptyString(value);

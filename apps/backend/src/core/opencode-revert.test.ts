@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolveOpenCodeMessageId } from "@orkestrator/protocol/opencode-message-id";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { openCodeMessageId } from "./opencode-history-test-support.js";
 import {
@@ -29,6 +30,13 @@ const range = (from: number, to: number) =>
   Array.from({ length: to - from }, (_, index) => openCodeMessageId(from + index));
 
 describe("openCodeRevertMarker", () => {
+  test("accepts caller-owned message ids for long system request ids", () => {
+    const requestId = `system-dispatch:${"environment-session-workflow:".repeat(8)}request`;
+    const messageId = resolveOpenCodeMessageId([], requestId, 1_000);
+    expect(messageId.length).toBeGreaterThan(256);
+    expect(openCodeRevertMarker({ revert: { messageID: messageId } })).toEqual({ messageId });
+  });
+
   test("reads Session.revert and ignores a missing or malformed one", () => {
     expect(
       openCodeRevertMarker({ revert: { messageID: "msg_1", snapshot: "s", diff: "" } }),
@@ -39,7 +47,9 @@ describe("openCodeRevertMarker", () => {
     });
     expect(openCodeRevertMarker({ id: "ses_1" })).toBeUndefined();
     expect(openCodeRevertMarker({ revert: { messageID: "" } })).toBeUndefined();
-    expect(openCodeRevertMarker({ revert: { messageID: "m".repeat(257) } })).toBeUndefined();
+    expect(
+      openCodeRevertMarker({ revert: { messageID: "m".repeat(16 * 1024 + 1) } }),
+    ).toBeUndefined();
     expect(openCodeRevertMarker(null)).toBeUndefined();
   });
 });

@@ -479,3 +479,114 @@ test("a mixed inclusive or ignored before response cannot claim history completi
   );
   expect(page).toEqual({ status: "expired" });
 });
+
+describe("pending reverts in transcript snapshots", () => {
+  function revertedSnapshot(options: {
+    cached?: { from: number; fromStart: boolean };
+    cut: number;
+    limit: number;
+    revised?: string[];
+  }) {
+    const server = openCodeHistoryServer(12);
+    return openCodeTranscriptSnapshot(
+      {
+        revision: () => 7,
+        historyEpoch: () => "revert-epoch",
+        currentMessages: () =>
+          options.cached ? server.read().slice(options.cached.from) : undefined,
+        currentMessagesFromStart: () => options.cached?.fromStart ?? false,
+        readMessages: async (limit) => server.read(limit),
+        replaceMessages: () => undefined,
+        title: () => undefined,
+        recordUnknown: () => undefined,
+        revertMarker: async () => ({ messageId: openCodeMessageId(options.cut) }),
+        revisedMessageIds: () => options.revised ?? [],
+      },
+      { limit: options.limit, targetBytes: 512 * 1024 },
+    ) as Promise<ProviderTranscriptSnapshot>;
+  }
+
+  test("revised messages hidden by a revert do not request history reconciliation", async () => {
+    const snapshot = await revertedSnapshot({
+      cached: { from: 0, fromStart: true },
+      cut: 8,
+      limit: 3,
+      revised: [openCodeMessageId(1), openCodeMessageId(9)],
+    });
+    expect(rowIds(snapshot.messages)).toEqual([5, 6, 7].map(openCodeMessageId));
+    expect(rowIds(snapshot.revisedMessages ?? [])).toEqual([openCodeMessageId(1)]);
+    expect(snapshot.historyReconciliationToken).toBeUndefined();
+    // A revised id genuinely absent from this retained read still reconciles.
+    const missing = await revertedSnapshot({
+      cached: { from: 4, fromStart: false },
+      cut: 8,
+      limit: 3,
+      revised: [openCodeMessageId(1), openCodeMessageId(9)],
+    });
+    expect(missing.historyReconciliationToken).toBeDefined();
+  });
+
+  test("a fully hidden uncached tail uses its oldest raw message as the history cursor", async () => {
+    const snapshot = await revertedSnapshot({ cut: 4, limit: 4 });
+    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.complete).toBe(false);
+    expect(decodeCursor(snapshot.historyCursor)).toEqual({
+      id: openCodeMessageId(8),
+      time: 1_002,
+    });
+  });
+
+  test("a fully hidden cached suffix preserves the cursor when earlier history is unknown", async () => {
+    const snapshot = await revertedSnapshot({
+      cached: { from: 6, fromStart: false },
+      cut: 4,
+      limit: 4,
+    });
+    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.complete).toBe(false);
+    expect(decodeCursor(snapshot.historyCursor)).toEqual({
+      id: openCodeMessageId(6),
+      time: 1_002,
+    });
+  });
+
+  test("a revert hiding a whole session known from its start needs no history cursor", async () => {
+    const snapshot = await revertedSnapshot({
+      cached: { from: 0, fromStart: true },
+      cut: 0,
+      limit: 4,
+    });
+    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.complete).toBe(true);
+    expect(snapshot.historyCursor).toBeUndefined();
+  });
+
+  for (const fromStart of [true, false]) {
+    test(`a revert shrinking a cached window respects fromStart=${fromStart}`, async () => {
+      const snapshot = await revertedSnapshot({
+        cached: { from: 2, fromStart },
+        cut: 5,
+        limit: 4,
+      });
+      expect(rowIds(snapshot.messages)).toEqual([2, 3, 4].map(openCodeMessageId));
+      expect(snapshot.complete).toBe(fromStart);
+      expect(decodeCursor(snapshot.historyCursor)).toEqual(
+        fromStart ? undefined : { id: openCodeMessageId(2), time: 1_000 },
+      );
+    });
+  }
+
+  test("visible rows exceeding the limit still have older history when cached from the start", async () => {
+    const snapshot = await revertedSnapshot({
+      cached: { from: 0, fromStart: true },
+      cut: 8,
+      limit: 4,
+    });
+    expect(rowIds(snapshot.messages)).toEqual([4, 5, 6, 7].map(openCodeMessageId));
+    expect(snapshot.complete).toBe(false);
+    expect(decodeCursor(snapshot.historyCursor)).toEqual({
+      id: openCodeMessageId(4),
+      time: 1_001,
+    });
+  });
+});

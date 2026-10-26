@@ -16,7 +16,12 @@ import type {
   ProviderTranscriptPage,
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
-import { openCodeFake, openCodeProvider, waitUntil } from "./agent-provider-test-support.js";
+import {
+  deferred,
+  openCodeFake,
+  openCodeProvider,
+  waitUntil,
+} from "./agent-provider-test-support.js";
 import { openCodeHistoryServer, openCodeMessageId } from "./opencode-history-test-support.js";
 import { withService } from "./native-agent-service-projection-test-support.js";
 
@@ -156,6 +161,178 @@ async function connected(fake: ReturnType<typeof openCodeFake>, provider: Provid
   provider.registerSession?.(SESSION);
   await waitUntil(() => fake.subscriptions.length === 1 && fake.messageCalls.length > 0);
 }
+
+/** Apply the action on the server immediately, but hold its response in flight. */
+function delayAction(fake: ReturnType<typeof openCodeFake>, action: "revert" | "unrevert") {
+  const started = deferred();
+  const gate = deferred();
+  const client = fake.client.session as unknown as Record<
+    string,
+    (parameters: unknown) => Promise<unknown>
+  >;
+  const original = client[action]!;
+  client[action] = async (parameters) => {
+    const response = await original(parameters);
+    started.resolve();
+    await gate.promise;
+    return response;
+  };
+  return { started: started.promise, release: gate.resolve };
+}
+
+describe("OpenCode revert response recovery", () => {
+  for (const newerCut of [undefined, 24]) {
+    test(`a delayed undo cannot overwrite a newer session.updated cut=${newerCut}`, async () => {
+      const fake = openCodeFake();
+      const server = revertServer(fake, 26);
+      server.publishActions = false;
+      const delayed = delayAction(fake, "revert");
+      const provider = openCodeProvider(fake);
+      try {
+        await connected(fake, provider);
+        server.externalRevert({ messageID: openCodeMessageId(20) });
+        await waitForSnapshot(provider, (rows) => rows.at(-1) === openCodeMessageId(19));
+        const undo = provider.performSessionAction!(SESSION, {
+          kind: "undo",
+          messageId: openCodeMessageId(10),
+        });
+        await delayed.started;
+        // Another client redid or changed the revert while Undo was in flight.
+        server.externalRevert(
+          newerCut === undefined
+            ? undefined
+            : {
+                messageID: openCodeMessageId(newerCut),
+              },
+        );
+        const end = newerCut ?? 26;
+        await waitForSnapshot(provider, (rows) => rows.at(-1) === openCodeMessageId(end - 1));
+        const reads = fake.sessionGetCallCount;
+        delayed.release();
+        await undo;
+        // Even before a reread, the event's marker must survive the stale response.
+        const state = await provider.sessionStateSnapshot!(SESSION);
+        if (newerCut === undefined) expect(state.notices).toBeUndefined();
+        else
+          expect(state.notices).toContainEqual(
+            expect.objectContaining({
+              occurrenceId: `opencode-revert:${openCodeMessageId(newerCut)}:`,
+            }),
+          );
+        expect(await readAll(provider, await snapshot(provider))).toEqual(ids(0, end));
+        expect(fake.sessionGetCallCount).toBeGreaterThan(reads);
+      } finally {
+        delayed.release();
+        await provider.dispose?.();
+      }
+    });
+  }
+
+  for (const firstKind of ["undo", "redo"] as const) {
+    test(`concurrent ${firstKind} and its inverse reconcile responses completed in reverse order`, async () => {
+      const fake = openCodeFake();
+      const server = revertServer(fake, 26);
+      server.publishActions = false;
+      const first = delayAction(fake, firstKind === "undo" ? "revert" : "unrevert");
+      const second = delayAction(fake, firstKind === "undo" ? "unrevert" : "revert");
+      const provider = openCodeProvider(fake);
+      try {
+        await connected(fake, provider);
+        await snapshot(provider);
+        const action = (kind: "undo" | "redo") =>
+          provider.performSessionAction!(SESSION, {
+            kind,
+            ...(kind === "undo" ? { messageId: openCodeMessageId(20) } : {}),
+          });
+        const firstResult = action(firstKind);
+        await first.started;
+        const secondResult = action(firstKind === "undo" ? "redo" : "undo");
+        await second.started;
+        second.release();
+        await secondResult;
+        const reads = fake.sessionGetCallCount;
+        first.release();
+        await firstResult;
+        const expected = ids(0, firstKind === "undo" ? 26 : 20);
+        expect(await readAll(provider, await snapshot(provider))).toEqual(expected);
+        expect(fake.sessionGetCallCount).toBeGreaterThan(reads);
+        // Once reconciled, later reads use the fresh marker.
+        const reconciledReads = fake.sessionGetCallCount;
+        await snapshot(provider);
+        expect(fake.sessionGetCallCount).toBe(reconciledReads);
+      } finally {
+        first.release();
+        second.release();
+        await provider.dispose?.();
+      }
+    });
+  }
+
+  for (const response of [
+    { data: { id: "another-session" } },
+    { data: null },
+    { data: { id: SESSION, revert: { messageID: 42 } } },
+  ]) {
+    test(`an invalid action response invalidates marker freshness: ${JSON.stringify(response)}`, async () => {
+      const fake = openCodeFake();
+      const server = revertServer(fake, 26);
+      server.publishActions = false;
+      const provider = openCodeProvider(fake);
+      try {
+        await connected(fake, provider);
+        await provider.performSessionAction!(SESSION, {
+          kind: "undo",
+          messageId: openCodeMessageId(20),
+        });
+        await snapshot(provider);
+        Object.assign(fake.client.session, { unrevert: async () => response });
+        // The server has redone the turn; the malformed answer cannot prove it.
+        fake.setSessionGetResponse(SESSION, { data: { id: SESSION } });
+        const reads = fake.sessionGetCallCount;
+        await provider.performSessionAction!(SESSION, { kind: "redo" });
+        expect(await readAll(provider, await snapshot(provider))).toEqual(ids(0, 26));
+        expect(fake.sessionGetCallCount).toBeGreaterThan(reads);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+  }
+
+  test("failed session reads retain the prior marker and retry until recovery", async () => {
+    const fake = openCodeFake();
+    const server = revertServer(fake, 26);
+    server.publishActions = false;
+    const provider = openCodeProvider(fake);
+    try {
+      await connected(fake, provider);
+      await provider.performSessionAction!(SESSION, {
+        kind: "undo",
+        messageId: openCodeMessageId(20),
+      });
+      await snapshot(provider);
+      Object.assign(fake.client.session, { unrevert: async () => ({ data: null }) });
+      await provider.performSessionAction!(SESSION, { kind: "redo" });
+      fake.setSessionGetError(new Error("session unavailable"));
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const reads = fake.sessionGetCallCount;
+        expect(rowIds((await snapshot(provider)).messages).at(-1)).toBe(openCodeMessageId(19));
+        expect(fake.sessionGetCallCount).toBeGreaterThan(reads);
+        expect((await provider.sessionStateSnapshot!(SESSION)).notices).toContainEqual(
+          expect.objectContaining({ kind: "advisory" }),
+        );
+      }
+      fake.setSessionGetError(null);
+      fake.setSessionGetResponse(SESSION, { data: { id: SESSION } });
+      expect(await readAll(provider, await snapshot(provider))).toEqual(ids(0, 26));
+      expect((await provider.sessionStateSnapshot!(SESSION)).notices).toBeUndefined();
+      const reads = fake.sessionGetCallCount;
+      await snapshot(provider);
+      expect(fake.sessionGetCallCount).toBe(reads);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});
 
 describe("OpenCode undo and redo in the transcript", () => {
   test("undo hides the reverted turn in the snapshot and every page; redo restores it", async () => {

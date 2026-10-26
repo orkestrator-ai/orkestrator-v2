@@ -10,6 +10,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
+import { buildPromptWithTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
@@ -1055,6 +1056,155 @@ describe("NativeAgentService", () => {
       },
     );
   });
+
+  test("titles a session from the request, not the transcript-annotation block after it", async () => {
+    // The live case from 0081: request text long enough that the first 80
+    // characters used to end inside the fence.
+    const request = `Let's discuss the design "Untitled design" in the attached design context.`;
+    const prompt = buildPromptWithTranscriptAnnotations(request, [
+      {
+        id: "design-1",
+        text: "Frame Hero at revision 3",
+        comment: "",
+        source: "design",
+      },
+    ]);
+    // The old fallback: whitespace collapsed, then the first 80 characters.
+    expect(prompt.replace(/\s+/g, " ").slice(0, 80)).toEndWith("<orke");
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Agent Session",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: prompt,
+            parts: [{ type: "text", content: prompt }],
+            createdAt: "2026-10-26T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-codex-annotated-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-annotated-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe(request);
+        await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+        expect(stub.setSessionTitle).toHaveBeenCalledWith("provider-session", request);
+      },
+    );
+  });
+
+  test.each(["codex", "claude"] as const)(
+    "titles a %s session from the next user request after an annotation-only message",
+    async (agent) => {
+      const annotationOnly = buildPromptWithTranscriptAnnotations("", [
+        { id: "design-1", text: "Frame Hero at revision 3", comment: "", source: "design" },
+      ]);
+      const request = "Update the sidebar layout";
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({
+          status: "idle",
+          title: agent === "claude" ? "Session a1b2c3" : "Agent Session",
+          messages: [
+            {
+              id: "user-1",
+              role: "user",
+              content: annotationOnly,
+              parts: [{ type: "text", content: annotationOnly }],
+              createdAt: "2026-10-26T10:00:00.000Z",
+            },
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: "I have the design context.",
+              parts: [{ type: "text", content: "I have the design context." }],
+              createdAt: "2026-10-26T10:00:01.000Z",
+            },
+            {
+              id: "user-2",
+              role: "user",
+              content: request,
+              parts: [{ type: "text", content: request }],
+              createdAt: "2026-10-26T10:00:02.000Z",
+            },
+          ],
+        }),
+        setSessionTitle: async () => undefined,
+      });
+      await withService(
+        {
+          prefix: `orkestrator-native-${agent}-annotation-only-next-title-`,
+          provider: async () => stub.provider,
+        },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent,
+            logicalSessionKey: `env-env-1:tab-${agent}-annotation-only-next-title`,
+          };
+          await service.ensureSession(identity);
+          const projection = await service.getProjection(identity);
+          expect(projection?.title).toBe(request);
+          await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+          expect(stub.setSessionTitle).toHaveBeenCalledWith("provider-session", request);
+        },
+      );
+    },
+  );
+
+  test.each(["codex", "claude"] as const)(
+    "keeps the %s placeholder when every user message contains only annotations",
+    async (agent) => {
+      const annotationOnly = buildPromptWithTranscriptAnnotations("", [
+        { id: "design-1", text: "Frame Hero at revision 3", comment: "", source: "design" },
+      ]);
+      const title = agent === "claude" ? "Session a1b2c3" : "Agent Session";
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({
+          status: "idle",
+          title,
+          messages: ["user-1", "user-2"].map((id) => ({
+            id,
+            role: "user" as const,
+            content: annotationOnly,
+            parts: [{ type: "text", content: annotationOnly }],
+            createdAt: "2026-10-26T10:00:00.000Z",
+          })),
+        }),
+        setSessionTitle: async () => undefined,
+      });
+      await withService(
+        {
+          prefix: `orkestrator-native-${agent}-annotation-only-placeholder-`,
+          provider: async () => stub.provider,
+        },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent,
+            logicalSessionKey: `env-env-1:tab-${agent}-annotation-only-placeholder`,
+          };
+          await service.ensureSession(identity);
+          const projection = await service.getProjection(identity);
+          expect(projection?.title).toBe(title);
+          expect(stub.setSessionTitle).toHaveBeenCalledWith("provider-session", title);
+        },
+      );
+    },
+  );
 
   test("keeps a Codex brief title when the transcript includes framed guidance", async () => {
     const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server.")}\n\nMock up the sidebar`;

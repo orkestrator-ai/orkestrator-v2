@@ -38,6 +38,8 @@ import {
   composeWebAnnotationDispatchText,
 } from "./web-annotation-brief.js";
 import { ENV_A, createHarness, type ServiceHarness } from "./web-annotation-test-support.js";
+import { webAnnotationStoreName } from "./web-annotation-store-layout.js";
+import { readIndexSnapshot } from "./web-annotation-store-rows.js";
 import { rejectionDetail } from "./web-annotation-test-helpers.js";
 
 jest.setTimeout(180_000);
@@ -427,12 +429,12 @@ describe("large collections", () => {
   });
 
   test("SQLite writes per create stay bounded as the collection grows (no whole-history rewrite)", async () => {
-    harness = await createHarness();
+    // The debug full diff would add O(collection) CPU to every timed create.
+    harness = await createHarness({ verifyRowPlans: false });
     // Count actual persisted row writes, including unchanged rows a regressed
     // whole-history writer might rewrite. Wall time alone cannot distinguish
-    // that from fsync contention on a shared host (flake 0225). CPU per create
-    // still grows linearly: every commit clones the manifest and re-serializes
-    // every index row to find the changed ones (`commitManifest`, `planRows`).
+    // that from fsync contention on a shared host (flake 0225). The CPU bound
+    // (rows serialized per commit) is the next test.
     await harness.service.storage.environment(ENV_A);
     const db = harness.service.storage.database().db;
     db.exec(`
@@ -493,5 +495,87 @@ describe("large collections", () => {
     // Write amplification above is the regression gate. Medians remain useful
     // diagnostics; the total deadline only catches a stalled benchmark.
     expect(batchMs.reduce((sum, ms) => sum + ms, 0)).toBeLessThan(60_000);
+  });
+
+  test("commit CPU per create follows the changed rows, not the collection (rows serialized)", async () => {
+    harness = await createHarness();
+    const service = harness.service;
+    // Non-timing bound: a regression back to whole-collection diffing or
+    // copying shows up as more rows serialized or collections copied.
+    const commitCost = () => {
+      const gauges = service.metrics.snapshot().gauges;
+      return {
+        rows: gauges["storage_commit_rows_serialized|scope=manifest"]!,
+        collections: gauges["storage_commit_collections_copied|scope=manifest"]!,
+      };
+    };
+    let operation = 0;
+    const create = () =>
+      service.create({
+        environmentId: ENV_A,
+        operationId: `op-cost-${operation++}`,
+        capture: fixtureCaptureInput("element"),
+        body: `Cost note ${operation}`,
+      });
+    // The first commit also writes the new store's migration row.
+    await create();
+    await create();
+    const small = commitCost();
+
+    const store = await service.storage.environment(ENV_A);
+    const notes = 1_900;
+    await store.mutate((tx) => {
+      tx.markEssential();
+      for (let index = 0; index < notes; index++) {
+        const id = `annotation-cost-${String(index).padStart(4, "0")}`;
+        const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+        tx.manifest.annotations[id] = fixtureAnnotation({
+          id,
+          environmentId: ENV_A,
+          createdAt,
+          currentCaptureId: `capture-${id}`,
+          entryCount: 2,
+          lastSequence: 2,
+        });
+        tx.manifest.changedAt[id] = 1;
+        tx.manifest.captures[`capture-${id}`] = {
+          id: `capture-${id}`,
+          annotationId: id,
+          revision: 1,
+          producer: "desktop-native",
+          state: "complete",
+          assetIds: [],
+          createdAt,
+          bytes: 2_048,
+        };
+        tx.manifest.entries[id] = [1, 2].map((sequence) => ({
+          id: `entry-${id}-${sequence}`,
+          annotationId: id,
+          sequence,
+          kind: sequence === 1 ? ("lifecycle" as const) : ("comment" as const),
+          provenance: sequence === 1 ? ("system" as const) : ("host-user" as const),
+          bytes: 512,
+          createdAt,
+        }));
+      }
+      tx.markDirty();
+    });
+    const indexRows = readIndexSnapshot(service.storage.database(), webAnnotationStoreName(ENV_A))!
+      .rows.length;
+    expect(indexRows).toBeGreaterThan(notes * 4);
+
+    await create();
+    const large = commitCost();
+    measurements.commitCost = {
+      smallRowsSerialized: small.rows,
+      largeRowsSerialized: large.rows,
+      smallCollectionsCopied: small.collections,
+      largeCollectionsCopied: large.collections,
+      largeIndexRows: indexRows,
+    };
+    // Annotation, changed, capture, entry, receipt and meta rows.
+    expect(small.rows).toBeLessThanOrEqual(8);
+    expect(large.rows).toBe(small.rows);
+    expect(large.collections).toBe(small.collections);
   });
 });

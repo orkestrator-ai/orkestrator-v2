@@ -158,7 +158,9 @@ export class WebAnnotationResults {
   /** Settlement clears the provisional flag on the request's result indexes. */
   settleResultsInTx(tx: WebAnnotationTransaction, request: WebAnnotationRequest): void {
     for (const result of Object.values(tx.manifest.results)) {
-      if (result.requestId === request.id && result.provisional) result.provisional = false;
+      if (result.requestId === request.id && result.provisional) {
+        tx.manifest.results[result.id] = { ...result, provisional: false };
+      }
     }
   }
 
@@ -211,9 +213,10 @@ export class WebAnnotationResults {
 
   writeResult(
     tx: WebAnnotationTransaction,
-    request: WebAnnotationRequest,
+    target: WebAnnotationRequest,
     result: WebAnnotationResult,
   ): void {
+    const request = tx.edit("requests", target.id) ?? target;
     const bytes = tx.writeRecord("result", result.id, 1, result);
     tx.manifest.results[result.id] = {
       id: result.id,
@@ -231,7 +234,7 @@ export class WebAnnotationResults {
     request.revision++;
     request.updatedAt = tx.now;
     for (const selection of request.selections) {
-      const annotation = tx.manifest.annotations[selection.annotationId];
+      const annotation = tx.edit("annotations", selection.annotationId);
       if (annotation) this.threads.bumpMetadata(tx, annotation);
     }
     tx.touch({ requestIds: [request.id] });

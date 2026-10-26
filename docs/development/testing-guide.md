@@ -134,6 +134,10 @@ ORKESTRATOR_E2E_BROWSER=webkit mise run test:logged -- --name browser-webkit -- 
   e2e/PaneBreakpoint.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts
 ```
 
+The Chrome-only native datalist spec is skipped on alternate engines, as are
+CDP touch-input cases. Engine checks use `browserName`, independently of the
+viewport project name.
+
 Playwright's WebKit has no `moveBefore`, so it exercises the stable-host
 `appendChild` fallback natively. It runs on the host, so it does not stand in
 for iOS Safari on a device or simulator. Install it with

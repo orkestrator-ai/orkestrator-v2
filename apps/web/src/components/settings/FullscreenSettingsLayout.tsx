@@ -101,9 +101,8 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   // A modal takes focus when it opens, so the keyboard starts inside it rather
   // than on the control underneath that opened it, and hands it back to that
   // control when it closes. Focus another owner already placed is left alone.
-  // The `FocusScope` below moves focus in (`onMountAutoFocus`) once its trap
-  // listens, so the trap knows where to send focus that tries to leave.
-  const dialogRef = useRef<HTMLDivElement>(null);
+  // FocusScope starts on the first tabbable control, so reverse navigation
+  // wraps immediately as well as after moving forward.
   useEffect(() => {
     if (!open) return;
     const opener = document.activeElement;
@@ -142,15 +141,10 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
           asChild
           loop
           trapped
-          onMountAutoFocus={(event) => {
-            event.preventDefault();
-            dialogRef.current?.focus({ preventScroll: true });
-          }}
           // The effect above returns focus, and leaves focus another owner placed.
           onUnmountAutoFocus={(event) => event.preventDefault()}
         >
           <div
-            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={title}

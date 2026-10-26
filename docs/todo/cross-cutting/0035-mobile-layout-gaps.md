@@ -189,6 +189,25 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
 
 ### Qualification
 
+- **Review fixes, 2026-10-26.** `mise run check` passes. The three focused
+  settings/shell/composition unit files pass, and both complete settings
+  browser specs pass in Chromium. Targeted WebKit checks pass for immediate
+  reverse Tab and tools-launched settings (including cached reopening and
+  changing the default agent). Chrome-channel/CDP cases skip under both
+  `ORKESTRATOR_E2E_BROWSER=webkit` and `firefox`.
+  The complete nine-worker component run has 757 passed, 103 skipped and two
+  native Chrome datalist failures (`rel` instead of `release/2.0`); both
+  failures reproduce in the complete one-worker owner, matching
+  [0493](../../tests/flaky-tests/aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md).
+  The public-site suite passes separately. `mise run test` has 9834 web passes;
+  four backend failures and their owner reruns are recorded in
+  [0091](../../tests/flaky-tests/environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md),
+  [0180](../../tests/flaky-tests/environments-and-containers/0180-worktree-tracked-edit-cache-hit.md),
+  [0248](../../tests/flaky-tests/environments-and-containers/0248-move-restart-recovery-submodule-timeout.md)
+  and [0942](../../tests/flaky-tests/aggregate-validation-runs/0942-service-preview-rollout-0042-validation.md).
+  The initial root diagnostic guard caught raw DOM absence assertions in the
+  new composition test; those now use the shared helper and the complete
+  diagnostic guard passes on rerun. Raw logs remain outside Git.
 - In Chromium both fixes are checked in a narrow browser:
   `e2e/PaneBreakpoint.spec.ts` crosses the breakpoint mid-test in the
   `mobile-chromium` and `desktop-chromium` projects, and
@@ -320,10 +339,11 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   Chose (a), as the item asked. Pros: one renderer, one pin-by-id and
   drop-on-delete path, and a toolbar request now also closes an open drawer.
   Cons: the toolbar's dialog only appears where `AppShell` mounts
-  `AppDialogHost`, and the ActionBar tests can no longer see the dialog. A
-  bare `<ActionBar />` render shows nothing, so they check the request
-  instead. The ActionBar's repository settings keep their own copy: the item
-  did not cover them, and they are not opened from the drawer.
+  `AppDialogHost`. A bare `<ActionBar />` test checks the request; the
+  composed ActionBar/settings test and phone browser fixture render the real
+  host and verify section navigation and focus return after cached reopening.
+  The ActionBar's repository settings keep their own copy: the item did not
+  cover them, and they are not opened from the drawer.
 - **How to trap focus (2026-10-26).** Options: (a) Radix `FocusScope` around
   the existing dialog; (b) convert the layer to a Radix `Dialog`; (c) a
   hand-written Tab handler plus a `focusin` guard. Chose (a). Pros: it shares
@@ -336,14 +356,16 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   to behave. (b) would add outside-press dismissal, scroll locking and
   `aria-hidden` on siblings that the layer does not have today. (c) would
   have to reimplement the nested-layer stack.
-- **Where the dialog's opening focus goes (2026-10-26).** Kept focus on the
-  dialog itself, set in `FocusScope`'s `onMountAutoFocus` so the trap is
-  already listening and knows where to send focus. Radix's default, the
-  first control, would have changed what a screen reader announces first
-  and where the keyboard starts.
-- **Returning focus past the trap (2026-10-26).** Options: (a) the drawer
-  bumps a counter from its store callback and focuses its trigger in an
-  effect, after the dialog's unmount commit; (b) the settings layer drops
+- **Where the dialog's opening focus goes (2026-10-26).** Use Radix's
+  default first tabbable control. Starting on the dialog container stranded
+  an immediate Shift+Tab there because the container is not a tabbable edge.
+  The first control gives reverse navigation a working wrap immediately,
+  within the named modal. Unit and browser tests cover reverse navigation
+  before any forward Tab, and the browser checks each control in order.
+- **Returning focus past the trap (2026-10-26).** Options: (a) the mobile shell
+  records the drawer or tools trigger, bumps a counter from its store callback
+  and focuses that trigger in an effect, after the dialog's unmount commit;
+  (b) the settings layer drops
   its trap when it starts to close. Chose (a). The layer cannot see the close
   coming: `onOpenChange(false)` reaches the store and its subscribers before
   React renders. A counter avoids setting state in an effect body. Con: the
@@ -357,7 +379,12 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   `project.name === "mobile-chromium"` skips keep working. Cons: under WebKit
   the project names say "chromium". The config comment and the testing guide
   say they name the viewport profile. The two `-webkit-app-region`
-  assertions (Electron-only CSS) now only run under Chromium.
+  assertions (Electron-only CSS) now only run under Chromium. Chrome-channel
+  native datalist tests and CDP touch cases skip alternate engines based on
+  `browserName`, independently of the viewport project name.
+- **Qualification artifacts (2026-10-26).** Raw qualification logs are scratch
+  output and are ignored under `/output/qualification-*/`. Keep validation
+  summaries here; the logged runner owns bounded failure evidence outside Git.
 
 ## Related
 

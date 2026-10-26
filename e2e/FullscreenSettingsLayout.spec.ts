@@ -93,7 +93,18 @@ test("Tab and Shift+Tab cycle inside settings without reaching the page undernea
 }) => {
   await page.goto("/fullscreen-settings");
   const dialog = page.getByRole("dialog", { name: "Fixture settings" });
-  await expect(dialog).toBeFocused();
+  const first =
+    page.viewportSize()!.width < 768
+      ? dialog.getByRole("combobox", { name: "Settings section" })
+      : dialog.getByRole("button", { name: "Section 1", exact: true });
+  const last = dialog.getByRole("button", { name: "Close settings" });
+  await expect(first).toBeFocused();
+  // Reverse navigation must work immediately, before a forward Tab.
+  await page.keyboard.press("Shift+Tab");
+  await expect(last).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(first).toBeFocused();
+
   const focusedLabel = () =>
     page.evaluate(() => {
       const active = document.activeElement;
@@ -102,15 +113,23 @@ test("Tab and Shift+Tab cycle inside settings without reaching the page undernea
       return active.getAttribute("aria-label") ?? active.textContent?.trim() ?? "";
     });
 
-  // More presses than the layer has controls, so each direction wraps at least once.
-  for (const key of ["Tab", "Shift+Tab"]) {
-    const visited: string[] = [];
-    for (let press = 0; press < 30; press += 1) {
-      await page.keyboard.press(key);
-      visited.push(await focusedLabel());
-    }
-    expect(visited.filter((label) => label.startsWith("outside:"))).toEqual([]);
-    expect(new Set(visited).size).toBeLessThan(visited.length);
+  // Visit every visible control in order and prove each press advances before
+  // checking the wrap. A focus trap stuck on one element must fail this test.
+  const controls = [
+    ...(page.viewportSize()!.width < 768
+      ? ["Settings section"]
+      : Array.from({ length: 16 }, (_, index) => `Section ${index + 1}`)),
+    "Jump to last section",
+    "Close settings",
+  ];
+  expect(await focusedLabel()).toBe(controls[0]);
+  for (const label of [...controls.slice(1), controls[0]]) {
+    await page.keyboard.press("Tab");
+    expect(await focusedLabel()).toBe(label);
+  }
+  for (const label of [...controls.slice(1).reverse(), controls[0]]) {
+    await page.keyboard.press("Shift+Tab");
+    expect(await focusedLabel()).toBe(label);
   }
   await expect(page.getByRole("button", { name: "Page underneath" })).not.toBeFocused();
 });

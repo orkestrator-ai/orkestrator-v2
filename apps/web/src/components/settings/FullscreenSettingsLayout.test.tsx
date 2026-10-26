@@ -625,7 +625,7 @@ describe("FullscreenSettingsLayout", () => {
     try {
       opener.focus();
       const { rerender } = render(view(true));
-      expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Settings" }));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /General/ }));
 
       screen.getByRole("button", { name: "Inside" }).focus();
       rerender(view(false));
@@ -685,7 +685,11 @@ describe("FullscreenSettingsLayout", () => {
     const first = screen.getByRole("button", { name: /General/ });
     const last = screen.getByRole("button", { name: "Last control" });
 
-    last.focus();
+    // The initial control supports reverse wrapping before any forward Tab.
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+
     fireEvent.keyDown(last, { key: "Tab" });
     expect(document.activeElement).toBe(first);
 

@@ -178,3 +178,26 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   passed (8.2 s) at load average about 15.
 - **Evidence:** `orkestrator-test-run.9PpU2I/` below the host temporary
   directory. No assertion, timeout or skip changed.
+
+
+## Mobile settings review-fix validation — 2026-10-26
+
+The review-fix `mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` used workspace/root/bridges/protocol
+allocations of 4/1/2/1, with two backend workers. Backend finished with 11762
+passed, 97 skipped and four failed across 703 files (636.58 s); the aggregate
+finished in 654.9 s. Web passed 9834 tests. Aggregate evidence is
+`orkestrator-test-run.x766cu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The change touches no backend implementation
+or backend tests.
+
+`local preview service discovery on this host > two environments, a restart
+on the reused port, and an auto-incremented port` failed at line 531
+(441.53 ms): the fixture printed `EADDRINUSE` on loopback and its shell exited
+before reporting a bound port.
+
+The complete unchanged owner passed alone:
+`mise run test:logged -- --name backend-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+(4.3 s logged). This confirms intermittence for the port-collision recurrence;
+it does not establish the cause. No assertion, timeout, skip or preview
+implementation changed.

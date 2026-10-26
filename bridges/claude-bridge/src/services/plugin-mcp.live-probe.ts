@@ -27,8 +27,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function main(): Promise<void> {
   const input = JSON.parse(process.argv[2] ?? "{}") as ProbeInput;
   setClaudeHomeForTesting(input.home);
-  // Exactly what a turn passes: project plugin layers only with project resources.
-  const plugins = await getPluginsForSdk(input.cwd, input.settingSources.includes("project"));
+  // Exactly what a turn passes: project plugin layers only with project
+  // resources, installs only when the loaded settings enable them.
+  const plugins = await getPluginsForSdk(
+    input.cwd,
+    input.settingSources.includes("project"),
+    input.settingSources,
+  );
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;

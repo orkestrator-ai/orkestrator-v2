@@ -82,3 +82,11 @@
 - **Aggregate counts:** Backend 11,012 passed, 79 skipped and three failed across 660 files (642.56 s); root/support 3,405 passed and one failed across 162 files (403.31 s). All other workspace packages, bridges and protocol passed; aggregate exit 1 in 692.6 s logged.
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
+
+## Recurrence — 2026-10-26
+
+- **Original command:** `mise run test` on `todo-0020-container-state-observation-fb5e330d3136` (container image, entrypoint, an e2e spec, a CI workflow and docs; nothing in the public API), macOS 27.0 arm64, default worker plan, host load average about 12 to 19.
+- **Failure:** the restart reconciliation case failed in fixture cleanup with `EPERM: operation not permitted, rm '/tmp/ork-public-api-…'` at `test-support.ts:143` after 1169.63 ms. The same aggregate's other failure was case [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md).
+- **Owning-file rerun:** `mise run test:logged -- --name env-exec-alone -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1` passed (exit 0, 13.1 s).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SdxKj0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** recurrence of the existing intermittent failure. Nothing changed.

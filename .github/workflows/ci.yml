@@ -95,6 +95,20 @@ jobs:
           mise run download:codex
           echo "$GITHUB_WORKSPACE/binaries" >> "$GITHUB_PATH"
 
+      # Preserve paired probe/CLI evidence on this same disposable AppArmor host.
+      # The restricted phase must run before any sysctl/profile remediation.
+      - name: Install Claude sandbox and completion shell dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap socat zsh fish
+
+      - name: Qualify Claude under stock AppArmor policy
+        env:
+          ORKESTRATOR_CLAUDE_APPARMOR_PHASE: restricted
+          ORKESTRATOR_POLICY_CLAUDE_PATH: ${{ github.workspace }}/binaries/claude
+          ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE: ${{ runner.temp }}/claude-apparmor
+        run: mise run test:logged -- --name claude-apparmor-restricted -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-apparmor-live.test.ts --parallel=1
+
       # The Claude execution-policy qualification runs the pinned CLI's real
       # Linux sandbox, which needs bubblewrap and socat. Ubuntu's AppArmor
       # policy denies the unprivileged user namespaces bubblewrap creates, and
@@ -103,10 +117,8 @@ jobs:
       # capability-restricted"). Both checks below fail here, not in the tests.
       # The CLI's shell-completion tests run the generated scripts in zsh and
       # fish, which the runner image does not ship.
-      - name: Install Claude sandbox and completion shell dependencies
+      - name: Allow nested namespaces on the disposable runner
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap socat zsh fish
           sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
           sudo sysctl --write kernel.apparmor_restrict_unprivileged_unconfined=0
           for profile in bwrap-userns-restrict unprivileged_userns; do
@@ -117,6 +129,22 @@ jobs:
           bwrap --unshare-all --ro-bind / / true
           bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc -- \
             unshare --user --map-root-user true
+
+      - name: Qualify Claude after AppArmor remediation
+        env:
+          ORKESTRATOR_CLAUDE_APPARMOR_PHASE: remediated
+          ORKESTRATOR_POLICY_CLAUDE_PATH: ${{ github.workspace }}/binaries/claude
+          ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE: ${{ runner.temp }}/claude-apparmor
+        run: mise run test:logged -- --name claude-apparmor-remediated -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-apparmor-live.test.ts --parallel=1
+
+      - name: Upload paired Claude AppArmor evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: claude-apparmor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/claude-apparmor
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Run complete non-iOS suite
         env:

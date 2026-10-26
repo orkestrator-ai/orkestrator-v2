@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import {
   emptyContainerLifecycle,
   setupCompletionIsCurrent,
@@ -9,10 +12,31 @@ import {
   drainContainerProcesses,
   ensureCurrentBootReady,
   parseBootProbe,
+  parseExitedBootRecord,
   waitForContainerBoot,
   withEnvironmentDraining,
 } from "../src/core/container-readiness";
-import { withDockerScript } from "./container-lifecycle-fixtures";
+import { tempDir, withDockerScript } from "./container-lifecycle-fixtures";
+
+const cleanup: string[] = [];
+afterEach(async () => {
+  await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+/** What `docker cp <container>:/run/orkestrator/boot-status.json -` streams. */
+async function bootRecordTar(content: string): Promise<string> {
+  const dir = await tempDir("ork-boot-record-tar-");
+  cleanup.push(dir);
+  await fs.writeFile(path.join(dir, "boot-status.json"), content);
+  const tarPath = path.join(dir, "out.tar");
+  const result = spawnSync(
+    "tar",
+    ["--format=ustar", "-cf", tarPath, "-C", dir, "boot-status.json"],
+    { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+  );
+  expect(result.status).toBe(0);
+  return tarPath;
+}
 
 const record = (fields: Record<string, unknown>) =>
   JSON.stringify({
@@ -54,6 +78,81 @@ describe("boot status probe", () => {
     expect(parseBootProbe("ORKESTRATOR_NO_BOOT_DIR\n1\n")).toEqual({ kind: "legacy" });
     expect(parseBootProbe("\n1\n")).toEqual({ kind: "pending" });
     expect(parseBootProbe("unexpected\n1\n")).toEqual({ kind: "pending" });
+  });
+});
+
+describe("an exited container's final boot record", () => {
+  const failed = (fields: Record<string, unknown> = {}) =>
+    record({
+      phase: "failed",
+      failureCode: "firewall-failed",
+      updatedAt: "2026-09-27T10:00:05Z",
+      ...fields,
+    });
+
+  test("names the failure only when this run wrote it", () => {
+    const startedAt = "2026-09-27T10:00:04.123456789Z";
+    expect(parseExitedBootRecord(`${failed()}\n`, startedAt)).toBe("firewall-failed");
+    // Written in the same second the run started.
+    expect(parseExitedBootRecord(failed(), "2026-09-27T10:00:05.900Z")).toBe("firewall-failed");
+    // Left by an earlier start: the entrypoint of this one died before writing.
+    expect(parseExitedBootRecord(failed(), "2026-09-27T10:00:06.000Z")).toBeNull();
+    expect(parseExitedBootRecord(failed(), "0001-01-01T00:00:00Z")).toBeNull();
+    expect(parseExitedBootRecord(failed(), "")).toBeNull();
+    // Only a failed boot names a failure, and only with a well-formed code.
+    expect(parseExitedBootRecord(failed({ phase: "ready" }), startedAt)).toBeNull();
+    expect(parseExitedBootRecord(failed({ failureCode: "rm -rf /" }), startedAt)).toBeNull();
+    expect(parseExitedBootRecord(failed({ failureCode: null }), startedAt)).toBeNull();
+    expect(parseExitedBootRecord(failed({ version: 2 }), startedAt)).toBeNull();
+    expect(parseExitedBootRecord(failed({ updatedAt: "yesterday" }), startedAt)).toBeNull();
+    expect(parseExitedBootRecord(failed().slice(0, 40), startedAt)).toBeNull();
+  });
+
+  test("a fail-closed boot that exited reports its own code, not container-exited", async () => {
+    const tar = await bootRecordTar(
+      `${record({ phase: "failed", failureCode: "firewall-missing", updatedAt: "2026-09-27T10:00:05Z" })}\n`,
+    );
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  exec) printf 'Error response from daemon: container is not running\\n' >&2; exit 1 ;;
+  inspect) printf 'false 2026-09-27T10:00:04.5Z\\n' ;;
+  cp) cat '${tar}' ;;
+esac
+`,
+      async (log) => {
+        const failure = await waitForContainerBoot("container-1", { pollMs: 1 }).catch((e) => e);
+        expect((failure as ContainerInitializationError).failureCode).toBe("firewall-missing");
+        expect(String(failure)).toContain("firewall-missing");
+        expect(await log.read()).toContain("cp container-1:/run/orkestrator/boot-status.json -");
+      },
+    );
+  });
+
+  test("an unreadable or earlier record still reads as container-exited", async () => {
+    const stale = await bootRecordTar(
+      `${record({ phase: "failed", failureCode: "firewall-failed", updatedAt: "2026-09-27T09:00:00Z" })}\n`,
+    );
+    for (const cp of [
+      `cat '${stale}'`,
+      "printf 'Error response from daemon: Could not find the file /run/orkestrator/boot-status.json in container container-1\\n' >&2; exit 1",
+      "printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\\n' >&2; exit 1",
+    ]) {
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  exec) exit 1 ;;
+  inspect) printf 'false 2026-09-27T10:00:04.5Z\\n' ;;
+  cp) ${cp} ;;
+esac
+`,
+        async () => {
+          const failure = await waitForContainerBoot("container-1", { pollMs: 1 }).catch((e) => e);
+          expect((failure as ContainerInitializationError).failureCode).toBe("container-exited");
+        },
+      );
+    }
   });
 });
 

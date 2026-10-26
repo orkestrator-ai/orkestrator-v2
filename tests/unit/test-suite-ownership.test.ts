@@ -241,6 +241,8 @@ describe("test suite ownership", () => {
     // A backend or desktop suite belongs in its own package, where it runs on
     // the platform it ships on and is typechecked with that package.
     const crossPackageContracts = new Set([
+      // Build discovery must match the bridges desktop profiles build and check.
+      "tests/unit/bridge-packaging.test.ts",
       "tests/unit/codex-bridge-environment.test.ts",
       // The disk report reads the database the backend writes, without migrating it.
       "tests/unit/disk-report.test.ts",

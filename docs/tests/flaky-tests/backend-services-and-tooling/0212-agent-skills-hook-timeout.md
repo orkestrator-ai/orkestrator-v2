@@ -22,3 +22,16 @@ Original command: `mise run test:logged -- --name merge2-tests -- mise run test`
 Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 
 The unchanged owner pass confirms intermittence. No implementation, assertion, timeout or skip changed.
+
+## Plugin enablement regressions — 2026-10-26
+
+`mise run test:logged -- --name backend-settings-final -- bun test --cwd apps/backend ./tests/portable-inputs.test.ts ./src/core/agent-skills.test.ts ./src/core/environment-agent-skills.test.ts --parallel=3 --only-failures`
+reported the same fixture hook timeout (6860.69 ms), with 131 passes and one
+failure across three files. Other worktrees' aggregate validations and a Docker
+image build were active on the host. Evidence: the host temporary directory's
+`orkestrator-test-run.4fBNig/backend-settings-final.log.gz`.
+
+The unchanged owning file passed alone with
+`mise run test:logged -- --name agent-skills-isolated -- bun test --cwd apps/backend ./src/core/agent-skills.test.ts --parallel=1 --only-failures`
+(exit 0, 3.6 seconds). This matches the existing concurrent fixture-I/O
+hypothesis; no deadline, assertion or skip was changed.

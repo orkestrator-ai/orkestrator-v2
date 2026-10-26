@@ -16,6 +16,7 @@
  */
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
 import {
   CommandChangeJournal,
   hasMeasuredChanges,
@@ -51,7 +52,7 @@ function journalFileName(threadId: string): string | undefined {
 
 export function commandChangeJournalPath(codexHome: string, threadId: string): string | undefined {
   const fileName = journalFileName(threadId);
-  return fileName ? join(codexHome, "orkestrator-bridge", "command-changes", fileName) : undefined;
+  return fileName ? join(codexBridgeStateDir(codexHome), "command-changes", fileName) : undefined;
 }
 
 export function commandChangeJournalFor(
@@ -82,7 +83,18 @@ export async function readCommandChanges(
 ): Promise<Map<string, MeasuredWorkspaceChange>> {
   const journal = commandChangeJournalFor(codexHome, threadId);
   if (!journal) return new Map();
-  return journal.read().catch(() => new Map<string, MeasuredWorkspaceChange>());
+  const current = await journal.read().catch(() => new Map<string, MeasuredWorkspaceChange>());
+  // A thread run on this login before measurements moved to the shared state
+  // directory keeps its badges; the shared journal wins a call id both hold.
+  const fileName = journalFileName(threadId);
+  const legacyPath = fileName
+    ? join(codexLoginBridgeDir(codexHome), "command-changes", fileName)
+    : undefined;
+  if (!legacyPath || legacyPath === commandChangeJournalPath(codexHome, threadId)) return current;
+  const legacy = await new CommandChangeJournal(legacyPath)
+    .read()
+    .catch(() => new Map<string, MeasuredWorkspaceChange>());
+  return legacy.size === 0 ? current : new Map([...legacy, ...current]);
 }
 
 /** Journal one measurement. Never rejects; a lost record costs a badge. */

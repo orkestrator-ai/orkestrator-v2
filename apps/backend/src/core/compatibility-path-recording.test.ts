@@ -64,7 +64,7 @@ test("MCP counters distinguish marked reports and older bridge decisions", () =>
   expect(count("mcp-report.older-bridge-outcome")).toBe(older + 1);
 });
 
-test("transcript fallback counts legacy messages reads but not current transcript reads", async () => {
+test("transcript fallback counts legacy messages reads, not current reads or missing sessions", async () => {
   const id = "bridge-transcript.messages-fallback";
   const before = count(id);
   const options = { limit: 10, targetBytes: 1024 };
@@ -88,5 +88,13 @@ test("transcript fallback counts legacy messages reads but not current transcrip
       : Response.json({ messages: [] }),
   );
   await (legacy.provider as NativeAgentRuntimeProvider).transcriptSnapshot!("session-1", options);
+  expect(count(id)).toBe(before + 1);
+  // Both routes 404: the session is missing, which is no compatibility use.
+  const missing = httpProvider(() => new Response(null, { status: 404 }));
+  const snapshot = await (missing.provider as NativeAgentRuntimeProvider).transcriptSnapshot!(
+    "session-1",
+    options,
+  );
+  expect(snapshot).toMatchObject({ messages: [], complete: true });
   expect(count(id)).toBe(before + 1);
 });

@@ -229,7 +229,8 @@ every backend-only host, then restart the service.
 - **The managed `claude` does not update itself.** Host processes running it get
   `CLAUDE_PINNED_RUNTIME_ENV` (`DISABLE_AUTOUPDATER=1`, with
   `FORCE_AUTOUPDATE_PLUGINS=1` so the user's plugins still update). A `claude` on
-  PATH is left alone.
+  PATH is left alone. The container image sets the same two variables
+  (`docker/Dockerfile`), so container Claude stays on `CLAUDE_CLI_VERSION`.
 
 ### Container environments
 
@@ -561,10 +562,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    but update the module's header to say so.
 
    Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
-   `@inline` plugins the bridge passes, `.mcp.json` before the manifest's
-   `mcpServers`, the `plugin:<plugin>:<server>` names and the live panel's
-   plugin layer). This starts the real CLI three times in a temporary home,
-   with no credentials and no prompt:
+   `@inline` plugins the bridge passes, the bridge passing an install only
+   when its `<name>@<marketplace>` id is `true`, Claude Code's own installed
+   copy, `.mcp.json` before the manifest's `mcpServers`, the
+   `plugin:<plugin>:<server>` names and the live panel's plugin layer). This
+   starts the real CLI six times in a temporary home, with no credentials and
+   no prompt:
 
    ```bash
    mise run verify:claude:plugin-mcp-live
@@ -573,6 +576,18 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    A failure means the CLI changed one of the rules recorded under "Claude
    plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
    binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
+
+   Re-check the Linux command sandbox on a Linux host. The probe in
+   `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
+   runs a command (bubblewrap, then its `apply-seccomp` helper nesting a user
+   namespace); see "Claude's sandbox on Linux" in
+   `docs/architecture/coordinator.md`. Run
+   `bun test --cwd bridges/claude-bridge ./src/conformance-coordinator-sandbox-live.test.ts --preload ../../tests/setup-node.ts --parallel=1`
+   there, and look in the binary for the bubblewrap arguments and the
+   `apply-seccomp:` messages. If the CLI stops nesting a namespace, or gains a
+   setting that avoids it without weakening isolation (2.1.309's
+   `allowNestedUserNamespaces` removes code-execution isolation, so it is not
+   one), update the probe.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash
@@ -1095,7 +1110,14 @@ Dockerfile pins the same archive digests the manifest does.
 6. Review `src/models.ts` against `Model` and `ThinkingLevel`. A new thinking
    level that is not in `THINKING_LEVELS` is simply never offered. Remember the
    rule is asymmetric: `xhigh` and `max` need an *explicit* mapping, while every
-   other level is included unless mapped to `null`.
+   other level is included unless mapped to `null`. Also recheck the ChatGPT
+   login fallback (`chatGptLoginModelIds`): it reads the `openai-codex`
+   provider's built-in catalogue as the list a ChatGPT login runs, newest id
+   last, and relies on `ModelRuntime.isUsingSubscription`. The "ChatGPT login
+   fallback against the pinned SDK" tests in `src/models.test.ts` fail if the
+   catalogue stops starting on `openai/gpt-4`, stops covering the backend's
+   ids, or the pick moves off `gpt-6.1-sol`; a moved pick is fine only if
+   Pi's own `defaultModelPerProvider["openai-codex"]` moved with it.
 7. Re-verify the three SDK behaviours the bridge depends on, in
    `dist/core/agent-session.js`, rather than trusting the version in a comment:
 

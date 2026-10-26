@@ -747,3 +747,11 @@ assertion, timeout or skip was changed for validation.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUtdn0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Isolated rerun: `mise run test:logged -- --name coordinator-service-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 52.5 s logged, host still loaded).
 - Assessment: the same aggregate-load timeout. Still open; no code, assertion or timeout changed.
+
+## Recurrence — 2026-10-26
+
+- Command: `mise run test` on `todo-0020-container-state-observation-fb5e330d3136` (container image, entrypoint, an e2e spec, a CI workflow and docs; nothing in the coordinator), macOS 27.0 arm64, default worker plan, host load average about 12 to 19.
+- Failure: `project coordinator > discards an unborn HEAD and a dirty remote-tracking switch` timed out at 5512.27 ms. The same aggregate's other failure was case [0341](../backend-services-and-tooling/0341-public-exec-restart-cleanup-eperm.md).
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SdxKj0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Isolated rerun: `mise run test:logged -- --name coord-unborn-alone -- bun test --cwd apps/backend ./src/core/coordinator-service.test.ts --parallel=1 -t "discards an unborn HEAD"` passed (exit 0, 3.0 s).
+- Assessment: the same aggregate-load timeout. Still open; nothing changed.

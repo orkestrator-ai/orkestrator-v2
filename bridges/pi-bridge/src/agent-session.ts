@@ -190,7 +190,9 @@ function resolveModelForSession(
  * may not be allowed to use. The backend's fallback follows, which only an
  * agent-test profile sharing the host's login receives. Project settings count
  * only when the session trusts the project, the same rule its resources follow.
- * The callers fall back to the catalogue's first model after these.
+ * After these, callers use `lastResortModelId` in models.ts: the catalogue's
+ * first model, or, when its provider uses a ChatGPT subscription login, the
+ * newest ChatGPT-backend model the catalogue offers.
  */
 export function defaultModelIds(
   state: Pick<SessionState, "policy" | "readOnly">,
@@ -1108,9 +1110,10 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
   if (persist || session.thinkingLevel !== level)
     session.setThinkingLevel(level as never, { persist });
 
-  // Echo what Pi will really run. Without this, an unknown selection silently
-  // executes the first available model while the picker, transcript and usage
-  // continue naming the unavailable one.
+  // Echo what Pi will really run. An unknown selection can execute a preferred
+  // model or lastResortModelId (the first available model, except for a ChatGPT
+  // subscription login's newest available backend model). A failed setModel
+  // keeps the previous model. The picker, transcript and usage must agree.
   const reconciled = reconcileComposerSelection(state.composer, actualModel, session.thinkingLevel);
   if (
     reconciled.selectedModelId !== state.composer.selectedModelId ||

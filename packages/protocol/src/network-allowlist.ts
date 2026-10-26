@@ -109,6 +109,14 @@ export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({
     "cursor-cdn.com",
     "cursor.com",
   ] as readonly string[]),
+  /**
+   * OpenCode's own providers (OpenCode Zen and Go, the models a fresh install
+   * offers with no other login) are served from `opencode.ai`. Without it
+   * those turns could not connect in a restricted container (live,
+   * 2026-10-23); a user signed in to another provider reaches that provider's
+   * host instead, which belongs in `allowedDomains` unless it is a default.
+   */
+  opencode: Object.freeze(["opencode.ai"] as readonly string[]),
   grok: Object.freeze([
     "x.ai",
     "auth.x.ai",
@@ -155,7 +163,7 @@ export function requiredAgentNetworkDomains(
 ): readonly string[] {
   if (!enabledPlatforms) return [];
   const domains = new Set<string>();
-  for (const platform of ["codex", "cursor", "grok", "pi"] as const) {
+  for (const platform of ["codex", "cursor", "opencode", "grok", "pi"] as const) {
     if (enabledPlatforms.includes(platform)) {
       for (const domain of AGENT_NETWORK_DOMAINS_BY_PLATFORM[platform]) {
         domains.add(domain);

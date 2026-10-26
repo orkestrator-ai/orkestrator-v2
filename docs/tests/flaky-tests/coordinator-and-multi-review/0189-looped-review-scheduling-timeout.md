@@ -32,3 +32,14 @@ code was unchanged.
 - **Hypothesis:** the existing concurrent-load timeout recurred. Fixture cleanup
   after the timeout explains the subsequent null read, but the slow operation
   remains unconfirmed. No timeout, assertion or skip changed.
+
+## Recurrence on 2026-10-26 (todo 0035 validation)
+
+`mise run test:logged -- --name full-test -- mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` (head `aaea46d6a`, renderer-only
+changes), at host load averages of 38 to 44 on 18 cores, failed this case after
+5002.75 ms, along with [0962](0962-diff-stats-in-flight-baseline-aggregate-timeout.md) and one other known case. The
+unchanged owner passed alone with
+`mise run test:logged -- --name backend-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts ./src/core/looped-review-scheduling.test.ts ./src/core/feature-planning-scheduling.test.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures`
+(exit 0, 23.6 s). Evidence: `orkestrator-test-run.xIhDQt/` below the host
+temporary directory. No assertion, timeout or skip changed.

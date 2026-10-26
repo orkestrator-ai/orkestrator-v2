@@ -73,7 +73,10 @@ import {
   type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
 import { retainProvider } from "./provider-retirement.js";
-import { ProviderUnreachableError } from "./agent-provider-contract.js";
+import {
+  ProviderUnreachableError,
+  type ProviderDispatchStatus,
+} from "./agent-provider-contract.js";
 import {
   structuredReportRepairPrompt,
   type ReviewWorktreeSnapshot,
@@ -749,16 +752,25 @@ export class ReviewFanoutRunner {
    * reviewers cannot lose one another's updates. The caller awaits its own
    * commit before its next fallible operation — that is what keeps
    * `dispatching` durable before `send`.
+   *
+   * `transition`, when given, is applied to the in-memory record only once
+   * this write's turn in the queue comes, and reverted if the write fails.
+   * Every save serializes the whole panel, so a change made before then would
+   * ride on a peer's earlier write; for `dispatching` that made a request
+   * durable whose own commit, and so whose send, might never happen.
    */
-  private commit(): Promise<void> {
+  private commit(transition?: { apply(): void; revert(): void }): Promise<void> {
     const run = this.commitTail.then(async () => {
       const staged = this.observationStaged;
       // Whatever was staged rides on this write.
       this.observationStaged = false;
       const started = Date.now();
+      transition?.apply();
       try {
         await this.host.save();
       } catch (error) {
+        // Reverted before the queue moves on, so no later write carries it.
+        transition?.revert();
         this.observationStaged ||= staged;
         throw error;
       }
@@ -1170,11 +1182,18 @@ export class ReviewFanoutRunner {
               }
             : undefined,
         );
-        reviewer.dispatchState = "dispatching";
         // Other reviewers may be committing concurrently; this reviewer's own
         // journal is what matters. Its `dispatching` write is durable once this
         // await resolves, and `send` is the next reviewer-local fallible call.
-        await this.commit();
+        // Set inside the write, so no peer's save can make it durable first.
+        await this.commit({
+          apply: () => {
+            reviewer.dispatchState = "dispatching";
+          },
+          revert: () => {
+            reviewer.dispatchState = "prepared";
+          },
+        });
       } catch (error) {
         this.settleReviewerArtifactTurn(reviewer, index);
         throw error;
@@ -1254,11 +1273,18 @@ export class ReviewFanoutRunner {
       // A durable intent is not acceptance. In particular, session status may
       // still describe the request replaced by this continuation. Providers
       // without request-scoped proof stay parked within the idle-poll bound;
-      // neither unknown nor a retired (lost) ID is safe to resend.
-      const acceptance = await provider
-        .dispatchStatus?.(reviewer.providerSessionId, reviewer.requestId)
-        .catch(() => "unknown" as const);
+      // neither unknown nor a retired (lost) ID is safe to resend, and no
+      // provider can yet prove an id never reached it (0223).
+      const acceptance = await this.recoveredDispatchAcceptance(provider, reviewer);
       await host.assertFence();
+      if (acceptance === "lost") {
+        // Retired for good: the provider refuses this id, and a new one could
+        // run the same turn twice. Waiting out the idle bound changes nothing.
+        return this.failReviewer(
+          reviewer,
+          "The reviewer dispatch was lost in a provider restart and cannot be resent safely",
+        );
+      }
       if (acceptance !== "dispatched") {
         return this.recordStall(
           reviewer,
@@ -1858,6 +1884,52 @@ export class ReviewFanoutRunner {
     return true;
   }
 
+  /**
+   * What can be proven about a recovered `dispatching` request.
+   *
+   * The provider's dispatch journal answers first. A result for this exact
+   * request id is proof too, from the one place it could only have come from
+   * its own turn: the tool-transport slot is keyed by the request and written
+   * with that attempt's capability, and a structured result names its request.
+   * A report submitted before a provider restart retired the id is used rather
+   * than discarded with the turn it came from.
+   */
+  private async recoveredDispatchAcceptance(
+    provider: BuildPipelineProvider,
+    reviewer: ReviewerRecord,
+  ): Promise<ProviderDispatchStatus> {
+    const sessionId = reviewer.providerSessionId!;
+    const requestId = reviewer.requestId!;
+    const status = await provider
+      .dispatchStatus?.(sessionId, requestId)
+      .catch(() => "unknown" as const);
+    if (status === "dispatched" || status === "pending") return "dispatched";
+    let proven = false;
+    try {
+      proven =
+        reviewer.resultTransport === "tool-v1"
+          ? Boolean(await this.host.readResult?.<unknown>(requestId))
+          : (await provider.structured<unknown>(sessionId, requestId))?.requestId === requestId;
+    } catch {
+      // A failed read proves nothing either way.
+    }
+    return proven ? "dispatched" : (status ?? "unknown");
+  }
+
+  /** Ends a reviewer that can make no further progress, best-effort aborting its turn. */
+  private async failReviewer(reviewer: ReviewerRecord, error: string): Promise<"continue"> {
+    if (reviewer.providerSessionId) {
+      await this.host.abandonSession(reviewer, reviewer.providerSessionId);
+      this.host.progress.forget(reviewer.providerSessionId);
+    }
+    reviewer.status = "failed";
+    reviewer.error = error;
+    reviewer.completedAt = nowIso();
+    delete reviewer.stalledSince;
+    await this.commit();
+    return "continue";
+  }
+
   private recordUnavailable(reviewer: ReviewerRecord, error: unknown) {
     return this.recordStall(
       reviewer,
@@ -1888,14 +1960,7 @@ export class ReviewFanoutRunner {
       gate?.exhausted(scope, reviewer.idleResultPolls, MAX_REVIEW_IDLE_RESULT_POLLS)
     ) {
       if (retry && (await retry())) return "stop";
-      if (reviewer.providerSessionId) {
-        await this.host.abandonSession(reviewer, reviewer.providerSessionId);
-        this.host.progress.forget(reviewer.providerSessionId);
-      }
-      reviewer.status = "failed";
-      reviewer.error = typeof error === "string" ? error : await error();
-      reviewer.completedAt = nowIso();
-      delete reviewer.stalledSince;
+      return this.failReviewer(reviewer, typeof error === "string" ? error : await error());
     }
     await this.commit();
     return "continue";

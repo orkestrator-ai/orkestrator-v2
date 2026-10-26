@@ -122,7 +122,13 @@ is left is one container run.
   (`service-claude-plugins.test.ts`, "a container lists the plugins in its own
   home"). It needs the workspace's development image built and a container
   session, which this run did not do; batch it with the container session run
-  in [0040](0040-mcp-environment-delivery.md).
+  in [0040](0040-mcp-environment-delivery.md). Since
+  [0151](0151-claude-bridge-plugin-settings.md) (2026-10-26) the same run
+  should also turn one install off on the host (`claude plugin disable`),
+  rebuild, and confirm the container session does not load it and its row
+  says why; the pieces were each proven in an existing image (0151,
+  "Qualification"), and the real container reader part passes with
+  `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`.
 
 ## Answers to the open question and rules read from the CLI
 
@@ -142,11 +148,14 @@ Read from the pinned CLI binary (Agent SDK 0.3.309, `claudeCodeVersion`
   user; managed policy first, not modelled) whose `enabledPlugins` names
   `<name>@inline`, compared without case, sets it to `false`; any other value
   enables it. With no entry, `defaultEnabled: false` in the manifest skips it.
-- `<name>@<marketplace>` entries never apply to the `@inline` copy, so
-  disabling a plugin through Claude Code's own plugin settings does not stop
+- `<name>@<marketplace>` entries never apply to the `@inline` copy. Since
+  [0151](0151-claude-bridge-plugin-settings.md) (2026-10-26) the bridge passes
+  an install only when that id is `true` in the first loaded layer naming it,
+  so disabling a plugin through Claude Code's own plugin settings does stop
   Orkestrator's sessions loading it. When the `@inline` copy is off, an
-  installed copy whose exact id is `true` still loads (unit-tested only: a
-  live marketplace install needs marketplace state the fixture does not have).
+  installed copy whose exact id is `true` still loads when the CLI can resolve
+  its marketplace (proven live in the first case of
+  `claude-plugin-mcp-live.test.ts`).
 - Servers are named `plugin:<plugin>:<server>` and report `scope: "dynamic"`,
   `source: "plugin"`.
 - User settings come from `$CLAUDE_CONFIG_DIR/settings.json` when set.
@@ -177,7 +186,8 @@ Read from the pinned CLI binary (Agent SDK 0.3.309, `claudeCodeVersion`
 
 - [0039-mcp-management.md](0039-mcp-management.md), item 7.
 - [0151-claude-bridge-plugin-settings.md](0151-claude-bridge-plugin-settings.md):
-  the bridge passes plugins Claude Code's own settings turned off.
+  the bridge passed plugins Claude Code's own settings turned off (fixed
+  2026-10-26).
 - [`mcp-management.md`](../../architecture/mcp-management.md) ("Claude
   plugins").
 

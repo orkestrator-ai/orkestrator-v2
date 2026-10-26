@@ -30,45 +30,49 @@ export function FullscreenSettingsFixture() {
   const [machine, setMachine] = useState<string | null>(null);
 
   return (
-    <FullscreenSettingsLayout
-      open={open}
-      onOpenChange={setOpen}
-      title="Fixture settings"
-      menuItems={menuItems}
-      defaultSection={defaultSection}
-      sectionRequest={sectionRequest}
-      headerStart={
-        withMachines
-          ? (section) => (
-              <SettingsMachineStrip
-                options={machines}
-                selected={machine}
-                locked={section === "section-2"}
-                onSelect={setMachine}
-              />
-            )
-          : undefined
-      }
-      headerActions={
-        <button
-          type="button"
-          onClick={() => {
-            setDefaultSection(lastSection);
-            setSectionRequest((request) => request + 1);
-          }}
-        >
-          Jump to last section
-        </button>
-      }
-    >
-      {(section) => (
-        <div className="h-[1200px]" data-testid="settings-content">
-          Content for {section}
-          {withMachines
-            ? ` on ${section === "section-2" ? "Studio" : (machines.find((m) => m.nodeId === machine)?.name ?? "")}`
-            : null}
-        </div>
-      )}
-    </FullscreenSettingsLayout>
+    <>
+      {/* The page underneath, which the keyboard must not reach while settings are open. */}
+      <button type="button">Page underneath</button>
+      <FullscreenSettingsLayout
+        open={open}
+        onOpenChange={setOpen}
+        title="Fixture settings"
+        menuItems={menuItems}
+        defaultSection={defaultSection}
+        sectionRequest={sectionRequest}
+        headerStart={
+          withMachines
+            ? (section) => (
+                <SettingsMachineStrip
+                  options={machines}
+                  selected={machine}
+                  locked={section === "section-2"}
+                  onSelect={setMachine}
+                />
+              )
+            : undefined
+        }
+        headerActions={
+          <button
+            type="button"
+            onClick={() => {
+              setDefaultSection(lastSection);
+              setSectionRequest((request) => request + 1);
+            }}
+          >
+            Jump to last section
+          </button>
+        }
+      >
+        {(section) => (
+          <div className="h-[1200px]" data-testid="settings-content">
+            Content for {section}
+            {withMachines
+              ? ` on ${section === "section-2" ? "Studio" : (machines.find((m) => m.nodeId === machine)?.name ?? "")}`
+              : null}
+          </div>
+        )}
+      </FullscreenSettingsLayout>
+    </>
   );
 }

@@ -404,6 +404,27 @@ not run `useNativeAgentSession`'s retained-page join or the projection
 store's subscriptions (workload `g` covers their accounting), and it was not
 an Electron window.
 
+### Validation (2026-10-26)
+
+`mise run format:check`, `mise run lint` (no findings in changed files) and
+`mise run typecheck` passed. Focused suites passed: the Claude bridge suite
+(`bun test --cwd bridges/claude-bridge --parallel=4`), the backend
+compatibility-path, summary-transcript, v2-transcript and projection-sync
+tests (51 tests), `apps/desktop/tests/backend-process.test.ts`,
+`tests/unit/mise-tasks.test.ts` and `tests/unit/flaky-tests-index.test.ts`.
+
+`env -u PORT mise run test` (890 s) passed the workspace, bridges and
+protocol groups. The root group failed three cases, none from this change:
+- `firewall-policy.test.ts`'s root-entrypoint case at the five-second budget,
+  a recurrence of [0632](../../tests/flaky-tests/environments-and-containers/0632-firewall-policy-probe-budget.md);
+  the owner passed alone (43.0 s), and failed again in a root-only rerun under
+  the same host load;
+- `disk-report.test.ts`, a recurrence of
+  [0259](../../tests/flaky-tests/environments-and-containers/0259-disk-report-aggregate-timeout.md);
+  the owner passed alone (1.9 s) and in the root-only rerun;
+- the flake-register test, because flake 0887's case file on `main` lacked
+  its `- **ID:**` and `- **Status:**` lines; fixed in this change.
+
 ## Qualification results (2026-10-24)
 
 Run on node mbp3 (Mac17,6, Apple M5 Max, 18 cores, macOS arm64, Bun 1.4.3)

@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODEX_SIGN_IN_EXPIRED_NOTICE, ROOT_THREAD_SOURCE_KINDS } from "./app-server-engine.js";
 import type { EngineTurnConfig } from "./types.js";
+import { codexCoordinatorPolicy } from "../codex-config.js";
 import {
   AUTH_SECRET_CANARIES,
   captureOutput,
@@ -541,6 +542,84 @@ describe("thread lifecycle", () => {
     expect(
       on.child().requests.find((request) => request.method === "thread/start")?.params.config,
     ).toEqual({ "features.default_mode_request_user_input": true });
+  });
+
+  test("a coordinator keeps the checkout untrusted but its skills loaded", async () => {
+    const previous = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+    process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    try {
+      const h = harness(
+        {
+          "skills/extraRoots/set": () => ({}),
+          "skills/list": () => ({
+            data: [
+              {
+                cwd: "/tmp/workspace",
+                errors: [],
+                skills: [
+                  {
+                    name: "release",
+                    path: "/tmp/workspace/.agents/skills/release/SKILL.md",
+                    scope: "repo",
+                    enabled: true,
+                  },
+                ],
+              },
+            ],
+          }),
+          "thread/start": () => ({ thread: thread("t1") }),
+        },
+        { skillExtraRoots: ["/home/u/.codex/skills", "/tmp/workspace/.claude/skills"] },
+      );
+      const config: EngineTurnConfig = {
+        ...BUILD,
+        policy: codexCoordinatorPolicy({}),
+      };
+      await h.engine.start();
+      await h.engine.startThread({ config });
+      await h.engine.startThread({ config });
+      await h.engine.listSkills({ cwd: "/tmp/workspace" });
+      const requests = h.child().requests;
+      // The checkout stays untrusted; no skill is switched off.
+      const started = requests.find((request) => request.method === "thread/start");
+      expect(started?.params.config).toMatchObject({
+        projects: { "/tmp/workspace": { trust_level: "untrusted" } },
+      });
+      expect(started?.params.config).not.toHaveProperty("skills");
+      // The extra roots are set once for this child, before anything lists
+      // skills or starts a thread.
+      const extra = requests.filter((request) => request.method === "skills/extraRoots/set");
+      expect(extra.map((request) => request.params)).toEqual([
+        { extraRoots: ["/home/u/.codex/skills", "/tmp/workspace/.claude/skills"] },
+      ]);
+      expect(requests.indexOf(extra[0]!)).toBeLessThan(
+        requests.findIndex((request) => request.method === "thread/start"),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+      else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previous;
+    }
+  });
+
+  test("a child that refuses the extra skill roots refuses the thread, and the next try asks again", async () => {
+    let refusals = 1;
+    const h = harness(
+      {
+        "skills/extraRoots/set": () => {
+          if (refusals-- > 0) throw new Error("extra roots refused");
+          return {};
+        },
+        "thread/start": () => ({ thread: thread("t1") }),
+      },
+      { skillExtraRoots: ["/home/u/.codex/skills"] },
+    );
+    await h.engine.start();
+    await expect(h.engine.startThread({ config: BUILD })).rejects.toThrow();
+    expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
+    await h.engine.startThread({ config: BUILD });
+    expect(
+      h.child().requests.filter((request) => request.method === "skills/extraRoots/set"),
+    ).toHaveLength(2);
   });
 
   test("disables the checkout's own skills on every thread entry point when project resources are off", async () => {

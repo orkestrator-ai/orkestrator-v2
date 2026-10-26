@@ -99,6 +99,7 @@ import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
+  COORDINATOR_CODEX_USER_SKILLS_DIR_ENV,
   COORDINATOR_COMMAND_SANDBOX_ENV,
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
@@ -847,6 +848,7 @@ async function startLocalServerAttempt(
   delete env[COORDINATOR_RESEARCH_MCP_ENV];
   delete env[COORDINATOR_COMMAND_SANDBOX_ENV];
   delete env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV];
+  delete env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -956,6 +958,12 @@ async function startLocalServerAttempt(
       const account = await resolveActiveAgentAccount(context, "codex");
       if (account.home) stripInheritedAgentCredentials(env);
       const login = await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
+      // The skills a worker on this account reads. The bridge lists them
+      // through app-server and grants the permission profile read access.
+      env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV] = path.join(
+        account.home ?? coordinatorHostCodexHome(),
+        "skills",
+      );
       env.CODEX_HOME = coordinatorCodexHome;
       launchedAccountId = account.accountId;
       launchedTokenExpiresAt = login.tokenExpiresAt;

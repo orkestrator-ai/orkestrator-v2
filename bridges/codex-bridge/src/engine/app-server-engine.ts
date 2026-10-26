@@ -56,7 +56,11 @@ import type {
   InteractionResolution,
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
-import type { SkillsListParams, UserInput } from "../app-server/generated/typescript/v2/index.js";
+import type {
+  SkillsExtraRootsSetParams,
+  SkillsListParams,
+  UserInput,
+} from "../app-server/generated/typescript/v2/index.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import {
   AppServerRpcError,
@@ -73,6 +77,7 @@ import {
 } from "../sessions/dispatch-journal.js";
 import {
   codexHostedNetworkLockGaps,
+  codexLoadsProjectSkills,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
   codexProjectSkillsConfig,
@@ -429,6 +434,12 @@ export interface AppServerEngineOptions {
   codexHome: string;
   clientInfo: { name: string; title: string; version: string };
   configOverrides?: Record<string, string>;
+  /**
+   * Skill directories app-server lists beside its own
+   * (`codexCoordinatorSkillExtraRoots`). Held by the child, so they are set
+   * again on every generation before it lists skills or starts a thread.
+   */
+  skillExtraRoots?: readonly string[];
   /** Escalation budget for a turn that will not stop. */
   interruptTimeoutMs?: number;
   /** How long a human has to answer an approval before it auto-denies. */
@@ -842,6 +853,7 @@ export class AppServerEngine implements CodexEngine {
    * swap the binary underneath the same overrides.
    */
   private hostedNetworkLockVerifiedGeneration: EngineGeneration | null = null;
+  private skillExtraRootsGeneration: { id: EngineGeneration; set: Promise<void> } | null = null;
   /** The generation whose `config/read` confirmed tool declarations stay out of history. */
   private toolHistoryLockVerifiedGeneration: EngineGeneration | null = null;
   /**
@@ -906,6 +918,7 @@ export class AppServerEngine implements CodexEngine {
         this.forgetSignIn();
         this.loginSequence++;
         this.hostedNetworkLockVerifiedGeneration = null;
+        this.skillExtraRootsGeneration = null;
         this.toolHistoryLockVerifiedGeneration = null;
         this.rejectAllWaiters();
         this.router.abandonGeneration(generation);
@@ -1550,6 +1563,29 @@ export class AppServerEngine implements CodexEngine {
   // --------------------------------------------------------------- threads
 
   /**
+   * Hand this generation its extra skill directories, once. A failure is not
+   * cached, so the next thread or listing tries again, and a thread is never
+   * started on a generation that refused them.
+   */
+  private async ensureSkillExtraRoots(generation: EngineGeneration): Promise<void> {
+    const extraRoots = this.options.skillExtraRoots ?? [];
+    if (extraRoots.length === 0) return;
+    if (this.skillExtraRootsGeneration?.id !== generation) {
+      const set = this.supervisor
+        .requestOnGeneration(generation, "skills/extraRoots/set", {
+          extraRoots: [...extraRoots],
+        } satisfies SkillsExtraRootsSetParams)
+        .then(() => undefined);
+      const entry = { id: generation, set };
+      this.skillExtraRootsGeneration = entry;
+      set.catch(() => {
+        if (this.skillExtraRootsGeneration === entry) this.skillExtraRootsGeneration = null;
+      });
+    }
+    await this.skillExtraRootsGeneration!.set;
+  }
+
+  /**
    * Thread configuration only app-server can supply: with project resources
    * off, the checkout's own skills, which the untrusted pin does not reach.
    * Failure to establish the inventory refuses the thread, including an older
@@ -1559,7 +1595,8 @@ export class AppServerEngine implements CodexEngine {
     generation: EngineGeneration,
     config: EngineTurnConfig,
   ): Promise<Record<string, unknown>> {
-    if (!config.policy || config.policy.projectResources) return {};
+    await this.ensureSkillExtraRoots(generation);
+    if (!config.policy || codexLoadsProjectSkills(config.policy)) return {};
     let listed: unknown;
     try {
       listed = await this.supervisor.requestOnGeneration(generation, "skills/list", {
@@ -1952,6 +1989,14 @@ export class AppServerEngine implements CodexEngine {
       cwds: [options.cwd],
       ...(options.forceReload ? { forceReload: true } : {}),
     };
+    if ((this.options.skillExtraRoots ?? []).length > 0) {
+      const { id: generation } = await this.supervisor.ensureReady();
+      await this.ensureSkillExtraRoots(generation);
+      return {
+        result: await this.supervisor.requestOnGeneration(generation, "skills/list", params),
+        generation,
+      };
+    }
     return this.supervisor.requestWithGeneration("skills/list", params);
   }
 

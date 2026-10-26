@@ -685,7 +685,10 @@ keeps out the checkout's `.codex` config layer (MCP servers, hooks, model
 settings), its AGENTS.md and its skills, wins over a trusted main checkout, and
 stops a writable thread marking the project trusted in the user's
 `config.toml`. `live-project-trust.test.ts` proves it against the pinned
-binary. When the policy turns
+binary. A coordinator process is the one exception to the skills part: it keeps
+the untrusted pin but not the disabling, so it can follow the checkout's own
+procedures (`codexLoadsProjectSkills`; see
+[the coordinator's skills](coordinator.md#skills)). When the policy turns
 project resources on, the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0` and
 `agent --no-leader` (`providerEnv`), so a checkout Grok never trusted, such as a
 container's `/workspace`, still loads its AGENTS.md, skills, commands, hooks and
@@ -702,7 +705,7 @@ decoder together.
 | Adapter | Policy mapping | `network` in `capabilityPolicy.deny` (search unless `allow` names `web.search`) |
 | --- | --- | --- |
 | Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options; for a read-only turn, `managedSettings` that drop every plugin and skill hook and skill inline shell (`claudeManagedSettings`) | WebFetch and RemoteTrigger, and WebSearch unless allowed, in `disallowedTools` (`claudeDisallowedTools`) |
-| Codex | `approvalPolicy`, thread sandbox and sandbox network; an untrusted project pin and disabled repo skills when project resources are off; the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
+| Codex | `approvalPolicy`, thread sandbox and sandbox network; an untrusted project pin and disabled repo skills when project resources are off (a coordinator process keeps its repo skills, see [the coordinator's skills](coordinator.md#skills)); the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
 | Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume | `webFetch`, `webSearch` and `task` in `disallowedTools`; the read-only allowlist never includes `webFetch`, and includes `webSearch` only when allowed |
 | Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; `GROK_FOLDER_TRUST=0` and `agent --no-leader` when project resources are on, Grok's own folder trust otherwise | `--disable-web-search` and `agent --no-leader`, which remove search with fetch; an allowed search is not honoured |
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |
@@ -1001,6 +1004,8 @@ session close and a malformed answer all deny, and a turn that ends with a call
 still parked denies it rather than leaving the turn awaiting a promise nobody
 will settle. The same policy controls project-local `.pi/` extensions, skills
 and prompt templates through Pi's resource loader and project-trust callback.
+A coordinator process also loads skills, the user's and the checkout's, with
+the project still untrusted and extensions off (`piResourceLoaderPolicy`).
 
 A prompt owns a claim from the moment its request is admitted. A cancel that
 arrives before Pi has produced a cancel handle is parked against that claim and

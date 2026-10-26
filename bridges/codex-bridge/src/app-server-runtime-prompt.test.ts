@@ -4312,6 +4312,69 @@ describe("search configuration recovery", () => {
   });
 });
 
+describe("coordinator project skills", () => {
+  const path = "/tmp/ws/.agents/skills/release/SKILL.md";
+  const listing = () => ({
+    data: [{ errors: [], skills: [{ name: "release", path, scope: "repo", enabled: true }] }],
+  });
+  const hostPolicy = {
+    id: "interactive-host",
+    sandbox: "provider",
+    approvals: "auto-approve",
+    projectResources: false,
+    networkAccess: "full",
+  } as const;
+
+  test("a coordinator may invoke the checkout's skill; an ordinary host session may not", async () => {
+    const previous = {
+      policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY,
+      profile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE,
+    };
+    process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    process.env.CODEX_BRIDGE_PERMISSION_PROFILE = "coordinator-skills";
+    try {
+      const h = await harness({
+        "skills/list": listing,
+        // What a coordinator's process configuration reads back as.
+        "config/read": () => ({
+          config: { web_search: "disabled", features: { incremental_tools: false } },
+        }),
+        "thread/start": () => ({
+          thread: { id: "thread-1", turns: [] },
+          activePermissionProfile: { id: "coordinator-skills" },
+        }),
+      });
+      const { sessionId } = h.runtime.createSession({
+        mode: "build",
+        policy: { ...hostPolicy, id: "coordinator-read-only", approvals: "deny" },
+      });
+      const result = await h.runtime.prompt(sessionId, {
+        prompt: "$release 2.33.0",
+        requestId: "coordinator-skill",
+        attachments: [],
+      });
+      expect(result).toMatchObject({ ok: true });
+      const start = h.child().requests.find((r) => r.method === "thread/start")!;
+      expect((start.params.config ?? {}) as Record<string, unknown>).not.toHaveProperty("skills");
+      expect(h.child().requests.some((r) => r.method === "turn/start")).toBe(true);
+    } finally {
+      if (previous.policy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+      else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previous.policy;
+      if (previous.profile === undefined) delete process.env.CODEX_BRIDGE_PERMISSION_PROFILE;
+      else process.env.CODEX_BRIDGE_PERMISSION_PROFILE = previous.profile;
+    }
+
+    const host = await harness({ "skills/list": listing });
+    const { sessionId } = host.runtime.createSession({ mode: "build", policy: hostPolicy });
+    await host.runtime.prompt(sessionId, {
+      prompt: "$release 2.33.0",
+      requestId: "host-skill",
+      attachments: [],
+    });
+    expect(host.child().requests.some((r) => r.method === "turn/start")).toBe(false);
+  });
+});
+
 describe("project resource reconfiguration", () => {
   const policy = (projectResources: boolean) =>
     ({

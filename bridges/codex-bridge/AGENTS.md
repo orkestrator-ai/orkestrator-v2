@@ -108,6 +108,15 @@ own verdicts (a rejected structured result, a lost rebind) add none.
 
 ## When touching the app-server engine
 
+- A coordinator's skills widen what it reads, never what it runs
+  (`codexLoadsProjectSkills`, `codexCoordinatorSkillExtraRoots`,
+  `codexCoordinatorSkillReadRoots`). The checkout stays pinned untrusted; only
+  its skills stop being disabled. A read grant follows only the user's own
+  skill roots and a linked target that holds a `SKILL.md` and is not HOME, `/`
+  or an ancestor, never a link in the checkout. Extra roots live in the child,
+  so a new generation gets them again before it lists skills or starts a
+  thread. Re-prove with `live-coordinator-skills.test.ts`.
+
 - Never let the stdout read loop await a render, an SSE write, or the browser —
   app-server's outbound queue is bounded, so that stalls **every** thread.
 - Never auto-retry an ambiguous dispatch. Only an explicit `-32001` overload means

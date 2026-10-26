@@ -425,15 +425,19 @@ billed, uses the caller's login), which runs a hostile skill both mirrored and r
 the Skill tool and as a typed slash command, and reports that no hook, inline
 shell, Write, Bash `touch` or worktree ran while the mirrored skill loaded.
 
-**Other platforms.**
+**Other platforms.** Every coordinator loads the user's skills from its own
+platform's directories and the project's from the checkout, including the
+checkout's `.claude/skills`, so a project that keeps its procedures there (as
+this one does) is not invisible to a coordinator on another platform. What
+runs in a skill stays inside that platform's read-only boundary.
 
-| Platform | User skills | Project skills | Gap |
+| Platform | User skills | Project skills | How it holds |
 | --- | --- | --- | --- |
-| Codex | Not loaded: the private `CODEX_HOME` holds only `auth.json` | Disabled with every repo skill, as on a host worker (`codexProjectSkillsConfig`) | User skills need `skills/extraRoots/set` plus a read grant for those directories in the coordinator's permission profile, which reads only the runtime root, attachment root and workspace today |
-| Cursor | Not loaded: `settingSources: []` | Not loaded | The SDK has no skills-only switch; the `user` layer also brings `~/.cursor/mcp.json`. A bridge-hosted skill tool through `customTools` is the likely route |
-| OpenCode | Loaded: OpenCode discovers its own, `~/.claude` and `~/.agents` skills | Loaded (`.opencode`, `.claude`, `.agents` skills) | None. The `skill` permission is allowed, so the model can invoke them: on 1.19.4 it only returns the `SKILL.md` and a file list, and a shipped script still needs the denied `bash` |
-| Pi | Not loaded (`noSkills`) | Not loaded | Matches a host Pi worker, which loads neither while project resources are off |
-| Grok | Loaded from `~/.grok`; the coordinator has no private home | Through Grok's own folder trust only | Advisory tier. A checkout the user trusted in Grok already loads its hooks and MCP servers in the coordinator, a gap that predates skills |
+| Codex | The account's `CODEX_HOME/skills`, which the launcher names in `ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR` because the coordinator's own `CODEX_HOME` is private, added with `skills/extraRoots/set` once per app-server generation; `~/.agents/skills`, which Codex lists from HOME | `.agents/skills` and `.codex/skills`, no longer disabled for a coordinator process (`codexLoadsProjectSkills`); `.claude/skills` as an extra root. The checkout stays pinned untrusted, so its config, hooks and MCP servers stay out | A Codex skill grants nothing; what it asks for runs as a command under the permission profile (no write, no network). The profile reads each user skill root and each skill it links to (`codexCoordinatorSkillReadRoots`): a link target is granted only when it holds a `SKILL.md` and is not HOME, `/` or an ancestor, and the checkout's own links are never followed. `features.skill_mcp_dependency_install` and `skill_env_var_dependency_prompt` are off. Proved by `live-coordinator-skills.test.ts` (no credits): the skills are listed and offered, a user skill is readable from a command, and a neighbouring file, the skill and the checkout stay unreadable or unwritable |
+| Cursor | `~/.cursor`, `~/.agents`, `~/.claude`, `~/.codex` and `~/.grok` skills, Cursor's own list | The same five directories under the checkout | The SDK has no skills-only switch (the `user` layer also brings `~/.cursor/mcp.json`), so the bridge hosts one read-only tool, `orkestrator-skills__load` (`coordinator-skills.ts`), beside the Orkestrator and research tools: its description lists the skills, and a call returns a `SKILL.md` or a file inside that skill. A directory counts as a skill only with a `SKILL.md` and not as HOME, `/` or an ancestor; a file outside the skill's own directory is refused. The allowlist and sandbox are unchanged. The list is read at attach |
+| OpenCode | OpenCode's own, `~/.claude` and `~/.agents` skills | `.opencode`, `.claude` and `.agents` skills | OpenCode discovers them itself; the `skill` permission is now allowed. On 1.19.4 it only returns the `SKILL.md` and a file list, and a shipped script still needs the denied `bash` |
+| Pi | `~/.pi/agent/skills` and `~/.agents/skills` (`noSkills: false` in a coordinator process) | `.pi/skills`, `.agents/skills` and `.claude/skills` as `additionalSkillPaths`, with the project still untrusted, so `.pi/` settings and extensions stay out | A Pi skill is markdown the model reads with `read`; extensions stay off and the read-only gate admits no tool that could run what a skill ships. `coordinator-skills.test.ts` (pi-bridge) runs it against the real SDK |
+| Grok | Loaded from `~/.grok`, `~/.claude` and installed plugins; the coordinator has no private home | Gap: only through Grok's own folder trust, which also loads the checkout's hooks and MCP servers. The per-process overlay (`GROK_CONFIG`) applies `models` but drops a `skills` section, so `skills.paths` can be set only in the user's own `~/.grok/config.toml` (probed on 1.0.67) | Advisory tier. A checkout the user trusted in Grok already loads its hooks and MCP servers in the coordinator, a gap that predates skills |
 
 ### Claude's sandbox on Linux
 
@@ -1057,6 +1061,13 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
 - research servers on the pinned OpenCode, with a real `opencode serve` and a
   local MCP server: `opencode-coordinator-research-live.test.ts`
+- coordinator skills on Codex against the real pinned app-server with a
+  loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
+  (codex-bridge); the extra roots, read grants and project-skill rule in
+  `codex-config.test.ts`, `app-server-engine.test.ts` and
+  `app-server-runtime-prompt.test.ts`; Pi's loader against the real SDK
+  (`coordinator-skills.test.ts`, pi-bridge); Cursor's hosted skill tool
+  (`coordinator-skills.test.ts`, `agent-session.test.ts`, cursor-bridge)
 - coordinator skills: the mirror and its frontmatter allowlist
   (`coordinator-skills.test.ts`), the options a coordinator, a worker and a
   worker's read-only review pass and the launch conflict a changed skill set

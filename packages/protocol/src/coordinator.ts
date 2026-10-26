@@ -34,6 +34,13 @@ export function coordinatorCommandSandboxFromEnv(
 export const COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV =
   "ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR";
 
+/**
+ * The same for Codex: `skills` in the active account's `CODEX_HOME`, else the
+ * host's. A coordinator's own `CODEX_HOME` holds only an access-only login.
+ */
+export const COORDINATOR_CODEX_USER_SKILLS_DIR_ENV =
+  "ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR";
+
 export type AgentSessionOwner =
   | { kind: "environment"; projectId: string; environmentId: string }
   | { kind: "coordinator"; projectId: string; coordinatorId: string };

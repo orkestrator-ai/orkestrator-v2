@@ -44,6 +44,7 @@ describe("Coordinator Codex server", () => {
   let checkout: string;
   let managedBin: string;
   let storage: StorageService;
+  let previousBridgeStateDir: string | undefined;
   let previousCodexHome: string | undefined;
   let previousClaudeConfigDir: string | undefined;
   let cleanupContext: CommandContext | null = null;
@@ -81,6 +82,8 @@ describe("Coordinator Codex server", () => {
       ...config.global,
       agentSettings: { ...config.global.agentSettings, defaultAgent: "codex" },
     });
+    previousBridgeStateDir = process.env.CODEX_BRIDGE_STATE_DIR;
+    process.env.CODEX_BRIDGE_STATE_DIR = path.join(root, "inherited-host-state");
     previousCodexHome = process.env.CODEX_HOME;
     const sourceHome = path.join(root, "source-codex-home");
     await fs.mkdir(sourceHome);
@@ -115,6 +118,8 @@ describe("Coordinator Codex server", () => {
     }
     restoreHostCredentialRead?.();
     restoreHostCredentialRead = undefined;
+    if (previousBridgeStateDir === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+    else process.env.CODEX_BRIDGE_STATE_DIR = previousBridgeStateDir;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -489,7 +494,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
-await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ stateDir: process.env.CODEX_BRIDGE_STATE_DIR ?? null, codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -573,6 +578,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         // Codex re-execs argv[0] inside its macOS sandbox helper, so the
         // bridge is handed the activation link's canonical target: the same
         // directory the deny-by-default permission profile allowlists below.
+        stateDir: null,
         codexPath: path.join(root, "bin", "codex"),
         policy: "coordinator-read-only",
         permissionProfile: `coordinator-${conversation.id}`,

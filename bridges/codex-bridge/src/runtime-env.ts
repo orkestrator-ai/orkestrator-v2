@@ -109,7 +109,7 @@ export async function refreshRuntimeEnvironment(run: typeof execFile = execFile)
       ],
       {
         env: {
-          ...process.env,
+          ...runtimeEnvironmentSnapshot(),
           [RUNTIME_ENV_SCRIPT_ENV]: runtimeEnvScript,
         },
         maxBuffer: 256 * 1024,
@@ -148,7 +148,11 @@ export function fingerprintRuntimeEnvironment(env: NodeJS.ProcessEnv = process.e
 export function runtimeEnvironmentSnapshot(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return { ...env };
+  const snapshot = { ...env };
+  // Only the bridge owns shared bookkeeping. Helpers and model shells must
+  // resolve any bridge they launch against their own CODEX_HOME.
+  delete snapshot.CODEX_BRIDGE_STATE_DIR;
+  return snapshot;
 }
 
 /** A child environment for bridge helpers that must not receive managed credentials. */

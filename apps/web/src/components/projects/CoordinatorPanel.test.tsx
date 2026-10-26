@@ -367,11 +367,32 @@ describe("CoordinatorPanel", () => {
       "Inspect the repository",
     );
 
-    // Evidence of the turn is what releases it.
     const sessionKey = createSessionKey(
       coordinatorRuntimeId("coordinator-1", "conversation-1"),
       "coordinator-tab",
     );
+    // A new session's first read is the backend's reconnecting placeholder. It
+    // is not a turn, and releasing on it dropped the prompt unsent, so the user
+    // had to press Enter a second time.
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        platform: "claude",
+        environmentId: "coordinator:coordinator-1:conversation-1",
+        connection: "connecting",
+        turn: { phase: "recovering" },
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: {},
+        revision: 0,
+        generation: "test",
+      } as never);
+    });
+    expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(
+      "Inspect the repository",
+    );
+
+    // Evidence of the turn is what releases it.
     act(() => {
       useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
         platform: "claude",

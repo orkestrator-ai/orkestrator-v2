@@ -99,10 +99,10 @@ Image `orkestrator-v2:dev-8540c28917b1`, built from this branch, declares
 
 Linux Engine: GitHub-hosted `ubuntu-24.04` (Azure, Xeon Platinum 8573C, 4
 vCPU) and `ubuntu-24.04-arm`, Docker Engine 28.0.4, cgroup v2, Ubuntu 24.04.5
-with kernel 6.17.0-1022-azure. Workflow run `40249760218` on this branch's first
-commit (`cf63edec5`, before its rebase), each runner's own image built from it. The host here is the
-runner VM, so engine CPU is what dockerd, containerd and the shims spend on
-that VM.
+with kernel 6.17.0-1022-azure. Workflow run `40249760218` on this branch's
+first commit (`cf63edec5`, before its rebase), each runner's own image built
+from it. The host here is the runner VM, so engine CPU is what dockerd,
+containerd and the shims spend on that VM.
 
 | What | x64 | arm64 | Source |
 | --- | --- | --- | --- |
@@ -116,8 +116,8 @@ that VM.
 | Live Claude hooks, real image | the image's hook commands arm, confirm, report `working`/`waiting` and recover dropped rings through the host-gateway alias | same | `claude-state-signal-docker.test.ts` |
 | Live watcher, real image | arm to confirmed 451 ms; `node_modules` silent; one watcher after a new lineage; a killed `inotifywait` demotes (`watcher-lost`) | 419 ms; same | `container-worktree-signal-docker.test.ts` |
 
-The script also reports the CLI's peak RSS: 113 MB on both runners against
-30 MB on Desktop. That figure is the child's `maxRSS` as Bun reports it on
+The script also reports the CLI's peak RSS: 113 MB (x64) and 119 MB (arm64)
+against 30 MB on Desktop. That figure is the child's `maxRSS` as Bun reports it on
 Linux and was not checked against another tool, so it is not compared here.
 The worktree test's change-to-scan line (1.43 s on both runners) is not a
 clean latency; the same test reads 1.28–1.38 s on Desktop today
@@ -135,7 +135,7 @@ profile with the host Claude login (access-only in the container), image
 (`claude-state-signal=2,container-worktree-signal=1`), Claude Code 2.1.309.
 `container-claude-terminal-signal.spec.ts`, 3 runs × 2 turns, all passed.
 Times are host clock, sampled every 50 ms plus an invoke round trip, so they
-are upper bounds; the container clock was 15 ms ahead and corrected.
+are upper bounds; the container clock was 14–18 ms ahead and corrected.
 
 | What | Foreground turn (3) | Background turn (3) | Budget |
 | --- | --- | --- | --- |
@@ -412,7 +412,7 @@ minute; Files panel open, plus 1.5 tree walks a minute; a change announced in
   Time from the reply text appearing.
 - **Chosen:** (a), also recording (c) in the report.
 - **Why.** No product change, and the budgets are about what a user sees.
-  The offset (15 ms) is the tightest of five `date` reads.
+  The offset (14–18 ms) is the tightest of five `date` reads.
 - **Pros:** end-to-end, content-free. **Cons:** upper bounds by up to one
   poll period plus an invoke.
 

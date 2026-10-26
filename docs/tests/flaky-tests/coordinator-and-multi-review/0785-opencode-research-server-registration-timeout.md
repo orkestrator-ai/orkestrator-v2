@@ -70,3 +70,23 @@ log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.gmkkKT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Complete unchanged owner: `mise run test:logged -- --name opencode-research-isolated -- bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1` passed (exit 0, 2.4 s).
 - Assessment: another aggregate-only timeout at the 40 s deadline. Still open; nothing changed.
+
+## Recurrence 2026-10-26 (0023 validation, Linux)
+
+- **Run:** `TMPDIR=/tmp/ork0023-full-tmp mise run test:logged -- --name full-test -- mise run test`
+  on `todo-0023-environment-disk-cleanup-7f4af662efb4` (`d0de935d`, parent main
+  `93018933`), omarchy-hp, Arch Linux x86_64, 12 CPUs, a host shared with other
+  workers. Recorded with the run's other failures in
+  [1010](../aggregate-validation-runs/1010-environment-disk-cleanup-0023-validation.md).
+- **Failure:** the 40-second deadline (40,005.77 ms).
+- **Isolated reruns** with the preload command above (`--parallel=1 --only-failures`):
+  failed at 40.8 s with the private `TMPDIR`; failed at 40.5 s with `main`'s
+  versions of every file the branch changes checked out (so the branch is not
+  the cause); passed in 2.3 s with the default `TMPDIR` on the branch. Without
+  the preload it also failed twice at 40 s, as noted above.
+- **Side effect:** a timed-out run leaves its `policy-cli-*` fixture directory
+  behind in the temporary directory, because the test is abandoned before
+  `withPolicyCliFixture`'s `finally` runs. Three were left by these runs.
+- **Assessment:** fails alone as well as in the aggregate, intermittently,
+  which supports the startup-race hypothesis above over load alone. Still
+  open; no implementation, assertion, deadline or skip changed.

@@ -209,7 +209,12 @@ environment creation or shutdown draining.
   minute, doubling, capped at 6 hours.
 - After `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS` (8) passes the entry is kept for
   inspection, no longer retried, and logged once per process with its pending
-  steps and redacted error.
+  steps and redacted error. The cap and its predicate,
+  `isEnvironmentCleanupExhausted`, live in `environment-cleanup-ledger.ts`;
+  `disk:report` reads the store read-only through `parseEnvironmentCleanupLedger`
+  and shows those entries in its `environment cleanup ledger` row (count,
+  pending steps, redacted `lastError`, first environment ids), skipping
+  entries whose environment record still exists, as the reconciler does.
 - `scheduleEnvironmentCleanupReconcile` runs one pass at a time per data
   directory and re-arms an unreferenced timer for the earliest deferred retry.
   It runs at startup and after each successful deletion.

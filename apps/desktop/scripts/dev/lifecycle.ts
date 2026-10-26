@@ -877,8 +877,12 @@ export async function resetProfile(args: DevArguments): Promise<number> {
   const kept = removal.branchesKept.length
     ? ` Kept unmerged branch(es): ${removal.branchesKept.join(", ")}.`
     : "";
+  const keychain = removal.keychainItemsRemoved
+    ? ` Removed ${removal.keychainItemsRemoved} login Keychain item(s).`
+    : "";
   console.log(
-    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s), ${removal.volumesRemoved} volume(s), ${removal.networksRemoved} network(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}`,
+    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s), ${removal.volumesRemoved} volume(s), ${removal.networksRemoved} network(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}${keychain}`,
   );
+  if (removal.keychainWarning) console.warn(removal.keychainWarning);
   return 0;
 }

@@ -12,10 +12,12 @@ import {
 } from "../src/core/worktree-watcher";
 import { relevantRefPaths, resolveWorktreeGitPaths } from "../src/core/worktree-git-paths";
 
-const cleanups: Array<() => void> = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 
-afterEach(() => {
-  while (cleanups.length) cleanups.pop()?.();
+// Awaited, so a directory removal finishes before the file's last test ends
+// and the process exits.
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()?.();
 });
 
 interface FakeWatch {
@@ -259,6 +261,8 @@ describe("startWorktreeWatcher", () => {
   // and not a failure - that is the documented degradation.
   test("observes a real file write", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ork-watch-"));
+    // Registered first so it runs after the watcher closes (cleanups unwind LIFO).
+    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
     let changes = 0;
     let resolveChange!: () => void;
     const changeObserved = new Promise<void>((resolve) => {
@@ -526,7 +530,7 @@ describe("linked worktree metadata coverage", () => {
 describe("resolveWorktreeGitPaths", () => {
   test("resolves a main checkout and a linked worktree from real Git", async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-gitpaths-")));
-    cleanups.push(() => void fs.rm(root, { recursive: true, force: true }));
+    cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
     const repo = path.join(root, "repo");
     const linked = path.join(root, "linked");
     const run = (cwd: string, ...args: string[]) => {

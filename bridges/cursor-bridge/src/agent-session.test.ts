@@ -293,7 +293,7 @@ test("a Cursor model change clears parameters from the previous model", () => {
   expect(state.composer.parameterValues).toEqual({});
 });
 
-afterAll(() => {
+afterAll(async () => {
   sessions.clear();
   restoreRuntime();
   useCursorLocalAgentStoreForTests(previousStore);
@@ -312,6 +312,7 @@ afterAll(() => {
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousMcpUrl;
   if (previousMcpToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = previousMcpToken;
+  await rm(bridgeStateRoot, { recursive: true, force: true });
 });
 
 /** A conversation turn in the shape `run.conversation()` returns. */

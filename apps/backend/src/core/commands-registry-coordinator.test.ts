@@ -18,6 +18,9 @@ import {
 import { parseBackendId } from "@orkestrator/protocol/federation";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { seedStore } from "./storage-test-support.js";
+import { multiReviewInputWithDefaults } from "./coordinator-launch-defaults.js";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 
 describe("coordinator command registry", () => {
@@ -214,6 +217,55 @@ describe("coordinator command registry", () => {
       ),
     ).rejects.toThrow("different payload");
   });
+
+  test.each([false, true])(
+    "resolves persisted Pi defaults with no bridge (marked: %p)",
+    async (marked) => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const snapshot = await coordinator.ensure(project.id);
+      const conversation = snapshot.workspace.conversations[0]!;
+      const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+      await storage.updateGlobalConfig({
+        ...(await storage.loadConfig()).global,
+        enabledAgentPlatforms: ["pi"],
+      });
+      seedStore(path.join(root, "data"), "agent-model-catalog.json", {
+        schemaVersion: 1,
+        pi: {
+          updatedAt: new Date(0).toISOString(),
+          models: [
+            { platform: "pi", id: "openai/gpt-4", label: "Refused first model" },
+            {
+              platform: "pi",
+              id: "openai/gpt-6.1-sol",
+              label: "Saved default",
+              ...(marked ? { sessionDefault: true } : {}),
+            },
+          ],
+        },
+      });
+      const catalog = (await commands.get("get_native_agent_model_catalog")!(
+        { environmentId },
+        context,
+      )) as AgentModel[];
+      // The durable cache is served either way; only the row resolution
+      // differs. An unmarked (pre-upgrade) cache leaves the model to Pi.
+      expect(catalog.filter((model) => model.platform === "pi")).toHaveLength(2);
+      const rows = await multiReviewInputWithDefaults(
+        {},
+        {
+          tiers: { global: { defaultAgent: "pi" } },
+          global: { defaultAgent: "pi" },
+          enabledAgentPlatforms: ["pi"],
+        },
+        async () => catalog,
+      );
+      const expected = { agent: "pi", model: marked ? "openai/gpt-6.1-sol" : "default" };
+      expect(rows.reviewers).toEqual([expected, expected]);
+      expect(rows.reviewModel).toEqual(expected);
+      expect(rows.fixModel).toEqual(expected);
+    },
+  );
 
   test("returns the Codex catalogue for a live coordinator conversation", async () => {
     const project = await storage.addProject(createProject("remote", checkout));

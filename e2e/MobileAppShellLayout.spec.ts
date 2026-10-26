@@ -10,6 +10,7 @@ async function touchTap(page: Page, trigger: Locator) {
 }
 
 test("long mobile titles stay between controls and support touch and keyboard dismissal", async ({
+  browserName,
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
@@ -54,10 +55,13 @@ test("long mobile titles stay between controls and support touch and keyboard di
     agentInfoBox.x + agentInfoBox.width,
   );
 
-  await expect(title).toHaveCSS("-webkit-app-region", "no-drag");
-  await expect(actions).toHaveCSS("-webkit-app-region", "no-drag");
-  await expect(agentInfo).toHaveCSS("-webkit-app-region", "no-drag");
-  await expect(tools).toHaveCSS("-webkit-app-region", "no-drag");
+  // `-webkit-app-region` is Chromium's (Electron's) property; other engines drop it.
+  if (browserName === "chromium") {
+    await expect(title).toHaveCSS("-webkit-app-region", "no-drag");
+    await expect(actions).toHaveCSS("-webkit-app-region", "no-drag");
+    await expect(agentInfo).toHaveCSS("-webkit-app-region", "no-drag");
+    await expect(tools).toHaveCSS("-webkit-app-region", "no-drag");
+  }
   const titleMetrics = await title.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -132,8 +136,12 @@ test("the title uses space released when the optional inbox is hidden", async ({
   expect(withoutInbox.titleBox.width).toBeGreaterThan(withInbox.titleBox.width);
 });
 
-test("a narrow Electron title remains a native drag region", async ({ page }, testInfo) => {
+test("a narrow Electron title remains a native drag region", async ({
+  browserName,
+  page,
+}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop runtime coverage only");
+  test.skip(browserName !== "chromium", "native drag regions are Electron's, so Chromium-only");
   await page.setViewportSize({ width: 700, height: 700 });
   await page.goto("/mobile-shell?desktop");
 

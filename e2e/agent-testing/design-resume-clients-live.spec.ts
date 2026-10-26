@@ -72,18 +72,8 @@ function selectedProviders(): Provider[] {
   });
 }
 
-// A resumed Codex transcript also shows Codex's synthetic environment context
-// as a user message (docs/todo/transcripts-and-observation/
-// 0082-codex-resume-shows-environment-context.md); it is not a prompt.
 const userTurns = (current: Projection) =>
-  (current?.messages ?? []).filter(
-    (message) =>
-      message.role === "user" &&
-      !(
-        typeof message.content === "string" &&
-        message.content.trimStart().startsWith("<environment_context>")
-      ),
-  ).length;
+  (current?.messages ?? []).filter((message) => message.role === "user").length;
 
 const isResume = (response: Response) =>
   response.url().endsWith("/__orkestrator/invoke") &&
@@ -346,6 +336,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             expect(userTurns(resumed), "resuming sent a prompt").toBe(turnsBefore);
             expect(resumed?.turn.phase).not.toBe("running");
             expect(await agentTabs()).toHaveLength(1);
+            console.log(
+              `[design-resume] ${provider} user rows: live=${turnsBefore}, resumed=${userTurns(resumed)}`,
+            );
             for (const [index, client] of clients.entries()) {
               await client.screenshot({
                 path: testInfo.outputPath(`${provider}-client-${index + 1}-resumed.png`),

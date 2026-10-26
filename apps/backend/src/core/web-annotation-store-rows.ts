@@ -2,11 +2,13 @@
  * Row codec and SQL helpers of the per-environment web-annotation store
  * (`web-annotations/<environmentId>`, layout in `web-annotation-store-layout.ts`).
  *
- * The service works on one in-memory `WebAnnotationManifest`. A commit diffs
- * the mutated manifest against the committed rows and writes only the rows
- * whose JSON or position changed, so a commit costs O(changed rows) of I/O.
- * The diff still serializes every index row (the same CPU the old engine
- * spent serializing the whole manifest per commit).
+ * The service works on one in-memory `WebAnnotationManifest`. Its committed
+ * row values are deep-frozen (`freezeRowValue`), so an unchanged reference is
+ * an unchanged row. A manifest commit plans only the rows its working copy
+ * replaced (`planChangedRows`), serializes those, and writes the ones whose
+ * JSON or position changed: O(changed rows) of CPU and I/O. `planRows`, the
+ * full diff, serves the one-off legacy import and repair, and checks every
+ * incremental plan in tests (`assertSameRowPlan`).
  *
  * Rows are read and written through the database's uncached row access
  * (`StorageDatabase.rows`), writes inside `StorageDatabase.transaction`; each
@@ -78,7 +80,7 @@ export interface StoreSnapshot {
   meta: WebAnnotationStoreMeta;
   unreadable: Map<string, UnreadableRecord>;
   rows: Map<string, IndexRow>;
-  /** Parsed value of every row (shared with `manifest`; never mutated). */
+  /** Parsed value of every row (shared with `manifest`; deep-frozen). */
   values: Map<string, unknown>;
   indexBytes: number;
   maxPosition: number;
@@ -108,10 +110,10 @@ export function defaultMeta(environmentId: string, now: string): WebAnnotationSt
 }
 
 export function emptySnapshot(environmentId: string, now: string): StoreSnapshot {
-  const meta = defaultMeta(environmentId, now);
+  const meta = freezeRowValue(defaultMeta(environmentId, now));
   return {
     storeRevision: null,
-    manifest: emptyManifest(environmentId, now),
+    manifest: freezeRowValue(emptyManifest(environmentId, now)),
     meta,
     unreadable: new Map(),
     rows: new Map(),
@@ -194,6 +196,8 @@ export interface RowPlan {
   maxPosition: number;
   /** Keys of changed rows per collection (change hints for foreign commits). */
   changedKeys: Map<string, Set<string>>;
+  /** Row values this plan serialized with `JSON.stringify` (the commit's CPU bound). */
+  serialized: number;
 }
 
 /**
@@ -290,7 +294,225 @@ export function planRows(
     deletes.push(row);
     noteChange(row.collection, row.key);
   }
-  return { upserts, deletes, rows, values, indexBytes, maxPosition: max, changedKeys };
+  return {
+    upserts,
+    deletes,
+    rows,
+    values,
+    indexBytes,
+    maxPosition: max,
+    changedKeys,
+    serialized: items.length,
+  };
+}
+
+/** Freezes a row value and everything it holds; already-frozen parts are skipped. */
+export function freezeRowValue<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) freezeRowValue(child);
+  return value;
+}
+
+/** One ungrouped row a commit replaced; `undefined` removes it. */
+export interface RowChange {
+  collection: string;
+  key: string;
+  value: unknown;
+}
+
+/** A group (one annotation's entries, the receipts) whose member list changed. */
+export interface GroupChange {
+  group: string;
+  /** The new members in order, without duplicate ids. */
+  members: RowChange[];
+  /** The committed members, for removals. */
+  previous: Array<{ collection: string; key: string }>;
+}
+
+export interface RowChanges {
+  rows: RowChange[];
+  groups: GroupChange[];
+}
+
+/**
+ * Plan only the rows a commit declared. Equivalent to `planRows` over the
+ * whole next manifest provided every row not listed in `changes` is
+ * unchanged, which frozen committed values guarantee. A listed value that is
+ * still the committed object is not serialized; the rest are serialized
+ * once and written only when their JSON or position changed. Group
+ * positions follow the same append-only rule as `planRows`. The row maps are
+ * copied (O(rows) of pointer copies, no serialization) so the previous
+ * snapshot stays intact if the transaction rolls back.
+ */
+export function planChangedRows(
+  previous: Pick<StoreSnapshot, "rows" | "values" | "maxPosition" | "indexBytes">,
+  changes: RowChanges,
+): RowPlan {
+  const rows = new Map(previous.rows);
+  const values = new Map(previous.values);
+  const upserts = new Map<string, IndexRow>();
+  const deletes = new Map<string, IndexRow>();
+  const changedKeys = new Map<string, Set<string>>();
+  const noteChange = (collection: string, key: string) => {
+    let keys = changedKeys.get(collection);
+    if (!keys) changedKeys.set(collection, (keys = new Set()));
+    keys.add(key);
+  };
+  let max = previous.maxPosition;
+  let indexBytes = previous.indexBytes;
+  let serialized = 0;
+  const remove = (id: string) => {
+    const current = rows.get(id);
+    if (!current) return;
+    rows.delete(id);
+    values.delete(id);
+    upserts.delete(id);
+    indexBytes -= current.bytes;
+    const committed = previous.rows.get(id);
+    if (committed) {
+      deletes.set(id, committed);
+      noteChange(committed.collection, committed.key);
+    }
+  };
+  const put = (change: RowChange, position?: number) => {
+    const id = rowId(change.collection, change.key);
+    if (change.value === undefined) return remove(id);
+    const before = rows.get(id);
+    if (
+      before &&
+      previous.values.get(id) === change.value &&
+      (position === undefined || position === before.position)
+    ) {
+      return;
+    }
+    const json = JSON.stringify(change.value);
+    serialized += 1;
+    if (json === undefined) return remove(id);
+    const at = position ?? before?.position ?? ++max;
+    const unchanged = before !== undefined && before.json === json;
+    values.set(id, change.value);
+    if (unchanged && before.position === at) return;
+    const row: IndexRow = {
+      collection: change.collection,
+      key: change.key,
+      position: at,
+      json,
+      bytes: unchanged ? before.bytes : Buffer.byteLength(json, "utf8"),
+    };
+    indexBytes += row.bytes - (before?.bytes ?? 0);
+    rows.set(id, row);
+    upserts.set(id, row);
+    deletes.delete(id);
+    if (!unchanged) noteChange(change.collection, change.key);
+  };
+  for (const change of changes.rows) put(change);
+  for (const group of changes.groups) {
+    let last = -Infinity;
+    let sawNew = false;
+    let appendOnly = true;
+    for (const member of group.members) {
+      const before = previous.rows.get(rowId(member.collection, member.key));
+      if (!before) {
+        sawNew = true;
+        continue;
+      }
+      if (sawNew || before.position <= last) {
+        appendOnly = false;
+        break;
+      }
+      last = before.position;
+    }
+    const kept = new Set<string>();
+    for (const member of group.members) {
+      const id = rowId(member.collection, member.key);
+      kept.add(id);
+      const before = previous.rows.get(id);
+      put(member, appendOnly && before ? before.position : ++max);
+    }
+    for (const member of group.previous) {
+      const id = rowId(member.collection, member.key);
+      if (!kept.has(id)) remove(id);
+    }
+  }
+  return {
+    upserts: Array.from(upserts.values()),
+    deletes: Array.from(deletes.values()),
+    rows,
+    values,
+    indexBytes,
+    maxPosition: max,
+    changedKeys,
+    serialized,
+  };
+}
+
+/** Row position order inside each group, for comparing two plans. */
+function groupOrders(rows: ReadonlyMap<string, IndexRow>): Map<string, string[]> {
+  const orders = new Map<string, Array<{ id: string; position: number }>>();
+  for (const [id, row] of rows) {
+    if (row.collection !== "entries" && row.collection !== "receipts") continue;
+    const group =
+      row.collection === "receipts"
+        ? "receipts"
+        : `e\u0000${(JSON.parse(row.json) as { annotationId?: string }).annotationId}`;
+    const members = orders.get(group) ?? [];
+    members.push({ id, position: row.position });
+    orders.set(group, members);
+  }
+  return new Map(
+    Array.from(orders, ([group, members]) => [
+      group,
+      members.sort((a, b) => a.position - b.position).map((member) => member.id),
+    ]),
+  );
+}
+
+/**
+ * Debug check that an incremental plan persists exactly what the full diff
+ * would: the same rows with the same JSON, the same deletions, and the same
+ * order inside every group and quota byte total (new positions may be numbered
+ * differently). Serialization counts intentionally differ: only the full diff
+ * serializes unchanged rows; tests bound incremental serialization separately.
+ * Throws on a difference, so the commit rolls back.
+ */
+export function assertSameRowPlan(full: RowPlan, incremental: RowPlan): void {
+  const problems: string[] = [];
+  if (full.indexBytes !== incremental.indexBytes) {
+    problems.push(`indexBytes ${incremental.indexBytes} (expected ${full.indexBytes})`);
+  }
+  const describe = (id: string) => id.replace("\u0000", "/");
+  for (const [id, row] of full.rows) {
+    const other = incremental.rows.get(id);
+    if (!other) problems.push(`missing ${describe(id)}`);
+    else if (other.json !== row.json) problems.push(`stale ${describe(id)}`);
+  }
+  for (const id of incremental.rows.keys()) {
+    if (!full.rows.has(id)) problems.push(`extra ${describe(id)}`);
+  }
+  const fullDeletes = new Set(full.deletes.map((row) => rowId(row.collection, row.key)));
+  const incrementalDeletes = new Set(
+    incremental.deletes.map((row) => rowId(row.collection, row.key)),
+  );
+  for (const id of fullDeletes) {
+    if (!incrementalDeletes.has(id)) problems.push(`undeleted ${describe(id)}`);
+  }
+  for (const id of incrementalDeletes) {
+    if (!fullDeletes.has(id)) problems.push(`wrongly deleted ${describe(id)}`);
+  }
+  if (problems.length === 0) {
+    const expected = groupOrders(full.rows);
+    for (const [group, order] of groupOrders(incremental.rows)) {
+      if (expected.get(group)?.join("\n") !== order.join("\n")) {
+        problems.push(`reordered ${describe(group)}`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `web annotation row plan diverges from the full diff: ${problems.slice(0, 5).join(", ")}`,
+    );
+  }
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
@@ -331,7 +553,10 @@ export function assembleSnapshot(
             bytes: reuse ? before.bytes : Buffer.byteLength(raw.value, "utf8"),
           };
     rows.set(id, row);
-    values.set(id, reuse ? previous!.values.get(id) : (JSON.parse(raw.value) as unknown));
+    values.set(
+      id,
+      reuse ? previous!.values.get(id) : freezeRowValue(JSON.parse(raw.value) as unknown),
+    );
     indexBytes += row.bytes;
     if (row.position > maxPosition) maxPosition = row.position;
   }
@@ -339,7 +564,7 @@ export function assembleSnapshot(
   const metaValue = values.get(rowId("meta", "state"));
   const meta: WebAnnotationStoreMeta = isRecordValue(metaValue)
     ? (metaValue as unknown as WebAnnotationStoreMeta)
-    : defaultMeta(environmentId, now);
+    : freezeRowValue(defaultMeta(environmentId, now));
   const manifest = emptyManifest(environmentId, meta.createdAt);
   manifest.revision = meta.revision;
   manifest.updatedAt = meta.updatedAt;
@@ -372,6 +597,8 @@ export function assembleSnapshot(
       unreadable.set(row.key, value as UnreadableRecord);
     }
   }
+  // Row values are frozen as they are parsed; this freezes the containers.
+  freezeRowValue(manifest);
   return {
     storeRevision,
     manifest,

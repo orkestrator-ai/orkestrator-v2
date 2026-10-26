@@ -208,3 +208,14 @@ complete owner passed alone both times
 `orkestrator-test-run.m0KWc5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 below the platform temporary directory. No implementation, assertion,
 deadline or skip changed; the aggregate failure is retained.
+
+## Recurrence on 2026-10-26 (todo 0035 validation)
+
+`mise run test:logged -- --name full-test -- mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` (head `aaea46d6a`, renderer-only
+changes), at host load averages of 38 to 44 on 18 cores, failed this case after
+5235.50 ms, along with [0962](../coordinator-and-multi-review/0962-diff-stats-in-flight-baseline-aggregate-timeout.md) and one other known case. The
+unchanged owner passed alone with
+`mise run test:logged -- --name backend-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts ./src/core/looped-review-scheduling.test.ts ./src/core/feature-planning-scheduling.test.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures`
+(exit 0, 23.6 s). Evidence: `orkestrator-test-run.xIhDQt/` below the host
+temporary directory. No assertion, timeout or skip changed.

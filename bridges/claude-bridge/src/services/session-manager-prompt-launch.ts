@@ -134,6 +134,9 @@ function endClaudeRuntime(
     session.status = "error";
     session.error = claudeProcessKilledMessage(killedBy);
     session.interruption = "restart";
+    // The latest turn the SDK took, which is what the mark names after a
+    // bridge restart too.
+    session.interruptedRequestId = session.turnInFlightRequestId;
     session.turnStartedAt = undefined;
     session.abortController = undefined;
     session.completionBlockedByBackgroundTasks = false;
@@ -212,11 +215,10 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
     ? [AGENT_MCP_SERVER_NAME, ...(options?.agentMcp?.design ? ["orkestrator-design"] : [])]
     : [];
   // Launch-only settings may have changed while this turn was preparing.
-  await assertClaudeRuntimeAccepts(
-    session,
-    options,
-    claudeLaunchResourceProfile(plugins, queryEnvironment),
-  );
+  await assertClaudeRuntimeAccepts(session, options, {
+    ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+    settingSources: JSON.stringify(plan.settingSources),
+  });
   // Held from here so the process is not closed as unused while the
   // settings below are applied.
   session.queryControl = running.control;
@@ -305,6 +307,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     activeTaskIds: stream.activeTaskIds,
     launch: {
       ...claudeLaunchedProfile(session, options),
+      settingSources: JSON.stringify(plan.settingSources),
       ...claudeLaunchResourceProfile(plugins, queryEnvironment),
     },
     mcpServers: mcpServersKey,
@@ -352,7 +355,7 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
   session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
   turn.queryStarted = true;
   // From here a restart cuts the turn short rather than losing it unsent.
-  syncTurnInFlightMark(session, { started: true });
+  syncTurnInFlightMark(session, { started: true, requestId: turn.dispatchRequestId });
   testHooks?.onQueryStarted?.();
   // One control read per turn, off the message path, so the inventory a
   // selected command is validated against is the session's own.
@@ -380,6 +383,7 @@ function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | unde
   if (!running || claudeRuntimeOwesWork(running)) return running;
   const requested = {
     ...claudeLaunchProfile(turn.session, turn.options),
+    settingSources: JSON.stringify(plan.settingSources),
     ...claudeLaunchResourceProfile(plan.plugins, plan.queryEnvironment),
   };
   return claudeLaunchConflict(running.launch, requested) ? undefined : running;

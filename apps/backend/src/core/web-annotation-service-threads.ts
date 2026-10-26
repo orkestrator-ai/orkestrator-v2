@@ -203,18 +203,40 @@ export class WebAnnotationThreads {
     return annotation;
   }
 
+  /**
+   * The annotation as this transaction's editable row: committed rows are
+   * frozen, so every helper that changes an annotation takes this one.
+   */
+  requireEditable(tx: WebAnnotationTransaction, annotationId: string): WebAnnotation {
+    this.requireAnnotation(tx.manifest, annotationId);
+    return tx.edit("annotations", annotationId)!;
+  }
+
+  /** An editable annotation that is not deleted, archived or unavailable. */
   requireMutable(
     store: WebAnnotationEnvironmentStore,
-    manifest: WebAnnotationManifest,
+    tx: WebAnnotationTransaction,
     annotationId: string,
   ): WebAnnotation {
-    const annotation = this.requireAnnotation(manifest, annotationId);
+    const annotation = this.requireAnnotation(tx.manifest, annotationId);
     if (annotation.state === "deleted")
       throw new WebAnnotationServiceError("Annotation was deleted");
     if (annotation.archivedAt) throw archivedError(annotation.continuationId);
     const unavailable = store.unavailableReason(annotationId);
     if (unavailable) throw degradedError(`annotation is read-only (${unavailable})`);
-    return annotation;
+    return tx.edit("annotations", annotationId)!;
+  }
+
+  /** Replace one entry index row of a thread (committed rows are frozen). */
+  editEntryIndex(
+    tx: WebAnnotationTransaction,
+    annotationId: string,
+    entryId: string,
+    patch: Partial<ManifestEntry>,
+  ): void {
+    tx.manifest.entries[annotationId] = (tx.manifest.entries[annotationId] ?? []).map((entry) =>
+      entry.id === entryId ? { ...entry, ...patch } : entry,
+    );
   }
 
   expectContentRevision(annotation: WebAnnotation, expected: number): void {
@@ -245,7 +267,11 @@ export class WebAnnotationThreads {
     this.bumpMetadata(tx, annotation);
   }
 
-  /** Append one immutable entry. Callers bump revisions as appropriate. */
+  /**
+   * Append one immutable entry. `annotation` must be editable
+   * (`requireEditable`, `requireMutable`, or a new one). Callers bump
+   * revisions as appropriate.
+   */
   appendEntry(
     tx: WebAnnotationTransaction,
     annotation: WebAnnotation,
@@ -304,7 +330,7 @@ export class WebAnnotationThreads {
       createdAt: entry.createdAt,
       ...(entry.supersedes ? { supersedes: entry.supersedes } : {}),
     };
-    (tx.manifest.entries[annotation.id] ??= []).push(index);
+    tx.manifest.entries[annotation.id] = [...(tx.manifest.entries[annotation.id] ?? []), index];
     annotation.entryCount++;
     annotation.entryBytes += bodyBytes;
     annotation.lastSequence = entry.sequence;
@@ -331,9 +357,12 @@ export class WebAnnotationThreads {
   referenceAssets(tx: WebAnnotationTransaction, assetIds: readonly string[]): ManifestAsset[] {
     const assets = [];
     for (const id of assetIds) {
-      const asset = tx.manifest.assets[id];
+      let asset = tx.manifest.assets[id];
       if (!asset) throw notFound("Asset");
-      asset.orphanedAt = null;
+      if (asset.orphanedAt !== null) {
+        asset = tx.edit("assets", id)!;
+        asset.orphanedAt = null;
+      }
       assets.push(asset);
     }
     return assets;
@@ -893,7 +922,7 @@ export class WebAnnotationThreads {
         editorId: input.editorId,
       },
       (tx, store) => {
-        const annotation = this.requireMutable(store, tx.manifest, input.annotationId);
+        const annotation = this.requireMutable(store, tx, input.annotationId);
         this.expectContentRevision(annotation, input.expectedContentRevision);
         this.bumpContent(tx, annotation);
         const entry = this.appendEntry(tx, annotation, {
@@ -923,7 +952,7 @@ export class WebAnnotationThreads {
         body: input.body,
       },
       (tx, store) => {
-        const annotation = this.requireMutable(store, tx.manifest, input.annotationId);
+        const annotation = this.requireMutable(store, tx, input.annotationId);
         this.expectContentRevision(annotation, input.expectedContentRevision);
         const index = (tx.manifest.entries[annotation.id] ?? []).find(
           (entry) => entry.id === input.entryId,
@@ -940,7 +969,7 @@ export class WebAnnotationThreads {
           body,
           supersedes: index.id,
         });
-        index.supersededBy = entry.id;
+        this.editEntryIndex(tx, annotation.id, index.id, { supersededBy: entry.id });
         const latest = (tx.manifest.entries[annotation.id] ?? [])
           .filter(
             (item) =>
@@ -985,7 +1014,7 @@ export class WebAnnotationThreads {
         hidden: input.hidden,
       },
       (tx, store) => {
-        const annotation = this.requireMutable(store, tx.manifest, input.annotationId);
+        const annotation = this.requireMutable(store, tx, input.annotationId);
         this.expectMetadataRevision(annotation, input.expectedMetadataRevision);
         if (title !== undefined) annotation.title = title;
         if (input.defaultDestination !== undefined)
@@ -1011,7 +1040,7 @@ export class WebAnnotationThreads {
         body: input.body,
       },
       (tx, store) => {
-        const annotation = this.requireMutable(store, tx.manifest, input.annotationId);
+        const annotation = this.requireMutable(store, tx, input.annotationId);
         this.expectContentRevision(annotation, input.expectedContentRevision);
         const revision = this.nextCaptureRevision(tx.manifest, annotation.id);
         const record = this.captureFromInput(tx, annotation.id, revision, capture);
@@ -1058,7 +1087,7 @@ export class WebAnnotationThreads {
       "resolve",
       { ...input, operationId: undefined, environmentId: undefined },
       (tx, store) => {
-        const annotation = this.requireMutable(store, tx.manifest, input.annotationId);
+        const annotation = this.requireMutable(store, tx, input.annotationId);
         if (annotation.state === "resolved") throw conflictError("annotation is already resolved");
         this.expectContentRevision(annotation, input.expectedContentRevision);
         if (annotation.currentCaptureId !== input.expectedCaptureId) {
@@ -1132,7 +1161,7 @@ export class WebAnnotationThreads {
         body: input.body,
       },
       (tx, store) => {
-        const annotation = this.requireMutable(store, tx.manifest, input.annotationId);
+        const annotation = this.requireMutable(store, tx, input.annotationId);
         this.expectMetadataRevision(annotation, input.expectedMetadataRevision);
         if (annotation.state !== "resolved") throw conflictError("annotation is not resolved");
         this.reopenIfResolved(tx, annotation);
@@ -1163,7 +1192,7 @@ export class WebAnnotationThreads {
         expectedMetadataRevision: input.expectedMetadataRevision,
       },
       (tx) => {
-        const annotation = this.requireAnnotation(tx.manifest, input.annotationId);
+        const annotation = this.requireEditable(tx, input.annotationId);
         if (annotation.state === "deleted") return { annotation };
         this.expectMetadataRevision(annotation, input.expectedMetadataRevision);
         const active = annotation.activeRequestId
@@ -1220,7 +1249,7 @@ export class WebAnnotationThreads {
           archivedMetadataRevision: Number(existing.value.archivedMetadataRevision),
         };
       }
-      const archived = this.requireMutable(store, tx.manifest, input.annotationId);
+      const archived = this.requireMutable(store, tx, input.annotationId);
       this.expectMetadataRevision(archived, input.expectedMetadataRevision);
       const active = archived.activeRequestId
         ? tx.manifest.requests[archived.activeRequestId]

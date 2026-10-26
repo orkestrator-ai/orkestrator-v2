@@ -1413,6 +1413,122 @@ describe("AgentNativeTab", () => {
     }
   });
 
+  test("Codex keeps rereading a signed-in account until the auth notice clears, then unlocks", async () => {
+    let needsAuth = true;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      notices: needsAuth
+        ? [
+            {
+              kind: "auth" as const,
+              state: "needs-auth" as const,
+              message: "Sign in to Codex again",
+              occurrenceId: "failure-1",
+            },
+          ]
+        : [],
+    }));
+    getNativeAgentAuthStatusMock.mockResolvedValue({
+      state: "signed-out",
+      signIn: { kind: "browser-url" },
+    });
+    installFakeReadCoordinator();
+    const reread = installControlledTimeout(10_000, { label: "Codex sign-out reread" });
+    try {
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-codex-reread"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await screen.findByText("Sign in to Codex again");
+      expect(
+        (screen.getByTitle("Sign in to Codex before sending") as HTMLButtonElement).disabled,
+      ).toBe(true);
+      await waitFor(() => expect(reread.pendingCount()).toBe(1));
+      const calls = getNativeAgentAuthStatusMock.mock.calls.length;
+      getNativeAgentAuthStatusMock.mockResolvedValue({
+        state: "signed-in",
+        signIn: { kind: "browser-url" },
+      });
+      await act(async () => {
+        expect(reread.advance()).toBe(1);
+      });
+      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(calls + 1);
+      // Account status can recover before the authoritative session snapshot.
+      expect(reread.pendingCount()).toBe(1);
+      expect(
+        (screen.getByTitle("Sign in to Codex before sending") as HTMLButtonElement).disabled,
+      ).toBe(true);
+      needsAuth = false;
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-codex-reread"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.queryByTitle("Sign in to Codex before sending") === null).toBe(true),
+      );
+      expect(reread.pendingCount()).toBe(0);
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Recovered" } });
+      await waitFor(() =>
+        expect((screen.getByTitle("Send") as HTMLButtonElement).disabled).toBe(false),
+      );
+      expect(reread.advance()).toBe(0);
+      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(calls + 1);
+    } finally {
+      cleanup();
+      reread.restore();
+      resetReadCoordinatorForTests();
+    }
+  });
+
+  test("hiding a signed-out Codex tab cancels its outstanding reread timer", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "Codex needs sign-in",
+        signIn: { kind: "browser-url" as const },
+      },
+    }));
+    getNativeAgentAuthStatusMock.mockResolvedValue({
+      state: "signed-out",
+      signIn: { kind: "browser-url" },
+    });
+    installFakeReadCoordinator();
+    const reread = installControlledTimeout(10_000, { label: "Codex sign-out reread" });
+    try {
+      const view = render(
+        <AgentNativeTab tabId="tab-codex-hidden" data={identity("codex")} isActive />,
+      );
+      await waitFor(() => expect(reread.pendingCount()).toBe(1));
+      await act(async () => {
+        reread.advance();
+      });
+      expect(reread.pendingCount()).toBe(1);
+      view.rerender(
+        <AgentNativeTab tabId="tab-codex-hidden" data={identity("codex")} isActive={false} />,
+      );
+      await waitFor(() => expect(reread.pendingCount()).toBe(0));
+      const reads = getNativeAgentAuthStatusMock.mock.calls.length;
+      await act(async () => {
+        expect(reread.advance()).toBe(0);
+      });
+      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(reads);
+    } finally {
+      cleanup();
+      reread.restore();
+      resetReadCoordinatorForTests();
+    }
+  });
+
   test("pending auth options never show the settings fallback", async () => {
     let resolveAuth!: (value: NativeAgentAuthStatus) => void;
     getNativeAgentAuthStatusMock.mockImplementation(
@@ -10223,6 +10339,169 @@ describe("AgentNativeTab", () => {
         ),
       );
       expect(mockToastError).not.toHaveBeenCalled();
+      // The warning sits beside a sign-in the user can act on, without locking
+      // the composer: Claude's expired login ends the turn as an ordinary reply.
+      expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
+      expect(screen.queryByTitle("Sign in to Claude before sending") === null).toBe(true);
+    });
+
+    test("pins Claude's sign-in card for a turn-time auth notice until it clears", async () => {
+      // As Claude Code 2.1.310 answers a revoked login: an ordinary reply, not
+      // a terminal error row, so only the notice can ask for the card.
+      const reply = "Failed to authenticate. API Error: 401 OAuth access token is invalid.";
+      const messages: NativeMessage[] = [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Reply with the single word: pong",
+          createdAt: "2026-10-26T00:32:00.000Z",
+          parts: [{ type: "text", content: "Reply with the single word: pong" }],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: reply,
+          createdAt: "2026-10-26T00:32:06.000Z",
+          parts: [{ type: "text", content: reply }],
+        },
+      ];
+      seedProjection({
+        messages,
+        notices: [
+          {
+            kind: "auth",
+            state: "expired",
+            message: "Claude's login was refused. Sign in to Claude again to keep working.",
+            occurrenceId: "assistant-1",
+          },
+        ],
+      });
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-auth-notice-card"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await screen.findByRole("region", { name: "Sign in to Claude" });
+      expect(screen.getAllByRole("region", { name: "Sign in to Claude" })).toHaveLength(1);
+
+      // A real answer clears the notice on the bridge, and the card goes with it.
+      seedProjection({ messages, notices: [] });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-auth-notice-card"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true),
+      );
+    });
+
+    test("Claude notice timestamps reject an old sign-in when a new failure occurrence replaces it", async () => {
+      const timestamp = spyOn(Date.prototype, "toISOString").mockReturnValue(
+        "2026-10-26T10:00:00.000Z",
+      );
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-26T10:01:00.000Z",
+      };
+      const notice = (occurrenceId: string) => ({
+        kind: "auth" as const,
+        state: "expired" as const,
+        message: "Claude login failed",
+        occurrenceId,
+      });
+      try {
+        seedProjection({ notices: [notice("failure-1")] });
+        const view = render(
+          <AgentNativeTab
+            tabId="tab-claude-new-failure"
+            data={identity("claude")}
+            isActive
+            refreshRequestId={0}
+          />,
+        );
+        await screen.findByText("Signed in. Resend your message to continue.");
+        timestamp.mockReturnValue("2026-10-26T10:02:00.000Z");
+        seedProjection({ notices: [notice("failure-1")] });
+        view.rerender(
+          <AgentNativeTab
+            tabId="tab-claude-new-failure"
+            data={identity("claude")}
+            isActive
+            refreshRequestId={1}
+          />,
+        );
+        // Re-reading the same occurrence preserves when it was first seen.
+        expect(await screen.findByText("Signed in. Resend your message to continue.")).toBeTruthy();
+        seedProjection({ notices: [notice("failure-2")] });
+        const reads = getAgentAccountLoginMock.mock.calls.length;
+        view.rerender(
+          <AgentNativeTab
+            tabId="tab-claude-new-failure"
+            data={identity("claude")}
+            isActive
+            refreshRequestId={2}
+          />,
+        );
+        await waitFor(() =>
+          expect(getAgentAccountLoginMock.mock.calls.length).toBeGreaterThan(reads),
+        );
+        expect(screen.queryByText("Signed in. Resend your message to continue.") === null).toBe(
+          true,
+        );
+        expect(screen.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy();
+      } finally {
+        timestamp.mockRestore();
+      }
+    });
+
+    test("does not pin a second Claude sign-in card over a terminal auth error row", async () => {
+      seedProjection({
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "hello",
+            createdAt: "2026-10-26T00:32:00.000Z",
+            parts: [{ type: "text", content: "hello" }],
+          },
+          {
+            id: "native-terminal:error:turn-1",
+            role: "system",
+            content: "Failed to authenticate. API Error: 401",
+            createdAt: "2026-10-26T00:32:06.000Z",
+            parts: [{ type: "text", content: "Failed to authenticate. API Error: 401" }],
+          },
+        ],
+        notices: [
+          {
+            kind: "auth",
+            state: "expired",
+            message: "Claude's login was refused. Sign in to Claude again to keep working.",
+            occurrenceId: "turn-1",
+          },
+        ],
+      });
+      render(
+        <AgentNativeTab
+          tabId="tab-auth-notice-row"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      // The notice has arrived; the row's own card (rendered by the transcript,
+      // which happy-dom does not lay out) answers it, so nothing is pinned.
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalled());
+      expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
     });
 
     test("persists a dismissed occurrence but shows a newer occurrence and another session", async () => {

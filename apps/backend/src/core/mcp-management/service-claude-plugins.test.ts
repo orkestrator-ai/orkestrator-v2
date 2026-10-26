@@ -53,7 +53,28 @@ function installPlugin(
   return path.join(fixture.root, relative);
 }
 
-function writeInstalled(ids: Record<string, string>): void {
+/** User settings, with every install's id enabled as `claude plugin install` records it. */
+function writeUserSettings(
+  enabledPlugins: Record<string, unknown>,
+  installed: readonly string[] = [],
+): void {
+  fixture.write(
+    "home/.claude/settings.json",
+    JSON.stringify({
+      enabledPlugins: {
+        ...Object.fromEntries(installed.map((id) => [id, true])),
+        ...enabledPlugins,
+      },
+    }),
+  );
+}
+
+/**
+ * Record installs as `claude plugin install` does: in `installed_plugins.json`,
+ * and enabled in user settings unless `enable` is false.
+ */
+function writeInstalled(ids: Record<string, string>, enable = true): void {
+  if (enable) writeUserSettings({}, Object.keys(ids));
   fixture.write(
     "home/.claude/plugins/installed_plugins.json",
     JSON.stringify({
@@ -69,6 +90,27 @@ function writeInstalled(ids: Record<string, string>): void {
 }
 
 const stdio = (command: string, extra: Record<string, unknown> = {}) => ({ command, ...extra });
+
+/**
+ * Plugins listed in `~/.claude.json` (not installed), under `~/listed/<name>`:
+ * only the `@inline` rule applies to them, since no install id exists.
+ */
+function listPlugins(plugins: Record<string, { manifest?: unknown; mcpJson: unknown }>): void {
+  for (const [name, files] of Object.entries(plugins)) {
+    if (files.manifest !== undefined)
+      fixture.write(
+        `home/listed/${name}/.claude-plugin/plugin.json`,
+        JSON.stringify(files.manifest),
+      );
+    fixture.write(`home/listed/${name}/.mcp.json`, JSON.stringify(files.mcpJson));
+  }
+  fixture.write(
+    "home/.claude.json",
+    JSON.stringify({
+      plugins: Object.keys(plugins).map((name) => ({ type: "local", path: `~/listed/${name}` })),
+    }),
+  );
+}
 
 function pluginSources(snapshot: McpManagementSnapshot) {
   return snapshot.sources.filter((source) => source.scope === "plugin");
@@ -244,12 +286,7 @@ describe("Claude plugin MCP sources", () => {
 
   test("a plugin disabled in project settings is shown disabled, naming the setting", async () => {
     projectResourcesOn();
-    writeInstalled({
-      "docs@market": installPlugin("docs", {
-        manifest: { name: "docs" },
-        mcpJson: { search: stdio("s") },
-      }),
-    });
+    listPlugins({ docs: { manifest: { name: "docs" }, mcpJson: { search: stdio("s") } } });
     fixture.write(
       "worktree/.claude/settings.json",
       JSON.stringify({ enabledPlugins: { "docs@inline": false } }),
@@ -304,23 +341,12 @@ describe("Claude plugin MCP sources", () => {
 
   test("user settings, the manifest default and the local-settings caveat", async () => {
     projectResourcesOn();
-    const plugins = {
-      off: installPlugin("off", { manifest: { name: "off" }, mcpJson: { a: stdio("a") } }),
-      quiet: installPlugin("quiet", {
-        manifest: { name: "quiet", defaultEnabled: false },
-        mcpJson: { a: stdio("a") },
-      }),
-      local: installPlugin("local", { manifest: { name: "local" }, mcpJson: { a: stdio("a") } }),
-    };
-    writeInstalled({
-      "off@market": plugins.off,
-      "quiet@market": plugins.quiet,
-      "local@market": plugins.local,
+    listPlugins({
+      off: { manifest: { name: "off" }, mcpJson: { a: stdio("a") } },
+      quiet: { manifest: { name: "quiet", defaultEnabled: false }, mcpJson: { a: stdio("a") } },
+      local: { manifest: { name: "local" }, mcpJson: { a: stdio("a") } },
     });
-    fixture.write(
-      "home/.claude/settings.json",
-      JSON.stringify({ enabledPlugins: { "OFF@inline": false } }),
-    );
+    writeUserSettings({ "OFF@inline": false });
     fixture.write(
       "worktree/.claude/settings.local.json",
       JSON.stringify({ enabledPlugins: { "local@inline": false } }),
@@ -332,7 +358,9 @@ describe("Claude plugin MCP sources", () => {
     expect(row(snapshot, "plugin:quiet:a").statusReason).toContain("defaultEnabled");
     expect(row(snapshot, "plugin:local:a").status).toBe("effective");
     const localSource = pluginSources(snapshot).find((source) => source.label === "Plugin local")!;
-    expect(localSource.note).toContain('"Include local settings" on do not load this plugin');
+    expect(localSource.note).toContain(
+      '"Include local settings" on do not load this plugin: enabledPlugins["local@inline"] in <worktree>/.claude/settings.local.json.',
+    );
   });
 
   test("user settings come from CLAUDE_CONFIG_DIR when the backend sets it, as the CLI reads them", async () => {
@@ -340,21 +368,25 @@ describe("Claude plugin MCP sources", () => {
     try {
       fixture.cleanup();
       fixture = createFixture({ env: { CLAUDE_CONFIG_DIR: configDir } });
-      writeInstalled({
-        "docs@market": installPlugin("docs", {
-          manifest: { name: "docs" },
-          mcpJson: { a: stdio("a") },
-        }),
-      });
+      writeInstalled(
+        {
+          "docs@market": installPlugin("docs", {
+            manifest: { name: "docs" },
+            mcpJson: { a: stdio("a") },
+          }),
+        },
+        false,
+      );
       // The bridge's plugin set still comes from ~/.claude; only the settings move.
-      fixture.write(
-        "home/.claude/settings.json",
-        JSON.stringify({ enabledPlugins: { "docs@inline": false } }),
+      writeUserSettings({ "docs@market": false });
+      writeFileSync(
+        path.join(configDir, "settings.json"),
+        JSON.stringify({ enabledPlugins: { "docs@market": true } }),
       );
       expect(row(await snapshotFor(), "plugin:docs:a").status).toBe("effective");
       writeFileSync(
         path.join(configDir, "settings.json"),
-        JSON.stringify({ enabledPlugins: { "docs@inline": false } }),
+        JSON.stringify({ enabledPlugins: { "docs@market": false } }),
       );
       const snapshot = await snapshotFor();
       expect(row(snapshot, "plugin:docs:a").status).toBe("disabled");
@@ -364,19 +396,92 @@ describe("Claude plugin MCP sources", () => {
     }
   });
 
-  test("a marketplace id does not turn off the copy Orkestrator passes, and an enabled installed copy still loads", async () => {
+  test("an install Claude Code turned off is not passed, and its row names the setting", async () => {
     const docs = installPlugin("docs", { manifest: { name: "docs" }, mcpJson: { a: stdio("a") } });
+    const never = installPlugin("never", {
+      manifest: { name: "never" },
+      mcpJson: { a: stdio("a") },
+    });
+    writeInstalled({ "docs@market": docs, "never@market": never }, false);
+    writeUserSettings({ "docs@market": false });
+    const snapshot = await snapshotFor();
+    expect(row(snapshot, "plugin:docs:a")).toMatchObject({
+      status: "disabled",
+      enabled: false,
+      statusReason:
+        'Disabled: enabledPlugins["docs@market"] is false in ~/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+    });
+    expect(snapshot.effective["plugin:docs:a"]).toBeUndefined();
+    // Installed but enabled nowhere: off in Claude Code too.
+    expect(row(snapshot, "plugin:never:a").statusReason).toBe(
+      'Disabled: no settings file these sessions load sets enabledPlugins["never@market"] to true, so Orkestrator does not pass this installed plugin to Claude Code.',
+    );
+    // Only `true` enables an install.
+    writeUserSettings({ "docs@market": "yes" });
+    expect(row(await snapshotFor(), "plugin:docs:a").statusReason).toContain(
+      'enabledPlugins["docs@market"] is not true in ~/.claude/settings.json',
+    );
+  });
+
+  test("the first loaded layer naming an install's id decides, and local settings are noted", async () => {
+    projectResourcesOn();
+    const plugins = {
+      project: installPlugin("project", {
+        manifest: { name: "project" },
+        mcpJson: { a: stdio("a") },
+      }),
+      localOff: installPlugin("lo", { manifest: { name: "lo" }, mcpJson: { a: stdio("a") } }),
+      localOn: installPlugin("ln", { manifest: { name: "ln" }, mcpJson: { a: stdio("a") } }),
+    };
+    writeInstalled(
+      {
+        "project@market": plugins.project,
+        "lo@market": plugins.localOff,
+        "ln@market": plugins.localOn,
+      },
+      false,
+    );
+    writeUserSettings({ "project@market": true, "lo@market": true });
+    fixture.write(
+      "worktree/.claude/settings.json",
+      JSON.stringify({ enabledPlugins: { "project@market": false } }),
+    );
+    fixture.write(
+      "worktree/.claude/settings.local.json",
+      JSON.stringify({ enabledPlugins: { "lo@market": false, "ln@market": true } }),
+    );
+    const snapshot = await snapshotFor();
+    expect(row(snapshot, "plugin:project:a").statusReason).toBe(
+      'Disabled: enabledPlugins["project@market"] is false in <worktree>/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+    );
+    // The backend user loads no project settings: user settings enable it.
+    expect(row(await snapshotFor("backend"), "plugin:project:a").status).toBe("effective");
+    const note = (label: string) =>
+      pluginSources(snapshot).find((source) => source.label === label)!.note;
+    expect(row(snapshot, "plugin:lo:a").status).toBe("effective");
+    expect(note("Plugin lo")).toContain(
+      'Sessions with "Include local settings" on do not load this plugin: enabledPlugins["lo@market"] in <worktree>/.claude/settings.local.json.',
+    );
+    expect(row(snapshot, "plugin:ln:a").status).toBe("disabled");
+    expect(note("Plugin ln")).toContain(
+      'Sessions with "Include local settings" on load this plugin: enabledPlugins["ln@market"] in <worktree>/.claude/settings.local.json.',
+    );
+  });
+
+  test("a marketplace id never turns off a plugin Orkestrator lists itself, and an enabled installed copy still loads", async () => {
+    // The same plugin, listed in ~/.claude.json as well as installed.
+    fixture.write("home/mine/.claude-plugin/plugin.json", JSON.stringify({ name: "docs" }));
+    fixture.write("home/mine/.mcp.json", JSON.stringify({ a: stdio("a") }));
+    fixture.write(
+      "home/.claude.json",
+      JSON.stringify({ plugins: [{ type: "local", path: "~/mine" }] }),
+    );
     const notes = installPlugin("notes", {
       manifest: { name: "notes" },
       mcpJson: { a: stdio("a") },
     });
-    writeInstalled({ "docs@market": docs, "notes@market": notes });
-    fixture.write(
-      "home/.claude/settings.json",
-      JSON.stringify({
-        enabledPlugins: { "docs@market": false, "notes@inline": false, "notes@market": true },
-      }),
-    );
+    writeInstalled({ "notes@market": notes }, false);
+    writeUserSettings({ "docs@market": false, "notes@inline": false, "notes@market": true });
     const snapshot = await snapshotFor();
     expect(row(snapshot, "plugin:docs:a").status).toBe("effective");
     const sources = pluginSources(snapshot);
@@ -623,9 +728,10 @@ describe("Claude plugin MCP sources", () => {
     );
     fixture.containerFiles.set(`${pluginDir}/.claude-plugin/plugin.json`, '{"name":"docs"}');
     fixture.containerFiles.set(`${pluginDir}/.mcp.json`, JSON.stringify({ a: stdio("a") }));
+    // The container's copy of the user settings, as staged from the host.
     fixture.containerFiles.set(
-      "/workspace/.claude/settings.json",
-      JSON.stringify({ enabledPlugins: { "docs@inline": false } }),
+      "/home/node/.claude/settings.json",
+      JSON.stringify({ enabledPlugins: { "docs@market": true } }),
     );
     const snapshot = await snapshotFor();
     expect(pluginSources(snapshot)[0]).toMatchObject({
@@ -633,10 +739,23 @@ describe("Claude plugin MCP sources", () => {
       writable: false,
       readOnlyReason: CLAUDE_PLUGIN_READ_ONLY_REASON,
     });
-    expect(row(snapshot, "plugin:docs:a")).toMatchObject({ status: "disabled" });
+    expect(row(snapshot, "plugin:docs:a")).toMatchObject({ status: "effective" });
     // Container sessions load project resources; `<worktree>` is /workspace.
-    expect(row(snapshot, "plugin:docs:a").statusReason).toContain(
-      "<worktree>/.claude/settings.json",
+    fixture.containerFiles.set(
+      "/workspace/.claude/settings.json",
+      JSON.stringify({ enabledPlugins: { "docs@market": false } }),
+    );
+    expect(row(await snapshotFor(), "plugin:docs:a").statusReason).toBe(
+      'Disabled: enabledPlugins["docs@market"] is false in <worktree>/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+    );
+    // Turned off in Claude Code: the container's sessions do not get it either.
+    fixture.containerFiles.set(
+      "/home/node/.claude/settings.json",
+      JSON.stringify({ enabledPlugins: { "docs@market": false } }),
+    );
+    fixture.containerFiles.delete("/workspace/.claude/settings.json");
+    expect(row(await snapshotFor(), "plugin:docs:a").statusReason).toBe(
+      'Disabled: enabledPlugins["docs@market"] is false in ~/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
     );
   });
 });

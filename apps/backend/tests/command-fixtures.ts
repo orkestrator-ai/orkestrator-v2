@@ -702,7 +702,7 @@ export async function createCommandFixtures() {
 
   async function writeBridgeEntrypoint(
     appRoot: string,
-    bridgeName: "claude-bridge" | "codex-bridge",
+    bridgeName: "claude-bridge" | "codex-bridge" | "cursor-bridge",
     source: string,
   ): Promise<void> {
     const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");

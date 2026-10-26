@@ -64,6 +64,13 @@ describe.skipIf(!enabled)("Claude plugin discovery in a real container", () => {
                   },
                 }),
           );
+        // The container's settings carry the host's plugin enablement (merged
+        // in by the entrypoint); an install is passed only when its id is true.
+        if (state === "installed")
+          fixture.write(
+            "home/.claude/settings.json",
+            JSON.stringify({ enabledPlugins: { "docs@market": true } }),
+          );
         // A folder without a manifest is never included by the scan.
         fixture.write(
           "home/.claude/plugins/bare/.mcp.json",
@@ -131,6 +138,21 @@ describe.skipIf(!enabled)("Claude plugin discovery in a real container", () => {
           { status: "effective", sourceId: sources[0]!.sourceId },
         );
         expect(snapshot.definitions.some((row) => row.name.includes("hidden"))).toBe(false);
+        if (state === "installed") {
+          // Turned off in Claude Code: not passed, and the row says why.
+          fixture.write(
+            "home/.claude/settings.json",
+            JSON.stringify({ enabledPlugins: { "docs@market": false } }),
+          );
+          const off = await service.snapshot({
+            targetId: await targetIdFor(fixture, "claude", "environment"),
+          });
+          expect(off.definitions.find((row) => row.name === "plugin:docs:search")).toMatchObject({
+            status: "disabled",
+            statusReason:
+              'Disabled: enabledPlugins["docs@market"] is false in ~/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+          });
+        }
       } finally {
         service?.dispose();
         if (containerId) await docker("rm", "--force", containerId);

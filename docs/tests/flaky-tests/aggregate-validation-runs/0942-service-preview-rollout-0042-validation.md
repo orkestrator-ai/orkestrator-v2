@@ -160,3 +160,64 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   relevant, but neither it nor these reruns proves the cause of the aggregate
   ownership mismatch. No assertion, timeout, skip or preview implementation
   was changed. Static checks and the focused coordinator/storage guards passed.
+
+## Recurrence during todo 0035 validation — 2026-10-26
+
+- **Command:** `mise run test:logged -- --name full-test-3 -- mise run test` on
+  branch `todo-0035-mobile-layout-gaps-49509c5f9933` (head `e61067baa`,
+  renderer-only changes; it does not touch preview discovery). Root, bridges,
+  the Codex protocol lockfile and every workspace package except backend
+  passed (web 9,833 passed). Backend reported 11,765 passed and one failed.
+- **Failure:** `local preview service discovery on this host > two
+  environments, a restart on the reused port, and an auto-incremented port`
+  (`preview-local-discovery.test.ts:617`, 793.72 ms). The same ownership
+  mismatch as the storage-main merge above: `user-registered` received where
+  `managed-process` was expected.
+- **Complete unchanged owner rerun:**
+  `mise run test:logged -- --name preview-discovery-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+  passed (8.2 s) at load average about 15.
+- **Evidence:** `orkestrator-test-run.9PpU2I/` below the host temporary
+  directory. No assertion, timeout or skip changed.
+
+
+## Mobile settings review-fix validation — 2026-10-26
+
+The review-fix `mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` used workspace/root/bridges/protocol
+allocations of 4/1/2/1, with two backend workers. Backend finished with 11762
+passed, 97 skipped and four failed across 703 files (636.58 s); the aggregate
+finished in 654.9 s. Web passed 9834 tests. Aggregate evidence is
+`orkestrator-test-run.x766cu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The change touches no backend implementation
+or backend tests.
+
+`local preview service discovery on this host > two environments, a restart
+on the reused port, and an auto-incremented port` failed at line 531
+(441.53 ms): the fixture printed `EADDRINUSE` on loopback and its shell exited
+before reporting a bound port.
+
+The complete unchanged owner passed alone:
+`mise run test:logged -- --name backend-preview-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+(4.3 s logged). This confirms intermittence for the port-collision recurrence;
+it does not establish the cause. No assertion, timeout, skip or preview
+implementation changed.
+
+## Recurrence 2026-10-26 (todo 0056 validation)
+
+- **Change under test:** todo 0056 on branch
+  `todo-0056-stale-bridge-builds-f8fc1693b936` (dev:test bridge builds and a
+  Playwright global setup; no backend or preview code).
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test`
+  on a host shared with other worktrees' runs and dev profiles.
+- **Aggregate result:** `local preview service discovery on this host > two
+  environments, a restart on the reused port, and an auto-incremented port`
+  failed in the backend workspace group.
+- **Unchanged owner reruns:** `bun test --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts`
+  from `apps/backend`, three times in a row: the first failed (18 passed, one
+  failed) with `listen EADDRINUSE: address already in use 127.0.0.1:50487`
+  and `terminal exited 0`; the next two passed (19 pass, 0 fail). The case
+  alone (`-t "two environments"`) also passed.
+- **Evidence:** aggregate group logs in `orkestrator-test-run.i9ylrT/`, outer
+  log in `orkestrator-test-run.gStbzk/`, under the host temporary directory.
+- **Assessment:** the same host-port collision as the earlier observations;
+  the owner passes alone on retry. Nothing was changed to hide it.

@@ -136,7 +136,8 @@ export async function startIsolatedBackend(options: {
   const worktreeDir = path.join(options.root, "worktrees");
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const env = await prepareIsolatedBackendEnvironment(options);
-  // Pi, Cursor and Grok: their bridge, platform selection and pinned binary.
+  // The provider's pinned binary; Pi, Cursor and Grok also get their bridge
+  // and platform selection.
   const runtime = await prepareProviderRuntime({
     root: options.root,
     dataDir,

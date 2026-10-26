@@ -7,6 +7,7 @@ import {
   captureEvents,
   createSession,
   getSession,
+  mockGetPluginsForSdk,
   nextQueryCall,
   pushSuccessfulContinuationResult,
   queryControlOverrides,
@@ -327,6 +328,74 @@ describe("one CLI per session", () => {
     finish(call);
     await secondPrompt;
   });
+
+  test("a follow-up that leaves local settings unsaid builds its plugin set from the running CLI's settings sources", async () => {
+    const { session, call, input, firstPrompt } = await releaseWithBackgroundWork(
+      "inherit plugins",
+      "agent-bg",
+      { includeLocalSettings: true },
+    );
+    const cwd = process.env.CWD || process.cwd();
+    // The launch read installs' enablement from the local layer too.
+    expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(cwd, true, ["user", "project", "local"]);
+    mockGetPluginsForSdk.mockClear();
+    const secondPrompt = sendPrompt(session.id, "mail from another agent", {
+      includeLocalSettings: undefined,
+    });
+    expect((await input.next()).done).toBe(false);
+    await firstPrompt;
+    await expectNoSecondProcess();
+    // Joining inherits the local layer, so the plugin set is the one it runs.
+    expect(mockGetPluginsForSdk).toHaveBeenCalled();
+    for (const args of mockGetPluginsForSdk.mock.calls)
+      expect(args).toEqual([cwd, true, ["user", "project", "local"]]);
+    finish(call);
+    await secondPrompt;
+  });
+
+  test.each(["plugins", "credentials"])(
+    "a warm replacement after changing %s keeps inherited local sources",
+    async (resource) => {
+      const session = createSession("replace with local settings");
+      track(session.id);
+      const first = sendPrompt(session.id, "first", { includeLocalSettings: true });
+      const initial = await nextQueryCall();
+      const input = (initial.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      expect((await input.next()).done).toBe(false);
+      initial.push({ type: "result", subtype: "success" });
+      await first;
+      expect(session.claudeRuntime?.state).toBe("open");
+      const oldRuntime = session.claudeRuntime!;
+      if (resource === "plugins") {
+        mockGetPluginsForSdk.mockImplementation(async () => [
+          { type: "local", path: "/test/locally-enabled-plugin" },
+        ]);
+      } else {
+        // Simulate a resource digest changed by credential rotation, independently
+        // of the credential-file reader covered by the runtime regressions.
+        oldRuntime.launch.credentials = "previous-credential-digest";
+      }
+      mockGetPluginsForSdk.mockClear();
+      const second = sendPrompt(session.id, "follow-up");
+      expect(await input.next()).toEqual({ done: true, value: undefined });
+      initial.finish();
+      const replacement = await nextQueryCall();
+      expect(initial.isClosed()).toBe(true);
+      expect(replacement.options.settingSources).toEqual(["user", "project", "local"]);
+      expect(session.claudeRuntime?.launch.settingSources).toBe(
+        JSON.stringify(replacement.options.settingSources),
+      );
+      expect(mockGetPluginsForSdk).toHaveBeenCalled();
+      for (const args of mockGetPluginsForSdk.mock.calls)
+        expect(args[2]).toEqual(replacement.options.settingSources);
+      if (resource === "plugins")
+        expect(replacement.options.plugins).toEqual([
+          { type: "local", path: "/test/locally-enabled-plugin" },
+        ]);
+      finish(replacement);
+      await second;
+    },
+  );
 
   test("stopping a follow-up stops the CLI it shares, and the agents with it", async () => {
     const { session, call, input, firstPrompt } = await releaseWithBackgroundWork("stop");

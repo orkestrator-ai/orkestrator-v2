@@ -1,7 +1,7 @@
 # Worktree tracked-edit cache hit
 
 - **ID:** 0180
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-03
 - **Snapshot:** based on `19cf6535`, with the workflow-result submission and review-nudge fixes staged. No watcher, diff-statistics or Git-snapshot implementation or tests changed.
 - **Original command:** `mise run test:logged -- --name full-suite-gnu -- mise run test`, with the GNU-tool PATH prescribed in `docs/development/testing-guide.md`.
@@ -317,3 +317,28 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
   - The timeline with the fix shows exactly one hint per real change and no index events after scans.
   - Related backend files (`diff-stats*`, `commands-files*`, `commands-file-*`, `worktree*`): 135 pass. Backend `typecheck`, `oxlint` and `oxfmt --check` are clean on the touched files.
   - `--rerun-each` does not apply here: the file's tests are sequential and stateful over one shared repository.
+
+
+## Mobile settings review-fix validation — 2026-10-26
+
+The review-fix `mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` used workspace/root/bridges/protocol
+allocations of 4/1/2/1, with two backend workers. Backend finished with 11762
+passed, 97 skipped and four failed across 703 files (636.58 s); the aggregate
+finished in 654.9 s. Web passed 9834 tests. Aggregate evidence is
+`orkestrator-test-run.x766cu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The change touches no backend implementation
+or backend tests.
+
+The tracked-edit cache-hit assertion at line 139 again expected 1 and received
+0 (188.76 ms). The existing read-only index assertion was not the failing
+assertion; this observation does not establish that the previously fixed
+index-write cause returned.
+
+`mise run test:logged -- --name backend-worktree-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+passed the tracked-edit case but timed out the separate linked-worktree staging
+case at 5000.27 ms (3 passed, 1 failed; 10.1 s logged;
+`orkestrator-test-run.IfGXl4`). After the aggregate ended, the complete unchanged
+file passed with the same command and `--name backend-worktree-owner-final`
+(2.3 s logged). Reopened: the recurrence is intermittent, but its cause remains
+unconfirmed. No assertion, timeout or skip changed.

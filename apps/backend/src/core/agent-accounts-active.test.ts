@@ -166,6 +166,26 @@ test("an added account clears inherited API keys before launch", async () => {
   expect(env.CLAUDE_CONFIG_DIR).toBe(accountHome("claude"));
 });
 
+test("a Codex bridge on an added account keeps its session records with the host login's", async () => {
+  // A launch environment built for an earlier account must not leak through.
+  const hostEnv: NodeJS.ProcessEnv = { CODEX_BRIDGE_STATE_DIR: "/stale" };
+  expect(await applyActiveAgentAccountEnvironment(context, "codex", hostEnv)).toBe("default");
+  expect(hostEnv.CODEX_BRIDGE_STATE_DIR).toBeUndefined();
+  expect(hostEnv.CODEX_HOME).toBeUndefined();
+
+  await activate("codex");
+  const env: NodeJS.ProcessEnv = {};
+  await applyActiveAgentAccountEnvironment(context, "codex", env);
+  expect(env.CODEX_HOME).toBe(accountHome("codex"));
+  // So a bridge replaced after a switch finds the tab's session (the bridge's
+  // `codexBridgeStateDir`); a Claude launch has no such variable.
+  expect(env.CODEX_BRIDGE_STATE_DIR).toBe(path.join(process.env.CODEX_HOME!, "orkestrator-bridge"));
+  const claudeEnv: NodeJS.ProcessEnv = {};
+  await activate("claude");
+  await applyActiveAgentAccountEnvironment(context, "claude", claudeEnv);
+  expect(claudeEnv.CODEX_BRIDGE_STATE_DIR).toBeUndefined();
+});
+
 describe("applyCoordinatorClaudeAccount", () => {
   test("hands over only a Keychain-backed access token with enough lifetime", async () => {
     await activate("claude");

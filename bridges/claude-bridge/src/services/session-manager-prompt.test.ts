@@ -4952,7 +4952,9 @@ describe("sendPrompt", () => {
       undefined,
       "user",
     );
-    expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(process.env.CWD || process.cwd(), false);
+    expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(process.env.CWD || process.cwd(), false, [
+      "user",
+    ]);
     expect(call.options.settingSources).toEqual(["user"]);
     call.push({ type: "result", subtype: "success" });
     call.finish();

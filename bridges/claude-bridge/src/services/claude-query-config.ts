@@ -182,7 +182,7 @@ export async function resolveClaudeDiscoveryConfig(
   const policy = claudeTurnPolicy(sessionPolicy, inputs.readOnly);
   const cwd = claudeWorkspaceCwd();
   const settingSources = claudeSettingSources(policy, inputs.includeLocalSettings);
-  const plugins = await getPluginsForSdk(cwd, policy?.projectResources !== false);
+  const plugins = await getPluginsForSdk(cwd, policy?.projectResources !== false, settingSources);
   return {
     cwd,
     settingSources,

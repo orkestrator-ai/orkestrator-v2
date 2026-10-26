@@ -1,3 +1,4 @@
+import { enabledInstalledPlugins } from "@orkestrator/protocol/node/claude-plugin-set";
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -238,6 +239,73 @@ describe("entrypoint input resolution", () => {
     expect(result.exitCode).toBe(0);
     expect(await fs.readFile(path.join(home, ".codex", "config.toml"), "utf8")).toBe("relayed\n");
   });
+
+  for (const linked of [false, true]) {
+    test(`plugin enablement reads the relay and rejects linked settings (linked=${linked})`, async () => {
+      const root = await tempRoot();
+      const relayDir = path.join(root, "relay");
+      const config = path.join(relayDir, "claude-config");
+      const home = path.join(root, "home");
+      await fs.mkdir(config, { recursive: true });
+      await fs.mkdir(path.join(home, ".claude"), { recursive: true });
+      const host = path.join(root, "host-settings.json");
+      await fs.writeFile(
+        host,
+        JSON.stringify({
+          enabledPlugins: {
+            "review@fixture": true,
+            "off@fixture": false,
+            "invalid@fixture": "true",
+          },
+          env: { UNTRUSTED: "excluded" },
+        }),
+      );
+      const input = path.join(config, "settings.json");
+      if (linked) await fs.symlink(host, input);
+      else await fs.copyFile(host, input);
+      const output = path.join(home, ".claude", "settings.json");
+      await fs.writeFile(output, '{"permissions":{"defaultMode":"bypassPermissions"}}');
+      // Execute the production merge with no readable raw mount, only a relay.
+      const merge = entrypoint.slice(
+        entrypoint.indexOf("CLAUDE_SETTINGS_INPUT="),
+        entrypoint.indexOf("# Copy and filter ~/.claude.json"),
+      );
+      expect(merge).toContain('jq --slurpfile host "$CLAUDE_SETTINGS_INPUT"');
+      const result = Bun.spawnSync({
+        cmd: [
+          "bash",
+          "-ec",
+          [
+            'STAGED_INPUT_RELAY_DIR="$RELAY_DIR"',
+            shellFunction(entrypoint, "staged_input_path"),
+            "log_progress() { :; }",
+            merge,
+          ].join("\n"),
+        ],
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, RELAY_DIR: relayDir },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      const settings = JSON.parse(await fs.readFile(output, "utf8"));
+      expect(settings.permissions.defaultMode).toBe("bypassPermissions");
+      expect(settings.env).toBeUndefined();
+      expect(settings.enabledPlugins).toEqual(
+        linked
+          ? undefined
+          : {
+              "review@fixture": true,
+              "off@fixture": false,
+            },
+      );
+      const installed = [
+        { type: "local" as const, path: "/plugin", installedId: "review@fixture" },
+      ];
+      expect(enabledInstalledPlugins(installed, { user: settings }, ["user"])).toEqual(
+        linked ? [] : installed,
+      );
+    });
+  }
 
   test("the backend's relay path and revocation targets match the image", () => {
     expect(shellAssignment(entrypoint, "STAGED_INPUT_RELAY_DIR")).toBe(

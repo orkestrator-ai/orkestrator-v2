@@ -70,7 +70,7 @@ export type ContainerWorktreeSignalSupport = "supported" | "unsupported" | "unkn
 
 /** What arming needs from the backend: storage for the image, agent tools for the credential. */
 export type ContainerWorktreeSignalContext = Pick<CommandContext, "storage"> &
-  Partial<Pick<CommandContext, "agentTools">>;
+  Partial<Pick<CommandContext, "agentTools" | "containerHostReachability">>;
 
 /** Puts the watcher into a container (`container-worktree-signal-install.ts`). */
 export interface ContainerWorktreeSignalInstaller {

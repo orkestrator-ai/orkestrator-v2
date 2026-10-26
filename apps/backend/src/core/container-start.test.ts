@@ -88,7 +88,8 @@ function scriptedRun(
 ) {
   const calls: string[][] = [];
   const network = options.network ?? "ork-env-net";
-  let attached = false;
+  let attached = true;
+  let published = false;
   const run = (async (_command: string, args: string[] = []) => {
     calls.push(args);
     if (args[0] === "inspect") {
@@ -101,10 +102,15 @@ function scriptedRun(
     }
     if (args[0] === "stop") return { stdout: "", stderr: "" };
     const next = results.shift();
-    if (next instanceof Error) throw next;
+    if (next instanceof Error) {
+      attached = false;
+      published = false;
+      throw next;
+    }
+    published = attached;
     return { stdout: next ?? "", stderr: "" };
   }) as unknown as NonNullable<Parameters<typeof startDockerContainer>[1]>["run"];
-  return { run, calls };
+  return { run, calls, attached: () => attached, published: () => published };
 }
 
 describe("startDockerContainer", () => {
@@ -159,6 +165,25 @@ describe("startDockerContainer", () => {
     );
     expect(fixed.calls.filter((args) => args[0] === "start")).toHaveLength(1);
   });
+
+  for (const fixed of [false, true]) {
+    test(`a later start restores ports after ${fixed ? "a fixed-port collision" : "both automatic attempts collide"}`, async () => {
+      const collision = new CommandFailedError(ROOTLESSKIT_IN_USE);
+      const fixture = scriptedRun(
+        fixed ? [collision, "ok"] : [collision, collision, "ok"],
+        fixed ? fixedAndAutomatic : automaticOnly,
+      );
+      await expect(
+        startDockerContainer("abc", { run: fixture.run, log: () => undefined }),
+      ).rejects.toBe(collision);
+      expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(fixed ? 1 : 2);
+      expect(fixture.attached()).toBe(true);
+      // The port is now free. Docker only publishes it with a network endpoint.
+      await startDockerContainer("abc", { run: fixture.run });
+      expect(fixture.attached()).toBe(true);
+      expect(fixture.published()).toBe(true);
+    });
+  }
 
   test("a retried container still without its network is stopped and the collision returned", async () => {
     const { run, calls } = scriptedRun(

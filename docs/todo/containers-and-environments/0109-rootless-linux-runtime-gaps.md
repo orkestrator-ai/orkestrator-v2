@@ -177,6 +177,44 @@ the items below); only the live re-run with a new image remains.
    rootful daemon practically never reports. Pro: one start path. Con: none
    found.
 
+### Multi Review outcome (2026-10-26)
+
+The Multi Review (workflow `action-bd8c83c32f72db1961f694ff1ffdd8da`)
+reported four P1 findings; all were real and fixed, none rejected:
+
+1. An existing container's alias repair could replace a working
+   `10.0.2.2` alias with the namespace gateway while the first reachability
+   check was still running or had failed. `ensureContainerAgentToolsHost`
+   now keeps a `10.0.2.2` alias on a rootless daemon when no address is
+   known (the reviewer's second alternative). Chosen over awaiting
+   discovery in every repair, which would put a check of up to 45 s in
+   front of bridge starts and preflights.
+2. The worktree-signal installer repaired the alias without the selected
+   host address. It now passes `containerHostAddress()`, like the Claude
+   state-signal installer.
+3. Claude's plugin-enablement merge, added on `main` after this work began,
+   read `/claude-config/settings.json` from the mount `node` cannot open
+   under rootless Docker. It now reads through `staged_input_path`.
+4. A failed retry, or a fixed-port collision, could leave the container
+   detached from its network, so a later successful start ran without
+   network or published ports. `startDockerContainer` now reconnects the
+   network after every collision failure before returning it.
+
+The coverage gaps it listed now have tests: the pending-probe alias repair
+and explicit address override (`commands-process-coverage.test.ts`), the
+worktree-signal address (`container-worktree-signal-install.test.ts`),
+`unreadableOnRootless` for rootless, rootful, failed-inspect and
+failed-manifest cases (`portable-input-status.test.ts`), the plugin merge
+through the relay (`staged-input-relay.test.ts`), and detached-start
+recovery (`container-start.test.ts`, plus the live-only
+`container-start-docker.test.ts` and rootless assertions in the C20/C22
+live suites, which run only with `RUN_LIVE_DOCKER_TESTS=1` and were not run
+here). The full image's rootless qualification remains the open item above.
+The review's fix pass also made `container-readiness.test.ts` build its tar
+fixture with one 512-byte record (`-b 1`): GNU tar's default 10 KiB padding
+exceeded the 8 KiB boot-record bound added on `main`, which failed that test
+on `main` too.
+
 ## Related
 
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)

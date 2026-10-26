@@ -51,7 +51,11 @@ export function createContainerWorktreeSignalInstaller(
       containerImageCapabilitySupport(containerId, context, "container-worktree-signal", 1),
     async install(containerId, credential, context, isCurrent, signal) {
       if (!isCurrent()) return;
-      await deps.ensureHost(containerId, signal);
+      await deps.ensureHost(
+        containerId,
+        signal,
+        context.containerHostReachability?.containerHostAddress?.(),
+      );
       if (!isCurrent()) return;
       await deps.ensurePorts(containerId, context.agentTools?.servicePort?.() ?? null, signal);
       if (!isCurrent()) return;

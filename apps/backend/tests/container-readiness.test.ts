@@ -29,9 +29,11 @@ async function bootRecordTar(content: string): Promise<string> {
   cleanup.push(dir);
   await fs.writeFile(path.join(dir, "boot-status.json"), content);
   const tarPath = path.join(dir, "out.tar");
+  // Docker streams short archives. GNU tar's default 10 KiB record padding
+  // exceeds the bounded 8 KiB boot-record stream even for a tiny JSON file.
   const result = spawnSync(
     "tar",
-    ["--format=ustar", "-cf", tarPath, "-C", dir, "boot-status.json"],
+    ["--format=ustar", "-b", "1", "-cf", tarPath, "-C", dir, "boot-status.json"],
     { env: { ...process.env, COPYFILE_DISABLE: "1" } },
   );
   expect(result.status).toBe(0);

@@ -856,9 +856,10 @@ log_progress "Created ~/.claude/settings.json with bypass permissions"
 # installed plugin only when these enable its `<name>@<marketplace>` id, and
 # the CLI reads the same keys, so a plugin turned off in Claude Code on the
 # host stays off in this container.
-if [ -f /claude-config/settings.json ] && [ ! -L /claude-config/settings.json ]; then
+CLAUDE_SETTINGS_INPUT="$(staged_input_path /claude-config/settings.json)"
+if [ -f "$CLAUDE_SETTINGS_INPUT" ] && [ ! -L "$CLAUDE_SETTINGS_INPUT" ]; then
     CLAUDE_SETTINGS_MERGED="$(mktemp)"
-    if jq --slurpfile host /claude-config/settings.json \
+    if jq --slurpfile host "$CLAUDE_SETTINGS_INPUT" \
         '($host[0].enabledPlugins // null) as $plugins
          | if ($plugins | type) == "object"
            then .enabledPlugins = ($plugins | with_entries(select(.value | type == "boolean")))

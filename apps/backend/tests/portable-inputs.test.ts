@@ -497,6 +497,8 @@ describe("portable input staging", () => {
       /^# Claude Code's plugin enablement from the host's user settings\.[\s\S]*?^fi$/m,
     )?.[0];
     if (!block) throw new Error("Missing Claude plugin enablement entrypoint block");
+    const resolver = entrypoint.match(/^staged_input_path\(\) \{[\s\S]*?^\}/m)?.[0];
+    if (!resolver) throw new Error("Missing staged input resolver");
     const run = async (source: string, name: string) => {
       const containerHome = path.join(root, name);
       const own = { permissions: { defaultMode: "bypassPermissions" }, hooks: {} };
@@ -505,7 +507,7 @@ describe("portable input staging", () => {
         cmd: [
           "bash",
           "-c",
-          `set -e\nlog_progress() { echo "$1"; }\n${block.replaceAll("/claude-config", '"$TEST_SOURCE"')}`,
+          `set -e\nlog_progress() { echo "$1"; }\n${resolver}\n${block.replaceAll("/claude-config", '"$TEST_SOURCE"')}`,
         ],
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",

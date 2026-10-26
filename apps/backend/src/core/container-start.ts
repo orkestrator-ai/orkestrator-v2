@@ -161,6 +161,19 @@ async function inspectForStart(
   }
 }
 
+/** Reconnect stopped containers after Docker drops their endpoint on a failed bind. */
+async function restoreNetwork(
+  containerId: string,
+  inspection: StartInspection,
+  run: typeof runCommand,
+): Promise<void> {
+  if (inspection.network && !inspection.attached.includes(inspection.network)) {
+    await run("docker", ["network", "connect", inspection.network, containerId], {
+      timeoutMs: 30_000,
+    });
+  }
+}
+
 export async function startDockerContainer(
   containerId: string,
   options: {
@@ -186,24 +199,30 @@ export async function startDockerContainer(
     if (refused) throw refused;
     if (!ADDRESS_IN_USE.test(message)) throw error;
     const inspection = await inspectForStart(containerId, run);
-    if (!inspection || !shouldRetryPortCollision(message, inspection.bindings)) throw error;
+    if (!inspection) throw error;
+    // Restore the endpoint even when a fixed-port failure cannot be retried.
+    // Otherwise a later start can succeed without networking or published ports.
+    await restoreNetwork(containerId, inspection, run).catch(() => {
+      throw error;
+    });
+    if (!shouldRetryPortCollision(message, inspection.bindings)) throw error;
     collision = error;
     network = inspection.network;
     (options.log ?? ((line) => console.warn(line)))(
       `[container-start] automatic host port collided container=${containerId.slice(0, 12)} port=${collidingHostPort(message) ?? "unknown"}; retrying once with fresh ports`,
     );
-    // The failed start left the container stopped and detached from its network.
-    if (network && !inspection.attached.includes(network)) {
-      await run("docker", ["network", "connect", network, containerId], {
-        timeoutMs: 30_000,
-      }).catch(() => {
-        throw collision;
-      });
-    }
   }
   try {
     await attempt("start");
   } catch (error) {
+    if (ADDRESS_IN_USE.test(messageOf(error))) {
+      const inspection = await inspectForStart(containerId, run);
+      if (inspection) {
+        await restoreNetwork(containerId, inspection, run).catch(() => {
+          throw error;
+        });
+      }
+    }
     throw bindMountRefusedError(messageOf(error)) ?? error;
   }
   // Never leave a container running without the network it was created on.

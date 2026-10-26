@@ -55,6 +55,7 @@ function runShell(
 }
 
 const AGENT_HELPER_SED =
+  "/^staged_input_path() {/,/^}$/p; " +
   "/^log_progress() {/,/^}$/p; " +
   "/^agent_copy_warn() {/,/^}$/p; " +
   "/^report_agent_copy_skips() {/,/^}$/p; " +

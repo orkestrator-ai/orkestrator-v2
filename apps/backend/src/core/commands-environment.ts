@@ -1,3 +1,4 @@
+import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
 import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
@@ -2365,6 +2366,17 @@ export async function ensureContainerAgentToolsHost(
         `Docker Desktop did not resolve ${CONTAINER_AGENT_TOOLS_HOST} for container ${containerId}`,
       );
     }
+    return;
+  }
+
+  // An absent discovery result is not evidence that RootlessKit's working
+  // alias is stale. Boot probes run in the background and later checks can
+  // fail transiently; preserve this concrete alias until a target is known.
+  if (
+    !hostAddress &&
+    parseIpTokens(existing).includes(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS) &&
+    (await detectDockerTopology()).rootless
+  ) {
     return;
   }
 

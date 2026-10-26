@@ -128,6 +128,9 @@ export const FileTreeNode = memo(function FileTreeNode({
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
   const setFolderExpanded = useFilesPanelStore((state) => state.setFolderExpanded);
   const isExpanded = expandedFolders.includes(item.path);
+  const isLoadingContents = useFilesPanelStore(
+    (state) => item.truncated === true && state.loadingFolders.includes(item.path),
+  );
   const isFolder = item.isDirectory;
   const [isDragOver, setIsDragOver] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -244,7 +247,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               className="py-1 pr-2 text-xs text-muted-foreground"
               style={{ paddingLeft: paddingLeft + 12 }}
             >
-              Some folder contents are not shown.
+              {isLoadingContents ? "Loading folder…" : "Some folder contents are not shown."}
             </p>
           )}
           {item.children?.map((child) => (

@@ -5,6 +5,7 @@ import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores
 import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import * as backend from "@/lib/backend";
+import { expandedTruncatedDirectories, mergeFileSubtrees } from "@/lib/file-subtrees";
 import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-baseline";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
@@ -56,6 +57,23 @@ function readOptionArgs(
   options: backend.SnapshotReadOptions | undefined,
 ): [] | [backend.SnapshotReadOptions] {
   return options?.refresh ? [options] : [];
+}
+
+/** What decides which truncated directories the tree reads on demand. */
+type FilesPanelTreeInputs = {
+  fileTree: backend.FileNode[];
+  fileSubtrees: Record<string, backend.FileSubtree>;
+  expandedFolders: string[];
+  failedFolders: string[];
+};
+
+function sameTreeInputs(a: FilesPanelTreeInputs, b: FilesPanelTreeInputs): boolean {
+  return (
+    a.fileTree === b.fileTree &&
+    a.fileSubtrees === b.fileSubtrees &&
+    a.expandedFolders === b.expandedFolders &&
+    a.failedFolders === b.failedFolders
+  );
 }
 
 function documentHidden(): boolean {
@@ -424,6 +442,7 @@ export function useFilesPanel() {
   useEffect(() => {
     publishChanges(environmentSnapshotKey, []);
     publishFileTree(environmentSnapshotKey, []);
+    useFilesPanelStore.getState().resetFileSubtrees(environmentSnapshotKey);
     setLoadingChanges(false);
     setLoadingTree(false);
   }, [environmentSnapshotKey, publishChanges, publishFileTree, setLoadingChanges, setLoadingTree]);
@@ -600,6 +619,65 @@ export function useFilesPanel() {
     ],
   );
 
+  // Reads one truncated directory for the tree. The store dedupes reads across
+  // panel mounts and drops a result whose target or expansion has gone.
+  const loadFolder = useCallback(
+    async (directory: string, reload: boolean): Promise<void> => {
+      const key = environmentSnapshotKey;
+      if (!useFilesPanelStore.getState().beginFolderLoad(key, directory, reload)) return;
+      let subtree: backend.FileSubtree | null = null;
+      try {
+        if (isLocalEnvironment && worktreePath) {
+          subtree = await backend.getLocalFileSubtree(worktreePath, directory);
+        } else if (containerId) {
+          subtree = await backend.getFileSubtree(containerId, directory);
+        }
+      } catch (err) {
+        console.error(`Failed to load folder ${directory}:`, err);
+      }
+      useFilesPanelStore.getState().finishFolderLoad(key, directory, subtree);
+    },
+    [isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey],
+  );
+
+  // Re-reads every directory read so far (and retries failed ones): their
+  // contents are not covered by the tree snapshot's digest or revision.
+  const reloadFolders = useCallback(() => {
+    const state = useFilesPanelStore.getState();
+    if (state.fileSubtreeKey !== environmentSnapshotKey) return;
+    for (const directory of [...Object.keys(state.fileSubtrees), ...state.failedFolders]) {
+      void loadFolder(directory, true);
+    }
+  }, [environmentSnapshotKey, loadFolder]);
+
+  // While the tree is shown, read every expanded directory the bounded tree
+  // left truncated, including ones expanded in an earlier session or revealed
+  // by another directory read. A new tree re-reads the directories read so far.
+  const showsTree = isOpen && isAvailable && activeTab === "all-files";
+  useEffect(() => {
+    if (!showsTree) return;
+    let seen: FilesPanelTreeInputs | null = null;
+    const sync = () => {
+      const state = useFilesPanelStore.getState();
+      const inputs: FilesPanelTreeInputs = {
+        fileTree: state.fileTree,
+        fileSubtrees: state.fileSubtrees,
+        expandedFolders: state.expandedFolders,
+        failedFolders: state.failedFolders,
+      };
+      if (seen && sameTreeInputs(seen, inputs)) return;
+      const treeChanged = seen !== null && seen.fileTree !== inputs.fileTree;
+      seen = inputs;
+      if (treeChanged) reloadFolders();
+      const tree = mergeFileSubtrees(state.fileTree, state.fileSubtrees);
+      for (const directory of expandedTruncatedDirectories(tree, new Set(state.expandedFolders))) {
+        void loadFolder(directory, false);
+      }
+    };
+    sync();
+    return useFilesPanelStore.subscribe(sync);
+  }, [showsTree, loadFolder, reloadFolders]);
+
   // Asks the backend for a fenced refresh of the environment projection; the
   // settled projection (or the later event) updates every view of it.
   const refreshChangeProjection = useCallback(
@@ -672,6 +750,7 @@ export function useFilesPanel() {
       // join a snapshot request that started earlier — here or in the
       // backend, which the refresh flag asks for a scan after the click.
       await Promise.all([loadingChangesRef.current?.promise, loadingTreeRef.current?.promise]);
+      if (activeTab === "all-files") reloadFolders();
       return loadVisible({ refresh: true });
     },
   });
@@ -690,8 +769,9 @@ export function useFilesPanel() {
     // The projection settles from the backend's own pass; it is not awaited
     // so a slow container scan does not hold the action's result.
     void refreshChangeProjection(false);
+    reloadFolders();
     await Promise.all([loadChanges(true), loadFileTree(true)]);
-  }, [environmentSnapshotKey, loadChanges, loadFileTree, refreshChangeProjection]);
+  }, [environmentSnapshotKey, loadChanges, loadFileTree, refreshChangeProjection, reloadFolders]);
 
   const revertFile = useCallback(
     async (filePath: string) => {

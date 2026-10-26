@@ -21,6 +21,19 @@ const getLocalFileTreeSnapshotMock = mock(async (_worktreePath: string) => ({
   digest: "tree",
   value: [],
 }));
+const getLocalFileSubtreeMock = mock(
+  async (_worktreePath: string, directory: string): Promise<realBackend.FileSubtree> => ({
+    children: [
+      {
+        name: "SKILL.md",
+        path: `${directory}/SKILL.md`,
+        isDirectory: false,
+        extension: ".md",
+      },
+    ],
+    truncated: false,
+  }),
+);
 const getLocalGitStatusSnapshotMock = mock(async () => ({
   unchanged: false,
   digest: "changes",
@@ -48,6 +61,7 @@ mock.module("@/lib/backend", () => ({
   ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
   copyExternalFile: copyExternalFileMock,
   getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
+  getLocalFileSubtree: getLocalFileSubtreeMock,
   getLocalGitStatusSnapshot: getLocalGitStatusSnapshotMock,
   refreshChanges: refreshChangesMock,
 }));
@@ -342,6 +356,122 @@ describe("useFilesPanel on the project root", () => {
     useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
     useFilesPanelStore.getState().openPanelOnAllFiles();
     expect(useFilesPanelStore.getState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
+  });
+});
+
+describe("useFilesPanel truncated folders", () => {
+  const boundedTree: realBackend.FileNode[] = [
+    {
+      name: "skills",
+      path: "skills",
+      isDirectory: true,
+      children: [
+        {
+          name: "release",
+          path: "skills/release",
+          isDirectory: true,
+          children: [],
+          truncated: true,
+        },
+      ],
+    },
+  ];
+
+  beforeEach(() => {
+    installFakeReadCoordinator();
+    getLocalFileSubtreeMock.mockClear();
+    getLocalFileTreeSnapshotMock.mockImplementation(async () => ({
+      unchanged: false,
+      digest: "bounded-tree",
+      value: boundedTree as never[],
+    }));
+    useFilesPanelStore.setState({
+      isOpen: true,
+      activeTab: "all-files",
+      expandedFolders: ["skills", "skills/release"],
+      fileSubtreeKey: "",
+      fileSubtrees: {},
+      loadingFolders: [],
+      failedFolders: [],
+    });
+  });
+
+  afterEach(() => {
+    getLocalFileTreeSnapshotMock.mockImplementation(async () => ({
+      unchanged: false,
+      digest: "tree",
+      value: [],
+    }));
+  });
+
+  async function settle() {
+    for (let tick = 0; tick < 5; tick += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
+
+  test("reads an expanded truncated folder once and again after it is collapsed", async () => {
+    renderHook(() => useFilesPanel());
+    await settle();
+
+    expect(getLocalFileSubtreeMock.mock.calls).toEqual([["/worktree", "skills/release"]]);
+    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({
+      "skills/release": {
+        children: [
+          {
+            name: "SKILL.md",
+            path: "skills/release/SKILL.md",
+            isDirectory: false,
+            extension: ".md",
+          },
+        ],
+        truncated: false,
+      },
+    });
+    expect(useFilesPanelStore.getState().loadingFolders).toEqual([]);
+
+    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", false));
+    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+    await settle();
+    expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
+
+    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", true));
+    await settle();
+    expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("a failed read is not retried until the folder is expanded again", async () => {
+    getLocalFileSubtreeMock.mockImplementationOnce(async () => {
+      throw new Error("unreadable");
+    });
+    const consoleError = console.error;
+    console.error = () => undefined;
+    try {
+      renderHook(() => useFilesPanel());
+      await settle();
+    } finally {
+      console.error = consoleError;
+    }
+
+    expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
+    expect(useFilesPanelStore.getState().failedFolders).toEqual(["skills/release"]);
+    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+
+    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", false));
+    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", true));
+    await settle();
+    expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
+    expect(useFilesPanelStore.getState().failedFolders).toEqual([]);
+    expect(Object.keys(useFilesPanelStore.getState().fileSubtrees)).toEqual(["skills/release"]);
+  });
+
+  test("a closed panel reads no folders", async () => {
+    useFilesPanelStore.setState({ isOpen: false });
+    renderHook(() => useFilesPanel());
+    await settle();
+    expect(getLocalFileSubtreeMock).not.toHaveBeenCalled();
   });
 });
 

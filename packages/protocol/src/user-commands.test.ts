@@ -88,9 +88,9 @@ describe("context insertion and display", () => {
   });
 
   test("text the user typed is never stripped", () => {
-    expect(stripUserCommandContext("hi <orkestrator-user-commands>x</orkestrator-user-commands>")).toBe(
-      "hi <orkestrator-user-commands>x</orkestrator-user-commands>",
-    );
+    expect(
+      stripUserCommandContext("hi <orkestrator-user-commands>x</orkestrator-user-commands>"),
+    ).toBe("hi <orkestrator-user-commands>x</orkestrator-user-commands>");
     expect(stripUserCommandContext("<orkestrator-user-commands> unterminated")).toBe(
       "<orkestrator-user-commands> unterminated",
     );

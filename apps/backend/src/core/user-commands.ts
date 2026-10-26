@@ -96,9 +96,7 @@ export class UserCommandService {
       throw new UserCommandError("invalid", "That command is too long.");
     }
     const key = tabKey(input.environmentId, input.tabId);
-    const running = (this.tabs.get(key) ?? []).filter(
-      (entry) => entry.record.status === "running",
-    );
+    const running = (this.tabs.get(key) ?? []).filter((entry) => entry.record.status === "running");
     if (running.length >= USER_COMMAND_MAX_RUNNING_PER_TAB) {
       throw new UserCommandError(
         "busy",
@@ -183,9 +181,7 @@ export class UserCommandService {
   }
 
   list(environmentId: string, tabId: string): UserCommandRecord[] {
-    return (this.tabs.get(tabKey(environmentId, tabId)) ?? []).map((entry) =>
-      this.snapshot(entry),
-    );
+    return (this.tabs.get(tabKey(environmentId, tabId)) ?? []).map((entry) => this.snapshot(entry));
   }
 
   get(id: string): UserCommandRecord {

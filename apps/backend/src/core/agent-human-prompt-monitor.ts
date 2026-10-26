@@ -49,7 +49,8 @@ const TASK_OUTPUT_FILE =
   /^(?:\/private)?\/tmp\/claude-\d+\/[^\0]+\/tasks\/[A-Za-z0-9_-]{1,64}\.output$/;
 const OUTPUT_FILE_IN_TEXT =
   /Output is being written to:\s*((?:\/private)?\/tmp\/claude-\d+\/\S+\/tasks\/[A-Za-z0-9_-]{1,64}\.output)/;
-const SHELL_TOOL = /^(bash|shell|sh|exec|exec_command|command|command_execution|terminal|run_terminal_cmd|local_shell|run_shell_command)$/i;
+const SHELL_TOOL =
+  /^(bash|shell|sh|exec|exec_command|command|command_execution|terminal|run_terminal_cmd|local_shell|run_shell_command)$/i;
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -151,7 +152,10 @@ export class AgentHumanPromptMonitor {
   /** Output files of background tasks seen running, by task id (bounded). */
   private readonly taskFiles = new Map<string, { path: string; command?: string }>();
   /** Sources with a prompt, per tab, so the ones that went away are cleared. */
-  private readonly live = new Map<string, { environmentId: string; tabId: string; ids: Set<string> }>();
+  private readonly live = new Map<
+    string,
+    { environmentId: string; tabId: string; ids: Set<string> }
+  >();
 
   constructor(private readonly deps: AgentHumanPromptMonitorDeps) {}
 

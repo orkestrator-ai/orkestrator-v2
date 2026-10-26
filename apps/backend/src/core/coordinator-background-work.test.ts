@@ -178,7 +178,11 @@ describe("a worker waiting on the user", () => {
     };
     await world.coordinator.noteWorkerHumanPrompt(entry);
     await world.coordinator.noteWorkerHumanPrompt(entry);
-    await world.coordinator.noteWorkerHumanPrompt({ ...entry, id: "user-command:1", source: "user-command" });
+    await world.coordinator.noteWorkerHumanPrompt({
+      ...entry,
+      id: "user-command:1",
+      source: "user-command",
+    });
     const mail = await world.undelivered(main);
     expect(mail).toHaveLength(1);
     expect(mail[0]).toMatchObject({

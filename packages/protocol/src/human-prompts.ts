@@ -44,7 +44,10 @@ const SIGN_IN_LINKS: ReadonlyArray<{ host: RegExp; path?: RegExp }> = [
   { host: /^login\.tailscale\.com$/i },
   { host: /^(appleid|idmsa|account)\.apple\.com$/i },
   { host: /^accounts\.google\.com$/i },
-  { host: /^(login\.microsoftonline\.com|microsoft\.com|www\.microsoft\.com)$/i, path: /^\/(devicelogin|common|organizations|[\w-]+\/oauth2)\b/i },
+  {
+    host: /^(login\.microsoftonline\.com|microsoft\.com|www\.microsoft\.com)$/i,
+    path: /^\/(devicelogin|common|organizations|[\w-]+\/oauth2)\b/i,
+  },
   { host: /^device\.sso\.[\w-]+\.amazonaws\.com$/i },
   { host: /^[\w-]+\.awsapps\.com$/i, path: /^\/start\b/i },
   { host: /^(www\.)?vercel\.com$/i, path: /^\/(oauth\/device|login|api\/registration)\b/i },
@@ -110,7 +113,8 @@ function isSignInLink(url: string): boolean {
     return false;
   }
   return SIGN_IN_LINKS.some(
-    (entry) => entry.host.test(parsed.hostname) && (!entry.path || entry.path.test(parsed.pathname)),
+    (entry) =>
+      entry.host.test(parsed.hostname) && (!entry.path || entry.path.test(parsed.pathname)),
   );
 }
 
@@ -125,7 +129,10 @@ function bounded(line: string): string {
  * Only the last `HUMAN_PROMPT_SCAN_BYTES` are read. `final` says the command
  * has exited: nothing is waiting any more, so this returns `null`.
  */
-export function detectHumanPrompt(raw: string, options: { final?: boolean } = {}): HumanPrompt | null {
+export function detectHumanPrompt(
+  raw: string,
+  options: { final?: boolean } = {},
+): HumanPrompt | null {
   if (options.final) return null;
   const tail = raw.length > HUMAN_PROMPT_SCAN_BYTES ? raw.slice(-HUMAN_PROMPT_SCAN_BYTES) : raw;
   const text = normalizeTerminalText(tail);
@@ -143,7 +150,10 @@ export function detectHumanPrompt(raw: string, options: { final?: boolean } = {}
       if (isSignInLink(candidate) || SIGN_IN_CONTEXT.test(context)) {
         // The latest link wins: a retried login prints a new one.
         url = candidate;
-        urlLine = SIGN_IN_CONTEXT.test(line) || !lines[index - 1]?.trim() ? line : `${lines[index - 1]} ${line}`;
+        urlLine =
+          SIGN_IN_CONTEXT.test(line) || !lines[index - 1]?.trim()
+            ? line
+            : `${lines[index - 1]} ${line}`;
       }
     }
   }
@@ -159,8 +169,9 @@ export function detectHumanPrompt(raw: string, options: { final?: boolean } = {}
 
   const hostKeyLine = lines.findLast((line) => HOST_KEY.test(line));
   const hostKey =
-    hostKeyLine !== undefined && /are you sure you want to continue connecting/i.test(unterminated || hostKeyLine)
-      ? (unterminated || hostKeyLine)
+    hostKeyLine !== undefined &&
+    /are you sure you want to continue connecting/i.test(unterminated || hostKeyLine)
+      ? unterminated || hostKeyLine
       : undefined;
   const secret = SECRET_PROMPT.test(unterminated.trim()) ? unterminated : undefined;
   const enterLine = lines.findLast((line) => PRESS_ENTER.test(line));
@@ -194,7 +205,12 @@ export function detectHumanPrompt(raw: string, options: { final?: boolean } = {}
     ...(code ? { code } : {}),
     wantsEnter,
     text: summary,
-    key: [kind, url ?? "", code ?? "", kind === "secret" || kind === "host-key" ? summary : ""].join("\u0000"),
+    key: [
+      kind,
+      url ?? "",
+      code ?? "",
+      kind === "secret" || kind === "host-key" ? summary : "",
+    ].join("\u0000"),
   };
 }
 

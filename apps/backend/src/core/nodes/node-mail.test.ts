@@ -150,7 +150,10 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
     // The command node's coordinator contacts it later: that one is primary now.
     at("2026-10-26T13:10:00.000Z");
     await mail.recordOrigin("worker", coordinatorOf("bk_cmd"), { keepOrigin: true });
-    expect(await route()).toMatchObject({ controllerId: "bk_cmd", coordinatorTabId: "coordinator-tab" });
+    expect(await route()).toMatchObject({
+      controllerId: "bk_cmd",
+      coordinatorTabId: "coordinator-tab",
+    });
     // The local coordinator delegates again afterwards: back to local.
     local.worker = { at: "2026-10-26T13:20:00.000Z", hasCoordinator: true };
     expect(await route()).toBeNull();

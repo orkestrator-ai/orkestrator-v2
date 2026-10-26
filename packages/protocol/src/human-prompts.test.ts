@@ -144,7 +144,9 @@ describe("normalizeTerminalText", () => {
 describe("HumanPromptScanner", () => {
   test("announces a prompt once across chunks and redraws, and clears on exit", () => {
     const scanner = new HumanPromptScanner();
-    expect(scanner.push("npm notice Log in on https://registry.npmjs.org/\nLogin at:\n")).toBeNull();
+    expect(
+      scanner.push("npm notice Log in on https://registry.npmjs.org/\nLogin at:\n"),
+    ).toBeNull();
     const first = scanner.push(
       "https://www.npmjs.com/login?next=/login/cli/b4cc90fe-8f7e-465f-9d29-702dfda0a967\nPress ENTER",
     );
@@ -158,7 +160,9 @@ describe("HumanPromptScanner", () => {
   test("a new link replaces the old one", () => {
     const scanner = new HumanPromptScanner();
     scanner.push("To authenticate, visit: https://login.tailscale.com/a/aaaaaaaa\n");
-    expect(scanner.push("To authenticate, visit: https://login.tailscale.com/a/bbbbbbbb\n")).toMatchObject({
+    expect(
+      scanner.push("To authenticate, visit: https://login.tailscale.com/a/bbbbbbbb\n"),
+    ).toMatchObject({
       prompt: { url: "https://login.tailscale.com/a/bbbbbbbb" },
     });
   });

@@ -56,7 +56,11 @@ async function until<T>(read: () => T, done: (value: T) => boolean, timeoutMs = 
 describe("running a user command", () => {
   test("runs in the workspace, streams output, and records the exit code", async () => {
     const { service, announced, cwd } = world();
-    const started = await service.run({ environmentId: "env", tabId: "tab", command: "pwd; exit 3" });
+    const started = await service.run({
+      environmentId: "env",
+      tabId: "tab",
+      command: "pwd; exit 3",
+    });
     expect(started).toMatchObject({ status: "running", command: "pwd; exit 3", cwd });
     const done = await until(
       () => service.get(started.id),
@@ -186,7 +190,10 @@ describe("telling the agent", () => {
     expect(service.takeContext("env", "tab").ids).toEqual([started.id]);
     service.markDelivered(first.ids, "req-1");
     expect(service.takeContext("env", "tab")).toEqual({ block: "", ids: [] });
-    expect(service.get(started.id).context).toMatchObject({ state: "delivered", requestId: "req-1" });
+    expect(service.get(started.id).context).toMatchObject({
+      state: "delivered",
+      requestId: "req-1",
+    });
   });
 
   test("a command delivered while running is offered again with how it ended", async () => {

@@ -182,7 +182,7 @@ export function registerAgentMessagingTools(
       title: "Send an agent message",
       description: mailToolDescription(
         scope,
-        'Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "coordinator" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; the result names which. To answer a specific message use reply_message, which always goes back to that message\'s sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab\'s mailbox, so this cannot reach the session that launched you.',
+        "Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to \"coordinator\" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; the result names which. To answer a specific message use reply_message, which always goes back to that message's sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.",
       ),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),

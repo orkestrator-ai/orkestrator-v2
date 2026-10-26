@@ -115,7 +115,8 @@ export class HumanPromptRegistry {
 
   /** Whether anything in this environment (any tab) is waiting on the user. */
   hasEnvironmentPrompt(environmentId: string): boolean {
-    for (const entry of this.entries.values()) if (entry.environmentId === environmentId) return true;
+    for (const entry of this.entries.values())
+      if (entry.environmentId === environmentId) return true;
     return false;
   }
 

@@ -34,10 +34,18 @@ function shellRow(state: "pending" | "success", output: string, id = "toolu_1") 
   };
 }
 
-function monitor(read: () => { messages?: unknown; backgroundTasks?: unknown } | null, files = new Map<string, string>()) {
+function monitor(
+  read: () => { messages?: unknown; backgroundTasks?: unknown } | null,
+  files = new Map<string, string>(),
+) {
   const prompts = new HumanPromptRegistry();
   let sessions: MonitoredSession[] = [
-    { environmentId: "env", agent: "codex", logicalSessionKey: "env-env:startup-agent", local: true },
+    {
+      environmentId: "env",
+      agent: "codex",
+      logicalSessionKey: "env-env:startup-agent",
+      local: true,
+    },
   ];
   const instance = new AgentHumanPromptMonitor({
     prompts,
@@ -93,13 +101,18 @@ describe("agent shell output that needs the user", () => {
           type: "tool-invocation",
           toolName: "Bash",
           toolUseId: "toolu_bg",
-          toolArgs: { command: "npm login --auth-type=web > /tmp/npm-login.log 2>&1", run_in_background: true },
+          toolArgs: {
+            command: "npm login --auth-type=web > /tmp/npm-login.log 2>&1",
+            run_in_background: true,
+          },
           toolState: "success",
           toolOutput: `Command running in background with ID: b22y6b1by. Output is being written to: ${TASK_FILE}. You will be notified when it completes.`,
         },
       ],
     };
-    let tasks: unknown[] = [{ id: "b22y6b1by", status: "running", kind: "shell", toolUseId: "toolu_bg" }];
+    let tasks: unknown[] = [
+      { id: "b22y6b1by", status: "running", kind: "shell", toolUseId: "toolu_bg" },
+    ];
     let messages: unknown[] = [launch];
     const { prompts, instance } = monitor(() => ({ messages, backgroundTasks: tasks }), files);
     await instance.tick();
@@ -121,7 +134,9 @@ describe("agent shell output that needs the user", () => {
   });
 
   test("a tab that stops working has nothing waiting any more", async () => {
-    const { prompts, instance, stopWorking } = monitor(() => ({ messages: [shellRow("pending", GH_DEVICE)] }));
+    const { prompts, instance, stopWorking } = monitor(() => ({
+      messages: [shellRow("pending", GH_DEVICE)],
+    }));
     await instance.tick();
     expect(prompts.list()).toHaveLength(1);
     stopWorking();
@@ -136,7 +151,15 @@ describe("agent shell output that needs the user", () => {
       runningShellSources([
         {
           role: "assistant",
-          parts: [{ type: "tool-invocation", toolName: "Read", toolUseId: "r", toolState: "pending", toolOutput: GH_DEVICE }],
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "Read",
+              toolUseId: "r",
+              toolState: "pending",
+              toolOutput: GH_DEVICE,
+            },
+          ],
         },
       ]),
     ).toEqual([]);
@@ -162,7 +185,10 @@ describe("task output files", () => {
       runningTaskOutputFiles([], [{ id: "t", status: "running", outputFile: "/etc/passwd" }]),
     ).toEqual([]);
     expect(
-      runningTaskOutputFiles([], [{ id: "t", status: "running", kind: "agent", outputFile: TASK_FILE }]),
+      runningTaskOutputFiles(
+        [],
+        [{ id: "t", status: "running", kind: "agent", outputFile: TASK_FILE }],
+      ),
     ).toEqual([]);
   });
 

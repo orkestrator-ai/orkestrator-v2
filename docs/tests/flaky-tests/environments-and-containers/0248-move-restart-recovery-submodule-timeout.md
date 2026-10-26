@@ -374,3 +374,11 @@ timeout, skip or environment-move implementation changed.
 - **Owning-file rerun:** `mise exec -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (37 pass, 0 fail).
 - **Evidence:** `orkestrator-test-run.fcOpb4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.
+
+## Live terminal cleanup validation recurrence — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name terminal-signal-repository -- mise run test`, Bun 1.4.4, standard worker leases. Workspace admission waited 132.8 seconds for shared host capacity. The change only edits the live terminal E2E spec; the move implementation and its tests are unchanged.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline (5043.76 ms), followed by a Git subprocess error between tests (`could not read IPC response`, unavailable config blob and submodule mapping).
+- **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 32.0 seconds.
+- **Evidence:** `orkestrator-test-run.zbtDAc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; enclosing log `orkestrator-test-run.3FhzyC/terminal-signal-repository.log.gz`. Backend 11197 passed, 95 skipped, two failed and one between-test error across 655 files (367.97 s). The other failure is [0091](0091-startworktreewatcher-observes-a-real-file-write.md); all other groups and workspace packages passed. The aggregate exited 1 after 549.1 seconds.
+- **Changes:** recorded recurrence only; no move code, assertions, deadlines or skips changed. The original aggregate remains failed.

@@ -10,12 +10,14 @@ import { getPluginsForSdk } from "../../../../../bridges/claude-bridge/src/servi
 import { createFixture, targetIdFor, type Fixture } from "./test-support.js";
 
 /**
- * The editor lists exactly the plugins the Claude bridge passes to the CLI.
- * Both build the set through `@orkestrator/protocol/node/claude-plugin-set`;
- * this runs the bridge's own `getPluginsForSdk` and the catalogue over the
- * same files, with project resources on and off, so neither side's reads can
- * drift. Whether the CLI then loads each plugin is proven against the pinned
- * CLI by `apps/backend/tests/claude-plugin-mcp-live.test.ts`.
+ * The editor lists exactly the plugins the Claude bridge passes to the CLI,
+ * plus the installs it leaves out because Claude Code's settings turn them
+ * off, which it lists disabled with that reason. Both build the set through
+ * `@orkestrator/protocol/node/claude-plugin-set`; this runs the bridge's own
+ * `getPluginsForSdk` and the catalogue over the same files, with project
+ * resources on and off, so neither side's reads can drift. Whether the CLI
+ * then loads each plugin is proven against the pinned CLI by
+ * `apps/backend/tests/claude-plugin-mcp-live.test.ts`.
  */
 
 let fixture: Fixture;
@@ -62,8 +64,47 @@ const FIXTURES: ParityFixture[] = [
           ],
         },
       },
+      "home/.claude/settings.json": { enabledPlugins: { "a@m": true, "b@m": true } },
       ...plugin("home/.claude/plugins/cache/m/a/1.0.0", "a"),
       ...plugin("home/.claude/plugins/cache/m/b/1.0.0", "b"),
+    },
+  },
+  {
+    name: "installs Claude Code's settings turn off, or never enable, are not passed",
+    files: {
+      "home/.claude/plugins/installed_plugins.json": {
+        version: 2,
+        plugins: {
+          "on@m": [{ installPath: "/Users/someone/.claude/plugins/cache/m/on/1.0.0" }],
+          "off@m": [{ installPath: "/Users/someone/.claude/plugins/cache/m/off/1.0.0" }],
+          "unnamed@m": [{ installPath: "/Users/someone/.claude/plugins/cache/m/unnamed/1.0.0" }],
+          "project-off@m": [
+            { installPath: "/Users/someone/.claude/plugins/cache/m/project-off/1.0.0" },
+          ],
+          "project-on@m": [
+            { installPath: "/Users/someone/.claude/plugins/cache/m/project-on/1.0.0" },
+          ],
+        },
+      },
+      "home/.claude/settings.json": {
+        enabledPlugins: {
+          "on@m": true,
+          "off@m": false,
+          // The @inline id does not enable an install.
+          "unnamed@inline": true,
+          "project-off@m": true,
+        },
+      },
+      "worktree/.claude/settings.json": {
+        enabledPlugins: { "project-off@m": false, "project-on@m": true },
+      },
+      // Only "Include local settings" loads these; the default session does not.
+      "worktree/.claude/settings.local.json": { enabledPlugins: { "on@m": false } },
+      ...plugin("home/.claude/plugins/cache/m/on/1.0.0", "on"),
+      ...plugin("home/.claude/plugins/cache/m/off/1.0.0", "off"),
+      ...plugin("home/.claude/plugins/cache/m/unnamed/1.0.0", "unnamed"),
+      ...plugin("home/.claude/plugins/cache/m/project-off/1.0.0", "project-off"),
+      ...plugin("home/.claude/plugins/cache/m/project-on/1.0.0", "project-on"),
     },
   },
   {
@@ -108,6 +149,7 @@ const FIXTURES: ParityFixture[] = [
       "home/.claude/plugins/installed_plugins.json": {
         plugins: { "quiet@m": [{ installPath: "{HOME}/quiet" }] },
       },
+      "home/.claude/settings.json": { enabledPlugins: { "quiet@m": true } },
       "home/quiet/README.md": "no servers",
     },
   },
@@ -133,7 +175,12 @@ function materialise(files: ParityFixture["files"]): void {
 
 /** What the bridge passes, limited to plugins that declare servers. */
 async function bridgePlugins(projectResources: boolean): Promise<string[]> {
-  const plugins = await getPluginsForSdk(fixture.worktree, projectResources);
+  // The settings sources a default session loads (`claudeSettingSources`).
+  const plugins = await getPluginsForSdk(
+    fixture.worktree,
+    projectResources,
+    projectResources ? ["user", "project"] : ["user"],
+  );
   return plugins
     .map((entry) => entry.path)
     .filter(
@@ -143,7 +190,10 @@ async function bridgePlugins(projectResources: boolean): Promise<string[]> {
     );
 }
 
-/** The plugin folders the catalogue lists, in order, from its display paths. */
+/** Installs the editor lists only to say Orkestrator leaves them out. */
+const NOT_PASSED = "so Orkestrator does not pass this installed plugin";
+
+/** The plugin folders the catalogue lists as passed, in order, from its display paths. */
 async function cataloguePlugins(): Promise<string[]> {
   const snapshot = await fixture.service.snapshot({
     targetId: await targetIdFor(fixture, "claude", "environment"),
@@ -151,6 +201,8 @@ async function cataloguePlugins(): Promise<string[]> {
   const dirs: string[] = [];
   for (const source of snapshot.sources) {
     if (source.scope !== "plugin") continue;
+    const rows = snapshot.definitions.filter((row) => row.sourceId === source.sourceId);
+    if (rows.length && rows.every((row) => row.statusReason?.includes(NOT_PASSED))) continue;
     const shown = source.displayPath
       .replace(/^~/, fixture.home)
       .replace(/^<worktree>/, fixture.worktree);
@@ -182,6 +234,19 @@ describe("the catalogue lists exactly the plugins the Claude bridge passes", () 
       snapshot.sources.find((source) => source.sourceId === "claude:plugin-discovery")!.note,
     ).toContain("Global and project plugin layers may be missing");
     expect(snapshot.freshness).toBe("incomplete");
+  });
+
+  test("installs pass by Claude Code's own settings, in the layers sessions load", async () => {
+    materialise(FIXTURES.find((config) => config.name.startsWith("installs Claude Code"))!.files);
+    const cache = (name: string) =>
+      path.join(fixture.home, ".claude/plugins/cache/m", name, "1.0.0");
+    expect(await bridgePlugins(false)).toEqual([cache("on"), cache("project-off")]);
+    expect(await bridgePlugins(true)).toEqual([cache("on"), cache("project-on")]);
+    // "Include local settings" adds the local layer, which turns "on" off.
+    const withLocal = await getPluginsForSdk(fixture.worktree, true, ["user", "project", "local"]);
+    expect(withLocal.map((entry) => entry.path)).toEqual([cache("project-on")]);
+    // A coordinator loads no settings, so no install is passed.
+    expect(await getPluginsForSdk(fixture.worktree, true, [])).toEqual([]);
   });
 
   for (const config of FIXTURES) {

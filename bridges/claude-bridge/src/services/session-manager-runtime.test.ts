@@ -7,6 +7,7 @@ import {
   captureEvents,
   createSession,
   getSession,
+  mockGetPluginsForSdk,
   nextQueryCall,
   pushSuccessfulContinuationResult,
   queryControlOverrides,
@@ -324,6 +325,30 @@ describe("one CLI per session", () => {
     expect((await input.next()).done).toBe(false);
     await firstPrompt;
     await expectNoSecondProcess();
+    finish(call);
+    await secondPrompt;
+  });
+
+  test("a follow-up that leaves local settings unsaid builds its plugin set from the running CLI's settings sources", async () => {
+    const { session, call, input, firstPrompt } = await releaseWithBackgroundWork(
+      "inherit plugins",
+      "agent-bg",
+      { includeLocalSettings: true },
+    );
+    const cwd = process.env.CWD || process.cwd();
+    // The launch read installs' enablement from the local layer too.
+    expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(cwd, true, ["user", "project", "local"]);
+    mockGetPluginsForSdk.mockClear();
+    const secondPrompt = sendPrompt(session.id, "mail from another agent", {
+      includeLocalSettings: undefined,
+    });
+    expect((await input.next()).done).toBe(false);
+    await firstPrompt;
+    await expectNoSecondProcess();
+    // Joining inherits the local layer, so the plugin set is the one it runs.
+    expect(mockGetPluginsForSdk).toHaveBeenCalled();
+    for (const args of mockGetPluginsForSdk.mock.calls)
+      expect(args).toEqual([cwd, true, ["user", "project", "local"]]);
     finish(call);
     await secondPrompt;
   });

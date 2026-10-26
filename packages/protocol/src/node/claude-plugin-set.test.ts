@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  CLAUDE_CONTAINER_ENABLED_PLUGINS_MAX,
+  claudeContainerPluginSettings,
   claudeInlinePluginEnablement,
   claudeInstalledPluginEnablement,
+  claudeInstalledPluginIdEnablement,
   claudePluginConfigList,
   claudePluginMcpDeclarations,
   claudePluginName,
   claudePluginServerName,
+  claudePluginSettingSources,
+  enabledInstalledPlugins,
   mergeClaudePluginLayers,
   remapInstalledPlugins,
 } from "./claude-plugin-set";
@@ -38,11 +43,87 @@ describe("the bridge's plugin set", () => {
         (installPath) => unsafe.push(installPath),
       ),
     ).toEqual([
-      { type: "local", path: `${HOME}/.claude/plugins/cache/m/a/1.0.0` },
-      { type: "local", path: "/opt/c" },
+      { type: "local", path: `${HOME}/.claude/plugins/cache/m/a/1.0.0`, installedId: "a@m" },
+      { type: "local", path: "/opt/c", installedId: "c@m" },
     ]);
     expect(unsafe).toEqual(["/x/.claude/plugins/../../../etc"]);
     expect(remapInstalledPlugins(`${HOME}/.claude/plugins`, { plugins: [] })).toEqual([]);
+  });
+
+  test("passes an install only when the first loaded layer naming its exact id sets it to true", () => {
+    const installs = [
+      { type: "local" as const, path: "/on", installedId: "on@m" },
+      { type: "local" as const, path: "/off", installedId: "off@m" },
+      { type: "local" as const, path: "/unnamed", installedId: "unnamed@m" },
+      { type: "local" as const, path: "/project-off", installedId: "po@m" },
+      { type: "local" as const, path: "/local-on", installedId: "lo@m" },
+      // The plugins folder scan records no id: kept.
+      { type: "local" as const, path: "/scanned" },
+    ];
+    const settings = {
+      user: {
+        enabledPlugins: {
+          "on@m": true,
+          "off@m": false,
+          "po@m": true,
+          // Case and the @inline id do not name the install.
+          "UNNAMED@m": true,
+          "unnamed@inline": true,
+        },
+      },
+      project: { enabledPlugins: { "po@m": false } },
+      local: { enabledPlugins: { "lo@m": true } },
+    };
+    const paths = (sources: Parameters<typeof enabledInstalledPlugins>[2]) =>
+      enabledInstalledPlugins(installs, settings, sources).map((plugin) => plugin.path);
+    expect(paths(["user"])).toEqual(["/on", "/project-off", "/scanned"]);
+    expect(paths(["project", "user"])).toEqual(["/on", "/scanned"]);
+    expect(paths(["local", "project", "user"])).toEqual(["/on", "/local-on", "/scanned"]);
+    // A coordinator loads no settings: only the scan's plugins remain.
+    expect(paths([])).toEqual(["/scanned"]);
+    expect(claudeInstalledPluginIdEnablement("po@m", settings, ["project", "user"])).toEqual({
+      enabled: false,
+      decidedBy: { source: "project", key: "po@m" },
+    });
+    expect(claudeInstalledPluginIdEnablement("unnamed@m", settings, ["user"])).toEqual({
+      enabled: false,
+    });
+    // Any value but true is off once a layer names the id.
+    expect(
+      claudeInstalledPluginIdEnablement("x@m", { user: { enabledPlugins: { "x@m": "yes" } } }, [
+        "user",
+      ]),
+    ).toEqual({ enabled: false, decidedBy: { source: "user", key: "x@m" } });
+  });
+
+  test("a container sees only the boolean, bounded plugin enablement of the host's settings", () => {
+    const text =
+      '{"env":{"SECRET":"s"},"hooks":{"Stop":[]},' +
+      '"enabledPlugins":{"a@m":true,"b@m":false,"c@m":"yes","":true,"__proto__":true}}';
+    // JSON.parse keeps `__proto__` as an own key; it must survive as one.
+    expect(JSON.parse(claudeContainerPluginSettings(text)!)).toEqual(
+      JSON.parse('{"enabledPlugins":{"a@m":true,"b@m":false,"__proto__":true}}'),
+    );
+    expect(claudeContainerPluginSettings('{"enabledPlugins":{"x@m":1}}')).toBeUndefined();
+    expect(claudeContainerPluginSettings('{"env":{}}')).toBeUndefined();
+    expect(claudeContainerPluginSettings("[1]")).toBeUndefined();
+    expect(claudeContainerPluginSettings("{ broken")).toBeUndefined();
+    const many = Object.fromEntries(
+      Array.from({ length: CLAUDE_CONTAINER_ENABLED_PLUGINS_MAX + 5 }, (_, i) => [`p${i}@m`, true]),
+    );
+    const kept = JSON.parse(
+      claudeContainerPluginSettings(JSON.stringify({ enabledPlugins: many }))!,
+    );
+    expect(Object.keys(kept.enabledPlugins)).toHaveLength(CLAUDE_CONTAINER_ENABLED_PLUGINS_MAX);
+  });
+
+  test("maps the SDK's settingSources onto the layers that carry enabledPlugins", () => {
+    expect(claudePluginSettingSources(["user", "project"])).toEqual(["project", "user"]);
+    expect(claudePluginSettingSources(["local", "user", "flagSettings"])).toEqual([
+      "local",
+      "user",
+    ]);
+    expect(claudePluginSettingSources([])).toEqual([]);
   });
 
   test("merges global < installed < project layers, first position wins, project only when loaded", () => {

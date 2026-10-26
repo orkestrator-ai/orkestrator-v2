@@ -24,6 +24,7 @@ import {
   restrictPiAuthSnapshot,
   type LoginSnapshot,
 } from "@orkestrator/protocol/login-snapshots";
+import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude-plugin-set";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 
 /**
@@ -79,6 +80,11 @@ export interface InputSource {
   root: string | null;
   files?: readonly string[];
   directories?: readonly { path: string; mode: DirectoryMode; exclude?: readonly string[] }[];
+  /**
+   * Files of `files` staged only through a filter, which returns what a
+   * container may see of them, or undefined to withhold the file.
+   */
+  filteredFiles?: Readonly<Record<string, (text: string) => string | undefined>>;
   /**
    * One of `files` that holds a login with a single-use or rotating refresh
    * token. It is staged through `restrict` (see
@@ -182,10 +188,15 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           files: [
             "CLAUDE.md",
             "settings.local.json",
+            "settings.json",
             ...(claudeAccountHome || roots.includeClaudeCredentials === false
               ? []
               : [".credentials.json"]),
           ],
+          // Only Claude Code's plugin enablement: the entrypoint merges it into
+          // the container's own settings, so the bridge passes, and the CLI
+          // loads, the installs the host has turned on.
+          filteredFiles: { "settings.json": claudeContainerPluginSettings },
           directories: [
             { path: "commands", mode: "entries" },
             { path: "agents", mode: "entries" },
@@ -539,13 +550,18 @@ class ProviderCopier {
   }
 
   adjustLogin(adjustment: LoginAdjustment, quiet = false): void {
+    this.adjustFiltered(adjustment);
+    if (adjustment.withheld && !quiet) this.skip("login-withheld");
+    if (adjustment.dropped) this.skip("login-withheld", adjustment.dropped);
+  }
+
+  /** Account for a staged file a filter rewrote or withheld. */
+  adjustFiltered(adjustment: LoginAdjustment): void {
     const files = adjustment.withheld ? -1 : 0;
     const bytes = adjustment.bytes - adjustment.originalBytes;
     this.summary.files += files;
     this.summary.bytes += bytes;
     this.total.take(files, bytes);
-    if (adjustment.withheld && !quiet) this.skip("login-withheld");
-    if (adjustment.dropped) this.skip("login-withheld", adjustment.dropped);
   }
 
   private record(files: number, bytes: number): void {
@@ -723,6 +739,18 @@ export async function stagePortableInputs(
         const stageRoot = path.join(partial, source.stage);
         for (const file of source.files ?? []) {
           await copier.file(root, file, stageRoot);
+          const filter = source.filteredFiles?.[file];
+          if (filter) {
+            const adjustment = await restrictStagedLogin(
+              path.join(stageRoot, file),
+              (text) => {
+                const filtered = filter(text);
+                return filtered === undefined ? { withheld: "filtered out" } : { text: filtered };
+              },
+              now,
+            );
+            if (adjustment) copier.adjustFiltered(adjustment);
+          }
           if (source.accessOnlyLogin?.file === file) {
             const adjustment = await restrictStagedLogin(
               path.join(stageRoot, file),
@@ -804,8 +832,9 @@ interface LoginAdjustment {
 }
 
 /**
- * Rewrite a just-staged login file access-only, or remove it, returning the
- * accounting adjustment. An absent file was never counted and needs no adjustment.
+ * Rewrite a just-staged file through `restrict` (a login made access-only, or
+ * a filtered file), or remove it, returning the accounting adjustment. An
+ * absent file was never counted and needs no adjustment.
  */
 async function restrictStagedLogin(
   file: string,

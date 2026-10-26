@@ -203,6 +203,27 @@ export function claudeLaunchedProfile(
 }
 
 /**
+ * The settings sources whose `enabledPlugins` decide this turn's plugin set
+ * (`getPluginsForSdk`): the ones the prompt asks for; else, when it leaves
+ * them unsaid and could join the running CLI, the ones that CLI was launched
+ * with, since a joining turn inherits them; else a new launch's default.
+ */
+export function claudeTurnSettingSources(
+  session: SessionState,
+  options: PromptOptions | undefined,
+): string[] {
+  const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
+  const running = openClaudeRuntime(session);
+  if (
+    options?.includeLocalSettings === undefined &&
+    running?.launch.settingSources !== undefined &&
+    !claudeLaunchConflict(running.launch, claudeLaunchProfile(session, options))
+  )
+    return JSON.parse(running.launch.settingSources) as string[];
+  return claudeSettingSources(policy, options?.includeLocalSettings);
+}
+
+/**
  * Refuse a prompt the session's running process cannot take.
  *
  * Launch-only settings cannot change on a live CLI, and starting a second one
@@ -244,7 +265,11 @@ export async function assertClaudeRuntimeAccepts(
   if (!resources) {
     const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
     const [plugins, environment] = await Promise.all([
-      getPluginsForSdk(request.cwd, policy?.projectResources !== false),
+      getPluginsForSdk(
+        request.cwd,
+        policy?.projectResources !== false,
+        claudeTurnSettingSources(session, options),
+      ),
       runtimeEnvironmentForAgentQuery(),
     ]);
     resources = claudeLaunchResourceProfile(plugins, environment);

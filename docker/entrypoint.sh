@@ -677,9 +677,10 @@ if [ -d /claude-config ]; then
     # Allowlist the portable inputs instead.
     #
     # settings.json is deliberately absent: this script overwrites it below with
-    # the container's own bypass-permissions settings, so copying it was work
-    # that was immediately discarded. .credentials.json is handled by the
-    # dedicated credential block that follows, which also chmods it.
+    # the container's own bypass-permissions settings, and merges in only the
+    # host's plugin enablement (staged filtered to `enabledPlugins`).
+    # .credentials.json is handled by the dedicated credential block that
+    # follows, which also chmods it.
     log_progress "  Copying essential config files..."
 
     for file in \
@@ -798,6 +799,28 @@ cat > "$HOME/.claude/settings.json" << 'EOF'
 EOF
 chmod 600 "$HOME/.claude/settings.json"
 log_progress "Created ~/.claude/settings.json with bypass permissions"
+
+# Claude Code's plugin enablement from the host's user settings. The backend
+# stages nothing else of that file (`claudeContainerPluginSettings`), and only
+# boolean `enabledPlugins` entries are taken here. The Claude bridge passes an
+# installed plugin only when these enable its `<name>@<marketplace>` id, and
+# the CLI reads the same keys, so a plugin turned off in Claude Code on the
+# host stays off in this container.
+if [ -f /claude-config/settings.json ] && [ ! -L /claude-config/settings.json ]; then
+    CLAUDE_SETTINGS_MERGED="$(mktemp)"
+    if jq --slurpfile host /claude-config/settings.json \
+        '($host[0].enabledPlugins // null) as $plugins
+         | if ($plugins | type) == "object"
+           then .enabledPlugins = ($plugins | with_entries(select(.value | type == "boolean")))
+           else . end' \
+        "$HOME/.claude/settings.json" > "$CLAUDE_SETTINGS_MERGED" 2>/dev/null; then
+        cat "$CLAUDE_SETTINGS_MERGED" > "$HOME/.claude/settings.json"
+        log_progress "Copied Claude plugin enablement from host settings"
+    else
+        echo "Host Claude plugin enablement could not be read; installed plugins stay off" >&2
+    fi
+    rm -f "$CLAUDE_SETTINGS_MERGED"
+fi
 
 # Copy and filter ~/.claude.json if mounted
 # Remove githubRepoPaths and projects as they contain host-specific paths

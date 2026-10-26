@@ -52,6 +52,7 @@ import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.j
 import {
   claudeLiveSettings,
   type ClaudeRuntimeTurn,
+  claudeTurnSettingSources,
   effectiveClaudeContext1m,
 } from "./session-manager-runtime.js";
 import { requestsUltracode } from "./ultracode.js";
@@ -109,7 +110,8 @@ export async function resolveQueryPlan(
   const [{ servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision }, plugins] =
     await Promise.all([
       getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
-      getPluginsForSdk(cwd, includeProjectResources),
+      // Installs pass only when the settings this CLI reads enable them.
+      getPluginsForSdk(cwd, includeProjectResources, claudeTurnSettingSources(session, options)),
     ]);
   turn.mcpServerNames = mcpServerNames;
 

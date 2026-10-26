@@ -72,3 +72,11 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.5 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.
+
+## Claude Linux sandbox probe (todo 0145) — 2026-10-26
+
+- **Original command:** `mise run test` on macOS, Bun 1.4.4, branch `todo-0145-claude-linux-sandbox-39a58b878dd6` (head `4c54d788e`), with other worktrees validating on the host (load average about 21).
+- **Failure:** `move_environment > moves a worktree with nested submodules (copy)` exceeded its five-second deadline (5201.28 ms), alongside 0950 and 0951 in the same run.
+- **Complete unchanged owner:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1` passed (37 pass, 0 fail).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pHWGe9`.
+- **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed.

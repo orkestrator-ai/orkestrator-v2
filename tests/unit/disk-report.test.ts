@@ -7,13 +7,21 @@ import path from "node:path";
 
 import {
   claudeProjectDirectoryName,
+  environmentCleanupLedgerRow,
   formatBytes,
   formatReport,
   legacyTurboArtifacts,
   previewPartitionRows,
   readEnvironments,
 } from "../../scripts/disk-report";
+import {
+  closeEnvironmentCleanupStorage,
+  environmentCleanupLedger,
+  MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
+  type EnvironmentCleanupEntry,
+} from "../../apps/backend/src/core/environment-cleanup-ledger";
 import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
+import { defaultRuntimeProfileRoots } from "../../packages/protocol/src/node/runtime-profile-status";
 
 let root: string;
 
@@ -22,8 +30,53 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  closeEnvironmentCleanupStorage();
   await rm(root, { recursive: true, force: true });
 });
+
+function ledgerEntry(
+  environmentId: string,
+  overrides: Partial<EnvironmentCleanupEntry> = {},
+): EnvironmentCleanupEntry {
+  return {
+    version: 1,
+    environmentId,
+    recordedAt: "2026-10-01T00:00:00.000Z",
+    projectPath: "/project",
+    worktreePath: `/workspaces/project-${environmentId}`,
+    branch: environmentId,
+    prMerged: false,
+    createdFromCommit: null,
+    baseBranches: [],
+    containerId: null,
+    retainedContainers: [],
+    volumes: [],
+    stateDirectories: [],
+    pending: ["worktree", "branch"],
+    attempts: 0,
+    lastAttemptAt: null,
+    lastError: null,
+    ...overrides,
+  };
+}
+
+/**
+ * Records an entry through the real ledger and fails it `passes` times, the
+ * way the reconciler does, so the report reads what the backend wrote.
+ */
+async function seedFailingCleanup(
+  dataDir: string,
+  entry: EnvironmentCleanupEntry,
+  passes: number,
+  error: { step: EnvironmentCleanupEntry["pending"][number]; code: string } | null,
+): Promise<void> {
+  const ledger = environmentCleanupLedger(dataDir);
+  await ledger.record(entry);
+  for (let pass = 0; pass < passes; pass += 1) {
+    await ledger.noteAttempt(entry.environmentId, new Date("2026-10-01T01:00:00.000Z"));
+    if (error) await ledger.fail(entry.environmentId, error.step, error.code);
+  }
+}
 
 describe("disk report", () => {
   test("reports an isolated checkout and only fixes named legacy Turbo artifacts", async () => {
@@ -46,9 +99,22 @@ describe("disk report", () => {
         env: {
           ...process.env,
           HOME: root,
+          XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),
         },
       });
+    // The data directory the script resolves for this HOME, never the host's.
+    const dataDir = defaultRuntimeProfileRoots(
+      process.platform,
+      { XDG_CONFIG_HOME: path.join(root, ".config") },
+      root,
+    ).productionDataDir;
+    await mkdir(dataDir, { recursive: true });
+    await seedFailingCleanup(dataDir, ledgerEntry("env-stuck"), MAX_ENVIRONMENT_CLEANUP_ATTEMPTS, {
+      step: "worktree",
+      code: "EACCES",
+    });
+    closeEnvironmentCleanupStorage();
 
     const report = invoke("--json");
     expect(report.status).toBe(0);
@@ -57,6 +123,11 @@ describe("disk report", () => {
       "1 files",
     );
     expect(rows.some((row) => row.location === `${checkout} environment branches`)).toBe(true);
+    expect(
+      rows.find((row) => row.location === `${dataDir} environment cleanup ledger`)?.orphaned,
+    ).toBe(
+      "1 stopped retrying, 0 retrying (pending: worktree 1, branch 1; last errors: worktree: EACCES)",
+    );
     expect(existsSync(legacy)).toBe(true);
 
     const fixed = invoke("--fix", "legacy-turbo");
@@ -64,6 +135,71 @@ describe("disk report", () => {
     expect(fixed.stdout).toContain("Removed 1 legacy Turbo artifacts");
     expect(existsSync(legacy)).toBe(false);
     expect(existsSync(active)).toBe(true);
+  });
+
+  test("reports cleanup the reconciler stopped retrying, never a live environment's", async () => {
+    const dataDir = path.join(root, "data");
+    await mkdir(dataDir);
+    // No database yet: nothing to report, and the report creates none.
+    expect(environmentCleanupLedgerRow(dataDir, new Set()).orphaned).toBe(
+      "0 stopped retrying, 0 retrying",
+    );
+    expect(existsSync(path.join(dataDir, "orkestrator.sqlite"))).toBe(false);
+
+    const cap = MAX_ENVIRONMENT_CLEANUP_ATTEMPTS;
+    await seedFailingCleanup(dataDir, ledgerEntry("env-stuck-a"), cap, {
+      step: "worktree",
+      code: "EACCES",
+    });
+    await seedFailingCleanup(
+      dataDir,
+      ledgerEntry("env-stuck-b", { pending: ["container", "volumes"] }),
+      cap + 1,
+      { step: "container", code: "exit 125" },
+    );
+    await seedFailingCleanup(dataDir, ledgerEntry("env-retrying"), cap - 1, {
+      step: "worktree",
+      code: "EBUSY",
+    });
+    // Its record still exists, so interrupted-deletion recovery owns it.
+    await seedFailingCleanup(dataDir, ledgerEntry("env-live"), cap, {
+      step: "branch",
+      code: "exit 1",
+    });
+    closeEnvironmentCleanupStorage();
+
+    const row = environmentCleanupLedgerRow(dataDir, new Set(["env-live"]));
+    expect(row).toEqual({
+      location: `${dataDir} environment cleanup ledger`,
+      bytes: null,
+      orphaned:
+        "2 stopped retrying, 1 retrying (pending: container 1, volumes 1, worktree 1, branch 1; last errors: worktree: EACCES, container: exit 125)",
+      owner: `Orkestrator (stops after ${cap} attempts)`,
+      cleanup:
+        "remove what the deletion of env-stuck-a, env-stuck-b left behind by hand; see docs/development/disk-usage.md",
+    });
+    expect(JSON.stringify(row)).not.toContain("/workspaces/");
+  });
+
+  test("names the first stuck deletions and counts the rest", async () => {
+    const dataDir = path.join(root, "data");
+    await mkdir(dataDir);
+    for (let index = 0; index < 5; index += 1) {
+      await seedFailingCleanup(
+        dataDir,
+        ledgerEntry(`env-${index}`, { recordedAt: `2026-10-0${index + 1}T00:00:00.000Z` }),
+        MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
+        index === 0 ? null : { step: "worktree", code: `E${index}` },
+      );
+    }
+    closeEnvironmentCleanupStorage();
+    const row = environmentCleanupLedgerRow(dataDir, new Set());
+    expect(row.orphaned).toBe(
+      "5 stopped retrying, 0 retrying (pending: worktree 5, branch 5; last errors: worktree: E1, worktree: E2, worktree: E3 +1 more)",
+    );
+    expect(row.cleanup).toStartWith(
+      "remove what the deletion of env-0, env-1, env-2 (+2 more) left behind by hand",
+    );
   });
 
   test("reads environments from the backend database without migrating a JSON data dir", async () => {

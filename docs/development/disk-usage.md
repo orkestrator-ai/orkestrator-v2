@@ -17,6 +17,22 @@ mise run disk:report -- --json
 The report is read-only. It needs no root access, so Docker's own directory is
 measured through `docker system df` rather than walked.
 
+The `environment cleanup ledger` row counts deletions whose cleanup is still
+owed: `retrying` entries are retried with backoff, and `stopped retrying`
+entries reached `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS` (8) and are kept for
+inspection. For those it lists the pending steps, the redacted last errors (a
+step and an error code) and the first environment ids. Entries whose
+environment record still exists are left to interrupted-deletion recovery and
+not counted. To clear a stuck entry, remove what that environment's deletion
+left behind by hand: the pending steps say which of its worktree, branch
+(only once you have checked it is merged), container, volumes, network or
+bridge state directories remain. The backend log names the environment once
+per start (`Cleanup for deleted environment ... is still failing`). The entry
+itself is not retried again, and nothing removes it, so it stays in this row
+after you have cleaned up by hand (whether to retry or clear such entries is an
+open question in todo 0023); see
+[environment-deletion.md](../architecture/environment-deletion.md#reconciler).
+
 In the app, **Settings > Disk usage** lists every environment's size: its
 worktree (largest top-level entries) or its container (writable layer,
 recovery copies and storage volumes; the shared image is not counted), plus
@@ -96,6 +112,7 @@ ignored files. The project home cannot be moved.
 | `<main checkout>/.turbo/cache` (shared by every worktree) | Turborepo, `cacheMaxAge` 7 days and `cacheMaxSize` 10 GB in `turbo.json` | Start of each `turbo run` |
 | `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start | Stopped profiles whose checkout no longer exists |
 | Worktrees a dev profile registered in an outside repository | `dev:reset`, `dev:prune`, start-up pruning | With the profile; branches only when merged |
+| A profile's macOS `safeStorage` key, the login Keychain item `<electronTitle> Safe Storage` | `dev:reset`, `dev:prune`, start-up pruning | After the profile state is gone; only the title `dev:test` gives that profile id |
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
 | Per-environment bridge state, worktrees, local branches, containers, volumes and networks | Environment deletion and its reconciler | At deletion; failed steps retried with backoff. See [environment-deletion.md](../architecture/environment-deletion.md) |
 | Orphaned bridge state, empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend orphan sweeps | At start-up and hourly; branches at most daily per project |

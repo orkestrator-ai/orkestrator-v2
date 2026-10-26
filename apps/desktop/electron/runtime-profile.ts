@@ -165,10 +165,18 @@ export function resolveRuntimeProfile(options: {
     rendererPort: options.rendererPort ?? 0,
     gatewayHost: "127.0.0.1",
     gatewayPort: options.gatewayPort ?? 0,
-    electronTitle: `${PRODUCT_NAME} — DEV [${id}]`,
+    electronTitle: runtimeProfileElectronTitle(id),
     credentialSources: [...new Set(options.credentialSources ?? [])],
     agentPlatforms: [...new Set(options.agentPlatforms ?? [])],
   });
+}
+
+/**
+ * The window title and Electron app name of a development or agent-test
+ * profile. On macOS it also names the profile's `safeStorage` Keychain item.
+ */
+export function runtimeProfileElectronTitle(id: string): string {
+  return `${PRODUCT_NAME} — DEV [${id}]`;
 }
 
 function isRuntimeFlavor(value: unknown): value is RuntimeFlavor {

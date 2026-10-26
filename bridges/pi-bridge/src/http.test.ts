@@ -48,6 +48,15 @@ const { requestToolApproval, resolveApproval } = await import("./interactions.js
 const { approvalTimeoutMs } = await import("./config.js");
 
 let origin: string;
+// Directories handed to code under test that keeps them open past the test
+// body (an MCP agent directory); removed once the server has shut down.
+const temporaryDirectories: string[] = [];
+
+async function ownedTempDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  temporaryDirectories.push(directory);
+  return directory;
+}
 
 beforeAll(async () => {
   // Explicitly ephemeral rather than relying on `PORT` above: another suite in
@@ -60,6 +69,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await shutdown();
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 async function call(
@@ -433,7 +447,7 @@ describe("successful lifecycle routes", () => {
       expect(await empty.json()).toEqual({ servers: [] });
 
       await preparePiMcp(state, {
-        agentDir: await mkdtemp(join(tmpdir(), "pi-http-mcp-")),
+        agentDir: await ownedTempDirectory("pi-http-mcp-"),
         cwd: process.cwd(),
         env: {},
       });
@@ -519,7 +533,7 @@ describe("successful lifecycle routes", () => {
     const state = seedSession();
     state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "token-a" };
     await preparePiMcp(state, {
-      agentDir: await mkdtemp(join(tmpdir(), "pi-http-rotate-")),
+      agentDir: await ownedTempDirectory("pi-http-rotate-"),
       cwd: process.cwd(),
       env: {},
     });

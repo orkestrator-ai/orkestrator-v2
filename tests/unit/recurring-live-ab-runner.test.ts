@@ -397,6 +397,46 @@ describe("live benchmark lifecycle", () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
+  test("removes the CLI config directory both runners share once the profile is stopped", async () => {
+    const configDirs: string[] = [];
+    let existedDuringRun = false;
+    const h = harness({
+      cliRunner: ((_profile: string, configDir: string) => {
+        configDirs.push(configDir);
+        existedDuringRun = existsSync(configDir);
+        return () => undefined;
+      }) as never,
+      measureFreshness: mock(async () => []),
+      asyncCliRunner: ((_profile: string, configDir: string) => {
+        configDirs.push(configDir);
+        return async () => ({ status: 0, stdout: "{}" });
+      }) as never,
+      measureSoak: mock(async () => ({
+        cyclesCompleted: 1,
+        failures: [],
+        baseline: {},
+        final: {},
+        leaks: [],
+        backendRssKiB: { baseline: null, final: null },
+      })) as never,
+    });
+    const result = await runArm(
+      { ...options(), freshnessProbes: 1, soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "config",
+      h.runtime,
+    );
+    expect(result.error).toBeUndefined();
+    expect(configDirs).toHaveLength(2);
+    expect(configDirs[0]).toBe(configDirs[1]!);
+    expect(path.basename(configDirs[0]!)).toStartWith("recurring-live-ab-cli-");
+    expect(existedDuringRun).toBe(true);
+    expect(existsSync(configDirs[0]!)).toBe(false);
+  });
+
   test("counts guard lines across logs and distinguishes unreadable logs", () => {
     const dir = temporary();
     mkdirSync(path.join(dir, "nested"));

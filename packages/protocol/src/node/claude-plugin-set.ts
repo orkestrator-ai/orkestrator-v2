@@ -244,7 +244,11 @@ export function claudeInstalledPluginIdEnablement(
   settings: Partial<Record<ClaudePluginSettingSource, unknown>>,
   loadedSources: readonly ClaudePluginSettingSource[],
 ): { enabled: boolean; decidedBy?: { source: ClaudePluginSettingSource; key: string } } {
-  for (const source of CLAUDE_PLUGIN_SETTING_SOURCES) {
+  // Self-contained so the environment scanner can embed this exact rule in
+  // its standalone script, including in a minified backend bundle.
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  for (const source of ["local", "project", "user"] as const) {
     if (!loadedSources.includes(source)) continue;
     const document = settings[source];
     const enabledPlugins = isRecord(document) ? document.enabledPlugins : undefined;

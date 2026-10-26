@@ -37,8 +37,9 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * already reads. The entrypoint's own bounded copy then runs unchanged.
  *
  * Only enabled providers are staged. Sources are read without following
- * symlinks (every ancestor and the entry itself), each file is re-checked
- * after opening so a swapped path cannot be read, and bounds are enforced
+ * symlinks in ancestors or files. Filtered settings may resolve a symlink to
+ * a regular file. Each file is re-checked after opening so a swapped path
+ * cannot be read, and bounds are enforced
  * while copying. Logins whose refresh token is single-use or rotating (Claude,
  * Codex, Grok, and OpenCode and Pi OAuth) are staged access-only (`accessOnlyLogin`),
  * so no container can spend the host's. A revision is written under a
@@ -457,11 +458,19 @@ async function assertNoSymlinkAncestry(root: string, relative: string): Promise<
   }
 }
 
+async function copyRegularFile(source: string, destination: string, limit: number): Promise<number>;
 async function copyRegularFile(
   source: string,
   destination: string,
   limit: number,
-): Promise<number> {
+  filter: ((text: string) => string | undefined) | undefined,
+): Promise<number | undefined>;
+async function copyRegularFile(
+  source: string,
+  destination: string,
+  limit: number,
+  filter?: (text: string) => string | undefined,
+): Promise<number | undefined> {
   const before = await lstat(source);
   if (before.isSymbolicLink()) throw new Skip("symlink");
   if (!before.isFile()) throw new Skip("not-regular");
@@ -488,9 +497,14 @@ async function copyRegularFile(
       if (total > limit) throw new Skip("too-large");
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
     }
+    const contents = Buffer.concat(chunks);
+    const filtered = filter ? filter(contents.toString("utf8")) : contents;
+    if (filtered === undefined) return undefined;
+    // Raw filtered-file bytes never reach a staged path, even if reading or
+    // filtering fails. Only the bounded allowlisted result is published.
     await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-    await writeFile(destination, Buffer.concat(chunks), { mode: 0o600, flag: "wx" });
-    return total;
+    await writeFile(destination, filtered, { mode: 0o600, flag: "wx" });
+    return Buffer.byteLength(filtered);
   } finally {
     await handle.close();
   }
@@ -570,10 +584,18 @@ class ProviderCopier {
     this.total.take(files, bytes);
   }
 
-  async file(root: string, relative: string, destinationRoot: string): Promise<void> {
+  async file(
+    root: string,
+    relative: string,
+    destinationRoot: string,
+    filter?: (text: string) => string | undefined,
+  ): Promise<void> {
     try {
       await assertNoSymlinkAncestry(root, relative);
-      const source = path.join(root, relative);
+      // Dotfile managers commonly link settings.json. Only filtered files may
+      // follow that link; copyRegularFile checks the resolved target's identity
+      // and size and opens it with O_NOFOLLOW before reading any bytes.
+      const source = filter ? await realpath(path.join(root, relative)) : path.join(root, relative);
       const stat = await lstat(source).catch(() => null);
       if (!stat) return;
       if (!this.total.fits(1, stat.size)) throw new Skip("aggregate-budget");
@@ -581,8 +603,9 @@ class ProviderCopier {
         source,
         path.join(destinationRoot, relative),
         this.limits.fileBytes,
+        filter,
       );
-      this.record(1, bytes);
+      if (bytes !== undefined) this.record(1, bytes);
     } catch (error) {
       if (error instanceof Skip) this.skip(error.reason);
       else if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.skip("unreadable");
@@ -738,19 +761,7 @@ export async function stagePortableInputs(
         if (!root) continue;
         const stageRoot = path.join(partial, source.stage);
         for (const file of source.files ?? []) {
-          await copier.file(root, file, stageRoot);
-          const filter = source.filteredFiles?.[file];
-          if (filter) {
-            const adjustment = await restrictStagedLogin(
-              path.join(stageRoot, file),
-              (text) => {
-                const filtered = filter(text);
-                return filtered === undefined ? { withheld: "filtered out" } : { text: filtered };
-              },
-              now,
-            );
-            if (adjustment) copier.adjustFiltered(adjustment);
-          }
+          await copier.file(root, file, stageRoot, source.filteredFiles?.[file]);
           if (source.accessOnlyLogin?.file === file) {
             const adjustment = await restrictStagedLogin(
               path.join(stageRoot, file),
@@ -841,7 +852,10 @@ async function restrictStagedLogin(
   restrict: AccessOnlyLoginRestriction,
   now: Date,
 ): Promise<LoginAdjustment | undefined> {
-  const contents = await readFile(file).catch(() => undefined);
+  const contents = await readFile(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
   if (contents === undefined) return undefined;
   const originalBytes = contents.byteLength;
   const restricted = restrict(contents.toString("utf8"), now.getTime());

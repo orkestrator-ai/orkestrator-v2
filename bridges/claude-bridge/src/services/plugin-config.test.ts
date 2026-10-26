@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { InstalledPluginsFile } from "../types/plugins.js";
 import {
   getMergedPlugins,
+  getPluginInfo,
   getPluginsForSdk,
   loadCliInstalledPlugins,
   loadGlobalPlugins,
@@ -280,6 +281,39 @@ describe("plugin config resolution", () => {
       else process.env.CLAUDE_CONFIG_DIR = previous;
       await rm(configDir, { recursive: true, force: true });
     }
+  });
+
+  test("the /plugins display excludes turned-off, never-enabled and local-only installs by default", async () => {
+    const pluginsDir = join(home, ".claude", "plugins");
+    const plugins: InstalledPluginsFile["plugins"] = {};
+    for (const id of ["on", "off", "never", "local-only"]) {
+      const plugin = await makePlugin(join(pluginsDir, id), { name: id });
+      plugins[`${id}@market`] = [entry(plugin)];
+    }
+    await writeFile(join(pluginsDir, "installed_plugins.json"), JSON.stringify(installed(plugins)));
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "on@market": true, "off@market": false } }),
+    );
+    await mkdir(join(cwd, ".claude"), { recursive: true });
+    await writeFile(
+      join(cwd, ".claude", "settings.local.json"),
+      JSON.stringify({ enabledPlugins: { "local-only@market": true } }),
+    );
+    expect(await getMergedPlugins(cwd)).toEqual([{ type: "local", path: join(pluginsDir, "on") }]);
+    expect(await getPluginInfo(cwd)).toEqual([
+      {
+        name: "on",
+        path: join(pluginsDir, "on"),
+        source: "cli",
+        enabled: true,
+        description: undefined,
+      },
+    ]);
+    expect(await getMergedPlugins(cwd, true, ["user", "project", "local"])).toEqual([
+      { type: "local", path: join(pluginsDir, "on") },
+      { type: "local", path: join(pluginsDir, "local-only") },
+    ]);
   });
 
   test("falls back to scanning the plugins directory when the manifest file is absent", async () => {

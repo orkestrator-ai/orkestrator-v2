@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   INPUT_LIMITS,
@@ -307,6 +308,81 @@ describe("portable input staging", () => {
     );
     expect(await listFiles(expired.directory)).not.toContain("claude-config/.credentials.json");
     expect(expired.providers[0]?.skipped["login-withheld"]).toBeUndefined();
+  });
+
+  test("filters a dotfile-managed settings symlink and bounds its resolved target", async () => {
+    const { dataDir, roots, home, root } = await fixtureHome();
+    const target = path.join(root, "dotfiles", "claude-settings.json");
+    await write(
+      target,
+      JSON.stringify({
+        env: { SECRET: "SENTINEL" },
+        enabledPlugins: { "on@market": true, "off@market": false },
+      }),
+    );
+    await fs.symlink(target, path.join(home, ".claude", "settings.json"));
+    const staged = await stagePortableInputs(
+      dataDir,
+      "linked-settings",
+      new Set(["claude"]),
+      roots,
+    );
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "claude-config", "settings.json"), "utf8"),
+      ),
+    ).toEqual({ enabledPlugins: { "on@market": true, "off@market": false } });
+    await write(target, "x".repeat(INPUT_LIMITS.fileBytes + 1));
+    const oversized = await stagePortableInputs(
+      dataDir,
+      "large-settings",
+      new Set(["claude"]),
+      roots,
+    );
+    expect(await listFiles(oversized.directory)).not.toContain("claude-config/settings.json");
+    expect(oversized.providers[0]!.skipped["too-large"]).toBe(1);
+  });
+
+  test("a non-ENOENT settings read failure cannot publish raw settings", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const settings = path.join(home, ".claude", "settings.json");
+    await write(
+      settings,
+      JSON.stringify({ env: { SECRET: "SENTINEL-SECRET" }, enabledPlugins: { "on@market": true } }),
+    );
+    const resolvedSettings = await fs.realpath(settings);
+    const originalOpen = fs.open.bind(fs);
+    let injected = false;
+    const openSpy = spyOn(fsPromises, "open").mockImplementation(
+      async (...args: Parameters<typeof fs.open>) => {
+        const handle = await originalOpen(...args);
+        if (args[0] === resolvedSettings) {
+          const read = handle.read.bind(handle);
+          let calls = 0;
+          handle.read = (async (...readArgs: Parameters<typeof read>) => {
+            if (++calls > 1) {
+              injected = true;
+              throw Object.assign(new Error("fixture read failure"), { code: "EIO" });
+            }
+            return read(...readArgs);
+          }) as typeof handle.read;
+        }
+        return handle;
+      },
+    );
+    let staged;
+    try {
+      staged = await stagePortableInputs(dataDir, "read-failure", new Set(["claude"]), roots);
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    expect(await listFiles(staged.directory)).not.toContain("claude-config/settings.json");
+    expect(staged.providers[0]!.skipped.unreadable).toBe(1);
+    for (const file of await listFiles(staged.directory))
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL-SECRET",
+      );
   });
 
   test("stages only the plugin enablement of Claude's user settings, and the entrypoint merges it", async () => {

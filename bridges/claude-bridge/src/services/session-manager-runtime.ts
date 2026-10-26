@@ -20,6 +20,7 @@ import type {
   HookCallback,
   SDKMessage,
   SDKUserMessage,
+  SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type {
@@ -211,7 +212,7 @@ export function claudeLaunchedProfile(
 export function claudeTurnSettingSources(
   session: SessionState,
   options: PromptOptions | undefined,
-): string[] {
+): SettingSource[] {
   const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
   const running = openClaudeRuntime(session);
   if (
@@ -219,7 +220,7 @@ export function claudeTurnSettingSources(
     running?.launch.settingSources !== undefined &&
     !claudeLaunchConflict(running.launch, claudeLaunchProfile(session, options))
   )
-    return JSON.parse(running.launch.settingSources) as string[];
+    return JSON.parse(running.launch.settingSources) as SettingSource[];
   return claudeSettingSources(policy, options?.includeLocalSettings);
 }
 
@@ -249,7 +250,7 @@ export function assertClaudeRuntimeStaticAccepts(
 export async function assertClaudeRuntimeAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
-  resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials">,
+  resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials"> & { settingSources?: string },
 ): Promise<void> {
   const runtime = openClaudeRuntime(session);
   if (!runtime || !claudeRuntimeOwesWork(runtime)) return;

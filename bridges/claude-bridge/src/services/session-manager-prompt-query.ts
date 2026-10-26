@@ -14,7 +14,6 @@ import {
   effectiveClaudeChrome,
   claudePermissionMode,
   claudePolicyPermissionMode,
-  claudeSettingSources,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
@@ -101,6 +100,8 @@ export async function resolveQueryPlan(
     includeLocalSettings: options?.includeLocalSettings === true,
   };
   const includeProjectResources = policy?.projectResources !== false;
+  const settingSources = claudeTurnSettingSources(session, options);
+  session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
   // Load MCP servers and plugins from config files. Both resolutions read
   // the same on-disk config, so they run concurrently and each merges once.
   // A coordinator's inline set is the injected Orkestrator server(s) only:
@@ -111,7 +112,7 @@ export async function resolveQueryPlan(
     await Promise.all([
       getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
       // Installs pass only when the settings this CLI reads enable them.
-      getPluginsForSdk(cwd, includeProjectResources, claudeTurnSettingSources(session, options)),
+      getPluginsForSdk(cwd, includeProjectResources, settingSources),
     ]);
   turn.mcpServerNames = mcpServerNames;
 
@@ -221,6 +222,7 @@ export async function resolveQueryPlan(
   // Content-free identity of the inline MCP servers, which carry credentials.
   const mcpServersKey = createHash("sha256").update(JSON.stringify(mcpServers)).digest("hex");
   return {
+    settingSources,
     cwd,
     policy,
     effortLevel,
@@ -399,7 +401,7 @@ export function claudeQueryOptions(
     // A coordinator loads nothing: user settings can declare their own
     // hooks and MCP servers, both of which run programs this boundary is
     // supposed to exclude.
-    settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
+    settingSources: plan.settingSources,
     // Fast mode (priority service tier) and Ultracode are Claude Code
     // flag-layer settings, so the user can opt into each per prompt. The
     // CLI keeps neither across processes, and each turn is its own query.

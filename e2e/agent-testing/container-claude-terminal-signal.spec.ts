@@ -205,6 +205,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
   const originalLayout = await invoke<unknown>("get_pane_layout", {
     environmentId: container!.id,
   });
+  let sessionId: string | undefined;
 
   try {
     const expand = page.getByRole("button", { name: /^Expand project / }).first();
@@ -243,7 +244,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     await expect(newTerminal).toBeEnabled({ timeout: 60_000 });
     await newTerminal.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Claude CLI" }).click();
-    const sessionId = ((await (await attached).json()) as { result: { sessionId: string } }).result
+    sessionId = ((await (await attached).json()) as { result: { sessionId: string } }).result
       .sessionId;
     const output = async () =>
       visibleText(
@@ -405,41 +406,51 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     expect(signalAfter.demotions).toEqual(signalBefore.demotions);
     expect(signalAfter.states.confirmed).toBeGreaterThanOrEqual(1);
     expect(signalAfter.fallback).toBe(signalBefore.fallback);
-
-    // Leave Claude so the terminal returns to its shell.
-    await containerItem.click();
-    await focusTerminal();
-    await page.keyboard.type("/exit");
-    await page.keyboard.press("Enter");
   } finally {
-    // Close the page first so the renderer cannot save its layout again, then
-    // restore the original tabs, which drops the terminal tab this test opened.
-    await page.close();
-    const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
-      environmentId: container!.id,
-    });
-    if (current) {
-      const restored = originalLayout as {
-        version?: number;
-        containerId?: string | null;
-        activePaneId?: string;
-        root?: unknown;
-      } | null;
-      await (restored?.root
-        ? invoke("save_pane_layout", {
-            environmentId: container!.id,
-            expectedRevision: current.revision ?? 0,
-            layout: {
-              version: restored.version,
-              containerId: restored.containerId ?? null,
-              activePaneId: restored.activePaneId,
-              root: restored.root,
-            },
-          })
-        : invoke("delete_pane_layout", {
-            environmentId: container!.id,
-            expectedRevision: current.revision ?? 0,
-          }));
+    // Close the page first so the renderer cannot save its layout again.
+    // Restore the original tabs even if closing the page or terminal fails.
+    try {
+      await page.close();
+    } finally {
+      try {
+        // Layout removal only orphans a terminal. Explicitly stop both Claude
+        // and its shell, including when a turn or an assertion failed.
+        if (sessionId) {
+          await invoke("detach_terminal", { sessionId });
+          expect(
+            (await invoke<{ running: boolean }>("get_terminal_session", { sessionId })).running,
+            "the test's terminal is still running after cleanup",
+          ).toBe(false);
+          expect(await invoke<string[]>("list_terminal_sessions")).not.toContain(sessionId);
+        }
+      } finally {
+        const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
+          environmentId: container!.id,
+        });
+        if (current) {
+          const restored = originalLayout as {
+            version?: number;
+            containerId?: string | null;
+            activePaneId?: string;
+            root?: unknown;
+          } | null;
+          await (restored?.root
+            ? invoke("save_pane_layout", {
+                environmentId: container!.id,
+                expectedRevision: current.revision ?? 0,
+                layout: {
+                  version: restored.version,
+                  containerId: restored.containerId ?? null,
+                  activePaneId: restored.activePaneId,
+                  root: restored.root,
+                },
+              })
+            : invoke("delete_pane_layout", {
+                environmentId: container!.id,
+                expectedRevision: current.revision ?? 0,
+              }));
+        }
+      }
     }
   }
 });

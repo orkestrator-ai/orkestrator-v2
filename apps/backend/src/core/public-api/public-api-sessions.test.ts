@@ -70,7 +70,7 @@ describe("session.start and request-specific completion", () => {
     // The same key can legitimately name another environment's operation.
     // Recovery must select its exact scope before checking for ambiguity.
     const otherInput = { ...original, environmentId: "env-other" };
-    const other = await harness.storage.admitPublicOperation({
+    const other = await harness.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "session.start",
       scope: "environment:env-other",
@@ -102,13 +102,16 @@ describe("session.start and request-specific completion", () => {
   test("restart during dispatch recovers a journaled turn", async () => {
     const { harness } = await setup();
     const started = await startSession(harness, "journaled-restart");
-    await harness.storage.updatePublicOperation(started.result.runId, (record) => ({
-      ...record,
-      generation: "previous-generation",
-      state: "running",
-      stage: "dispatching",
-      dispatch: undefined,
-    }));
+    await harness.storage.publicOperations.updatePublicOperation(
+      started.result.runId,
+      (record) => ({
+        ...record,
+        generation: "previous-generation",
+        state: "running",
+        stage: "dispatching",
+        dispatch: undefined,
+      }),
+    );
     const restarted = await harness.restart();
     const run = await receipt(restarted, started.result.runId);
     expect(run.dispatch?.state).toBe("accepted");
@@ -118,7 +121,7 @@ describe("session.start and request-specific completion", () => {
   for (const stage of ["executing", "dispatching"]) {
     test(`restart during ${stage} without a session settles interrupted`, async () => {
       const { harness } = await setup();
-      const admitted = await harness.storage.admitPublicOperation({
+      const admitted = await harness.storage.publicOperations.admitPublicOperation({
         authority: "operator",
         action: "session.start",
         scope: "environment:env-1",
@@ -128,12 +131,15 @@ describe("session.start and request-specific completion", () => {
         resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
         generation: "previous-generation",
       });
-      await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
-        ...record,
-        state: "running",
-        stage,
-        generation: "previous-generation",
-      }));
+      await harness.storage.publicOperations.updatePublicOperation(
+        admitted.record.operationId,
+        (record) => ({
+          ...record,
+          state: "running",
+          stage,
+          generation: "previous-generation",
+        }),
+      );
       const restarted = await harness.restart();
       expect(await receipt(restarted, admitted.record.operationId)).toMatchObject({
         state: "interrupted",
@@ -157,7 +163,7 @@ describe("session.start and request-specific completion", () => {
       { requestId: "parked-restart-prompt" },
     );
     const operationId = prompt.receipt!.operationId;
-    await harness.storage.updatePublicOperation(operationId, (record) => ({
+    await harness.storage.publicOperations.updatePublicOperation(operationId, (record) => ({
       ...record,
       generation: "previous-generation",
       state: "running",
@@ -496,7 +502,7 @@ describe("controls and interactions", () => {
       { requestId: "steer-stop-end" },
     );
     expect(stopped.ok).toBe(true);
-    const run = await harness.storage.getPublicOperation(started.result.runId);
+    const run = await harness.storage.publicOperations.getPublicOperation(started.result.runId);
     expect(run.status === "found" && run.record.stopRequestedAt).toBeDefined();
     setActivity(service, "claude", started.result.tabId, stub.sends[0]!.sessionId, "idle");
     expect((await receipt(harness, started.result.runId)).state).toBe("cancelled");

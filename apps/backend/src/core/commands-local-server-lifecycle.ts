@@ -164,24 +164,26 @@ export async function stopLocalServerUnlocked(
   const fields = { [port]: null, [pid]: null };
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
   if (coordinatorId) {
-    const workspace = await context.storage.getCoordinatorWorkspaceById(coordinatorId);
+    const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
     const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
     if (conversationId) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, conversationId);
     }
     if (workspace && kind === "codex") {
-      await context.storage.mutateCoordinatorWorkspace(workspace.projectId, (current) =>
-        current && current.id === coordinatorId
-          ? {
-              ...current,
-              conversations: current.conversations.map((conversation) =>
-                conversation.id === conversationId
-                  ? { ...conversation, bridgePort: undefined, bridgePid: undefined }
-                  : conversation,
-              ),
-              updatedAt: new Date().toISOString(),
-            }
-          : current,
+      await context.storage.coordinators.mutateCoordinatorWorkspace(
+        workspace.projectId,
+        (current) =>
+          current && current.id === coordinatorId
+            ? {
+                ...current,
+                conversations: current.conversations.map((conversation) =>
+                  conversation.id === conversationId
+                    ? { ...conversation, bridgePort: undefined, bridgePid: undefined }
+                    : conversation,
+                ),
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
       );
     }
   } else {

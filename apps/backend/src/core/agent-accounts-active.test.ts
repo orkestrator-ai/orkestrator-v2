@@ -76,7 +76,7 @@ function accountHome(platform: "claude" | "codex"): string {
 }
 
 async function activate(platform: "claude" | "codex" | undefined): Promise<void> {
-  await storage.mutateAgentAccounts((store) => ({
+  await storage.agentAccounts.mutateAgentAccounts((store) => ({
     store: {
       ...store,
       accounts: [

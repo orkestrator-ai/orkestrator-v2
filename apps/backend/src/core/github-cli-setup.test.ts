@@ -99,7 +99,9 @@ describe("GitHub CLI setup", () => {
       appRoot,
       resourceRoot: appRoot,
       storage: {
-        agentAccountsDirectory: () => path.join(root, "accounts"),
+        agentAccounts: {
+          agentAccountsDirectory: () => path.join(root, "accounts"),
+        },
         loadConfig: async () => ({ global: { githubCliReminderDismissed: reminderDismissed } }),
       },
     } as unknown as CommandContext;

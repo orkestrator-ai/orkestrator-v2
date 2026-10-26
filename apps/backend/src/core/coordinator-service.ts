@@ -214,7 +214,7 @@ export class CoordinatorService {
   async mainMailAddress(
     projectId: string,
   ): Promise<{ environmentId: string; tabId: string } | null> {
-    if (!(await this.storage.getCoordinatorWorkspace(projectId))) return null;
+    if (!(await this.storage.coordinators.getCoordinatorWorkspace(projectId))) return null;
     const { workspace, main } = await this.ensureMainConversation(projectId);
     return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
   }
@@ -229,7 +229,7 @@ export class CoordinatorService {
     projectId: string,
   ): Promise<{ workspace: CoordinatorWorkspace; main: CoordinatorConversation }> {
     const result = await this.serialize(projectId, async () => {
-      const existing = await this.storage.getCoordinatorWorkspace(projectId);
+      const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const open = coordinatorMainConversation(existing);
       if (open) return { workspace: existing, main: open, created: false };
@@ -245,15 +245,18 @@ export class CoordinatorService {
         undefined,
         await this.preferredAgent(projectId).catch(() => undefined),
       );
-      const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-        if (!current) throw new Error("Coordinator workspace disappeared");
-        return {
-          ...current,
-          conversations: retainCoordinatorConversations([...current.conversations, created]),
-          selectedConversationId: current.selectedConversationId ?? created.id,
-          updatedAt: new Date().toISOString(),
-        };
-      });
+      const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+        projectId,
+        (current) => {
+          if (!current) throw new Error("Coordinator workspace disappeared");
+          return {
+            ...current,
+            conversations: retainCoordinatorConversations([...current.conversations, created]),
+            selectedConversationId: current.selectedConversationId ?? created.id,
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      );
       if (!workspace) throw new Error("Coordinator workspace disappeared");
       const main = coordinatorMainConversation(workspace) ?? created;
       return { workspace, main, created: true };
@@ -273,8 +276,8 @@ export class CoordinatorService {
     // all — belongs to the new one.
     const owed = new Set(
       [
-        ...(await this.storage.listOpenCoordinatorDelegations()),
-        ...(await this.storage.listUnwokenCoordinatorDelegations()),
+        ...(await this.storage.coordinators.listOpenCoordinatorDelegations()),
+        ...(await this.storage.coordinators.listUnwokenCoordinatorDelegations()),
       ].map((association) => association.id),
     );
     await this.storage
@@ -300,7 +303,7 @@ export class CoordinatorService {
     main: CoordinatorConversation,
     closedOnly = false,
   ): Promise<void> {
-    for (const association of await this.storage.listCoordinatorWorkflowAssociations(
+    for (const association of await this.storage.coordinators.listCoordinatorWorkflowAssociations(
       workspace.projectId,
     )) {
       if (
@@ -314,7 +317,7 @@ export class CoordinatorService {
       ) {
         continue;
       }
-      await this.storage
+      await this.storage.coordinators
         .adoptCoordinatorWorkflowAssociation(
           workspace.projectId,
           workspace.id,
@@ -412,46 +415,49 @@ export class CoordinatorService {
   async ensure(projectId: string): Promise<CoordinatorSnapshot> {
     return this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
-      const before = await this.storage.getCoordinatorWorkspace(projectId);
+      const before = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       // A workspace only reaches `error` through a real startup failure now
       // that an unqualified default no longer produces one: a fresh
       // conversation has no provider until the user picks one. Retry therefore
       // means "try that same conversation again", and never silently rewrites
       // which platform a conversation belongs to.
       const canRecoverError = before?.lifecycleState === "error";
-      const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-        if (current) {
-          if (!canRecoverError || current.id !== before?.id) return current;
+      const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+        projectId,
+        (current) => {
+          if (current) {
+            if (!canRecoverError || current.id !== before?.id) return current;
+            return {
+              ...current,
+              lifecycleState: "ready",
+              lastStartupError: undefined,
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          const id = randomUUID();
+          const initial = conversation(id, "main");
+          const now = new Date().toISOString();
           return {
-            ...current,
+            version: COORDINATOR_WORKSPACE_VERSION,
+            id,
+            projectId,
+            executionPolicy: COORDINATOR_EXECUTION_POLICY,
             lifecycleState: "ready",
-            lastStartupError: undefined,
-            updatedAt: new Date().toISOString(),
+            conversations: [initial],
+            selectedConversationId: initial.id,
+            repositoryContextRevision: 0,
+            createdAt: now,
+            updatedAt: now,
           };
-        }
-        const id = randomUUID();
-        const initial = conversation(id, "main");
-        const now = new Date().toISOString();
-        return {
-          version: COORDINATOR_WORKSPACE_VERSION,
-          id,
-          projectId,
-          executionPolicy: COORDINATOR_EXECUTION_POLICY,
-          lifecycleState: "ready",
-          conversations: [initial],
-          selectedConversationId: initial.id,
-          repositoryContextRevision: 0,
-          createdAt: now,
-          updatedAt: now,
-        };
-      });
+        },
+      );
       if (!workspace) throw new Error("Coordinator workspace could not be created");
       return this.snapshot(workspace, projectPath);
     });
   }
 
   async get(projectId: string): Promise<CoordinatorSnapshot | null> {
-    const workspace = await this.storage.getCoordinatorWorkspace(projectId);
+    const workspace = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
     if (!workspace) return null;
     return this.snapshot(workspace, await this.canonicalProjectPath(projectId));
   }
@@ -469,7 +475,9 @@ export class CoordinatorService {
       projectPath,
       providerAvailability: availability,
       controlMcp: { enabled: mcp.enabled, running: mcp.running, error: mcp.error },
-      workflows: await this.storage.listCoordinatorWorkflowAssociations(workspace.projectId),
+      workflows: await this.storage.coordinators.listCoordinatorWorkflowAssociations(
+        workspace.projectId,
+      ),
     };
   }
 
@@ -497,7 +505,9 @@ export class CoordinatorService {
         return "unavailable" as const;
       });
     if (mail === "unavailable" || (mail && mail.total > 0)) return false;
-    const work = await this.storage.listCoordinatorWorkflowAssociations(workspace.projectId);
+    const work = await this.storage.coordinators.listCoordinatorWorkflowAssociations(
+      workspace.projectId,
+    );
     return !work.some(
       (association) =>
         association.coordinatorId === workspace.id && association.conversationId === item.id,
@@ -517,12 +527,12 @@ export class CoordinatorService {
     title?: string,
     options: { closeUnused?: readonly string[] } = {},
   ): Promise<CoordinatorSnapshot> {
-    if (!(await this.storage.getCoordinatorWorkspace(projectId))) {
+    if (!(await this.storage.coordinators.getCoordinatorWorkspace(projectId))) {
       await this.ensure(projectId);
     }
     return this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
-      const existing = await this.storage.getCoordinatorWorkspace(projectId);
+      const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace disappeared");
       const unused = new Set<string>();
       for (const id of new Set(options.closeUnused ?? [])) {
@@ -534,7 +544,7 @@ export class CoordinatorService {
       //
       // With no main open this starts the main coordinator; otherwise it adds
       // the next side agent. There is never a second main.
-      const workspace = await this.storage.mutateCoordinatorWorkspaceWithComposeDrafts(
+      const workspace = await this.storage.coordinators.mutateCoordinatorWorkspaceWithComposeDrafts(
         projectId,
         (current, drafts) => {
           if (!current) throw new Error("Coordinator workspace disappeared");
@@ -576,7 +586,7 @@ export class CoordinatorService {
         },
       );
       if (!workspace) throw new Error("Coordinator workspace disappeared");
-      await this.storage.pruneCoordinatorAttachmentDirectories(
+      await this.storage.coordinators.pruneCoordinatorAttachmentDirectories(
         workspace.id,
         new Set(workspace.conversations.map((item) => item.id)),
       );
@@ -599,7 +609,7 @@ export class CoordinatorService {
   ): Promise<CoordinatorSnapshot> {
     return this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
-      const existing = await this.storage.getCoordinatorWorkspace(projectId);
+      const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const target = existing.conversations.find((item) => item.id === conversationId);
       if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
@@ -623,18 +633,21 @@ export class CoordinatorService {
           );
         }
       }
-      const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-        if (!current) throw new Error("Coordinator workspace was not found");
-        const item = current.conversations.find((entry) => entry.id === conversationId);
-        if (!item || item.closedAt) throw new Error("Coordinator conversation was not found");
-        return {
-          ...current,
-          conversations: current.conversations.map((entry) =>
-            entry.id === conversationId ? { ...entry, agent } : entry,
-          ),
-          updatedAt: new Date().toISOString(),
-        };
-      });
+      const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+        projectId,
+        (current) => {
+          if (!current) throw new Error("Coordinator workspace was not found");
+          const item = current.conversations.find((entry) => entry.id === conversationId);
+          if (!item || item.closedAt) throw new Error("Coordinator conversation was not found");
+          return {
+            ...current,
+            conversations: current.conversations.map((entry) =>
+              entry.id === conversationId ? { ...entry, agent } : entry,
+            ),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      );
       if (!workspace) throw new Error("Coordinator workspace was not found");
       // The mailbox now has an agent, so mail that arrived while the
       // conversation was unassigned becomes deliverable. Both steps are
@@ -657,45 +670,51 @@ export class CoordinatorService {
     conversationId: string | null,
   ): Promise<CoordinatorSnapshot> {
     const projectPath = await this.canonicalProjectPath(projectId);
-    const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-      if (!current) throw new Error("Coordinator workspace was not found");
-      if (
-        conversationId !== null &&
-        !current.conversations.some((item) => item.id === conversationId && !item.closedAt)
-      ) {
-        throw new Error("Coordinator conversation was not found");
-      }
-      return {
-        ...current,
-        selectedConversationId: conversationId,
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+      projectId,
+      (current) => {
+        if (!current) throw new Error("Coordinator workspace was not found");
+        if (
+          conversationId !== null &&
+          !current.conversations.some((item) => item.id === conversationId && !item.closedAt)
+        ) {
+          throw new Error("Coordinator conversation was not found");
+        }
+        return {
+          ...current,
+          selectedConversationId: conversationId,
+          updatedAt: new Date().toISOString(),
+        };
+      },
+    );
     if (!workspace) throw new Error("Coordinator workspace was not found");
     return this.snapshot(workspace, projectPath);
   }
 
   async closeConversation(projectId: string, conversationId: string): Promise<CoordinatorSnapshot> {
     const projectPath = await this.canonicalProjectPath(projectId);
-    const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-      if (!current) throw new Error("Coordinator workspace was not found");
-      const target = current.conversations.find((item) => item.id === conversationId);
-      if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
-      const now = new Date().toISOString();
-      const conversations = current.conversations.map((item) =>
-        item.id === conversationId ? { ...item, closedAt: now } : item,
-      );
-      const remaining = conversations.filter((item) => !item.closedAt);
-      return {
-        ...current,
-        conversations,
-        selectedConversationId:
-          current.selectedConversationId === conversationId
-            ? (remaining.at(-1)?.id ?? null)
-            : current.selectedConversationId,
-        updatedAt: now,
-      };
-    });
+    const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+      projectId,
+      (current) => {
+        if (!current) throw new Error("Coordinator workspace was not found");
+        const target = current.conversations.find((item) => item.id === conversationId);
+        if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
+        const now = new Date().toISOString();
+        const conversations = current.conversations.map((item) =>
+          item.id === conversationId ? { ...item, closedAt: now } : item,
+        );
+        const remaining = conversations.filter((item) => !item.closedAt);
+        return {
+          ...current,
+          conversations,
+          selectedConversationId:
+            current.selectedConversationId === conversationId
+              ? (remaining.at(-1)?.id ?? null)
+              : current.selectedConversationId,
+          updatedAt: now,
+        };
+      },
+    );
     if (!workspace) throw new Error("Coordinator workspace was not found");
     return this.snapshot(workspace, projectPath);
   }
@@ -708,29 +727,32 @@ export class CoordinatorService {
         (platform) => coordinatorProviderQualification(platform, options).available,
       ),
     );
-    const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
-      if (!current) throw new Error("Coordinator workspace was not found");
-      const selected =
-        current.conversations.find((item) => item.id === current.selectedConversationId) ??
-        current.conversations.at(-1);
-      // An unassigned conversation has nothing to be unavailable: resuming it
-      // just returns the user to the composer, which is where the provider
-      // gate is applied.
-      if (!paused && selected?.agent && !allowedAgents.has(selected.agent)) {
-        throw new Error("The configured provider is unavailable for Coordinator");
-      }
-      return {
-        ...current,
-        lifecycleState: paused ? "paused" : "ready",
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+      projectId,
+      (current) => {
+        if (!current) throw new Error("Coordinator workspace was not found");
+        const selected =
+          current.conversations.find((item) => item.id === current.selectedConversationId) ??
+          current.conversations.at(-1);
+        // An unassigned conversation has nothing to be unavailable: resuming it
+        // just returns the user to the composer, which is where the provider
+        // gate is applied.
+        if (!paused && selected?.agent && !allowedAgents.has(selected.agent)) {
+          throw new Error("The configured provider is unavailable for Coordinator");
+        }
+        return {
+          ...current,
+          lifecycleState: paused ? "paused" : "ready",
+          updatedAt: new Date().toISOString(),
+        };
+      },
+    );
     if (!workspace) throw new Error("Coordinator workspace was not found");
     return this.snapshot(workspace, projectPath);
   }
 
   async recordStartupError(projectId: string, error: unknown): Promise<void> {
-    await this.storage.mutateCoordinatorWorkspace(projectId, (current) =>
+    await this.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) =>
       current
         ? {
             ...current,
@@ -743,7 +765,7 @@ export class CoordinatorService {
   }
 
   async removeProject(projectId: string): Promise<void> {
-    await this.storage.deleteCoordinatorByProject(projectId);
+    await this.storage.coordinators.deleteCoordinatorByProject(projectId);
   }
 
   /**
@@ -771,7 +793,7 @@ export class CoordinatorService {
     state: AgentActivityState | "unknown";
   }): Promise<void> {
     if (event.state === "working") {
-      for (const association of await this.storage.listOpenCoordinatorDelegations()) {
+      for (const association of await this.storage.coordinators.listOpenCoordinatorDelegations()) {
         if (
           !association.nodeId &&
           association.resourceId === event.environmentId &&
@@ -802,7 +824,7 @@ export class CoordinatorService {
     state: "completed" | "failed" | "stopped";
   }): Promise<void> {
     await this.storage.withAgentMailWorkerAdmission(worker.environmentId, async () => {
-      const open = await this.storage.listOpenCoordinatorDelegations();
+      const open = await this.storage.coordinators.listOpenCoordinatorDelegations();
       for (const association of open) {
         // A worker on another node is settled from its node's state.
         if (association.nodeId || association.resourceId !== worker.environmentId) continue;
@@ -870,7 +892,9 @@ export class CoordinatorService {
       this.backgroundWorkSince.delete(association.id);
       return { held: false };
     }
-    const owner = await this.storage.getCoordinatorWorkspaceById(association.coordinatorId);
+    const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
+      association.coordinatorId,
+    );
     const main = owner ? coordinatorMainConversation(owner) : undefined;
     if (
       owner &&
@@ -899,7 +923,7 @@ export class CoordinatorService {
     state: "completed" | "failed" | "stopped",
     backgroundWorkTimeoutMs?: number,
   ): Promise<void> {
-    await this.storage.closeCoordinatorDelegation(
+    await this.storage.coordinators.closeCoordinatorDelegation(
       id,
       state,
       new Date().toISOString(),
@@ -918,17 +942,17 @@ export class CoordinatorService {
    * from the environment record and a missed hook is a silent hang.
    */
   async reconcileWorkerDelegations(): Promise<void> {
-    for (const workspace of await this.storage.listCoordinatorWorkspaces()) {
+    for (const workspace of await this.storage.coordinators.listCoordinatorWorkspaces()) {
       const main = coordinatorMainConversation(workspace);
       if (main) await this.reconcileMainMail(workspace, main);
     }
-    for (const association of await this.storage.listOpenCoordinatorDelegations()) {
+    for (const association of await this.storage.coordinators.listOpenCoordinatorDelegations()) {
       if (association.nodeId) {
         await this.reconcileRemoteDelegation(association);
         continue;
       }
       await this.storage.withAgentMailWorkerAdmission(association.resourceId, async () => {
-        const current = (await this.storage.listOpenCoordinatorDelegations()).find(
+        const current = (await this.storage.coordinators.listOpenCoordinatorDelegations()).find(
           (item) => item.id === association.id,
         );
         if (!current) return;
@@ -981,8 +1005,8 @@ export class CoordinatorService {
     await this.deliverDelegationWakes();
     const owed = new Set(
       [
-        ...(await this.storage.listOpenCoordinatorDelegations()),
-        ...(await this.storage.listUnwokenCoordinatorDelegations()),
+        ...(await this.storage.coordinators.listOpenCoordinatorDelegations()),
+        ...(await this.storage.coordinators.listUnwokenCoordinatorDelegations()),
       ].map((association) => association.id),
     );
     await this.storage.releaseOrphanedDelegationHolds(owed);
@@ -993,7 +1017,7 @@ export class CoordinatorService {
    * sweep): settle the delegations it answers, and wake their coordinators.
    */
   async settleRemoteWorker(nodeId: string, environmentId: string): Promise<void> {
-    const open = (await this.storage.listOpenCoordinatorDelegations()).filter(
+    const open = (await this.storage.coordinators.listOpenCoordinatorDelegations()).filter(
       (association) => association.nodeId === nodeId && association.resourceId === environmentId,
     );
     for (const association of open) await this.reconcileRemoteDelegation(association);
@@ -1053,7 +1077,7 @@ export class CoordinatorService {
       async () => {
         // A follow-up admitted during either remote read needs its own turn.
         if (this.remoteAskedAt.get(association.id) !== requestGeneration) return;
-        const current = (await this.storage.listOpenCoordinatorDelegations()).find(
+        const current = (await this.storage.coordinators.listOpenCoordinatorDelegations()).find(
           (item) => item.id === association.id,
         );
         if (!current) return;
@@ -1088,16 +1112,18 @@ export class CoordinatorService {
   }
 
   private async deliverDelegationWakesOnce(): Promise<void> {
-    const unwoken = await this.storage.listUnwokenCoordinatorDelegations();
+    const unwoken = await this.storage.coordinators.listUnwokenCoordinatorDelegations();
     for (const association of unwoken) {
       const delegation = association.delegation;
       if (!delegation || !association.conversationId) continue;
-      const owner = await this.storage.getCoordinatorWorkspaceById(association.coordinatorId);
+      const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
+        association.coordinatorId,
+      );
       if (!owner) {
         // The coordinator itself is gone. Retiring the delegation is the only
         // honest outcome: there is nobody left to wake, and leaving it
         // unstamped would retry this lookup on every sweep forever.
-        await this.storage.markCoordinatorDelegationWoken(association.id);
+        await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
         continue;
       }
       // The wake goes to the main coordinator. If the user closed it, a new
@@ -1113,7 +1139,7 @@ export class CoordinatorService {
           association.resourceId,
           delegation.workerTabId,
         );
-        const prepared = await this.storage.prepareCoordinatorDelegationWake(
+        const prepared = await this.storage.coordinators.prepareCoordinatorDelegationWake(
           association.id,
           hasReport ? "report" : "notice",
         );
@@ -1229,7 +1255,7 @@ export class CoordinatorService {
             throw error;
           });
       }
-      await this.storage.markCoordinatorDelegationWoken(association.id);
+      await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
     }
   }
 

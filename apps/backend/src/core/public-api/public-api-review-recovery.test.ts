@@ -138,7 +138,7 @@ for (const action of ["review.launch", "review.open", "review.address", "review.
               ? { ...input, surface: "address" }
               : input;
         const scope = action === "review.launch" ? "environment:env-1" : "review:review-1";
-        const admitted = await harness.storage.admitPublicOperation({
+        const admitted = await harness.storage.publicOperations.admitPublicOperation({
           authority: "operator",
           action,
           scope,
@@ -156,7 +156,7 @@ for (const action of ["review.launch", "review.open", "review.address", "review.
         );
         if (evidence)
           await harness.storage.saveMultiReviewWorkflow(saved.id, saved.environmentId, 1, saved);
-        await harness.storage.updatePublicOperation(operationId, (record) => ({
+        await harness.storage.publicOperations.updatePublicOperation(operationId, (record) => ({
           ...record,
           state: "running",
           stage:

@@ -141,9 +141,7 @@ import type {
   SourceSpec,
 } from "./types.js";
 
-export interface McpServiceStorage extends TargetStorage {
-  getPreviewBackendIdentity(): Promise<{ instanceId: string }>;
-}
+export type McpServiceStorage = TargetStorage;
 
 export interface McpManagementServiceOptions {
   dataDir: string;
@@ -337,7 +335,7 @@ export class McpManagementService {
     target: ResolvedTarget,
     specs?: SourceSpec[],
   ): Promise<McpManagementTarget> {
-    const identity = await this.options.storage.getPreviewBackendIdentity();
+    const identity = await this.options.storage.previewServices.getPreviewBackendIdentity();
     const sources = specs ?? (await this.specsFor(target));
     // A container's own servers go to its environment-private copy by default.
     const defaultScope =
@@ -423,7 +421,7 @@ export class McpManagementService {
     const environmentId =
       typeof args.environmentId === "string" && args.environmentId ? args.environmentId : undefined;
     const targets = await listTargets(this.options.storage, environmentId);
-    const identity = await this.options.storage.getPreviewBackendIdentity();
+    const identity = await this.options.storage.previewServices.getPreviewBackendIdentity();
     return {
       protocolVersion: MCP_MANAGEMENT_PROTOCOL_VERSION,
       backendId: identity.instanceId,
@@ -1818,7 +1816,8 @@ export class McpManagementService {
     const ids = new Set<string>([target.targetId]);
     try {
       if (spec.scope === "backend-user") {
-        const { instanceId } = await this.options.storage.getPreviewBackendIdentity();
+        const { instanceId } =
+          await this.options.storage.previewServices.getPreviewBackendIdentity();
         for (const provider of providers) ids.add(backendTargetId(provider, instanceId));
         for (const known of await this.options.probe.environments()) {
           const environment = await this.options.storage.getEnvironment(known.id);

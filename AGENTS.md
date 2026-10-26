@@ -1201,9 +1201,10 @@ Storage rules:
   `deleteStore` awaited inside the store's lease, or `updateStore`/
   `updateStoreRow`, never both. `storage-writer-guards.test.ts` enforces it.
 - `StorageService` is a facade over per-store repositories sharing one
-  `StorageContext`; add store code to the owning repository and a forwarder
-  to the facade, never a base class (`docs/architecture/storage.md`, "Code
-  layout").
+  `StorageContext`; add store code to the owning repository and expose it
+  through that repository's area type (`KanbanStorage`, a `Pick` reached as
+  `storage.kanban`) or, for repositories without one yet, a forwarder on the
+  facade, never a base class (`docs/architecture/storage.md`, "Code layout").
 - An older record shape is upgraded once by a migration
   (`storage-record-upgrades.ts`), not by a reader on every load.
 - Tests seed and inspect stores through `storage-test-support.ts`, never by

@@ -858,7 +858,7 @@ async function startLocalServerAttempt(
     // Created here rather than on first paste: a bridge canonicalizes this root
     // before it reads through it, and a directory that does not exist yet is
     // indistinguishable from one that is not allowed.
-    const attachmentRoot = context.storage.coordinatorAttachmentDirectory(
+    const attachmentRoot = context.storage.coordinators.coordinatorAttachmentDirectory(
       coordinatorId,
       coordinatorConversationId!,
     );
@@ -1142,7 +1142,7 @@ async function startLocalServerAttempt(
     if (!localServers.releaseOwnership(key, child)) return;
     if (coordinatorId && selectedConversation) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
-      void context.storage
+      void context.storage.coordinators
         .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
           workspace && workspace.id === coordinatorId
             ? {
@@ -1220,20 +1220,22 @@ async function startLocalServerAttempt(
       }
     }
     if (coordinatorId) {
-      await context.storage.mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
-        workspace && workspace.id === coordinatorId
-          ? {
-              ...workspace,
-              conversations: workspace.conversations.map((conversation) =>
-                conversation.id === coordinatorConversationId
-                  ? { ...conversation, bridgePort: port, bridgePid: child.pid }
-                  : conversation,
-              ),
-              lifecycleState: "ready",
-              lastStartupError: undefined,
-              updatedAt: new Date().toISOString(),
-            }
-          : workspace,
+      await context.storage.coordinators.mutateCoordinatorWorkspace(
+        environment.projectId,
+        (workspace) =>
+          workspace && workspace.id === coordinatorId
+            ? {
+                ...workspace,
+                conversations: workspace.conversations.map((conversation) =>
+                  conversation.id === coordinatorConversationId
+                    ? { ...conversation, bridgePort: port, bridgePid: child.pid }
+                    : conversation,
+                ),
+                lifecycleState: "ready",
+                lastStartupError: undefined,
+                updatedAt: new Date().toISOString(),
+              }
+            : workspace,
       );
     } else {
       await context.storage.updateEnvironment(environmentId, {
@@ -1256,7 +1258,7 @@ async function startLocalServerAttempt(
       if (selectedConversation) {
         context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
       }
-      await context.storage
+      await context.storage.coordinators
         .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
           workspace && workspace.id === coordinatorId
             ? {

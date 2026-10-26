@@ -897,3 +897,48 @@ export class KanbanRepository {
     return nextRecord;
   }
 }
+
+/**
+ * Kanban tasks, feature plans, project notes, the Linear sign-in and PR completion comments: what callers reach as `storage.kanban`.
+ *
+ * Every name here is an entry point `storage-writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type KanbanStorage = Pick<
+  KanbanRepository,
+  | "getKanbanTasks"
+  | "getKanbanTask"
+  | "addKanbanTask"
+  | "findKanbanTaskByRequestId"
+  | "updateKanbanTask"
+  | "deleteKanbanTask"
+  | "addKanbanComment"
+  | "deleteKanbanComment"
+  | "addKanbanImage"
+  | "addNormalizedKanbanImageForRequest"
+  | "deleteKanbanImage"
+  | "getKanbanImageData"
+  | "getProjectNotes"
+  | "saveProjectNotes"
+  | "getFeaturePlans"
+  | "createFeaturePlan"
+  | "updateFeaturePlan"
+  | "claimFeaturePlanBuild"
+  | "appendFeaturePlanMessage"
+  | "appendFeatureStoryMessage"
+  | "listAllFeaturePlans"
+  | "getFeaturePlan"
+  | "listActiveFeaturePlanning"
+  | "startFeaturePlanning"
+  | "mutateFeaturePlanning"
+  | "clearFeaturePlanning"
+  | "getLinearAuth"
+  | "saveLinearAuth"
+  | "clearLinearAuth"
+  | "getLinearCompletionComment"
+  | "saveLinearCompletionComment"
+  | "getGitHubCompletionComment"
+  | "withGitHubCompletionCommentLock"
+  | "saveGitHubCompletionComment"
+>;

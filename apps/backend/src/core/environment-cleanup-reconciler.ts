@@ -141,8 +141,8 @@ async function stateOwnerKeys(context: CommandContext): Promise<Set<string>> {
   }
   // Coordinator conversations run the same bridges under a runtime id, so
   // their state lives in the same roots and must count as owned.
-  if (typeof context.storage.listCoordinatorWorkspaces === "function") {
-    for (const workspace of await context.storage.listCoordinatorWorkspaces()) {
+  if (typeof context.storage.coordinators?.listCoordinatorWorkspaces === "function") {
+    for (const workspace of await context.storage.coordinators.listCoordinatorWorkspaces()) {
       try {
         owners.add(environmentStateKey(coordinatorRuntimeId(workspace.id)));
         for (const conversation of workspace.conversations ?? []) {

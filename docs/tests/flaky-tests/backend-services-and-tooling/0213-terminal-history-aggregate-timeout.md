@@ -194,6 +194,21 @@ text, durations, commands, suite counts and retained evidence are recorded in
 No implementation, assertion, deadline or skip changed; the original aggregate
 remains failed.
 
+## Storage facade size validation — 2026-10-26
+
+`mise run test` on `todo-0163-storage-facade-size-a8e92b2563c1` (head
+`7e64cd377`, todo 0163: storage area fields and the agent mail split; no
+terminal-history code changed) failed this case at the five-second deadline
+(5001.62 ms) in the backend workspace aggregate: 11768 passed, 97 skipped, 1
+failed across 11866 tests in 703 files. The same case also timed out once in a
+direct `bun test src tests --parallel=8` run on the branch. The unchanged
+complete owner passed alone both times
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`:
+25 passed, 7.4 s). Evidence:
+`orkestrator-test-run.m0KWc5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the platform temporary directory. No implementation, assertion,
+deadline or skip changed; the aggregate failure is retained.
+
 ## Recurrence on 2026-10-26 (todo 0035 validation)
 
 `mise run test:logged -- --name full-test -- mise run test` on branch

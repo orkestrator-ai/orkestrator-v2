@@ -527,14 +527,21 @@ export async function createCommandFixtures() {
       }),
       storage: {
         getDataDir: () => options.dataDir ?? DEFAULT_DATA_DIR,
-        withGitHubCompletionCommentLock: mock(
-          async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
-        ),
+        kanban: {
+          withGitHubCompletionCommentLock: mock(
+            async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
+          ),
+          getKanbanTasks: mock(async () => []),
+          updateKanbanTask: mock(async () => undefined),
+          addKanbanComment: mock(async () => undefined),
+        },
         loadConfig: mock(async () => config),
         // No added agent accounts: every launch uses the host login.
-        loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
-        agentAccountsDirectory: () =>
-          path.join(options.dataDir ?? DEFAULT_DATA_DIR, "agent-accounts"),
+        agentAccounts: {
+          loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
+          agentAccountsDirectory: () =>
+            path.join(options.dataDir ?? DEFAULT_DATA_DIR, "agent-accounts"),
+        },
         saveConfig: mock(async (nextConfig: typeof config) => {
           Object.assign(config, nextConfig);
         }),
@@ -651,12 +658,9 @@ export async function createCommandFixtures() {
         deleteFileDraftsByEnvironment: mock(async () => undefined),
         deleteAgentHandoffsByEnvironment: mock(async () => [] as string[]),
         deletePaneLayout: mock(async () => undefined),
-        getKanbanTasks: mock(async () => []),
         listBuildPipelines: mock(async () => []),
         listAllBuildPipelines: mock(async () => []),
         listMultiReviewWorkflows: mock(async () => []),
-        updateKanbanTask: mock(async () => undefined),
-        addKanbanComment: mock(async () => undefined),
         getProject: mock(async (projectId: string) => {
           if (options.project) return options.project.id === projectId ? options.project : null;
           return {

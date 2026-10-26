@@ -93,7 +93,7 @@ describe("refreshHostClaudeLogin", () => {
       const now = Date.now();
       Object.assign(ctx.storage, {
         loadConfig: async () => ({ global: {} }),
-        loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+        agentAccounts: { loadAgentAccounts: async () => ({ accounts: [], active: {} }) },
       });
       const warn = spyOn(console, "warn").mockImplementation(() => {});
       try {

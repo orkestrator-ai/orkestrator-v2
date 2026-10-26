@@ -680,7 +680,7 @@ export class NativeAgentService {
     if (coordinator.status === "ready") {
       const staged: PromptAttachment[] = [];
       for (const image of assertValidPromptImages(images)) {
-        const path = await this.storage.writeCoordinatorAttachment(
+        const path = await this.storage.coordinators.writeCoordinatorAttachment(
           coordinator.coordinatorId,
           coordinator.conversationId,
           image.filename,
@@ -3516,7 +3516,7 @@ export class NativeAgentService {
           const coordinatorId = input.owner.coordinatorId;
           const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
           if (conversationId) {
-            await this.storage
+            await this.storage.coordinators
               .mutateCoordinatorWorkspace(input.owner.projectId, (workspace) =>
                 workspace && workspace.id === coordinatorId
                   ? {

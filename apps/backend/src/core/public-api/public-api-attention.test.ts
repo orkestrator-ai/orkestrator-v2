@@ -158,7 +158,7 @@ describe("attention.list", () => {
     const operations: string[] = [];
     for (let index = 0; index < 55; index += 1) {
       const requestId = `settled-${index}`;
-      const { record } = await harness.storage.admitPublicOperation({
+      const { record } = await harness.storage.publicOperations.admitPublicOperation({
         authority: "operator",
         action: "ticket.create",
         scope: "project:test",
@@ -167,11 +167,14 @@ describe("attention.list", () => {
         fingerprint: "0".repeat(64),
         generation: "test",
       });
-      await harness.storage.updatePublicOperation(record.operationId, (current) => ({
-        ...current,
-        state: "succeeded",
-        stage: "completed",
-      }));
+      await harness.storage.publicOperations.updatePublicOperation(
+        record.operationId,
+        (current) => ({
+          ...current,
+          state: "succeeded",
+          stage: "completed",
+        }),
+      );
       operations.push(record.operationId);
     }
     const delivered: string[] = [];
@@ -228,7 +231,7 @@ describe("attention.list", () => {
     );
     expect(settled.ok).toBe(true);
     for (let index = 0; index < 51; index += 1) {
-      await harness.storage.admitPublicOperation({
+      await harness.storage.publicOperations.admitPublicOperation({
         authority: "operator",
         action: "session.start",
         scope: "environment:env-1",

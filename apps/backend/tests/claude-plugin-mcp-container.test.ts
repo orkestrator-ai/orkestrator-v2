@@ -114,7 +114,9 @@ describe.skipIf(!enabled)("Claude plugin discovery in a real container", () => {
           storage: {
             getEnvironment: async () => fixture.environment as never,
             getProject: async () => ({ id: "proj-1", name: "fixture" }) as never,
-            getPreviewBackendIdentity: async () => ({ instanceId: "backend-1" }),
+            previewServices: {
+              getPreviewBackendIdentity: async () => ({ instanceId: "backend-1", created: false }),
+            },
           },
           emit: () => undefined,
           probe: fixture.probe,

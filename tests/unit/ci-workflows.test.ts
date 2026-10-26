@@ -58,6 +58,14 @@ describe("CI workflow contracts", () => {
     );
     expect(suites.length).toBeGreaterThan(0);
     for (const suite of suites) expect(source).toContain(`./tests/${suite} --parallel=1`);
+    // The container change signals' live tests and exec-cost numbers need a
+    // real Linux Engine too, with the run's own image.
+    for (const suite of ["claude-state-signal-docker", "container-worktree-signal-docker"])
+      expect(source).toContain(`./tests/${suite}.test.ts --parallel=1`);
+    expect(source).toContain(
+      "ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}",
+    );
+    expect(source).toContain("apps/backend/scripts/container-exec-cost.ts --image");
     // Without the gate every live test skips and the job passes vacuously.
     expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');
     expect(source).not.toContain("orkestrator-v2:latest");

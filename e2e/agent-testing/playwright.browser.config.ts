@@ -24,6 +24,7 @@ export default defineConfig({
     "container-rebuild-cycle.spec.ts",
     "container-root-terminal.spec.ts",
     "container-approval-stop.spec.ts",
+    "container-claude-terminal-signal.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",

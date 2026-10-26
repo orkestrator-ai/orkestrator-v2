@@ -307,7 +307,7 @@ const projectConfigSet: MutationActionHandler<SettingsPatch & { projectId: strin
       resources: { projectId: input.projectId },
       async execute() {
         const storage = context.command.storage;
-        await storage.patchRepositorySettingsAtRevision(
+        await storage.publicOperations.patchRepositorySettingsAtRevision(
           input.projectId,
           input.expectedRevision,
           (current) => {
@@ -460,35 +460,36 @@ const environmentConfigSet: MutationActionHandler<SettingsPatch & { environmentI
     return {
       resources: { environmentId: environment.id, projectId: environment.projectId },
       async execute() {
-        const updated = await context.command.storage.patchEnvironmentSettingsAtRevision(
-          input.environmentId,
-          input.expectedRevision,
-          (current, stored) => {
-            // Container creation reads ports and domains; refuse to race it.
-            if (
-              containerOnly.length > 0 &&
-              (stored.status === "creating" || stored.status === "stopping")
-            ) {
-              throw new PublicActionError(
-                "conflict",
-                "The environment is changing state; retry once it has settled",
-              );
-            }
-            const next = { ...current };
-            for (const [key, value] of [
-              ...Object.entries(input.set),
-              ...input.unset.map((key) => [key, undefined] as const),
-            ]) {
-              if (key.startsWith("agent."))
-                next.agentSettings = applyAgentKey(next.agentSettings, key, value);
-              else if (key === "portMappings")
-                next.portMappings = value as PortMapping[] | undefined;
-              else if (key === "allowedDomains")
-                next.allowedDomains = value as string[] | undefined;
-            }
-            return next;
-          },
-        );
+        const updated =
+          await context.command.storage.publicOperations.patchEnvironmentSettingsAtRevision(
+            input.environmentId,
+            input.expectedRevision,
+            (current, stored) => {
+              // Container creation reads ports and domains; refuse to race it.
+              if (
+                containerOnly.length > 0 &&
+                (stored.status === "creating" || stored.status === "stopping")
+              ) {
+                throw new PublicActionError(
+                  "conflict",
+                  "The environment is changing state; retry once it has settled",
+                );
+              }
+              const next = { ...current };
+              for (const [key, value] of [
+                ...Object.entries(input.set),
+                ...input.unset.map((key) => [key, undefined] as const),
+              ]) {
+                if (key.startsWith("agent."))
+                  next.agentSettings = applyAgentKey(next.agentSettings, key, value);
+                else if (key === "portMappings")
+                  next.portMappings = value as PortMapping[] | undefined;
+                else if (key === "allowedDomains")
+                  next.allowedDomains = value as string[] | undefined;
+              }
+              return next;
+            },
+          );
         // A running container whose image can change its allowlist in place
         // adopts the saved list now; anything else takes it at the next start.
         const domainsApplied =

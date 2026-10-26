@@ -103,6 +103,16 @@ The broad run and complete unchanged owner both retained five-second failures. T
 
 - **Completed aggregate:** workspace (web, backend, desktop, web-public, CLI, protocol, toolchain), bridge and protocol-lockfile groups passed; only the root probe timeout remained. The logged command exited 1 after 496.1 s; complete evidence is `orkestrator-test-run.3F8HQ0/mergead-tests.log.gz`. Static checks passed, and the credential-free isolated design suite passed both cases (33.8 s); profile `qa-browser-6b014289-52b` was stopped and reset.
 
+## Recurrence during 0050 item 3 validation (2026-10-26)
+
+- **Failure:** `container firewall policy > the root entrypoint runs the firewall itself and records the outcome per mode` hit the five-second budget (5,005.83 ms, `exitCode` `null` at `tests/unit/firewall-policy.test.ts:822`).
+- **Original command:** `env -u PORT mise run test` on branch `todo-0050-transcript-history-9f95ba1af36f` (`930189337` plus the change), node mbp3, standard group reservations, other workspaces loading the host (load average 20 to 159 during the preceding hour).
+- **Suite counts:** root and agent-support group 3,469 passed, 3 failed across 166 files (328.95 s); the other failures were 0259 and a malformed 0887 case header fixed in the same change.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.ZrjtAX`.
+- **Isolated rerun:** `env -u PORT mise run test:logged -- --name firewall-policy -- bun test ./tests/unit/firewall-policy.test.ts` passed (43.0 s).
+- **Disposition:** recurrence confirmed by the isolated pass; the branch touches neither the test nor `docker/`. No assertion, deadline or skip changed.
+- **Again in a root-only rerun:** `env -u PORT mise run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures` failed the same case (5,004.69 ms; 3,369 passed, 1 failed across 156 files, 104.2 s; evidence `orkestrator-test-run.Jwvudr`). The owner had passed alone minutes before.
+
 ## Pi ChatGPT fallback main merge — 2026-10-26
 
 - **Parents:** `8da8c9cc87779451589b106c228e425ef742aa47` and `a51045a4a954d49ae388c0f22535e9b28274279f`.
@@ -117,3 +127,7 @@ groups passed; root and bridges failed only the four firewall timeouts and
 one Cursor hook timeout described above. Backend reported 11,749 passed and
 zero failed; Pi reported 649 passed and zero failed. Formatting, lint,
 typechecking, and the flake-index contract check passed.
+
+## Shared Codex state review fixes — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` on `74841142b` repeated `the root entrypoint runs the firewall itself and records the outcome per mode`: `exitCode` was `null` at the five-second deadline (5005.35 ms). The complete unchanged owner passed alone in 51.5 s: `mise run test:logged -- --name codex-auth-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. Root and workspace groups used one and four reserved worker slots respectively, alongside two bridge slots and one protocol slot. The generic shell-test deadline remains the observed boundary; no new cause is established. Aggregate evidence and results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md).

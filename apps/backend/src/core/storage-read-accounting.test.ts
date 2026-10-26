@@ -44,22 +44,22 @@ async function unitsDuring(kind: RecurringJobKind, run: () => unknown) {
 describe("storage read accounting", () => {
   test("a whole-store read served from the row cache is still a storage read", async () => {
     const { storage, dataDir } = await storageIn();
-    const plan = await storage.createFeaturePlan("project-1");
-    await storage.listAllFeaturePlans();
+    const plan = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.listAllFeaturePlans();
 
     expect(
       await unitsDuring("feature-planning-tick", async () => {
-        await storage.listAllFeaturePlans();
-        await storage.listAllFeaturePlans();
+        await storage.kanban.listAllFeaturePlans();
+        await storage.kanban.listAllFeaturePlans();
       }),
     ).toEqual({ "storage-read": 2 });
 
     // Another process's write: the next read reloads the rows, still one read.
     const { storage: other } = await storageIn(dataDir);
-    await other.updateFeaturePlan(plan.id, { title: "renamed" });
-    expect(await unitsDuring("feature-planning-tick", () => storage.listAllFeaturePlans())).toEqual(
-      { "storage-read": 1 },
-    );
+    await other.kanban.updateFeaturePlan(plan.id, { title: "renamed" });
+    expect(
+      await unitsDuring("feature-planning-tick", () => storage.kanban.listAllFeaturePlans()),
+    ).toEqual({ "storage-read": 1 });
     other.close();
     storage.close();
   });
@@ -68,17 +68,17 @@ describe("storage read accounting", () => {
     const { storage, dataDir } = await storageIn();
     const plans = [];
     for (let index = 0; index < 20; index += 1) {
-      plans.push(await storage.createFeaturePlan("project-1"));
+      plans.push(await storage.kanban.createFeaturePlan("project-1"));
     }
     const target = plans[7]!;
     // Another process's write leaves this connection's cache stale, so the
     // pass has to fetch: only the plan's own row is charged.
     const { storage: other } = await storageIn(dataDir);
-    await other.updateFeaturePlan(target.id, { title: "renamed" });
-    const renamed = await other.getFeaturePlan(target.id);
+    await other.kanban.updateFeaturePlan(target.id, { title: "renamed" });
+    const renamed = await other.kanban.getFeaturePlan(target.id);
     const cost = await costDuring("feature-planning-tick", async () => {
-      expect((await storage.getFeaturePlan(target.id))?.title).toBe("renamed");
-      expect(await storage.getFeaturePlan("missing")).toBeNull();
+      expect((await storage.kanban.getFeaturePlan(target.id))?.title).toBe("renamed");
+      expect(await storage.kanban.getFeaturePlan("missing")).toBeNull();
     });
     expect(cost).toEqual({ units: { "storage-read": 2 }, bytes: JSON.stringify(renamed).length });
     other.close();
@@ -137,19 +137,23 @@ describe("storage read accounting", () => {
 
   test("only content fetched from the database charges bytes", async () => {
     const { storage, dataDir } = await storageIn();
-    const plan = await storage.createFeaturePlan("project-1");
-    await storage.listAllFeaturePlans();
+    const plan = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.listAllFeaturePlans();
 
     // Served by the connection's row cache: a read, nothing fetched.
-    expect(await costDuring("feature-planning-tick", () => storage.listAllFeaturePlans())).toEqual({
+    expect(
+      await costDuring("feature-planning-tick", () => storage.kanban.listAllFeaturePlans()),
+    ).toEqual({
       units: { "storage-read": 1 },
       bytes: 0,
     });
 
     // A foreign write invalidates the cache: the same read fetches the rows.
     const { storage: other } = await storageIn(dataDir);
-    await other.updateFeaturePlan(plan.id, { title: "renamed" });
-    const miss = await costDuring("feature-planning-tick", () => storage.listAllFeaturePlans());
+    await other.kanban.updateFeaturePlan(plan.id, { title: "renamed" });
+    const miss = await costDuring("feature-planning-tick", () =>
+      storage.kanban.listAllFeaturePlans(),
+    );
     expect(miss.units).toEqual({ "storage-read": 1 });
     expect(miss.bytes).toBeGreaterThan(0);
     other.close();

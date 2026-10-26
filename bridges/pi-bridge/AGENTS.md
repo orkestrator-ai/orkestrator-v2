@@ -76,6 +76,11 @@ alone. "Did this turn answer" is
 boundary clears mid-turn. A resume replays one row per Pi entry, dated by the
 entry, so live and resumed transcripts have the same shape.
 
+A turn Pi ended on a failed response (`stopReason: "error"` on its last
+response, which `finishTurn` fails) gets an error `status` line saying why
+(`appendTurnFailure`), on its last row or a new one when the turn produced
+none. A retried response that a later answer replaces adds nothing.
+
 ## When touching the Pi bridge
 
 - The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every

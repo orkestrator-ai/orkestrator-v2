@@ -684,7 +684,14 @@ interface PerfApi {
   messageCount: () => number;
   counters: () => PerfCounters;
   stats: () => Record<string, unknown>;
+  /** A non-positive interval starts the stream without a timer; see `streamTick`. */
   startStream: (intervalMs: number, charsPerTick: number) => void;
+  /**
+   * Apply one tick to the current stream. Lets a caller drive the stream from
+   * network events, which a hidden page receives at full rate, where the
+   * stream's own timer is throttled (`e2e/perf/hidden-resume-perf.ts`).
+   */
+  streamTick: () => void;
   stopStream: () => void;
   clearComposer: () => void;
   remount: () => void;
@@ -731,9 +738,13 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
   const inputContainerRef = useRef<HTMLDivElement | null>(null);
   const { scrollProps, virtuosoRef, isAtBottom, scrollToBottom, scrollToIndex } =
     useVirtuosoScrollState();
-  const streamRef = useRef<{ timer: number; id: string; code: string; offset: number } | null>(
-    null,
-  );
+  const streamRef = useRef<{
+    timer: number;
+    id: string;
+    code: string;
+    offset: number;
+    charsPerTick: number;
+  } | null>(null);
   const streamSource = useMemo(() => tsCode(seeded(0x57ea), 999, 2_000), []);
 
   const stopStream = useCallback(() => {
@@ -742,35 +753,37 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
     setIsLoading(false);
   }, []);
 
+  const streamTick = useCallback(() => {
+    const state = streamRef.current;
+    if (!state) return;
+    const next = streamSource.slice(state.offset, state.offset + state.charsPerTick);
+    state.offset = (state.offset + state.charsPerTick) % streamSource.length;
+    state.code += next;
+    counters.streamTicks++;
+    counters.streamChars += next.length;
+    const content = `${STREAM_PREAMBLE}${state.code}`;
+    const id = state.id;
+    setMessages((current) => {
+      const last = current.at(-1);
+      if (!last || last.id !== id) return current;
+      return [...current.slice(0, -1), { ...last, content, parts: [{ type: "text", content }] }];
+    });
+  }, [streamSource]);
+
   const startStream = useCallback(
     (intervalMs: number, charsPerTick: number) => {
       stopStream();
       const id = `perf-stream-${Date.now().toString(36)}`;
-      const state = { timer: 0, id, code: "", offset: 0 };
+      const state = { timer: 0, id, code: "", offset: 0, charsPerTick };
       streamRef.current = state;
       setIsLoading(true);
       setMessages((current) => [
         ...current,
         textMessage(id, "assistant", STREAM_PREAMBLE, MESSAGE_COUNT + current.length),
       ]);
-      state.timer = window.setInterval(() => {
-        const next = streamSource.slice(state.offset, state.offset + charsPerTick);
-        state.offset = (state.offset + charsPerTick) % streamSource.length;
-        state.code += next;
-        counters.streamTicks++;
-        counters.streamChars += next.length;
-        const content = `${STREAM_PREAMBLE}${state.code}`;
-        setMessages((current) => {
-          const last = current.at(-1);
-          if (!last || last.id !== id) return current;
-          return [
-            ...current.slice(0, -1),
-            { ...last, content, parts: [{ type: "text", content }] },
-          ];
-        });
-      }, intervalMs);
+      if (intervalMs > 0) state.timer = window.setInterval(streamTick, intervalMs);
     },
-    [stopStream, streamSource],
+    [stopStream, streamTick],
   );
 
   useEffect(() => () => stopStream(), [stopStream]);
@@ -805,6 +818,7 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
         return result;
       },
       startStream,
+      streamTick,
       stopStream,
       clearComposer: () => setText(""),
       remount: onRemount,
@@ -816,7 +830,15 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
       scrollToBottom: () => scrollToBottom(),
       richIndices: () => richMessageIndices,
     };
-  }, [messages.length, onRemount, scrollToBottom, scrollToIndex, startStream, stopStream]);
+  }, [
+    messages.length,
+    onRemount,
+    scrollToBottom,
+    scrollToIndex,
+    startStream,
+    streamTick,
+    stopStream,
+  ]);
 
   return (
     <section data-testid="rich-transcript-perf" className="min-h-0 flex-1">

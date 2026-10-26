@@ -640,12 +640,12 @@ test("scheduled agent tickets and comments replay once after committed effects a
     interruption.mockRestore();
   }
   expect(scheduler.service.get(owner, create.job.id).fires[0]!.state).toBe("running");
-  let tickets = await harness.storage.getKanbanTasks(projectId);
+  let tickets = await harness.storage.kanban.getKanbanTasks(projectId);
   expect(tickets).toHaveLength(1);
   clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
   await scheduler.fire();
   expect(scheduler.service.get(owner, create.job.id).fires[0]!.state).toBe("succeeded");
-  tickets = await harness.storage.getKanbanTasks(projectId);
+  tickets = await harness.storage.kanban.getKanbanTasks(projectId);
   expect(tickets).toHaveLength(1);
   const comment = await scheduler.service.create(owner, {
     at: "+1m",
@@ -665,7 +665,7 @@ test("scheduled agent tickets and comments replay once after committed effects a
   expect(scheduler.service.get(owner, comment.job.id).fires[0]!.state).toBe("running");
   clock.now += SCHEDULED_JOB_LIMITS.fireStaleMs;
   await scheduler.fire();
-  tickets = await harness.storage.getKanbanTasks(projectId);
+  tickets = await harness.storage.kanban.getKanbanTasks(projectId);
   expect(tickets[0]!.comments).toHaveLength(1);
   expect(scheduler.service.get(owner, comment.job.id).fires[0]!.state).toBe("succeeded");
 });

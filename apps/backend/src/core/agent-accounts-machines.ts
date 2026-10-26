@@ -41,11 +41,11 @@ export async function listMachineAgentAccounts(
 ): Promise<MachineAgentAccountsResult> {
   const timeoutMs = options.timeoutMs ?? MACHINE_ACCOUNTS_TIMEOUT_MS;
   const [profile, selfId, snapshot, signIns, store] = await Promise.all([
-    context.storage.getBackendProfile(),
+    context.storage.previewServices.getBackendProfile(),
     context.nodes?.selfIdentity().catch(() => null) ?? Promise.resolve(null),
     listAgentAccounts(context),
     (options.readSignIns ?? readHostAgentSignIns)(),
-    context.storage.loadAgentAccounts(),
+    context.storage.agentAccounts.loadAgentAccounts(),
   ]);
   const preferred = store.preferred ? { preferred: { ...store.preferred } } : {};
   const self: MachineAgentAccounts = {
@@ -126,7 +126,7 @@ export async function setPreferredAgentIdentity(
 ): Promise<PreferredAgentIdentities> {
   const normalized = email === null ? undefined : normalizePreferredEmail(email);
   if (email !== null && !normalized) throw new Error("A preferred login needs a valid email");
-  return context.storage.mutateAgentAccounts((store) => {
+  return context.storage.agentAccounts.mutateAgentAccounts((store) => {
     const next: PreferredAgentIdentities = { ...store.preferred };
     if (normalized) next[platform] = normalized;
     else delete next[platform];

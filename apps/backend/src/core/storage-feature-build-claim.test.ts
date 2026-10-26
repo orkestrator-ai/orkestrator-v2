@@ -23,11 +23,11 @@ afterEach(async () => {
 describe("StorageService feature build claims", () => {
   test("allows exactly one concurrent task to reserve a feature build", async () => {
     const storage = await createStorage();
-    const feature = await storage.createFeaturePlan("project-1");
+    const feature = await storage.kanban.createFeaturePlan("project-1");
 
     const [first, second] = await Promise.all([
-      storage.claimFeaturePlanBuild(feature.id, "task-a"),
-      storage.claimFeaturePlanBuild(feature.id, "task-b"),
+      storage.kanban.claimFeaturePlanBuild(feature.id, "task-a"),
+      storage.kanban.claimFeaturePlanBuild(feature.id, "task-b"),
     ]);
 
     expect([first.claimed, second.claimed].filter(Boolean)).toHaveLength(1);
@@ -40,17 +40,17 @@ describe("StorageService feature build claims", () => {
       buildTaskId: expect.stringMatching(/^task-[ab]$/),
     });
 
-    const persisted = await storage.getFeaturePlans("project-1");
+    const persisted = await storage.kanban.getFeaturePlans("project-1");
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.buildTaskId).toBe(winningTaskId);
   });
 
   test("treats retrying the winning task as an idempotent claim", async () => {
     const storage = await createStorage();
-    const feature = await storage.createFeaturePlan("project-1");
+    const feature = await storage.kanban.createFeaturePlan("project-1");
 
-    expect((await storage.claimFeaturePlanBuild(feature.id, "task-a")).claimed).toBe(true);
-    expect((await storage.claimFeaturePlanBuild(feature.id, "task-a")).claimed).toBe(true);
-    expect((await storage.claimFeaturePlanBuild(feature.id, "task-b")).claimed).toBe(false);
+    expect((await storage.kanban.claimFeaturePlanBuild(feature.id, "task-a")).claimed).toBe(true);
+    expect((await storage.kanban.claimFeaturePlanBuild(feature.id, "task-a")).claimed).toBe(true);
+    expect((await storage.kanban.claimFeaturePlanBuild(feature.id, "task-b")).claimed).toBe(false);
   });
 });

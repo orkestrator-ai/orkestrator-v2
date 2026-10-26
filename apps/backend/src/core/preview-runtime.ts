@@ -23,14 +23,22 @@ import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
 import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
 import { PreviewTargetResolver, type DockerRunner } from "./preview-target-resolver.js";
-import { DEFAULT_PREVIEW_SETTINGS, type PreviewSettings } from "./storage-preview-services.js";
+import {
+  DEFAULT_PREVIEW_SETTINGS,
+  type PreviewServicesStorage,
+  type PreviewSettings,
+} from "./storage-preview-services.js";
 
 export interface PreviewRuntimeStorage extends PreviewRegistryStorage {
   getDataDir(): string;
-  loadPreviewSettings(): Promise<PreviewSettings>;
-  updatePreviewSettings(
-    update: (current: PreviewSettings) => PreviewSettings,
-  ): Promise<PreviewSettings>;
+  previewServices: Pick<
+    PreviewServicesStorage,
+    | "loadPreviewServiceStore"
+    | "mutatePreviewServiceStore"
+    | "getPreviewBackendIdentity"
+    | "loadPreviewSettings"
+    | "updatePreviewSettings"
+  >;
 }
 
 export interface PreviewRuntimeOptions {
@@ -147,7 +155,7 @@ export class PreviewRuntime {
 
   init(): Promise<void> {
     this.initialized ??= (async () => {
-      this.settings = await this.options.storage.loadPreviewSettings();
+      this.settings = await this.options.storage.previewServices.loadPreviewSettings();
       await this.loadUpstreamCa();
       await this.registry.init();
     })();
@@ -233,7 +241,7 @@ export class PreviewRuntime {
     update: (current: PreviewSettings) => PreviewSettings,
   ): Promise<PreviewSettings> {
     const relayBefore = this.effectiveSettings().relay;
-    this.settings = await this.options.storage.updatePreviewSettings(update);
+    this.settings = await this.options.storage.previewServices.updatePreviewSettings(update);
     await this.loadUpstreamCa();
     const effective = this.effectiveSettings();
     if (effective.relay !== relayBefore) await this.reresolveForRelay(effective.relay);

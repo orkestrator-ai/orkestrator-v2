@@ -140,7 +140,8 @@ problems the spec found were fixed before those passes:
   as a user message the live tab never showed (3 user messages live, 4 after
   resume, with one turn per prompt in the rollout: nothing was sent). Filed as
   [0082](../transcripts-and-observation/0082-codex-resume-shows-environment-context.md);
-  the step excludes that block until it is fixed.
+  the step excluded that block until 0082 fixed the reader on 2026-10-26,
+  and now counts every user message (a Codex rerun is owed there).
 
 Every earlier step (launch, stale Ask agent, approval, handoff) also passed
 for both providers, so the handoff's design context now arriving as a chip in

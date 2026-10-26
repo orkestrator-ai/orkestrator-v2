@@ -877,6 +877,7 @@ export function buildConcurrentGroups(
         "./e2e/agent-testing/mcp-apply-live-safety.test.ts",
         "./e2e/agent-testing/idle-observation-live-support.test.ts",
         "./e2e/agent-testing/coordinator-mail-tiles.test.ts",
+        "./e2e/agent-testing/bridge-builds-setup.test.ts",
         "./scripts/opencode-live-compatibility-probe.test.ts",
         "./test-fixtures/agent-project/server.test.ts",
         "--only-failures",

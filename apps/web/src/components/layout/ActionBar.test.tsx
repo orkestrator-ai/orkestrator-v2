@@ -8,12 +8,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realSettings from "@/components/settings";
-import * as realEnvironmentSettingsDialog from "@/components/environments/EnvironmentSettingsDialog";
 import * as realDockerComponents from "@/components/docker";
 import * as realStores from "@/stores";
 import * as realHooks from "@/hooks";
@@ -27,6 +27,7 @@ import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ProjectBoardTab } from "@/stores";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
@@ -55,7 +56,6 @@ const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
 const realTooltipSnapshot = { ...realTooltip };
 const realSettingsSnapshot = { ...realSettings };
-const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
 const realDockerComponentsSnapshot = { ...realDockerComponents };
 const realStoresSnapshot = { ...realStores };
 const realHooksSnapshot = { ...realHooks };
@@ -230,7 +230,6 @@ const armRefreshAfterAgentCompletionMock = mock(async (): Promise<string | null>
 const disarmRefreshAfterAgentCompletionMock = mock(async (_armedAt: string) => {});
 const updateProjectMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
-const recreateEnvironmentMock = mock(async () => {});
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
@@ -571,47 +570,6 @@ mock.module("@/components/settings", () => ({
     ) : null,
 }));
 
-mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
-  EnvironmentSettingsDialog: ({
-    environment,
-    onOpenChange,
-    onRestart,
-    onUpdate,
-    open,
-  }: {
-    environment: Environment;
-    onOpenChange: (open: boolean) => void;
-    onRestart: (
-      environmentId: string,
-      options: { intent: "discard"; expectedContainerId: string | null },
-    ) => Promise<void>;
-    onUpdate: (environment: Environment) => void;
-    open: boolean;
-  }) =>
-    open ? (
-      <div>
-        <span>Environment settings for {environment.name}</span>
-        <button onClick={() => onUpdate({ ...environment, name: "updated-env" })} type="button">
-          Update mock environment
-        </button>
-        <button
-          onClick={() =>
-            void onRestart(environment.id, {
-              intent: "discard",
-              expectedContainerId: environment.containerId,
-            })
-          }
-          type="button"
-        >
-          Restart mock environment
-        </button>
-        <button onClick={() => onOpenChange(false)} type="button">
-          Close mock environment settings
-        </button>
-      </div>
-    ) : null,
-}));
-
 mock.module("@/components/docker", () => ({
   DockerStatsDialog: ({ open }: { open: boolean }) =>
     open ? <div>Docker configuration dialog</div> : null,
@@ -860,7 +818,6 @@ mock.module("@/lib/backend", () => ({
   openLocalInEditor: openLocalInEditorMock,
   readContainerFile: readContainerFileMock,
   readLocalFile: readLocalFileMock,
-  recreateEnvironment: recreateEnvironmentMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
   startLoopedReview: startLoopedReviewMock,
   cancelLoopedReview: cancelLoopedReviewMock,
@@ -909,10 +866,6 @@ afterAll(() => {
   mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
   mock.module("@/components/settings", () => realSettingsSnapshot);
-  mock.module(
-    "@/components/environments/EnvironmentSettingsDialog",
-    () => realEnvironmentSettingsDialogSnapshot,
-  );
   mock.module("@/components/docker", () => realDockerComponentsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
@@ -953,6 +906,7 @@ async function fireTooltipTimer(clock: ControlledTimeout): Promise<void> {
 }
 
 beforeEach(() => {
+  useAppDialogStore.setState({ request: null });
   currentDeletingEnvironments.clear();
   currentDeletingProjects.clear();
   setLongPressTimingsForTests(15, CLICK_SUPPRESSION_MS);
@@ -1079,7 +1033,6 @@ beforeEach(() => {
   disarmRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
-  recreateEnvironmentMock.mockReset();
   mergeEnvironmentPrMock.mockImplementation(
     async (_environmentId, _method, _deleteBranch, cleanupAfterMerge) => ({
       outcome: "merged",
@@ -2225,28 +2178,13 @@ describe("ActionBar toolbar interactions", () => {
       asyncDialogOptions,
     );
 
+    // Environment settings render in `AppDialogHost`, which `AppShell` mounts;
+    // `AppDialogHost.test.tsx` covers the dialog itself.
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(
-      await screen.findByText(
-        "Environment settings for feature-env",
-        undefined,
-        asyncDialogOptions,
-      ),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Update mock environment" }));
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(
-      "env-1",
-      expect.objectContaining({ id: "env-1", name: "updated-env" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Restart mock environment" }));
-    await waitFor(
-      () =>
-        expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1", {
-          intent: "discard",
-          expectedContainerId: expect.anything(),
-        }),
-      asyncDialogOptions,
-    );
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-1",
+    });
   }, 60_000);
 
   test("opens a requested global settings section from another tree", async () => {
@@ -2319,89 +2257,34 @@ describe("ActionBar toolbar interactions", () => {
     expect(openInEditorMock).not.toHaveBeenCalled();
   });
 
-  test("dismisses repository and environment settings through onOpenChange", async () => {
+  test("dismisses repository settings through onOpenChange", async () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close mock repository settings" }));
     expect(screen.queryByText("Repository settings for repo") === null).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close mock environment settings" }));
-    expect(screen.queryByText("Environment settings for feature-env") === null).toBe(true);
   });
 
-  test("keeps environment settings pinned to the environment that opened them", async () => {
+  test("leaves environment settings to the app dialog host", () => {
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
-
-    // The pinned environment still exists; only the selection moved on.
-    currentOtherEnvironments = [{ ...selectedEnvironment }];
-    currentEnvironment = {
-      ...selectedEnvironment,
-      id: "env-2",
-      name: "second-env",
-    };
-    currentSelectedEnvironmentId = currentEnvironment.id;
-    view.rerender(<ActionBar />);
-
-    expect(screen.getByText("Environment settings for feature-env")).toBeTruthy();
-    expect(screen.queryByText("Environment settings for second-env") === null).toBe(true);
-  });
-
-  test("reflects a background update to a pinned environment that is no longer selected", async () => {
-    const view = render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
-
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-1",
+    });
+    // The toolbar renders no copy of its own, and a later selection change does
+    // not retarget the request.
+    expectDomAbsent(screen.queryByRole("status", { name: "Loading environment settings…" }));
     currentOtherEnvironments = [{ ...selectedEnvironment }];
     currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
     currentSelectedEnvironmentId = currentEnvironment.id;
     view.rerender(<ActionBar />);
-
-    // The pin resolves through the store on every render, so a background sync
-    // that renames the pinned environment must reach the open dialog.
-    currentOtherEnvironments = [{ ...selectedEnvironment, name: "renamed-by-sync" }];
-    view.rerender(<ActionBar />);
-
-    expect(screen.getByText("Environment settings for renamed-by-sync")).toBeTruthy();
-    expect(screen.queryByText("Environment settings for feature-env") === null).toBe(true);
-  });
-
-  test("closes environment settings when the pinned environment is deleted", async () => {
-    const view = render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
-
-    // Deleted from the store. Keeping a stale snapshot open would let the user
-    // edit an environment that no longer exists, and updateEnvironment would
-    // discard the edit without reporting anything.
-    currentOtherEnvironments = [];
-    currentSelectedEnvironmentId = null;
-    view.rerender(<ActionBar />);
-
-    await waitFor(() => {
-      expect(screen.queryByText("Environment settings for feature-env") === null).toBe(true);
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-1",
     });
-    expect(updateEnvironmentMock).not.toHaveBeenCalled();
-  });
-
-  test("forwards environment settings updates to the store", async () => {
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Update mock environment" }));
-
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(
-      "env-1",
-      expect.objectContaining({ id: "env-1", name: "updated-env" }),
-    );
   });
 
   test("keeps repository settings pinned when project selection changes", async () => {

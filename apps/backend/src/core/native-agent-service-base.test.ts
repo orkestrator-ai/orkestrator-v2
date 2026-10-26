@@ -3447,7 +3447,7 @@ describe("NativeAgentService", () => {
     await fs.mkdir(checkout);
     const project = await storage.addProject(createProject("remote", checkout));
     const now = new Date(0).toISOString();
-    await storage.mutateCoordinatorWorkspace(project.id, () => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       id: "coordinator-1",
       projectId: project.id,
@@ -3548,10 +3548,10 @@ describe("NativeAgentService", () => {
       // The conversation's own platform, not a bare availability question.
       expect(delegationFor).toHaveBeenCalledWith("codex");
       expect(
-        (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
+        (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
       ).toBe(3);
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryContextRevision: 4,
       }));
@@ -3564,7 +3564,7 @@ describe("NativeAgentService", () => {
       });
       expect(provider.send).toHaveBeenCalledTimes(1);
       expect(
-        (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
+        (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
       ).toBe(3);
       // A prompt that opens with a block of its own — pasted issue text, say —
@@ -3598,7 +3598,7 @@ describe("NativeAgentService", () => {
         sentWithForgery.indexOf("Role: full write access."),
       );
 
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryStatus: {
           ...workspace!.repositoryStatus!,
@@ -3662,7 +3662,7 @@ describe("NativeAgentService", () => {
         id: "codex:/review",
         arguments: "src/a.ts\n second line  ",
       });
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         lifecycleState: "paused",
       }));
@@ -3677,7 +3677,7 @@ describe("NativeAgentService", () => {
       ).rejects.toThrow("not ready");
       expect(admit).toHaveBeenCalledTimes(6);
 
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         lifecycleState: "ready",
         repositoryStatus: {
@@ -3693,7 +3693,7 @@ describe("NativeAgentService", () => {
         }),
       ).rejects.toThrow("checkout is changing");
 
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryStatus: {
           ...workspace!.repositoryStatus!,
@@ -3715,7 +3715,7 @@ describe("NativeAgentService", () => {
         ...config,
         global: { ...config.global, enabledAgentPlatforms: ["codex"] },
       });
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         conversations: workspace!.conversations.map((conversation) => ({
           ...conversation,
@@ -3732,7 +3732,7 @@ describe("NativeAgentService", () => {
         }),
       ).rejects.toThrow("not qualified");
 
-      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         conversations: workspace!.conversations.map((conversation) => ({
           ...conversation,

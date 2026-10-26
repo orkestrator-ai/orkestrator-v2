@@ -77,6 +77,7 @@ import {
   requestedSpawnPath,
   validAgentPath,
 } from "../subagent-spawn.js";
+import { turnFailureText } from "../messages/turn-failure.js";
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -852,6 +853,23 @@ export function mergePersistedSessionMeta(
   }
 }
 
+/**
+ * Blocks Codex writes into the conversation as user messages of its own: the
+ * cwd, sandbox and shell (`environment_context`), a skill's instructions after
+ * the `$name` prompt that invoked it, the note after an interrupt (a developer
+ * message since 0.164.0, a user one before), a finished sub-agent's report and
+ * a TUI `!` command. The live tab never shows them. The tag set is the one in
+ * the pinned 0.164.0 binary. Only a block framed by its own open and close
+ * tags matches, so a user's text that starts with a tag is kept.
+ */
+const CODEX_CONTEXT_FRAGMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
+  ["<environment_context>", "</environment_context>"],
+  ["<skill>", "</skill>"],
+  ["<turn_aborted>", "</turn_aborted>"],
+  ["<subagent_notification>", "</subagent_notification>"],
+  ["<user_shell_command>", "</user_shell_command>"],
+];
+
 function isSyntheticPersistedUserText(text: string): boolean {
   const trimmed = text.trim();
   return (
@@ -859,9 +877,9 @@ function isSyntheticPersistedUserText(text: string): boolean {
     // Codex 0.162 drops the path from the heading when it injects only the
     // user's global instructions.
     /^# AGENTS\.md instructions[ \t]*\n\s*<INSTRUCTIONS>/.test(trimmed) ||
-    // The cwd, sandbox and shell block Codex injects as a user message; only
-    // a message that is exactly that block, so a user's own text is kept.
-    (trimmed.startsWith("<environment_context>") && trimmed.endsWith("</environment_context>")) ||
+    CODEX_CONTEXT_FRAGMENTS.some(
+      ([open, close]) => trimmed.startsWith(open) && trimmed.endsWith(close),
+    ) ||
     trimmed.startsWith(
       "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
     )
@@ -900,6 +918,16 @@ export function extractPersistedMessageContent(
     return null;
   }
 
+  // Codex writes its instructions and environment blocks as separate segments
+  // of one message. Judging each segment means a message is dropped only when
+  // nothing in it is the user's own text.
+  if (
+    role === "user" &&
+    segments.every((segment) => !segment.trim() || isSyntheticPersistedUserText(segment))
+  ) {
+    return null;
+  }
+
   const joined = segments.join("\n").trim();
   if (!joined) {
     return null;
@@ -916,7 +944,10 @@ export function extractPersistedMessageContent(
     return null;
   }
 
-  if (role === "user" && isSyntheticPersistedUserText(text)) {
+  // Recheck a single segment after stripping injected wrappers. For multipart
+  // messages the segment-level decision above is authoritative: joining can
+  // frame real user text between context tags or put it after a synthetic prefix.
+  if (role === "user" && segments.length === 1 && isSyntheticPersistedUserText(text)) {
     return null;
   }
 
@@ -1597,6 +1628,20 @@ async function replayPersistedRollout(
 
     if (record.type === "event_msg" && record.payload?.type === "item_completed") {
       visitCompletedItem(record.payload.item, timestamp);
+      return;
+    }
+
+    // A turn that failed keeps its error on `task_complete`; show it where the
+    // live turn did (`messages/turn-failure.ts`).
+    if (record.type === "event_msg" && record.payload?.type === "task_complete") {
+      const error = record.payload.error as { message?: unknown } | null | undefined;
+      if (error && typeof error === "object" && typeof error.message === "string") {
+        ensureAssistantMessage(timestamp).parts.push({
+          type: "status",
+          severity: "error",
+          content: turnFailureText(error.message),
+        });
+      }
       return;
     }
 

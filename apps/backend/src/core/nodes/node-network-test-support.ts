@@ -31,6 +31,9 @@ export class MemoryNodeStorage implements NodeServiceStorage {
   attachments: NodeAttachments = emptyNodeAttachments();
   controllerSettings: ControllerSettingsStore = emptyControllerSettingsStore();
   writes = { registry: 0, attachments: 0 };
+  /** One object stands in for both stores, so a test can patch either here. */
+  readonly nodes = this;
+  readonly previewServices = this;
 
   constructor(
     readonly instanceId: string,
@@ -86,8 +89,8 @@ export class MemoryNodeStorage implements NodeServiceStorage {
     return this.profile;
   }
 
-  async getPreviewBackendIdentity(): Promise<{ instanceId: string }> {
-    return { instanceId: this.instanceId };
+  async getPreviewBackendIdentity(): Promise<{ instanceId: string; created: boolean }> {
+    return { instanceId: this.instanceId, created: false };
   }
 }
 

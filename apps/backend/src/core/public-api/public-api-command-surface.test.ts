@@ -493,7 +493,9 @@ describe("prompt attachments", () => {
     expect(await fs.readFile(path.join(directory, "02-notes.txt"), "utf8")).toBe("hello\n");
     expect(attachments[0]!.path).toBe(path.join(directory, "01-shot.png"));
     // The operation record holds no file content.
-    const stored = JSON.stringify(await harness.storage.getPublicOperation(response.result.runId));
+    const stored = JSON.stringify(
+      await harness.storage.publicOperations.getPublicOperation(response.result.runId),
+    );
     expect(stored).not.toContain(PNG);
     // Different bytes under the same key conflict.
     const conflict = await harness.call(
@@ -608,7 +610,7 @@ describe("attachment restart checkpoints", () => {
         const sent = stub.sends.length;
         const pending = harness.call(action, input, { requestId: "staging" });
         await staging;
-        const record = (await harness.storage.listActivePublicOperations()).find(
+        const record = (await harness.storage.publicOperations.listActivePublicOperations()).find(
           (entry) => entry.requestId === "staging",
         )!;
         expect(record).toMatchObject({
@@ -746,7 +748,7 @@ describe("queued attachment persistence and restart evidence", () => {
           },
         );
       }
-      await harness.storage.updatePublicOperation(id, (record) => ({
+      await harness.storage.publicOperations.updatePublicOperation(id, (record) => ({
         ...record,
         stage: evidence === "evicted" ? "executing" : "queueing",
         dispatch: evidence === "evicted" ? { state: "accepted" } : undefined,

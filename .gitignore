@@ -44,6 +44,7 @@ pids/
 # Coverage
 coverage/
 .nyc_output/
+/output/qualification-*/
 /output/playwright/
 /output/agent-testing/
 /output/benchmarks/

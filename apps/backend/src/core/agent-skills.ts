@@ -1,3 +1,4 @@
+import { claudeInstalledPluginIdEnablement } from "@orkestrator/protocol/node/claude-plugin-set";
 import os from "node:os";
 import path from "node:path";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -133,6 +134,15 @@ function homeDir(): string {
   return homeOverride ?? os.homedir();
 }
 
+function claudeHome(): string {
+  const override = process.env.CLAUDE_CONFIG_DIR?.trim();
+  // Tests use a complete synthetic home unless they explicitly opt into a
+  // config directory inside it.
+  if (homeOverride !== undefined && (!override || !isInside(homeOverride, path.resolve(override))))
+    return path.join(homeOverride, ".claude");
+  return override ? path.resolve(override) : path.join(homeDir(), ".claude");
+}
+
 function codexHome(): string {
   // A synthetic home must be a complete isolation boundary. In particular,
   // Codex commonly sets CODEX_HOME for the process running the test suite.
@@ -231,8 +241,12 @@ async function claudePluginRoots(): Promise<RootSpec[]> {
   const plugins = (manifest as { plugins?: unknown }).plugins;
   if (!plugins || typeof plugins !== "object") return [];
 
+  // This host catalogue has no project context. Project settings can still
+  // override user enablement for individual sessions.
+  const settings = { user: await readJsonFile(path.join(claudeHome(), "settings.json")) };
   const roots: RootSpec[] = [];
   for (const [key, value] of Object.entries(plugins as Record<string, unknown>)) {
+    if (!claudeInstalledPluginIdEnablement(key, settings, ["user"]).enabled) continue;
     const installs = Array.isArray(value) ? value : [];
     for (const install of installs) {
       const installPath = (install as { installPath?: unknown } | null)?.installPath;
@@ -405,7 +419,7 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
     return [
       // Fixed machine roots would make synthetic-home tests inspect the host.
       ...(homeOverride !== undefined ? [] : [{ path: managed, scope: "admin" as const }]),
-      { path: path.join(home, ".claude", "skills"), scope: "user" },
+      { path: path.join(claudeHome(), "skills"), scope: "user" },
       ...(await claudePluginRoots()),
     ];
   }

@@ -104,8 +104,10 @@ async function setup() {
     switch (command) {
       case "get_project_coordinator":
         result = {
-          workspace: await world.storage.getCoordinatorWorkspace(world.projectId),
-          workflows: await world.storage.listCoordinatorWorkflowAssociations(world.projectId),
+          workspace: await world.storage.coordinators.getCoordinatorWorkspace(world.projectId),
+          workflows: await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+            world.projectId,
+          ),
         };
         break;
       case "get_projects":
@@ -143,7 +145,7 @@ async function setup() {
     conversationId = main.conversationId!,
     capabilities = ["environments", "jobs", "mail", "discovery", "build-pipelines", "multi-review"],
   ) => {
-    const workspace = (await world.storage.getCoordinatorWorkspace(world.projectId))!;
+    const workspace = (await world.storage.coordinators.getCoordinatorWorkspace(world.projectId))!;
     const conversation = workspace.conversations.find((item) => item.id === conversationId)!;
     return server.issueCoordinatorCredential({
       role: "coordinator",
@@ -228,7 +230,7 @@ test("real scoped credentials prompt and launch jobs in leaf-only environments w
   });
   expect(job.body.result?.isError).not.toBe(true);
   expect(job.body.result?.structuredContent).toMatchObject({ delivery: "async", tabId: "job-tab" });
-  const delegations = await world.storage.listOpenCoordinatorDelegations();
+  const delegations = await world.storage.coordinators.listOpenCoordinatorDelegations();
   expect(delegations).toHaveLength(2);
   expect(delegations.map((item) => item.delegation?.workerTabId).sort()).toEqual([
     "job-tab",
@@ -313,7 +315,7 @@ test("remote workflow mutations reject resources from another project", async ()
 
 test("unavailable nodes refuse environment reads and remain visible as unavailable workflow resources", async () => {
   const { world, main, call, disconnect, routed } = await setup();
-  await world.storage.saveCoordinatorWorkflowAssociation({
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: "remote-build",
     projectId: world.projectId,
     coordinatorId: world.coordinatorId,

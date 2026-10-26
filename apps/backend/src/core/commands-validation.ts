@@ -26,7 +26,7 @@ import type {
   PortMapping,
 } from "./models.js";
 import type { AgentSkillProvider } from "./agent-skills.js";
-import type { JsonRecord, StorageService } from "./storage.js";
+import type { JsonRecord, KanbanStorage } from "./storage.js";
 import type { GitHubIssueStatus, GitHubRepositoryRef } from "./github.js";
 import type {
   NativeAgentControlUpdate,
@@ -101,7 +101,7 @@ export function assertOnlyKeys(value: JsonRecord, allowed: readonly string[], na
 }
 
 export async function requireLinearApiKey(context: CommandContext): Promise<string> {
-  const auth = await context.storage.getLinearAuth();
+  const auth = await context.storage.kanban.getLinearAuth();
   if (!auth?.apiKey) throw new Error("Linear is not connected");
   return auth.apiKey;
 }
@@ -879,7 +879,7 @@ export function asFeaturePlanStories(value: unknown): JsonRecord[] {
 
 export function asFeaturePlanUpdates(
   value: unknown,
-): Parameters<StorageService["updateFeaturePlan"]>[1] {
+): Parameters<KanbanStorage["updateFeaturePlan"]>[1] {
   const updates = asRecord(value, "updates");
   assertOnlyKeys(updates, FEATURE_PLAN_UPDATE_FIELDS, "updates");
   const parsed: Record<string, unknown> = {};
@@ -913,7 +913,7 @@ export function asFeaturePlanUpdates(
       parsed[field] = asOptionalNonBlankFeaturePlanId(updates[field], `updates.${field}`);
     }
   }
-  return parsed as Parameters<StorageService["updateFeaturePlan"]>[1];
+  return parsed as Parameters<KanbanStorage["updateFeaturePlan"]>[1];
 }
 
 export function asStartFeaturePlanningInput(args: JsonRecord): StartFeaturePlanningInput {

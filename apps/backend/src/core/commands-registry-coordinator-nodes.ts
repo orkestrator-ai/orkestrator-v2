@@ -145,7 +145,9 @@ export async function coordinatorNodeTarget(
 
 /** This conversation's mailbox, where a node's reports for it are delivered. */
 async function mailbox(context: CommandContext, caller: Caller) {
-  const workspace = await context.storage.getCoordinatorWorkspaceById(caller.coordinatorId);
+  const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
+    caller.coordinatorId,
+  );
   const conversation = workspace?.conversations.find((item) => item.id === caller.conversationId);
   if (!conversation) throw new Error("This coordinator conversation has no mailbox.");
   return {
@@ -185,7 +187,7 @@ async function openNodeDelegation(
   tabId: string,
   requestId: string,
 ): Promise<boolean> {
-  const association = await context.storage.saveCoordinatorWorkflowAssociation({
+  const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
     ...caller,
     kind: "environment",
@@ -201,7 +203,10 @@ async function openNodeDelegation(
   ) {
     throw new Error("Coordinator request id was reused with a different delegation target");
   }
-  const opened = await context.storage.openCoordinatorDelegation(association.id, tabId);
+  const opened = await context.storage.coordinators.openCoordinatorDelegation(
+    association.id,
+    tabId,
+  );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   await startRemoteRequest(context, caller, association.id, { nodeId, environmentId, tabId });
   return opened.delegation?.state === "running";
@@ -234,7 +239,7 @@ async function assertNodeDelegationAvailable(
   tabId: string,
   requestId: string,
 ) {
-  const overlapping = (await context.storage.listOpenCoordinatorDelegations()).find(
+  const overlapping = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
     (association) =>
       association.coordinatorId === caller.coordinatorId &&
       association.conversationId === caller.conversationId &&
@@ -288,7 +293,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const baseCommit = input.delegationBaseCommit;
       const payloadHash = actionHash({ nodeId: target.nodeId, input });
       return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
-        const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
+        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
           ...caller,
           kind: "environment",
@@ -348,7 +353,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         }
         const environmentId = environment.id;
         await recordOrigin(context, caller, target, environmentId);
-        await context.storage.completeCoordinatorWorkflowAssociation(
+        await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           environmentId,
         );
@@ -372,7 +377,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         let coordinatorDelegationOpened = false;
         if (!startError) {
           coordinatorDelegationOpened = Boolean(
-            await context.storage.openCoordinatorDelegation(
+            await context.storage.coordinators.openCoordinatorDelegation(
               receipt.association.id,
               "startup-agent",
             ),
@@ -446,7 +451,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    */
   register("send_coordinator_node_mail", async (args, context) => {
     const caller = await identity(args.scope, context);
-    const workspace = await context.storage.getCoordinatorWorkspaceById(caller.coordinatorId);
+    const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
+      caller.coordinatorId,
+    );
     if (
       workspace?.conversations.find((item) => item.id === caller.conversationId)?.role === "side"
     ) {
@@ -464,7 +471,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         const requestId = asNonBlankString(args.requestId, "requestId");
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
-        const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
+        const joining = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
           (association) =>
             association.coordinatorId === caller.coordinatorId &&
             association.kind === "environment" &&
@@ -551,7 +558,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       }
       const payloadHash = actionHash({ nodeId: target.nodeId, input });
       return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
-        const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
+        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
           ...caller,
           kind: "build-pipeline",
@@ -582,7 +589,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         if (!record(workflow) || typeof workflow.id !== "string") {
           throw new Error("Build pipeline returned no result");
         }
-        await context.storage.completeCoordinatorWorkflowAssociation(
+        await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
         );
@@ -608,9 +615,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       context.storage.withAgentMailWorkerAdmission(
         `review:${target.nodeId}:${input.environmentId}`,
         async () => {
-          const associations = await context.storage.listCoordinatorWorkflowAssociations(
-            caller.projectId,
-          );
+          const associations =
+            await context.storage.coordinators.listCoordinatorWorkflowAssociations(
+              caller.projectId,
+            );
           const existing = associations.find(
             (item) =>
               item.coordinatorId === caller.coordinatorId &&
@@ -688,16 +696,17 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ? { association: existing, claimed: false }
               : reusable
                 ? {
-                    association: await context.storage.addCoordinatorWorkflowRequestAlias(
-                      reusable.id,
-                      caller.coordinatorId,
-                      caller.conversationId,
-                      input.requestId,
-                      payloadHash,
-                    ),
+                    association:
+                      await context.storage.coordinators.addCoordinatorWorkflowRequestAlias(
+                        reusable.id,
+                        caller.coordinatorId,
+                        caller.conversationId,
+                        input.requestId,
+                        payloadHash,
+                      ),
                     claimed: false,
                   }
-                : await context.storage.reserveCoordinatorWorkflowAssociation({
+                : await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
                     id: randomUUID(),
                     ...caller,
                     kind: "multi-review",
@@ -721,7 +730,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             throw new Error("Multi Review on that node returned no workflow");
           }
           if (receipt.association.pending) {
-            await context.storage.completeCoordinatorWorkflowAssociation(
+            await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
               receipt.association.id,
               result.workflow.id,
             );
@@ -754,7 +763,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         throw new Error("Multi Review not found in this project on that node");
       }
       const associations = (
-        await context.storage.listCoordinatorWorkflowAssociations(caller.projectId)
+        await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
       ).filter(
         (item) =>
           item.kind === "multi-review" && item.nodeId === target.nodeId && item.resourceId === id,
@@ -777,7 +786,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       }
       if (surface === "address" && !owned) {
         // Address adopts the review so its fix outcome reaches this conversation.
-        await context.storage.saveCoordinatorWorkflowAssociation({
+        await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
           id: randomUUID(),
           ...caller,
           kind: "multi-review",
@@ -812,7 +821,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       await target.environment(input.environmentId);
       const payloadHash = actionHash({ nodeId: target.nodeId, input, buildPipelineId: pipelineId });
       return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
-        const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
+        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
           ...caller,
           kind: "multi-review",
@@ -839,7 +848,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           throw new Error("Multi-review creation returned an invalid workflow");
         }
         if (receipt.association.pending) {
-          await context.storage.completeCoordinatorWorkflowAssociation(
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
             receipt.association.id,
             workflow.id,
           );

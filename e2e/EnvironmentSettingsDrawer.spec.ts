@@ -74,3 +74,38 @@ test("closing drawer-opened settings with the keyboard returns focus to the draw
   await page.keyboard.press("Enter");
   await expect(drawer.getByText("drawer-environment")).toBeVisible();
 });
+
+test("tools-launched environment settings return focus after first load and cached reopening", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "the tools popover is phone-only");
+  await page.goto("/environment-settings-drawer");
+  await touchTap(
+    page,
+    page.getByRole("button", { name: "Close projects and environments" }).last(),
+  );
+  const tools = page.getByRole("button", { name: "Open tools" });
+  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  for (const closeWithKeyboard of [false, true]) {
+    await touchTap(page, tools);
+    await touchTap(page, page.getByRole("button", { name: "Environment settings", exact: true }));
+    await expect(settings).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Tools", exact: true })).toHaveCount(0);
+    await expect
+      .poll(() => settings.evaluate((dialog) => dialog.contains(document.activeElement)))
+      .toBe(true);
+    const section = settings.getByRole("combobox", { name: "Settings section" });
+    await touchTap(page, section);
+    await touchTap(page, page.getByRole("option", { name: "Defaults", exact: true }));
+    await expect(section).toHaveText("Defaults");
+    const codex = settings
+      .getByRole("radiogroup", { name: "Default agent" })
+      .getByRole("radio", { name: "Codex", exact: true });
+    await touchTap(page, codex);
+    await expect(codex).toHaveAttribute("aria-checked", "true");
+    if (closeWithKeyboard) await page.keyboard.press("Escape");
+    else await touchTap(page, settings.getByRole("button", { name: "Close settings" }));
+    await expect(settings).toHaveCount(0);
+    await expect(tools).toBeFocused();
+  }
+});

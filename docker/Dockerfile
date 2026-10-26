@@ -200,6 +200,10 @@ ARG PI_CLI_VERSION=1.4.0
 # platform-native binary via optional dependencies.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
 ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
+# Keep the pinned CLI on its pin, as CLAUDE_PINNED_RUNTIME_ENV does on the
+# host: otherwise terminal Claude updates the global install in place and the
+# container runs a version the manifest does not declare. Plugins still update.
+ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
 
 # Install OpenCode from the same pinned, digest-verified release artifacts as
 # the packaged desktop toolchain.

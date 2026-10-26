@@ -4,7 +4,9 @@
  * The plugin set is the Claude bridge's own (`getPluginsForSdk`), built by the
  * same shared merge (`@orkestrator/protocol/node/claude-plugin-set`) over the
  * same files, so the editor cannot list a plugin a session does not get or
- * miss one it does. Each plugin that declares servers contributes one source
+ * miss one it does. Installs the bridge does not pass, because Claude Code's
+ * own settings turn them off, are still listed, disabled, so the row says why
+ * the plugin is off. Each plugin that declares servers contributes one source
  * per place it declares them, named as the CLI names them
  * (`plugin:<plugin>:<server>`), and whether the CLI loads the plugin follows
  * the pinned CLI's `enabledPlugins` rule. Values are shown exactly as written:
@@ -23,12 +25,17 @@ import path from "node:path";
 import {
   claudeInlinePluginEnablement,
   claudeInstalledPluginEnablement,
+  claudeInstalledPluginIdEnablement,
   claudePluginMcpDeclarations,
   claudePluginName,
   claudePluginServerName,
+  enabledInstalledPlugins,
   mergeClaudePluginLayers,
   remapInstalledPlugins,
+  resolveClaudePluginPath,
   type ClaudePluginConfig,
+  type ClaudePluginEnablement,
+  type ClaudePluginLayers,
   type ClaudePluginSettingSource,
 } from "@orkestrator/protocol/node/claude-plugin-set";
 
@@ -173,6 +180,28 @@ interface PluginState {
   notes: string[];
 }
 
+/** How the CLI treats one plugin for one set of loaded settings layers. */
+interface PluginDecision {
+  enabled: boolean;
+  /** The `@inline` rule, when the bridge passes the plugin. */
+  inline?: ClaudePluginEnablement;
+  /** Claude Code's own installed copy that loads while the `@inline` copy is off. */
+  installed?: { id: string; source: ClaudePluginSettingSource };
+  /** The bridge does not pass it: the install's own id is not enabled. */
+  notPassed?: { id: string; decidedBy?: { source: ClaudePluginSettingSource; key: string } };
+}
+
+/**
+ * Whether the bridge passes one plugin folder, for a set of loaded settings
+ * layers: `passed` says so, and `installedIds` are the `installed_plugins.json`
+ * ids the folder is recorded under (the ids whose settings decide it when only
+ * the installed layer lists it).
+ */
+interface PluginPassing {
+  installedIds: readonly string[];
+  passed(sources: readonly ClaudePluginSettingSource[]): boolean;
+}
+
 /**
  * Whether Orkestrator's sessions load a plugin, and why. Sessions load user
  * and project settings (project only with project resources); local settings
@@ -183,6 +212,7 @@ function pluginState(
   manifest: unknown,
   settings: PluginSettings,
   installedIds: readonly string[],
+  passing: PluginPassing,
   input: ClaudePluginSourceInput,
 ): PluginState {
   const loaded: ClaudePluginSettingSource[] = input.includeProjectSources
@@ -190,7 +220,14 @@ function pluginState(
     : ["user"];
   const where = (source: ClaudePluginSettingSource) =>
     input.display(settings.paths[source] ?? source);
-  const describe = (sources: readonly ClaudePluginSettingSource[]) => {
+  const describe = (sources: readonly ClaudePluginSettingSource[]): PluginDecision => {
+    if (!passing.passed(sources)) {
+      // Only the installed layer lists it, and Claude Code's settings leave
+      // every id it is recorded under off: the CLI's own copy is off too.
+      const id = passing.installedIds[0] ?? `${name}@`;
+      const install = claudeInstalledPluginIdEnablement(id, settings.documents, sources);
+      return { enabled: false, notPassed: { id, decidedBy: install.decidedBy } };
+    }
     const inline = claudeInlinePluginEnablement(name, manifest, settings.documents, sources);
     if (inline.enabled) return { enabled: true, inline };
     const installed = claudeInstalledPluginEnablement(
@@ -202,16 +239,41 @@ function pluginState(
     if (installed) return { enabled: true, inline, installed };
     return { enabled: false, inline };
   };
+  /** The setting in local settings that decides `described`, for the local-settings note. */
+  const localDecider = (described: PluginDecision) => {
+    const key =
+      described.notPassed?.decidedBy?.source === "local"
+        ? described.notPassed.decidedBy.key
+        : described.inline?.decidedBy?.source === "local"
+          ? described.inline.decidedBy.key
+          : described.installed?.source === "local"
+            ? described.installed.id
+            : // An install that local settings alone enable is passed because of them.
+              passing.installedIds.find(
+                (id) =>
+                  claudeInstalledPluginIdEnablement(id, settings.documents, ["local"]).decidedBy,
+              );
+    return key ? `enabledPlugins["${key}"] in ${where("local")}` : `settings in ${where("local")}`;
+  };
   const notes: string[] = [];
   const state = describe(loaded);
   let disabledReason: string | undefined;
-  if (!state.enabled) {
-    disabledReason = state.inline.decidedBy
+  if (state.notPassed) {
+    const decided = state.notPassed.decidedBy;
+    const value = decided
+      ? (settings.documents[decided.source] as { enabledPlugins: Record<string, unknown> })
+          .enabledPlugins[decided.key]
+      : undefined;
+    disabledReason = decided
+      ? `Disabled: enabledPlugins["${decided.key}"] is ${value === false ? "false" : "not true"} in ${where(decided.source)}, so Orkestrator does not pass this installed plugin to Claude Code.`
+      : `Disabled: no settings file these sessions load sets enabledPlugins["${state.notPassed.id}"] to true, so Orkestrator does not pass this installed plugin to Claude Code.`;
+  } else if (!state.enabled) {
+    disabledReason = state.inline?.decidedBy
       ? `Disabled: enabledPlugins["${state.inline.decidedBy.key}"] is false in ${where(state.inline.decidedBy.source)}.`
       : `Disabled: the plugin's manifest sets defaultEnabled to false, and no enabledPlugins setting turns on "${name}@inline".`;
   } else if (state.installed) {
     notes.push(
-      `enabledPlugins["${state.inline.decidedBy?.key ?? `${name}@inline`}"] turns off the copy Orkestrator passes, but Claude Code still loads its own installed copy, enabled by enabledPlugins["${state.installed.id}"] in ${where(state.installed.source)}.`,
+      `enabledPlugins["${state.inline?.decidedBy?.key ?? `${name}@inline`}"] turns off the copy Orkestrator passes, but Claude Code still loads its own installed copy, enabled by enabledPlugins["${state.installed.id}"] in ${where(state.installed.source)}.`,
     );
   }
   if (state.enabled && !state.installed) {
@@ -242,11 +304,7 @@ function pluginState(
     const withLocal = describe(["local", ...loaded]);
     if (withLocal.enabled !== state.enabled) {
       notes.push(
-        `Sessions with "Include local settings" on ${withLocal.enabled ? "load" : "do not load"} this plugin: ${
-          withLocal.inline.decidedBy?.source === "local"
-            ? `enabledPlugins["${withLocal.inline.decidedBy.key}"] in ${where("local")}`
-            : `settings in ${where("local")}`
-        }.`,
+        `Sessions with "Include local settings" on ${withLocal.enabled ? "load" : "do not load"} this plugin: ${localDecider(withLocal)}.`,
       );
     }
   }
@@ -275,16 +333,38 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
       ? valueOf(await readJson(input, path.join(input.cwd, ".claude", "plugins.json")))
       : undefined;
   const installed = await cliInstalledPlugins(input, pluginsDir);
-  const pluginDirs = mergeClaudePluginLayers(
-    {
-      global: isRecord(claudeJson) ? claudeJson.plugins : undefined,
-      cliInstalled: installed.plugins,
-      projectGlobal: isRecord(project) ? project.plugins : undefined,
-      projectLocal: isRecord(projectLocal) ? projectLocal.plugins : undefined,
-    },
-    { cwd, home: input.home, includeProjectSources: input.includeProjectSources && !!input.cwd },
-  );
+  const layers: ClaudePluginLayers = {
+    global: isRecord(claudeJson) ? claudeJson.plugins : undefined,
+    cliInstalled: installed.plugins,
+    projectGlobal: isRecord(project) ? project.plugins : undefined,
+    projectLocal: isRecord(projectLocal) ? projectLocal.plugins : undefined,
+  };
+  const mergeOptions = {
+    cwd,
+    home: input.home,
+    includeProjectSources: input.includeProjectSources && !!input.cwd,
+  };
+  // Every folder, including installs the bridge leaves out, so their rows can
+  // say why they are off; `passedBy` is the bridge's own set for those layers.
+  const pluginDirs = mergeClaudePluginLayers(layers, mergeOptions);
   const settings = await readPluginSettings(input);
+  const passedSets = new Map<string, Set<string>>();
+  const passedBy = (sources: readonly ClaudePluginSettingSource[]) => {
+    const key = sources.join(",");
+    let passed = passedSets.get(key);
+    if (!passed) {
+      const cliInstalled = enabledInstalledPlugins(installed.plugins, settings.documents, sources);
+      passed = new Set(mergeClaudePluginLayers({ ...layers, cliInstalled }, mergeOptions));
+      passedSets.set(key, passed);
+    }
+    return passed;
+  };
+  const installedIdsByDir = new Map<string, string[]>();
+  for (const plugin of installed.plugins) {
+    if (!plugin.installedId) continue;
+    const dir = resolveClaudePluginPath(plugin.path, cwd, input.home);
+    installedIdsByDir.set(dir, [...(installedIdsByDir.get(dir) ?? []), plugin.installedId]);
+  }
   const specs: SourceSpec[] = [];
   const discoveryNotes: string[] = [];
   if (claudeJsonRead.state !== "ok" && claudeJsonRead.state !== "absent")
@@ -376,7 +456,17 @@ export async function claudePluginSources(input: ClaudePluginSourceInput): Promi
       });
       continue;
     }
-    const state = pluginState(name, manifest, settings, installed.installedIds, input);
+    const state = pluginState(
+      name,
+      manifest,
+      settings,
+      installed.installedIds,
+      {
+        installedIds: installedIdsByDir.get(pluginDir) ?? [],
+        passed: (sources) => passedBy(sources).has(pluginDir),
+      },
+      input,
+    );
     const seen = names.get(name) ?? 0;
     names.set(name, seen + 1);
     const notes = [...state.notes];

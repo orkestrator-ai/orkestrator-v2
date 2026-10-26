@@ -268,13 +268,13 @@ export class PrMonitorRuntime {
         findTaskForEnvironment: (environmentId) =>
           findKanbanTaskForEnvironment(this.requireStorage(), environmentId),
         moveTaskToReview: async (taskId) => {
-          await this.requireStorage().updateKanbanTask(taskId, { status: "review" });
+          await this.requireStorage().kanban.updateKanbanTask(taskId, { status: "review" });
         },
         addTaskComment: async (taskId, text) => {
-          await this.requireStorage().addKanbanComment(taskId, text);
+          await this.requireStorage().kanban.addKanbanComment(taskId, text);
         },
         updateTaskPrMetadata: async (taskId, updates) => {
-          await this.requireStorage().updateKanbanTask(taskId, updates);
+          await this.requireStorage().kanban.updateKanbanTask(taskId, updates);
         },
       },
       onWarning: (message, error) => {

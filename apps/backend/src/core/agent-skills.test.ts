@@ -434,6 +434,10 @@ describe("scanAgentSkills", () => {
       JSON.stringify({ plugins: { "my-plugin@some-market": [{ installPath }] } }),
     );
 
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "my-plugin@some-market": true } }),
+    );
     const scan = await scanAgentSkills("claude");
 
     expect(scan.skills[0]).toMatchObject({
@@ -565,6 +569,14 @@ describe("scanAgentSkills", () => {
       }),
     );
 
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({
+        enabledPlugins: Object.fromEntries(
+          Array.from({ length: 4 }, (_, index) => [`plugin-${index}@market`, true]),
+        ),
+      }),
+    );
     const scan = await scanAgentSkills("claude");
 
     expect(scan.roots).toHaveLength(5);
@@ -843,6 +855,16 @@ describe("Claude plugin discovery", () => {
       join(home, ".claude", "plugins", "installed_plugins.json"),
       typeof manifest === "string" ? manifest : JSON.stringify(manifest),
     );
+    if (typeof manifest === "object" && manifest !== null && "plugins" in manifest) {
+      await writeFile(
+        join(home, ".claude", "settings.json"),
+        JSON.stringify({
+          enabledPlugins: Object.fromEntries(
+            Object.keys(manifest.plugins as object).map((id) => [id, true]),
+          ),
+        }),
+      );
+    }
   };
 
   const writeSkill = async (dir: string, name: string) => {
@@ -858,6 +880,51 @@ describe("Claude plugin discovery", () => {
   afterEach(async () => {
     setAgentSkillsHomeForTesting(undefined);
     await rm(home, { recursive: true, force: true });
+  });
+
+  test("only user-enabled installs enter the catalogue and file read allowlist", async () => {
+    const plugins = Object.fromEntries(
+      ["on", "off", "never"].map((id) => [`${id}@market`, [{ installPath: join(home, id) }]]),
+    );
+    for (const id of ["on", "off", "never"]) await writeSkill(join(home, id, "skills"), "review");
+    await writeManifest({ plugins });
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "on@market": true, "off@market": false } }),
+    );
+    expect((await scanAgentSkills("claude")).skills.map((skill) => skill.name)).toEqual([
+      "on:review",
+    ]);
+    for (const id of ["off", "never"])
+      await expect(
+        readAgentSkillFile("claude", join(home, id, "skills", "review", "SKILL.md")),
+      ).rejects.toThrow();
+  });
+
+  test("reads user roots and enablement from CLAUDE_CONFIG_DIR", async () => {
+    const config = join(home, "custom-config");
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = config;
+    try {
+      await writeSkill(join(config, "skills"), "personal");
+      await writeSkill(join(home, "install", "skills"), "review");
+      await mkdir(join(home, ".claude", "plugins"), { recursive: true });
+      await writeFile(
+        join(home, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({ plugins: { "quality@market": [{ installPath: join(home, "install") }] } }),
+      );
+      await writeFile(
+        join(config, "settings.json"),
+        JSON.stringify({ enabledPlugins: { "quality@market": true } }),
+      );
+      expect((await scanAgentSkills("claude")).skills.map((skill) => skill.name)).toEqual([
+        "personal",
+        "quality:review",
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
   });
 
   test("uses only the first install of a plugin id", async () => {

@@ -299,7 +299,7 @@ async function scopedTicket(
   projectId: string,
   ticketId: string,
 ): Promise<KanbanTask> {
-  const task = (await storage.getKanbanTasks(projectId)).find(
+  const task = (await storage.kanban.getKanbanTasks(projectId)).find(
     (candidate) => candidate.id === ticketId,
   );
   if (!task) throw new Error(`Kanban ticket not found in this project: ${ticketId}`);
@@ -442,7 +442,7 @@ async function createAgentToolServer(
       },
     },
     async ({ status, offset, limit }) => {
-      const all = await storage.getKanbanTasks(scope.projectId);
+      const all = await storage.kanban.getKanbanTasks(scope.projectId);
       const filtered = status ? all.filter((task) => task.status === status) : all;
       const tickets = filtered.slice(offset, offset + limit).map(ticketSummary);
       return toolResult({
@@ -499,7 +499,7 @@ async function createAgentToolServer(
       },
     },
     async ({ title, description, acceptanceCriteria, status, requestId }) => {
-      const ticket = await storage.addKanbanTask(scope.projectId, title, description, {
+      const ticket = await storage.kanban.addKanbanTask(scope.projectId, title, description, {
         acceptanceCriteria,
         status,
         requestId,
@@ -539,7 +539,7 @@ async function createAgentToolServer(
       if (Object.keys(updates).length === 0) {
         throw new Error("Provide at least one ticket field to update");
       }
-      const ticket = await storage.updateKanbanTask(ticketId, updates, scope.projectId);
+      const ticket = await storage.kanban.updateKanbanTask(ticketId, updates, scope.projectId);
       return ticketResult(ticket);
     },
   );
@@ -563,7 +563,12 @@ async function createAgentToolServer(
     },
     async ({ ticketId, text, requestId }) => {
       await scopedTicket(storage, scope.projectId, ticketId);
-      const ticket = await storage.addKanbanComment(ticketId, text, scope.projectId, requestId);
+      const ticket = await storage.kanban.addKanbanComment(
+        ticketId,
+        text,
+        scope.projectId,
+        requestId,
+      );
       const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
       return ticketResult(ticket, commentOffset);
     },

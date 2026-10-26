@@ -16,7 +16,12 @@ function setup() {
   const getPortalLayout = mock(async () => layout);
   const emit = mock(() => {});
   const context = {
-    storage: { updatePortalLayout, getPortalLayout },
+    storage: {
+      nodes: {
+        updatePortalLayout,
+        getPortalLayout,
+      },
+    },
     emit,
   } as unknown as CommandContext;
   return { handlers, context, layout, updatePortalLayout, getPortalLayout, emit };

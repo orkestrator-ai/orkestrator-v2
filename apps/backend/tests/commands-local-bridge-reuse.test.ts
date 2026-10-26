@@ -293,6 +293,48 @@ describe("local bridge reuse under load", () => {
     expect(isProcessRunning(first.pid)).toBe(false);
   });
 
+  test("a busy Cursor bridge keeps its key until it is idle", async () => {
+    // A changed key restarts the bridge, which would end a running turn and
+    // its background work, so a busy one moves over once idle, as a busy
+    // Claude or Codex bridge does with an account switch and as the
+    // container path already did.
+    const environmentId = "env-cursor-key-busy";
+    const appRoot = await createTempDir("ork-electron-app-cursor-key-");
+    const worktreePath = await createTempDir("ork-electron-worktree-cursor-key-");
+    await writeBridgeEntrypoint(appRoot, "cursor-bridge", CONTROLLABLE_BRIDGE);
+    const { context } = createContext(createEnvironment({ id: environmentId, worktreePath }), {
+      globalConfig: { cursorApiKey: "cursor-key-before" },
+    });
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    let busy = true;
+    const hasObservedLiveWork = mock(async () => busy);
+    context.nativeAgents = { hasObservedLiveWork } as unknown as CommandContext["nativeAgents"];
+    const commands = createCommandRegistry();
+    const start = () =>
+      commands.get("start_local_cursor_server_cmd")?.(
+        { environmentId },
+        context,
+      ) as Promise<Started>;
+    const first = await start();
+    expect(first.wasRunning).toBe(false);
+
+    (await context.storage.loadConfig()).global.cursorApiKey = "cursor-key-after";
+    const kept = await start();
+    expect(kept).toMatchObject({ wasRunning: true, pid: first.pid, port: first.port });
+    expect(isProcessRunning(first.pid)).toBe(true);
+    expect(hasObservedLiveWork).toHaveBeenCalledWith(environmentId, "cursor");
+
+    busy = false;
+    const replaced = await start();
+    expect(replaced.wasRunning).toBe(false);
+    expect(replaced.pid).not.toBe(first.pid);
+    expect(isProcessRunning(first.pid)).toBe(false);
+    // The new bridge holds the new key: nothing more to move over.
+    busy = true;
+    expect(await start()).toMatchObject({ wasRunning: true, pid: replaced.pid });
+  });
+
   test("replaces an idle unresponsive bridge and logs why", async () => {
     const { commands, context, environmentId, first } = await startControllableBridge(
       "env-bridge-reuse-idle",

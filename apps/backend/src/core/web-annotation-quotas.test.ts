@@ -110,7 +110,7 @@ describe("environment quotas through the service", () => {
     const store = await harness.service.storage.environment(ENV_A);
     await store.mutate((tx) => {
       tx.markEssential();
-      tx.manifest.usage.recordBytes = WEB_ANNOTATION_LIMITS.environmentMetadataBytes;
+      tx.manifest.usage = { recordBytes: WEB_ANNOTATION_LIMITS.environmentMetadataBytes };
       tx.markDirty();
     });
     const created = await rejectionDetail(createAnnotation(harness.service, ENV_A, "more"));
@@ -134,14 +134,14 @@ describe("environment quotas through the service", () => {
     // Execution progress (essential) still commits at the limit.
     const progress = await store.mutate((tx) => {
       tx.markEssential();
-      tx.manifest.annotations[receipt.annotationId]!.hidden = true;
+      tx.edit("annotations", receipt.annotationId)!.hidden = true;
       tx.touch({ annotationIds: [receipt.annotationId] });
     });
     expect(progress.committed).toBe(true);
     // Freeing space makes the quota pass again.
     await store.mutate((tx) => {
       tx.markEssential();
-      tx.manifest.usage.recordBytes = 0;
+      tx.manifest.usage = { recordBytes: 0 };
       tx.markDirty();
     });
     await createAnnotation(harness.service, ENV_A, "fits again");
@@ -167,7 +167,7 @@ describe("environment quotas through the service", () => {
     });
     await store.mutate((tx) => {
       tx.markEssential();
-      tx.manifest.annotations["annotation-quota-0"]!.state = "deleted";
+      tx.edit("annotations", "annotation-quota-0")!.state = "deleted";
       tx.markDirty();
     });
     await createAnnotation(harness.service, ENV_A);
@@ -207,7 +207,7 @@ describe("environment quotas through the service", () => {
     const store = await harness.service.storage.environment(ENV_A);
     await store.mutate((tx) => {
       tx.markEssential();
-      tx.manifest.annotations[receipt.annotationId]!.entryCount =
+      tx.edit("annotations", receipt.annotationId)!.entryCount =
         WEB_ANNOTATION_LIMITS.threadEntries;
       tx.markDirty();
     });

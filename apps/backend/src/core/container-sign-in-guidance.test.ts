@@ -24,11 +24,13 @@ function context(
             } as Environment)
           : undefined,
       loadConfig: async () => ({ global: { enabledAgentPlatforms: ["codex", "grok"] } }),
-      loadAgentAccounts: async () => ({
-        accounts: [],
-        active: options.activeCodex ? { codex: options.activeCodex } : {},
-      }),
-      agentAccountsDirectory: () => "/accounts",
+      agentAccounts: {
+        loadAgentAccounts: async () => ({
+          accounts: [],
+          active: options.activeCodex ? { codex: options.activeCodex } : {},
+        }),
+        agentAccountsDirectory: () => "/accounts",
+      },
     },
   } as unknown as CommandContext;
 }

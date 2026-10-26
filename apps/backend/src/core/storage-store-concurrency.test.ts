@@ -56,12 +56,17 @@ describe("concurrent store writers across backends", () => {
     const [first, second] = await storagePair();
     await Promise.all(
       Array.from({ length: WRITES }, (_, index) =>
-        (index % 2 === 0 ? first : second).saveProjectNotes(`project-${index}`, `note ${index}`),
+        (index % 2 === 0 ? first : second).kanban.saveProjectNotes(
+          `project-${index}`,
+          `note ${index}`,
+        ),
       ),
     );
 
     for (let index = 0; index < WRITES; index += 1) {
-      expect((await second.getProjectNotes(`project-${index}`)).content).toBe(`note ${index}`);
+      expect((await second.kanban.getProjectNotes(`project-${index}`)).content).toBe(
+        `note ${index}`,
+      );
     }
   });
 
@@ -69,7 +74,7 @@ describe("concurrent store writers across backends", () => {
     const [first, second] = await storagePair();
     await Promise.all(
       Array.from({ length: WRITES }, (_, index) =>
-        (index % 2 === 0 ? first : second).saveLinearCompletionComment({
+        (index % 2 === 0 ? first : second).kanban.saveLinearCompletionComment({
           pipelineId: `pipeline-${index}`,
           issueId: `issue-${index}`,
           status: "posted",
@@ -78,7 +83,7 @@ describe("concurrent store writers across backends", () => {
     );
 
     for (let index = 0; index < WRITES; index += 1) {
-      const comment = await first.getLinearCompletionComment(`pipeline-${index}`);
+      const comment = await first.kanban.getLinearCompletionComment(`pipeline-${index}`);
       expect(comment?.issueId).toBe(`issue-${index}`);
     }
   });
@@ -87,11 +92,11 @@ describe("concurrent store writers across backends", () => {
     const [first, second] = await storagePair();
     const created = await Promise.all(
       Array.from({ length: WRITES }, (_, index) =>
-        (index % 2 === 0 ? first : second).createFeaturePlan("project-1"),
+        (index % 2 === 0 ? first : second).kanban.createFeaturePlan("project-1"),
       ),
     );
 
-    const plans = await second.getFeaturePlans("project-1");
+    const plans = await second.kanban.getFeaturePlans("project-1");
     expect(new Set(plans.map((plan) => plan.id))).toEqual(new Set(created.map((plan) => plan.id)));
   });
 });

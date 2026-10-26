@@ -227,7 +227,9 @@ const environmentExec: MutationActionHandler<ExecInput> = {
     const environment = await requireEnvironment(context, input.environmentId);
     assertReadyForAgents(environment);
     const root = workspaceRoot(environment);
-    const active = (await context.command.storage.listActivePublicOperations()).filter(
+    const active = (
+      await context.command.storage.publicOperations.listActivePublicOperations()
+    ).filter(
       (record) =>
         record.action === "environment.exec" && record.resources.environmentId === environment.id,
     );
@@ -348,10 +350,12 @@ const runCancel: MutationActionHandler<{ operationId: string }> = {
         })) as ExecState;
         const { patch, terminal } = executionFromState(state);
         if (terminal) {
-          await context.command.storage.updatePublicOperation(record.operationId, (current) =>
-            ["admitted", "running", "unknown"].includes(current.state)
-              ? { ...current, ...patch, completedAt: new Date(context.now()).toISOString() }
-              : null,
+          await context.command.storage.publicOperations.updatePublicOperation(
+            record.operationId,
+            (current) =>
+              ["admitted", "running", "unknown"].includes(current.state)
+                ? { ...current, ...patch, completedAt: new Date(context.now()).toISOString() }
+                : null,
           );
           return {
             state: "succeeded",

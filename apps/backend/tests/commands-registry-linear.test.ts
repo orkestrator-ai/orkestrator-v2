@@ -20,7 +20,7 @@ describe("Electron backend command registry", () => {
       viewer?: { id: string; name: string; email?: string };
     } | null;
 
-    Object.assign(context.storage, {
+    Object.assign(context.storage.kanban, {
       getLinearAuth: mock(async () => auth),
       saveLinearAuth: mock(
         async (apiKey: string, viewer?: { id: string; name: string; email?: string }) => {
@@ -81,7 +81,7 @@ describe("Electron backend command registry", () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
-    Object.assign(context.storage, {
+    Object.assign(context.storage.kanban, {
       getLinearAuth: mock(async () => ({ apiKey: "lin_api_secret" })),
     });
 
@@ -150,7 +150,7 @@ describe("Electron backend command registry", () => {
     } | null = null;
     let commentCreateCalls = 0;
 
-    Object.assign(context.storage, {
+    Object.assign(context.storage.kanban, {
       getLinearAuth: mock(async () => ({ apiKey: "lin_api_secret" })),
       getLinearCompletionComment: mock(async () => completionRecord),
       saveLinearCompletionComment: mock(async (record: typeof completionRecord) => {
@@ -242,7 +242,7 @@ describe("Electron backend command registry", () => {
     } | null = null;
     let commentCreateCalls = 0;
 
-    Object.assign(context.storage, {
+    Object.assign(context.storage.kanban, {
       getLinearAuth: mock(async () => ({ apiKey: "lin_api_secret" })),
       getLinearCompletionComment: mock(async () => completionRecord),
       saveLinearCompletionComment: mock(async (record: typeof completionRecord) => {

@@ -670,6 +670,10 @@ export async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
 export async function setContainerResourceLimits(
   limits: ContainerResourceLimits | null,
   machine?: AccountMachine,
-): Promise<{ limits: ContainerResourceLimits | null }> {
+): Promise<{
+  limits: ContainerResourceLimits | null;
+  /** Saved, but this backend's Docker cannot enforce these axes (older backends omit it). */
+  unenforceable?: Array<keyof ContainerResourceLimits>;
+}> {
   return machineInvoke(machine, "set_container_resource_limits", { limits });
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
@@ -32,6 +33,7 @@ function harness(
   const sends: Array<{ sessionId: string; options: Record<string, unknown> }> = [];
   const attached: Array<{ sessionId: string; options?: Record<string, unknown> }> = [];
   const saves: ReviewerRecord[] = [];
+  const abandoned: string[] = [];
   const provider = {
     async createSession() {
       return "unused";
@@ -76,7 +78,9 @@ function harness(
       return "Inspect the immutable review package";
     },
     async resolveUnattendedInteractions() {},
-    async abandonSession() {},
+    async abandonSession(_reviewer, sessionId) {
+      abandoned.push(sessionId);
+    },
     progress: new MultiReviewProgressTracker(),
   };
   return {
@@ -86,6 +90,7 @@ function harness(
     sends,
     attached,
     saves,
+    abandoned,
     policyReads: () => policyReads,
     rejectPolicy(value: boolean) {
       rejectPolicy = value;
@@ -94,6 +99,39 @@ function harness(
 }
 
 describe("review fan-out dispatch preparation", () => {
+  test("reverts the dispatch transition when its owning save throws and retries once", async () => {
+    const h = harness("build");
+    const save = h.host.save;
+    const failure = new Error("owning save lost its fence after applying the transition");
+    failure.name = "TestFenceError";
+    let fail = true;
+    h.host.save = async () => {
+      expect(h.reviewer.dispatchState).not.toBe("prepared");
+      if (fail) {
+        expect(h.reviewer.dispatchState).toBe("dispatching");
+        throw failure;
+      }
+      await save();
+    };
+    const runner = new ReviewFanoutRunner(h.host);
+    await expect(runner.advanceReviewers([h.reviewer])).rejects.toBe(failure);
+    expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "prepared" });
+    expect(h.saves).toHaveLength(0);
+    expect(h.sends).toHaveLength(0);
+    expect(h.abandoned).toHaveLength(0);
+
+    fail = false;
+    await runner.advanceReviewers([h.reviewer]);
+    await runner.advanceReviewers([h.reviewer]);
+    expect(h.reviewer.dispatchState).toBe("sent");
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]?.options.requestId).toBe("review-request");
+    expect(h.saves.slice(0, 2).map((saved) => saved.dispatchState)).toEqual([
+      "dispatching",
+      "sent",
+    ]);
+  });
+
   test("keeps a reviewer prepared when policy resolution fails before send", async () => {
     const testHarness = harness("plan");
     testHarness.rejectPolicy(true);
@@ -181,7 +219,7 @@ describe("review fan-out dispatch preparation", () => {
 });
 
 describe("recovered reviewer dispatch", () => {
-  test.each(["unknown", "lost", "throws", "unsupported"] as const)(
+  test.each(["unknown", "throws", "unsupported"] as const)(
     "parks %s acceptance without spending another turn",
     async (acceptance) => {
       const h = harness("build");
@@ -214,22 +252,118 @@ describe("recovered reviewer dispatch", () => {
     },
   );
 
-  test("acceptance promotes the same request and clears the uncertainty poll budget", async () => {
+  test("a lost request fails at once without spending another turn", async () => {
     const h = harness("build");
     h.reviewer.dispatchState = "dispatching";
-    h.reviewer.continuationPrompt = "Continue";
-    h.reviewer.idleResultPolls = 10;
-    h.provider.dispatchStatus = async () => "dispatched";
+    h.provider.dispatchStatus = async () => "lost";
+    h.provider.structured = async () => null;
     await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
     expect(h.reviewer).toMatchObject({
+      status: "failed",
       requestId: "review-request",
-      dispatchState: "sent",
-      status: "running",
+      dispatchState: "dispatching",
     });
-    expect(h.reviewer.continuationPrompt).toBeUndefined();
-    expect(h.reviewer.idleResultPolls).toBeUndefined();
+    expect(h.reviewer.error).toContain("lost in a provider restart");
+    expect(h.abandoned).toEqual(["review-session"]);
     expect(h.sends).toHaveLength(0);
   });
+
+  test.each(["unknown", "lost"] as const)(
+    "a structured result for the exact request proves a %s dispatch ran",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.provider.dispatchStatus = async () => acceptance;
+      let resultRequest = "an-earlier-request";
+      h.provider.structured = async <T>() =>
+        ({
+          ok: true,
+          provider: "opencode",
+          requestId: resultRequest,
+          value: {},
+        }) as StructuredOutputResult<T>;
+      h.provider.status = async () => "running";
+      const runner = new ReviewFanoutRunner(h.host);
+      // Another request's result proves nothing about this one.
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer.status).toBe(acceptance === "lost" ? "failed" : "running");
+      if (acceptance === "lost") return;
+      expect(h.reviewer.dispatchState).toBe("dispatching");
+
+      resultRequest = "review-request";
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
+      expect(h.sends).toHaveLength(0);
+    },
+  );
+
+  test.each(["lost", "unknown"] as const)(
+    "a matching structured result on the first poll promotes a %s dispatch",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.provider.dispatchStatus = async () => acceptance;
+      h.provider.structured = async <T>() =>
+        ({
+          ok: true,
+          provider: "opencode",
+          requestId: "review-request",
+          value: {},
+        }) as StructuredOutputResult<T>;
+      const runner = new ReviewFanoutRunner(h.host);
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({
+        status: "running",
+        requestId: "review-request",
+        dispatchState: "sent",
+      });
+      expect(h.abandoned).toHaveLength(0);
+      expect(h.sends).toHaveLength(0);
+      expect(h.saves.some((saved) => saved.dispatchState === "sent")).toBe(true);
+
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
+      expect(h.abandoned).toHaveLength(0);
+      expect(h.sends).toHaveLength(0);
+    },
+  );
+
+  test("a submitted tool result proves a dispatch the provider retired", async () => {
+    const h = harness("build");
+    h.reviewer.dispatchState = "dispatching";
+    h.reviewer.resultTransport = "tool-v1";
+    h.provider.dispatchStatus = async () => "lost";
+    const read: string[] = [];
+    h.host.readResult = async <T>(requestId: string) => {
+      read.push(requestId);
+      return { ok: true, requestId, value: {} } as T;
+    };
+    h.provider.status = async () => "running";
+    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+    expect(read[0]).toBe("review-request");
+    expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
+    expect(h.sends).toHaveLength(0);
+  });
+
+  test.each(["dispatched", "pending"] as const)(
+    "%s promotes the same request and clears the uncertainty poll budget",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.reviewer.continuationPrompt = "Continue";
+      h.reviewer.idleResultPolls = 10;
+      h.provider.dispatchStatus = async () => acceptance;
+      await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({
+        requestId: "review-request",
+        dispatchState: "sent",
+        status: "running",
+      });
+      expect(h.reviewer.continuationPrompt).toBeUndefined();
+      expect(h.reviewer.idleResultPolls).toBeUndefined();
+      expect(h.sends).toHaveLength(0);
+    },
+  );
 });
 
 test("a sent continuation ignores a superseded restart until its own turn settles", async () => {

@@ -29,9 +29,12 @@ import { parseSync, visitorKeys, type CallExpression, type Node } from "oxc-pars
  * reached from inside `atomically`, which buffers the value and commits it
  * whole.
  *
- * Only the public methods of `StorageService` are entry points: nothing
- * outside the storage files reaches a repository, so a repository method,
- * whatever its TypeScript visibility, is followed to every caller. Code
+ * The entry points are the public methods of `StorageService` and the
+ * members its public area fields pick (`readonly kanban: KanbanStorage`, where
+ * `KanbanStorage = Pick<KanbanRepository, ...>`). Nothing else outside the
+ * storage files reaches a repository, so any other repository method,
+ * whatever its TypeScript visibility, is followed to every caller. A public
+ * field of the facade that is not such a `Pick` fails the scan. Code
  * between the lease callback and the write may not start another function (a
  * `forEach` callback, a timer), and every asynchronous call on the way (the
  * write, each helper, `atomically`) must be awaited or returned: nothing else
@@ -105,7 +108,13 @@ type SourceFile = { file: string; source: string };
 
 type ParsedFile = SourceFile & { program: Node; lineStarts: number[] };
 
-type Field = { type: string | null; readonly: boolean };
+type Field = {
+  type: string | null;
+  readonly: boolean;
+  accessibility?: "public" | "protected" | "private";
+  /** A `this.x` path the field is initialised from, when it has one. */
+  from?: string | null;
+};
 
 type ClassInfo = {
   name: string;
@@ -160,6 +169,12 @@ type StoreSummary = {
 type Analysis = {
   /** Every class the scan reads, the root first. */
   classes: string[];
+  /**
+   * The root's area fields (`kanban`) and the members their `Pick` type
+   * names (`KanbanRepository.addKanbanTask`): entry points like the root's
+   * own public methods.
+   */
+  areas: Map<string, string[]>;
   /**
    * Each store's database name by the helper that names it (`kanbanFile` →
    * `kanban`). `*` stands for a part a parameter supplies.
@@ -392,6 +407,11 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
             fields.set(name, {
               type: declaredType(element.typeAnnotation as Node | null, value),
               readonly: Boolean(element.readonly),
+              accessibility:
+                (element.key as Node).type === "PrivateIdentifier"
+                  ? "private"
+                  : (element.accessibility ?? "public"),
+              from: value ? memberPath(unwrap(value)) : null,
             });
           }
         }
@@ -403,6 +423,7 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
             fields.set(target.name, {
               type: declaredType(target.typeAnnotation as Node | null),
               readonly: Boolean(param.readonly),
+              accessibility: param.accessibility ?? "public",
             });
           }
         }
@@ -413,6 +434,38 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
         node,
         file,
         fields,
+      });
+    });
+  }
+
+  // Area types: `type KanbanStorage = Pick<KanbanRepository, "a" | "b">`.
+  const areaTypes = new Map<
+    string,
+    { className: string; names: string[] | null; node: Node; file: ParsedFile }
+  >();
+  for (const file of files) {
+    walk(file.program, (node) => {
+      if (node.type !== "TSTypeAliasDeclaration") return;
+      const type = node.typeAnnotation as Node;
+      if (type.type !== "TSTypeReference" || (type.typeName as Node).type !== "Identifier") return;
+      if ((type.typeName as Node & { name: string }).name !== "Pick") return;
+      const [target, keys] = ((type.typeArguments as (Node & { params: Node[] }) | null)?.params ??
+        []) as Node[];
+      const className = target ? unwrapTypeAnnotation(target) : null;
+      if (!className || !declared.has(className)) return;
+      const literals = keys?.type === "TSUnionType" ? (keys.types as Node[]) : keys ? [keys] : [];
+      const names = literals.map((literal) => {
+        const value =
+          literal.type === "TSLiteralType"
+            ? (literal.literal as Node & { value: unknown }).value
+            : null;
+        return typeof value === "string" ? value : null;
+      });
+      areaTypes.set((node.id as Node & { name: string }).name, {
+        className,
+        names: names.every((name) => name !== null) ? (names as string[]) : null,
+        node,
+        file,
       });
     });
   }
@@ -431,6 +484,8 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
     scanned.push(info);
     for (const field of info.fields.values()) {
       if (field.type && declared.has(field.type)) pendingClasses.push(field.type);
+      const area = field.type ? areaTypes.get(field.type) : undefined;
+      if (area) pendingClasses.push(area.className);
     }
   }
   const scannedByName = new Map(scanned.map((info) => [info.name, info]));
@@ -481,6 +536,46 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
     }
   }
   const memberByKey = new Map(members.map((member) => [member.key, member]));
+
+  // The root's public fields. One typed as an area (`Pick<Repository, ...>`)
+  // makes each picked member an entry point. One holding a scanned class, by
+  // its type or by copying another field, would hand callers methods the
+  // analysis treats as internal.
+  const areas = new Map<string, string[]>();
+  const areaEntries = new Set<string>();
+  const root = scannedByName.get(options.rootClass)!;
+  for (const [name, field] of root.fields) {
+    if (field.accessibility !== "public") continue;
+    const area = field.type ? areaTypes.get(field.type) : undefined;
+    if (!area) {
+      if ((field.type && declared.has(field.type)) || field.from?.startsWith("this.")) {
+        violations.push(
+          `${location(root.file, root.node)} ${options.rootClass}.${name}: expose a repository as a Pick of its entry points, not ${field.type ?? field.from}`,
+        );
+      }
+      continue;
+    }
+    if (!area.names) {
+      violations.push(
+        `${location(area.file, area.node)} ${field.type}: pick the entry points as string literals`,
+      );
+      continue;
+    }
+    const owner = scannedByName.get(area.className)!;
+    const keys: string[] = [];
+    for (const picked of area.names) {
+      const key = `${area.className}.${picked}`;
+      if (memberByKey.get(key)?.accessibility === "public") {
+        areaEntries.add(key);
+        keys.push(key);
+      } else if (owner.fields.get(picked)?.accessibility !== "public") {
+        violations.push(
+          `${location(area.file, area.node)} ${field.type}: ${area.className} has no public member ${picked}`,
+        );
+      }
+    }
+    areas.set(name, keys);
+  }
 
   const fieldOf = (className: string, name: string): Field | null =>
     scannedByName.get(className)?.fields.get(name) ??
@@ -960,7 +1055,9 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
       return [{ leases: context.leases, via, entry: null, problem: context.problem }];
     }
     const member = context.member!;
-    const entry = member.className === options.rootClass && member.accessibility === "public";
+    const entry =
+      (member.className === options.rootClass && member.accessibility === "public") ||
+      areaEntries.has(member.key);
     if (context.leases.some((lease) => !lease.keyed) || entry) {
       return [{ leases: context.leases, via, entry: member }];
     }
@@ -1165,7 +1262,14 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
     storeNames.set(store, relative.replace(/\.json$/, ""));
   }
 
-  return { classes: scanned.map((info) => info.name), storeNames, sites, stores, violations };
+  return {
+    classes: scanned.map((info) => info.name),
+    areas,
+    storeNames,
+    sites,
+    stores,
+    violations,
+  };
 }
 
 function readStorageSources(): SourceFile[] {
@@ -1580,6 +1684,10 @@ const REPOSITORIES = [
   "BuildPipelinesRepository",
   "DraftsRepository",
   "AgentMailRepository",
+  "AgentMailStore",
+  "AgentMailboxDirectory",
+  "AgentMailInjects",
+  "AgentMailBudgets",
   "KanbanRepository",
   "PreviewServicesRepository",
   "NodesRepository",
@@ -1627,6 +1735,11 @@ describe("StorageService store writers", () => {
       leases: ["backendProfileFile"],
       paths: 3,
     });
+    // Agent mail's four classes write through one shared store and lease.
+    expect(stores.get("agentMailFile")).toMatchObject({
+      kind: "whole",
+      leases: ["agentMailFile"],
+    });
     expect(stores.get("linearAuthFile")).toMatchObject({
       kind: "whole",
       leases: ["linearAuthFile"],
@@ -1669,6 +1782,39 @@ describe("StorageService store writers", () => {
       expect.arrayContaining([expect.objectContaining({ keyed: true })]),
     );
     expect(result.violations.join("\n")).toContain("recordNativeAgentSessionResumeIdentity");
+  });
+
+  test("the facade's area fields make their picked members entry points", () => {
+    const { areas } = analyzeStorageService();
+    expect([...areas.keys()].sort()).toEqual([
+      "agentAccounts",
+      "coordinators",
+      "kanban",
+      "nodes",
+      "previewServices",
+      "publicOperations",
+    ]);
+    expect(areas.get("kanban")).toContain("KanbanRepository.saveLinearAuth");
+    // Omitted from the area: only other repositories call it.
+    expect(areas.get("publicOperations")).not.toContain(
+      "PublicOperationsRepository.loadPublicOperationIndex",
+    );
+    // Drop the lease from an area method: the write must be traced to that
+    // method as an entry, not to the (absent) callers inside the storage files.
+    const sources = readStorageSources().map((source) => ({
+      ...source,
+      source: source.source.replace(
+        `await this.enqueueLinearAuthMutation(() =>
+      this.context.saveSensitiveJson(this.files.linearAuthFile(), auth),
+    );`,
+        "await this.context.saveSensitiveJson(this.files.linearAuthFile(), auth);",
+      ),
+    }));
+    expect(sources.some((source) => source.source.includes("auth);\n    return auth;"))).toBe(true);
+    const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+    expect(result.violations.join("\n")).toContain(
+      "no store-wide lease reaches this write from KanbanRepository.saveLinearAuth",
+    );
   });
 
   test("no backend class outside the scan calls the store write primitives", () => {
@@ -1728,8 +1874,9 @@ describe("StorageService store writers", () => {
   });
 
   test("code outside the storage files reaches the repositories only through StorageService", () => {
-    // Only StorageService's public methods are entry points, so a caller
-    // holding a repository could run a write path the scan never checked.
+    // Only StorageService's public methods and the members its area fields
+    // pick are entry points, so a caller holding a repository could run a
+    // write path the scan never checked. Callers name the area types instead.
     const { classes } = analyzeStorageService();
     const internal = new Set(classes.filter((name) => name !== "StorageService"));
     const allowed = new Set([
@@ -2012,6 +2159,55 @@ describe("store writer analysis", () => {
       repository,
     );
     expect(unleased.violations).toEqual([expect.stringContaining("saveA ← Store.save")]);
+  });
+
+  test("treats the members an area field picks as entry points", () => {
+    const repository = `
+      export class Repo {
+        constructor(
+          private readonly context: StorageContext,
+          private readonly files: Files,
+        ) {}
+        async saveA(value: number) { await this.context.saveJson(this.files.aFile(), value); }
+        async saveB(value: number) { await this.context.saveJson(this.files.bFile(), value); }
+      }
+      export type RepoArea = Pick<Repo, "saveA">;`;
+    const body = `private readonly repo!: Repo;
+       readonly area!: RepoArea;
+       async save() { return this.leases.enqueueA(async () => this.repo.saveA(1)); }
+       async other() { return this.leases.enqueueA(async () => this.repo.saveB(1)); }`;
+    const result = analyze(body, repository);
+    // `saveA` is reachable through the area without the root's lease; `saveB`
+    // is not picked, so its caller's lease still counts.
+    expect(result.violations).toEqual([
+      expect.stringContaining("no store-wide lease reaches this write from Repo.saveA"),
+    ]);
+    expect(result.areas).toEqual(new Map([["area", ["Repo.saveA"]]]));
+  });
+
+  test("rejects a public root field exposing a whole class or an unknown pick", () => {
+    const repository = `
+      export class Repo {
+        constructor(private readonly context: StorageContext) {}
+        async read() { return 1; }
+      }
+      export type Missing = Pick<Repo, "write">;`;
+    const whole = analyze(`readonly repo!: Repo;`, repository);
+    expect(whole.violations).toEqual([
+      expect.stringContaining("Store.repo: expose a repository as a Pick of its entry points"),
+    ]);
+    const copied = analyze(
+      `private readonly inner!: Repo;
+       readonly alias = this.inner;`,
+      repository,
+    );
+    expect(copied.violations).toEqual([
+      expect.stringContaining("Store.alias: expose a repository as a Pick of its entry points"),
+    ]);
+    const missing = analyze(`readonly area!: Missing;`, repository);
+    expect(missing.violations).toEqual([
+      expect.stringContaining("Missing: Repo has no public member write"),
+    ]);
   });
 
   test("rejects a class holding a StorageContext the root does not reach", () => {

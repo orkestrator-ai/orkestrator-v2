@@ -1,7 +1,7 @@
 # `startWorktreeWatcher > observes a real file write` (`apps/backend/tests/worktree-watcher.test.ts:237`)
 
 - **ID:** 0091
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-08-06
 - **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
 - **Suite counts:** 3,686 passed, 1 skipped, 1 failed
@@ -10,3 +10,12 @@
 - **Root cause:** The test drives the real recursive `fs.watch` implementation. The first failure looked like aggregate scheduler contention, but a stress version that waited up to two seconds for one write still missed one event in 30 repetitions. A single OS watcher event is therefore not a reliable synchronization primitive for this test.
 - **Fix:** The test now performs bounded, distinct file writes until the watcher reports a change or a two-second deadline expires. A broken watcher still fails at the deadline, while one dropped OS event no longer fails the suite.
 - **Verification:** `bun test apps/backend/tests/worktree-watcher.test.ts --test-name-pattern "observes a real file write" --rerun-each 50` -> 50 passed, 0 failed. Targeted stress and the final aggregate suite both passed.
+
+
+## Live terminal cleanup validation recurrence — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name terminal-signal-repository -- mise run test`, Bun 1.4.4, standard worker leases. The change only edits `e2e/agent-testing/container-claude-terminal-signal.spec.ts`; the watcher and its tests are unchanged.
+- **Failure:** `startWorktreeWatcher > observes a real file write` received zero changes after the current two-second bounded write loop (2004.32 ms, `apps/backend/tests/worktree-watcher.test.ts:290`). Reopened because the earlier retry-loop fix did not prevent this aggregate recurrence.
+- **Complete unchanged owner:** `mise run test:logged -- --name worktree-watcher-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 1.0 seconds.
+- **Evidence:** `orkestrator-test-run.zbtDAc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. The aggregate exited 1 with backend 11197 passed, 95 skipped, two failures and one between-test error across 655 files; the other failure is [0248](0248-move-restart-recovery-submodule-timeout.md). Root/support, bridges, protocol and every other workspace package passed.
+- **Changes:** evidence only; no watcher code, assertions, deadlines or skips changed. The original aggregate remains failed.

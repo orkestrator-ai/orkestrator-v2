@@ -610,18 +610,8 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
         );
 
         await test.step("closing the design conversation keeps it resumable; Resume sends nothing", async () => {
-          // A resumed Codex transcript also shows Codex's synthetic environment
-          // context as a user message (docs/todo/transcripts-and-observation/
-          // 0082-codex-resume-shows-environment-context.md); it is not a prompt.
           const userTurnsOf = (current: Projection) =>
-            (current?.messages ?? []).filter(
-              (message) =>
-                message.role === "user" &&
-                !(
-                  typeof message.content === "string" &&
-                  message.content.trimStart().startsWith("<environment_context>")
-                ),
-            );
+            (current?.messages ?? []).filter((message) => message.role === "user");
           const userTurns = userTurnsOf(await projection());
           // The handoff tab keeps its display title; the design tab is the other one.
           await page

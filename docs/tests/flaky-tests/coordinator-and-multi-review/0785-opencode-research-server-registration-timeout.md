@@ -48,3 +48,10 @@ immediately afterwards; the next isolated rerun with the same command passed
 - Complete unchanged owner: `mise run test:logged -- --name merge-opencode-research-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` passed (exit 0, 2.6 s).
 - Evidence: `/tmp/orkestrator-test-run.BiI1L3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer logged-run summary: `/tmp/orkestrator-test-run.zPP21z/summary.json`.
 - Assessment: another aggregate-only timeout. The cause remains unconfirmed; no implementation, assertion, timeout or skip changed.
+
+## Fails alone on omarchy-hp — 2026-10-26
+
+- Branch `todo-0058-legacy-migration-symlink-977645ad36e4` (todo 0058; changes only `docker/orkestrator-migrate.sh`, `tests/unit/migrate-copy.test.ts`, a live Docker test and docs), Arch Linux x64, 12 cores.
+- Command: `mise run test:logged -- --name full-test -- mise run test`. The case timed out at 40,000.51 ms.
+- Unlike earlier observations, the complete unchanged owner also timed out **alone**, three times at 40.0–40.9 s: `bun test --preload ../../tests/setup-node.ts src/core/opencode-coordinator-research-live.test.ts` from `apps/backend`, at load average 11–15 on 12 cores. It timed out the same way in a disposable worktree of clean `origin/main` (`a51045a4`), so the branch did not cause it. The binary is the pinned toolchain copy that `policyQualificationCli("opencode")` resolves from the host's data directory (read only).
+- Assessment: on this host the hang is now deterministic rather than load-only, which supports the startup-hang hypothesis above. No implementation, assertion, timeout or skip changed.

@@ -13,3 +13,7 @@
 - **Isolated owner command:** `mise run test:logged -- --name isolated-worktree-git -- sh -c 'cd apps/backend && bun test ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures'`.
 - **Isolated result:** Complete unchanged owner passed, exit 0, in 2.1 seconds.
 - **Hypothesis:** Shared-host contention delayed filesystem watcher reconciliation beyond the runner's default deadline. Unproven; the tests, their assertions and deadlines were not changed. This is distinct from resolved case 0180, which concerned a tracked-edit cache-hit assertion rather than these two watcher timeouts.
+
+## Recurrence — 0247 sweeps, 2026-10-26
+
+- Both direct backend sweeps (`TMPDIR=<private dir> mise exec -- bun run --cwd apps/backend test:workspace`, macOS arm64, at `5eb3f9037` and `8268be981` on `test-temp-directory-4cd0548cf2b5-r1`, which does not touch this owner) timed out `real Git through the shared owner` cases at 5,000 ms: the tracked-edit, linked-worktree staging and shared-ref cases in the first, the tracked-edit case in the second. The owner rerun alone at load average 37 (`mise run test:logged -- --name rerun-worktree-snapshots-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts`) also failed the staging and shared-ref cases (2 pass, 2 fail; artifact `orkestrator-test-run.62Ge9Y`); no quieter rerun was taken. No change.

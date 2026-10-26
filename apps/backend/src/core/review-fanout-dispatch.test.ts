@@ -99,6 +99,39 @@ function harness(
 }
 
 describe("review fan-out dispatch preparation", () => {
+  test("reverts the dispatch transition when its owning save throws and retries once", async () => {
+    const h = harness("build");
+    const save = h.host.save;
+    const failure = new Error("owning save lost its fence after applying the transition");
+    failure.name = "TestFenceError";
+    let fail = true;
+    h.host.save = async () => {
+      expect(h.reviewer.dispatchState).not.toBe("prepared");
+      if (fail) {
+        expect(h.reviewer.dispatchState).toBe("dispatching");
+        throw failure;
+      }
+      await save();
+    };
+    const runner = new ReviewFanoutRunner(h.host);
+    await expect(runner.advanceReviewers([h.reviewer])).rejects.toBe(failure);
+    expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "prepared" });
+    expect(h.saves).toHaveLength(0);
+    expect(h.sends).toHaveLength(0);
+    expect(h.abandoned).toHaveLength(0);
+
+    fail = false;
+    await runner.advanceReviewers([h.reviewer]);
+    await runner.advanceReviewers([h.reviewer]);
+    expect(h.reviewer.dispatchState).toBe("sent");
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]?.options.requestId).toBe("review-request");
+    expect(h.saves.slice(0, 2).map((saved) => saved.dispatchState)).toEqual([
+      "dispatching",
+      "sent",
+    ]);
+  });
+
   test("keeps a reviewer prepared when policy resolution fails before send", async () => {
     const testHarness = harness("plan");
     testHarness.rejectPolicy(true);
@@ -264,6 +297,32 @@ describe("recovered reviewer dispatch", () => {
     },
   );
 
+  test.each(["lost", "unknown"] as const)(
+    "a matching structured result on the first poll promotes a %s dispatch",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.provider.dispatchStatus = async () => acceptance;
+      h.provider.structured = async <T>() =>
+        ({
+          ok: true,
+          provider: "opencode",
+          requestId: "review-request",
+          value: {},
+        }) as StructuredOutputResult<T>;
+      const runner = new ReviewFanoutRunner(h.host);
+      await runner.advanceReviewers([h.reviewer]);
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({
+        status: "running",
+        requestId: "review-request",
+        dispatchState: "sent",
+      });
+      expect(h.abandoned).toHaveLength(0);
+      expect(h.sends).toHaveLength(0);
+    },
+  );
+
   test("a submitted tool result proves a dispatch the provider retired", async () => {
     const h = harness("build");
     h.reviewer.dispatchState = "dispatching";
@@ -281,22 +340,25 @@ describe("recovered reviewer dispatch", () => {
     expect(h.sends).toHaveLength(0);
   });
 
-  test("acceptance promotes the same request and clears the uncertainty poll budget", async () => {
-    const h = harness("build");
-    h.reviewer.dispatchState = "dispatching";
-    h.reviewer.continuationPrompt = "Continue";
-    h.reviewer.idleResultPolls = 10;
-    h.provider.dispatchStatus = async () => "dispatched";
-    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
-    expect(h.reviewer).toMatchObject({
-      requestId: "review-request",
-      dispatchState: "sent",
-      status: "running",
-    });
-    expect(h.reviewer.continuationPrompt).toBeUndefined();
-    expect(h.reviewer.idleResultPolls).toBeUndefined();
-    expect(h.sends).toHaveLength(0);
-  });
+  test.each(["dispatched", "pending"] as const)(
+    "%s promotes the same request and clears the uncertainty poll budget",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.reviewer.continuationPrompt = "Continue";
+      h.reviewer.idleResultPolls = 10;
+      h.provider.dispatchStatus = async () => acceptance;
+      await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({
+        requestId: "review-request",
+        dispatchState: "sent",
+        status: "running",
+      });
+      expect(h.reviewer.continuationPrompt).toBeUndefined();
+      expect(h.reviewer.idleResultPolls).toBeUndefined();
+      expect(h.sends).toHaveLength(0);
+    },
+  );
 });
 
 test("a sent continuation ignores a superseded restart until its own turn settles", async () => {

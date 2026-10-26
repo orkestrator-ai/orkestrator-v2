@@ -2446,7 +2446,10 @@ describe("session routes", () => {
         mockGetPromptDispatchState.mockReturnValueOnce(state);
         const res = await app.request("/session/s-1/dispatch?requestId=r-1");
         expect(res.status).toBe(200);
-        expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+        expect(await jsonBody(res)).toEqual({
+          dispatch: "dispatched",
+          pending: state === "processing",
+        });
       }
       expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "r-1");
     });
@@ -2488,7 +2491,10 @@ describe("session routes", () => {
         // reports dispatched: an explicit positive wins.
         for (const state of ["processing", "already-processed"] as const) {
           mockGetPromptDispatchState.mockReturnValueOnce(state);
-          expect(await read("before-restart")).toEqual({ dispatch: "dispatched" });
+          expect(await read("before-restart")).toEqual({
+            dispatch: "dispatched",
+            pending: state === "processing",
+          });
         }
         expect(mockPersistedDispatchClaimLost).not.toHaveBeenCalled();
         // Read-only: never the touching or hydrating lookups.
@@ -2535,7 +2541,7 @@ describe("session routes", () => {
     test("is not shadowed by GET /session/:id", async () => {
       mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const res = await app.request("/session/s-1/dispatch?requestId=r-1");
-      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched", pending: true });
     });
   });
 

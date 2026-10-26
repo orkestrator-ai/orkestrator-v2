@@ -269,6 +269,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const body = asRecord(
       await boundedJson(response, `${this.agent} dispatch status`).catch(() => null),
     );
+    // The additive flag preserves `dispatched` for older backends, while a
+    // newer backend can distinguish a pending turn from a completed one.
+    if (body?.dispatch === "dispatched" && body.pending === true) return "pending";
     // `lost` is additive: a bridge that predates it answers `unknown` there.
     return body?.dispatch === "dispatched" || body?.dispatch === "lost" ? body.dispatch : "unknown";
   }

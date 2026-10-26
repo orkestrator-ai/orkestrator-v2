@@ -830,6 +830,12 @@ describe("HTTP bridge provider", () => {
     expect(dispatched.requests[0]!.url).toBe(
       "http://claude.test/session/s%2F1/dispatch?requestId=r%2F1",
     );
+    for (const pending of [true, false, undefined, "true"]) {
+      const { provider } = httpProvider(() => Response.json({ dispatch: "dispatched", pending }));
+      await expect(provider.dispatchStatus?.("s", "r")).resolves.toBe(
+        pending === true ? "pending" : "dispatched",
+      );
+    }
     // The bridge retired the id after a restart: the read-only twin of a 410.
     const lost = httpProvider(() => Response.json({ dispatch: "lost" }));
     await expect(lost.provider.dispatchStatus?.("s", "r")).resolves.toBe("lost");
@@ -2390,10 +2396,11 @@ describe("HTTP bridge provider", () => {
     const body = { current: {} as Record<string, unknown> };
     // What the bridge's dispatch journal says about the continuation.
     let continuation = "dispatched";
+    let pending = true;
     const { provider } = httpProvider(
       (url) =>
         new URL(url).pathname.endsWith("/dispatch")
-          ? Response.json({ dispatch: continuation })
+          ? Response.json({ dispatch: continuation, pending })
           : Response.json(body.current),
       codexConnection,
     );
@@ -2438,6 +2445,15 @@ describe("HTTP bridge provider", () => {
       );
     }
     continuation = "dispatched";
+    // A finished watched request cannot hide a later request's restart.
+    pending = false;
+    expect(await readProviderStatus(provider, "session-1", "continuation")).toEqual({
+      status: "error",
+      error: "restarted",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    });
+    pending = true;
     // A bridge that predates the field: the notice is taken at face value.
     body.current = { status: "error", error: "restarted", interruption: "restart" };
     expect((await readProviderStatus(provider, "session-1", "continuation")).status).toBe("error");

@@ -96,10 +96,10 @@ What the file found, and what changed.
      restores it; older marks and bridges simply omit it.
    - `throwExplainedTurnFailure` parses it (bounded to 512 characters), and
      `readProviderStatus` reads a notice naming another request than the one
-     watched, while the provider's dispatch journal confirms the watched one
-     (`dispatched`), as "this request's turn has not settled" (`idle`,
-     `turnSettled: false`). Without that confirmation the notice is taken at
-     face value (decision 8). That fixes the fan-out, the Multi Review steps,
+     watched, while the provider's dispatch journal reports the watched one
+     accepted and unfinished (`pending`), as "this request's turn has not
+     settled" (`idle`, `turnSettled: false`). Without that the notice is
+     taken at face value (decisions 8 and 9). That fixes the fan-out, the Multi Review steps,
      Build Pipeline consolidation and the Build Pipeline stage supervisor (which
      had the same "interrupted again" failure) in one place.
    - The interleaving harness starts half of all continuation turns late,
@@ -176,9 +176,9 @@ What the file found, and what changed.
    another request as `idle` with `turnSettled: false`. Why: every workflow
    caller already waits on `turnSettled === false`, and the Build Pipeline
    supervisor had the same bug. Pros: one rule for four callers. Cons: the
-   wait is not counted against the idle bound; decision 8 confines it to a
-   request the provider confirms it holds, so it lasts only until the bridge
-   starts that turn.
+   wait is not counted against the idle bound; decisions 8 and 9 confine it
+   to a request the provider reports in flight, so it lasts only until the
+   bridge starts that turn.
 6. **How Codex names the request.** Options: add it to the persisted restart
    notice, or look it up. Chosen: look it up in the dispatch journal by turn
    id. Why: the session record validator rejects unknown fields, so a new
@@ -209,6 +209,40 @@ What the file found, and what changed.
    read, only when a notice names another request; providers without
    `dispatchStatus` keep the old behaviour. 8 of 8 runs of the real-bridge
    test passed afterwards.
+9. **`dispatched` or `pending` as that confirmation** (Multi Review finding,
+   2026-10-26). `dispatched` also covers a finished request, so a workflow
+   still watching a finished request could read a *later* turn's restart
+   notice as superseded and wait without a bound (a queued Build Pipeline
+   message dispatched under a fresh id while the stage's
+   `structuredRequestId` stays watched). Options: a new `pending` answer, or
+   report the latest accepted request id and require it to match. Chosen:
+   `pending`. The Claude and Codex `/dispatch` routes add `pending: true`
+   beside `dispatched` for a request still in flight, `HttpBridgeProvider`
+   maps it to `pending`, and every consumer that promotes on `dispatched`
+   accepts `pending` too. Why: the flag is additive (an older backend reads
+   it as `dispatched`, an older bridge never sends it and so never
+   supersedes), and it answers exactly the question asked. Cons: a widened
+   `ProviderDispatchStatus` union every consumer must handle; all five do.
+
+## Multi Review outcome
+
+The branch's Multi Review (2026-10-26) reported one finding and six test
+coverage gaps; its automatic Fix stopped on a model-capacity error, so the
+fixes were finished and checked by hand. All were accepted.
+
+- **Finding (P2): a finished watched request could make a later restart
+  notice look superseded.** Fixed with `pending` (decision 9). Tests:
+  `workflow-dispatch-observation.test.ts` ("only a pending watched request
+  supersedes a named restart", which fails under the old rule), the
+  `http-bridge-provider.test.ts` restart-notice and dispatch-status cases, and
+  the Claude and Codex `/dispatch` route tests.
+- **Gaps, each now covered:** the commit transition reverted when its own save
+  throws, then sent exactly once (`review-fanout-dispatch.test.ts`); a `lost`
+  or `unknown` dispatch promoted by a matching structured result on the first
+  poll; the released-turn kill naming its request and an owned mark renamed
+  by a new turn (`session-manager-turn-interruption.test.ts`); and a provider
+  without `dispatchStatus` keeping the notice at face value
+  (`workflow-dispatch-observation.test.ts`).
 
 ## Open questions
 

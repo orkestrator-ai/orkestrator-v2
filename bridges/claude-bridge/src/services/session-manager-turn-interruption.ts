@@ -78,12 +78,17 @@ function turnInFlight(session: SessionState): boolean {
  *
  * `stopped`: the user stopped the turn. A restart before it settles must not
  * be blamed for a stop someone asked for.
+ *
+ * `requestId`, with `started`: the dispatch request id of the turn the SDK
+ * just took. The mark names it, so a later process can say which request a
+ * restart cut short.
  */
 export function syncTurnInFlightMark(
   session: SessionState,
-  options: { stopped?: boolean; started?: boolean } = {},
+  options: { stopped?: boolean; started?: boolean; requestId?: string } = {},
 ): void {
   if (session.deleting) return;
+  if (options.started) session.turnInFlightRequestId = options.requestId;
   writeTurnInFlightMark(
     session,
     options.stopped !== true && turnInFlight(session),
@@ -102,18 +107,30 @@ export function clearTurnInFlightMarkForClose(session: SessionState): void {
 }
 
 function writeTurnInFlightMark(session: SessionState, wanted: boolean, claim = false): void {
+  // A new turn rewrites a mark it already owns only to name its own request.
+  const renamed =
+    claim &&
+    session.turnInFlightMarkOwned === true &&
+    session.turnInFlightMarkRequestId !== session.turnInFlightRequestId;
   if (
     wanted === (session.turnInFlightMarked === true) &&
-    !(wanted && claim && !session.turnInFlightMarkOwned)
+    !(wanted && claim && (!session.turnInFlightMarkOwned || renamed))
   )
     return;
   const sdkSessionId = session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
   if (!sdkSessionId) return;
   session.turnInFlightMarked = wanted;
   session.turnInFlightMarkOwned = wanted;
+  const requestId = wanted ? session.turnInFlightRequestId : undefined;
+  session.turnInFlightMarkRequestId = requestId;
   const update: SessionPreferences = {
     turnInFlight: wanted
-      ? { bridgeInstanceId: BRIDGE_INSTANCE_ID, pid: process.pid, startedAt: Date.now() }
+      ? {
+          bridgeInstanceId: BRIDGE_INSTANCE_ID,
+          pid: process.pid,
+          startedAt: Date.now(),
+          ...(requestId ? { requestId } : {}),
+        }
       : undefined,
   };
   void updateSessionPreferences(sdkSessionId, update).catch((error: unknown) => {
@@ -137,7 +154,12 @@ export function restoredTurnInterruption(
   preferences: SessionPreferences | undefined,
 ): Pick<
   SessionState,
-  "status" | "error" | "interruption" | "turnInFlightMarked" | "turnInFlightMarkOwned"
+  | "status"
+  | "error"
+  | "interruption"
+  | "interruptedRequestId"
+  | "turnInFlightMarked"
+  | "turnInFlightMarkOwned"
 > {
   const mark = preferences?.turnInFlight;
   if (!mark) return { status: "idle" };
@@ -151,6 +173,7 @@ export function restoredTurnInterruption(
     status: "error",
     error: CLAUDE_RESTARTED_MID_TURN_MESSAGE,
     interruption: "restart",
+    ...(mark.requestId ? { interruptedRequestId: mark.requestId } : {}),
     // Stays on disk until a turn settles here, so a second restart before the
     // continuation still reports the turn as cut short.
     turnInFlightMarked: true,

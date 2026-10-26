@@ -18,11 +18,16 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
   EnvironmentSettingsDialog: ({
     environment,
     onOpenChange,
+    onRestart,
     onUpdate,
     open,
   }: {
     environment: Environment;
     onOpenChange: (open: boolean) => void;
+    onRestart: (
+      environmentId: string,
+      options: { intent: "discard"; expectedContainerId: string | null },
+    ) => Promise<void>;
     onUpdate: (environment: Environment) => void;
     open: boolean;
   }) =>
@@ -31,6 +36,17 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
         <span>Settings for {environment.name}</span>
         <button type="button" onClick={() => onUpdate({ ...environment, status: "stopping" })}>
           Stop from settings
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            void onRestart(environment.id, {
+              intent: "discard",
+              expectedContainerId: environment.containerId ?? null,
+            })
+          }
+        >
+          Restart from settings
         </button>
         <button type="button" onClick={() => onOpenChange(false)}>
           Close settings
@@ -103,6 +119,35 @@ describe("AppDialogHost", () => {
       useEnvironmentStore.getState().environments.find((candidate) => candidate.id === "env-1")
         ?.status,
     ).toBe("stopping");
+  });
+
+  test("follows a background update to the requested environment", async () => {
+    render(<AppDialogHost />);
+    requestSettings("env-1");
+    expect(await screen.findByText("Settings for first-env")).toBeTruthy();
+
+    // The request pins an id, not a snapshot, so a sync that renames the
+    // environment reaches the open dialog.
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", { name: "renamed-by-sync" });
+    });
+
+    expect(screen.getByText("Settings for renamed-by-sync")).toBeTruthy();
+  });
+
+  test("restarts the requested environment through the backend", async () => {
+    render(<AppDialogHost />);
+    requestSettings("env-2");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restart from settings" }));
+
+    await waitFor(() =>
+      expect(nativeInvoke).toHaveBeenCalledWith("recreate_environment", {
+        environmentId: "env-2",
+        intent: "discard",
+        expectedContainerId: null,
+      }),
+    );
   });
 
   test("drops the request when its environment disappears", async () => {

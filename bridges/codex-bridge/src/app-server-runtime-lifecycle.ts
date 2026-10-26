@@ -775,6 +775,13 @@ export class CodexRuntimeLifecycle {
       return;
     }
     if (event.kind === "unknown.protocol") return;
+    if (event.kind === "account.signedIn") {
+      // Each thread's notice was about the login just replaced.
+      for (const context of this.ctx.registry.listThreads()) {
+        this.setThreadAuthNotice(context, undefined);
+      }
+      return;
+    }
     if (event.kind === "account.reload.requested") {
       void this.ctx.callbacks.reloadStoredAccountLogin().catch((error: unknown) => {
         console.warn(
@@ -1140,7 +1147,12 @@ export class CodexRuntimeLifecycle {
         this.discardOutlivingCommandWindows(turn);
         if (turn.stoppedByShutdown && event.status === "interrupted")
           this.completeRecoveredTurn(turn, event.status);
-        else turn.complete(event.status, event.error);
+        else {
+          turn.complete(event.status, event.error);
+          // A refused model fails the turn before anything streams; without
+          // this it read as idle with an empty reply.
+          if (event.status === "failed" && event.error) turn.recordProviderFailure(event.error);
+        }
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>
           this.runFinalization(context, turn).catch((error) => {

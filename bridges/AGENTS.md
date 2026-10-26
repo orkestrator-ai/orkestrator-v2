@@ -47,7 +47,11 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   run, the draft's id released); `unknown` leaves it parked. Neither `lost` nor
   `unknown` means "never sent": reporting a lost record that way would have it
   run the same turn twice. Like `/activity`, it must never touch liveness,
-  hydrate or re-attach.
+  hydrate or re-attach. A bridge that reports restart interruptions (Claude,
+  Codex) adds `pending: true` beside `dispatched` while that request's turn is
+  still in flight and `pending: false` once it finished; the backend lets a
+  restart notice naming another request stand aside only for a `pending`
+  request, so never report a finished request as pending.
 - Prompt dispatch and `POST /session/:id/attach` share the same client timeout,
   because they do the same work. A bridge with no attached agent process pays a
   full spawn plus `initialize` plus `session/load` on whichever request arrives

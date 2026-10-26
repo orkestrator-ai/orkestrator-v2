@@ -21,7 +21,11 @@ mock.module("@/components/ui/dialog", () => ({
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
-import { BuildLaunchDialog, type BuildLaunchSelection } from "./BuildLaunchDialog";
+import {
+  BuildLaunchDialog,
+  resolveStepState,
+  type BuildLaunchSelection,
+} from "./BuildLaunchDialog";
 
 const catalog: AgentModelCatalog = {
   claude: [
@@ -172,6 +176,25 @@ const speedCatalog: AgentModelCatalog = {
 };
 
 describe("BuildLaunchDialog", () => {
+  test.each(["", "default"])("an unset step (%p) uses the Pi default's effort list", (model) => {
+    const pi = [
+      { id: "openai/gpt-4", name: "Refused first model", reasoningEfforts: ["low"] },
+      {
+        id: "openai/gpt-6.1-sol",
+        name: "Saved Pi default",
+        sessionDefault: true,
+        reasoningEfforts: ["medium", "high"],
+      },
+    ];
+    const resolved = resolveStepState(
+      { agent: "pi", model, reasoningEffort: "high" },
+      { ...catalog, pi },
+    );
+    expect(resolved.model?.id).toBe("openai/gpt-6.1-sol");
+    expect(resolved.efforts).toEqual(["medium", "high"]);
+    expect(resolved.effort).toBe("high");
+  });
+
   test("shows the ordered pipeline immediately with one model picker per step", () => {
     renderDialog();
 

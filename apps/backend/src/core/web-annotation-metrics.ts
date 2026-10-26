@@ -118,6 +118,20 @@ export class WebAnnotationMetrics {
     if (observation.records > 0) {
       this.increment(`storage_records_written|scope=${observation.scope}`, observation.records);
     }
+    // CPU bound of the commit: rows serialized, and collections shallow-copied.
+    // Both follow the rows a commit changed, not the size of the environment.
+    this.increment(
+      `storage_rows_serialized|scope=${observation.scope}`,
+      observation.rowsSerialized,
+    );
+    this.gauge(
+      `storage_commit_rows_serialized|scope=${observation.scope}`,
+      observation.rowsSerialized,
+    );
+    this.gauge(
+      `storage_commit_collections_copied|scope=${observation.scope}`,
+      observation.collectionsCopied,
+    );
     for (const requestId of observation.requestIds) {
       const before = observation.previous.requests[requestId];
       const after = observation.next.requests[requestId];

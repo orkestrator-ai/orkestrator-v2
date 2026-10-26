@@ -1405,7 +1405,10 @@ app.get("/session/:id/dispatch", (c) => {
   const dispatched =
     record?.bridgeSessionId === c.req.param("id") &&
     (record.state === "accepted" || record.state === "terminal");
-  return c.json({ dispatch: dispatched ? "dispatched" : "unknown" });
+  return c.json({
+    dispatch: dispatched ? "dispatched" : "unknown",
+    ...(dispatched ? { pending: record.state === "accepted" } : {}),
+  });
 });
 
 app.get("/session/:id/structured-output", (c) => {

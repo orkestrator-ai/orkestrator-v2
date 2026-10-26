@@ -84,6 +84,48 @@ describe("turn-time auth notice", () => {
       "a completed turn did not clear the auth notice",
     );
   });
+
+  test("a failed renewal's notice clears once the user signs in again", async () => {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "req-auth", attachments: [] });
+    h.child().notify("modelProvider/authRecoveryStarted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      provider: "openai",
+    });
+    h.child().notify("modelProvider/authRecoveryCompleted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      provider: "openai",
+      message: "Refreshing the login failed permanently",
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "failed", error: { message: "401" } },
+    });
+    await h.drain();
+    // The tab locks its composer on this notice, so no turn can complete to
+    // clear it; a sign-in must.
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice?.state === "needs-auth",
+      "the failed renewal did not leave a sign-in notice",
+    );
+
+    h.child().notify("account/login/completed", { loginId: "login-1", success: false });
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+
+    h.child().notify("account/login/completed", { loginId: "login-2", success: true });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "a successful sign-in did not clear the auth notice",
+    );
+  });
 });
 
 describe("same thread in two tabs", () => {

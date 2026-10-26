@@ -24,9 +24,11 @@ import type { NormalizedMessage } from "../types/index.js";
  * read together here, so a summary, a detail locator and a page cursor always
  * describe the same array.
  *
- * `peekSession` only: a transcript read never materializes a persisted session
- * or probes the catalogue. `getSessionMessages` refreshes the idle clock, as a
- * user-driven tab read should.
+ * `peekSession` only: building a source never materializes a persisted session
+ * or probes the catalogue. The summary route materializes one first (see
+ * {@link registerSessionTranscriptRoutes}); detail and page never do.
+ * `getSessionMessages` refreshes the idle clock, as a user-driven tab read
+ * should.
  */
 export function claudeTranscriptSource(
   id: string,
@@ -95,14 +97,32 @@ function query(c: Context) {
  * they answer an unknown session in band (`missing` / `expired`) instead.
  * Neither of them hydrates: they serve exactly what the summary route serves,
  * preview or hydrated, and it is the summary route that starts hydration.
+ *
+ * The summary route first materializes a session that exists on disk but is
+ * not resident yet (after a bridge restart), exactly as `/messages` does, so
+ * its 404 means the session does not exist. Bridges before this change
+ * answered 404 there too, and the backend's `/messages` fallback is what
+ * loaded the session (`readHttpBridgeTranscriptSnapshot`); see 0050 item 3.
  */
-export function registerSessionTranscriptRoutes(app: Hono, generation: string): void {
+export function registerSessionTranscriptRoutes(
+  app: Hono,
+  generation: string,
+  materialize: (
+    id: string,
+  ) => Promise<
+    { ok: true } | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 }
+  >,
+): void {
   // Transcript-first display route. Persisted hydration continues in the
   // background; callers keep the preview visible and poll its conditional
   // token. The response is serialized before hydration is started, so the
   // token always describes exactly the content it was sent with.
-  app.get("/:id/transcript", (c) => {
+  app.get("/:id/transcript", async (c) => {
     const id = c.req.param("id");
+    if (!peekSession(id)) {
+      const resolved = await materialize(id);
+      if (!resolved.ok) return c.json(resolved.body, resolved.status);
+    }
     const read = claudeTranscriptSource(id, generation);
     if (!read) return c.json({ error: "Session not found" }, 404);
     const response = c.json(bridgeTranscriptRouteBody(read.source, query(c)));

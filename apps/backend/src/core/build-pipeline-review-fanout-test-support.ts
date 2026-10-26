@@ -28,7 +28,10 @@ import type {
   ProviderSendOptions,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
-import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
+import type {
+  NativeAgentRuntimeProvider,
+  ProviderDispatchStatus,
+} from "./agent-provider-contract.js";
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
 import {
   TEST_REVIEW_PREPARATION,
@@ -169,10 +172,8 @@ export class FanoutProvider implements BuildPipelineProvider {
 
   registerSession(): void {}
 
-  async dispatchStatus(_sessionId: string, requestId: string) {
-    return this.sent.some((entry) => entry.requestId === requestId)
-      ? ("dispatched" as const)
-      : ("unknown" as const);
+  async dispatchStatus(_sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
+    return this.sent.some((entry) => entry.requestId === requestId) ? "dispatched" : "unknown";
   }
 
   async createSession(

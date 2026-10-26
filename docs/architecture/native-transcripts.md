@@ -236,15 +236,28 @@ These are ceilings, not targets to raise.
 
 ## Retained compatibility paths
 
-Both stay until the support window in
-[0034-mixed-version-compatibility.md](../todo/cross-cutting/0034-mixed-version-compatibility.md)
-is agreed; [0050-transcript-history-efficiency.md](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
-owns them.
+Both are in the register of
+[version-compatibility.md](version-compatibility.md#register), with their
+removal conditions. Checked on 2026-10-26: neither serves only bridges outside
+the support window.
 
-- **Joined `sync-v1` history paging**, for a bridge without page routes.
-- **Bridges that predate `/transcript`.** `readHttpBridgeTranscriptSnapshot`
-  reads the whole `/messages` body and keeps the newest window itself, so a
-  progress probe on such a bridge also costs a whole read.
+- **Joined `sync-v1` history paging.** `getMessagePage` serves a v1 cursor by
+  refreshing the sync-v1 projection, which reads the whole transcript, and
+  paging the backend's own joined copy. It serves a bridge without page
+  routes, and also the renderer: when the progressive view carries no direct
+  cursor, **Load earlier messages** mints one from the sync-v1 projection,
+  which only mints v1 cursors, so a v2 bridge or OpenCode then pages through
+  the joined copy too. [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
+  owns moving that onto direct pages.
+- **The `/messages` fallback.** When `/transcript` answers 404 or 405,
+  `readHttpBridgeTranscriptSnapshot` reads the whole `/messages` body and
+  keeps the newest window itself, so a progress probe there also costs a
+  whole read. That serves bridges before #670 and, until 2026-10-26, every
+  Claude bridge: its `/transcript` read only resident sessions, so after a
+  bridge restart a persisted session answered 404 and only `/messages` loaded
+  it. The Claude summary route now loads the session first, so its 404 means
+  missing. When `/messages` also answers 404 the session is missing and the
+  read is an empty, complete snapshot, not counted as compatibility use.
   `/messages?limit=` is advisory for the same reason.
 
 ## Measuring

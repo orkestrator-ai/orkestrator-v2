@@ -467,7 +467,9 @@ never replaced.
   name and bytes inside the request: at most 8 files and 256 KiB in total, so
   that they fit the 1 MiB request with the prompt. Images (PNG, JPEG, GIF,
   WebP by signature) are sent as images, anything else as files; a provider
-  that cannot take one kind refuses (`capability-unavailable`). The backend
+  that cannot take one kind refuses (`capability-unavailable`). OpenCode gets
+  a file as a `text/plain` file part, which it reads with its Read tool
+  (binary content arrives as a read failure the agent sees). The backend
   writes them, after admission and before dispatch, to
   `.orkestrator/prompt-attachments/<operation ID>/` in the environment
   workspace (the directory the composer stages into) and attaches those
@@ -483,6 +485,11 @@ never replaced.
   exactly one initial prompt under the stable request ID
   `initial-prompt:<environment>:startup-agent`. Setup failure leaves the prompt
   unsent (`partial`, `dispatch: not-sent`). Never follow it with `session start`.
+- `session start` without `--model` uses the configured
+  default as a default: it is reported as the resolved model, but the
+  runtime may replace it when this login cannot serve it (the shipped Codex
+  `gpt-5.4` on a ChatGPT login), exactly as a launch from the app does. Only a
+  model named with `--model` is pinned.
 - Responses mean **submitted**. The receipt's `dispatch` is
   `accepted | rejected | unknown`; `execution` is
   `pending | running | waiting-for-input | completed | failed | cancelled | interrupted | unknown | unsupported`.
@@ -499,7 +506,18 @@ later steering input does not end a turn while the session is busy. Missing
 evidence stays `unknown`. A provider whose status reads idle after a failed
 turn (OpenCode keeps the error on the request's last assistant message) is
 asked for that request's terminal error before an idle turn counts as
-completed; an unreadable answer is retried, never settled as success.
+completed; an unreadable answer is retried, never settled as success. A turn
+the environment's stop cut off (it was last seen working or waiting when the
+runtime stopped, and no outcome was recorded) settles `interrupted` with
+evidence `none`: its bridge is gone, so no outcome can be read, and changes
+made before the stop may remain. The stopped session itself reads `idle`.
+
+OpenCode can also accept a prompt (`promptAsync` returns 204) and then drop it
+while building its parts, reporting only a `session.error` and storing no
+message. A request whose history holds nothing, two seconds or more after such
+an error that the provider's event stream saw following its dispatch, settles
+`failed` with "OpenCode did not accept the prompt: <reason>". Without that
+event (a stream gap, or a backend restart in between) it stays `unknown`.
 
 | Provider | Completion | Evidence (packaged CLI, file assertion + follow-up) |
 | --- | --- | --- |
@@ -681,9 +699,11 @@ opt-in. The published package ships only the Claude and Codex bridges (OpenCode 
 For a live Pi, Cursor or Grok run the harness gives that backend its own
 `--resource-root`: the packaged Claude and Codex bridges plus the provider's
 worktree-built bridge (`prepareProviderRuntime` in
-`packages/cli/scenarios/provider-runtime.ts`), with the provider enabled and,
-for Grok, the pinned binary installed into the scenario data directory. Those
-providers are not yet live-qualified (see
+`packages/cli/scenarios/provider-runtime.ts`), with the provider enabled.
+Every live run with a pinned binary (Claude, Codex, OpenCode, Pi, Grok) first
+installs it into the scenario data directory with `toolchain install --tool`,
+because an agent-test backend never falls back to `PATH`. Pi, Cursor and Grok
+are not yet live-qualified (see
 [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md)).
 Which test proves each scenario class is listed in
 [cli-testing.md](../development/cli-testing.md#coverage-by-layer).

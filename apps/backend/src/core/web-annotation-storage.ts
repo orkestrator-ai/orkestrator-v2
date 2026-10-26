@@ -16,8 +16,9 @@ import { deletionMarker, markDeletion } from "./storage-deletion-fences.js";
  * A mutation is: asynchronous preparation outside (image staging and
  * promotion into `assets/`), then ONE synchronous IMMEDIATE transaction that
  * revalidates the in-memory model against the store revision (reloading what
- * another backend committed), runs the caller's synchronous `work`, and writes
- * only the rows that changed plus the environment revision. SQLite's write
+ * another backend committed), runs the caller's synchronous `work` against a
+ * copy-on-write working manifest (`web-annotation-working-manifest.ts`), and
+ * serializes and writes only the rows it changed plus the environment revision. SQLite's write
  * lock serializes that transaction against every connection and process, so
  * two backends sharing a data directory never lose each other's updates. The
  * per-environment FIFO only orders this process's writes and bounds them.
@@ -60,12 +61,15 @@ import {
   WEB_ANNOTATION_STORE_FORMAT,
   WEB_ANNOTATION_STORE_VERSION,
   assembleSnapshot,
+  assertSameRowPlan,
   committedStoreRevision,
   defaultMeta,
   deleteAllRows,
   deleteRecordRows,
   emptySnapshot,
   hasAssetRow,
+  freezeRowValue,
+  planChangedRows,
   planRows,
   readIndexSnapshot,
   readMetaRow,
@@ -76,6 +80,7 @@ import {
   type StoreSnapshot,
   type WebAnnotationStoreMeta,
 } from "./web-annotation-store-rows.js";
+import { WorkingManifest, type EditableCollection } from "./web-annotation-working-manifest.js";
 import {
   WebAnnotationStorageError,
   isRecord,
@@ -144,6 +149,13 @@ export interface WebAnnotationCommitObservation {
   requestIds: readonly string[];
   /** Annotations the commit touched (empty for draft commits). */
   annotationIds: readonly string[];
+  /**
+   * Index rows the commit serialized to plan its writes. Bounded by the rows
+   * it changed, not by the size of the collection.
+   */
+  rowsSerialized: number;
+  /** Collections the commit shallow-copied (pointer copies; no row is cloned). */
+  collectionsCopied: number;
   previous: Readonly<WebAnnotationManifest>;
   next: Readonly<WebAnnotationManifest>;
 }
@@ -163,6 +175,11 @@ export interface WebAnnotationStorageOptions {
   syncDirectories?: boolean;
   /** A connection to use instead of opening (and owning) one. */
   database?: StorageDatabase;
+  /**
+   * Also run the full row diff on every commit and refuse (roll back) one
+   * whose incremental plan differs. Defaults to on under `bun test`.
+   */
+  verifyRowPlans?: boolean;
 }
 
 export function storageCapacityError(
@@ -259,7 +276,12 @@ function encodeRecord(
 
 type RecordReader = (kind: WebAnnotationRecordKind, id: string, revision: number) => unknown;
 
-/** One mutation's working set. The manifest is a private clone until commit. */
+/**
+ * One mutation's working set. `manifest` is a copy-on-write working copy
+ * (`web-annotation-working-manifest.ts`): committed rows are frozen, so a
+ * change replaces a row (`manifest.requests[id] = { ...request, state }`) or
+ * edits the private clone `edit` returns.
+ */
 export class WebAnnotationTransaction {
   readonly records: PendingRecordWrite[] = [];
   readonly dropRecords: Array<{ id: string; revision: number }> = [];
@@ -271,12 +293,25 @@ export class WebAnnotationTransaction {
   private bypassQuota = false;
 
   constructor(
-    readonly manifest: WebAnnotationManifest,
+    private readonly working: WorkingManifest,
     readonly now: string,
     readonly nowMs: number,
     private readonly reader: RecordReader,
   ) {}
 
+  get manifest(): WebAnnotationManifest {
+    return this.working.manifest;
+  }
+  /**
+   * A mutable clone of one committed row, put in its place: edits to it
+   * commit with the transaction. `undefined` when the row does not exist.
+   */
+  edit<C extends EditableCollection>(
+    collection: C,
+    key: string,
+  ): WebAnnotationManifest[C][string] | undefined {
+    return this.working.edit(collection, key);
+  }
   get dirty(): boolean {
     return this.changed;
   }
@@ -389,6 +424,8 @@ interface CommitOutcome<T> {
   next?: StoreSnapshot;
   previous?: StoreSnapshot;
   records?: number;
+  rowsSerialized?: number;
+  collectionsCopied?: number;
   dropAssets?: readonly string[];
   annotationIds?: readonly string[];
   requestIds?: readonly string[];
@@ -440,6 +477,9 @@ export class WebAnnotationEnvironmentStore {
   }
   private db(): StorageDatabase {
     return this.host.database();
+  }
+  private get verifyRowPlans(): boolean {
+    return this.options.verifyRowPlans ?? process.env.NODE_ENV === "test";
   }
 
   /** The committed manifest, revalidated against other processes' commits. */
@@ -1086,9 +1126,10 @@ export class WebAnnotationEnvironmentStore {
   }
 
   /**
-   * Run one mutation. `work` edits a private clone of the manifest inside the
-   * commit transaction and must be synchronous; if it marks the transaction
-   * dirty, the changed rows commit atomically with the new revision.
+   * Run one mutation. `work` edits a copy-on-write working manifest inside
+   * the commit transaction and must be synchronous; if it marks the
+   * transaction dirty, the rows it replaced commit atomically with the new
+   * revision. Committed rows are frozen: replace them or use `tx.edit`.
    */
   async mutate<T>(
     work: WebAnnotationWork<WebAnnotationTransaction, T>,
@@ -1133,6 +1174,8 @@ export class WebAnnotationEnvironmentStore {
       records: outcome.records ?? 0,
       requestIds: outcome.requestIds ?? [],
       annotationIds: outcome.annotationIds ?? [],
+      rowsSerialized: outcome.rowsSerialized ?? 0,
+      collectionsCopied: outcome.collectionsCopied ?? 0,
       previous: previous.manifest,
       next: next.manifest,
     });
@@ -1154,10 +1197,11 @@ export class WebAnnotationEnvironmentStore {
     this.assertWritable();
     const base = this.snapshot;
     const nowMs = this.nowMs();
-    // A deep copy, so a throwing `work` leaves the committed manifest intact.
-    // With `planRows` below it is the commit's O(collection) CPU cost.
+    // Copy-on-write: a throwing `work` leaves the frozen committed manifest
+    // intact, and only the rows it replaced are planned below.
+    const working = new WorkingManifest(base.manifest);
     const tx = new WebAnnotationTransaction(
-      structuredClone(base.manifest),
+      working,
       new Date(nowMs).toISOString(),
       nowMs,
       (kind, id, revision) => this.readRecordNow(kind, id, revision),
@@ -1167,11 +1211,11 @@ export class WebAnnotationEnvironmentStore {
       throw new WebAnnotationStorageError("Web annotation mutations must be synchronous");
     }
     if (!tx.dirty) return { value, committed: false };
-    const next = tx.manifest;
-    next.revision = base.manifest.revision + 1;
-    next.updatedAt = tx.now;
-    next.consumedDrafts = [];
-    for (const id of tx.annotationIds) next.changedAt[id] = next.revision;
+    const draft = working.manifest;
+    draft.revision = base.manifest.revision + 1;
+    draft.updatedAt = tx.now;
+    draft.consumedDrafts = [];
+    for (const id of tx.annotationIds) draft.changedAt[id] = draft.revision;
 
     const database = this.db();
     this.fault("before-record-write");
@@ -1181,16 +1225,22 @@ export class WebAnnotationEnvironmentStore {
       ...tx.dropDraftRecords.map((drop) => recordKey(drop.id, drop.revision)),
     ]);
     const written = tx.records.reduce((sum, record) => sum + record.bytes, 0);
-    const recordBytes = Math.max(0, next.usage.recordBytes + written - freed);
-    next.usage = { recordBytes };
-    const meta: WebAnnotationStoreMeta = {
+    const recordBytes = Math.max(0, draft.usage.recordBytes + written - freed);
+    draft.usage = { recordBytes };
+    const meta: WebAnnotationStoreMeta = freezeRowValue({
       ...base.meta,
-      createdAt: next.createdAt,
+      createdAt: draft.createdAt,
       updatedAt: tx.now,
-      revision: next.revision,
+      revision: draft.revision,
       recordBytes,
-    };
-    const plan = planRows(base, next, meta, base.unreadable);
+    });
+    const changes = working.changes();
+    changes.rows.push({ collection: "meta", key: "state", value: meta });
+    const plan = planChangedRows(base, changes);
+    const next = working.commit(changes);
+    if (this.verifyRowPlans) {
+      assertSameRowPlan(planRows(base, next, meta, base.unreadable), plan);
+    }
     if (!tx.essential) {
       this.assertQuota(
         plan.indexBytes + recordBytes,
@@ -1216,6 +1266,8 @@ export class WebAnnotationEnvironmentStore {
         maxPosition: plan.maxPosition,
       },
       records: tx.records.length,
+      rowsSerialized: plan.serialized,
+      collectionsCopied: working.copiedCollections,
       dropAssets: tx.dropAssets,
       annotationIds: Array.from(tx.annotationIds),
       requestIds: Array.from(tx.requestIds),
@@ -1239,6 +1291,8 @@ export class WebAnnotationEnvironmentStore {
       records: outcome.records ?? 0,
       requestIds: [],
       annotationIds: [],
+      rowsSerialized: outcome.rowsSerialized ?? 0,
+      collectionsCopied: 0,
       previous: outcome.previous!.manifest,
       next: outcome.next.manifest,
     });
@@ -1274,13 +1328,31 @@ export class WebAnnotationEnvironmentStore {
     );
     const written = tx.records.reduce((sum, record) => sum + record.bytes, 0);
     const recordBytes = Math.max(0, base.manifest.usage.recordBytes + written - freed);
-    const next: WebAnnotationManifest = {
+    const next: WebAnnotationManifest = freezeRowValue({
       ...base.manifest,
       drafts: tx.drafts,
       usage: { recordBytes },
-    };
-    const meta: WebAnnotationStoreMeta = { ...base.meta, recordBytes };
-    const plan = planRows(base, next, meta, base.unreadable, DRAFT_SCOPE);
+    });
+    const meta: WebAnnotationStoreMeta = freezeRowValue({ ...base.meta, recordBytes });
+    // The draft index is small (256 drafts per environment): plan all of it.
+    const plan = planChangedRows(base, {
+      rows: [
+        { collection: "meta", key: "state", value: meta },
+        { collection: "meta", key: "migration", value: next.migration },
+        ...Object.entries(next.drafts).map(([key, value]) => ({
+          collection: "drafts",
+          key,
+          value: value as unknown,
+        })),
+        ...Object.keys(base.manifest.drafts)
+          .filter((key) => !Object.hasOwn(next.drafts, key))
+          .map((key) => ({ collection: "drafts", key, value: undefined })),
+      ],
+      groups: [],
+    });
+    if (this.verifyRowPlans) {
+      assertSameRowPlan(planRows(base, next, meta, base.unreadable, DRAFT_SCOPE), plan);
+    }
     this.assertQuota(
       plan.indexBytes + recordBytes,
       base.indexBytes + base.manifest.usage.recordBytes,
@@ -1303,6 +1375,7 @@ export class WebAnnotationEnvironmentStore {
         maxPosition: plan.maxPosition,
       },
       records: tx.records.length,
+      rowsSerialized: plan.serialized,
     };
   }
 

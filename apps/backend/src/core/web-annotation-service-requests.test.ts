@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   WEB_ANNOTATION_CONFLICT,
+  WEB_ANNOTATION_LIMITS,
   parseWebAnnotationRequestMarker,
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
@@ -248,6 +249,74 @@ describe("web annotation request send", () => {
 });
 
 describe("web annotation request recovery", () => {
+  test.each([1, WEB_ANNOTATION_LIMITS.briefAnnotations])(
+    "same-state reconciliation of %i selections commits only the request and store metadata",
+    async (count) => {
+      harness = await createHarness({ verifyRowPlans: false });
+      const { service, dispatch, clock } = harness;
+      const ids: string[] = [];
+      for (let index = 0; index < count; index++) {
+        ids.push((await createAnnotation(service, ENV_A, `Note ${index}`)).annotationId);
+      }
+      const { request: before } = await send(service, ids, "req-cost");
+      // Finish the first pass's garbage collection before measuring this commit.
+      await service.reconcileOnce();
+      const store = await service.storage.environment(ENV_A);
+      const annotations = store.manifest.annotations;
+      const entries = store.manifest.entries;
+      const revision = store.manifest.revision;
+      const calls = dispatch.observeCalls;
+      const db = service.storage.database().db;
+      db.exec(`
+        CREATE TEMP TABLE reconcile_writes (collection TEXT, key TEXT);
+        CREATE TEMP TRIGGER reconcile_insert AFTER INSERT ON store_rows BEGIN
+          INSERT INTO reconcile_writes VALUES (NEW.collection, NEW.key);
+        END;
+        CREATE TEMP TRIGGER reconcile_update AFTER UPDATE ON store_rows BEGIN
+          INSERT INTO reconcile_writes VALUES (NEW.collection, NEW.key);
+        END;
+        CREATE TEMP TRIGGER reconcile_delete AFTER DELETE ON store_rows BEGIN
+          INSERT INTO reconcile_writes VALUES (OLD.collection, OLD.key);
+        END;
+      `);
+
+      clock.advance(1_000);
+      dispatch.observe_("req-cost", "queued", { blockedReason: "compose-draft" });
+      await service.reconcileOnce();
+
+      expect(dispatch.observeCalls).toBe(calls + 1);
+      expect((await service.getRequest(ENV_A, "req-cost")).request).toMatchObject({
+        state: "queued",
+        blockedReason: "compose-draft",
+        reservation: true,
+        revision: before.revision + 1,
+        updatedAt: new Date(clock.now()).toISOString(),
+      });
+      expect(store.manifest.revision).toBe(revision + 1);
+      expect(store.manifest.annotations).toBe(annotations);
+      expect(store.manifest.entries).toBe(entries);
+      expect(
+        db.query("SELECT collection, key FROM reconcile_writes ORDER BY collection, key").all(),
+      ).toEqual([
+        { collection: "meta", key: "state" },
+        { collection: "requests", key: "req-cost" },
+      ]);
+      const gauges = service.metrics.snapshot().gauges;
+      expect(gauges["storage_commit_rows_serialized|scope=manifest"]).toBe(2);
+      expect(gauges["storage_commit_collections_copied|scope=manifest"]).toBe(1);
+      const persisted = readStoredEnvironment(harness.dir)!;
+      expect(persisted.requests["req-cost"].blockedReason).toBe("compose-draft");
+      expect(persisted.annotations).toEqual(annotations);
+      expect(persisted.entries).toEqual(
+        Object.fromEntries(
+          Object.values(entries)
+            .flat()
+            .map((entry) => [entry.id, entry]),
+        ),
+      );
+    },
+  );
+
   test("a lost publication is re-driven with the same id after restart", async () => {
     harness = await createHarness();
     harness.dispatch.publishFailures = 1;

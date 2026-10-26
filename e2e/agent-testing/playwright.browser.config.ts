@@ -24,6 +24,7 @@ export default defineConfig({
     "container-rebuild-cycle.spec.ts",
     "container-root-terminal.spec.ts",
     "container-approval-stop.spec.ts",
+    "container-claude-terminal-signal.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",
@@ -49,6 +50,7 @@ export default defineConfig({
     [path.join(import.meta.dirname, "artifact-sanitizing-reporter.ts"), { suite: "browser" }],
   ],
   outputDir: path.join(outputRoot, "artifacts"),
+  globalSetup: path.join(import.meta.dirname, "bridge-builds-setup.ts"),
   globalTeardown: path.join(import.meta.dirname, "global-teardown.ts"),
   use: {
     // `webkit` runs a spec in Safari's engine (the iOS wrapper's WKWebView).

@@ -15,13 +15,21 @@
  * - Preparation/consolidation and Fix use their own action default when it
  *   names an enabled platform, else Review.
  * - Each row layers its action's model, effort and speed over that platform's
- *   resolved settings, then picks the preferred catalogue model or the first
+ *   resolved settings, then picks the preferred catalogue model, else the
+ *   connected model a tab with no model would start on (the one the catalogue
+ *   marks `sessionDefault`, such as Pi's saved default), else the first
  *   connected one, keeping the effort and speed only when that model offers them.
+ *   A Pi catalogue that marks no connected row leaves the model `default`, so
+ *   the session starts where a Pi tab would rather than on the first row.
  *
  * Build pipelines use the shared `buildPipelineConfiguredDefaults`, the same
  * resolver the Build button uses.
  */
-import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
+import {
+  reportsSessionDefault,
+  resolveCatalogModelId,
+  sessionDefaultModel,
+} from "@orkestrator/protocol/model-id";
 import {
   resolveActionDefault,
   type ActionDefaultKey,
@@ -92,10 +100,22 @@ function concreteRow(
   const preferredId = resolveCatalogModelId(preference.agent, offered, preference.model);
   const preferred = offered.find((model) => model.id === preferredId);
   // With no catalogue for this platform there is nothing to correct a saved
-  // model against, so it is kept rather than replaced by a placeholder.
-  const selected = preferred ?? offered[0];
-  const unavailable = catalog.some((model) => model.platform === preference.agent) && !selected;
-  const model = selected?.id ?? (unavailable ? "default" : preference.model) ?? "default";
+  // model against, so it is kept rather than replaced by a placeholder. With
+  // nothing saved, the row runs where a tab with no model would: the first
+  // catalogue entry can be one the login refuses (Pi on a ChatGPT login).
+  // A Pi catalogue with no connected marked row is a cache written before the
+  // mark existed, a disconnected default, or a login with no saved default;
+  // only the session can tell which, so the row is left to it (`default`).
+  const leftToSession =
+    !preferred &&
+    offered.length > 0 &&
+    reportsSessionDefault(preference.agent) &&
+    !offered.some((model) => model.sessionDefault === true);
+  const selected = preferred ?? (leftToSession ? undefined : sessionDefaultModel(offered));
+  const unavailable =
+    !leftToSession && catalog.some((model) => model.platform === preference.agent) && !selected;
+  const model =
+    selected?.id ?? (unavailable || leftToSession ? "default" : preference.model) ?? "default";
   const effort = preference.reasoningEffort;
   const keepsEffort =
     effort !== undefined &&

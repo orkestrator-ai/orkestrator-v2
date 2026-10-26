@@ -588,6 +588,9 @@ export async function fetchAcpNormalizedModelsAtResult(
           ...(typeof model.supportsImageInput === "boolean"
             ? { supportsImageInput: model.supportsImageInput }
             : {}),
+          // Where a tab with no model starts (Pi's saved default), which the
+          // launch defaults prefer over the first entry.
+          ...(model.sessionDefault === true ? { sessionDefault: true } : {}),
         },
       ];
     });
@@ -677,9 +680,15 @@ async function startLocalServerAttempt(
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
+    // A changed Cursor key restarts the bridge, which would end a running turn
+    // and its background work. A busy bridge keeps the key it started with,
+    // as a busy Claude or Codex bridge keeps its account; the first start
+    // after it goes idle applies the new one (the container path does the
+    // same in `start_cursor_server`).
     const credentialMatches =
       kind !== "cursor" ||
-      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint;
+      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint ||
+      (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     const workingDirectoryMatches =
       Boolean(env?.worktreePath) && localServers.workingDirectory(key) === env?.worktreePath;
     const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);
@@ -830,6 +839,7 @@ async function startLocalServerAttempt(
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.
   delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
+  delete env.CODEX_BRIDGE_STATE_DIR;
   // The same for coordinator research: read-only review turns in a worker
   // bridge consult these too, so only the coordinator branch may set them.
   delete env[COORDINATOR_WEB_RESEARCH_ENV];

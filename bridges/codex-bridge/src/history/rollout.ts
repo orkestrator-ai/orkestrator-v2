@@ -77,6 +77,7 @@ import {
   requestedSpawnPath,
   validAgentPath,
 } from "../subagent-spawn.js";
+import { turnFailureText } from "../messages/turn-failure.js";
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -1627,6 +1628,20 @@ async function replayPersistedRollout(
 
     if (record.type === "event_msg" && record.payload?.type === "item_completed") {
       visitCompletedItem(record.payload.item, timestamp);
+      return;
+    }
+
+    // A turn that failed keeps its error on `task_complete`; show it where the
+    // live turn did (`messages/turn-failure.ts`).
+    if (record.type === "event_msg" && record.payload?.type === "task_complete") {
+      const error = record.payload.error as { message?: unknown } | null | undefined;
+      if (error && typeof error === "object" && typeof error.message === "string") {
+        ensureAssistantMessage(timestamp).parts.push({
+          type: "status",
+          severity: "error",
+          content: turnFailureText(error.message),
+        });
+      }
       return;
     }
 

@@ -128,7 +128,8 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
     (`openEnvironmentSettings` in `useActionBarController.ts`), so
     `AppDialogHost` is the only renderer of the dialog opened from the
     drawer or the toolbar. `ServiceBrowserTab` still renders its own copy
-    from a browser tab's error state; it is not in the drawer.
+    for a preview tab's "configure mapping" recovery action; it is not in
+    the drawer.
   - Covered by `AppDialogHost.test.tsx` (including a background rename of
     the requested environment and restart through the backend),
     `ActionBar.test.tsx` (the toolbar button records the request and renders

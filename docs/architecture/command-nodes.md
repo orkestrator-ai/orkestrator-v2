@@ -303,11 +303,22 @@ Every attached command node keeps its own subscription to the leaf's event
 stream, so status, activity and environment changes reach all of them.
 Updates that have a single destination are routed intelligently:
 
-- Mail from a leaf environment's agent to "the coordinator", answers to a
-  coordinator's request, and task completion reports go to the command node
-  that started that conversation or task (recorded when it was started).
-- When there is no originating command node, they go to the command node
-  that contacted the leaf most recently.
+- A reply goes back to whoever sent the message it answers: a command
+  node's coordinator through the outbox, a coordinator on the leaf itself
+  locally.
+- Mail to "the coordinator" and task completion reports go to the
+  coordinator that last contacted that environment (launched it, delegated
+  to it, prompted it or mailed it), whether that is one of the leaf's own
+  coordinators or a command node's. An environment the leaf's own
+  coordinator launched reports locally until a command node's coordinator
+  contacts it, and back again once the local coordinator does
+  (`LeafNodeMail.route`, `localCoordinatorContact`).
+- With no coordinator contact at all, mail stays local when the project has
+  a coordinator on the leaf, and otherwise goes to the command node that
+  contacted the leaf most recently. Being attached is not a contact: the
+  link's own traffic would otherwise send every local worker's report to the
+  command node (the 2026-10-26 incident, where three release workers'
+  reports never reached their local coordinator).
 - If that command node is unreachable, the update waits in the leaf's
   outbox until a command node collects it; it is not dropped or sent to a
   different command node silently.

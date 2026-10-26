@@ -129,6 +129,55 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
       }),
     ).toBeNull();
   });
+
+  // Regression (2026-10-26): on a leaf attached to a command node, a local
+  // coordinator's worker reported to "coordinator" and the report went to the
+  // command node's outbox. The local coordinator never saw it, and its
+  // delegation closed as "finished without sending a report".
+  test("a local coordinator's worker reports locally until a command node's coordinator contacts it", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const worker = await world.addEnvironment("worker", { launched: true });
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
+    const router = world.storage.nodeMailRouter!;
+    const route = () =>
+      router.route({
+        fromEnvironmentId: worker.environmentId,
+        fromTabId: worker.tabId,
+        toEnvironmentId: "coordinator",
+      });
+    expect(await route()).toBeNull();
+    // Sent locally, the report is held for the open delegation, not lost.
+    const report = await world.send(worker, "coordinator", "Needs npm login: https://…");
+    expect(report.toEnvironmentId).toBe((await world.main()).environmentId);
+    expect(report.placement).toBe("inject-held");
+
+    // The command node's coordinator writes to it: now that one is primary.
+    const delivered = await instance.deliverIncoming({
+      controllerId: "bk_cmd",
+      coordinatorEnvironmentId: "coordinator:c1:conv-1",
+      coordinatorTabId: "coord-tab",
+      requestId: "remote-1",
+      toEnvironmentId: worker.environmentId,
+      toTabId: worker.tabId,
+      body: "Status?",
+    });
+    expect(await route()).toMatchObject({ controllerId: "bk_cmd", coordinatorTabId: "coord-tab" });
+
+    // The local coordinator writes again: local is primary again, while a
+    // reply to the command node's message still goes back to it.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await world.delegate(await world.main(), worker, "One more thing.");
+    expect(await route()).toBeNull();
+    expect(
+      await router.route({
+        fromEnvironmentId: worker.environmentId,
+        fromTabId: worker.tabId,
+        toEnvironmentId: "",
+        replyToMessageId: delivered.messageId,
+      }),
+    ).toMatchObject({ controllerId: "bk_cmd" });
+  });
 });
 
 describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command node", () => {

@@ -23,6 +23,7 @@ import {
   emptyNodeMailState,
   LeafNodeMail,
   type CoordinatorMailbox,
+  type LocalCoordinatorContact,
   type NodeMailState,
   type NodeMailStore,
 } from "./node-mail.js";
@@ -48,9 +49,56 @@ function parseMailState(value: unknown): NodeMailState {
   return {
     version: 1,
     origins: root.origins && typeof root.origins === "object" ? root.origins : {},
+    ...(root.contacts && typeof root.contacts === "object" ? { contacts: root.contacts } : {}),
     threads: root.threads && typeof root.threads === "object" ? root.threads : {},
     outbox: root.outbox && typeof root.outbox === "object" ? root.outbox : {},
   };
+}
+
+/**
+ * When a coordinator on this backend last contacted a local environment's tab:
+ * launched or delegated to the environment, or mailed the tab. Associations
+ * with a `nodeId` are for environments on other nodes and never count.
+ */
+export async function localCoordinatorContact(
+  storage: StorageService,
+  environmentId: string,
+  tabId?: string,
+): Promise<LocalCoordinatorContact> {
+  const environment = await storage.getEnvironment(environmentId).catch(() => null);
+  const [associations, workspace, mailbox] = await Promise.all([
+    environment
+      ? storage.coordinators
+          .listCoordinatorWorkflowAssociations(environment.projectId)
+          .catch(() => [])
+      : [],
+    environment
+      ? storage.coordinators.getCoordinatorWorkspace(environment.projectId).catch(() => null)
+      : null,
+    tabId
+      ? storage.getAgentMailMailbox(environmentId, tabId, { limit: 200 }).catch(() => null)
+      : null,
+  ]);
+  let at: string | undefined;
+  const consider = (value: string | undefined) => {
+    if (value && (!at || value > at)) at = value;
+  };
+  for (const association of associations) {
+    if (
+      association.kind !== "environment" ||
+      association.resourceId !== environmentId ||
+      association.nodeId ||
+      association.pending
+    ) {
+      continue;
+    }
+    if (association.baseCommit) consider(association.createdAt);
+    consider(association.delegation?.requestedAt);
+  }
+  for (const message of mailbox?.messages ?? []) {
+    if (message.from.kind === "coordinator") consider(message.createdAt);
+  }
+  return { ...(at ? { at } : {}), hasCoordinator: Boolean(workspace) };
 }
 
 export class NodeCoordination {
@@ -89,6 +137,8 @@ export class NodeCoordination {
             displayName: entry.displayName,
           })),
         mostRecentControllerId: () => nodes.mostRecentControllerId(),
+        localCoordinatorContact: (environmentId, tabId) =>
+          localCoordinatorContact(storage, environmentId, tabId),
       },
       options.emit,
     );
@@ -244,11 +294,9 @@ export class NodeCoordination {
       { newDelegation: true },
     );
     await this.leafMail.recordThread(message.id, mailbox);
-    // An environment the coordinator talks to reports back to it.
-    const state = await this.options.storage.nodes.loadNodeMail();
-    if (!parseMailState(state).origins[toEnvironmentId]) {
-      await this.leafMail.recordOrigin(toEnvironmentId, mailbox);
-    }
+    // An environment the coordinator talks to reports back to it, until
+    // another coordinator contacts it.
+    await this.leafMail.recordOrigin(toEnvironmentId, mailbox, { keepOrigin: true });
     return { messageId: message.id, toTabId: message.toTabId, placement: message.placement };
   }
 

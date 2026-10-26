@@ -5,7 +5,10 @@ import {
   AGENT_MAIL_LOOP_BUDGET_REASON,
   type AgentMailIdentity,
 } from "@orkestrator/protocol/agent-mail";
-import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_DELEGATION_HOLD_REASON,
+  COORDINATOR_MAIL_ADDRESS,
+} from "@orkestrator/protocol/coordinator";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { StorageService } from "./storage.js";
@@ -179,7 +182,7 @@ export function registerAgentMessagingTools(
       title: "Send an agent message",
       description: mailToolDescription(
         scope,
-        'Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "coordinator" and omit toTabId. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab\'s mailbox, so this cannot reach the session that launched you.',
+        'Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "coordinator" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; the result names which. To answer a specific message use reply_message, which always goes back to that message\'s sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab\'s mailbox, so this cannot reach the session that launched you.',
       ),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
@@ -207,10 +210,12 @@ export function registerAgentMessagingTools(
       consumeRateLimit("send");
       try {
         const { identity } = await assertCallerMailbox(storage, scope, fromTabId);
-        // On a leaf, mail for the coordinator goes to the command node that
-        // started this work (or contacted this node last), via its outbox.
+        // On a leaf, mail for the coordinator goes to the command node whose
+        // coordinator contacted this environment last, via its outbox; a reply
+        // goes back to its sender. See `LeafNodeMail.route`.
         const remote = await storage.nodeMailRouter?.route({
           fromEnvironmentId: scope.environmentId,
+          fromTabId: identity.tabId,
           toEnvironmentId: input.toEnvironmentId,
           ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
         });
@@ -226,6 +231,7 @@ export function registerAgentMessagingTools(
             identity,
             message: { outboxSeq: queued.seq, toEnvironmentId: input.toEnvironmentId },
             placement: "node-outbox",
+            coordinator: `command node ${remote.controllerName ?? remote.controllerId}`,
             deliveryHint: `queued for the coordinator on ${remote.controllerName ?? "the command node"}; delivered when it collects its mail`,
           });
         }
@@ -246,6 +252,9 @@ export function registerAgentMessagingTools(
         return result({
           identity,
           message: { ...message, body: undefined },
+          ...(input.toEnvironmentId === COORDINATOR_MAIL_ADDRESS
+            ? { coordinator: "this machine" }
+            : {}),
           placement: message.placement,
           presence: recipient.descriptor.presence,
           deliveryHint: deliveryHint(
@@ -413,6 +422,7 @@ export function registerAgentMessagingTools(
         // A reply to a command node's coordinator goes back through the outbox.
         const remote = await storage.nodeMailRouter?.route({
           fromEnvironmentId: scope.environmentId,
+          fromTabId: identity.tabId,
           toEnvironmentId: "",
           replyToMessageId: messageId,
         });

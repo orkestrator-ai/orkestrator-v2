@@ -471,11 +471,16 @@ function groupOrders(rows: ReadonlyMap<string, IndexRow>): Map<string, string[]>
 /**
  * Debug check that an incremental plan persists exactly what the full diff
  * would: the same rows with the same JSON, the same deletions, and the same
- * order inside every group (new positions may be numbered differently).
+ * order inside every group and quota byte total (new positions may be numbered
+ * differently). Serialization counts intentionally differ: only the full diff
+ * serializes unchanged rows; tests bound incremental serialization separately.
  * Throws on a difference, so the commit rolls back.
  */
 export function assertSameRowPlan(full: RowPlan, incremental: RowPlan): void {
   const problems: string[] = [];
+  if (full.indexBytes !== incremental.indexBytes) {
+    problems.push(`indexBytes ${incremental.indexBytes} (expected ${full.indexBytes})`);
+  }
   const describe = (id: string) => id.replace("\u0000", "/");
   for (const [id, row] of full.rows) {
     const other = incremental.rows.get(id);

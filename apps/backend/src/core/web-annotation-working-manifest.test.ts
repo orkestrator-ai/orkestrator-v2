@@ -219,4 +219,41 @@ describe("copy-on-write working manifest", () => {
     });
     expect(() => assertSameRowPlan(full, missed)).toThrow(/stale annotations\/annotation-0/);
   });
+
+  test("quota bytes track UTF-8 additions, growth, shrinkage and deletion across commits", () => {
+    let base = committed(2);
+    const id = "annotation-quota";
+    for (const title of ["é", "🦊".repeat(100), "a", null]) {
+      const before = base.rows.get(`annotations\0${id}`)?.bytes ?? 0;
+      const { incremental, full, next } = commit(base, (manifest) => {
+        if (title === null) delete manifest.annotations[id];
+        else manifest.annotations[id] = fixtureAnnotation({ id, environmentId: ENV, title });
+      });
+      const after = incremental.rows.get(`annotations\0${id}`)?.bytes ?? 0;
+      const metaDelta =
+        incremental.rows.get("meta\0state")!.bytes - base.rows.get("meta\0state")!.bytes;
+      expect(incremental.indexBytes).toBe(base.indexBytes + after - before + metaDelta);
+      expect(incremental.indexBytes).toBe(
+        Array.from(incremental.rows.values()).reduce(
+          (sum, row) => sum + Buffer.byteLength(row.json, "utf8"),
+          0,
+        ),
+      );
+      expect(incremental.serialized).toBe(title === null ? 1 : 2);
+      assertSameRowPlan(full, incremental);
+      base = { ...base, ...incremental, manifest: next };
+    }
+  });
+
+  test.each([-1, 1])("the debug check refuses quota byte drift of %i", (drift) => {
+    const { full, incremental } = commit(committed(2), (_manifest, working) => {
+      working.edit("annotations", "annotation-0")!.title = "é🦊";
+    });
+    expect(incremental.serialized).toBe(2);
+    expect(full.serialized).toBeGreaterThan(incremental.serialized);
+    expect(() => assertSameRowPlan(full, incremental)).not.toThrow();
+    expect(() =>
+      assertSameRowPlan(full, { ...incremental, indexBytes: incremental.indexBytes + drift }),
+    ).toThrow(/indexBytes .*expected/);
+  });
 });

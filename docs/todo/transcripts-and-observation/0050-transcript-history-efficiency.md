@@ -328,9 +328,10 @@ Still open:
   (`bun run --cwd bridges/cursor-bridge build`), start
   `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 mise run dev:test --profile
   qa-0050-cursor --fixture --credential-source cursor --agent-platforms
-  cursor`, sign in with `mise run dev:login --profile qa-0050-cursor`, give a Cursor tab a prompt that reads a chain of
-  20 KB files with a sub-agent for part of it, switch to another environment
-  for the turn, and on return check `/runtime-health` `transcriptBounds`, the
+  cursor`, sign in with `mise run dev:login --profile qa-0050-cursor`, give
+  a Cursor tab a prompt that reads a chain of 20 KB files with a sub-agent
+  for part of it, switch to another environment for the turn, and on return
+  check `/runtime-health` `transcriptBounds`, the
   `truncated` window and its history pages, the sub-agent card and the stop
   and steer controls. Still owed: it is a paid provider run, and no Cursor
   live spec exists yet to drive it.
@@ -352,7 +353,7 @@ Still open:
 
 Run on node mbp3 (Apple M5 Max, macOS arm64, Bun 1.4.4) on `930189337` plus
 this change, in Google Chrome 155.0.8059.85, with other workspaces loading the
-host (load average 46 to 92), so timings are upper bounds. Reports are in
+host (load average 20 to 159), so timings are upper bounds. Reports are in
 `output/benchmarks/hidden-resume/` (untracked).
 
 First, why the 2026-10-24 plan (`--headed`) could not work. Probes on the
@@ -368,7 +369,7 @@ went `visible` again on restore. Every Playwright page has a session, so no Play
 a hidden document.
 
 `mise exec -- bun e2e/perf/hidden-resume-perf.ts --runs 3 --hidden-seconds
-10,60`, then `--runs 1 --hidden-seconds 300`, as described in
+10,60`, then 5-minute runs (`--hidden-seconds 300`), as described in
 [rich-transcripts.md](../../architecture/rich-transcripts.md#performance-gate):
 the `/rich-transcript-perf` fixture at `?retainedMiB=8` (3,001 messages,
 8.0 MiB encoded), scrolled to its tail with a response streaming 12
@@ -382,7 +383,18 @@ server-sent event every 50 ms, as a backend's updates arrive.
 | timer, 60 s | 3 of 3 | 52 to 60 | 1.2 to 1.5 ms | 0 | one 53 ms frame, 0 ms blocking | 24.7 to 31.7 / 21.0 to 23.7 MiB |
 | network, 10 s | 3 of 3 | 199 to 204 | 7.6 to 12.2 ms | 0 | none | 31.3 to 31.7 / 20.5 to 35.9 MiB |
 | network, 60 s | 3 of 3 | 1,155 to 1,169 | 0.5 to 1.0 ms | 0 | none | 31.0 to 32.4 / 26.7 to 28.6 MiB |
-LONG_RUN_ROWS
+| timer, 5 min | 1 of 1 | 64 | 3.7 ms | 0 | not kept (see below) | not kept |
+| network, 5 min | 3 of 3 | 5,724 to 5,827 | 0.4 to 0.5 ms | 0 | none | 31.3 to 32.8 / 26.1 to 30.6 MiB |
+
+The first 5-minute network attempt, before the probe had diagnostics, sent
+no report within 33 s of the restore. The harness then threw, which also lost
+the report of the timer run before it (its printed line is the row above). The
+probe now reports at once on `visibilitychange` and every 400 updates while
+hidden, waits 180 s, and keeps whatever arrived. Three reruns with it
+reported 3.56 to 3.60 s after the restore (the 3 s window plus the post), all
+14 progress reports arrived while hidden, and the load average reached 159.
+The first miss did not recur and its cause is unknown.
+
 So a hidden document at 8 MiB pays nothing measurable on return: while hidden
 the network stream kept its full rate (about 20 updates a second, each
 re-deriving rows over the whole array), and the shown page reached its next

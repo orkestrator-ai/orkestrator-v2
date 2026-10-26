@@ -603,8 +603,10 @@ hidden; `network` ticks it from a server-sent event every 50 ms
 it would a real backend's updates. Per run it records the visibility the page
 saw, stream ticks while hidden, the time from `visibilitychange` to the next
 frame, long tasks and long animation frames in the 3 s after, and the JS heap
-before and after, in `output/benchmarks/hidden-resume/<run-id>.json`. A Chrome
-window appears on screen for each run.
+before and after, in `output/benchmarks/hidden-resume/<run-id>.json`. A page
+that has not reported 180 s after it was restored is recorded as such
+(`shownReported: false`), with the `visible` and progress reports it did send.
+A Chrome window appears on screen for each run.
 
 **Fixture.** `/rich-transcript-perf`
 (`e2e/fixture/RichTranscriptPerfFixture.tsx`) mounts the real

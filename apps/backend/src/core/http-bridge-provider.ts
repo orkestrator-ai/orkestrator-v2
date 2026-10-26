@@ -451,7 +451,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           remaining: 16 * 1024 * 1024,
         }),
       ) ?? {};
-    const interruption = throwExplainedTurnFailure(this.agent, body);
+    const failure = throwExplainedTurnFailure(this.agent, body);
     const status =
       body.status === "running" || body.status === "idle" || body.status === "error"
         ? body.status
@@ -459,7 +459,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const contextUsage = this.contextUsage(body.contextUsage);
     return {
       status,
-      ...(interruption ? { interruption } : {}),
+      ...failure,
       // sessionTokens has explicit cumulative semantics. Do not expose an
       // occupancy-only bridge snapshot as review consumption.
       ...(contextUsage?.sessionTokens !== undefined ? { contextUsage } : {}),

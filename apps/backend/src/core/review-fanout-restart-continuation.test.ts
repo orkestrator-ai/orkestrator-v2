@@ -25,6 +25,8 @@ function harness(transport: ReviewerRecord["resultTransport"] = "structured-outp
   };
   const bridge = {
     turn: "restarted" as "restarted" | "failed" | "running" | "idle",
+    /** The request a restart notice names; unset as on a bridge that predates it. */
+    interrupted: undefined as string | undefined,
     /** What the provider's structured-output slot holds for any request. */
     structured: null as unknown,
     /** Accepted tool-transport results, by request id. */
@@ -36,7 +38,10 @@ function harness(transport: ReviewerRecord["resultTransport"] = "structured-outp
   const provider = {
     async status() {
       if (bridge.turn === "restarted") {
-        throw new ProviderSessionFailedError("codex", RESTARTED, { interruption: "restart" });
+        throw new ProviderSessionFailedError("codex", RESTARTED, {
+          interruption: "restart",
+          interruptedRequestId: bridge.interrupted,
+        });
       }
       if (bridge.turn === "failed") {
         throw new ProviderSessionFailedError("codex", "usage limit reached");
@@ -135,6 +140,48 @@ describe("a reviewer whose turn a provider restart cut short", () => {
     await runner.advanceReviewers([reviewer]);
     expect(reviewer.status).toBe("completed");
     expect(reviewer.report?.reviewSummary).toBe("Survived the restart");
+  });
+
+  // 0112: status is per session, so until the continuation's turn starts the
+  // bridge still reports the restart that cut the original turn short.
+  test("waits out the notice about the turn its continuation replaced", async () => {
+    const { reviewer, runner, bridge, sent } = harness();
+    bridge.interrupted = "review-request";
+    bridge.structured = {
+      ok: false,
+      provider: "codex",
+      requestId: "review-request",
+      error: { code: "provider_error", message: RESTARTED, retryable: true },
+    };
+    await runner.advanceReviewers([reviewer]);
+    const continuationRequestId = reviewer.requestId!;
+    expect(reviewer.restartContinuationSent).toBe(true);
+    await runner.advanceReviewers([reviewer]);
+    expect(sent).toHaveLength(1);
+    expect(reviewer.dispatchState).toBe("sent");
+
+    // Sent, not started: the notice still names the original request.
+    bridge.structured = null;
+    for (let pass = 0; pass < 3; pass += 1) await runner.advanceReviewers([reviewer]);
+    expect(reviewer).toMatchObject({ status: "running", requestId: continuationRequestId });
+    expect(reviewer.error).toBeUndefined();
+
+    bridge.turn = "idle";
+    bridge.structured = accepted(continuationRequestId);
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.status).toBe("completed");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("fails closed when the notice names the continuation itself", async () => {
+    const { reviewer, runner, bridge, sent } = harness();
+    reviewer.restartContinuationSent = true;
+    bridge.interrupted = "review-request";
+
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.status).toBe("failed");
+    expect(reviewer.error).toBe(`The reviewer session failed: ${RESTARTED}`);
+    expect(sent).toEqual([]);
   });
 
   test("fails closed when a second restart cuts the continuation short", async () => {

@@ -354,7 +354,14 @@ session.get("/:id", async (c) => {
     // Structured, so a workflow continues the turn without matching text.
     // Only beside the failure it explains; the next turn clears it.
     ...(sessionData.status === "error" && sessionData.interruption
-      ? { interruption: sessionData.interruption }
+      ? {
+          interruption: sessionData.interruption,
+          // The request it cut short, so a workflow does not read the notice
+          // as the outcome of a newer request that has not started yet.
+          ...(sessionData.interruptedRequestId
+            ? { interruptedRequestId: sessionData.interruptedRequestId }
+            : {}),
+        }
       : {}),
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,

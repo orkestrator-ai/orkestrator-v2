@@ -56,12 +56,13 @@ async function deadPid(): Promise<number> {
 }
 
 /** What a bridge process that died mid-turn leaves behind. */
-async function leaveMarkFromDeadBridge(pid?: number): Promise<void> {
+async function leaveMarkFromDeadBridge(pid?: number, requestId?: string): Promise<void> {
   await updateSessionPreferences(PERSISTED_SDK_ID, {
     turnInFlight: {
       bridgeInstanceId: "a-bridge-that-died",
       pid: pid ?? (await deadPid()),
       startedAt: Date.now() - 60_000,
+      ...(requestId ? { requestId } : {}),
     },
   });
 }
@@ -88,6 +89,8 @@ describe("turn-in-flight mark", () => {
       const mark = await storedMark("present");
       expect(mark?.bridgeInstanceId).toBe(bridgeInstanceIdForTesting());
       expect(mark?.pid).toBe(process.pid);
+      // Names the turn's request, so a later process can too.
+      expect(mark?.requestId).toBe("mark-turn");
 
       call.push({ type: "result", subtype: "success", result: "done" });
       call.finish();
@@ -149,12 +152,14 @@ describe("turn-in-flight mark", () => {
 describe("restoring a session a restart cut short", () => {
   test("reports the turn failed with interruption restart, then a new turn continues it", async () => {
     await withTemporaryClaudeHome("claude-turn-restored-", async () => {
-      await leaveMarkFromDeadBridge();
+      await leaveMarkFromDeadBridge(undefined, "cut-short");
       const restored = await materializePersistedSession();
       expect(restored).toMatchObject({
         status: "error",
         error: CLAUDE_RESTARTED_MID_TURN_MESSAGE,
         interruption: "restart",
+        // The request the restart cut short, not whichever one asks next.
+        interruptedRequestId: "cut-short",
       });
 
       // A second restart before anything continued it still reports it.
@@ -170,10 +175,12 @@ describe("restoring a session a restart cut short", () => {
       // The continuation is the turn now; nothing explains a failure any more.
       expect(continued.status).toBe("running");
       expect(continued.interruption).toBeUndefined();
+      expect(continued.interruptedRequestId).toBeUndefined();
       expect(continued.error).toBeUndefined();
       // Still marked while it runs: a restart now cuts the continuation short.
       const mark = await storedMark("present", 2_000, bridgeInstanceIdForTesting());
       expect(mark?.pid).toBe(process.pid);
+      expect(mark?.requestId).toBe("continuation");
       // A second bridge has a different instance id and pid, but sees our live
       // process as the owner of this continuation.
       const observer = Bun.spawn(
@@ -225,10 +232,13 @@ describe("restoring a session a restart cut short", () => {
     await withTemporaryClaudeHome("claude-turn-restored-pid-", async () => {
       // Pids repeat across container restarts; the instance id tells them apart.
       await leaveMarkFromDeadBridge(process.pid);
-      expect(await materializePersistedSession()).toMatchObject({
+      const restored = await materializePersistedSession();
+      expect(restored).toMatchObject({
         status: "error",
         interruption: "restart",
       });
+      // A mark from a bridge that predates request ids names none.
+      expect(restored.interruptedRequestId).toBeUndefined();
     });
   });
 
@@ -257,6 +267,22 @@ describe("restoring a session a restart cut short", () => {
       const restored = await materializePersistedSession();
       expect(restored.status).toBe("idle");
       expect(restored.interruption).toBeUndefined();
+    });
+  });
+
+  test("drops only a malformed request id from an otherwise valid mark", async () => {
+    await withTemporaryClaudeHome("claude-turn-restored-bad-request-", async () => {
+      await updateSessionPreferences(PERSISTED_SDK_ID, {
+        turnInFlight: {
+          bridgeInstanceId: "a-bridge-that-died",
+          pid: await deadPid(),
+          startedAt: 1,
+          requestId: "x".repeat(201),
+        },
+      });
+      const restored = await materializePersistedSession();
+      expect(restored.interruption).toBe("restart");
+      expect(restored.interruptedRequestId).toBeUndefined();
     });
   });
 
@@ -290,6 +316,7 @@ describe("a Claude Code process killed under the turn", () => {
         status: "error",
         error: claudeProcessKilledMessage("SIGKILL"),
         interruption: "restart",
+        interruptedRequestId: "killed-turn",
       });
       await waitFor(() => failed.claudeRuntime === undefined);
       // A bridge restart before the continuation still reports it.

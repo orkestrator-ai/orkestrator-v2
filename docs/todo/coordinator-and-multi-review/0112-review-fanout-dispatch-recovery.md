@@ -6,56 +6,122 @@ added (`apps/backend/src/core/review-fanout-interleaving.test.ts`). Checked
 against `main` at `ba7cc8d4`. Both bugs affect standalone Multi Review and
 Build Pipeline review stages, because both use `ReviewFanoutRunner`.
 
+**Finished on 2026-10-26** against `main` at `93018933`. Every item is done;
+the one part of item 1 no provider can support yet (re-sending a request the
+provider proves never arrived) moved to
+[0223-provider-non-delivery-proof.md](0223-provider-non-delivery-proof.md).
+The durable behaviour is in
+[review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery)
+and [agent engines, "Restart continuation"](../../architecture/agent-engines.md).
+Kept only until this branch's Multi Review reads it, then deleted.
+
 ## Current state
 
-- **A `dispatching` record is treated as sent.** On recovery,
+What the file found, and what changed.
+
+- **A `dispatching` record was treated as sent.** On recovery,
   `ReviewFanoutRunner` (`review-fanout.ts`, the
-  `dispatchState === "dispatching"` branch) rewrites a durable `dispatching`
-  reviewer to `sent` without asking the provider. `dispatchStatus` exists on
-  the provider contract (`agent-provider-contract.ts`), but the runner does
-  not call it here, and the HTTP bridges have no `settleTurn`. The store can
-  hold `dispatching` for a request that never reached the provider:
+  `dispatchState === "dispatching"` branch) rewrote a durable `dispatching`
+  reviewer to `sent` without asking the provider. The store can hold
+  `dispatching` for a request that never reached the provider:
   - a peer's commit saves this reviewer's in-memory `dispatching` before its
     own commit and send, and the fence is then lost or the backend dies;
   - a send refused before the prompt was written resets to `prepared`, but
     that commit loses the fence;
   - the backend dies between the durable write and the send.
 
-  The next owner then watches an idle session that was never prompted. A
-  tool-transport reviewer gets the result reminder ("your analysis is
-  already done") as its first turn; a structured-output reviewer fails as
+  The next owner then watched an idle session that was never prompted. A
+  tool-transport reviewer got the result reminder ("your analysis is
+  already done") as its first turn; a structured-output reviewer failed as
   idle without its report. Seeds: fence-loss 24 and 34, restart 13, 17 and 24.
-- **A takeover mid-continuation counts the old restart twice.** The new
-  owner reads the session's status before the in-flight restart continuation
-  lands, sees the previous turn's `interruption: "restart"` again, and fails
-  the reviewer as restarted twice. Seeds: fence-loss 861 and 1251, which are
-  outside the 24 CI seeds; a sweep of
-  `ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS=4000` reaches them.
-- Both are `test.todo` cases in "runner bugs found by interleaving"; each
-  fails on its seeds today. The main suites only require the affected
-  reviewers to settle, so CI stays green.
+
+  The review fixes of #1247 (merged after this file was written) already made
+  the runner ask `dispatchStatus` and park on anything but `dispatched`. This
+  change removes the first cause and settles more recovered requests on proof
+  (item 1).
+- **A takeover mid-continuation counted the old restart twice.** The new
+  owner read the session's status before the in-flight restart continuation
+  started, saw the previous turn's `interruption: "restart"` again, and failed
+  the reviewer as restarted twice. Seeds: fence-loss 861 and 1251. The #1247
+  gate hid it in the harness (status is read only once the continuation is
+  journaled), but a real bridge journals a request before its turn starts, so
+  the window stayed open (item 2).
+- Both used to be `test.todo` cases in "runner bugs found by interleaving";
+  #1247 turned them into tests, and they pass.
 
 ## Outstanding work
 
 ### Code
 
-1. **Reconcile a recovered `dispatching` request with the provider** before
-   treating it as sent: ask `dispatchStatus` (or the bridge's request
-   journal) whether the request id was accepted, send it under the same id
-   when the provider says it never arrived, and keep parking it when the
-   answer is unknown. Never re-send under a new id (invariant 3 in 0027).
-   Bridges without a dispatch-status answer need one, or the runner needs a
-   documented fallback. Turn the todo case into a test.
-2. **Tie a restart interruption to the request it interrupted.** The
-   observation should carry the interrupted request id (or the runner should
-   compare it with `requestId`), so an interruption of the request that a
-   continuation already replaced is ignored. Turn the todo case into a test,
-   and add seeds 861 and 1251 to the CI list.
+1. ~~**Reconcile a recovered `dispatching` request with the provider.**~~
+   Done on 2026-10-26, narrowed: re-sending a request "the provider says
+   never arrived" moved to [0223](0223-provider-non-delivery-proof.md),
+   because no provider can say that soundly (decision 1).
+   - **The peer-commit cause is gone.** `ReviewFanoutRunner.commit` takes a
+     `transition` that is applied when the reviewer's own write reaches the
+     front of the serialized queue and reverted if that write fails; the
+     dispatch sets `dispatching` through it. Evidence: an A/B sweep of
+     fence-loss and chaos seeds 1–1500 found 30 durable `dispatching` records
+     that no send was ever attempted for on `main` (`93018933`; seeds 6, 24,
+     40, 55, 148, …) and 0 with the change. The harness now fails any seed
+     without a crash that leaves one behind
+     (`review-fanout-interleaving-support.ts`, the end of `run`), which seeds
+     6 and 24 of the CI list would catch.
+   - **Proof before promotion.** `recoveredDispatchAcceptance` promotes a
+     recovered request to `sent` on `dispatched`, or on a result for this exact
+     request id (the tool-transport slot, or a structured result whose
+     `requestId` matches). A report submitted before a provider restart is
+     used instead of discarded.
+   - **`lost` fails at once** ("lost in a provider restart and cannot be
+     resent safely"): the provider refuses the id for good and a new id could
+     run the turn twice, so waiting out the idle bound changed nothing.
+   - **Documented fallback.** `unknown`, a failed read and a provider without
+     `dispatchStatus` park within the idle-poll bound and fail closed ("dispatch
+     acceptance could not be confirmed"). Nothing is re-sent, under a new id
+     or the same one. Recorded in
+     [review-preparation.md](../../architecture/review-preparation.md#dispatch-recovery).
+   - Tests: `review-fanout-dispatch.test.ts` ("a lost request fails at once…",
+     "a structured result for the exact request proves a … dispatch ran", "a
+     submitted tool result proves a dispatch the provider retired", the
+     parking cases); the regression case "a dispatch that never reached the
+     provider is not treated as sent" in `review-fanout-interleaving.test.ts`.
+2. ~~**Tie a restart interruption to the request it interrupted.**~~ Done on
+   2026-10-26.
+   - The Codex and Claude bridges name the interrupted request beside the
+     notice (`interruptedRequestId`). Codex looks it up in its dispatch
+     journal by the interrupted turn id (`DispatchJournal.requestIdForTurn`),
+     so its persisted session record is unchanged. Claude sets it on a killed
+     turn and on a released turn killed outside the prompt, and writes the
+     turn's request id into the `turnInFlight` mark, so a later process
+     restores it; older marks and bridges simply omit it.
+   - `throwExplainedTurnFailure` parses it (bounded to 512 characters), and
+     `readProviderStatus` reads a notice naming another request than the one
+     watched as "this request's turn has not settled" (`idle`,
+     `turnSettled: false`). That fixes the fan-out, the Multi Review steps,
+     Build Pipeline consolidation and the Build Pipeline stage supervisor (which
+     had the same "interrupted again" failure) in one place.
+   - The interleaving harness starts half of all continuation turns late,
+     answering the first status read with the previous turn, and its restart
+     notice names the interrupted request. With the comparison disabled, CI
+     seeds fail in every flavour (plain 2, 14, 22; fence-loss 1, 5, 6, 24; …);
+     with it, all pass. Seeds 861 and 1251 now run in the fence-loss suite's
+     CI list too (`REGRESSION_SEEDS`).
+   - Tests: `review-fanout-restart-continuation.test.ts` ("waits out the
+     notice about the turn its continuation replaced", which fails without the
+     fix, and "fails closed when the notice names the continuation itself"),
+     `build-pipeline-restart-continuation.test.ts` ("pipeline stage handles
+     stale-notice after restart", which also fails without the fix),
+     `http-bridge-provider.test.ts` ("a restart notice about an earlier request
+     is not the watched request's outcome"), the Claude bridge's
+     `session-manager-turn-interruption.test.ts` and `routes/session.test.ts`,
+     and the Codex bridge's `app-server-runtime-lifecycle.test.ts` and
+     `dispatch-journal.test.ts`.
 
 ### Qualification
 
 - None beyond the deterministic tests: both are interleavings no live run can
-  force on purpose.
+  force on purpose. The bridge field is additive; a live restart run
+  (0027's killed-Claude case) would show it but is not needed to trust it.
 
 ## Constraints and rationale
 
@@ -63,23 +129,89 @@ Build Pipeline review stages, because both use `ReviewFanoutRunner`.
   (never retry an ambiguous send under a new request id) and fail-closed
   recovery.
 - A fix must keep `dispatching` → send as the only fallible step, and must
-  not hold a storage lock across provider I/O.
+  not hold a storage lock across provider I/O. Both hold: the transition runs
+  inside the existing commit, and the proof reads happen before any write.
+
+## Assumptions and decisions
+
+1. **Re-send a request the provider says never arrived, or park it.**
+   Options: (a) re-send under the same id on `unknown`, relying on bridge
+   deduplication; (b) add an `absent` answer and implement it on the bridges
+   that can prove it; (c) park and fail closed, and file the provider work.
+   Chosen: (c). Why: a survey of every bridge (summarised in 0223) found that
+   none can tell "never arrived" from "delivered, then evicted, lost to a
+   restart or never saved durably": Claude does not journal structured
+   prompts durably at all, Pi and ACP evict unresolved entries, OpenCode has
+   no durable journal, and Codex could answer only through a `thread/read`
+   its read-only `/dispatch` route does not make. (a) would run turns twice;
+   (b) needs per-bridge "journal complete" tracking with its own compatibility
+   work, and a runner path with no producer would be dead code. Pros: no
+   at-most-once risk, and the fallback is explicit. Cons: a reviewer whose
+   send provably never happened still fails after the idle bound instead of
+   running.
+2. **Fix the peer-commit cause in the runner, not only by recovery.** Options:
+   leave it to recovery (park, then fail), or stop peers writing it. Chosen:
+   apply `dispatching` inside the reviewer's own serialized commit and revert
+   it on failure. Why: it removes the most common unsent-dispatch cause (30 of
+   the sweep's records) outright, with no provider involvement, and keeps the
+   send the next fallible step. Pros: those reviewers now run normally.
+   Cons: `commit` gains a small callback parameter.
+3. **What counts as proof of delivery.** Options: the dispatch journal only,
+   or also a result. Chosen: also a result for the exact request id (tool slot
+   keyed by the request and written with that attempt's capability, or a
+   structured result whose `requestId` matches). Why: only that request's turn
+   can produce it, and Build Pipeline already treats a result as proof. Pros:
+   a report submitted before a restart is kept. Cons: one extra result read
+   per pass while a request is parked, bounded by the idle-poll bound.
+4. **Fail `lost` at once or keep parking.** Chosen: fail at once, after the
+   result check. Why: the provider will refuse that id forever, and invariant 3
+   forbids a new one, so the bound only delayed a certain failure. Pros: a
+   faster, clearer error. Cons: none found.
+5. **Where to scope a restart notice.** Options: in each caller, or in
+   `readProviderStatus`. Chosen: `readProviderStatus`, reading a notice about
+   another request as `idle` with `turnSettled: false`. Why: every workflow
+   caller already waits on `turnSettled === false`, and the Build Pipeline
+   supervisor had the same bug. Pros: one rule for four callers. Cons: the
+   wait is not counted against the idle bound; it lasts only until the bridge
+   starts the journaled turn.
+6. **How Codex names the request.** Options: add it to the persisted restart
+   notice, or look it up. Chosen: look it up in the dispatch journal by turn
+   id. Why: the session record validator rejects unknown fields, so a new
+   field would make an older bridge drop the whole session after a downgrade.
+   Cons: once the journal drops the record (24 h, or past its caps) the notice
+   names nothing and is taken at face value, as before.
+7. **The other step runners.** The Multi Review steps and Build Pipeline
+   consolidation keep their own parking (no `lost` fast-fail or result proof).
+   Why: they have one writer per request, so the peer-commit cause cannot
+   arise, and they get the restart scoping through `readProviderStatus`.
 
 ## Open questions
 
-- Which bridges can answer "did request X arrive" today? Claude has a durable
-  prompt journal (`claimPromptDispatch`); Codex and the others need checking.
+- ~~Which bridges can answer "did request X arrive" today?~~ Answered on
+  2026-10-26: all six answer `dispatched` from their own records, and Claude,
+  Cursor, Pi and ACP also answer `lost`; none can answer "never arrived". The
+  per-bridge detail and the work to change that are in
+  [0223](0223-provider-non-delivery-proof.md).
 
 ## Needs verification
 
-- Whether the same `dispatching` recovery gap exists in Multi Review's step
-  runner (`MultiReviewService.activeRequest`) and Build Pipeline's
-  `pendingPromptAttempt`, which have their own recovery paths.
+- ~~Whether the same `dispatching` recovery gap exists in Multi Review's step
+  runner and Build Pipeline's `pendingPromptAttempt`.~~ Checked on
+  2026-10-26. `MultiReviewService` (the `request.state === "dispatching"`
+  branch) and Build Pipeline consolidation already ask `dispatchStatus` and
+  park, as the fan-out did (#1247); each request has one writer, so the
+  peer-commit cause does not arise. Build Pipeline's stage prompts are
+  different: `pendingPromptAttempt` is redispatched under the same id
+  whenever the stage is not running, trusting the bridge to deduplicate, which
+  does not hold for a Claude structured prompt after a bridge restart. Filed
+  as 0223 item 3.
 
 ## Related
 
 - [0027-multi-review-scale-and-cost.md](0027-multi-review-scale-and-cost.md):
   the interleaving tests, invariants and error scopes.
+- [0223-provider-non-delivery-proof.md](0223-provider-non-delivery-proof.md):
+  the provider work split out of item 1, and the Build Pipeline redispatch gap.
 
 ## Replaces
 

@@ -420,6 +420,17 @@ export class DispatchJournal {
   }
 
   /**
+   * The request that started `turnId`, while the journal still holds it. Lets a
+   * restart notice, which is keyed by turn, name the request it cut short.
+   */
+  requestIdForTurn(turnId: string): string | undefined {
+    for (const record of this.records.values()) {
+      if (record.turnId === turnId && !record.quarantined) return record.requestId;
+    }
+    return undefined;
+  }
+
+  /**
    * Drops a `prepared` record once reconciliation proved the turn never ran, so
    * the request can be dispatched cleanly.
    */

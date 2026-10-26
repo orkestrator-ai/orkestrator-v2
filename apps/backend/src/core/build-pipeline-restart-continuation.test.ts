@@ -103,7 +103,7 @@ for (const toolMode of [false, true]) {
     },
   );
 
-  test.each(["accepted", "continue", "second-restart"] as const)(
+  test.each(["accepted", "continue", "second-restart", "stale-notice"] as const)(
     `pipeline stage handles %s after restart (${toolMode ? "tool" : "structured"})`,
     async (outcome) => {
       await withPipeline(
@@ -125,7 +125,13 @@ for (const toolMode of [false, true]) {
           let interrupted = true;
           spyOn(provider, "observeSession").mockImplementation(async (sessionId) =>
             sessionId === session.sdkSessionId && interrupted
-              ? { status: "error", interruption: "restart", error: "Claude restarted" }
+              ? {
+                  status: "error",
+                  interruption: "restart",
+                  error: "Claude restarted",
+                  // A bridge that names the request the restart cut short.
+                  ...(outcome === "stale-notice" ? { interruptedRequestId: firstRequestId } : {}),
+                }
               : { status: "idle" },
           );
           const sentBefore = provider.sent.length;
@@ -149,6 +155,15 @@ for (const toolMode of [false, true]) {
             await service.advanceNow(started.id);
             expect((await read(started.id)).phase).toBe("failed");
           } else {
+            if (outcome === "stale-notice") {
+              // Sent, not started: the notice still names the original
+              // request, so it is not the continuation's second restart (0112).
+              await service.advanceNow(started.id);
+              const waiting = await read(started.id);
+              expect(waiting.phase).toBe("building");
+              expect(waiting.error).toBeUndefined();
+              expect(provider.sent).toHaveLength(sentBefore + 1);
+            }
             interrupted = false;
             provider.structured = originalStructured;
             if (toolMode && result?.ok)

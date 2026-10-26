@@ -41,3 +41,64 @@
 
 No assertion, timeout or skip was changed. Shared-host load is the likely
 contributor, not an established cause.
+
+## Review-hardening validation, 2026-10-26
+
+`mise run test:logged -- --name bridge-review-tests -- mise run test` repeated
+the unchanged firewall owner's five-second deadlines. The root group used one
+worker and finished in 255.3 s (3,467 passed, six failed); four failures were:
+
+- `policy 2 narrows host access to named ports and records what it applied`
+  (5,004.10 ms).
+- `policy 3 allowlist  EXAMPLE.COM:443/tcp  chooses blocked HTTPS probe example.net`
+  (5,017.54 ms).
+- `policy 3 allowlist example.com:80 chooses blocked HTTPS probe example.com`
+  (5,009.87 ms).
+- `the root entrypoint runs the firewall itself and records the outcome per mode`
+  (5,005.18 ms).
+
+The other two root failures were new test ownership declarations, corrected in
+the implementation; the focused ownership and runner tests then passed.
+
+The complete unchanged owner also failed under
+`mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`:
+29 passed, five timed out, 192 assertions, 65.1 s. Its failures were policy 2,
+policy 3 address/protocol/port tuples, both `example.com:443/tcp` variants, and
+the root entrypoint, all at 5,003.95–5,007.32 ms. This observation is not newly
+classified as flaky. Host load averages measured shortly after that run were
+40.61, 50.15 and 55.95 on 18 cores; contention remains a hypothesis.
+
+Evidence is in `orkestrator-test-run.r2VUEh/` (aggregate groups),
+`orkestrator-test-run.Ri7lB9/` (outer log), and
+`orkestrator-test-run.qOOXrw/` (isolated owner) under the host temporary directory.
+
+The corrected-tree rerun,
+`mise run test:logged -- --name bridge-review-final-tests -- mise run test`,
+ran 3,483 root/agent-support tests in 333.3 s (3,471 passed, 12 failed). All
+12 failures were in the unchanged firewall owner, with no ownership or bridge
+freshness failures. Its exact failing cases and durations were:
+
+| Test under `container firewall policy` | Duration (ms) |
+| --- | ---: |
+| `policy 2 narrows host access to named ports and records what it applied` | 5,005.51 |
+| `policy 3 allows address, protocol and port tuples` | 5,006.71 |
+| `policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net` | 5,151.91 |
+| `policy 3 allowlist example.org,example.com chooses blocked HTTPS probe example.net` | 5,005.88 |
+| `policy 3 allowlist example.com:443 chooses blocked HTTPS probe example.net` | 5,015.14 |
+| `policy 3 allowlist example.com:443/tcp chooses blocked HTTPS probe example.net` | 5,005.82 |
+| `policy 3 allowlist  EXAMPLE.COM:443/tcp  chooses blocked HTTPS probe example.net` | 5,006.49 |
+| `policy 3 allowlist example.com:80 chooses blocked HTTPS probe example.com` | 5,007.77 |
+| `policy 3 allowlist example.com:443/udp chooses blocked HTTPS probe example.com` | 5,020.98 |
+| `policy 3 allowlist example.com,example.net:443,example.org:443/tcp chooses blocked HTTPS probe ` | 6,016.13 |
+| `a gateway workload records its egress once and verifies enforcement without running the firewall: the gateway has gone` | 5,009.14 |
+| `the root entrypoint runs the firewall itself and records the outcome per mode` | 5,001.61 |
+
+The corrected desktop suite passed both alone (`desktop-final`, 76.7 s) and in
+the final aggregate (1,344 passed, 14 skipped, zero failures, 44.85 s). Final
+rerun evidence is in `orkestrator-test-run.IKbrwf/` (groups) and
+`orkestrator-test-run.Di3WV3/` (outer log).
+
+The final default suite completed in 842.7 s: the workspace, bridge and protocol
+lockfile groups passed; only the 12 firewall deadlines failed. `mise run check`,
+the focused freshness/setup/packaging/lifecycle tests, and the ownership/runner
+tests passed. No firewall assertions, skips or timeout budgets were changed.

@@ -169,6 +169,13 @@ which takes a few seconds; a changed bridge, or a change to a package it
 bundles such as `packages/protocol`, rebuilds in about five more. A failed
 build stops the start. Plain `mise run dev` does not build bridges.
 
+Preparation compares Turbo input hashes before and after the build and its log
+write. If any input changed, restart `dev:test` to build again; it does not write
+a new record for that attempt. Every bridge must have a nonempty task hash in
+Turbo's plan. A failed or incomplete plan stops preparation or the suite check,
+including when the stale-build override is set: the override permits known
+mismatches, and cannot establish freshness when planning fails.
+
 The start then records each bridge's Turbo build hash and the SHA-256 of its
 `dist/index.js` in `runtime/bridge-builds.json` beside `status.json`. The
 browser, paused-interactions, Claude warm-runtime and coordinator Playwright
@@ -182,6 +189,7 @@ failed. The one-shot runners (`test:agent:browser:isolated`,
 `test:agent:design:isolated`, `test:agent:coordinator`) start a new profile,
 so they always build first. The older-bridge step below swaps one bundle in
 during a spec, after the check, and is unaffected.
+The Electron Playwright config starts its own app and does not use this guard.
 
 ## Sign a browser in
 

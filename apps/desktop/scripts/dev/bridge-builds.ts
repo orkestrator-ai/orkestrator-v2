@@ -34,7 +34,7 @@ export type LocalBridge = (typeof LOCAL_BRIDGES)[number];
 /** Written beside the profile's `status.json`; not part of that manifest's contract. */
 export const BRIDGE_BUILDS_FILE = "bridge-builds.json";
 
-/** Set to `1` to run against a profile whose bridges no longer match the checkout. */
+/** Set to `1` to allow known mismatches; Turbo planning failures still stop the suite. */
 export const ALLOW_STALE_BRIDGES_ENV = "ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES";
 
 export type BridgeBuildState = {
@@ -98,28 +98,35 @@ export function buildLocalBridges(
 export function bridgeInputHashes(
   repositoryRoot: string,
   run: TurboRunner = runTurbo,
-): Record<LocalBridge, string | null> {
+): Record<LocalBridge, string> {
   const result = run(["run", "build", ...bridgeFilters(), "--dry=json"], repositoryRoot);
   if (result.status !== 0) {
     throw new Error(`Turbo could not plan the bridge builds: ${commandOutput(result).trim()}`);
   }
-  return parseBridgeInputHashes(result.stdout ?? "");
+  try {
+    return parseBridgeInputHashes(result.stdout ?? "");
+  } catch (error) {
+    throw new Error(
+      `Turbo could not plan the bridge builds: ${error instanceof Error ? error.message : error}\n${commandOutput(result).trim()}`,
+    );
+  }
 }
 
-export function parseBridgeInputHashes(stdout: string): Record<LocalBridge, string | null> {
+export function parseBridgeInputHashes(stdout: string): Record<LocalBridge, string> {
   const start = stdout.indexOf("{");
   if (start < 0) throw new Error("Turbo's dry run printed no plan");
   const plan = JSON.parse(stdout.slice(start)) as { tasks?: unknown };
   if (!Array.isArray(plan.tasks)) throw new Error("Turbo's dry run plan has no tasks");
-  const hashes = Object.fromEntries(LOCAL_BRIDGES.map((bridge) => [bridge, null])) as Record<
-    LocalBridge,
-    string | null
-  >;
+  const hashes: Partial<Record<LocalBridge, string>> = {};
   for (const task of plan.tasks as Array<{ taskId?: unknown; hash?: unknown }>) {
     const bridge = LOCAL_BRIDGES.find((name) => task.taskId === `${name}#build`);
-    if (bridge && typeof task.hash === "string") hashes[bridge] = task.hash;
+    if (bridge && typeof task.hash === "string" && task.hash.length > 0) hashes[bridge] = task.hash;
   }
-  return hashes;
+  const missing = LOCAL_BRIDGES.filter((bridge) => !hashes[bridge]);
+  if (missing.length > 0) {
+    throw new Error(`Turbo's dry run is missing build input hashes for ${missing.join(", ")}`);
+  }
+  return hashes as Record<LocalBridge, string>;
 }
 
 export function bridgeBundleHash(repositoryRoot: string, bridge: LocalBridge): string | null {
@@ -169,6 +176,8 @@ export function compareBridgeBuilds(
       problems.push(`${bridge}: the profile started without a build`);
     } else if (!now.bundle) {
       problems.push(`${bridge}: dist/index.js is missing`);
+    } else if (!before.inputs || !now.inputs) {
+      problems.push(`${bridge}: its build input hash is missing`);
     } else if (before.inputs !== now.inputs) {
       problems.push(`${bridge}: its sources changed since the profile started`);
     } else if (before.bundle !== now.bundle) {
@@ -220,7 +229,8 @@ export async function readBridgeBuildRecord(statusPath: string): Promise<BridgeB
 /**
  * Builds the bridges for a starting profile and records the result. Throws
  * with the log path when a build fails: a profile must not start on a bridge
- * that no longer compiles, or on the build before it.
+ * that no longer compiles, or on the build before it. Inputs must stay stable
+ * from the pre-build plan through the post-build snapshot.
  */
 export async function prepareProfileBridgeBuilds(options: {
   repositoryRoot: string;
@@ -229,10 +239,21 @@ export async function prepareProfileBridgeBuilds(options: {
   logPath: string;
   run?: TurboRunner;
 }): Promise<BridgeBuildRecord> {
+  // Check both sides of the build, including the awaited log write. Otherwise
+  // newer source hashes could be recorded alongside bundles built from older inputs.
+  const inputs = bridgeInputHashes(options.repositoryRoot, options.run);
   const built = buildLocalBridges(options.repositoryRoot, options.run);
   await options.writeLog(built.output);
   if (!built.ok) throw new Error(`Bridge build failed; see ${options.logPath}`);
   const record = snapshotBridgeBuilds(options.repositoryRoot, { run: options.run });
+  const changed = LOCAL_BRIDGES.filter(
+    (bridge) => inputs[bridge] !== record.bridges[bridge].inputs,
+  );
+  if (changed.length > 0) {
+    throw new Error(
+      `Bridge inputs changed during the build for ${changed.join(", ")}; restart dev:test to rebuild them.`,
+    );
+  }
   const missing = LOCAL_BRIDGES.filter((bridge) => !record.bridges[bridge].bundle);
   if (missing.length > 0) {
     throw new Error(`Bridge build left no dist/index.js for ${missing.join(", ")}`);

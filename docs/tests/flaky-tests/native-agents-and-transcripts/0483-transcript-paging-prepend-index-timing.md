@@ -41,3 +41,11 @@ The desktop native paging case saw prepend index 1 instead of an index greater t
 - **Suite counts:** 28 passed, 2 failed (43.6 s).
 - **Owner reruns:** `-g "paging before prose" --repeat-each 3 --workers 4` passed 12 of 12 (26.4 s); the whole owner with `--workers=1` passed all 30 cases (111.0 s logged).
 - **Assessment:** confirmed intermittent recurrence under parallel load. The fixture's default (unpaged) history is unchanged by this branch: the new `paged`, `stops` and `prompt` options default off. The index assertion failing while the offset held fits a page that never landed, as when the native tab's background poll retires a page in flight (transcript-scroll.md, Known limitations). That remains a hypothesis. No assertion, timeout or skip changed.
+
+
+## Hidden-resume review recurrence — 2026-10-26
+
+- **Failure:** Desktop `native: paging before prose holds the original tool position` retained row index 1 instead of greater than 1.
+- **Complete unchanged owner:** `mise run test:logged -- --name paging-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/playwright/resume-paging-owner` passed (96.6 s logged).
+- **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
+- **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.

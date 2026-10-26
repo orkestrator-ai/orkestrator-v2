@@ -1,17 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import {
   coordinatorProviderAllowed,
   coordinatorProviderQualification,
   coordinatorProviderQualifications,
   coordinatorProviderTierSetting,
-  CLAUDE_LINUX_SANDBOX_PROGRAMS,
   defaultCoordinatorHostCapabilities,
-  executableOnPath,
 } from "./coordinator-providers.js";
+import {
+  CLAUDE_LINUX_SANDBOX_PROGRAMS,
+  probeClaudeLinuxSandbox,
+} from "@orkestrator/protocol/node/claude-linux-sandbox";
 
 const sandboxed = { claudeSandbox: true };
 const unsandboxed = { claudeSandbox: false };
@@ -141,19 +140,22 @@ describe("coordinator provider qualification", () => {
   });
 
   test("the host probe follows the OS sandboxes that actually exist", () => {
-    const everything = () => true;
-    const nothing = () => false;
-    expect(defaultCoordinatorHostCapabilities("darwin", nothing).claudeSandbox).toBe(true);
-    expect(defaultCoordinatorHostCapabilities("linux", everything).claudeSandbox).toBe(true);
+    const works = () => ({ available: true }) as const;
+    const refused = () =>
+      ({ available: false, failure: "nested-user-namespace", reason: "Refused." }) as const;
+    expect(defaultCoordinatorHostCapabilities("darwin", refused).claudeSandbox).toBe(true);
+    expect(defaultCoordinatorHostCapabilities("linux", works)).toEqual({ claudeSandbox: true });
     // The pinned CLI's Windows sandbox is behind a vendor flag that is off.
-    expect(defaultCoordinatorHostCapabilities("win32", everything).claudeSandbox).toBe(false);
+    expect(defaultCoordinatorHostCapabilities("win32", works).claudeSandbox).toBe(false);
   });
 
   test("Linux without bubblewrap or socat is not reported as enforced", () => {
     // The CLI refuses to start a required sandbox without either, so an
     // `enforced` Claude there would fail every coordinator turn.
     for (const missing of CLAUDE_LINUX_SANDBOX_PROGRAMS) {
-      const host = defaultCoordinatorHostCapabilities("linux", (name) => name !== missing);
+      const host = defaultCoordinatorHostCapabilities("linux", () =>
+        probeClaudeLinuxSandbox({ onPath: (name) => name !== missing }),
+      );
       expect(host.claudeSandbox).toBe(false);
       expect(
         coordinatorProviderQualification("claude", { host, tierSetting: "provider-configured" }),
@@ -164,18 +166,47 @@ describe("coordinator provider qualification", () => {
     }
   });
 
-  test("the PATH lookup finds an executable and ignores a plain file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "coordinator-path-"));
-    try {
-      await writeFile(join(directory, "bwrap"), "#!/bin/sh\n");
-      await chmod(join(directory, "bwrap"), 0o755);
-      await writeFile(join(directory, "socat"), "");
-      await chmod(join(directory, "socat"), 0o644);
-      expect(executableOnPath("bwrap", directory)).toBe(true);
-      expect(executableOnPath("socat", directory)).toBe(false);
-      expect(executableOnPath("bwrap", "")).toBe(false);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+  test("a host whose AppArmor refuses the nested namespace is not reported as enforced", () => {
+    // Ubuntu 26.04 with bwrap and socat installed: the CLI's sandbox starts,
+    // then every command fails in its seccomp helper (todo 0145).
+    const host = defaultCoordinatorHostCapabilities("linux", () =>
+      probeClaudeLinuxSandbox({
+        onPath: () => true,
+        run: (_command, args) =>
+          args.includes("unshare")
+            ? { ok: false, stderr: "unshare: write failed /proc/self/setgroups: Permission denied" }
+            : { ok: true, stderr: "" },
+        appArmorBwrapProfile: () => true,
+      }),
+    );
+    expect(host.claudeSandbox).toBe(false);
+    const claude = coordinatorProviderQualification("claude", {
+      host,
+      tierSetting: "provider-configured",
+      enabledPlatforms: everyPlatform,
+    });
+    expect(claude).toMatchObject({ tier: "provider-configured", available: true });
+    expect(claude.reason).toContain("bwrap-userns-restrict");
+    expect(claude.reason).toContain("the bridge admits only reading commands");
+    const strict = coordinatorProviderQualification("claude", {
+      host,
+      tierSetting: "enforced",
+      enabledPlatforms: everyPlatform,
+    });
+    expect(strict.available).toBe(false);
+    expect(strict.reason).toContain("bwrap-userns-restrict");
+  });
+
+  test("a host whose bubblewrap nests a namespace keeps Claude enforced", () => {
+    const host = defaultCoordinatorHostCapabilities("linux", () =>
+      probeClaudeLinuxSandbox({ onPath: () => true, run: () => ({ ok: true, stderr: "" }) }),
+    );
+    expect(
+      coordinatorProviderQualification("claude", {
+        host,
+        tierSetting: "enforced",
+        enabledPlatforms: everyPlatform,
+      }),
+    ).toMatchObject({ tier: "enforced", available: true });
   });
 });

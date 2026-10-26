@@ -403,6 +403,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       if (response.status === 422 && detailText && detail?.kind === "command-unavailable") {
         throw new PromptRejectedError(detailText);
       }
+      // A turn that requires a provider sandbox the bridge's host cannot run
+      // commands in (Claude under Ubuntu's AppArmor bwrap profile). The reason
+      // says what blocks it and how to allow it.
+      if (response.status === 422 && detailText && detail?.kind === "sandbox-unavailable") {
+        throw new PromptRejectedError(detailText);
+      }
       const detailMessage = detailText ? `: ${detailText}` : "";
       throw new PromptRejectedError(
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,

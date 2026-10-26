@@ -234,6 +234,20 @@ describe("bounded bridge output", () => {
     return content;
   }
 
+  test("the writer handles rotation failures, output errors, signals and fallback", () => {
+    const result = Bun.spawnSync({
+      cmd: [
+        "bash",
+        path.resolve(import.meta.dir, "../../../docker/tests/log-writer-test.sh"),
+        WRITER,
+      ],
+      timeout: 20_000,
+    });
+    expect(result.stderr.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain("log writer regression checks: passed");
+  }, 25_000);
+
   test(
     "the writer writes each line while its producer's pipe stays open",
     withWriterDir(async (_dir, file) => {

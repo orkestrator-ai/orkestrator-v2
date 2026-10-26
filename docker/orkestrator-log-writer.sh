@@ -34,7 +34,9 @@ umask 077
 # always has it.
 if ! command -v perl >/dev/null 2>&1; then
     # Unbounded, as an image without the writer is, but still draining.
-    exec cat >>"$file"
+    # If opening or writing fails, consume the remaining input as well.
+    cat >>"$file" || cat >/dev/null
+    exit 0
 fi
 exec perl -e '
 use strict;
@@ -75,10 +77,13 @@ sub rotate {
     close $log if $log;
     undef $log;
     for (my $i = $keep - 1; $i >= 1; $i--) {
-        rename($i == 1 ? $file : "$file." . ($i - 1), "$file.$i");
+        my $source = $i == 1 ? $file : "$file." . ($i - 1);
+        next unless -e $source;
+        return 0 unless rename($source, "$file.$i");
     }
-    truncate($file, 0) if $keep == 1;
+    return 0 if $keep == 1 && -e $file && !truncate($file, 0);
     $size = 0;
+    return 1;
 }
 
 sub line {
@@ -87,7 +92,9 @@ sub line {
     $text = substr($text, 0, $max > 32 ? $max - 32 : 0) . " [line truncated]"
         if length($text) + 1 > $max;
     my $n = length($text) + 1;
-    rotate() if $size > 0 && $size + $n > $max;
+    # A failed rotation leaves the active file (and its accounting) intact.
+    # Drop this line and retry on later input, while continuing to drain.
+    return if $size > 0 && $size + $n > $max && !rotate();
     $out .= "$text\n";
     $size += $n;
 }

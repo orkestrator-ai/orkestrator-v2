@@ -1854,6 +1854,53 @@ ${body}
 
   const READY_LINE = `printf '{"type":"orkestrator-backend-ready","url":"http://127.0.0.1:1/","authFile":"%s","bindAddress":"127.0.0.1","port":1}\\n' "$AUTH"`;
 
+  test("stop delivers final stdout and stderr before resolving, including after exit", async () => {
+    const logs: string[] = [];
+    const realLog = console.log;
+    const realError = console.error;
+    let releaseOutput: string | undefined;
+    let outputClosed: Promise<void> | undefined;
+    console.log = (...args) => {
+      logs.push(args.map(String).join(" "));
+    };
+    console.error = (...args) => {
+      logs.push(args.map(String).join(" "));
+    };
+    try {
+      const backend = await fakeBackend(`
+printf '%s' '{"token":"${TOKEN}"}' > "$AUTH"
+trap '(while [ ! -f "$AUTH.release" ]; do sleep 0.01; done; printf "final stdout"; printf "final stderr" >&2) & exit 0' TERM
+${READY_LINE}
+while :; do sleep 0.05; done`);
+      releaseOutput = `${backend.auth}.release`;
+      await backend.started;
+      const child = (backend.backendProcess as unknown as { child: ChildProcess }).child;
+      outputClosed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      let resolved = false;
+      const stopped = backend.backendProcess.stop().then(() => {
+        resolved = true;
+      });
+      await exited;
+      // A second stop after the supervisor cleared its child must still drain.
+      const stoppedAgain = backend.backendProcess.stop();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(resolved).toBe(false);
+      expect(logs).not.toContain("[Backend] final stdout");
+      await writeFile(releaseOutput, "release");
+      await Promise.all([stopped, stoppedAgain]);
+      expect(logs).toContain("[Backend] final stdout");
+      expect(logs).toContain("[Backend] final stderr");
+      expect(backend.onUnexpectedExit).not.toHaveBeenCalled();
+    } finally {
+      // Release the pipe-holding descendant even when an assertion fails.
+      if (releaseOutput) await writeFile(releaseOutput, "release");
+      await outputClosed;
+      console.log = realLog;
+      console.error = realError;
+    }
+  });
+
   async function waitForProcessGone(pid: number, timeoutMs = 5_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {

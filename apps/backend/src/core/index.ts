@@ -116,6 +116,7 @@ import { applyGhChannel, fetchReleasePins } from "./host-maintenance-tasks.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
+  controlMcpPortOverride,
   type ControlMcpInfo,
   type ControlMcpSettings,
 } from "./control-mcp-server.js";
@@ -424,9 +425,8 @@ export class OrkestratorBackend {
     this.controlMcp =
       options.controlMcp ??
       new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed in the application, ephemeral in the test runner so concurrently
-        // executing backend fixtures cannot contend for the user-facing port.
-        port: process.env.NODE_ENV === "test" ? 0 : undefined,
+        // Fixed in the application; ephemeral for tests and agent-test backends.
+        port: controlMcpPortOverride(options.runtimeFlavor, process.env),
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();

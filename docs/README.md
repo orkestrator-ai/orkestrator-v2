@@ -15,12 +15,13 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 | --- | --- |
 | [`architecture/`](#architecture) | Living guides to how shipped features work. Keep them aligned with the tree. |
 | [`development/`](#development) | Living contributor guides: testing, upgrades, releases, disk usage. |
+| [`debugging/`](#debugging) | Runbooks for diagnosing failures on a running install: crashes, killed processes, blank windows. |
 | [`tests/`](#tests) | The flaky-test registry, grouped into folders by area. [`tests/flaky-tests/0000-index.md`](tests/flaky-tests/0000-index.md) points to each folder's index, which tracks its cases. |
 | [`todo/`](#todo) | All outstanding work in numbered files, grouped into folders by area. [`todo/0000-index.md`](todo/0000-index.md) points to each folder's index, which ranks its files by criticality. Pick work from here. |
 
 There are no other plan, review or dated-note folders, and nothing else
-belongs at the top of `docs/`. Durable content goes into `architecture/` or
-`development/`; anything still to do goes into `todo/`. Completed plans are
+belongs at the top of `docs/`. Durable content goes into `architecture/`,
+`development/` or `debugging/`; anything still to do goes into `todo/`. Completed plans are
 deleted once their behaviour is in a living doc; git history keeps them. The
 2026-10-15 consolidation removed everything under `docs/improvements/`,
 `docs/imrovements/`, `docs/plans/`, `docs/2026-10-14/`, `docs/2026-10-15/` and
@@ -94,6 +95,12 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [federation-benchmarks.md](development/federation-benchmarks.md) | Synthetic 1/3/10/25-machine runtime benchmark results and what is not measured. |
 | [federation-handoff.md](development/federation-handoff.md) | Federated client handoff: architecture summary, schema versions, validation evidence, deviations and untested cases. |
 | [flaky-tests.md](development/flaky-tests.md) | Pointer to the flake registry in `tests/`. |
+
+## Debugging
+
+| Document | Notes |
+| --- | --- |
+| [process-crashes-and-kills.md](debugging/process-crashes-and-kills.md) | Why part of the desktop app stopped (Linux): reading the app log, core dumps and journal; correlating agent activity; catching the sender of a SIGKILL/SIGTERM with an audit trail; AppImage mount failures; the 2026-10-26 incidents and their fixes. |
 
 ## Tests
 

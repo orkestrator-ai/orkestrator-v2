@@ -4,6 +4,11 @@ export type BackendShutdownDependencies = {
   stopGateway: () => Promise<void>;
   stopBackend: () => Promise<void>;
   warn: (message: string) => void;
+  /**
+   * Records the shutdown. Without it a clean quit leaves no trace in the
+   * desktop log and cannot be told apart from the backend being killed.
+   */
+  info?: (message: string) => void;
   exit: (code: number) => void;
 };
 
@@ -24,6 +29,7 @@ export function createBackendShutdownHandler(
   return (signal) => {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
+      dependencies.info?.(`[Backend] Received ${signal}; shutting down`);
       if (dependencies.stopTailscaleServe) {
         await dependencies.stopTailscaleServe().catch((error: unknown) => {
           dependencies.warn(
@@ -53,7 +59,9 @@ export function createBackendShutdownHandler(
         dependencies.warn(`[Backend] Failed to stop local servers: ${errorMessage(error)}`);
       }
 
-      dependencies.exit(fatalErrors.length > 0 ? 1 : signal === "SIGINT" ? 130 : 0);
+      const code = fatalErrors.length > 0 ? 1 : signal === "SIGINT" ? 130 : 0;
+      dependencies.info?.(`[Backend] Shutdown finished; exiting with ${code}`);
+      dependencies.exit(code);
     })();
     return shutdownPromise;
   };

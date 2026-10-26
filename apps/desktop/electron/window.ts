@@ -6,6 +6,7 @@ import { installDefaultContextMenu } from "./context-menu.js";
 import { resolveRendererIndexPath } from "./paths.js";
 import { desktopTitleBarStyle } from "./title-bar-inset.js";
 import { installRendererDiagnostics } from "./renderer-diagnostics.js";
+import { installRendererRecovery } from "./renderer-recovery.js";
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindow;
 type ContextMenuMenu = Parameters<typeof installDefaultContextMenu>[1];
@@ -123,6 +124,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
 
   installDefaultContextMenu(mainWindow, options.menu, options.writeClipboardText);
   installRendererDiagnostics(mainWindow.webContents);
+  installRendererRecovery(mainWindow.webContents);
   installRendererNavigationGuards(mainWindow.webContents, trustedRendererUrl);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 

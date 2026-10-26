@@ -18,8 +18,9 @@
   Web: one file's worker was killed (SIGKILL). Root and agent-support: 3,472
   passed, 2 failed. Bridges, desktop, protocol, toolchain, CLI and web-public
   passed.
-- **Evidence:** `/tmp/ork0023-full-tmp/orkestrator-test-run.CCTMJZ/` on
-  omarchy-hp (workspace and root `.log.gz`, `summary.json`).
+- **Evidence:** was `/tmp/ork0023-full-tmp/orkestrator-test-run.CCTMJZ/` on
+  omarchy-hp; that private directory was cleared before the second run, so
+  only the counts and messages recorded here remain.
 
 | Owning file | Failing test | Aggregate failure | Complete unchanged owner alone |
 | --- | --- | --- | --- |

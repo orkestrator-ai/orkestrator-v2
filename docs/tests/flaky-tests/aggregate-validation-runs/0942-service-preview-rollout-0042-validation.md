@@ -160,3 +160,21 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   relevant, but neither it nor these reruns proves the cause of the aggregate
   ownership mismatch. No assertion, timeout, skip or preview implementation
   was changed. Static checks and the focused coordinator/storage guards passed.
+
+## Recurrence during todo 0035 validation — 2026-10-26
+
+- **Command:** `mise run test:logged -- --name full-test-3 -- mise run test` on
+  branch `todo-0035-mobile-layout-gaps-49509c5f9933` (head `e61067baa`,
+  renderer-only changes; it does not touch preview discovery). Root, bridges,
+  the Codex protocol lockfile and every workspace package except backend
+  passed (web 9,833 passed). Backend reported 11,765 passed and one failed.
+- **Failure:** `local preview service discovery on this host > two
+  environments, a restart on the reused port, and an auto-incremented port`
+  (`preview-local-discovery.test.ts:617`, 793.72 ms). The same ownership
+  mismatch as the storage-main merge above: `user-registered` received where
+  `managed-process` was expected.
+- **Complete unchanged owner rerun:**
+  `mise run test:logged -- --name preview-discovery-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts --parallel=1 --only-failures`
+  passed (8.2 s) at load average about 15.
+- **Evidence:** `orkestrator-test-run.9PpU2I/` below the host temporary
+  directory. No assertion, timeout or skip changed.

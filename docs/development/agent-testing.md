@@ -119,7 +119,10 @@ ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa mise run test:logged -- --name dock
 
 `grok-container-login.spec.ts` also offers an opt-in real-provider check. It
 requires a usable host Grok login when the profile starts; a missing or expired
-login produces an explicit skip. It gets an authenticated reply, advances only
+login produces an explicit skip. Containers take the profile's own Grok
+snapshot (`<dataDir>/agent-credentials/home/.grok/auth.json`, the profile's
+HOME), which is the file the spec edits; until 2026-10-26 container staging
+read the real host `~/.grok` instead, so the spec could not have passed. It gets an authenticated reply, advances only
 the disposable profile's login expiry metadata, withholds the expired host
 snapshot, restores a current host snapshot, and synchronizes it into the same
 bridge. A follow-up must recall the first turn's codeword in the same session.
@@ -947,8 +950,9 @@ token. The whole run takes about 20 minutes.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It
   defaults to `pi=openai/gpt-6-sol`. A profile now also receives the host's
   saved Pi default model, but the pin keeps the run independent of whatever
-  the host saved; without either, the bridge would start on the catalogue's
-  first model (once `gpt-4`), which a ChatGPT-backed OpenAI login refuses.
+  the host saved; without either, the bridge would start on its last resort
+  (for a ChatGPT-backed OpenAI login, the newest ChatGPT-backend model, not
+  the catalogue's first `gpt-4`, which that login refuses).
 
 The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a

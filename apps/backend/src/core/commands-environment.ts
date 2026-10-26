@@ -49,6 +49,7 @@ import {
   runContainerOperation,
 } from "./container-lifecycle-service.js";
 import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
+import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
 import { applyEnvironmentAllowedDomains } from "./container-network.js";
 import {
   assertRecoveryCapacity,
@@ -1768,8 +1769,9 @@ export async function stopEnvironmentOnce(
       { source: currentRuntimeIdentity(environment, context) },
     );
     if ("replayed" in outcome) return;
-    // The bridges died with the container, and their parked requests with them.
-    context.nativeAgents?.withdrawEnvironmentInteractions(environment.id);
+    // The bridges died with the container, and their turns and parked
+    // requests with them.
+    await settleStoppedRuntimeAgents(environment.id, context);
     shutdownClaudeStatePolling(containerId);
     context.runtime.diffStats.invalidatePendingSync();
     context.runtime.diffStats.service.pause(environment.id);
@@ -1797,7 +1799,7 @@ export async function stopEnvironmentOnce(
   });
   // A bridge that refused to terminate may still hold a live request.
   if (stopError) throw stopError;
-  context.nativeAgents?.withdrawEnvironmentInteractions(environment.id);
+  await settleStoppedRuntimeAgents(environment.id, context);
 }
 
 export function stopEnvironmentTask(

@@ -221,3 +221,12 @@ The aggregate timed out at 5017.45 ms (root/support: 3381 passed, two failed). I
 - **Complete unchanged owner:** `env -u PORT mise run test:logged -- --name disk-report -- bun test ./tests/unit/disk-report.test.ts` passed (1.9 s).
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.ZrjtAX`.
 - **Assessment:** known recurrence under shared host load; the branch does not touch disk reporting. No assertion, deadline or skip changed.
+
+## Interactive command/prompt review — 2026-10-26
+
+- **Original command:** `mise run test` through `test:logged`, standard 4/1/2/1 workspace/root/bridge/protocol reservations.
+- **Observation:** The isolated-checkout report timed out at 5027.35 ms, with null subprocess status and an error between tests. The complete unchanged owner passed alone in 3.1 s.
+- **Owner command:** `mise run test:logged -- --name owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`.
+- **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
+- **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
+- **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.

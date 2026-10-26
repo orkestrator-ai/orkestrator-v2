@@ -386,3 +386,12 @@ timeout, skip or environment-move implementation changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 32.0 seconds.
 - **Evidence:** `orkestrator-test-run.zbtDAc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; enclosing log `orkestrator-test-run.3FhzyC/terminal-signal-repository.log.gz`. Backend 11197 passed, 95 skipped, two failed and one between-test error across 655 files (367.97 s). The other failure is [0091](0091-startworktreewatcher-observes-a-real-file-write.md); all other groups and workspace packages passed. The aggregate exited 1 after 549.1 seconds.
 - **Changes:** recorded recurrence only; no move code, assertions, deadlines or skips changed. The original aggregate remains failed.
+
+## Interactive command/prompt review — 2026-10-26
+
+- **Original command:** `mise run test` through `test:logged`, standard 4/1/2/1 workspace/root/bridge/protocol reservations.
+- **Observation:** Restart recovery re-linking an adopted or abandoned copy timed out at 5077.16 ms. The complete owner passed alone in 14.1 s, including the new running-command preflight regression.
+- **Owner command:** `mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`.
+- **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
+- **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
+- **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.

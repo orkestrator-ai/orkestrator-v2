@@ -21,3 +21,12 @@
 - **Evidence:** `orkestrator-test-run.nG0pIs/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Owner rerun:** `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`: 33 passed, 1 failed (45.45 s). Both aggregate firewall cases passed; a different policy-3 HTTPS probe hit 5002.93 ms. Evidence: `orkestrator-test-run.jPtxw9`.
 - **Assessment:** the complete owner still fails under current host conditions, so this observation does not establish a new flake classification. No firewall code, assertion or deadline changed.
+
+## Interactive command/prompt review — 2026-10-26
+
+- **Original command:** `mise run test` through `test:logged`, standard 4/1/2/1 workspace/root/bridge/protocol reservations.
+- **Observation:** The root-entrypoint case timed out at 5007.31 ms. The complete unchanged owner passed alone in 42.2 s.
+- **Owner command:** `mise run test:logged -- --name owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`.
+- **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
+- **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
+- **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.

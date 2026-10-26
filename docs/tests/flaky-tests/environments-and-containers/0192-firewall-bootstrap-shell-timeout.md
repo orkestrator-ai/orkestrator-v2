@@ -358,3 +358,12 @@ The integrated default suite timed out the stored-domain/repeated-range case at 
 - **Assessment:** this complete owner remains non-green; no new flake classification or cause is established. Neither `tests/unit/firewall-policy.test.ts` nor `docker/firewall-domains.sh` differs from the merge base. No implementation, assertion, deadline or skip changed for this observation.
 
 - **Completed aggregate:** workspace (web, backend, desktop, web-public, CLI, protocol, toolchain), bridge and protocol-lockfile groups passed; only the two root firewall timeouts remained. The outer command exited 1 after 638.3 s. Full evidence: `orkestrator-test-run.lyZaoe/merge95-tests.log.gz`; group evidence is under `orkestrator-test-run.N9YUtx/`. Static checks and the flake-index contract test passed on the merged result.
+
+## Interactive command/prompt review — 2026-10-26
+
+- **Original command:** `mise run test` through `test:logged`, standard 4/1/2/1 workspace/root/bridge/protocol reservations.
+- **Observation:** The GitHub seed/live/cache case timed out at 5043.51 ms. The complete unchanged owner passed alone in 42.2 s.
+- **Owner command:** `mise run test:logged -- --name owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`.
+- **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
+- **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
+- **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.

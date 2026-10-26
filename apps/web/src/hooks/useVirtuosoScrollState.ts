@@ -163,7 +163,11 @@ export interface TranscriptScrollAnchor {
 }
 
 interface UseVirtuosoScrollStateReturn {
-  /** Whether the user is currently at the bottom of the scroll area */
+  /**
+   * UI state for return-to-latest affordances: at the end, allowed to follow,
+   * or a latest journey that already arrived. May stay true through transient
+   * off-bottom growth; this is not a pure geometry signal.
+   */
   isAtBottom: boolean;
   /** Ref that tracks at-bottom state without triggering re-renders (for use in effects) */
   isAtBottomRef: React.RefObject<boolean>;

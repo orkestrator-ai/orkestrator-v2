@@ -142,6 +142,7 @@ describe("useVirtuosoScrollState", () => {
   describe("atBottomStateChange", () => {
     test("updates isAtBottom to false when called with false", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
+      act(() => result.current.scrollProps.controller.seed(false));
 
       act(() => {
         result.current.scrollProps.atBottomStateChange(false);
@@ -152,6 +153,7 @@ describe("useVirtuosoScrollState", () => {
 
     test("updates isAtBottom back to true when called with true", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
+      act(() => result.current.scrollProps.controller.seed(false));
 
       act(() => {
         result.current.scrollProps.atBottomStateChange(false);
@@ -166,6 +168,7 @@ describe("useVirtuosoScrollState", () => {
 
     test("updates isAtBottomRef in sync with isAtBottom", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
+      act(() => result.current.scrollProps.controller.seed(false));
 
       // Initially true
       expect(result.current.isAtBottomRef.current).toBe(true);
@@ -179,6 +182,37 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollProps.atBottomStateChange(true);
       });
       expect(result.current.isAtBottomRef.current).toBe(true);
+    });
+
+    test("keeps a follower at bottom while growth outruns its pin", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        scroller.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        // A streaming commit grows the list before the resize delivery pins
+        // it: the scroll event and the virtualizer both see it short of the end.
+        Object.defineProperty(scroller, "scrollHeight", { value: 1080 });
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+          result.current.scrollProps.atBottomStateChange(false);
+        });
+        expect(result.current.isAtBottom).toBe(true);
+        expect(result.current.isAtBottomRef.current).toBe(true);
+
+        // Pausing (a selection, find) stops the pins: the geometry shows.
+        act(() => result.current.scrollProps.setFollowPaused("selection", true));
+        expect(result.current.isAtBottom).toBe(false);
+        act(() => result.current.scrollProps.setFollowPaused("selection", false));
+        expect(result.current.isAtBottom).toBe(true);
+
+        // The reader's own departure shows it too.
+        act(() => wheelUp(scroller, 500));
+        expect(result.current.isAtBottom).toBe(false);
+      } finally {
+        document.body.removeChild(scroller);
+      }
     });
 
     test("does not re-arm released intent from a transient at-bottom report away from bottom", () => {
@@ -631,6 +665,7 @@ describe("useVirtuosoScrollState", () => {
 
     test("does not optimistically set isAtBottom", async () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
+      act(() => result.current.scrollProps.controller.seed(false));
 
       // First move away from bottom
       act(() => {
@@ -1117,7 +1152,7 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("keeps stick intent for an upward scroll with no pointer held", () => {
+    test("keeps stick intent for shrinking-content compensation with no pointer held", () => {
       // Virtuoso corrects over-estimated heights after restoring a snapshot,
       // which moves scrollTop up with no user involved. Treating that as
       // intent would silently stop auto-follow on mount.
@@ -1131,6 +1166,7 @@ describe("useVirtuosoScrollState", () => {
           scroller.dispatchEvent(new Event("scroll"));
         });
 
+        Object.defineProperty(scroller, "scrollHeight", { value: 500 });
         scroller.scrollTop = 200;
         act(() => {
           scroller.dispatchEvent(new Event("scroll"));
@@ -1157,12 +1193,15 @@ describe("useVirtuosoScrollState", () => {
           window.dispatchEvent(new Event("pointerup"));
         });
 
+        const generation = result.current.scrollProps.controller.generation;
+        Object.defineProperty(scroller, "scrollHeight", { value: 500 });
         scroller.scrollTop = 200;
         act(() => {
           scroller.dispatchEvent(new Event("scroll"));
         });
 
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+        expect(result.current.scrollProps.controller.generation).toBe(generation);
       } finally {
         document.body.removeChild(scroller);
       }

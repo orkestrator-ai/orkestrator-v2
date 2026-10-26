@@ -56,6 +56,22 @@ const VIRTUOSO_WINDOW_SIZE = 25;
 
 let lastVirtuosoProps: Record<string, any> | null = null;
 
+/**
+ * The reader scrolls up in the mocked scroller. A follower is pinned to the
+ * end, so an off-bottom report alone does not show the scroll-down button.
+ */
+function scrollReaderAwayFromBottom() {
+  const scroller = screen.getByTestId("virtuoso-mock");
+  Object.defineProperty(scroller, "scrollHeight", { value: 1000, configurable: true });
+  Object.defineProperty(scroller, "clientHeight", { value: 300, configurable: true });
+  scroller.scrollTop = 700;
+  scroller.dispatchEvent(new Event("scroll"));
+  scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -200 }));
+  scroller.scrollTop = 500;
+  scroller.dispatchEvent(new Event("scroll"));
+  lastVirtuosoProps?.atBottomStateChange(false);
+}
+
 let dateNowSpy: ReturnType<typeof spyOn> | undefined;
 
 const virtuosoScrollToIndexMock = mock(() => {});
@@ -1239,9 +1255,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(lastVirtuosoProps).toBeTruthy();
     });
 
-    act(() => {
-      lastVirtuosoProps?.atBottomStateChange(false);
-    });
+    act(() => scrollReaderAwayFromBottom());
 
     const scrollButton = await screen.findByRole("button", {
       name: /scroll to bottom of conversation/i,
@@ -1282,9 +1296,7 @@ describe("ClaudeTmuxChatTab", () => {
       expect(lastVirtuosoProps).toBeTruthy();
     });
 
-    act(() => {
-      lastVirtuosoProps?.atBottomStateChange(false);
-    });
+    act(() => scrollReaderAwayFromBottom());
     await screen.findByRole("button", { name: /scroll to bottom of conversation/i });
 
     // Switch into interactive terminal mode — the Virtuoso transcript unmounts and the

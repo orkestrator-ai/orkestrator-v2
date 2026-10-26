@@ -21,7 +21,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
-import { prepareAppImageInstall, registerBackendShutdown } from "./backend-lifecycle.js";
+import {
+  BACKEND_EXIT_WAIT_MS,
+  prepareAppImageInstall,
+  registerBackendShutdown,
+} from "./backend-lifecycle.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -123,6 +127,8 @@ import {
   readRemoteRelaunchMarker,
   writeRemoteRelaunchMarker,
 } from "./remote-relaunch.js";
+import { relaunchApplication } from "./relaunch.js";
+import { showRestartPrompt } from "./restart-prompt.js";
 import {
   applyWindowTitle,
   focusWindowById,
@@ -303,10 +309,28 @@ const windowAllClosedQuit = registerWindowAllClosedQuit({
   platform: process.platform,
   alwaysQuit: runtimeFlavor === "agent-test",
 });
+// Every relaunch goes through here: an AppImage restarts from its image file,
+// never from the temporary mount that disappears when this process exits.
+const relaunchingApp = {
+  relaunch: () => relaunchApplication(app),
+  quit: () => app.quit(),
+};
 const quitReopen = registerQuitReopenRelaunch({
   app,
   allowRelaunch: runtimeFlavor !== "agent-test",
+  relaunch: relaunchingApp.relaunch,
 });
+const showNonBlockingError = (title: string, detail: string): void => {
+  void showRestartPrompt({
+    title,
+    detail,
+    showMessageBox: (options) => dialog.showMessageBox(options),
+    restart: () => {
+      quitReopen.scheduleRelaunch();
+      app.quit();
+    },
+  });
+};
 let startupComplete = false;
 let autoUpdate: AutoUpdateController | null = null;
 let hostUpdates: HostUpdateExecutor | null = null;
@@ -1319,13 +1343,14 @@ async function startApplication(): Promise<void> {
         publishConnectionLists();
         // Shortly after a remote-requested update, relaunch instead of a modal
         // nobody may answer, so the remote client gets its backend back.
-        if (recoverRemoteBackendFailure(dataDir, app)) {
+        if (recoverRemoteBackendFailure(dataDir, relaunchingApp)) {
           console.error(
             `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
           );
           return;
         }
-        dialog.showErrorBox(
+        console.error(`[Desktop] Local backend exited unexpectedly: ${error.message}`);
+        showNonBlockingError(
           `${productName} backend stopped`,
           `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
         );
@@ -1420,7 +1445,7 @@ async function startApplication(): Promise<void> {
   startupComplete = true;
   if (localStartError) {
     emitToConnection("local", "local-backend-unavailable", { message: localStartError.message });
-    dialog.showErrorBox(
+    showNonBlockingError(
       `${productName} local backend did not start`,
       `${localStartError.message}\n\nYour saved remote machines are still available. Restart the application to retry Local.`,
     );
@@ -1477,7 +1502,7 @@ if (isPrimaryInstance) {
         isQuitting: quitReopen.isQuitting,
         recover: () =>
           runtimeFlavor !== "agent-test" &&
-          recoverRemoteBackendFailure(app.getPath("userData"), app),
+          recoverRemoteBackendFailure(app.getPath("userData"), relaunchingApp),
         error,
         report: (failure) => {
           console.error("[Desktop] Startup failed:", failure);
@@ -1495,9 +1520,13 @@ if (isPrimaryInstance) {
   );
 }
 
-registerBackendShutdown(app, backendProcess);
+const backendShutdown = registerBackendShutdown(app, backendProcess);
 // The loopback handoff page only exists while a sign-in is pending.
 app.on("will-quit", () => {
   void previewExternalHandoff.close().catch(() => undefined);
 });
-registerApplicationLoggingShutdown(app, applicationLogging);
+// The backend's drain is logged through this process: flush after it.
+registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
+  settled: backendShutdown.stopped,
+  timeoutMs: BACKEND_EXIT_WAIT_MS,
+});

@@ -26,11 +26,12 @@ const NETWORK_DENIED: NativeAgentExecutionPolicy = {
 };
 
 describe("a policy that denies the network", () => {
-  test("adds WebFetch and WebSearch to the override's own deny list", () => {
+  test("adds WebFetch, WebSearch and RemoteTrigger to the override's own deny list", () => {
     expect(claudeDisallowedTools(NETWORK_DENIED)).toEqual([
       "NotebookEdit",
       "WebFetch",
       "WebSearch",
+      "RemoteTrigger",
     ]);
     // Without a capability denial the override passes through untouched,
     // `undefined` included, so ordinary sessions launch exactly as before.

@@ -823,6 +823,69 @@ exact command, working directory, PID, or owned port before stopping it. Never
 kill by a broad executable name because other worktrees and agent profiles may
 be using the same runtime.
 
+## Production Orkestrator shares this host
+
+Orkestrator is developed with Orkestrator. On a development machine, the
+installed production app is usually running, and an agent's commands and test
+suites are descendants of its backend. That process tree looks like this:
+
+```text
+orkestrator-v2 (Electron)
+└─ bun …/resources/backend/main.js          production backend
+   └─ codex-bridge / claude-bridge
+      └─ agent CLI → shell → mise run test  your test run
+```
+
+The production backend, bridges, agent CLIs, and `opencode serve` processes
+have the same executable names and similar command lines to the ones tests
+start. Killing any of them stops every local agent session on the host, including
+the one running the tests. On 2026-10-26 the production backend received
+`SIGKILL` three times while agents were running a full `mise run test`, each
+time within a minute of the suite starting. It was not an out-of-memory kill:
+Electron, in the same scope and process group, survived. Linux does not record
+who sends a signal, so the culprit was not identified from the logs alone.
+
+Test code, fixtures, and scripts must follow these rules, and so must commands
+run by hand:
+
+- Signal only what you spawned. Use the child handle, or the PID recorded at
+  spawn time. Signal a process group (`kill(-pid)`) only when you started that
+  child detached, so it leads its own group. Otherwise the group is the
+  caller's.
+- Never select processes by name, pattern, or port. This rules out `pkill`,
+  `killall`, `fuser -k`, `kill $(lsof -t -i :PORT)`, and `ps | grep` loops on
+  the host. Production listens on fixed ports such as the remote gateway and
+  agent tools ports.
+- Never signal `process.ppid`, an ancestor, PID `0`, `-1`, or `-process.pid`.
+  A test runs under agent shells, bridges, and the production backend, so an
+  ancestor is very likely production.
+- Treat a PID read from disk, a database, or a `ps` snapshot as unverified. A
+  PID can be reused as soon as its process exits. Before signalling, confirm
+  the start time (`/proc/<pid>/stat` field 22) and the exact command line, and
+  do nothing if either is unknown. `host-test-scheduler.ts` and
+  `local-server-reaper.ts` show the pattern.
+- Never use production state. Tests and fixtures use temporary data
+  directories, or an isolated `dev:test` profile for real-stack work. They must
+  not use `~/.config/orkestrator-v2`, its toolchain directory, its instance
+  descriptor, or its fixed ports. Code that "reclaims" a stale instance from a
+  data directory must never resolve to the real one in a test.
+- Bound tree walks to the root you own. Walk descendants from your own child,
+  never upwards and never from a shared parent such as `systemd --user`.
+  Orphans are re-parented there, not to PID 1, on this host.
+
+If the production backend dies with `signal SIGKILL` while tests run, the
+sender can be captured with an audit rule (requires `sudo`; lasts until reboot):
+
+```bash
+sudo auditctl -a always,exit -F arch=b64 -S kill -F a1=9 -k ork-sigkill
+sudo auditctl -a always,exit -F arch=b64 -S tkill -F a1=9 -k ork-sigkill
+sudo auditctl -a always,exit -F arch=b64 -S tgkill -F a2=9 -k ork-sigkill
+sudo auditctl -a always,exit -F arch=b64 -S pidfd_send_signal -F a1=9 -k ork-sigkill
+# Note the backend PID beforehand: pgrep -f resources/backend/main.js
+sudo ausearch -k ork-sigkill -i | grep -B8 'opid=<backend-pid>'
+sudo auditctl -D -k ork-sigkill   # remove the rules afterwards
+```
+
 ## Host capacity queue
 
 `mise run test`, `test:changed`, and `test:all` no longer reject a second suite

@@ -39,7 +39,7 @@ import {
 } from "./session-titles.js";
 import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
-import { codexAppServerConfigOverrides } from "./codex-config.js";
+import { codexAppServerConfigOverrides, codexCoordinatorSkillExtraRoots } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
@@ -791,6 +791,7 @@ function createCodexEngine(
       version: env.ORKESTRATOR_VERSION || "0.0.0",
     },
     configOverrides: codexAppServerConfigOverrides(env),
+    skillExtraRoots: codexCoordinatorSkillExtraRoots(env, getWorkingDirectory()),
   });
 }
 

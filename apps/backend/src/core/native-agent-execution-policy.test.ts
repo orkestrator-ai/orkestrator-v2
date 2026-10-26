@@ -357,6 +357,9 @@ describe("OpenCode execution policy translation", () => {
     const allowed = rules.filter((rule) => rule.action === "allow").map((rule) => rule.permission);
     expect(allowed).toContain("read");
     expect(allowed).toContain("grep");
+    // The user's and the project's skills, loaded as text; their scripts
+    // would still need `bash`.
+    expect(allowed).toContain("skill");
     expect(allowed).not.toContain("edit");
     expect(allowed).not.toContain("bash");
     expect(allowed).not.toContain("write");

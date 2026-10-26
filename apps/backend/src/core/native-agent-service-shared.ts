@@ -193,6 +193,15 @@ export type MailInjectDispatchOutcome =
   | { outcome: "unknown"; requestId: string; error: string }
   | { outcome: "rejected"; error: string };
 
+/** What became of mail offered to the turn that is running now (Deliver now). */
+export type MailSteerDispatchOutcome =
+  | { outcome: "applied" }
+  /** No turn is running: deliver it the ordinary way. */
+  | { outcome: "idle" }
+  /** Provably not delivered. */
+  | { outcome: "refused"; reason: "steer-unsupported" | "steer-refused" }
+  /** Handed to the provider without an answer: confirm it before resending. */
+  | { outcome: "unknown" };
 export interface AdoptNativeAgentSessionInput extends EnsureNativeAgentSessionInput {
   providerSessionId: string;
   expectedProviderSessionId?: string;

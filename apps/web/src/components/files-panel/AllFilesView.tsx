@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/context-menu";
 import type { FileNode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { mergeFileSubtrees } from "@/lib/file-subtrees";
 import { BoundedPathList } from "./BoundedPathList";
 import {
   collectAllFilePaths,
@@ -90,7 +91,13 @@ export function AllFilesView({
   movePending = false,
   onOpenFile,
 }: AllFilesViewProps = {}) {
-  const fileTree = useFilesPanelStore((state) => state.fileTree);
+  const boundedTree = useFilesPanelStore((state) => state.fileTree);
+  const fileSubtrees = useFilesPanelStore((state) => state.fileSubtrees);
+  // Directories the bounded tree truncated are read when expanded.
+  const fileTree = useMemo(
+    () => mergeFileSubtrees(boundedTree, fileSubtrees),
+    [boundedTree, fileSubtrees],
+  );
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);

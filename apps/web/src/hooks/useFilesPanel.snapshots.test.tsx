@@ -166,6 +166,39 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     expect(useFilesPanelStore.getState().fileTree.map((node) => node.path)).toEqual(["dir-2"]);
   });
 
+  test("tree revisions refresh expanded subtrees even when the bounded digest is unchanged", async () => {
+    useFilesPanelStore.setState({ activeTab: "all-files", expandedFolders: ["deferred"] });
+    treeSpy.mockImplementation(async () => ({
+      unchanged: false,
+      digest: "bounded",
+      value: [
+        { name: "deferred", path: "deferred", isDirectory: true, truncated: true, children: [] },
+      ],
+      view: stamp(treeRevision),
+    }));
+    const subtreeSpy = spyOn(backend, "getLocalFileSubtree").mockResolvedValue({
+      children: [],
+      truncated: false,
+    });
+    spies.push(subtreeSpy);
+    renderHook(() => useFilesPanel());
+    await flush();
+    const originalTree = useFilesPanelStore.getState().fileTree;
+    const reads = subtreeSpy.mock.calls.length;
+    subtreeSpy.mockResolvedValue({
+      children: [{ name: "fresh.txt", path: "deferred/fresh.txt", isDirectory: false }],
+      truncated: false,
+    });
+    treeRevision = 2;
+    announce();
+    await flush();
+    expect(useFilesPanelStore.getState().fileTree).toBe(originalTree);
+    expect(subtreeSpy.mock.calls.length).toBeGreaterThan(reads);
+    expect(useFilesPanelStore.getState().fileSubtrees.deferred?.children[0]?.name).toBe(
+      "fresh.txt",
+    );
+  });
+
   test("a retargeted lineage is re-read even at a lower revision", async () => {
     renderHook(() => useFilesPanel());
     await flush();

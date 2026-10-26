@@ -44,6 +44,7 @@ import type {
   NativeAgentDiscoveryUpdateInput,
   NativeAgentMessagePage,
   MailInjectDispatchOutcome,
+  MailSteerDispatchOutcome,
 } from "./native-agent-service-shared.js";
 import {
   BUILD_PIPELINE_AGENTS,
@@ -3058,7 +3059,7 @@ export class NativeAgentService {
   }
 
   async reconcileMailInject(
-    input: NativeAgentProjectionInput & { requestId: string },
+    input: NativeAgentProjectionInput & { requestId: string; steerRecovery?: boolean },
   ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
     const candidates = [input];
     const coordinatorId = coordinatorIdFromRuntimeId(input.environmentId);
@@ -3093,6 +3094,7 @@ export class NativeAgentService {
     let refused = false;
     let unresolved = false;
     for (const { candidate, key, session } of records) {
+      if (session?.retiredDispatch?.requestId === input.requestId) unresolved = true;
       if (session?.pendingDispatch?.requestId !== input.requestId) continue;
       if (session.pendingDispatch.mailRefused) refused = true;
       else if (
@@ -3102,7 +3104,14 @@ export class NativeAgentService {
       } else unresolved = true;
     }
     // A refusal in one identity cannot prove another identity's attempt unsent.
-    return refused && !unresolved ? "not-dispatched" : "unknown";
+    // A steer claim may never have entered ordinary dispatch. In recovery,
+    // absence of its durable ordinary record rules out a fallback send, but
+    // only alongside separate proof from the steer journal. An unsettled
+    // matching ordinary dispatch still blocks replay.
+    return !unresolved &&
+      (refused || (input.steerRecovery && records.some(({ session }) => session)))
+      ? "not-dispatched"
+      : "unknown";
   }
 
   async dispatchMailInject(
@@ -3210,6 +3219,127 @@ export class NativeAgentService {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Mail dispatch failed",
       };
+    }
+  }
+
+  /**
+   * Deliver mail into the turn that is running now, as the person's Deliver
+   * now asked, instead of waiting for that turn to end. It takes the same
+   * persisted path as a typed `/steer`: the backend-owned record is durable
+   * before the provider sees the text, so a steer left without an answer is
+   * confirmed through `reconcileMailSteer` and mail is still never delivered
+   * twice. `requestId` must be fresh for every attempt: the Claude bridge uses
+   * it as the message uuid and remembers every id it was offered.
+   */
+  async steerMailInject(
+    input: NativeAgentProjectionInput & { text: string; requestId: string },
+  ): Promise<MailSteerDispatchOutcome> {
+    const resolved = await this.resolveProjectionSession(input);
+    // A tab that was never prompted has no turn to steer.
+    if (!resolved) return { outcome: "idle" };
+    const { key, session, provider } = resolved;
+    if (
+      !nativeCapabilities(input.agent).actions?.steer ||
+      !provider.performSessionAction ||
+      !provider.activeSteerRun ||
+      !provider.steerSupported ||
+      !provider.steerStatus
+    ) {
+      return { outcome: "refused", reason: "steer-unsupported" };
+    }
+    // An unresolved delivery comes first; the ordinary path waits for it.
+    if (session.pendingDispatch || session.pendingSteer) {
+      return { outcome: "refused", reason: "steer-refused" };
+    }
+    if (!(await provider.steerSupported(session.providerSessionId).catch(() => false))) {
+      return { outcome: "refused", reason: "steer-unsupported" };
+    }
+    const active = await provider
+      .activeSteerRun(session.providerSessionId)
+      .catch(() => ({ state: "unknown" as const }));
+    if (active.state === "idle") return { outcome: "idle" };
+    if (active.state === "unsupported") return { outcome: "refused", reason: "steer-unsupported" };
+    if (active.state !== "running") return { outcome: "refused", reason: "steer-refused" };
+    const pending: PersistedNativeAgentPendingSteer = {
+      requestId: input.requestId,
+      text: input.text,
+      inputDigest: createHash("sha256").update(input.text).digest("hex"),
+      expectedRunId: active.runId,
+      state: "prepared",
+      createdAt: new Date().toISOString(),
+    };
+    let outcome: NativeAgentSessionActionOutcome;
+    try {
+      outcome = await this.dispatchPersistedSteer(
+        provider,
+        session.providerSessionId,
+        key,
+        pending,
+      );
+    } catch {
+      // The record is durable before the provider is called: without one the
+      // text never left, and with one its fate is the journal's to tell.
+      const latest = await this.storage.getNativeAgentSession(key).then(
+        (record) => record ?? null,
+        () => undefined,
+      );
+      const recorded =
+        latest === undefined ||
+        latest?.pendingSteer?.requestId === input.requestId ||
+        latest?.dispatchedRequestIds?.includes(input.requestId) === true;
+      outcome = recorded ? { outcome: "unknown" } : { outcome: "mismatch" };
+    } finally {
+      this.projections.invalidateProjection(key);
+    }
+    switch (outcome.outcome) {
+      case "applied":
+        return { outcome: "applied" };
+      case "unknown":
+        return { outcome: "unknown" };
+      // The turn ended between the check and the steer.
+      case "idle":
+        return { outcome: "idle" };
+      default:
+        return { outcome: "refused", reason: "steer-refused" };
+    }
+  }
+
+  /**
+   * Whether a mail steer reached the agent. Only evidence counts: the
+   * session's delivered history, its parked steer settled against the
+   * provider's steer journal, or that journal once the record is gone.
+   * Anything short of that is `unknown`, never "not sent".
+   */
+  async reconcileMailSteer(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      if (!session) return "unknown";
+      if (session.dispatchedRequestIds?.includes(input.requestId)) return "dispatched";
+      if (session.pendingSteer?.requestId === input.requestId) {
+        const settled = await this.settleAmbiguousSteer(input, key, input.requestId);
+        return settled === "dispatched"
+          ? "dispatched"
+          : settled === "absent"
+            ? "not-dispatched"
+            : "unknown";
+      }
+      const status = await (
+        await this.provider(input)
+      ).steerStatus?.(session.providerSessionId, input.requestId);
+      return status === "dispatched"
+        ? "dispatched"
+        : status === "absent"
+          ? "not-dispatched"
+          : "unknown";
+    } catch {
+      return "unknown";
     }
   }
 

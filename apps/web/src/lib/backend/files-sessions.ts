@@ -52,6 +52,13 @@ export interface FileNode {
   extension?: string;
 }
 
+/** One truncated tree directory, read when it is expanded. */
+export interface FileSubtree {
+  children: FileNode[];
+  /** The directory's own entries were not all listed. */
+  truncated: boolean;
+}
+
 /** File content with metadata */
 export interface FileContent {
   path: string;
@@ -153,6 +160,11 @@ export async function getFileTreeSnapshot(
     ...refreshArgs(options),
   });
   return normalizeConditionalArraySnapshot<FileNode>(response, "get_file_tree");
+}
+
+/** Read one truncated directory of a container's file tree */
+export async function getFileSubtree(containerId: string, directory: string): Promise<FileSubtree> {
+  return invoke<FileSubtree>("get_file_subtree", { containerId, directory });
 }
 
 /** Read a file from inside a container */
@@ -432,6 +444,14 @@ export async function getLocalFileTreeSnapshot(
     ...refreshArgs(options),
   });
   return normalizeConditionalArraySnapshot<FileNode>(response, "get_local_file_tree");
+}
+
+/** Read one truncated directory of a local environment's file tree */
+export async function getLocalFileSubtree(
+  worktreePath: string,
+  directory: string,
+): Promise<FileSubtree> {
+  return invoke<FileSubtree>("get_local_file_subtree", { worktreePath, directory });
 }
 
 /** Read a file from a local environment (worktree path) */

@@ -367,3 +367,11 @@ The integrated default suite timed out the stored-domain/repeated-range case at 
 - **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
 - **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
 - **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.
+
+## Resume cleanup coverage validation — 2026-10-25
+
+Original command: `mise run test:logged -- --name cleanup-repository -- mise run test`, with workspace/root/bridge/protocol worker reservations 4/1/2/1 and component browser validation running concurrently. Aggregate evidence is under the host temporary directory, `orkestrator-test-run.TabHxj/`.
+
+`container firewall policy > policy 2 narrows host access to named ports and records what it applied` timed out after 5,006.54 ms, with subprocess exit code null instead of zero. Root/support reported 3,415 passed, two failed and one between-test error across 162 files (515.96 s); the other failure and error belong to disk report case 0259.
+
+The complete unchanged owner passed: `mise run test:logged -- --name cleanup-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` (exit 0, 37.3 s). This confirms another shell-fixture deadline recurrence without establishing its cause. No firewall implementation, assertion, timeout or skip changed.

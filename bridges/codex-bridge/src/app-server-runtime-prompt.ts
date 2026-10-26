@@ -17,7 +17,7 @@ import type { AppServerEngine } from "./engine/app-server-engine.js";
 
 import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
 import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
-import { codexReadOnlyTurnPolicy } from "./codex-config.js";
+import { codexLoadsProjectSkills, codexReadOnlyTurnPolicy } from "./codex-config.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -248,7 +248,7 @@ export class CodexRuntimePrompt {
     if (input.command) {
       plan = await this.ctx.commandCatalogue.resolveSelected(
         input.command,
-        session.config.policy?.projectResources !== false,
+        codexLoadsProjectSkills(session.config.policy),
       );
       if (plan.kind === "refused") return commandRefusal(plan.message);
       if (plan.kind === "builtin" && input.outputSchema) {
@@ -322,7 +322,7 @@ export class CodexRuntimePrompt {
         interpretCommands && !input.outputSchema
           ? await this.ctx.commandCatalogue.resolveTyped(
               input.prompt,
-              session.config.policy?.projectResources !== false,
+              codexLoadsProjectSkills(session.config.policy),
             )
           : { kind: "text" };
     } else if (plan.kind === "skill") {
@@ -330,7 +330,7 @@ export class CodexRuntimePrompt {
       // the dead generation is withdrawn; re-validate against the live one.
       const revalidated = await this.ctx.commandCatalogue.resolveSelected(
         input.command!,
-        session.config.policy?.projectResources !== false,
+        codexLoadsProjectSkills(session.config.policy),
       );
       if (revalidated.kind === "refused") return commandRefusal(revalidated.message);
       plan = revalidated;
@@ -345,9 +345,7 @@ export class CodexRuntimePrompt {
     if (plan.kind === "builtin") {
       const response =
         plan.builtin === "help"
-          ? await this.ctx.commandCatalogue.helpText(
-              session.config.policy?.projectResources !== false,
-            )
+          ? await this.ctx.commandCatalogue.helpText(codexLoadsProjectSkills(session.config.policy))
           : await this.modelsListText(session);
       this.emitLocalResponse(session, input.prompt, response);
       return { ok: true, result: { status: "processing", requestId } };
@@ -372,7 +370,7 @@ export class CodexRuntimePrompt {
     if (plan.kind === "skill") {
       const unavailable = skillUnavailability(
         plan.binding,
-        session.config.policy?.projectResources !== false,
+        codexLoadsProjectSkills(session.config.policy),
       );
       if (unavailable) return commandRefusal(unavailable.message);
     }
@@ -401,7 +399,7 @@ export class CodexRuntimePrompt {
     const needsThreadReload = (config: EngineTurnConfig): boolean =>
       Boolean(input.workflowResultTool) ||
       context?.promptThreadConfig !== promptThreadConfig(config) ||
-      (config.policy?.projectResources === false &&
+      (!codexLoadsProjectSkills(config.policy) &&
         context?.projectSkillsRevision !== projectSkillsRevision);
     if (context && !context.materialized && needsThreadReload(promptConfig())) {
       // A thread that was never prompted has no rollout, so reloading it for
@@ -451,7 +449,7 @@ export class CodexRuntimePrompt {
     // Rebuild with fresh exclusions before certifying this turn's configuration.
     for (
       let attempt = 0;
-      turnConfig.policy?.projectResources === false &&
+      !codexLoadsProjectSkills(turnConfig.policy) &&
       projectSkillsRevision !== this.ctx.projectSkillsRevision;
       attempt += 1
     ) {
@@ -1391,7 +1389,7 @@ export class CodexRuntimePrompt {
       };
     }
     return this.ctx.commandCatalogue.list(
-      this.ctx.registry.getSession(sessionId)?.config.policy?.projectResources !== false,
+      codexLoadsProjectSkills(this.ctx.registry.getSession(sessionId)?.config.policy),
     );
   }
 

@@ -233,8 +233,10 @@ What each enforced platform actually does:
   refuses AskUserQuestion outright in `dontAsk`, so a coordinator could not ask
   the user anything. Then an allowlist that excludes every writing tool
   and WebFetch (and WebSearch unless research is on), `settingSources: []`, a private
-  `CLAUDE_CONFIG_DIR` holding only the credential, and a bridge-owned
-  `PreToolUse` hook. The hook is the real boundary for shell: it allows a fixed
+  `CLAUDE_CONFIG_DIR` holding only the credential, managed settings that run
+  no plugin or skill hook and no skill inline shell (see [Skills](#skills)),
+  and a bridge-owned `PreToolUse` hook. The hook is the real boundary for
+  shell: it allows a fixed
   list of reading commands and refuses pipes, redirection, substitution and
   chaining, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
   gawk's in-place and program options), path-qualified programs and the
@@ -344,6 +346,98 @@ Every coordinator bridge is launched with
 authority: the bridge replaces whatever policy a request body or a persisted
 record carries, so a permissive record cannot survive a restart and widen a live
 conversation.
+
+### Skills
+
+A coordinator can load and invoke the user's own skills and the project's,
+the ones a worker sees, so that a procedure such as this repository's
+`.claude/skills/release` is followed rather than improvised. A skill is
+instructions, but it can also carry parts that run or grant, so each platform
+loads skills only where those parts stay inside the boundary.
+
+**Claude.** With `settingSources: []` the pinned CLI (2.1.309) reads no
+skills directory at all: not `$CLAUDE_CONFIG_DIR/skills`, not `.claude/skills`,
+whatever the `skills` or `additionalDirectories` options say. Turning on the
+`user` or `project` source would also load that layer's hooks, permissions,
+`env`, MCP servers and CLAUDE.md, so the bridge hands each directory over
+through the one channel the CLI still honours, the inline plugin set
+(`coordinator-skills.ts`):
+
+- **Two generated plugins.** `user-skills` mirrors the directory a worker on
+  the active account reads (`<account home>/skills`, else
+  `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`), which the launcher names
+  in `ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR` because the bridge's own
+  `CLAUDE_CONFIG_DIR` is the private one. `project-skills` mirrors the
+  coordinator's own checkout's `.claude/skills`, the project's main checkout,
+  whether or not git tracks it. This repository ignores `.claude/`, so a skill
+  there that is not force-tracked reaches the coordinator but not a worker in
+  a worktree, which has only tracked files. Their skills are listed as
+  `user-skills:<name>` and `project-skills:<name>`. Worker launches never
+  inherit the variable, and a read-only review turn in a worker bridge loads
+  neither plugin.
+- **Mirrored, not linked.** Each `SKILL.md` is rewritten with only `name`,
+  `description`, `when_to_use`, `argument-hint`, `arguments`,
+  `disable-model-invocation`, `user-invocable` and `version`, parsed with
+  Bun's YAML parser and re-serialised as JSON scalars, so nothing of the
+  original syntax reaches the CLI's parser. Dropped are `hooks` (registered as
+  session hooks when the skill runs; a command hook runs outside the sandbox),
+  `allowed-tools` (granted without `canUseTool`), `context`/`agent`, `model`
+  and the rest. Frontmatter that does not parse skips the skill. Every other
+  file is a symbolic link to the original, so references and scripts stay
+  readable.
+- **Allowed by name.** The allowlist names each mirrored skill
+  (`Skill(project-skills:release)`). A skill from another inline plugin that
+  declares hooks or tool grants reached `canUseTool` in the probe, which
+  refuses it under the deny policy; the user can still type its slash
+  command.
+- **Nothing in a skill runs.** Every read-only turn passes `managedSettings:
+  { allowManagedHooksOnly: true, disableSkillShellExecution: true }`
+  (`claudeManagedSettings`), including the command-discovery probe. That
+  closes, for every inline plugin and not only the mirrors, three paths probed
+  on 2.1.309 that the `PreToolUse` hook never sees: a plugin's
+  `hooks/hooks.json` (its `SessionStart` and `UserPromptSubmit` command hooks
+  ran in a coordinator-shaped session), a skill's frontmatter hooks, and a
+  skill's `` !`cmd` ``, which runs before the model sees the skill and is
+  checked only against that skill's own `allowed-tools`: `allowed-tools:
+  Bash(touch:*)` plus `` !`touch x` `` wrote the checkout. The bridge's own
+  hooks are SDK callbacks, which `allowManagedHooksOnly` keeps.
+- **A grant cannot widen the tool set.** `allowed-tools` (on a typed slash
+  command of an unmirrored plugin skill, which skips the Skill tool's
+  permission check) grants without `canUseTool`, so a built-in the hook does
+  not name would run. The capability translation therefore also denies, by
+  name and in the hook, `EnterWorktree` and `ExitWorktree` (`file.write`),
+  `PowerShell` (`shell.mutate`: the hook vets Bash commands only) and
+  `RemoteTrigger` (`network`). Write and Edit were already denied by name,
+  and a granted Bash still goes through the hook, which refuses running a
+  skill's script (`bash scripts/x.sh`, `./x.sh` and path-qualified programs).
+  A subagent a skill starts runs under the same hooks, deny rules and
+  sandbox.
+- **Launch identity.** Each mirror is content-addressed
+  (`<plugin>-<digest>`), so adding, removing or editing a skill changes the
+  plugin path. The launch fingerprint and the discovery cache compare plugin
+  paths, so an idle warm CLI is replaced and one that still owes work refuses
+  the prompt with a `plugins` conflict until it finishes. The four previous
+  mirrors of each source stay for a CLI still running on one.
+
+The proof against the real CLI is
+`bun src/services/coordinator-skills.live-probe.ts` (claude-bridge; opt-in,
+billed, uses the caller's login), which runs a hostile skill both mirrored and raw, through
+the Skill tool and as a typed slash command, and reports that no hook, inline
+shell, Write, Bash `touch` or worktree ran while the mirrored skill loaded.
+
+**Other platforms.** Every coordinator loads the user's skills from its own
+platform's directories and the project's from the checkout, including the
+checkout's `.claude/skills`, so a project that keeps its procedures there (as
+this one does) is not invisible to a coordinator on another platform. What
+runs in a skill stays inside that platform's read-only boundary.
+
+| Platform | User skills | Project skills | How it holds |
+| --- | --- | --- | --- |
+| Codex | The account's `CODEX_HOME/skills`, which the launcher names in `ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR` because the coordinator's own `CODEX_HOME` is private, added with `skills/extraRoots/set` once per app-server generation; `~/.agents/skills`, which Codex lists from HOME | `.agents/skills` and `.codex/skills`, no longer disabled for a coordinator process (`codexLoadsProjectSkills`); `.claude/skills` as an extra root. The checkout stays pinned untrusted, so its config, hooks and MCP servers stay out | A Codex skill grants nothing; what it asks for runs as a command under the permission profile (no write, no network). The profile reads each user skill root and each skill it links to (`codexCoordinatorSkillReadRoots`): a link target is granted only when it holds a `SKILL.md` and is not HOME, `/` or an ancestor, and the checkout's own links are never followed. `features.skill_mcp_dependency_install` and `skill_env_var_dependency_prompt` are off. Proved by `live-coordinator-skills.test.ts` (no credits): the skills are listed and offered, a user skill is readable from a command, and a neighbouring file, the skill and the checkout stay unreadable or unwritable |
+| Cursor | `~/.cursor`, `~/.agents`, `~/.claude`, `~/.codex` and `~/.grok` skills, Cursor's own list | The same five directories under the checkout | The SDK has no skills-only switch (the `user` layer also brings `~/.cursor/mcp.json`), so the bridge hosts one read-only tool, `orkestrator-skills__load` (`coordinator-skills.ts`), beside the Orkestrator and research tools: its description lists the skills, and a call returns a `SKILL.md` or a file inside that skill. A directory counts as a skill only with a `SKILL.md` and not as HOME, `/` or an ancestor; a file outside the skill's own directory is refused. The allowlist and sandbox are unchanged. The list is read at attach |
+| OpenCode | OpenCode's own, `~/.claude` and `~/.agents` skills | `.opencode`, `.claude` and `.agents` skills | OpenCode discovers them itself; the `skill` permission is now allowed. On 1.19.4 it only returns the `SKILL.md` and a file list, and a shipped script still needs the denied `bash` |
+| Pi | `~/.pi/agent/skills` and `~/.agents/skills` (`noSkills: false` in a coordinator process) | `.pi/skills`, `.agents/skills` and `.claude/skills` as `additionalSkillPaths`, with the project still untrusted, so `.pi/` settings and extensions stay out | A Pi skill is markdown the model reads with `read`; extensions stay off and the read-only gate admits no tool that could run what a skill ships. `coordinator-skills.test.ts` (pi-bridge) runs it against the real SDK |
+| Grok | Loaded from `~/.grok`, `~/.claude` and installed plugins; the coordinator has no private home | Gap: only through Grok's own folder trust, which also loads the checkout's hooks and MCP servers. The per-process overlay (`GROK_CONFIG`) applies `models` but drops a `skills` section, so `skills.paths` can be set only in the user's own `~/.grok/config.toml` (probed on 1.0.67) | Advisory tier. A checkout the user trusted in Grok already loads its hooks and MCP servers in the coordinator, a gap that predates skills |
 
 ### Claude's sandbox on Linux
 
@@ -1002,6 +1096,20 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
 - research servers on the pinned OpenCode, with a real `opencode serve` and a
   local MCP server: `opencode-coordinator-research-live.test.ts`
+- coordinator skills on Codex against the real pinned app-server with a
+  loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
+  (codex-bridge); the extra roots, read grants and project-skill rule in
+  `codex-config.test.ts`, `app-server-engine.test.ts` and
+  `app-server-runtime-prompt.test.ts`; Pi's loader against the real SDK
+  (`coordinator-skills.test.ts`, pi-bridge); Cursor's hosted skill tool
+  (`coordinator-skills.test.ts`, `agent-session.test.ts`, cursor-bridge)
+- coordinator skills: the mirror and its frontmatter allowlist
+  (`coordinator-skills.test.ts`), the options a coordinator, a worker and a
+  worker's read-only review pass and the launch conflict a changed skill set
+  causes (`session-manager-coordinator-skills.test.ts`), the hook refusing
+  granted tools and skill scripts (`read-only-policy.test.ts`), all in
+  claude-bridge; the launcher naming the account's skills directory
+  (`agent-accounts-active.test.ts`, `commands-servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
   test:agent:coordinator` runs five scenarios per platform in a disposable

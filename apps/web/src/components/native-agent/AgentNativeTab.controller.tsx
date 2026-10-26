@@ -114,6 +114,7 @@ import {
   childBackgroundTasksByParent,
   normalizeNativeMessages,
   rowlessBackgroundTaskMessages,
+  withResumeCleanupNotices,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { hideMachineOutputText } from "@/lib/structured-review-messages";
@@ -902,12 +903,15 @@ export function SharedNativeAgentController({
     [environmentPrompts, tabId],
   );
   const transcriptMessages = useMemo(() => {
+    // Tasks Claude cleaned up on resume get one line in place of their rows.
+    const withNotices = withResumeCleanupNotices(
+      displayMessages,
+      projection?.backgroundTasks ?? [],
+    );
     const base =
-      backgroundTaskRows.length === 0
-        ? displayMessages
-        : [...displayMessages, ...backgroundTaskRows];
+      backgroundTaskRows.length === 0 ? withNotices : [...withNotices, ...backgroundTaskRows];
     return userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
-  }, [backgroundTaskRows, displayMessages, userCommands]);
+  }, [backgroundTaskRows, displayMessages, projection?.backgroundTasks, userCommands]);
   const agentActivityAnnouncement = useNativeAgentActivityAnnouncement(
     transcriptMessages,
     sessionKey,

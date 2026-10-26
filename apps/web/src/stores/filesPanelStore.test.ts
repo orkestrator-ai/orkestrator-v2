@@ -90,3 +90,83 @@ test("persisted state enforces target and tab bounds and ignores invalid contain
     expect(merge({ pullRequestTabs: invalid }, store.getState()).pullRequestTabs).toEqual({});
   }
 });
+
+const subtree = { children: [], truncated: false };
+
+function resetFolders() {
+  store.setState({
+    fileSubtreeKey: "A",
+    fileSubtrees: {},
+    loadingFolders: [],
+    folderLoadTokens: new Map(),
+    failedFolders: [],
+    expandedFolders: ["parent", "parent/child", "other"],
+  });
+  return store.getState();
+}
+
+test("collapse forgets descendant results, failures and pending requests without affecting siblings", () => {
+  const state = resetFolders();
+  const child = state.beginFolderLoad("A", "parent/child", false)!;
+  store.setState({
+    fileSubtrees: { parent: subtree, "parent/loaded": subtree, other: subtree },
+    failedFolders: ["parent/failed", "other/failed"],
+  });
+  state.setFolderExpanded("parent", false);
+  expect(store.getState().fileSubtrees).toEqual({ other: subtree });
+  expect(store.getState().failedFolders).toEqual(["other/failed"]);
+  expect(store.getState().loadingFolders).toEqual([]);
+  state.setFolderExpanded("parent", true);
+  const replacement = state.beginFolderLoad("A", "parent/child", false)!;
+  expect(replacement).toBeTruthy();
+  expect(state.finishFolderLoad("A", "parent/child", child, subtree)).toBe(false);
+  expect(store.getState().folderLoadTokens.get("parent/child")).toBe(replacement);
+});
+
+for (const oldFirst of [true, false]) {
+  test(`target A → B → A rejects obsolete completion (${oldFirst ? "old" : "new"} first)`, () => {
+    const state = resetFolders();
+    const old = state.beginFolderLoad("A", "parent", false)!;
+    state.resetFileSubtrees("B");
+    state.resetFileSubtrees("A");
+    const current = state.beginFolderLoad("A", "parent", false)!;
+    if (oldFirst) {
+      expect(state.finishFolderLoad("A", "parent", old, null)).toBe(false);
+      expect(store.getState().loadingFolders).toEqual(["parent"]);
+    }
+    expect(state.finishFolderLoad("A", "parent", current, subtree)).toBe(true);
+    expect(state.finishFolderLoad("A", "parent", old, null)).toBe(false);
+    expect(store.getState().fileSubtrees.parent).toEqual(subtree);
+    expect(store.getState().failedFolders).toEqual([]);
+  });
+}
+
+for (const path of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+  test(`loads and stores the valid folder name ${path}`, () => {
+    const state = resetFolders();
+    state.setFolderExpanded(path, true);
+    const token = state.beginFolderLoad("A", path, false)!;
+    expect(typeof token).toBe("symbol");
+    state.finishFolderLoad("A", path, token, subtree);
+    expect(Object.hasOwn(store.getState().fileSubtrees, path)).toBe(true);
+    expect(store.getState().fileSubtrees[path]).toEqual(subtree);
+    expect(state.beginFolderLoad("A", path, false)).toBeNull();
+  });
+}
+
+test("load guards deduplicate, failures preserve contents, and retry allows a fresh read", () => {
+  const state = resetFolders();
+  expect(state.beginFolderLoad("B", "parent", true)).toBeNull();
+  const first = state.beginFolderLoad("A", "parent", false)!;
+  expect(state.beginFolderLoad("A", "parent", true)).toBeNull();
+  state.finishFolderLoad("A", "parent", first, subtree);
+  expect(state.beginFolderLoad("A", "parent", false)).toBeNull();
+  const refresh = state.beginFolderLoad("A", "parent", true)!;
+  state.finishFolderLoad("A", "parent", refresh, null);
+  expect(store.getState().fileSubtrees.parent).toEqual(subtree);
+  expect(state.beginFolderLoad("A", "parent", false)).toBeNull();
+  state.retryFolderLoad("parent");
+  const retry = state.beginFolderLoad("A", "parent", false)!;
+  state.finishFolderLoad("A", "parent", retry, subtree);
+  expect(store.getState().failedFolders).toEqual([]);
+});

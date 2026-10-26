@@ -25,11 +25,11 @@ import type { WorkAdmissionPool } from "./work-admission.js";
 
 /**
  * Version of what a tree walk returns for a root: exclusions (`.git`,
- * `node_modules`), the node cap, symlink handling and node shape. Part of the
- * ad hoc cache identity so an entry cannot be served across a policy change;
- * bump it with any such change.
+ * `node_modules`), deferred directories (`.turbo`), the node cap, symlink handling
+ * and node shape. Part of the ad hoc cache identity so an entry cannot be served
+ * across a policy change; bump it with any such change.
  */
-export const FILE_TREE_POLICY_VERSION = 1;
+export const FILE_TREE_POLICY_VERSION = 2;
 
 export interface WorktreeLookup {
   worktreePath?: string;

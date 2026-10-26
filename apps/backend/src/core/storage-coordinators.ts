@@ -20,6 +20,15 @@ import type { DraftsRepository } from "./storage-drafts.js";
 const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
+/**
+ * Every coordinator's staged attachments, under the application data
+ * directory. Only the backend writes here (`writeCoordinatorAttachment`), so
+ * the renderer may read it back to preview an image the user pasted.
+ */
+export function coordinatorAttachmentsRoot(dataDir: string): string {
+  return path.join(dataDir, "coordinator-attachments");
+}
+
 export class CoordinatorsRepository {
   constructor(
     private readonly context: StorageContext,
@@ -622,8 +631,7 @@ export class CoordinatorsRepository {
    */
   coordinatorAttachmentDirectory(coordinatorId: string, conversationId: string): string {
     return path.join(
-      this.context.dataDir,
-      "coordinator-attachments",
+      coordinatorAttachmentsRoot(this.context.dataDir),
       coordinatorId,
       conversationId,
     );
@@ -642,7 +650,7 @@ export class CoordinatorsRepository {
     coordinatorId: string,
     retainedConversationIds: ReadonlySet<string>,
   ): Promise<void> {
-    const root = path.join(this.context.dataDir, "coordinator-attachments", coordinatorId);
+    const root = path.join(coordinatorAttachmentsRoot(this.context.dataDir), coordinatorId);
     const entries = await fs.readdir(root, { withFileTypes: true }).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -690,7 +698,7 @@ export class CoordinatorsRepository {
     });
     if (coordinatorId) {
       await Promise.all([
-        fs.rm(path.join(this.context.dataDir, "coordinator-attachments", coordinatorId), {
+        fs.rm(path.join(coordinatorAttachmentsRoot(this.context.dataDir), coordinatorId), {
           recursive: true,
           force: true,
         }),

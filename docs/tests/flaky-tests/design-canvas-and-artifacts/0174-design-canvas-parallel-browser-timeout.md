@@ -235,6 +235,12 @@ Evidence: host temporary directory
 `output/playwright/test-results/DesignCanvas-canvas-edits--cfd2e--events-conflict-and-reload-mobile-chromium/`.
 No canvas implementation, assertion, timeout or skip changed.
 
+## Resume cleanup coverage validation — 2026-10-25
+
+The mobile replacement-iframe assertion exceeded the 30 s test deadline in the five-worker component run. Both unchanged owner viewport cases passed in the sequential one-worker owner rerun.
+
+The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.
+
 ## Root cause and fix — 2026-10-25
 
 Reproduced without host load through `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE`

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
 
 import {
   activeAgentAccountShellEnvironment,
@@ -333,6 +334,27 @@ describe("applyCoordinatorClaudeAccount", () => {
     expect(account).toEqual({ accountId: "default" });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("profile");
     expect(JSON.stringify(env)).not.toContain("profile-r");
+    // The profile's skills, as a worker on it reads them, not the private home's.
+    expect(env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV]).toBe(path.join(profileDir, "skills"));
+    expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(root, "coordinator", "profile"));
+  });
+
+  test("names the active account's skills directory, which a worker on it reads", async () => {
+    await activate("claude");
+    const coordinatorHome = path.join(root, "coordinator", "account-skills");
+    const env: NodeJS.ProcessEnv = { CLAUDE_CONFIG_DIR: path.join(root, "inherited") };
+    await applyCoordinatorClaudeAccount(
+      context,
+      coordinatorHome,
+      env,
+      prepareCoordinatorClaudeHome,
+      async () => undefined,
+      noKeychain,
+    );
+    expect(env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV]).toBe(
+      path.join(accountHome("claude"), "skills"),
+    );
+    expect(env.CLAUDE_CONFIG_DIR).toBe(coordinatorHome);
   });
 
   test("an agent-test profile without a grant never reads the host login", async () => {

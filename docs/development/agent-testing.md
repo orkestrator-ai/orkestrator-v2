@@ -425,6 +425,21 @@ seeds an empty `.claude.json` onboarding marker in the profile's isolated HOME
 if it is absent, and removes only the marker it created during cleanup. This
 does not authenticate Claude or modify the host's configuration.
 
+Before stopping that profile, you can also run the live mail scenario:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-build-steer ORKESTRATOR_AGENT_TEST_REVIEW=1 \
+  mise run test:logged -- --name mail-steer-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/browser-gateway.spec.ts --grep 'agent mail Deliver now steers'
+```
+
+It releases mail from the conversation's Deliver now action into a running
+Codex turn, checks that one steer UUID joins the existing session's history,
+and verifies the mail's file effect while another environment is active.
+Reloading must retain the delivered status without sending the carrier again.
+The native mail-steer suite separately exercises a turn changing between the
+active-run lookup and the provider's check of `expectedRunId`.
+
 The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
 opt-in and uses the host's OpenCode credentials. No fixed default model ships,
 so without a pin the native-tab case starts on the default your connected

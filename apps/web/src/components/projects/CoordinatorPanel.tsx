@@ -490,12 +490,21 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       : null;
   // Either half is enough: a turn that has started, or a message already in the
   // transcript. A slow first read shows neither, which is precisely when the
-  // prompt still has to be held.
+  // prompt still has to be held. Only phases a turn produces count: the first
+  // read of a new session is the backend's `recovering` placeholder while the
+  // provider mapping settles, and an `error` with no transcript is a failed
+  // start. Releasing on either dropped the prompt before it was ever sent.
   const launchObserved = useNativeAgentProjectionStore((state) => {
     if (!launchSessionKey) return false;
     const projection = state.projections.get(launchSessionKey);
     if (!projection) return false;
-    return projection.turn.phase !== "idle" || projection.messages.length > 0;
+    const phase = projection.turn.phase;
+    return (
+      phase === "running" ||
+      phase === "blocked" ||
+      phase === "cancelling" ||
+      projection.messages.length > 0
+    );
   });
   const coordinatorTurnActive =
     selectedTurnPhase === "running" ||

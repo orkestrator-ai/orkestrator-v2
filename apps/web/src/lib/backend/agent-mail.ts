@@ -138,6 +138,19 @@ export function retryAgentMailInject(
   return invoke("retry_agent_mail_inject", { environmentId, tabId, messageId });
 }
 
+/**
+ * Deliver one message now. A recipient mid-turn has it steered into that turn
+ * when its agent can take it; otherwise it is delivered when the turn ends.
+ * Resolves after the attempt, with the message as it then stands.
+ */
+export function deliverAgentMailNow(
+  environmentId: string,
+  tabId: string,
+  messageId: string,
+): Promise<AgentMailMessage> {
+  return invoke("retry_agent_mail_inject", { environmentId, tabId, messageId, now: true });
+}
+
 export function discardAgentMailInject(
   environmentId: string,
   tabId: string,

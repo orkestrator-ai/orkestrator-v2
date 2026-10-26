@@ -12,6 +12,7 @@ import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
 import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
+import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
@@ -19,6 +20,7 @@ import type { TabInfo } from "@/types/paneLayout";
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
 const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
+const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
@@ -92,6 +94,11 @@ mock.module("@/components/federation/RealmTitleBar", () => ({
   useRealmPanelDismiss: () => undefined,
 }));
 
+// Observable as a slot: the banner's View opens it in whichever layout is shown.
+mock.module("@/components/agent-mail/AgentMailPanel", () => ({
+  AgentMailPanel: () => <div data-testid="agent-mail-panel-host" />,
+}));
+
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useMediaQuery: () => isMobile,
@@ -137,6 +144,7 @@ afterAll(() => {
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
   mock.module("@/components/federation/RealmTitleBar", () => realRealmTitleBarSnapshot);
+  mock.module("@/components/agent-mail/AgentMailPanel", () => realAgentMailPanelSnapshot);
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {
@@ -341,6 +349,19 @@ describe("AppShell", () => {
       expect(screen.getByTestId("realm-title-bar-panels")).toBeTruthy();
       expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
       expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
+    } finally {
+      happyDOM.setURL(originalHref);
+    }
+  });
+
+  test("a realm hosts the messages panel its tabs' mail banners open", () => {
+    isMobile = false;
+    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+    const originalHref = window.location.href;
+    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
+    try {
+      render(<AppShell>Workspace</AppShell>);
+      expect(screen.getByTestId("agent-mail-panel-host")).toBeTruthy();
     } finally {
       happyDOM.setURL(originalHref);
     }

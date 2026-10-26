@@ -489,6 +489,19 @@ export interface SessionState {
    */
   interruption?: "restart";
   /**
+   * The dispatch request id of the turn `interruption` cut short, when known.
+   * Status is per session, so this lets a workflow tell the notice from a newer
+   * request whose turn has not started yet. Cleared with `interruption`.
+   */
+  interruptedRequestId?: string;
+  /**
+   * The dispatch request id of the latest turn the SDK took, written into the
+   * turn-in-flight mark so a later process can name the request a restart cut.
+   */
+  turnInFlightRequestId?: string;
+  /** The request id the mark on disk names, so a new turn knows to rewrite it. */
+  turnInFlightMarkRequestId?: string;
+  /**
    * Whether this process believes the preferences file holds a turn-in-flight
    * mark for the session, so the mark is written and cleared once per edge.
    */

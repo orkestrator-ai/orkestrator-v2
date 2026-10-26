@@ -42,6 +42,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "BUN_INSTALL",
   "CI",
   "COLORTERM",
+  // Cursor's producer trim threshold (`bridges/cursor-bridge/src/config.ts`).
+  // Local bridges inherit the backend's environment, so this lets an isolated
+  // profile reach the bound in a short qualification run. A size, never a
+  // credential.
+  "CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES",
   // Where the Docker daemon is, not who may talk to it. Stripping these sends
   // every `docker` call to the built-in default context, which is wrong for
   // Colima, Rancher Desktop, rootless Podman, a remote daemon, and Docker

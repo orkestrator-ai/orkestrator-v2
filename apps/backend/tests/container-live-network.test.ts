@@ -16,6 +16,7 @@ import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { restartRuntime, startRuntime } from "./container-live-start";
+import { removeLabelledResources } from "./container-live-cleanup";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -49,17 +50,9 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!ENABLED) return;
   for (const server of servers) server.stop(true);
-  const ids = (await docker(["ps", "-aq", "--filter", `label=orkestrator-owner=${owner}`]))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  const networks = (
-    await docker(["network", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
+  expect(leftovers).toEqual([]);
   // Removing containers takes several seconds on a loaded host; the default
   // hook timeout would abandon the cleanup part-way and leak the networks.
 }, 180_000);
@@ -468,7 +461,7 @@ describe("C24 one environment at its CPU limit leaves another usable", () => {
       expect(busySample?.cpuCores).not.toBeNull();
       // Held to its one-core budget (with sampling slack), not eight cores.
       expect(busySample!.cpuCores!).toBeLessThan(1.3);
-      await docker(["rm", "-f", ...ids]);
+      for (const id of ids) await docker(["rm", "-f", id]);
     },
     LIVE_TIMEOUT_MS,
   );

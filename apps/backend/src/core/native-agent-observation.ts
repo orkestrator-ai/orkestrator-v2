@@ -616,6 +616,16 @@ export class NativeAgentObservationBroker {
     this.wakes["provider-generation"] += 1;
   }
 
+  /**
+   * Every provider group of one environment lost its bridge (its runtime
+   * stopped): reads in flight against any of them become inert.
+   */
+  replaceEnvironmentGenerations(environmentId: string): void {
+    for (const groupKey of Array.from(this.groups.keys())) {
+      if (groupKeyEnvironmentId(groupKey) === environmentId) this.replaceGroupGeneration(groupKey);
+    }
+  }
+
   isGroupDue(groupKey: string): boolean {
     const state = this.groups.get(groupKey);
     return !state || state.nextDueAt <= this.now();

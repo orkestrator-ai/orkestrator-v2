@@ -159,6 +159,17 @@ describe("journal state transitions", () => {
     });
   });
 
+  test("names the request that started a turn while it holds the record", async () => {
+    const store = journal();
+    await store.markPrepared({ requestId: "req-1", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markAccepted("req-1", { threadId: "t1", turnId: "turn-1" });
+    await store.markPrepared({ requestId: "req-2", bridgeSessionId: "s1", threadId: "t1" });
+
+    expect(store.requestIdForTurn("turn-1")).toBe("req-1");
+    // A prepared record has no turn yet, and an unknown turn names nothing.
+    expect(store.requestIdForTurn("turn-2")).toBeUndefined();
+  });
+
   test("retryable records can be dispatched again and are not unresolved", async () => {
     const store = journal();
     await store.markPrepared({ requestId: "retry", bridgeSessionId: "s1", threadId: "t1" });

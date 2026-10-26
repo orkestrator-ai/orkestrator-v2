@@ -18,7 +18,11 @@ the platforms and providers still waiting for evidence are in
   qualification image.
 - Every resource a suite creates carries a per-run label and an owner label
   derived from a private temporary data directory; `afterAll` removes exactly
-  those resources. Never prune, globally or by owner.
+  those resources, one per call, and fails if any is left
+  (`removeLabelledResources` in `apps/backend/tests/container-live-cleanup.ts`).
+  Docker Desktop 4.95 intermittently answered a multi-argument `docker rm -f`
+  or `docker volume rm` under load with `404 page not found`, which a single
+  call that ignored errors leaked silently. Never prune, globally or by owner.
 - Synthetic file, network and lifecycle scenarios need no credentials.
   Provider runs use only an authorized agent-test profile's credential
   sources, and one provider's success never qualifies another.

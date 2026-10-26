@@ -930,9 +930,13 @@ user's own credentials, so:
   `defaultModel` in `settings.json`, what `/model` writes) when a signed-in
   provider serves it, the way `pi` itself starts, and only then on the
   catalogue's first model. A login can refuse a model its provider lists, so
-  the first model is a last resort. An agent-test profile also receives the
-  host's saved default, which it uses when its own settings name no default
-  that a signed-in provider serves. `/global/models` marks that starting model
+  the first model is a last resort, and a ChatGPT subscription login (under
+  `openai`, or the legacy `openai-codex`) whose catalogue starts the list
+  starts instead on the newest model in pi-ai's ChatGPT-backend catalogue
+  (`chatGptLoginModelIds` in `bridges/pi-bridge/src/models.ts`). An
+  agent-test profile also receives the host's saved default, which it uses
+  when its own settings name no default that a signed-in provider serves.
+  `/global/models` marks the first available saved or profile default
   `sessionDefault` (`markSessionDefault` in `models.ts`; global settings only,
   as no session asks), and every launch default that has no saved model (Multi
   Review rows, the launch dialogs' `firstModelFor`) picks the marked row before
@@ -1098,6 +1102,25 @@ session, under a fresh request id and result slot
     that error (`errorClass: "process_killed_by_signal"`, pinned in
     `sdk-compatibility.test.ts`). A non-zero exit is not a restart, because it
     is as likely a launch or sign-in fault.
+
+  Both bridges also name the request the restart cut short
+  (`interruptedRequestId`): Codex from its dispatch journal record for the
+  interrupted turn, Claude from the request id the `turnInFlight` mark (or the
+  killed turn) carries. Status is per session, so until the continuation's
+  turn starts the notice still describes the earlier request; given the
+  watched request id, `readProviderStatus` reads a notice that names another
+  request, while the provider's dispatch journal reports the watched one
+  accepted and unfinished (`pending`), as "this request's turn has not
+  settled" (`idle`, `turnSettled: false`) instead of a failure. The Claude
+  and Codex `/dispatch` routes add `pending: true` beside `dispatched` for a
+  request still in flight (Claude `processing`, a Codex `accepted` journal
+  record); a finished request stays plain `dispatched`, and older backends
+  read either as `dispatched`. The confirmation matters both ways: a name can
+  be stale (Claude rewrites the mark after the turn starts, so a bridge killed
+  in between restores the previous request's name, and a restarted bridge no
+  longer holds the request it lost), and a finished watched request must not
+  mask a later turn's restart. A bridge or mark that predates either field
+  names nothing, and without both the notice is taken at face value.
 
   The other bridges report none yet, so their cut-short turns fail as before.
   A step or reviewer whose bridge is unreachable keeps its state and

@@ -17,6 +17,7 @@ on:
       - "apps/backend/tests/container-lifecycle-fixtures.ts"
       - "apps/backend/tests/container-live-rebuild-*.ts"
       - "apps/backend/tests/container-live-workspace.ts"
+      - "apps/backend/tests/container-live-cleanup.ts"
       - "apps/backend/tests/container-xattr-fixture.js"
       - "apps/backend/tests/claude-state-signal-docker.test.ts"
       - "apps/backend/tests/container-worktree-signal-docker.test.ts"

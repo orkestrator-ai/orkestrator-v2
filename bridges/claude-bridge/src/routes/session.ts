@@ -355,7 +355,14 @@ session.get("/:id", async (c) => {
     // Structured, so a workflow continues the turn without matching text.
     // Only beside the failure it explains; the next turn clears it.
     ...(sessionData.status === "error" && sessionData.interruption
-      ? { interruption: sessionData.interruption }
+      ? {
+          interruption: sessionData.interruption,
+          // The request it cut short, so a workflow does not read the notice
+          // as the outcome of a newer request that has not started yet.
+          ...(sessionData.interruptedRequestId
+            ? { interruptedRequestId: sessionData.interruptedRequestId }
+            : {}),
+        }
       : {}),
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
@@ -665,7 +672,9 @@ session.get("/:id/messages", async (c) => {
 });
 
 // `GET /:id/transcript` and its detail and page reads (`session-transcript.ts`).
-registerSessionTranscriptRoutes(session, TRANSCRIPT_GENERATION);
+registerSessionTranscriptRoutes(session, TRANSCRIPT_GENERATION, (id) =>
+  resolveSession(id, "Failed to load session transcript"),
+);
 
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {
@@ -1273,12 +1282,14 @@ session.get("/:id/runtime-health", (c) => {
  * before `/:id/...` catch-alls for the same reason.
  */
 session.get("/:id/dispatch", async (c) => {
-  const answer = (dispatch: BridgePromptDispatchStatus) => c.json({ dispatch });
+  const answer = (dispatch: BridgePromptDispatchStatus, pending?: boolean) =>
+    c.json({ dispatch, ...(pending !== undefined ? { pending } : {}) });
   const requestId = c.req.query("requestId")?.trim();
   if (!requestId) return answer("unknown");
   const id = c.req.param("id");
   const state = getPromptDispatchState(id, requestId);
-  if (state === "processing" || state === "already-processed") return answer("dispatched");
+  if (state === "processing" || state === "already-processed")
+    return answer("dispatched", state === "processing");
   if (state === "new") {
     return answer(restoredDispatchClaimLost(peekSession(id), requestId) ? "lost" : "unknown");
   }

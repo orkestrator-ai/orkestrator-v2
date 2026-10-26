@@ -53,6 +53,7 @@ import {
   DOCKER_LABEL_ENVIRONMENT_NAME,
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
+import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { createEnvironment } from "./storage.js";
 import {
@@ -102,14 +103,7 @@ export function dockerUnavailableReason(error: unknown): DockerUnavailableReason
   ) {
     return "permission-denied";
   }
-  if (
-    /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect|failed to connect to the docker api|connect: no such file or directory/i.test(
-      message,
-    )
-  ) {
-    return "daemon-unavailable";
-  }
-  return "unknown";
+  return isDockerDaemonUnreachable(message) ? "daemon-unavailable" : "unknown";
 }
 
 export async function checkDockerAvailability(

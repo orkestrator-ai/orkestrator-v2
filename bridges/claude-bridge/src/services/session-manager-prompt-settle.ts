@@ -222,6 +222,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.abortController = turn.beforeStartup.abortController;
     session.error = turn.beforeStartup.error;
     session.interruption = turn.beforeStartup.interruption;
+    session.interruptedRequestId = turn.beforeStartup.interruptedRequestId;
     session.inProgressUsage = turn.beforeStartup.inProgressUsage;
     session.inProgressUsageGeneration = turn.beforeStartup.inProgressUsageGeneration;
     const index = session.messages.indexOf(userMessage);
@@ -260,6 +261,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.turnStartedAt = undefined;
     session.error = failure;
     session.interruption = killedBy ? "restart" : undefined;
+    session.interruptedRequestId = killedBy ? turn.dispatchRequestId : undefined;
     session.abortController = undefined;
     session.completionBlockedByBackgroundTasks = false;
     cleanupPendingInteractions(sessionId);

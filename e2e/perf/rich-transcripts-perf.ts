@@ -21,10 +21,11 @@
  *  - renderer mount counts, highlighter invocations, backend calls per phase;
  *  - covered: another tab in front for 10 s while the response keeps
  *    streaming, then the page brought back: time to the first frame, long tasks
- *    and long animation frames in the 3 s after. Headless Chrome keeps a
- *    covered page `visible` (and ignores minimizing and lifecycle freezing), so
- *    only `--headed` measures a truly hidden and resumed document; the report
- *    records the visibility the page saw;
+ *    and long animation frames in the 3 s after. A page Playwright drives
+ *    stays `visible` with timers at full rate when covered, minimized or
+ *    frozen, headless or `--headed`, because a DevTools session is attached to
+ *    it, so this phase never measures a hidden document; the report records
+ *    the visibility the page saw. `hidden-resume-perf.ts` measures one;
  *  - cycles: N scroll/expand/reopen cycles, sampling settled cache entries and
  *    bytes, queued work, view-state entries, live workers, DOM nodes and the
  *    post-GC JS heap, then checking they converge within FRONTEND_RENDER_POLICY.

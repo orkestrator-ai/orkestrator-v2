@@ -26,6 +26,7 @@ const {
   bridgeInstanceIdForTesting,
   claudeProcessKilledMessage,
   killedClaudeProcessSignal,
+  syncTurnInFlightMark,
 } = await import("./session-manager-turn-interruption.js");
 const { closeSessionRetainingHistory } = await import("./session-manager-close.js");
 
@@ -34,13 +35,15 @@ async function storedMark(
   expected: "present" | "absent",
   timeoutMs = 2_000,
   owner?: string,
+  requestId?: string,
 ): Promise<ClaudeTurnInFlightMark | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const mark = (await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight;
     if (
       (mark !== undefined) === (expected === "present") &&
-      (!owner || mark?.bridgeInstanceId === owner)
+      (!owner || mark?.bridgeInstanceId === owner) &&
+      (!requestId || mark?.requestId === requestId)
     )
       return mark;
     if (Date.now() > deadline) throw new Error(`Timed out waiting for the mark to be ${expected}`);
@@ -56,12 +59,13 @@ async function deadPid(): Promise<number> {
 }
 
 /** What a bridge process that died mid-turn leaves behind. */
-async function leaveMarkFromDeadBridge(pid?: number): Promise<void> {
+async function leaveMarkFromDeadBridge(pid?: number, requestId?: string): Promise<void> {
   await updateSessionPreferences(PERSISTED_SDK_ID, {
     turnInFlight: {
       bridgeInstanceId: "a-bridge-that-died",
       pid: pid ?? (await deadPid()),
       startedAt: Date.now() - 60_000,
+      ...(requestId ? { requestId } : {}),
     },
   });
 }
@@ -79,6 +83,37 @@ function killedBySignal(signal: string): Error {
 }
 
 describe("turn-in-flight mark", () => {
+  test("a new turn renames the mark this process already owns", async () => {
+    await withTemporaryClaudeHome("claude-turn-mark-rename-", async () => {
+      const session = await materializePersistedSession();
+      session.status = "running";
+      try {
+        syncTurnInFlightMark(session, { started: true, requestId: "first-turn" });
+        const first = await storedMark(
+          "present",
+          2_000,
+          bridgeInstanceIdForTesting(),
+          "first-turn",
+        );
+        expect(first?.requestId).toBe("first-turn");
+        expect(session.turnInFlightMarkOwned).toBe(true);
+
+        syncTurnInFlightMark(session, { started: true, requestId: "new-turn" });
+        const next = await storedMark("present", 2_000, bridgeInstanceIdForTesting(), "new-turn");
+        expect(next).toMatchObject({
+          bridgeInstanceId: first!.bridgeInstanceId,
+          pid: process.pid,
+          requestId: "new-turn",
+        });
+        expect(session.turnInFlightMarkRequestId).toBe("new-turn");
+      } finally {
+        session.status = "idle";
+        syncTurnInFlightMark(session);
+        await storedMark("absent");
+      }
+    });
+  });
+
   test("is written while a turn runs and cleared when it completes", async () => {
     await withTemporaryClaudeHome("claude-turn-mark-", async () => {
       const state = await materializePersistedSession();
@@ -88,6 +123,8 @@ describe("turn-in-flight mark", () => {
       const mark = await storedMark("present");
       expect(mark?.bridgeInstanceId).toBe(bridgeInstanceIdForTesting());
       expect(mark?.pid).toBe(process.pid);
+      // Names the turn's request, so a later process can too.
+      expect(mark?.requestId).toBe("mark-turn");
 
       call.push({ type: "result", subtype: "success", result: "done" });
       call.finish();
@@ -149,12 +186,14 @@ describe("turn-in-flight mark", () => {
 describe("restoring a session a restart cut short", () => {
   test("reports the turn failed with interruption restart, then a new turn continues it", async () => {
     await withTemporaryClaudeHome("claude-turn-restored-", async () => {
-      await leaveMarkFromDeadBridge();
+      await leaveMarkFromDeadBridge(undefined, "cut-short");
       const restored = await materializePersistedSession();
       expect(restored).toMatchObject({
         status: "error",
         error: CLAUDE_RESTARTED_MID_TURN_MESSAGE,
         interruption: "restart",
+        // The request the restart cut short, not whichever one asks next.
+        interruptedRequestId: "cut-short",
       });
 
       // A second restart before anything continued it still reports it.
@@ -170,10 +209,12 @@ describe("restoring a session a restart cut short", () => {
       // The continuation is the turn now; nothing explains a failure any more.
       expect(continued.status).toBe("running");
       expect(continued.interruption).toBeUndefined();
+      expect(continued.interruptedRequestId).toBeUndefined();
       expect(continued.error).toBeUndefined();
       // Still marked while it runs: a restart now cuts the continuation short.
       const mark = await storedMark("present", 2_000, bridgeInstanceIdForTesting());
       expect(mark?.pid).toBe(process.pid);
+      expect(mark?.requestId).toBe("continuation");
       // A second bridge has a different instance id and pid, but sees our live
       // process as the owner of this continuation.
       const observer = Bun.spawn(
@@ -225,10 +266,13 @@ describe("restoring a session a restart cut short", () => {
     await withTemporaryClaudeHome("claude-turn-restored-pid-", async () => {
       // Pids repeat across container restarts; the instance id tells them apart.
       await leaveMarkFromDeadBridge(process.pid);
-      expect(await materializePersistedSession()).toMatchObject({
+      const restored = await materializePersistedSession();
+      expect(restored).toMatchObject({
         status: "error",
         interruption: "restart",
       });
+      // A mark from a bridge that predates request ids names none.
+      expect(restored.interruptedRequestId).toBeUndefined();
     });
   });
 
@@ -257,6 +301,22 @@ describe("restoring a session a restart cut short", () => {
       const restored = await materializePersistedSession();
       expect(restored.status).toBe("idle");
       expect(restored.interruption).toBeUndefined();
+    });
+  });
+
+  test("drops only a malformed request id from an otherwise valid mark", async () => {
+    await withTemporaryClaudeHome("claude-turn-restored-bad-request-", async () => {
+      await updateSessionPreferences(PERSISTED_SDK_ID, {
+        turnInFlight: {
+          bridgeInstanceId: "a-bridge-that-died",
+          pid: await deadPid(),
+          startedAt: 1,
+          requestId: "x".repeat(201),
+        },
+      });
+      const restored = await materializePersistedSession();
+      expect(restored.interruption).toBe("restart");
+      expect(restored.interruptedRequestId).toBeUndefined();
     });
   });
 
@@ -290,6 +350,7 @@ describe("a Claude Code process killed under the turn", () => {
         status: "error",
         error: claudeProcessKilledMessage("SIGKILL"),
         interruption: "restart",
+        interruptedRequestId: "killed-turn",
       });
       await waitFor(() => failed.claudeRuntime === undefined);
       // A bridge restart before the continuation still reports it.
@@ -386,8 +447,12 @@ test.each(["completed", "stopped", "killed"] as const)(
         call.fail(killedBySignal("SIGKILL"));
         await firstPrompt.catch(() => {});
         await waitFor(() => session.claudeRuntime === undefined);
-        expect(session).toMatchObject({ status: "error", interruption: "restart" });
-        expect(await storedMark("present")).toBeDefined();
+        expect(session).toMatchObject({
+          status: "error",
+          interruption: "restart",
+          interruptedRequestId: "background-request",
+        });
+        expect(await storedMark("present")).toMatchObject({ requestId: "background-request" });
       } else if (outcome === "stopped") {
         expect(abortSession(session.id)).toBe(true);
         await firstPrompt;

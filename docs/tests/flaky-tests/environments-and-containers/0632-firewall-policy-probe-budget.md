@@ -102,3 +102,18 @@ The broad run and complete unchanged owner both retained five-second failures. T
 - **Assessment:** the complete owner remains non-green, so this observation does not independently establish a new flake classification or cause. Neither `tests/unit/firewall-policy.test.ts` nor `docker/firewall-domains.sh` differs from the merge base; no implementation, assertion, deadline or skip changed for this observation.
 
 - **Completed aggregate:** workspace (web, backend, desktop, web-public, CLI, protocol, toolchain), bridge and protocol-lockfile groups passed; only the root probe timeout remained. The logged command exited 1 after 496.1 s; complete evidence is `orkestrator-test-run.3F8HQ0/mergead-tests.log.gz`. Static checks passed, and the credential-free isolated design suite passed both cases (33.8 s); profile `qa-browser-6b014289-52b` was stopped and reset.
+
+## Pi ChatGPT fallback main merge — 2026-10-26
+
+- **Parents:** `8da8c9cc87779451589b106c228e425ef742aa47` and `a51045a4a954d49ae388c0f22535e9b28274279f`.
+- **Aggregate command:** `mise run test:logged -- --name merge-tests -- mise run test` (macOS, Bun 1.4.4). Workspace/root/bridge/protocol groups reserved 4/1/2/1 worker slots, with one isolated root worker. Root reported 3,468 passed and four failed across 166 files in 234.43 s.
+- **Failures:** policy-3 probes for `example.org,example.com`, `example.com:443`, and `example.com,example.net:443,example.org:443/tcp` exhausted five seconds at 5007.80, 5003.33, and 5004.88 ms. `the root entrypoint runs the firewall itself and records the outcome per mode` also timed out at 5002.69 ms. All received a `null` subprocess exit code.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` reported 33 passed and one failed in 53.56 s. The three probe cases passed, but the root-entrypoint case still timed out at 5002.22 ms.
+- **Evidence:** host temporary directory `orkestrator-test-run.2B615e/root-and-agent-support-tests.log.gz`; isolated evidence `orkestrator-test-run.mprNjR/merge-firewall-isolated.log.gz`; outer aggregate `orkestrator-test-run.Lf5a1a/merge-tests.log.gz`.
+- **Assessment:** the complete owner remains non-green, so this observation does not independently establish a new flake classification or cause. The test and `docker/init-firewall.sh`, `docker/firewall-domains.sh`, and `docker/network-policy-entrypoint.sh` match `origin/main`. No implementation, assertion, timeout or skip changed.
+
+The complete aggregate exited 1 after 568.8 s: workspace and protocol-lockfile
+groups passed; root and bridges failed only the four firewall timeouts and
+one Cursor hook timeout described above. Backend reported 11,749 passed and
+zero failed; Pi reported 649 passed and zero failed. Formatting, lint,
+typechecking, and the flake-index contract check passed.

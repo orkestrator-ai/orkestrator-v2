@@ -288,11 +288,12 @@ export function SortableProjectFolder({
       {/*
         Members are unmounted while collapsed rather than hidden with CSS: they
         are sortable nodes, and a registered node the user cannot see would
-        still resolve drops.
+        still resolve drops. Both variants cancel the folder's right padding so
+        member chevrons line up with top-level ones; members bring their own.
       */}
       {!isCollapsed && (
         <div
-          className={repository ? "-mx-2" : "ml-3 border-l border-zinc-800/80 pl-1"}
+          className={repository ? "-mx-2" : "-mr-2 ml-3 border-l border-zinc-800/80 pl-1"}
           data-project-folder-content={name}
         >
           {children}

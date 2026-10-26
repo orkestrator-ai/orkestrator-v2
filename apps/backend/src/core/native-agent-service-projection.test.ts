@@ -10,6 +10,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
+import { buildPromptWithTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
@@ -1052,6 +1053,56 @@ describe("NativeAgentService", () => {
           "provider-session",
           "Mock up the sidebar",
         );
+      },
+    );
+  });
+
+  test("titles a session from the request, not the transcript-annotation block after it", async () => {
+    // The live case from 0081: request text long enough that the first 80
+    // characters used to end inside the fence.
+    const request = `Let's discuss the design "Untitled design" in the attached design context.`;
+    const prompt = buildPromptWithTranscriptAnnotations(request, [
+      {
+        id: "design-1",
+        text: "Frame Hero at revision 3",
+        comment: "",
+        source: "design",
+      },
+    ]);
+    // The old fallback: whitespace collapsed, then the first 80 characters.
+    expect(prompt.replace(/\s+/g, " ").slice(0, 80)).toEndWith("<orke");
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Agent Session",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: prompt,
+            parts: [{ type: "text", content: prompt }],
+            createdAt: "2026-10-26T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-codex-annotated-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-annotated-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe(request);
+        await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+        expect(stub.setSessionTitle).toHaveBeenCalledWith("provider-session", request);
       },
     );
   });

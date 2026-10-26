@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import { buildPromptWithTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import {
   SESSION_TITLE_MODEL,
   SESSION_TITLE_REASONING_EFFORT,
@@ -134,6 +135,18 @@ describe("Codex session titles", () => {
   test("derives a fallback from the brief after framed canvas guidance", () => {
     const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server. Canvas ID: canvas-1")}\n\nMock up the sidebar`;
     expect(buildFallbackSessionTitle(prompt)).toBe("Mock up the sidebar");
+  });
+
+  test("derives a fallback from the request, not the transcript-annotation block", () => {
+    const prompt = buildPromptWithTranscriptAnnotations("Review the hero frame", [
+      { id: "design-1", text: "Frame Hero at revision 3", comment: "", source: "design" },
+    ]);
+    expect(buildFallbackSessionTitle(prompt)).toBe("Review the hero frame");
+    // Before 0081 the tag pass kept the quoted instruction as the title.
+    const annotationsOnly = buildPromptWithTranscriptAnnotations("", [
+      { id: "excerpt-1", text: "Quoted output", comment: "" },
+    ]);
+    expect(buildFallbackSessionTitle(annotationsOnly)).toBe("Codex session");
   });
 
   test("sanitizes model titles without splitting Unicode", () => {

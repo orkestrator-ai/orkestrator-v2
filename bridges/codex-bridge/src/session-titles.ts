@@ -8,6 +8,7 @@ import {
   CODEX_BACKGROUND_TASK_REASONING_EFFORT,
 } from "@orkestrator/protocol/codex-background-task";
 import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import { runtimeEnvironmentWithoutCredentials } from "./runtime-env.js";
 
 export const SESSION_TITLE_MODEL = CODEX_BACKGROUND_TASK_MODEL;
@@ -60,7 +61,9 @@ interface PersistedSessionTitleEntry {
 }
 
 export function buildFallbackSessionTitle(prompt: string): string {
-  const normalized = stripSystemInstructions(prompt)
+  // The tag pass below would drop the annotation fence but keep the quoted
+  // instruction and JSON inside it; remove the whole envelope first.
+  const normalized = stripTranscriptAnnotations(stripSystemInstructions(prompt))
     .replace(/<[^>]+>/g, " ")
     .replace(/[`*_#[\]{}()]/g, " ")
     .replace(/\s+/g, " ")

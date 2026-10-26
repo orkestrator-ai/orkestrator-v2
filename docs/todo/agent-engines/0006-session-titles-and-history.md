@@ -31,10 +31,11 @@ archived agents) are not adopted.
   - Grok: no rewind or fork on ACP v1.
 - Titles:
   - The backend projection title (`native-agent-transcript-projection.ts`) uses
-    the provider's title, then the first user message cut to 80 characters
-    (Claude's placeholder titles count as absent). It pushes the result back
-    through `setSessionTitle`. A failed push is ignored and the projection keeps
-    its title.
+    the provider's title, then the first user message, without framed system
+    instructions or transcript-annotation blocks, cut to 80 characters
+    (Claude's placeholder titles count as absent; see 0081). It pushes the
+    result back through `setSessionTitle`. A failed push is ignored and the
+    projection keeps its title.
   - Setters: Codex `thread/name/set`, OpenCode `session.update`
     (`opencode-capabilities.ts`), Pi `setSessionName`, Claude through the
     bridge's `/session/:id/rename` route. Cursor and Grok have none, so the
@@ -44,7 +45,8 @@ archived agents) are not adopted.
       `bridges/codex-bridge/src/session-titles.ts`;
     - Claude: `generateTitleViaCli` (`claude --print --safe-mode` with tools,
       MCP, slash commands, settings and session persistence all off) in
-      `session-manager-core.ts`, called from `generateAndSetSessionTitle`.
+      `session-manager-core.ts`, called from `generateAndSetSessionTitle`,
+      which nothing has called since #599 (checked 2026-10-26 for 0081).
 - Codex `thread/reverted`, `thread/archived` and `thread/unarchived` are on the
   ignore list in `bridges/codex-bridge/src/app-server/event-reducer.ts`.
   Nothing calls `thread/archive`.

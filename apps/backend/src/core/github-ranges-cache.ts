@@ -1,5 +1,17 @@
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { runCommand } from "./shell.js";
 
 /**
  * GitHub's published web/api/git IPv4 ranges, fetched by the backend at most
@@ -91,6 +103,46 @@ export async function githubRangesSeed(
   } catch {
     // Keep serving the previous seed while it is still reasonably fresh.
     return age < USABLE_FOR_MS ? file : null;
+  }
+}
+
+/** The directory the firewall reads the seed from (`docker/firewall-domains.sh`). */
+export const GITHUB_RANGES_SEED_DIRECTORY = "/etc/orkestrator-seed";
+
+/**
+ * Copies the seed into a created, not yet started, container rather than
+ * binding it. A rootless daemon cannot mount a read-only bind from a
+ * filesystem whose `nosuid`/`nodev` flags its user namespace cannot clear,
+ * and nothing is lost: the seed is replaced by rename, so a file bind already
+ * showed the container the seed as it was when it was created. Best effort:
+ * a container without a seed fetches the ranges itself.
+ */
+export async function copyGithubRangesSeed(
+  containerId: string,
+  seedFile: string,
+  run: typeof runCommand = runCommand,
+): Promise<boolean> {
+  const staging = await mkdtemp(path.join(os.tmpdir(), "orkestrator-github-seed-"));
+  try {
+    await chmod(staging, 0o755);
+    const staged = path.join(staging, "github-ranges");
+    await copyFile(seedFile, staged);
+    await chmod(staged, 0o644);
+    await run(
+      "docker",
+      ["cp", `${staging}${path.sep}.`, `${containerId}:${GITHUB_RANGES_SEED_DIRECTORY}`],
+      {
+        timeoutMs: 30_000,
+      },
+    );
+    return true;
+  } catch (error) {
+    console.warn(
+      `[github-ranges] seed not copied container=${containerId.slice(0, 12)} error=${error instanceof Error ? error.message.slice(0, 200) : String(error)}`,
+    );
+    return false;
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

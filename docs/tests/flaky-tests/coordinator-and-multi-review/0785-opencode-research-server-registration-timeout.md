@@ -102,3 +102,14 @@ The merged aggregate repeated the 40-second timeout (40003.45 ms). The complete 
 - **Assessment:** fails alone as well as in the aggregate, intermittently,
   which supports the startup-race hypothesis above over load alone. Still
   open; no implementation, assertion, deadline or skip changed.
+
+## 2026-10-26 observation (omarchy-hp)
+
+The test timed out at 40 s in `mise run test` on branch
+`todo-0109-rootless-linux-runtime-d03790b22a6c`, and also when its owning file
+ran alone (load about 8), and on a clean `origin/main` worktree
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts
+src/core/opencode-coordinator-research-live.test.ts`): 0 pass, 1 fail each
+time. On this host it is not intermittent, so it is environmental here
+(probably the host's OpenCode CLI or its first-run state), not a branch
+regression.

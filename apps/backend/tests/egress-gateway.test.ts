@@ -121,6 +121,14 @@ describe("where a runtime's firewall runs", () => {
     expect(
       egressGatewayCreateArguments({ ...spec, addHostGateway: false }).join(" "),
     ).not.toContain("--add-host");
+    // Rootless: RootlessKit's host address once the reachability check chose it.
+    expect(
+      egressGatewayCreateArguments({ ...spec, hostAliasTarget: "10.0.2.2" }).join(" "),
+    ).toContain("--add-host host.docker.internal:10.0.2.2");
+    // The seed is copied in after creation, even when there is one.
+    expect(
+      egressGatewayCreateArguments({ ...spec, githubSeed: "/data/github-ranges.txt" }).join(" "),
+    ).not.toContain("github-ranges");
   });
 
   test("parsers accept only what Docker reports", () => {

@@ -2308,6 +2308,8 @@ export function parseIpTokens(output: string): string[] {
 export async function ensureContainerAgentToolsHost(
   containerId: string,
   signal?: AbortSignal,
+  /** RootlessKit's host address when the reachability check chose it; else the network gateway. */
+  hostAddress?: string | null,
 ): Promise<void> {
   let existing = await dockerExec(
     containerId,
@@ -2378,7 +2380,7 @@ export async function ensureContainerAgentToolsHost(
     ],
     { timeoutMs: 10_000, signal },
   );
-  const gateway = parseIpTokens(stdout)[0];
+  const gateway = hostAddress ?? parseIpTokens(stdout)[0];
   if (!gateway) {
     throw new Error(`Could not determine the Docker host gateway for container ${containerId}`);
   }
@@ -2420,7 +2422,11 @@ export async function resolveContainerAgentToolConnection(
     containerId,
   );
   if (!environment) return undefined;
-  await ensureContainerAgentToolsHost(containerId);
+  await ensureContainerAgentToolsHost(
+    containerId,
+    undefined,
+    context.containerHostReachability?.containerHostAddress?.(),
+  );
   await ensureContainerHostServicePorts(containerId, context.agentTools.servicePort?.() ?? null);
   // Evidence, not a gate: an interactive agent can still work without its
   // Orkestrator tools, so a blocked path is logged and raised in the app

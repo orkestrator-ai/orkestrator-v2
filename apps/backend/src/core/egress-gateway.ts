@@ -6,6 +6,8 @@ import {
 import type { NetworkPolicyVersion } from "./container-network.js";
 import { runCommand } from "./shell.js";
 import { egressGatewayOf, forgetNetworkOwner } from "./container-network-owner.js";
+import { startDockerContainer } from "./container-start.js";
+import { copyGithubRangesSeed } from "./github-ranges-cache.js";
 
 export { egressGatewayOf, networkOwnerContainer } from "./container-network-owner.js";
 
@@ -100,6 +102,8 @@ export interface EgressGatewaySpec {
   publishArguments: readonly string[];
   /** Linux Engine's `host.docker.internal` alias; the workload shares /etc/hosts. */
   addHostGateway: boolean;
+  /** What the alias names: Docker's `host-gateway` unless rootless needs RootlessKit's host. */
+  hostAliasTarget?: string;
   githubSeed: string | null;
   /** `-e NAME=value` policy values the gateway records and enforces. */
   policyEnvironment: Readonly<Record<string, string>>;
@@ -144,12 +148,8 @@ export function egressGatewayCreateArguments(spec: EgressGatewaySpec): string[] 
       : []),
     ...(spec.limits.pids ? ["--pids-limit", String(EGRESS_GATEWAY_PIDS)] : []),
     ...spec.logArguments,
-    ...(spec.addHostGateway ? ["--add-host", "host.docker.internal:host-gateway"] : []),
-    ...(spec.githubSeed
-      ? [
-          "--mount",
-          `type=bind,src=${spec.githubSeed},dst=/etc/orkestrator-seed/github-ranges,readonly`,
-        ]
+    ...(spec.addHostGateway
+      ? ["--add-host", `host.docker.internal:${spec.hostAliasTarget ?? "host-gateway"}`]
       : []),
     "--network",
     spec.network,
@@ -244,10 +244,15 @@ async function containerExists(nameOrId: string): Promise<boolean | null> {
  * other same-named container is left alone and reported.
  */
 export async function createEgressGateway(spec: EgressGatewaySpec): Promise<string> {
-  const create = async () =>
-    (
+  // The GitHub seed is copied in before the first start, never bound
+  // (`copyGithubRangesSeed`).
+  const create = async () => {
+    const id = (
       await runCommand("docker", egressGatewayCreateArguments(spec), { timeoutMs: 120_000 })
     ).stdout.trim();
+    if (spec.githubSeed) await copyGithubRangesSeed(id, spec.githubSeed);
+    return id;
+  };
   try {
     return await create();
   } catch (error) {
@@ -361,11 +366,11 @@ export async function prepareEgressGatewayForStart(
   }
   const retryFailed = gateway.running && (await gatewayFirewallState(gatewayId)) === "failed";
   if (!gateway.running || retryFailed) {
-    await runCommand("docker", [retryFailed ? "restart" : "start", gatewayId], {
-      timeoutMs: 60_000,
-    }).catch((error: unknown) => {
-      throw startError(error);
-    });
+    await startDockerContainer(gatewayId, { verb: retryFailed ? "restart" : "start" }).catch(
+      (error: unknown) => {
+        throw startError(error);
+      },
+    );
   }
   await waitForEgressGatewayFirewall(gatewayId, options);
   const { stdout } = await runCommand(

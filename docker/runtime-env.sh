@@ -324,11 +324,18 @@ orkestrator_source_runtime_env() {
 
     # A staged Claude key stays in a revocable bind-mounted file rather than
     # Docker's immutable Config.Env. Every new shell reads the current file;
-    # revocation removes it and stops the existing bridge.
-    if [ -r /claude-config/.orkestrator-anthropic-key ]; then
-        ANTHROPIC_API_KEY="$(cat /claude-config/.orkestrator-anthropic-key 2>/dev/null || true)"
-        export ANTHROPIC_API_KEY
-    fi
+    # revocation removes it and stops the existing bridge. Under rootless
+    # Docker node reads the root entrypoint's relayed copy, which revocation
+    # removes too.
+    for key_file in /claude-config/.orkestrator-anthropic-key \
+        /run/orkestrator-inputs/claude-config/.orkestrator-anthropic-key; do
+        if [ -r "$key_file" ]; then
+            ANTHROPIC_API_KEY="$(cat "$key_file" 2>/dev/null || true)"
+            export ANTHROPIC_API_KEY
+            break
+        fi
+    done
+    unset key_file
 
     orkestrator_add_common_runtime_paths_floor
     orkestrator_promote_mise_shims

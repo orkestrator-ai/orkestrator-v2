@@ -220,6 +220,54 @@ this run found are tracked in
   `port-conflict` with the original kept. The rerun drew other ports and
   passed.
 
+### Rootless follow-up (2026-10-26)
+
+The fixes for those gaps were exercised on the same host and daemon build
+(Docker 29.9.1, runc 1.5.2, RootlessKit 3.3.0, slirp4netns 1.3.3) without a
+full environment image: the host had 16 GB free and runs a live Orkestrator,
+so the image was not rebuilt there. Each check ran the branch's own code
+against the user's rootless daemon (host loopback disabled, the default) or a
+disposable second rootless daemon started with
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false` under a temporary
+`XDG_RUNTIME_DIR` and data root, removed afterwards.
+
+- **Staged inputs.** A real revision from `stagePortableInputs` (Codex,
+  Claude, Git), bound read-only into a `debian:bookworm-slim` container with
+  a UID 1000 `node`: the mounts showed `root:root 0700/0600` and `node` got
+  `Permission denied`. The branch's `relay_staged_inputs`, run as root with the
+  real `setpriv`, produced `node`-owned `0700`/`0600` copies under
+  `/run/orkestrator-inputs`, and the entrypoint's `staged_input_path` and
+  `copy_agent_file` imported `~/.codex/auth.json` and `config.toml` (`node
+  600`) and the Git identity from them. On the rootful daemon the same
+  mounts showed `node 600`, `node` read them directly and no relay was made;
+  the host revision stayed `0600`.
+- **Agent tools.** The real `ContainerHostReachabilityService` against a
+  loopback listener: with host loopback enabled, `host-gateway` was refused on
+  both networks and `10.0.2.2` answered on both, so the verdict was
+  `reachable` with `hostAddress` `10.0.2.2`; on the user's daemon `10.0.2.2`
+  gave busybox's `Network unreachable` (now classified `unreachable`; it was
+  `error` before) and the verdict was `blocked` with the rootless remediation.
+- **Read-only binds from `nosuid`/`nodev`.** Not reproduced: file and
+  directory binds, `--mount …,readonly` and `-v …:ro`, from the tmpfs `/tmp`,
+  `/dev/shm` and `/run/user/1000` (all `nosuid,nodev`), alone and with the
+  runtime's and gateway's other options (`--init`, `--tmpfs /run`, own
+  network, sysctl, `NET_ADMIN`, `--read-only`, volumes), all mounted. The
+  GitHub seed is now copied in rather than bound, and a refusal elsewhere is a
+  typed error naming the mount.
+- **Port collisions.** Rootless dockerd hands out automatic ports
+  sequentially, so the next one was held by a host listener. The first start
+  failed with `RootlessKit PortManager.AddPort(): listen tcp4
+  127.0.0.1:<port>: bind: address already in use`, and that failed start
+  detached the container from its network: a bare second start ran it with
+  no network and `Ports={}`. `startDockerContainer` reconnects the network
+  and retries; live, on the default bridge and on a user network, the retry
+  ran with an address and fresh ports for both mappings. A collision on a
+  fixed port was returned without a retry.
+
+Still owed: the C20, C22 and readiness suites with an environment image built
+from this branch, on a rootless host with room for it
+([0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md)).
+
 ## Docker Desktop on Apple Silicon (2026-10-23)
 
 The full live set, now six suites, ran on Docker Desktop 4.95.0 (Engine

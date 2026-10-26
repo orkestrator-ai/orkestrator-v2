@@ -1,4 +1,5 @@
 import { withContainerAdmission } from "./container-admission.js";
+import { startDockerContainer } from "./container-start.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   formatContainerLifecycleError,
@@ -880,11 +881,9 @@ async function replaceRuntimePreservingStateUnfenced(
     await prepareEgressGatewayForStart(candidateId).catch((error: unknown) => {
       throw candidateStartError(error);
     });
-    await runCommand("docker", ["start", candidateId], { timeoutMs: 60_000 }).catch(
-      (error: unknown) => {
-        throw candidateStartError(error);
-      },
-    );
+    await startDockerContainer(candidateId).catch((error: unknown) => {
+      throw candidateStartError(error);
+    });
     const bootId = await waitForContainerBoot(candidateId);
     await runCommand("docker", ["exec", candidateId, "sh", "-c", "mountpoint -q /workspace"], {
       timeoutMs: 30_000,

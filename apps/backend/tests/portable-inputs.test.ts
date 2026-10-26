@@ -26,6 +26,7 @@ import {
   CURSOR_MCP_STAGED_INPUTS_VERSION,
   IMAGE_CAPABILITIES,
   imageCopiesCursorMcpConfig,
+  imageRelaysStagedInputs,
 } from "@orkestrator/protocol/image-manifest";
 import {
   lifecycleEnvironment,
@@ -784,6 +785,8 @@ exit 0
         });
         const calls = await log.read();
         expect(calls).toContain("/home/node/.claude/.credentials.json");
+        // A rootless runtime's relayed copy goes with the imported files.
+        expect(calls).toContain("'/run/orkestrator-inputs/claude-config'");
         expect(calls).toContain("pkill -TERM -f '[/]opt/claude-bridge/'");
       },
     );
@@ -934,16 +937,34 @@ esac
       path.join(import.meta.dir, "../../../docker/entrypoint.sh"),
       "utf8",
     );
+    const rootEntrypoint = await fs.readFile(
+      path.join(import.meta.dir, "../../../docker/network-policy-entrypoint.sh"),
+      "utf8",
+    );
+    // The root entrypoint relays exactly these mounts when node cannot read
+    // them (rootless Docker), and the entrypoint resolves each through it.
+    const relayed = /^STAGED_INPUT_MOUNTS="([^"]*)"$/m.exec(rootEntrypoint)?.[1]?.split(" ") ?? [];
     const spec = portableInputSpec({ home: "/h", agentTest: false });
+    const targets = new Set<string>();
     for (const provider of spec) {
       for (const directory of provider.directories) {
-        expect(entrypoint).toContain(directory.target);
+        targets.add(directory.target);
         for (const file of directory.files ?? []) {
           expect(entrypoint).toContain(path.basename(file));
         }
       }
-      for (const file of provider.files) expect(entrypoint).toContain(file.target);
+      for (const file of provider.files) targets.add(file.target);
     }
+    for (const target of targets) {
+      const name = target.slice(1);
+      expect(relayed).toContain(name);
+      expect(entrypoint).toContain(target);
+    }
+    // Plus the project seed files workspace-setup.sh reads.
+    expect(relayed.filter((name) => !targets.has(`/${name}`)).sort()).toEqual([
+      "opencode-project-json",
+      "project-env",
+    ]);
     expect(entrypoint).toContain(
       `ORKESTRATOR_CAPABILITY staged-inputs=${IMAGE_CAPABILITIES["staged-inputs"]}`,
     );
@@ -953,6 +974,10 @@ esac
     expect(imageCopiesCursorMcpConfig({ "staged-inputs": 1 })).toBe(false);
     expect(imageCopiesCursorMcpConfig({ "staged-inputs": 2 })).toBe(true);
     expect(imageCopiesCursorMcpConfig(null)).toBe(false);
+    expect(imageRelaysStagedInputs({ "staged-inputs": 2 })).toBe(false);
+    expect(imageRelaysStagedInputs({ "staged-inputs": IMAGE_CAPABILITIES["staged-inputs"] })).toBe(
+      true,
+    );
   });
 });
 

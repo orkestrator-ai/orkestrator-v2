@@ -29,16 +29,33 @@ BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
 
 # Portable input contract (docker/image-manifest.ts):
-# ORKESTRATOR_CAPABILITY staged-inputs=2
+# ORKESTRATOR_CAPABILITY staged-inputs=3
 #
 # Agent configuration and credentials arrive only at the read-only mount
 # points below (/claude-config, /codex-home, /opencode-*, /grok-*, /pi-config,
 # /cursor-config, /claude-config.json, /tmp/gitconfig), and this script copies
 # a bounded allowlist from each. Version 2 adds /cursor-config (Cursor's
-# mcp.json only). A backend that sees this capability stages exactly that
-# allowlist for enabled providers and binds the staged copies instead of whole
-# host agent homes (apps/backend/src/core/portable-inputs.ts); the two lists
-# must stay in step.
+# mcp.json only). Version 3 reads a mount node cannot open (rootless Docker)
+# from the copy the root entrypoint relayed (staged_input_path). A backend
+# that sees this capability stages exactly that allowlist for enabled
+# providers and binds the staged copies instead of whole host agent homes
+# (apps/backend/src/core/portable-inputs.ts); the two lists must stay in step.
+
+# Under rootless Docker the backend's user is container root, so node cannot
+# open its owner-only staged mounts. network-policy-entrypoint.sh
+# (relay_staged_inputs) then copied each such mount into node's own
+# STAGED_INPUT_RELAY_DIR, keeping its absolute path below it. A mount path
+# resolves to that copy when one exists, to itself otherwise. The copy
+# helpers resolve their source root the same way, inline, so each works alone.
+STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs
+staged_input_path() {
+    local relayed="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$1"
+    if [ -e "$relayed" ] && [ ! -L "$relayed" ]; then
+        printf '%s\n' "$relayed"
+    else
+        printf '%s\n' "$1"
+    fi
+}
 
 # Atomic: a reader sees the previous record or this one, never a partial one.
 write_boot_status() {
@@ -138,6 +155,12 @@ restrict_imported_login() {
     local source_root="${4:-}"
     local source_relative="${5:-}"
     local source=""
+    # A relayed copy of a staged mount stands in for it (staged_input_path).
+    case "$source_root" in
+        /*) if [ -e "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ]; then
+                source_root="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root"
+            fi ;;
+    esac
 
     [ -f "$file" ] && [ ! -L "$file" ] || return 0
     if [ "$kind" = opencode ] || [ "$kind" = pi ]; then
@@ -335,6 +358,12 @@ publish_claude_credentials() {
 
 copy_agent_file() {
     local source_root="$1"
+    # A relayed copy of a staged mount stands in for it (staged_input_path).
+    case "$source_root" in
+        /*) if [ -e "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ]; then
+                source_root="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root"
+            fi ;;
+    esac
     local destination_root="$2"
     local relative_path="$3"
     # Display name of the calling agent, used only in warnings.
@@ -408,6 +437,12 @@ copy_agent_file() {
 
 copy_agent_directory() {
     local source_root="$1"
+    # A relayed copy of a staged mount stands in for it (staged_input_path).
+    case "$source_root" in
+        /*) if [ -e "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ]; then
+                source_root="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root"
+            fi ;;
+    esac
     local destination_root="$2"
     local relative_path="$3"
     # Display name of the calling agent, used only in warnings.
@@ -553,6 +588,12 @@ copy_agent_directory() {
 # must stay link-free, exactly as with copy_agent_directory.
 copy_agent_directory_entries() {
     local source_root="$1"
+    # A relayed copy of a staged mount stands in for it (staged_input_path).
+    case "$source_root" in
+        /*) if [ -e "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ]; then
+                source_root="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root"
+            fi ;;
+    esac
     local destination_root="$2"
     local relative_path="$3"
     # Display name of the calling agent, used only in warnings.
@@ -737,8 +778,12 @@ elif [ -f "$HOME/.claude/.credentials.json" ] && [ ! -L "$HOME/.claude/.credenti
     echo "Credential already present (backend sync); leaving it in place"
 else
     # Linux hosts keep the credential on disk, so the mount can carry it.
-    if [ -f /claude-config/.credentials.json ] && [ ! -L /claude-config/.credentials.json ]; then
-        if publish_claude_credentials /claude-config/.credentials.json; then
+    mounted_credentials=/claude-config/.credentials.json
+    if [ -f "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$mounted_credentials" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$mounted_credentials" ]; then
+        mounted_credentials="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$mounted_credentials"
+    fi
+    if [ -f "$mounted_credentials" ] && [ ! -L "$mounted_credentials" ]; then
+        if publish_claude_credentials "$mounted_credentials"; then
             echo "Copied credentials from host"
         else
             echo "No credential on the mount; awaiting the backend credential sync"
@@ -835,11 +880,15 @@ fi
 # ~/.claude.json may be modified by Claude CLI running on the host (e.g., during
 # background environment naming). We write to a temp file first, validate it's
 # valid JSON, then move it to the final location.
-if [ -f /claude-config.json ]; then
+CLAUDE_JSON_INPUT=/claude-config.json
+if [ -f "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT" ]; then
+    CLAUDE_JSON_INPUT="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT"
+fi
+if [ -f "$CLAUDE_JSON_INPUT" ]; then
     if [ -n "$DEBUG" ]; then
         echo "=== Processing .claude.json ==="
-        echo "Size: $(wc -c < /claude-config.json) bytes"
-        echo "Key count: $(jq 'keys | length' /claude-config.json 2>/dev/null || echo 'failed to parse')"
+        echo "Size: $(wc -c < "$CLAUDE_JSON_INPUT") bytes"
+        echo "Key count: $(jq 'keys | length' "$CLAUDE_JSON_INPUT" 2>/dev/null || echo 'failed to parse')"
     fi
 
     # Use jq to:
@@ -859,7 +908,7 @@ if [ -f /claude-config.json ]; then
               .hasCompletedOnboarding = true |
               .theme = "dark" |
               .projects = {"/workspace": {"hasTrustDialogAccepted": true, "hasCompletedProjectOnboarding": true}}' \
-              /claude-config.json > "$TEMP_CLAUDE_JSON" 2>/dev/null; then
+              "$CLAUDE_JSON_INPUT" > "$TEMP_CLAUDE_JSON" 2>/dev/null; then
 
             # Validate the output is valid JSON before using it
             if jq empty "$TEMP_CLAUDE_JSON" 2>/dev/null; then
@@ -1088,7 +1137,9 @@ log_progress "Grok configuration ready"
 log_progress "Setting up Pi configuration..."
 mkdir -p "$HOME/.pi/agent"
 
-if [ -d /pi-config/agent ]; then
+# Under rootless Docker node cannot traverse the /pi-config mount itself, so
+# its relayed copy is checked too; the copy helpers read from that copy.
+if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then
     for file in \
         auth.json \
         models.json \
@@ -1155,9 +1206,13 @@ else
 fi
 
 # Set up git configuration from host if mounted
-if [ -f "/tmp/gitconfig" ]; then
+GITCONFIG_INPUT=/tmp/gitconfig
+if [ -f "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$GITCONFIG_INPUT" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$GITCONFIG_INPUT" ]; then
+    GITCONFIG_INPUT="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$GITCONFIG_INPUT"
+fi
+if [ -f "$GITCONFIG_INPUT" ]; then
     log_progress "Setting up Git configuration from host..."
-    cp /tmp/gitconfig "$HOME/.gitconfig"
+    cp "$GITCONFIG_INPUT" "$HOME/.gitconfig"
     # Host git credential helpers often contain absolute macOS paths such as
     # /opt/homebrew/bin/gh. Those helpers do not exist inside Linux containers
     # and cause git clone to prompt for credentials. Keep identity/remotes from

@@ -71,6 +71,11 @@ it as a prompt Orkestrator sent on their behalf; nothing was sent.
    - `history/rollout.test.ts`: every block is dropped, judged per segment;
      a user's text that starts with or mentions a tag, or holds one beside
      their own segment, is kept.
+     Review regressions cover extraction and hydration with user text between
+     two matching context blocks (all five tags), and after either AGENTS.md
+     heading or the recommended-plugins prefix. The joined-text recheck now
+     applies only to a single segment, so it cannot override a mixed message's
+     per-segment classification.
    - `app-server/live-resume-context.test.ts` (gated by
      `RUN_LIVE_CODEX_APP_SERVER=1`, no credits): the real pinned 0.164.0
      binary against a loopback Responses endpoint runs a plain turn, a skill
@@ -81,22 +86,58 @@ it as a prompt Orkestrator sent on their behalf; nothing was sent.
      Passed 2026-10-26 on arktech-mini; against the old reader it fails with
      the `<skill>` block as a **You** row. It also showed that 0.164.0 writes
      `<turn_aborted>` as a developer message, which never renders.
-3. Then drop the environment-context exclusion from the resume step of
-   `e2e/agent-testing/design-live.spec.ts`.
+3. ~~Then drop the environment-context exclusion from the resume step of
+   `e2e/agent-testing/design-live.spec.ts`.~~ Done and qualified 2026-10-26.
    - Code done 2026-10-26: dropped there and from
      `e2e/agent-testing/design-resume-clients-live.spec.ts`, which had the
      same exclusion. Both now count every user message.
-   - Still owed: a live run of both specs for Codex without the exclusion.
-     They spend real model turns and need a `dev:test --fixture` profile with
-     Codex credentials, which this change did not run. Follow "Live
-     design-tool cycle" in
-     [`agent-testing.md`](../../development/agent-testing.md) and its
-     two-client Resume run, with `ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS=codex`
-     for both (`ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1` and
-     `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN_RESUME=1`), and record the resume
-     step's user message counts here (live and resumed should now be equal).
-     The bridge behaviour they check is already proven against the real
-     binary by item 2's live test.
+   - Two-client live run passed 2026-10-26 on this Mac, disposable fixture
+     profile `qa-resume-context-0082`, pinned Codex 0.164.0, model
+     `gpt-6.1-sol`: **1 user row live, 1 resumed**. The bridge restarted;
+     both resume requests overlapped (0/30 ms start, 2872/2874 ms finish),
+     converged on one tab and session, and sent nothing. Results:
+     `output/agent-testing/qa-resume-context-0082-resume-verified/browser/results.json`
+     (1 passed, 0 skipped).
+   - Full design cycle passed with the same profile, binary and model:
+     **3 user rows live, 3 resumed**, with no exclusion. Launch, stale
+     selection, approval across an environment switch/reload, handoff and
+     close/resume all passed; 13 design MCP calls, 0 failed. Results:
+     `output/agent-testing/qa-resume-context-0082-cycle-verified/browser/results.json`
+     (1 passed, 0 skipped).
+   - The fixture's default `gpt-5.4` was rejected by this ChatGPT account
+     before either first attempt reached resume. The reruns use
+     `ORKESTRATOR_AGENT_TEST_DESIGN_MODELS=codex=gpt-6.1-sol`, selected from
+     the account's model catalog. Both specs log content-free live/resumed
+     row counts after their assertions.
+   - The qualification profile was stopped and reset after both passing runs;
+     `dev:status` confirms it is missing, with no live processes.
+
+## Review validation
+
+The focused rollout regressions, real-binary loopback resume test
+(`RUN_LIVE_CODEX_APP_SERVER=1`), formatting, lint and typechecking passed.
+The live browser results above use this checkout with the multipart fix.
+
+The repository aggregate was also run through `test:logged`. Its root group
+failed the existing malformed `0887` flake-register entry (missing its required
+ID line); the owning register test also fails alone. Its bridge group hit the
+catalogue race tracked in [0791](../../tests/flaky-tests/agent-bridges/0791-codex-command-catalogue-stale-race.md)
+and the persistence timeout tracked in [0947](../../tests/flaky-tests/agent-bridges/0947-claude-stale-list-tombstone-timeout.md);
+both unchanged complete owners passed alone. These failures do not involve
+the history reader. No assertions or deadlines were relaxed.
+The backend group also repeated the nested-submodule timeout in
+[0621](../../tests/flaky-tests/environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md)
+and the exec restart cleanup failure in
+[0341](../../tests/flaky-tests/backend-services-and-tooling/0341-public-exec-restart-cleanup-eperm.md).
+Both complete unchanged owners passed alone (42.2 s and 13.5 s respectively).
+The activity batch sweep also repeated [0247](../../tests/flaky-tests/native-agents-and-transcripts/0247-activity-batch-sweep-no-requests.md)
+and passed its complete unchanged owner alone in 1.7 s. Backend totals were
+11,196 passed, 95 skipped, three failed and one error across 655 files;
+root/support reported 3,471 passed and one failed. Every other workspace
+package and the protocol lockfile check passed. The aggregate exited 1 after
+1010.2 s; retained evidence is in the host temporary directories
+`orkestrator-test-run.unZQTH` (group logs and summary) and
+`orkestrator-test-run.2JILAH` (outer log).
 
 ## Assumptions and decisions
 
@@ -117,12 +158,14 @@ it as a prompt Orkestrator sent on their behalf; nothing was sent.
   loses it on reload. That is an implausible prompt, and the live row still
   showed it.
 - **Per segment or whole message.** Options: judge the joined text (as
-  before), or each segment. Chose each segment, keeping the joined check too.
+  before), or each segment. Chose each segment, keeping the joined check only
+  for single-segment messages after stripping injected wrappers.
   Codex writes instructions and environment as two segments of one message;
   judging segments drops that message even when its first segment is not one
   of the AGENTS.md shapes, and keeps a message where any segment is the
-  user's own text. Pros: robust to segment order. Cons: none seen; the joined
-  check is kept only so behaviour for single-segment messages is unchanged.
+  user's own text. Pros: robust to segment order, including user text between
+  matching blocks or after a synthetic prefix. The joined check preserves
+  existing single-segment behaviour without discarding mixed messages.
 - **`<user_instructions>`.** Options: add it pre-emptively, or leave it out.
   Left it out: no binary from 0.159.2 to 0.164.0 contains it and no local
   rollout uses it, and the rule is to filter only what Codex is known to
@@ -135,9 +178,10 @@ it as a prompt Orkestrator sent on their behalf; nothing was sent.
   preamble, or record what was typed). Filed as
   [0211-codex-resume-shows-wire-prompt.md](0211-codex-resume-shows-wire-prompt.md)
   rather than widened here.
-- **Live design spec rerun.** Not run here: it spends real Codex turns and
-  needs a credentialed `dev:test` profile; the free loopback test covers the
-  bridge behaviour against the real binary. Left open under item 3.
+- **Live design spec rerun.** Uses a disposable `dev:test --fixture` profile
+  with only Codex credentials/platform enabled, the two live opt-in flags,
+  and `ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS=codex`. The issue's regression
+  checks and real-binary loopback test also passed on this Mac.
 
 ## Constraints and rationale
 

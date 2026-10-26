@@ -82,3 +82,25 @@
 - **Aggregate counts:** Backend 11,012 passed, 79 skipped and three failed across 660 files (642.56 s); root/support 3,405 passed and one failed across 162 files (403.31 s). All other workspace packages, bridges and protocol passed; aggregate exit 1 in 692.6 s logged.
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
+
+## Codex resume-context review validation — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` used
+workspace/root/bridges/protocol reservations of 4/1/2/1 slots, with two Bun
+workers for backend. The restart reconciliation case failed during fixture cleanup with `EPERM` at
+`test-support.ts:143` after 1142.41 ms.
+
+The complete unchanged owner passed alone, exit 0 in 13.5 seconds:
+
+```sh
+mise run test:logged -- --name public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary directory
+`orkestrator-test-run.unZQTH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed on aggregate completion), enclosing log
+`orkestrator-test-run.2JILAH/repository-tests.log`. No backend implementation,
+test, assertion, deadline or skip changed. The aggregate remains failed.
+
+Aggregate backend totals: 11,196 passed, 95 skipped, three failed and one
+error across 655 files (501.24 s). The groups finished in 1010.2 s; exit 1.

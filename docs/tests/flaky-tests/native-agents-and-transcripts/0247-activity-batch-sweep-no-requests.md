@@ -180,3 +180,12 @@ passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
 - **Complete unchanged owner:** `mise run test:logged -- --name activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.8 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend totals: 11,431 passed and four failed; web had one failure. Root/support, bridges and protocol passed. The aggregate exited 1 in 1099.1 seconds logged.
 - **Assessment:** recurrence of the empty-request symptom; cause unproven. No assertion, deadline or skip changed.
+
+## Codex resume-context review validation — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`; workspace/root/bridges/protocol reservations 4/1/2/1, backend two Bun workers.
+- **Failure:** `activity sweep over the batch route > 10 sessions cost 1 request(s) and touch nothing` expected batch sizes `[10]`, received `[]` at line 157 (33.93 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name activity-batch-owner -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0 in 1.7 seconds.
+- **Aggregate counts:** backend 11,196 passed, 95 skipped, three failed and one error across 655 files (501.24 s). The aggregate exited 1 after its groups finished in 1010.2 s.
+- **Evidence:** host temporary directory `orkestrator-test-run.unZQTH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; enclosing `orkestrator-test-run.2JILAH/repository-tests.log.gz`.
+- **Assessment:** recurrence of this existing empty-request symptom. No activity implementation, test, assertion, timeout or skip changed; the aggregate remains failed.

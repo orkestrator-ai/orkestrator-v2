@@ -72,3 +72,26 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.5 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.
+
+## Codex resume-context review validation — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` used
+workspace/root/bridges/protocol reservations of 4/1/2/1 slots, with two Bun
+workers for backend. The same-disk nested-submodule move timed out at 5130.43 ms against its
+five-second deadline while `addNestedSubmodules` was running Git.
+
+The complete unchanged owner passed alone, exit 0 in 42.2 seconds:
+
+```sh
+mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary directory
+`orkestrator-test-run.unZQTH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed on aggregate completion), enclosing log
+`orkestrator-test-run.2JILAH/repository-tests.log`. No backend implementation,
+test, assertion, deadline or skip changed. The aggregate remains failed.
+
+Aggregate backend totals: 11,196 passed, 95 skipped, three failed and one
+error across 655 files (501.24 s). The groups finished in 1010.2 s; exit 1.
+The timed-out Git reset was terminated with SIGTERM and rejected between tests.

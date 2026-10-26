@@ -113,3 +113,12 @@ The timed-out Git reset was terminated with SIGTERM and rejected between tests.
 - **Second unchanged owning-file rerun:** the identical command with `--name environment-move-second-owner` passed the complete file, exit 0 (35.7 s).
 - **Evidence:** `orkestrator-test-run.WnNxeb/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, enclosing `orkestrator-test-run.ZW79NR/apparmor-full.log.gz`, and first owner `orkestrator-test-run.z6UYA0/` under the host temporary directory.
 - **Assessment:** the same existing five-second Git-heavy fixture timeout alternated between variants before the whole file passed. No implementation, timeout, assertion or skip was changed; the isolated pass does not make the aggregate result green.
+
+## On-demand file-tree review fixes — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name repo-tests -- mise run test`, Bun 1.4.4 on macOS; workspace/root/bridges/protocol reservations 4/1/2/1, with two backend workers. Component browser and disposable-stack browser validation also ran on the host.
+- **Failure:** `move_environment > moves a worktree with nested submodules (same disk)` exceeded the five-second deadline at 5112.41 ms, with a terminated recursive Git child.
+- **Complete unchanged owning file:** `mise run test:logged -- --name environment-move-isolated -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 50.4 seconds.
+- **Evidence:** `orkestrator-test-run.7ku54G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.o7QG5Q/repo-tests.log.gz` under the host temporary directory.
+- **Aggregate backend counts:** 11,580 passed, 101 skipped, four failed and two between-test errors across 677 files (822.94 s).
+- **Assessment:** recurrence of this existing timing failure. No environment-move code, assertion, timeout or skip changed; the isolated pass does not make the aggregate green.

@@ -467,6 +467,105 @@ describe("useFilesPanel truncated folders", () => {
     expect(Object.keys(useFilesPanelStore.getState().fileSubtrees)).toEqual(["skills/release"]);
   });
 
+  test("silent polling refreshes loaded contents with an unchanged bounded-tree digest", async () => {
+    const { clock } = installFakeReadCoordinator();
+    renderHook(() => useFilesPanel());
+    await settle();
+    const originalTree = useFilesPanelStore.getState().fileTree;
+    getLocalFileSubtreeMock.mockResolvedValueOnce({
+      children: [{ name: "new.txt", path: "skills/release/new.txt", isDirectory: false }],
+      truncated: false,
+    });
+    await act(() => clock.advance(5_000));
+    await settle();
+    expect(useFilesPanelStore.getState().fileTree).toBe(originalTree);
+    expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
+    expect(useFilesPanelStore.getState().fileSubtrees["skills/release"]?.children[0]?.name).toBe(
+      "new.txt",
+    );
+  });
+
+  for (const action of ["refresh", "copy"] as const) {
+    test(`${action} awaits a post-action read when the initial subtree request is pending`, async () => {
+      let resolveOld!: (value: realBackend.FileSubtree) => void;
+      let resolveNew!: (value: realBackend.FileSubtree) => void;
+      getLocalFileSubtreeMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      );
+      getLocalFileSubtreeMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve;
+          }),
+      );
+      const { result } = renderHook(() => useFilesPanel());
+      await settle();
+      let complete = false;
+      let operation!: Promise<void>;
+      await act(async () => {
+        operation = (
+          action === "refresh"
+            ? result.current.refresh()
+            : result.current.copyExternalFiles([droppedFile("new.txt", [1])], "skills/release")
+        ).then(() => {
+          complete = true;
+        });
+        await Promise.resolve();
+      });
+      await settle();
+      expect(complete).toBe(false);
+      expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
+      await act(async () => resolveOld({ children: [], truncated: false }));
+      await settle();
+      expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
+      expect(complete).toBe(false);
+      await act(async () => {
+        resolveNew({
+          children: [{ name: "new.txt", path: "skills/release/new.txt", isDirectory: false }],
+          truncated: false,
+        });
+        await operation;
+      });
+      expect(complete).toBe(true);
+      expect(useFilesPanelStore.getState().fileSubtrees["skills/release"]?.children[0]?.name).toBe(
+        "new.txt",
+      );
+    });
+  }
+
+  test("a changed bounded tree reloads existing subtrees and reopening the view reconciles them", async () => {
+    const { clock } = installFakeReadCoordinator();
+    renderHook(() => useFilesPanel());
+    await settle();
+    getLocalFileTreeSnapshotMock.mockResolvedValueOnce({
+      unchanged: false,
+      digest: "changed",
+      value: [...boundedTree] as never[],
+    });
+    await act(() => clock.advance(5_000));
+    await settle();
+    const reads = getLocalFileSubtreeMock.mock.calls.length;
+    expect(reads).toBeGreaterThan(1);
+    act(() => useFilesPanelStore.getState().setActiveTab("changes"));
+    await settle();
+    act(() => useFilesPanelStore.getState().setActiveTab("all-files"));
+    await settle();
+    expect(getLocalFileSubtreeMock.mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  test("collapsing a parent invalidates descendant results and reopening fetches them again", async () => {
+    renderHook(() => useFilesPanel());
+    await settle();
+    act(() => useFilesPanelStore.getState().setFolderExpanded("skills", false));
+    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+    act(() => useFilesPanelStore.getState().setFolderExpanded("skills", true));
+    await settle();
+    expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
+  });
+
   test("a closed panel reads no folders", async () => {
     useFilesPanelStore.setState({ isOpen: false });
     renderHook(() => useFilesPanel());

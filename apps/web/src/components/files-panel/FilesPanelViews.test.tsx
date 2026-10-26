@@ -320,6 +320,48 @@ describe("files panel views", () => {
     expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
   });
 
+  test("FileTreeNode shows loading and failure with a keyboard-accessible retry", async () => {
+    const incomplete: FileNode = {
+      name: "build",
+      path: "build",
+      isDirectory: true,
+      children: [],
+      truncated: true,
+    };
+    useFilesPanelStore.setState({
+      expandedFolders: ["build"],
+      loadingFolders: ["build"],
+      failedFolders: [],
+    });
+    render(<FileTreeNode item={incomplete} depth={0} />);
+    expect(await screen.findByText("Loading folder…")).toBeTruthy();
+    act(() => useFilesPanelStore.setState({ loadingFolders: [], failedFolders: ["build"] }));
+    expect((await screen.findByRole("status")).textContent).toBe("Could not load folder.");
+    expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading build" }));
+    expect(useFilesPanelStore.getState().failedFolders).toEqual([]);
+  });
+
+  test("AllFilesView renders loaded subtree children in the merged tree", async () => {
+    useFilesPanelStore.setState({
+      expandedFolders: ["build"],
+      loadingFolders: [],
+      failedFolders: [],
+      fileTree: [
+        { name: "build", path: "build", isDirectory: true, children: [], truncated: true },
+      ],
+      fileSubtrees: {
+        build: {
+          children: [{ name: "fresh.txt", path: "build/fresh.txt", isDirectory: false }],
+          truncated: false,
+        },
+      },
+    });
+    renderWithTerminal(<AllFilesView onDelete={() => undefined} />);
+    expect(await screen.findByRole("button", { name: "fresh.txt" })).toBeTruthy();
+    expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
+  });
+
   test("FileTreeNode drags a file onto a destination folder", async () => {
     const onMove = mock(() => undefined);
     useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });

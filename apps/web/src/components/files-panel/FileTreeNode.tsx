@@ -128,9 +128,9 @@ export const FileTreeNode = memo(function FileTreeNode({
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
   const setFolderExpanded = useFilesPanelStore((state) => state.setFolderExpanded);
   const isExpanded = expandedFolders.includes(item.path);
-  const isLoadingContents = useFilesPanelStore(
-    (state) => item.truncated === true && state.loadingFolders.includes(item.path),
-  );
+  const isLoadingContents = useFilesPanelStore((state) => state.loadingFolders.includes(item.path));
+  const failedContents = useFilesPanelStore((state) => state.failedFolders.includes(item.path));
+  const retryFolderLoad = useFilesPanelStore((state) => state.retryFolderLoad);
   const isFolder = item.isDirectory;
   const [isDragOver, setIsDragOver] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -242,12 +242,28 @@ export const FileTreeNode = memo(function FileTreeNode({
           folderRow
         )}
         <CollapsibleContent>
-          {item.truncated && (
+          {(item.truncated || isLoadingContents || failedContents) && (
             <p
               className="py-1 pr-2 text-xs text-muted-foreground"
               style={{ paddingLeft: paddingLeft + 12 }}
             >
-              {isLoadingContents ? "Loading folder…" : "Some folder contents are not shown."}
+              {isLoadingContents ? (
+                "Loading folder…"
+              ) : failedContents ? (
+                <>
+                  <span role="status">Could not load folder.</span>{" "}
+                  <button
+                    type="button"
+                    aria-label={`Retry loading ${item.path}`}
+                    className="rounded text-foreground underline underline-offset-2 hover:text-primary focus-visible:outline focus-visible:outline-2"
+                    onClick={() => retryFolderLoad(item.path)}
+                  >
+                    Retry
+                  </button>
+                </>
+              ) : (
+                "Some folder contents are not shown."
+              )}
             </p>
           )}
           {item.children?.map((child) => (

@@ -129,3 +129,12 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 - **Unchanged owner:** `bun test --cwd apps/backend ./src/core/agent-accounts.test.ts` passed the complete file three times in a row (39 pass, 0 fail each).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IZmPu4` (the run's failure artifacts).
 - **Assessment:** the same intermittent symptom. No account implementation, assertion, timeout or skip changed.
+
+## On-demand file-tree review validation — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name repo-tests -- mise run test`, Bun 1.4.4, workspace/root/bridges/protocol reservations 4/1/2/1 with two backend workers.
+- **Failure:** `agent accounts > the same login cannot be added twice`: A rejected duplicate left a second account directory (37.40 ms).
+- **Aggregate counts:** backend 11,580 passed, 101 skipped, four failed and two between-test errors across 677 files (822.94 s); the aggregate remains failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name agent-accounts-isolated -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --parallel=1 --only-failures` passed, exit 0 in 3.5 seconds.
+- **Evidence:** `orkestrator-test-run.7ku54G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** recurrence of the existing ordering failure; no owning implementation, assertion, deadline or skip changed.

@@ -34,3 +34,12 @@ implementation, assertion, timeout or skip changed.
 - **Disposition:** open; a likely product race found.
 - **Evidence:** `commands-servers.ts:295` decides the failure type in the child's `exit` handler, using `stderrTail` built from stderr `data` events. Node documents that stdio may still be open when `exit` fires. If `database is locked` arrives after `exit`, the error is the plain `exited before becoming healthy`, no lock retry is scheduled, and the test sees that instead of `shutting down`. That matches the failure text and the lock message logged just before it. The sibling case `a start that loses the database is retried and comes up` failed in [0801](../aggregate-validation-runs/0801-per-machine-accounts-validation.md) on 2026-10-25 (291.53 ms), which fits the same race. The owner passed alone today (9/9, 5.3 s; Bun 1.4.4).
 - **Next step:** classify on `close` (or after stderr ends) rather than `exit`, then stress the owner under load. Real OpenCode starts that lose the lock would hit the same path.
+
+## On-demand file-tree review validation — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name repo-tests -- mise run test`, Bun 1.4.4, workspace/root/bridges/protocol reservations 4/1/2/1 with two backend workers.
+- **Failure:** `local OpenCode server starts on one host > shutdown between database-lock attempts prevents a retry spawn`: Expected `shutting down`, received `opencode server exited before becoming healthy (code 1, signal null)` (565.24 ms).
+- **Aggregate counts:** backend 11,580 passed, 101 skipped, four failed and two between-test errors across 677 files (822.94 s); the aggregate remains failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name opencode-host-isolated -- bun test --cwd apps/backend ./src/core/opencode-host-start.test.ts --parallel=1 --only-failures` passed, exit 0 in 6.0 seconds.
+- **Evidence:** `orkestrator-test-run.7ku54G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** recurrence of the existing ordering failure; no owning implementation, assertion, deadline or skip changed.

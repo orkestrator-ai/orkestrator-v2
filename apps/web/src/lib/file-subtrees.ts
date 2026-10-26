@@ -54,19 +54,28 @@ export function mergeFileSubtrees(
   return merged;
 }
 
-/** Expanded directories still truncated, reachable through expanded ancestors. */
-export function expandedTruncatedDirectories(
+/** Expanded directories reachable through expanded ancestors. */
+export function expandedDirectories(
   tree: FileNode[],
   expandedFolders: ReadonlySet<string>,
+  truncatedOnly = false,
 ): string[] {
   const result: string[] = [];
   const visit = (nodes: FileNode[]) => {
     for (const node of nodes) {
       if (!node.isDirectory || !expandedFolders.has(node.path)) continue;
-      if (node.truncated) result.push(node.path);
+      if (!truncatedOnly || node.truncated) result.push(node.path);
       if (node.children) visit(node.children);
     }
   };
   visit(tree);
   return result;
+}
+
+/** Expanded truncated directories reachable through expanded ancestors. */
+export function expandedTruncatedDirectories(
+  tree: FileNode[],
+  expandedFolders: ReadonlySet<string>,
+): string[] {
+  return expandedDirectories(tree, expandedFolders, true);
 }

@@ -708,13 +708,31 @@ test("file rename preserves selection, survives reload and cancels on workspace 
   }
 });
 
-test("capped file tree retains source files and shows incomplete folders after reload", async ({
+test("capped file tree loads subtrees, retries failures and refreshes across inactive views and reload", async ({
   page,
 }) => {
   const status = await profileStatus();
   expect(status.status).toBe("ready");
+  let subtreeReads = 0;
+  let failSubtreeReads = true;
+  let releaseFailure!: () => void;
+  const failureGate = new Promise<void>((resolve) => {
+    releaseFailure = resolve;
+  });
   await page.route("**/__orkestrator/invoke", async (route) => {
-    if (route.request().postDataJSON()?.command === "check_claude_cli") {
+    const request = route.request().postDataJSON();
+    if (
+      request?.command === "get_local_file_subtree" &&
+      request.args?.directory === "build/.turbo"
+    ) {
+      subtreeReads += 1;
+      if (failSubtreeReads) {
+        await failureGate;
+        await route.fulfill({ status: 500, json: { error: "Fixture folder read failed" } });
+        return;
+      }
+    }
+    if (request?.command === "check_claude_cli") {
       await route.fulfill({ json: { result: false } });
     } else {
       await route.continue();
@@ -739,8 +757,8 @@ test("capped file tree retains source files and shows incomplete folders after r
     const root = hydrated.worktreePath!;
     await fs.mkdir(path.join(root, "build"), { recursive: true });
     await fs.mkdir(path.join(root, "src"), { recursive: true });
-    await fs.mkdir(path.join(root, "build", "unopened-folder"));
-    await fs.writeFile(path.join(root, "build", "unopened-folder", "hidden.o"), "");
+    await fs.mkdir(path.join(root, "build", ".turbo"));
+    await fs.writeFile(path.join(root, "build", ".turbo", "hidden.o"), "");
     await fs.mkdir(path.join(root, "empty-folder"));
     await fs.writeFile(path.join(root, "src", "cap-source.ts"), "");
     for (let start = 0; start < 5_100; start += 100) {
@@ -760,6 +778,9 @@ test("capped file tree retains source files and shows incomplete folders after r
         name: "Open projects and environments",
         exact: true,
       });
+      // Wait for the mobile shell to mount before deciding whether its
+      // navigation drawer needs opening after reload.
+      await expect(projects.or(expand).or(entry).first()).toBeVisible({ timeout: 30_000 });
       if (await projects.isVisible()) await projects.click();
       await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
       if (await expand.isVisible()) await expand.click();
@@ -792,11 +813,39 @@ test("capped file tree retains source files and shows incomplete folders after r
     await expect(
       page.getByText("Some folder contents are not shown.", { exact: true }).first(),
     ).toBeVisible();
-    await expandFolder("unopened-folder");
+    await expandFolder(".turbo");
+    const folderContentsId = await page
+      .getByRole("button", { name: ".turbo", exact: true })
+      .getAttribute("aria-controls");
     await expect(
-      page.getByText("Some folder contents are not shown.", { exact: true }),
-    ).toHaveCount(2);
+      page.locator(`[id="${folderContentsId}"]`).getByText("Loading folder…", { exact: true }),
+    ).toBeVisible();
+    releaseFailure();
+    await expect(page.getByText("Could not load folder.", { exact: true })).toBeVisible();
+    const retry = page.getByRole("button", { name: "Retry loading build/.turbo", exact: true });
+    await retry.focus();
+    failSubtreeReads = false;
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toBeVisible();
+    await expect(retry).toHaveCount(0);
+    // The bounded walk never opens .turbo; its digest cannot see these edits.
+    await fs.rename(
+      path.join(root, "build", ".turbo", "hidden.o"),
+      path.join(root, "build", ".turbo", "fresh.o"),
+    );
+    await expect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
     await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: /^Changes\b/ }).click();
+    await fs.writeFile(path.join(root, "build", ".turbo", "inactive.o"), "");
+    await page.getByRole("tab", { name: "All files", exact: true }).click();
+    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    const previousReads = subtreeReads;
+    await page.getByRole("button", { name: "build", exact: true }).click();
+    await expandFolder("build");
+    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    expect(subtreeReads).toBeGreaterThan(previousReads);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await openFiles();
@@ -804,9 +853,13 @@ test("capped file tree retains source files and shows incomplete folders after r
     await expect(
       page.getByText("Some folder contents are not shown.", { exact: true }).first(),
     ).toBeVisible();
+    await expandFolder(".turbo");
+    await expect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     await expandFolder("src");
     await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
   } finally {
+    releaseFailure();
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
   }

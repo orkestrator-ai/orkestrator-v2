@@ -294,14 +294,29 @@ function startProxy(port: number, upstream: string, onReport: (report: ProbeRepo
   });
 }
 
-class BrowserTarget {
+export class BrowserTarget {
   private nextId = 0;
-  private readonly pending = new Map<number, (message: Record<string, unknown>) => void>();
-  private constructor(private readonly socket: WebSocket) {
+  private readonly pending = new Map<
+    number,
+    { reply: (message: Record<string, unknown>) => void; reject: (error: Error) => void }
+  >();
+  private disconnected: Error | undefined;
+
+  constructor(
+    private readonly socket: WebSocket,
+    private readonly commandTimeoutMs = 10_000,
+  ) {
     socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data)) as Record<string, unknown>;
-      if (typeof message.id === "number") this.pending.get(message.id)?.(message);
+      if (typeof message.id === "number") this.pending.get(message.id)?.reply(message);
     };
+    socket.onclose = () => this.disconnect(new Error("Chrome CDP socket closed"));
+    socket.onerror = () => this.disconnect(new Error("Chrome CDP socket error"));
+  }
+
+  private disconnect(error: Error): void {
+    this.disconnected ??= error;
+    for (const request of Array.from(this.pending.values())) request.reject(error);
   }
 
   static async connect(debugPort: number): Promise<BrowserTarget> {
@@ -317,18 +332,39 @@ class BrowserTarget {
   }
 
   send(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    if (this.disconnected) return Promise.reject(this.disconnected);
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, (message) => {
+      const finish = () => {
+        clearTimeout(timer);
         this.pending.delete(id);
-        if (message.error) reject(new Error(`${method}: ${JSON.stringify(message.error)}`));
-        else resolve((message.result ?? {}) as Record<string, unknown>);
+      };
+      const fail = (error: Error) => {
+        finish();
+        reject(error);
+      };
+      const timer = setTimeout(
+        () => fail(new Error(`${method}: CDP command timed out after ${this.commandTimeoutMs} ms`)),
+        this.commandTimeoutMs,
+      );
+      this.pending.set(id, {
+        reject: fail,
+        reply: (message) => {
+          finish();
+          if (message.error) reject(new Error(`${method}: ${JSON.stringify(message.error)}`));
+          else resolve((message.result ?? {}) as Record<string, unknown>);
+        },
       });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
   close(): void {
+    this.disconnect(new Error("Chrome CDP connection closed"));
     this.socket.close();
   }
 }
@@ -400,7 +436,7 @@ async function measure(
       sawHidden:
         shown?.sawHidden === true ||
         trail.some((report) => report.kind === "visible" || report.visibility === "hidden"),
-      shown: shown ?? { kind: "shown" as const },
+      shown: shown ?? null,
       shownReported: shown !== undefined,
       shownReportAfterRestoreMs: shown ? Date.now() - restoredAt : null,
       trail,
@@ -415,12 +451,55 @@ async function measure(
 // ---------------------------------------------------------------------------
 // Main.
 
-const median = (values: number[]) => {
-  if (values.length === 0) return Number.NaN;
-  const sorted = [...values].sort((a, b) => a - b);
+type Measurement = Awaited<ReturnType<typeof measure>>;
+
+function finite(values: Array<number | null | undefined>): number[] {
+  return values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+}
+
+function median(values: Array<number | null | undefined>): number | null {
+  const sorted = finite(values).sort((a, b) => a - b);
+  if (sorted.length === 0) return null;
   const middle = (sorted.length - 1) / 2;
   return (sorted[Math.floor(middle)]! + sorted[Math.ceil(middle)]!) / 2;
-};
+}
+
+function maximum(values: Array<number | null | undefined>): number | null {
+  const samples = finite(values);
+  return samples.length > 0 ? Math.max(...samples) : null;
+}
+
+export function summarizeRuns(runs: Measurement[]) {
+  // A missing report is an incomplete run, never a zero-cost observation.
+  const completed = runs.filter((run) => run.shownReported && run.shown !== null);
+  const shown = completed.map((run) => run.shown!);
+  return {
+    allHidden: runs.every((run) => run.sawHidden),
+    allReported: completed.length === runs.length,
+    reportedRuns: completed.length,
+    unreportedRuns: runs.length - completed.length,
+    maxShownReportAfterRestoreMs: maximum(completed.map((run) => run.shownReportAfterRestoreMs)),
+    medianTicksWhileHidden: median(shown.map((report) => report.ticksWhileHidden)),
+    medianFirstFrameMs: median(shown.map((report) => report.firstFrameMs)),
+    medianShownLongTaskMs: median(
+      shown.map((report) => report.longTasks?.reduce((sum, value) => sum + value, 0)),
+    ),
+    maxShownLongTaskMs: maximum(
+      shown.map((report) => (report.longTasks ? Math.max(0, ...report.longTasks) : null)),
+    ),
+    medianShownLoafBlockingMs: median(
+      shown.map((report) =>
+        report.longAnimationFrames?.reduce((sum, [, blocking]) => sum + blocking, 0),
+      ),
+    ),
+    medianHeapBeforeMiB: median(shown.map((report) => report.heapBeforeMiB)),
+    medianHeapAfterMiB: median(shown.map((report) => report.heapAfterMiB)),
+    transcriptMiB: runs[0]?.ready.transcriptMiB,
+    messages: runs[0]?.ready.messages,
+  };
+}
 
 async function main() {
   const options = parseOptions(process.argv.slice(2));
@@ -473,41 +552,13 @@ async function main() {
           );
           (results[`${stream}-${hiddenSeconds}s`] ??= []).push(result);
           console.log(
-            `[hidden] run ${run} ${stream} ${hiddenSeconds}s: shown report ${result.shownReported ? `after ${result.shownReportAfterRestoreMs} ms` : "never arrived"}, hidden ${result.sawHidden}, ticks while hidden ${result.shown.ticksWhileHidden}, first frame ${result.shown.firstFrameMs} ms, long tasks ${result.shown.longTasks?.length ?? 0} (${(result.shown.longTasks ?? []).reduce((sum, value) => sum + value, 0)} ms)`,
+            `[hidden] run ${run} ${stream} ${hiddenSeconds}s: shown report ${result.shownReported ? `after ${result.shownReportAfterRestoreMs} ms` : "never arrived"}, hidden ${result.sawHidden}, ticks while hidden ${result.shown?.ticksWhileHidden}, first frame ${result.shown?.firstFrameMs} ms, long tasks ${result.shown?.longTasks?.length ?? 0} (${(result.shown?.longTasks ?? []).reduce((sum, value) => sum + value, 0)} ms)`,
           );
         }
       }
     }
     const summary = Object.fromEntries(
-      Object.entries(results).map(([key, runs]) => [
-        key,
-        {
-          allHidden: runs.every((run) => run.sawHidden),
-          allReported: runs.every((run) => run.shownReported),
-          maxShownReportAfterRestoreMs: Math.max(
-            0,
-            ...runs.map((run) => run.shownReportAfterRestoreMs ?? Number.POSITIVE_INFINITY),
-          ),
-          medianTicksWhileHidden: median(runs.map((run) => run.shown.ticksWhileHidden ?? 0)),
-          medianFirstFrameMs: median(runs.map((run) => run.shown.firstFrameMs ?? Number.NaN)),
-          medianShownLongTaskMs: median(
-            runs.map((run) => (run.shown.longTasks ?? []).reduce((sum, value) => sum + value, 0)),
-          ),
-          maxShownLongTaskMs: Math.max(0, ...runs.flatMap((run) => run.shown.longTasks ?? [])),
-          medianShownLoafBlockingMs: median(
-            runs.map((run) =>
-              (run.shown.longAnimationFrames ?? []).reduce(
-                (sum, [, blocking]) => sum + blocking,
-                0,
-              ),
-            ),
-          ),
-          medianHeapBeforeMiB: median(runs.map((run) => run.shown.heapBeforeMiB ?? Number.NaN)),
-          medianHeapAfterMiB: median(runs.map((run) => run.shown.heapAfterMiB ?? Number.NaN)),
-          transcriptMiB: runs[0]?.ready.transcriptMiB,
-          messages: runs[0]?.ready.messages,
-        },
-      ]),
+      Object.entries(results).map(([key, runs]) => [key, summarizeRuns(runs)]),
     );
     const chromeVersion = spawnSync(CHROME, ["--version"], { encoding: "utf8" }).stdout.trim();
     const report = {
@@ -535,4 +586,4 @@ async function main() {
   }
 }
 
-await main();
+if (import.meta.main) await main();

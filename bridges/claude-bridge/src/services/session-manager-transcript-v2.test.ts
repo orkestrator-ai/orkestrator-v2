@@ -17,7 +17,7 @@ import {
   transcriptWithToolResult,
   waitFor,
 } from "./session-manager-test-harness.js";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { gunzipSync } from "node:zlib";
 import { Hono } from "hono";
 import {
@@ -315,6 +315,68 @@ describe("unknown sessions", () => {
     // An unknown sub-path is still not a route.
     expect((await get("/session/session-unknown/transcript/other")).status).toBe(404);
   });
+  test.each([
+    { code: "invalid", status: 400 },
+    { code: "conflict", status: 409 },
+    { code: undefined, status: 500 },
+  ])(
+    "materialization failure returns $status and a later summary request retries",
+    async ({ code, status }) => {
+      const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
+      const log = spyOn(console, "error").mockImplementation(() => {});
+      mockSdkGetSessionInfo.mockRejectedValueOnce(
+        Object.assign(new Error("SDK materialization failed"), { code }),
+      );
+      try {
+        const failed = await get(transcriptPath(bridgeId, { version: "2" }));
+        expect(failed.status).toBe(status);
+        expect(await failed.json()).toEqual({ error: "SDK materialization failed" });
+        expect(peekSession(bridgeId)).toBeUndefined();
+
+        mockSdkGetSessionInfo.mockImplementation(async () => sdkSessionInfo());
+        const retried = await read(transcriptPath(bridgeId, { version: "2" }));
+        expect(retried.status).toBe("snapshot");
+        const state = peekSession(bridgeId)!;
+        await waitFor(() => state.persistedMessagesLoaded === true && !state.persistedHydration);
+        expect(mockSdkGetSessionInfo).toHaveBeenCalledTimes(2);
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
+  test("failed background hydration stays retryable and the hydrated token invalidates the preview", async () => {
+    const state = await materializePersistedSession();
+    const log = spyOn(console, "warn").mockImplementation(() => {});
+    mockSdkGetSessionMessages.mockRejectedValueOnce(new Error("SDK hydration failed"));
+    try {
+      const preview = await read(transcriptPath(state.id, { version: "2" }));
+      expect(preview.value.complete).toBe(false);
+      await waitFor(() => log.mock.calls.length > 0);
+      expect(state.persistedHydration).toBeUndefined();
+      expect(state.persistedMessagesLoaded).toBe(false);
+      expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(1);
+
+      mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+      const retry = await read(
+        transcriptPath(state.id, { version: "2", knownToken: preview.token }),
+      );
+      expect(retry).toMatchObject({ status: "unchanged", token: preview.token });
+      await waitFor(() => state.persistedMessagesLoaded === true && !state.persistedHydration);
+      const hydrated = await read(
+        transcriptPath(state.id, { version: "2", knownToken: preview.token }),
+      );
+      expect(hydrated.status).toBe("snapshot");
+      expect(hydrated.token).not.toBe(preview.token);
+      expect(hydrated.value.complete).toBe(true);
+      expect(hydrated.value.freshness).toBe("current");
+      expect(hydrated.value.messages.length).toBeGreaterThan(0);
+      expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   // A persisted session that is not resident (after a bridge restart) used
   // to answer 404 here, and only the backend's `/messages` fallback loaded it.
   // The summary route now materializes it, so 404 means missing (0050 item 3).
@@ -332,6 +394,7 @@ describe("unknown sessions", () => {
       expect(state).toBeDefined();
       await waitFor(() => state!.persistedMessagesLoaded !== false && !state!.persistedHydration);
       const hydrated = await read(transcriptPath(bridgeId, { version: "2", limit: "100" }));
+      expect(hydrated.token).not.toBe(preview.token);
       expect(hydrated.value.complete).toBe(true);
       expect(hydrated.value.freshness).toBe("current");
       expect(hydrated.value.messages.length).toBeGreaterThan(0);

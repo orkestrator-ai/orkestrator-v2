@@ -3414,6 +3414,27 @@ describe("persisted session routes", () => {
       expect((await jsonBody(res)).messages[0].content).toBe("from the transcript");
     });
 
+    test("forwards a materialization failure and allows the next messages request to retry", async () => {
+      mockEnsurePersistedSession.mockRejectedValueOnce(
+        refusal("conflict", "Session temporarily unavailable"),
+      );
+      const failed = await app.request("/session/s-persisted/messages");
+      expect(failed.status).toBe(409);
+      expect(await jsonBody(failed)).toEqual({ error: "Session temporarily unavailable" });
+
+      mockEnsurePersistedSession.mockResolvedValueOnce({
+        id: "s-persisted",
+        title: "From disk",
+        status: "idle",
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      });
+      const retried = await app.request("/session/s-persisted/messages");
+      expect(retried.status).toBe(200);
+      expect((await jsonBody(retried)).messages).toEqual(mockGetSessionMessages());
+      expect(mockEnsurePersistedSession).toHaveBeenCalledTimes(2);
+    });
+
     test("serves the in-memory transcript once it has been loaded", async () => {
       const res = await app.request("/session/s-1/messages");
       expect(res.status).toBe(200);

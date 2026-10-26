@@ -731,9 +731,11 @@ Overrides layer the way the launchers do. For `start_build_pipeline`:
 Each Multi Review row field is replaced independently.
 
 Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
-over the worker's model catalogue, mirroring the launch dialog: a stale saved
-model falls back to the first connected catalogue model, and an effort or speed
-is kept only when the chosen model offers it. When a platform has no catalogue,
+over the worker's model catalogue, mirroring the launch dialog: an unset or
+stale saved model falls back to the connected model a tab with no model would
+start on (the catalogue row marked `sessionDefault`, which the Pi bridge sets
+on Pi's saved default), else to the first connected catalogue model, and an
+effort or speed is kept only when the chosen model offers it. When a platform has no catalogue,
 the saved model id is kept. The request hash covers the caller's payload, not
 the resolved rows, so retrying with the same `requestId` after the user edits
 their defaults replays the original work.

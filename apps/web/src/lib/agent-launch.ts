@@ -11,8 +11,8 @@ import {
   resolveReasoningId,
   type AgentModel,
 } from "@orkestrator/protocol/native-agent";
-export { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
-import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
+export { resolveCatalogModelId, sessionDefaultModel } from "@orkestrator/protocol/model-id";
+import { resolveCatalogModelId, sessionDefaultModel } from "@orkestrator/protocol/model-id";
 
 export type LaunchAgent = AgentPlatform;
 
@@ -36,6 +36,8 @@ export interface AgentModelOption {
   resolvedModel?: string;
   /** True when this model exposes a Fast/Normal speed toggle. */
   supportsSpeed?: boolean;
+  /** Where a new session with no model starts (Pi's saved default). */
+  sessionDefault?: boolean;
 }
 
 export type AgentModelCatalog = Record<"claude" | "codex" | "opencode", AgentModelOption[]> &
@@ -55,7 +57,9 @@ export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> 
 ];
 
 /**
- * The preferred connected model when offered, otherwise the first connected one.
+ * The preferred connected model when offered, otherwise the connected one a
+ * tab with no model would start on (`sessionDefault`, Pi's saved default),
+ * otherwise the first connected one.
  *
  * A configured default can name a model the running agent no longer exposes;
  * passing it through would send the run to an unavailable model. Cached rows
@@ -68,7 +72,9 @@ export function firstModelFor(
 ): string {
   const models = modelsForAgent(catalog, agent).filter((model) => model.connected !== false);
   return (
-    resolveCatalogModelId(agent, models, preferredModels?.[agent]) ?? models[0]?.id ?? "default"
+    resolveCatalogModelId(agent, models, preferredModels?.[agent]) ??
+    sessionDefaultModel(models)?.id ??
+    "default"
   );
 }
 

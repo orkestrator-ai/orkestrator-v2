@@ -37,6 +37,7 @@ import {
   modelsForAgent,
   platformOwnsSpeed,
   resolveCatalogModelId,
+  sessionDefaultModel,
   toPickerModel,
   type AgentModelCatalog,
   type AgentModelOption,
@@ -410,7 +411,7 @@ function resolveStepState(state: StepState, catalog: AgentModelCatalog): Resolve
     matched ??
     (state.model && state.model !== "default"
       ? undefined
-      : modelsForAgent(catalog, state.agent)[0]);
+      : sessionDefaultModel(modelsForAgent(catalog, state.agent)));
   const efforts = model?.reasoningEfforts ?? [];
   const effort =
     !model && state.reasoningEffort && state.reasoningEffort !== "default"

@@ -57,3 +57,16 @@ export function resolveCatalogModelId(
   }
   return undefined;
 }
+
+/**
+ * The model a launch falls back to when no saved choice matches: the one the
+ * catalogue marks as where a new session starts, else its first entry.
+ *
+ * Every "use the defaults" launch must land where a tab with no model would,
+ * or a review row and a worker launched from the same settings disagree.
+ */
+export function sessionDefaultModel<T extends { sessionDefault?: boolean }>(
+  models: readonly T[],
+): T | undefined {
+  return models.find((model) => model.sessionDefault === true) ?? models[0];
+}

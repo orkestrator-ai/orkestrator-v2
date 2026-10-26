@@ -7,6 +7,7 @@ import {
   emptyComposer,
   hydrateComposer,
   listModels,
+  markSessionDefault,
   modelLocalId,
   modelProviderId,
   normalizeAgentModel,
@@ -40,6 +41,25 @@ describe("model ids", () => {
   test("reports no provider for an id that names none", () => {
     expect(modelProviderId("claude-opus-4-5")).toBe("");
     expect(modelLocalId("claude-opus-4-5")).toBe("");
+  });
+});
+
+describe("session default mark", () => {
+  const rows = [
+    { platform: "pi" as const, id: "openai/gpt-4", label: "GPT-4" },
+    { platform: "pi" as const, id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol" },
+  ];
+
+  test("marks the first preferred id the catalogue offers, on copies", () => {
+    const marked = markSessionDefault(rows, ["signed-out/x", "openai/gpt-6.1-sol", "openai/gpt-4"]);
+    expect(marked.map((row) => row.sessionDefault ?? false)).toEqual([false, true]);
+    // The input is the process-wide catalogue cache; it must stay unmarked.
+    expect(rows.some((row) => "sessionDefault" in row)).toBe(false);
+  });
+
+  test("marks nothing when no preferred id is offered", () => {
+    expect(markSessionDefault(rows, ["signed-out/x"])).toEqual(rows);
+    expect(markSessionDefault(rows, [])).toEqual(rows);
   });
 });
 

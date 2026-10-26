@@ -677,9 +677,15 @@ async function startLocalServerAttempt(
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
+    // A changed Cursor key restarts the bridge, which would end a running turn
+    // and its background work. A busy bridge keeps the key it started with,
+    // as a busy Claude or Codex bridge keeps its account; the first start
+    // after it goes idle applies the new one (the container path does the
+    // same in `start_cursor_server`).
     const credentialMatches =
       kind !== "cursor" ||
-      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint;
+      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint ||
+      (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     const workingDirectoryMatches =
       Boolean(env?.worktreePath) && localServers.workingDirectory(key) === env?.worktreePath;
     const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);

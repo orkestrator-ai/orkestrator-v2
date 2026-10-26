@@ -1321,6 +1321,18 @@ describe("successful lifecycle routes", () => {
       expect(state.status).toBe("error");
       expect(state.error).toBe("OAuth token refresh failed: invalid_grant");
       expect(state.promptJournal.get("req-run-failed")?.state).toBe("failed");
+      // The reason is in the transcript too, where the next turn cannot
+      // replace it, rather than an empty reply.
+      const failure = state.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "status");
+      expect(failure).toEqual([
+        expect.objectContaining({
+          type: "status",
+          severity: "error",
+          content: "OAuth token refresh failed: invalid_grant",
+        }),
+      ]);
     } finally {
       resetTestDependencies();
     }
@@ -1353,6 +1365,9 @@ describe("successful lifecycle routes", () => {
       expect(state.status).toBe("idle");
       expect(state.error).toBeUndefined();
       expect(state.promptJournal.get("req-retried")?.state).toBe("completed");
+      expect(
+        state.messages.flatMap((message) => message.parts).some((part) => part.type === "status"),
+      ).toBe(false);
     } finally {
       resetTestDependencies();
     }

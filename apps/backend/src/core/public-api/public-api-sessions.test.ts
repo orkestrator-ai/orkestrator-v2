@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import {
@@ -206,6 +206,40 @@ describe("session.start and request-specific completion", () => {
     const settled = await receipt(harness, started.result.runId);
     expect(settled.state).toBe("failed");
     expect(settled.execution?.error).toContain("model overloaded");
+  });
+
+  test("a run whose environment stopped under it settles interrupted, not unknown", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "job-stopped");
+    const { tabId, runId } = started.result;
+    setActivity(service, "claude", tabId, stub.sends[0]!.sessionId, "waiting");
+    expect((await receipt(harness, runId)).state).toBe("running");
+
+    // The bridge is gone, so its status is unreadable from here on.
+    stub.setStatus(async () => {
+      throw new Error("bridge unreachable");
+    });
+    await harness.storage.updateEnvironment("env-1", { status: "stopped" });
+    await service.environmentRuntimeStopped("env-1");
+
+    const settled = await receipt(harness, runId);
+    expect(settled.state).toBe("interrupted");
+    expect(settled.execution).toMatchObject({ state: "interrupted", evidence: "none" });
+    expect(settled.error?.code).toBe("run-interrupted");
+    // And the session is no longer busy for a follow-up.
+    const session = await harness.call<{ activity: string }>("session.get", {
+      sessionId: started.result.sessionId,
+    });
+    expect(session.ok && session.result.activity).toBe("idle");
+  });
+
+  test("an inherited default model stays a default the runtime may replace", async () => {
+    // The shipped Codex default is refused for a ChatGPT login. Pinned as if
+    // named, every `session start` on default settings failed its first turn.
+    const { harness, service } = await setup();
+    const ensure = spyOn(service, "ensureSession");
+    await startSession(harness, "job-default-model");
+    expect(ensure.mock.calls.at(-1)?.[0]).toMatchObject({ modelSource: "default" });
   });
 
   test("independent sessions settle independently", async () => {

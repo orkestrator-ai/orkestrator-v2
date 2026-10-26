@@ -43,7 +43,11 @@ describe("copy plan", () => {
       async () => {
         const started = Date.now();
         const result = await pipeContainerPath("source", "/workspace", ["run", "helper"]);
-        expect(result).toMatchObject({ absent: false, producerFailed: true });
+        expect(result).toMatchObject({
+          absent: false,
+          producerFailed: true,
+          daemonUnavailable: false,
+        });
         expect(Date.now() - started).toBeLessThan(5_000);
       },
     );
@@ -71,6 +75,9 @@ exit 125
             pipeContainerPath("source", "/workspace", ["run", "helper"]),
             new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 15_000)),
           ]);
+          // Whether the producer's message lands first is a race (the
+          // helper's exit kills it), so only settling is asserted here; a
+          // failed step asks the daemon itself (`dockerDaemonUnreachableNow`).
           expect(settled).toMatchObject({ absent: false, producerFailed: true });
         }
       },
@@ -82,11 +89,15 @@ exit 125
     for (const [stderr, expected] of [
       [
         "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory",
-        { absent: false, producerFailed: true },
+        { absent: false, producerFailed: true, daemonUnavailable: true },
       ],
       [
         "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
-        { absent: false, producerFailed: true },
+        { absent: false, producerFailed: true, daemonUnavailable: true },
+      ],
+      [
+        "Error response from daemon: container source is being removed",
+        { absent: false, producerFailed: true, daemonUnavailable: false },
       ],
       [
         "Error response from daemon: Could not find the file /home/node/.pi in container source",

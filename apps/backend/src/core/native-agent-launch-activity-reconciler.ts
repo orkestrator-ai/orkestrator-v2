@@ -1,6 +1,7 @@
 import type {
   BuildPipelineAgent,
   AgentActivityState,
+  Environment,
   PersistedNativeAgentSession,
   StorageService,
   NativeAgentRuntimeProvider,
@@ -59,6 +60,12 @@ type ObservedSessionActivity = {
   completionPending?: boolean;
   /** The provider content revision at this observation, when reported. */
   contentRevision?: string;
+  /**
+   * Settled to idle because the session's runtime stopped while its turn was
+   * still working or waiting (`settleStoppedSessions`), not observed idle.
+   * The next real observation replaces the whole record and so clears it.
+   */
+  stoppedMidTurn?: true;
 };
 
 type PrepareDispatch = (
@@ -87,6 +94,8 @@ export interface NativeAgentLaunchActivityReconcilerHost {
     sessionKey: string,
     itemIds: readonly string[],
   ): Promise<void>;
+  /** Drop a stopped environment's outstanding requests from every cached view. */
+  withdrawEnvironmentInteractions(environmentId: string): void;
   /** The service's public prompt dispatch. */
   dispatchPrompt(input: DispatchNativeAgentPromptInput): Promise<PersistedNativeAgentSession>;
   /** Prompt dispatch with a preparation step run against the resolved session. */
@@ -116,6 +125,11 @@ export class NativeAgentLaunchActivityReconciler {
    * simultaneous session completions into one environment notification.
    */
   private readonly pendingPrRefreshEnvironmentIds = new Set<string>();
+  /**
+   * Stopped container environments whose sessions the sweep has already
+   * settled, so it does so once per stop rather than on every pass.
+   */
+  private readonly settledStoppedEnvironments = new Set<string>();
   private activityScan: Promise<void> | null = null;
   /** Number of the latest sweep started; demands compare against it. */
   private activityScanNumber = 0;
@@ -272,6 +286,101 @@ export class NativeAgentLaunchActivityReconciler {
       : observed.state;
   }
 
+  /** Whether the session's last turn was cut off by its runtime stopping. */
+  sessionStoppedMidTurn(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): boolean {
+    return (
+      this.observedSessionActivity.get(
+        nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+      )?.stoppedMidTurn === true
+    );
+  }
+
+  /**
+   * An environment's runtime stopped, and its bridges with it: no turn of
+   * its sessions is running any more and no parked request can be answered.
+   *
+   * The sweep skips environments that are not ready, so without this the
+   * last observation outlived the stop: a session seen `waiting` stayed
+   * `waiting`, `session send` refused it as busy and a move was refused as
+   * running. Each session is settled to `idle` *quietly*. No activity
+   * transition is announced, because a turn that was cut off did not finish:
+   * announcing one would report a worker's turn as done to its coordinator,
+   * drain queued prompts into a stopped environment and probe for a PR. No
+   * completion is recorded, and the next start reads `idle` against `idle`,
+   * so it fires no "finished" edge either. Views are told to re-read
+   * (`onObservationInvalidation`), and `stoppedMidTurn` keeps what happened
+   * for a run observer until the next real observation replaces it.
+   *
+   * Reads already in flight are fenced first, so a pre-stop `working` cannot
+   * land after the settle.
+   */
+  settleStoppedSessions(
+    environmentId: string,
+    sessions: readonly PersistedNativeAgentSession[],
+  ): void {
+    this.observations.replaceEnvironmentGenerations(environmentId);
+    for (const session of sessions) {
+      if (session.environmentId !== environmentId) continue;
+      const observed = this.observedSessionActivity.get(session.key);
+      if (!observed || observed.providerSessionId !== session.providerSessionId) continue;
+      // A retained record would still answer "waiting" to a fresh demand.
+      this.observations.forget(session.key);
+      if (observed.state === "idle") continue;
+      const turnWasRunning = observed.state === "waiting" || observed.readyForInput !== true;
+      this.observedSessionActivity.set(session.key, {
+        providerSessionId: session.providerSessionId,
+        state: "idle",
+        ...(turnWasRunning ? { stoppedMidTurn: true as const } : {}),
+      });
+      this.options.onObservationInvalidation?.({
+        observation: this.observations.nextStamp(),
+        environmentId: session.environmentId,
+        sessionKey: session.key,
+        providerSessionId: session.providerSessionId,
+        state: "idle",
+        owner: "environment",
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+      });
+    }
+  }
+
+  /**
+   * The sweep's catch-all for runtimes that stopped without the stop command:
+   * a container that exited on its own and was found by lifecycle
+   * reconciliation, or one stopped by a rebuild or a recovery-copy restore.
+   * Container environments only: Docker reports `stopped` only for a
+   * container that is not running, whereas a local stop that could not end a
+   * bridge still records `stopped` and deliberately keeps that bridge's
+   * requests (`stopEnvironmentOnce`). Once per stop; a start re-arms it.
+   */
+  private settleStoppedRuntimes(
+    environments: readonly Environment[],
+    sessions: readonly PersistedNativeAgentSession[],
+  ): void {
+    const stopped = new Set(
+      environments
+        .filter(
+          (environment) =>
+            environment.environmentType !== "local" && environment.status === "stopped",
+        )
+        .map((environment) => environment.id),
+    );
+    for (const environmentId of Array.from(this.settledStoppedEnvironments)) {
+      if (!stopped.has(environmentId)) this.settledStoppedEnvironments.delete(environmentId);
+    }
+    for (const environmentId of stopped) {
+      if (this.settledStoppedEnvironments.has(environmentId)) continue;
+      this.settledStoppedEnvironments.add(environmentId);
+      this.host.withdrawEnvironmentInteractions(environmentId);
+      this.settleStoppedSessions(environmentId, sessions);
+    }
+  }
+
   /**
    * Whether one environment's bridge has an in-flight dispatch or a session
    * last observed working, waiting, or running background tasks.
@@ -417,6 +526,7 @@ export class NativeAgentLaunchActivityReconciler {
       }
     }
     if (this.host.isStopped()) return;
+    this.settleStoppedRuntimes(environments, sessions);
     // Preserve the aggregate's restart fallback until every session has a
     // known prior observation. Afterwards exact session edges own attention,
     // including completions announced before a detached shell finally exits.

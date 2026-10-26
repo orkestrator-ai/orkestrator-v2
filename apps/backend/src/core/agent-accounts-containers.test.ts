@@ -57,6 +57,7 @@ import {
 import { createEnvironment, StorageService } from "./storage.js";
 
 const ENV_KEYS = [
+  "HOME",
   "CODEX_HOME",
   "XDG_DATA_HOME",
   "ORKESTRATOR_AGENT_TEST_HOST_HOME",
@@ -177,6 +178,8 @@ beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "ork-account-containers-")));
   process.env.CODEX_HOME = path.join(root, "host-codex");
   process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = path.join(root, "host-home");
+  // The profile's isolated HOME, where its Grok snapshot lives.
+  process.env.HOME = path.join(root, "profile-home");
   process.env.XDG_DATA_HOME = path.join(root, "host-data");
   process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV] = path.join(root, "host-claude");
   await write(path.join(root, "host-codex", "auth.json"), '{"OPENAI_API_KEY":"codex-host"}');
@@ -347,8 +350,8 @@ describe("refreshStagedAgentAccountLogins", () => {
         tokens: { access_token: accessToken, refresh_token: "SENTINEL-CODEX-REFRESH" },
       }),
     );
-    const grokAuth = path.join(root, "host-home", ".grok", "auth.json");
-    await write(path.join(root, "host-home", ".grok", "config.toml"), "model = 'x'");
+    const grokAuth = path.join(root, "profile-home", ".grok", "auth.json");
+    await write(path.join(root, "profile-home", ".grok", "config.toml"), "model = 'x'");
     await write(grokAuth, "{}");
     const enableGrok = () => {
       const original = context.storage.loadConfig.bind(context.storage);
@@ -1529,7 +1532,7 @@ else if (command === "cp") {
 });
 
 describe("syncContainerLogin for Grok", () => {
-  const grokAuth = () => path.join(root, "host-home", ".grok", "auth.json");
+  const grokAuth = () => path.join(root, "profile-home", ".grok", "auth.json");
 
   function enableGrok(): void {
     context.storage.loadConfig = async () =>

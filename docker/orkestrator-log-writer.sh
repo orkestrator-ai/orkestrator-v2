@@ -27,7 +27,17 @@ umask 077
 # newline would otherwise have awk hold its whole output in memory. It is
 # line-buffered, or a pipe would hold back the last few KiB of output — the
 # lines a failure diagnosis needs.
-stdbuf -oL fold -b -w 65536 | LC_ALL=C awk -v file="$file" -v max="$max" -v keep="$keep" '
+#
+# mawk, the image's awk, also block-buffers a piped stdin: without
+# `-W interactive` it acts on nothing until it holds a few KiB or sees end of
+# file, so a quiet, long-lived bridge never had its log file created at all.
+# Other awks reject the option, so it is passed only where it is accepted
+# (the `+` expansion keeps an empty array legal under `set -u` in bash 3).
+awk_interactive=()
+if probe="$(LC_ALL=C awk -W interactive 'BEGIN { }' </dev/null 2>&1)" && [ -z "$probe" ]; then
+    awk_interactive=(-W interactive)
+fi
+stdbuf -oL fold -b -w 65536 | LC_ALL=C awk ${awk_interactive[@]+"${awk_interactive[@]}"} -v file="$file" -v max="$max" -v keep="$keep" '
 function shell_quote(s) { gsub(/\047/, "\047\\\047\047", s); return "\047" s "\047" }
 function rotate(   i, from, to) {
     close(file)

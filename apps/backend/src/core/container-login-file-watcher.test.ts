@@ -8,6 +8,7 @@ import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import type { Environment } from "./models.js";
 
 const savedHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+const savedHome = process.env.HOME;
 const savedDataHome = process.env.XDG_DATA_HOME;
 let root: string;
 
@@ -47,7 +48,8 @@ function harness(options: { environments: Environment[]; leaseHeld?: boolean }) 
   return { watcher, synced, scheduled, hooks, context };
 }
 
-const grokAuth = () => path.join(root, "host-home", ".grok", "auth.json");
+// An agent-test profile's Grok login is its own snapshot in its isolated HOME.
+const grokAuth = () => path.join(root, "profile-home", ".grok", "auth.json");
 const piAuth = () => path.join(root, "host-home", ".pi", "agent", "auth.json");
 
 async function write(file: string, contents: string): Promise<void> {
@@ -60,12 +62,15 @@ async function write(file: string, contents: string): Promise<void> {
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "ork-login-watch-")));
   process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = path.join(root, "host-home");
+  process.env.HOME = path.join(root, "profile-home");
   process.env.XDG_DATA_HOME = path.join(root, "host-data");
 });
 
 afterEach(async () => {
   if (savedHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
   else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = savedHostHome;
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
   if (savedDataHome === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = savedDataHome;
   await fs.rm(root, { recursive: true, force: true });

@@ -577,6 +577,9 @@ exit 0
     try {
       await withFakeDocker(dockerScript, async (logs) => {
         process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+        // An agent-test profile's Grok login is its own snapshot in its
+        // isolated HOME, not the real host's (`portableInputSpec`).
+        process.env.HOME = hostHome;
         // Concurrent starts must be serialized into one bridge process.
         const [first, second] = (await Promise.all([
           commands.get(`start_${provider}_server`)?.(

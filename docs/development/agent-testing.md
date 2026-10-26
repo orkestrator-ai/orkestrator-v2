@@ -119,7 +119,10 @@ ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa mise run test:logged -- --name dock
 
 `grok-container-login.spec.ts` also offers an opt-in real-provider check. It
 requires a usable host Grok login when the profile starts; a missing or expired
-login produces an explicit skip. It gets an authenticated reply, advances only
+login produces an explicit skip. Containers take the profile's own Grok
+snapshot (`<dataDir>/agent-credentials/home/.grok/auth.json`, the profile's
+HOME), which is the file the spec edits; until 2026-10-26 container staging
+read the real host `~/.grok` instead, so the spec could not have passed. It gets an authenticated reply, advances only
 the disposable profile's login expiry metadata, withholds the expired host
 snapshot, restores a current host snapshot, and synchronizes it into the same
 bridge. A follow-up must recall the first turn's codeword in the same session.

@@ -140,3 +140,14 @@ describe("context insertion and display", () => {
     expect(insertUserCommandContext("unchanged", "")).toBe("unchanged");
   });
 });
+
+test("an unterminated user-authored tag cannot suppress pending command context", () => {
+  const original = "<orkestrator-user-commands> user text without a closing delimiter";
+  const block = renderUserCommandContext([command()]);
+  expect(insertUserCommandContext(original, block)).toBe(`${block}${original}`);
+  expect(stripUserCommandContext(insertUserCommandContext(original, block))).toBe(original);
+  const coordinator = "<orkestrator-coordinator-context>ids</orkestrator-coordinator-context>\n\n";
+  expect(insertUserCommandContext(`${coordinator}${original}`, block)).toBe(
+    `${coordinator}${block}${original}`,
+  );
+});

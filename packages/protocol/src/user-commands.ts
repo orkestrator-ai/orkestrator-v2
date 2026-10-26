@@ -174,10 +174,10 @@ export function insertUserCommandContext(prompt: string, block: string): string 
     if (end !== -1) {
       const head = prompt.slice(0, end + COORDINATOR_CONTEXT_CLOSE_TAG.length);
       const rest = afterBlock(prompt.slice(end + COORDINATOR_CONTEXT_CLOSE_TAG.length));
-      return rest.startsWith(USER_COMMAND_CONTEXT_OPEN_TAG) ? prompt : `${head}\n\n${block}${rest}`;
+      return leadingUserCommandContext(rest) ? prompt : `${head}\n\n${block}${rest}`;
     }
   }
-  return prompt.startsWith(USER_COMMAND_CONTEXT_OPEN_TAG) ? prompt : `${block}${prompt}`;
+  return leadingUserCommandContext(prompt) ? prompt : `${block}${prompt}`;
 }
 
 /** The already persisted block, including on an ambiguous dispatch retry. */

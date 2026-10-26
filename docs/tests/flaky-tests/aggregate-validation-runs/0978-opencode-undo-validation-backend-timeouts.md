@@ -54,3 +54,21 @@ worktrees (the protocol group ran 223.2 s; bridges 1183.5 s). Evidence:
 The second run's backend failures above passed in this run, and this run's
 failures passed in the earlier ones, consistent with load-dependent timing.
 Nothing was changed in these owners.
+
+
+## Review fixes validation — 2026-10-26
+
+- **Change under test:** `2015359f9` on `todo-0175-opencode-undo-3179a52c7d02` fixes long revert-marker IDs and delayed action responses, and adds recovery and snapshot paging coverage. The failing owners and their implementations are unchanged.
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; backend and web each used two isolated Bun workers. Bridges waited 253.8 seconds for shared host capacity.
+- **Aggregate result:** exit 1 after 585.9 seconds of test groups (587.9 seconds logged). Backend: 11,228 passed, 95 skipped, four failed and one between-test error across 657 files (488.13 seconds). Desktop: 1,320 passed, 14 skipped, one failed across 91 files (41.42 seconds). Web: 9,830 passed, 10 skipped, zero failed; the remaining workspace packages, root/support, bridges and protocol regeneration passed.
+- **Evidence:** `orkestrator-test-run.1YwIKw/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; enclosing log `orkestrator-test-run.5OhBot/repository-tests.log.gz`.
+
+| Unchanged owning file | Aggregate failure | Complete owning-file rerun |
+| --- | --- | --- |
+| `apps/desktop/tests/preview-transport-manager.test.ts` | `PreviewTransportManager (desktop tunnel end to end) > hiding does not close the listener; the last release retires it and frees the attachment`: release invocation absent after the fixed wait (295.42 ms). | `mise run test:logged -- --name preview-owner-rerun -- bun test --cwd apps/desktop ./tests/preview-transport-manager.test.ts --parallel=1 --only-failures` passed in 1.1 seconds. Confirmed recurrence of [0790](../previews-annotations-and-gateway/0790-preview-transport-attachment-release-timing.md). |
+| `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write`: zero changes after 2,006.05 ms. | `mise run test:logged -- --name worktree-watcher-owner-rerun -- bun test --cwd apps/backend ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed in 1.4 seconds. Reopened [0091](../environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md). |
+| `apps/backend/src/core/environment-move.test.ts` | `restart recovery re-links submodules of an adopted or abandoned copy`: 5,069.21 ms timeout and terminated Git child. | `mise run test:logged -- --name environment-move-owner-rerun -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` remained non-green: 35 passed, two failed and two errors across 37 tests (46.45 seconds). The original case timed out at 5,039.46 ms and `move_environment > moves a worktree with nested submodules (same disk)` timed out at 5,070.46 ms. Evidence: `orkestrator-test-run.ioWqle/`. See existing [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md); this run does not independently establish a flake. |
+| `apps/backend/src/core/worktree-snapshots-git.test.ts` | `real Git through the shared owner > staging in a linked worktree (index outside the root) is detected` and `real Git through the shared owner > a shared ref moving the baseline outside the worktree is detected`: both timed out at 5,002.01 ms. | `mise run test:logged -- --name worktree-snapshots-owner-rerun -- bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` also failed both cases (5,002.02 / 5,002.01 ms): two passed, two failed in 11.21 seconds. Evidence: `orkestrator-test-run.LNBdEz/`. Unresolved; not classified as flakes. |
+
+The focused OpenCode revert/provider/snapshot regressions, formatting, lint and typechecking passed. Shared host contention is a possible contributor to timing failures, but the persistent isolated failures above do not establish that cause. No unrelated implementation, assertion, timeout or skip was changed.

@@ -2498,7 +2498,10 @@ describe("session routes", () => {
         mockGetPromptDispatchState.mockReturnValueOnce(state);
         const res = await app.request("/session/s-1/dispatch?requestId=r-1");
         expect(res.status).toBe(200);
-        expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+        expect(await jsonBody(res)).toEqual({
+          dispatch: "dispatched",
+          pending: state === "processing",
+        });
       }
       expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "r-1");
     });
@@ -2540,7 +2543,10 @@ describe("session routes", () => {
         // reports dispatched: an explicit positive wins.
         for (const state of ["processing", "already-processed"] as const) {
           mockGetPromptDispatchState.mockReturnValueOnce(state);
-          expect(await read("before-restart")).toEqual({ dispatch: "dispatched" });
+          expect(await read("before-restart")).toEqual({
+            dispatch: "dispatched",
+            pending: state === "processing",
+          });
         }
         expect(mockPersistedDispatchClaimLost).not.toHaveBeenCalled();
         // Read-only: never the touching or hydrating lookups.
@@ -2587,7 +2593,7 @@ describe("session routes", () => {
     test("is not shadowed by GET /session/:id", async () => {
       mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const res = await app.request("/session/s-1/dispatch?requestId=r-1");
-      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched" });
+      expect(await jsonBody(res)).toEqual({ dispatch: "dispatched", pending: true });
     });
   });
 
@@ -3277,6 +3283,7 @@ describe("persisted session routes", () => {
         status: "error" as "error" | "idle",
         error: "Claude restarted before this turn finished",
         interruption: "restart" as const,
+        interruptedRequestId: "cut-short",
         createdAt: new Date("2026-01-01"),
         lastActivity: new Date("2026-01-01"),
       };
@@ -3286,11 +3293,14 @@ describe("persisted session routes", () => {
         status: "error",
         error: "Claude restarted before this turn finished",
         interruption: "restart",
+        interruptedRequestId: "cut-short",
       });
 
       // A stale field on a session that is no longer failed explains nothing.
       restored.status = "idle";
-      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty("interruption");
+      const idle = await jsonBody(await app.request("/session/s-1"));
+      expect(idle).not.toHaveProperty("interruption");
+      expect(idle).not.toHaveProperty("interruptedRequestId");
       mockGetSession.mockImplementation(defaultGetSession);
     });
 

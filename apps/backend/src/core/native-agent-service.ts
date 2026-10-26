@@ -1679,7 +1679,7 @@ export class NativeAgentService {
           ? "retired"
           : undefined;
       }
-      if (status !== "dispatched") return undefined;
+      if (status !== "dispatched" && status !== "pending") return undefined;
       return (await this.storage.confirmNativeAgentDispatch(key, requestId))
         ? "confirmed"
         : undefined;

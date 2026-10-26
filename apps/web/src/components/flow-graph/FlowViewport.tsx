@@ -9,8 +9,8 @@ import {
 import { Maximize, Minimize, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
-import type { FlowRect } from "./multi-review-flow";
+import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import type { FlowRect } from "./flow-graph-model";
 import {
   DEFAULT_FLOW_VIEW,
   FLOW_ZOOM_MAX,
@@ -26,7 +26,7 @@ import {
   zoomFlowView,
   type FlowSize,
   type FlowView,
-} from "./multi-review-flow-viewport";
+} from "./flow-viewport";
 
 /** Drag-to-pan starts only on the canvas itself, never on a node or a control. */
 const NO_PAN_SELECTOR = '[role="tab"], [data-flow-zoom-controls]';
@@ -95,7 +95,7 @@ export function useFlowViewport({
   };
   // The remembered zoom applies only at the width it was taken at.
   const zoom =
-    useMultiReviewFlowViewStore((state) => {
+    useFlowGraphViewStore((state) => {
       const remembered = state.views.get(viewKey);
       return remembered && remembered.width === measuredWidth ? remembered.zoom : null;
     }) ?? DEFAULT_FLOW_VIEW.zoom;
@@ -114,7 +114,7 @@ export function useFlowViewport({
 
   const save = useCallback((view: FlowView) => {
     const { viewKey: key, measuredWidth: width } = sizesRef.current;
-    useMultiReviewFlowViewStore.getState().saveView(key, { ...view, width });
+    useFlowGraphViewStore.getState().saveView(key, { ...view, width });
   }, []);
 
   const currentView = useCallback((): FlowView => {
@@ -163,7 +163,7 @@ export function useFlowViewport({
     const last = lastWidthRef.current;
     lastWidthRef.current = { key: viewKey, width: measuredWidth };
     const element = viewportRef.current;
-    const store = useMultiReviewFlowViewStore.getState();
+    const store = useFlowGraphViewStore.getState();
     const remembered = store.views.get(viewKey);
     const resized =
       last !== null &&
@@ -406,6 +406,7 @@ export function FlowZoomControls({
   fullscreen,
   onToggleFullscreen,
   placement = "corner",
+  testIdPrefix,
 }: {
   zoom: number;
   onZoomOut: () => void;
@@ -414,6 +415,8 @@ export function FlowZoomControls({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   placement?: "corner" | "inline";
+  /** Names the controls for tests: `{prefix}-zoom-level`, `{prefix}-fullscreen`. */
+  testIdPrefix: string;
 }) {
   const percent = Math.round(zoom * 100);
   const touch = placement === "inline";
@@ -449,7 +452,7 @@ export function FlowZoomControls({
         )}
         aria-label={`Zoom ${percent}%, reset to 100%`}
         title="Reset to 100%"
-        data-testid="multi-review-zoom-level"
+        data-testid={`${testIdPrefix}-zoom-level`}
         onClick={onReset}
       >
         {percent}%
@@ -474,7 +477,8 @@ export function FlowZoomControls({
         aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
         aria-pressed={fullscreen}
         title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-        data-testid="multi-review-fullscreen"
+        data-testid={`${testIdPrefix}-fullscreen`}
+        data-flow-fullscreen-toggle=""
         onClick={onToggleFullscreen}
       >
         {fullscreen ? <Minimize className="size-3.5" /> : <Maximize className="size-3.5" />}
@@ -498,12 +502,14 @@ export function FlowHeightDivider({
   max,
   onResize,
   onCommit,
+  testIdPrefix,
 }: {
   height: number;
   min: number;
   max: number;
   onResize: (height: number | null) => void;
   onCommit: (height: number | null) => void;
+  testIdPrefix: string;
 }) {
   const dragRef = useRef<{
     pointerId: number;
@@ -550,7 +556,7 @@ export function FlowHeightDivider({
       aria-valuemin={min}
       aria-valuemax={max}
       tabIndex={0}
-      data-testid="multi-review-graph-divider"
+      data-testid={`${testIdPrefix}-graph-divider`}
       title="Drag to resize · double-click to reset"
       className={cn(
         "group absolute inset-x-0 -bottom-1 z-20 flex h-2 cursor-row-resize touch-none items-center outline-hidden",

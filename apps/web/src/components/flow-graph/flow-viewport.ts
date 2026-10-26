@@ -1,5 +1,5 @@
 /**
- * Zoom and pan for the Multi Review flow graph.
+ * Zoom and pan for the workflow flow graphs (Multi Review, the build pipeline).
  *
  * The graph sits in a scrolling viewport: pan is the viewport's scroll
  * position, so wheel, trackpad and touch scrolling pan it natively and the
@@ -9,7 +9,7 @@
  * the answers.
  */
 
-import { FLOW_GRAPH_MIN_HEIGHT, type FlowRect } from "./multi-review-flow";
+import { FLOW_GRAPH_MIN_HEIGHT, type FlowRect } from "./flow-graph-model";
 
 export const FLOW_ZOOM_MIN = 0.2;
 export const FLOW_ZOOM_MAX = 2;

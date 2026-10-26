@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { multiReviewFlowLayout } from "./multi-review-flow";
+import { multiReviewFlowLayout } from "../review/multi-review-flow";
 import {
   FLOW_VIEWPORT_MAX_HEIGHT,
   FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
@@ -17,7 +17,7 @@ import {
   steppedFlowZoom,
   wheelZoomFactor,
   zoomFlowView,
-} from "./multi-review-flow-viewport";
+} from "./flow-viewport";
 
 function graph(reviewerCount: number, width = 1440) {
   const layout = multiReviewFlowLayout({ width, reviewerCount, packageHasChips: true });

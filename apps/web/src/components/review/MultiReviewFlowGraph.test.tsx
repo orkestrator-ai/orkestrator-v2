@@ -19,7 +19,7 @@ import {
 } from "@/contexts";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
+import { useFlowGraphViewStore as useMultiReviewFlowViewStore } from "@/stores/flowGraphViewStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -30,7 +30,7 @@ import {
   type MultiReviewFlowGraphProps,
   type MultiReviewFlowNodeModel,
 } from "./MultiReviewFlowGraph";
-import { useFlowViewport } from "./MultiReviewFlowViewport";
+import { useFlowViewport } from "@/components/flow-graph/FlowViewport";
 import {
   multiReviewFlowLayout,
   type MultiReviewFlowEdgeState,
@@ -40,7 +40,7 @@ import {
   FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
   flowViewportHeight,
   resizedFlowViewportHeight,
-} from "./multi-review-flow-viewport";
+} from "@/components/flow-graph/flow-viewport";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 

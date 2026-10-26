@@ -41,21 +41,17 @@ import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { formatTokenCount } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
 import { formatRuntimeParts, runtimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
-import {
-  flowNodeElementId,
-  MultiReviewFlowGraph,
-  type MultiReviewFlowNodeModel,
-} from "./MultiReviewFlowGraph";
+import { MultiReviewFlowGraph, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
+import { FlowInspectorPanel } from "@/components/flow-graph/FlowInspector";
 import {
   MultiReviewFindingsBadge,
   MultiReviewInspectorHeader,
   ReviewerTranscriptTail,
   StepTranscriptTail,
 } from "./MultiReviewInspector";
+import { defaultFlowSelection, latestActivityAt } from "@/components/flow-graph/flow-graph-model";
 import {
-  defaultFlowSelection,
   flowPendingLabel,
-  latestActivityAt,
   mergeReviewerFindings,
   multiReviewElapsedSeconds,
   multiReviewFlowEdges,
@@ -1756,11 +1752,10 @@ function MultiReviewOverviewTab({
               provisionalCount={provisionalCount}
               className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
             />
-            <section
-              role="tabpanel"
-              id={panelId}
-              aria-labelledby={flowNodeElementId(panelId, selected.node.id)}
-              data-testid="multi-review-inspector"
+            <FlowInspectorPanel
+              panelId={panelId}
+              selectedId={selected.node.id}
+              testId="multi-review-inspector"
               className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
             >
               <div className="col-start-1 row-start-1 min-w-0">
@@ -1768,7 +1763,7 @@ function MultiReviewOverviewTab({
               </div>
               {/* Full width: the badge only overlaps it once stuck. */}
               <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
-            </section>
+            </FlowInspectorPanel>
           </div>
         </div>
       </div>

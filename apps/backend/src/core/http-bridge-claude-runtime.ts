@@ -109,6 +109,13 @@ function kindField(taskType: unknown): { kind?: NativeAgentBackgroundTaskKind } 
   };
 }
 
+/** The bridge's end reasons, in the protocol's spelling. */
+function endReasonField(value: unknown): Pick<NativeAgentBackgroundTaskSummary, "endReason"> {
+  if (value === "worker_restart") return { endReason: "process-restart" };
+  if (value === "resume_cleanup") return { endReason: "resume-cleanup" };
+  return {};
+}
+
 function pausedMsField(value: unknown): { pausedMs?: number } {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? { pausedMs: value }
@@ -165,7 +172,7 @@ export function normalizeClaudeBackgroundTasks(
           ...nameField("lastToolName", task.lastToolName),
           ...textField("progressSummary", task.progressSummary),
           ...pausedMsField(task.pausedMs),
-          ...(task.endReason === "worker_restart" ? { endReason: "process-restart" as const } : {}),
+          ...endReasonField(task.endReason),
         },
       ];
     });

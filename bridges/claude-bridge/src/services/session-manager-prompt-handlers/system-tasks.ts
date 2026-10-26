@@ -10,6 +10,7 @@ import {
   isHookRunningBackgroundTask,
   noteBackgroundTasksChanged,
   parkSettlingBackgroundTask,
+  resumeOrphanScanOutcome,
   takeShellTaskFields,
   takeProvisionalBackgroundTask,
   takeSettlingBackgroundTask,
@@ -210,6 +211,17 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
   const parked = takeSettlingBackgroundTask(session, notification.task_id);
   const previous =
     session.backgroundTasks?.[notification.task_id] ?? parked?.task ?? correlated.task;
+  const orphanScan = resumeOrphanScanOutcome(notification, previous);
+  if (orphanScan === "already-settled" && previous) {
+    // The resume scan found no ending in the transcript, but this session saw
+    // one. Keep the ending it saw rather than relabel the task stopped.
+    session.backgroundTasks = boundBackgroundTaskHistory({
+      ...session.backgroundTasks,
+      [previous.id]: previous,
+    });
+    emitBackgroundTasks(turn);
+    return;
+  }
   const terminalStatus: BackgroundTaskSnapshot["status"] =
     notification.status === "failed"
       ? "failed"
@@ -232,6 +244,7 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     subagentType: previous?.subagentType,
     ...carriedTaskMetadata(previous),
     ...taskMessageMetadata(notification),
+    ...(orphanScan === "cleanup" ? { endReason: "resume_cleanup" as const } : {}),
   };
   Object.assign(
     task,

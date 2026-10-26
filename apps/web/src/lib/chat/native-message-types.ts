@@ -90,7 +90,7 @@ export interface NativeBackgroundTask {
   /** Total time the task spent paused, in milliseconds. */
   pausedMs?: number;
   /** See the protocol summary's `endReason`. */
-  endReason?: "process-restart";
+  endReason?: "process-restart" | "resume-cleanup";
 }
 
 /**

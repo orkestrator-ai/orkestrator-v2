@@ -27,6 +27,7 @@ import {
   RUN_SCOPED_TASK_METADATA_RESET,
   boundBackgroundTaskHistory,
   carriedTaskMetadata,
+  resumeOrphanScanOutcome,
   taskMessageMetadata,
 } from "./session-manager-background-tasks.js";
 
@@ -1561,6 +1562,10 @@ export function reducePersistedBackgroundTaskMessage(
     : stored;
   if (message.subtype === "task_notification") {
     if (!message.status) return tasks ?? {};
+    // As on the live edge: the resume scan does not relabel an ending this
+    // replay already read, and marks a task it has no record of as cleanup.
+    const orphanScan = resumeOrphanScanOutcome(message, previous);
+    if (orphanScan === "already-settled") return tasks ?? {};
     const startedAt = previous?.startedAt ?? timestamp;
     const endedAt = timestamp >= startedAt ? timestamp : previous?.endedAt;
     const terminalStatus: BackgroundTaskSnapshot["status"] =
@@ -1588,6 +1593,7 @@ export function reducePersistedBackgroundTaskMessage(
         subagentType: previous?.subagentType,
         ...carriedTaskMetadata(previous),
         ...taskMessageMetadata(message),
+        ...(orphanScan === "cleanup" ? { endReason: "resume_cleanup" as const } : {}),
       },
     });
   }

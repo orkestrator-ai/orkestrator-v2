@@ -251,6 +251,7 @@ const stop = createBackendShutdownHandler({
     await backend.shutdown();
   },
   warn: (message) => console.warn(message),
+  info: (message) => console.log(message),
   exit: (code) => {
     void stopStandaloneBackendLogging(standaloneLogging).finally(() => process.exit(code));
   },

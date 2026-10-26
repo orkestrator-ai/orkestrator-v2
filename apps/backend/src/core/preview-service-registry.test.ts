@@ -233,10 +233,12 @@ describe("PreviewServiceRegistry", () => {
     const registry = await started();
     registry.flushEvent();
     const before = harness.events.length;
-    const original = harness.storage.mutatePreviewServiceStore.bind(harness.storage);
-    harness.storage.mutatePreviewServiceStore = (async () => {
+    const original = harness.storage.previewServices.mutatePreviewServiceStore.bind(
+      harness.storage.previewServices,
+    );
+    harness.storage.previewServices.mutatePreviewServiceStore = (async () => {
       throw new Error("disk full");
-    }) as typeof harness.storage.mutatePreviewServiceStore;
+    }) as typeof harness.storage.previewServices.mutatePreviewServiceStore;
     await expect(
       registry.register({
         environmentId: "a",
@@ -245,7 +247,7 @@ describe("PreviewServiceRegistry", () => {
         applicationPort: 8000,
       }),
     ).rejects.toThrow("disk full");
-    harness.storage.mutatePreviewServiceStore = original;
+    harness.storage.previewServices.mutatePreviewServiceStore = original;
     registry.flushEvent();
     expect(harness.events.slice(before)).toEqual([]);
     expect(registry.listDefinitions("a")).toEqual([]);
@@ -299,7 +301,7 @@ describe("PreviewServiceRegistry", () => {
     await registry.settle();
     expect(registry.listDefinitions("a")).toEqual([]);
     expect(revoked).toContain(serviceId);
-    const stored = await harness.storage.loadPreviewServiceStore();
+    const stored = await harness.storage.previewServices.loadPreviewServiceStore();
     expect(Object.keys(stored.store.definitions)).toEqual([]);
   });
 
@@ -315,7 +317,7 @@ describe("PreviewServiceRegistry", () => {
     const restarted = await started(harness.newRuntime());
     expect(restarted.listDefinitions("a")).toEqual([]);
     expect(restarted.listDefinitions("b")).toHaveLength(1);
-    const stored = await harness.storage.loadPreviewServiceStore();
+    const stored = await harness.storage.previewServices.loadPreviewServiceStore();
     expect(
       Object.values(stored.store.definitions).map((definition) => definition.environmentId),
     ).toEqual(["b"]);
@@ -334,7 +336,7 @@ describe("PreviewServiceRegistry", () => {
   });
 
   test("malformed stored records do not crash startup and are never served", async () => {
-    await harness.storage.mutatePreviewServiceStore((store) => {
+    await harness.storage.previewServices.mutatePreviewServiceStore((store) => {
       (store.definitions as Record<string, unknown>)["svc_broken_record1"] = {
         serviceId: "svc_broken_record1",
       };

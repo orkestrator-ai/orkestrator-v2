@@ -57,3 +57,28 @@ immediately afterwards; the next isolated rerun with the same command passed
 - **Evidence:** `/tmp/orkestrator-test-run.s0jA9M/…toolchain.log.gz` and `/tmp/orkestrator-test-run.LsRgok/` on omarchy-hp.
 - **Assessment:** consistent with the earlier timeout under contention; a host-specific cause (the real `opencode serve` not reaching `connected` within 20 s at this load) is possible. No implementation, deadline or skip changed.
 - **Again after rebasing onto `a51045a4`:** `mise run test` hit the same 40-second deadline (40,001.60 ms) as the backend's only failure (11,742 passed, 142 skipped, 1 failed).
+
+## Desktop recovery validation — 2026-10-26
+
+`mise run test:logged -- --name recovery-repository -- mise run test` on Linux
+x64 repeated the 40-second registration timeout (40001.33 ms, two backend
+workers). The complete unchanged owner also timed out with
+`mise run test:logged -- --name unrelated-opencode-owner -- bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures`
+(40032.56 ms; zero passed, one failed; 43.0 seconds logged). Both runs killed
+one dangling fixture process. This observation is non-green in isolation and
+does not establish a new aggregate-only flake. No OpenCode implementation,
+assertion, timeout or skip changed. Evidence:
+`/tmp/orkestrator-test-run.bTab6l/unrelated-opencode-owner.log.gz` and the aggregate
+log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.
+
+## Recurrence — 2026-10-26
+
+- Command: `mise run test` on branch `todo-0020-container-state-observation-fb5e330d3136` (`d3dcfd62b`: container image, entrypoint, e2e spec, CI workflow and docs; nothing near this test), macOS 27.0 arm64, default groups, host load average about 23 to 32 from other workers.
+- Failure: the case timed out at 40,002.04 ms, the backend's only failure. The root group's other failure was flake 0887's missing register fields, fixed in the same change.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.gmkkKT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Complete unchanged owner: `mise run test:logged -- --name opencode-research-isolated -- bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1` passed (exit 0, 2.4 s).
+- Assessment: another aggregate-only timeout at the 40 s deadline. Still open; nothing changed.
+
+## Remote host upgrades main merge — 2026-10-26
+
+The merged aggregate repeated the 40-second timeout (40003.45 ms). The complete unchanged owner also timed out (40015.45 ms, zero passed, one failed; one dangling fixture process killed). This remains non-green in isolation. Commands, workers, counts and evidence are recorded in [1009](../aggregate-validation-runs/1009-remote-host-main-merge-validation.md). No implementation, assertion, deadline or skip changed.

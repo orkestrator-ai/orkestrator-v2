@@ -116,6 +116,7 @@ import { applyGhChannel, fetchReleasePins } from "./host-maintenance-tasks.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
+  controlMcpPortOverride,
   type ControlMcpInfo,
   type ControlMcpSettings,
 } from "./control-mcp-server.js";
@@ -424,9 +425,8 @@ export class OrkestratorBackend {
     this.controlMcp =
       options.controlMcp ??
       new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed in the application, ephemeral in the test runner so concurrently
-        // executing backend fixtures cannot contend for the user-facing port.
-        port: process.env.NODE_ENV === "test" ? 0 : undefined,
+        // Fixed in the application; ephemeral for tests and agent-test backends.
+        port: controlMcpPortOverride(options.runtimeFlavor, process.env),
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
@@ -544,12 +544,12 @@ export class OrkestratorBackend {
       emit: (event, payload) => options.emit(event, payload),
       local: { invoke: (command, args = {}) => this.invoke(command, args) },
       summaries: {
-        load: () => storage.loadNodeSummariesCache(),
-        save: (value) => storage.saveNodeSummariesCache(value),
+        load: () => storage.nodes.loadNodeSummariesCache(),
+        save: (value) => storage.nodes.saveNodeSummariesCache(value),
       },
       outcomes: {
-        load: () => storage.loadNodeOutcomes(),
-        save: (value) => storage.saveNodeOutcomes(value),
+        load: () => storage.nodes.loadNodeOutcomes(),
+        save: (value) => storage.nodes.saveNodeOutcomes(value),
       },
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
     });
@@ -890,7 +890,7 @@ export class OrkestratorBackend {
         if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
           return true;
       }
-      const workspace = await storage.getCoordinatorWorkspace(projectId);
+      const workspace = await storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
       for (const conversation of workspace.conversations) {
         if (conversation.closedAt || !conversation.agent) continue;
@@ -1350,7 +1350,7 @@ export class OrkestratorBackend {
       loadEnvironments: async (): Promise<Environment[]> => {
         const [environments, workspaces] = await Promise.all([
           this.context.storage.loadEnvironments(),
-          this.context.storage.listCoordinatorWorkspaces(),
+          this.context.storage.coordinators.listCoordinatorWorkspaces(),
         ]);
         const coordinatorRuntimes = workspaces.flatMap((workspace) =>
           workspace.conversations.flatMap((conversation): Environment[] =>
@@ -1386,23 +1386,26 @@ export class OrkestratorBackend {
         if (!coordinatorId || !conversationId) {
           return this.context.storage.updateEnvironment(environmentId, fields);
         }
-        const workspace = await this.context.storage.getCoordinatorWorkspaceById(coordinatorId);
+        const workspace =
+          await this.context.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
         if (!workspace) return null;
-        return this.context.storage.mutateCoordinatorWorkspace(workspace.projectId, (current) =>
-          current && current.id === coordinatorId
-            ? {
-                ...current,
-                conversations: current.conversations.map((conversation) =>
-                  conversation.id === conversationId
-                    ? {
-                        ...conversation,
-                        ...coordinatorBridgeIdentityFromEnvironment(conversation.agent, fields),
-                      }
-                    : conversation,
-                ),
-                updatedAt: new Date().toISOString(),
-              }
-            : current,
+        return this.context.storage.coordinators.mutateCoordinatorWorkspace(
+          workspace.projectId,
+          (current) =>
+            current && current.id === coordinatorId
+              ? {
+                  ...current,
+                  conversations: current.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? {
+                          ...conversation,
+                          ...coordinatorBridgeIdentityFromEnvironment(conversation.agent, fields),
+                        }
+                      : conversation,
+                  ),
+                  updatedAt: new Date().toISOString(),
+                }
+              : current,
         );
       },
     };
@@ -1873,7 +1876,7 @@ export class OrkestratorBackend {
       invoke: (command, args) => this.invoke(command, args ?? {}),
       storage: {
         sendAgentMail: (sender, input) => storage.sendAgentMail(sender, input),
-        getCoordinatorWorkspace: (projectId) => storage.getCoordinatorWorkspace(projectId),
+        coordinators: storage.coordinators,
       },
       publicHandlers: () => handlers,
       ...(controlMcp.callCoordinatorTool &&
@@ -1949,8 +1952,8 @@ export class OrkestratorBackend {
   }> {
     const storage = this.context.storage;
     const [identity, profile] = await Promise.all([
-      storage.getPreviewBackendIdentity(),
-      storage.getBackendProfile(),
+      storage.previewServices.getPreviewBackendIdentity(),
+      storage.previewServices.getBackendProfile(),
     ]);
     return {
       installationId: identity.instanceId,

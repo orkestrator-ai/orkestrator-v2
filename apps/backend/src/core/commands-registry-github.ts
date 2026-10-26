@@ -37,7 +37,7 @@ export function registerGitHubCommands(
       if (!commentBody) throw new Error("Completion comment cannot be empty");
 
       return withGitHubCompletionCommentLock(runId, () =>
-        context.storage.withGitHubCompletionCommentLock(runId, async () => {
+        context.storage.kanban.withGitHubCompletionCommentLock(runId, async () => {
           const target = await requireGitHubProject(context, targetProjectId);
           if (
             target.repository.owner.toLowerCase() !== owner.toLowerCase() ||
@@ -47,7 +47,7 @@ export function registerGitHubCommands(
               `GitHub pipeline repository does not match the selected project (${target.repository.owner}/${target.repository.name}).`,
             );
           }
-          const existing = await context.storage.getGitHubCompletionComment(runId);
+          const existing = await context.storage.kanban.getGitHubCompletionComment(runId);
           if (existing?.status === "posted" && existing.commentId) {
             return {
               status: "already-posted",
@@ -66,7 +66,7 @@ export function registerGitHubCommands(
             const matchingComment = comments.find((comment) => comment.body.includes(marker));
             if (matchingComment) {
               const commentId = String(matchingComment.id);
-              await context.storage.saveGitHubCompletionComment({
+              await context.storage.kanban.saveGitHubCompletionComment({
                 pipelineId: runId,
                 repositoryOwner: repository.owner,
                 repositoryName: repository.name,
@@ -89,7 +89,7 @@ export function registerGitHubCommands(
               `${commentBody}\n\n${marker}`,
             );
             const commentId = String(comment.id);
-            await context.storage.saveGitHubCompletionComment({
+            await context.storage.kanban.saveGitHubCompletionComment({
               pipelineId: runId,
               repositoryOwner: repository.owner,
               repositoryName: repository.name,
@@ -105,7 +105,7 @@ export function registerGitHubCommands(
             };
           } catch (error) {
             const message = sanitizeGitHubError(error, token);
-            await context.storage.saveGitHubCompletionComment({
+            await context.storage.kanban.saveGitHubCompletionComment({
               pipelineId: runId,
               repositoryOwner: repository.owner,
               repositoryName: repository.name,

@@ -14,6 +14,10 @@ import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profi
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import {
+  writeRemoteRelaunchMarker,
+  readRemoteRelaunchMarker,
+} from "../../apps/desktop/electron/remote-relaunch";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -134,7 +138,12 @@ test.beforeAll(() => {
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 });
 
-async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
+type DesktopRecoveryScenario = "close" | "restart" | "remote" | "planned" | "renderer";
+
+async function testIndependentWindows(
+  nicknamesOnly = false,
+  failure?: DesktopRecoveryScenario,
+): Promise<void> {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-smoke-"));
   let vite: ChildProcess | null = null;
   let launchedApp: ElectronApplication | null = null;
@@ -176,6 +185,7 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
       cwd: repositoryRoot,
       env: {
         ...process.env,
+        APPIMAGE: "",
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
@@ -183,7 +193,15 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
     });
     launchedApp = app;
     dismissStartupDialogs(app);
-    const window = await app.firstWindow();
+    // Startup can briefly create a bootstrap window, and development opens
+    // detached DevTools. Select the application document explicitly.
+    await expect
+      .poll(() => app.windows().some((page) => page.url().startsWith(rendererUrl)), {
+        timeout: 60_000,
+      })
+      .toBe(true);
+    const window = app.windows().find((page) => page.url().startsWith(rendererUrl));
+    if (!window) throw new Error("Main renderer window was not created");
     // index.html's title stays until Vite serves and runs renderer-entry; under
     // host load that startup takes longer than expect's 5 s default.
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
@@ -303,6 +321,156 @@ print("public.tiff")
       .not.toBeNull()
       .then(() => backendChildPid(electronPid!));
     expect(backendPid).not.toBeNull();
+
+    if (failure && failure !== "renderer") {
+      // Stub only native user decisions and relaunch side effects. The real
+      // supervisor, main-process callback, catalogue and marker recovery run.
+      await app.evaluate(({ app, dialog }) => {
+        const state = {
+          prompts: [] as Electron.MessageBoxOptions[],
+          relaunches: 0,
+          quits: 0,
+          answer: (_response: number) => {},
+          restore: () => {},
+        };
+        const showMessageBox = dialog.showMessageBox;
+        const relaunch = app.relaunch;
+        const quit = app.quit;
+        state.restore = () => {
+          dialog.showMessageBox = showMessageBox;
+          app.relaunch = relaunch;
+          app.quit = quit;
+        };
+        dialog.showMessageBox = ((options: Electron.MessageBoxOptions) => {
+          state.prompts.push(options);
+          return new Promise<Electron.MessageBoxReturnValue>((resolve) => {
+            state.answer = (response) => resolve({ response, checkboxChecked: false });
+          });
+        }) as typeof dialog.showMessageBox;
+        app.relaunch = () => {
+          state.relaunches += 1;
+        };
+        app.quit = () => {
+          state.quits += 1;
+        };
+        (globalThis as any).__backendFailureTest = state;
+      });
+      const readState = () =>
+        app.evaluate(() => {
+          const { prompts, relaunches, quits } = (globalThis as any).__backendFailureTest;
+          return { prompts, relaunches, quits };
+        });
+      if (failure === "planned") {
+        // Real before-quit wiring calls BackendProcess.stop(), which must not
+        // enter the unexpected-exit callback or offer Restart.
+        await app.evaluate(({ app }) => {
+          app.emit("before-quit", {} as Electron.Event);
+        });
+        await expect.poll(() => processExists(backendPid!), { timeout: 10_000 }).toBe(false);
+        expect(await readState()).toEqual({ prompts: [], relaunches: 0, quits: 0 });
+      } else {
+        if (failure === "remote") {
+          await writeRemoteRelaunchMarker(profile.dataDir, {
+            jobId: "electron-recovery",
+            version: "test",
+          });
+        }
+        process.kill(backendPid!, "SIGKILL");
+        if (failure === "remote") {
+          await expect.poll(async () => (await readState()).quits).toBe(1);
+          expect(await readState()).toEqual({ prompts: [], relaunches: 1, quits: 1 });
+          expect(readRemoteRelaunchMarker(profile.dataDir)?.attempts).toBe(1);
+        } else {
+          await expect.poll(async () => (await readState()).prompts.length).toBe(1);
+          expect((await readState()).prompts[0]).toMatchObject({
+            buttons: ["Restart", "Close"],
+            cancelId: 1,
+          });
+          // Both processes remain responsive while the dialog's promise is
+          // unresolved: the Linux synchronous error-box regression froze here.
+          expect(await window.evaluate(() => document.readyState)).toBe("complete");
+          expect((await readState()).quits).toBe(0);
+          await app.evaluate(
+            (_electron, response) => {
+              (globalThis as any).__backendFailureTest.answer(response);
+            },
+            failure === "restart" ? 0 : 1,
+          );
+          await expect
+            .poll(async () => (await readState()).relaunches)
+            .toBe(failure === "restart" ? 1 : 0);
+          expect((await readState()).quits).toBe(failure === "restart" ? 1 : 0);
+        }
+        const catalogue = await window.evaluate(async () =>
+          (
+            globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi }
+          ).orkestrator.connections.list(),
+        );
+        expect(catalogue.connections.find((entry) => entry.id === "local")?.transport).toBe(
+          "unreachable",
+        );
+      }
+      await app.evaluate(() => {
+        (globalThis as any).__backendFailureTest.restore();
+      });
+      await app.close();
+      launchedApp = null;
+      return;
+    }
+
+    if (failure === "renderer") {
+      const browserWindow = await app.browserWindow(window);
+      const before = await browserWindow.evaluate((candidate) => ({
+        id: candidate.id,
+        rendererPid: candidate.webContents.getOSProcessId(),
+      }));
+      const recovered = await browserWindow.evaluate(
+        (candidate) =>
+          new Promise<{ reason: string; rendererPid: number }>((resolve) => {
+            let reason = "";
+            candidate.webContents.once(
+              "render-process-gone",
+              (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
+                reason = details.reason;
+              },
+            );
+            candidate.webContents.once("did-finish-load", () =>
+              resolve({ reason, rendererPid: candidate.webContents.getOSProcessId() }),
+            );
+            process.kill(candidate.webContents.getOSProcessId(), "SIGKILL");
+          }),
+      );
+      // Recovery must come from installRendererRecovery in the real main
+      // process; the test never reloads the crashed page itself.
+      expect(recovered.reason).toBe("killed");
+      expect(recovered.rendererPid).toBeGreaterThan(0);
+      expect(recovered.rendererPid).not.toBe(before.rendererPid);
+      // Playwright keeps the old CDP Page marked as crashed. Observe the
+      // replacement document through Electron's surviving WebContents.
+      await expect
+        .poll(
+          () =>
+            browserWindow.evaluate((candidate) =>
+              candidate.webContents.executeJavaScript(
+                `Boolean(document.querySelector('button[aria-label="Global settings"]')?.getClientRects().length)`,
+              ),
+            ),
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+      expect(await browserWindow.evaluate((candidate) => candidate.id)).toBe(before.id);
+      expect(backendChildPid(electronPid!)).toBe(backendPid);
+      expect(
+        await browserWindow.evaluate((candidate) =>
+          candidate.webContents.executeJavaScript(
+            `window.orkestrator.invoke("greet", { name: "Recovered renderer" })`,
+          ),
+        ),
+      ).toContain("Hello, Recovered renderer");
+      await app.close();
+      launchedApp = null;
+      return;
+    }
 
     const actionBarControl = window.getByRole("button", { name: "Global settings" });
     await expect(actionBarControl).toBeVisible();
@@ -574,6 +742,16 @@ test("real Electron main process shares one backend across independent windows",
 
 test("remote nicknames refresh all native titles and Window menu entries", async () => {
   await testIndependentWindows(true);
+});
+
+for (const scenario of ["close", "restart", "remote", "planned"] as const) {
+  test(`real desktop backend exit wiring: ${scenario}`, async () => {
+    await testIndependentWindows(false, scenario);
+  });
+}
+
+test("real crashed renderer restores the window and reconnects to the existing backend", async () => {
+  await testIndependentWindows(false, "renderer");
 });
 
 test("a real window with a missing preload reaches recovery without mounting the workspace", async () => {

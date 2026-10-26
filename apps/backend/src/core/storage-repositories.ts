@@ -1,4 +1,8 @@
 import { AgentAccountsRepository } from "./storage-agent-accounts.js";
+import { AgentMailBudgets } from "./storage-agent-mail-budgets.js";
+import { AgentMailboxDirectory } from "./storage-agent-mail-directory.js";
+import { AgentMailInjects } from "./storage-agent-mail-injects.js";
+import { AgentMailStore } from "./storage-agent-mail-store.js";
 import { AgentMailRepository } from "./storage-agent-mail.js";
 import { BuildPipelinesRepository } from "./storage-build-pipelines.js";
 import { ConfigRepository } from "./storage-config.js";
@@ -42,6 +46,9 @@ export class StorageRepositories {
   readonly buildPipelines: BuildPipelinesRepository;
   readonly drafts: DraftsRepository;
   readonly agentMail: AgentMailRepository;
+  readonly agentMailboxes: AgentMailboxDirectory;
+  readonly agentMailInjects: AgentMailInjects;
+  readonly agentMailBudgets: AgentMailBudgets;
   readonly kanban: KanbanRepository;
   readonly previewServices: PreviewServicesRepository;
   readonly nodes: NodesRepository;
@@ -61,7 +68,11 @@ export class StorageRepositories {
     this.prompts = new PromptsRepository(context, files, this);
     this.buildPipelines = new BuildPipelinesRepository(context, files, this);
     this.drafts = new DraftsRepository(context, files, this);
-    this.agentMail = new AgentMailRepository(context, files, this);
+    const mailStore = new AgentMailStore(context, files);
+    this.agentMail = new AgentMailRepository(context, files, this, mailStore);
+    this.agentMailboxes = new AgentMailboxDirectory(context, this, mailStore);
+    this.agentMailInjects = new AgentMailInjects(context, this, mailStore);
+    this.agentMailBudgets = new AgentMailBudgets(context, this, mailStore);
     this.kanban = new KanbanRepository(context, files);
     this.previewServices = new PreviewServicesRepository(context);
     this.nodes = new NodesRepository(context);

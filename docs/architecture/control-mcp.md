@@ -97,7 +97,11 @@ listener. Treat every token like a password: a `full` credential can create
 environments, launch jobs, read transcripts, and update tickets. Managed
 development profiles request an ephemeral loopback port so they can run
 alongside an installed Orkestrator instance; the selected URL is published in
-the profile's readiness and descriptor data.
+the profile's readiness and descriptor data. Any `--runtime-flavor agent-test`
+backend (test fixtures, qualification services, headless backends an agent
+starts) defaults to an ephemeral port as well unless
+`ORKESTRATOR_CONTROL_MCP_PORT` is set, so a forgotten one cannot hold the
+installed app's port.
 
 With the full profile the default credential lists the leaf-node, review and
 PR tools alongside eight `schedule.*` direct tools; clients that defer or

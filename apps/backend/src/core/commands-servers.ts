@@ -680,9 +680,15 @@ async function startLocalServerAttempt(
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
+    // A changed Cursor key restarts the bridge, which would end a running turn
+    // and its background work. A busy bridge keeps the key it started with,
+    // as a busy Claude or Codex bridge keeps its account; the first start
+    // after it goes idle applies the new one (the container path does the
+    // same in `start_cursor_server`).
     const credentialMatches =
       kind !== "cursor" ||
-      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint;
+      localServers.cursorCredentialFingerprint(environmentId) === cursorCredentialFingerprint ||
+      (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     const workingDirectoryMatches =
       Boolean(env?.worktreePath) && localServers.workingDirectory(key) === env?.worktreePath;
     const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);
@@ -833,6 +839,7 @@ async function startLocalServerAttempt(
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.
   delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
+  delete env.CODEX_BRIDGE_STATE_DIR;
   // The same for coordinator research: read-only review turns in a worker
   // bridge consult these too, so only the coordinator branch may set them.
   delete env[COORDINATOR_WEB_RESEARCH_ENV];
@@ -851,7 +858,7 @@ async function startLocalServerAttempt(
     // Created here rather than on first paste: a bridge canonicalizes this root
     // before it reads through it, and a directory that does not exist yet is
     // indistinguishable from one that is not allowed.
-    const attachmentRoot = context.storage.coordinatorAttachmentDirectory(
+    const attachmentRoot = context.storage.coordinators.coordinatorAttachmentDirectory(
       coordinatorId,
       coordinatorConversationId!,
     );
@@ -1135,7 +1142,7 @@ async function startLocalServerAttempt(
     if (!localServers.releaseOwnership(key, child)) return;
     if (coordinatorId && selectedConversation) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
-      void context.storage
+      void context.storage.coordinators
         .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
           workspace && workspace.id === coordinatorId
             ? {
@@ -1213,20 +1220,22 @@ async function startLocalServerAttempt(
       }
     }
     if (coordinatorId) {
-      await context.storage.mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
-        workspace && workspace.id === coordinatorId
-          ? {
-              ...workspace,
-              conversations: workspace.conversations.map((conversation) =>
-                conversation.id === coordinatorConversationId
-                  ? { ...conversation, bridgePort: port, bridgePid: child.pid }
-                  : conversation,
-              ),
-              lifecycleState: "ready",
-              lastStartupError: undefined,
-              updatedAt: new Date().toISOString(),
-            }
-          : workspace,
+      await context.storage.coordinators.mutateCoordinatorWorkspace(
+        environment.projectId,
+        (workspace) =>
+          workspace && workspace.id === coordinatorId
+            ? {
+                ...workspace,
+                conversations: workspace.conversations.map((conversation) =>
+                  conversation.id === coordinatorConversationId
+                    ? { ...conversation, bridgePort: port, bridgePid: child.pid }
+                    : conversation,
+                ),
+                lifecycleState: "ready",
+                lastStartupError: undefined,
+                updatedAt: new Date().toISOString(),
+              }
+            : workspace,
       );
     } else {
       await context.storage.updateEnvironment(environmentId, {
@@ -1249,7 +1258,7 @@ async function startLocalServerAttempt(
       if (selectedConversation) {
         context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
       }
-      await context.storage
+      await context.storage.coordinators
         .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
           workspace && workspace.id === coordinatorId
             ? {

@@ -142,7 +142,7 @@ const attentionList: ReadActionHandler<{ cursor?: AttentionCursor; limit: number
       );
     }
 
-    const runPage = await storage.listSettledPublicOperationsChangedSince(
+    const runPage = await storage.publicOperations.listSettledPublicOperationsChangedSince(
       context.authority,
       since,
       input.limit + 1,

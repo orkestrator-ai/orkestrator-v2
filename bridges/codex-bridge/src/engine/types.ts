@@ -549,6 +549,12 @@ export type EngineEvent = EngineEventMeta &
      * runtime owns turn tracking, so it decides when the child can be replaced.
      */
     | { kind: "account.reload.requested" }
+    /**
+     * A sign-in finished on app-server, through this bridge or another client.
+     * The credential a thread's `auth` notice was about has been replaced, and
+     * that notice locks the tab's composer, so it must not wait for a turn.
+     */
+    | { kind: "account.signedIn" }
   );
 
 export type EngineEventListener = (event: EngineEvent) => void;

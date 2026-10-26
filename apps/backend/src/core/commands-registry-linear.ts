@@ -18,11 +18,11 @@ export function registerLinearCommands(
   _dependencies: RegistryDependencies,
 ): void {
   register("get_linear_connection", async (_args, context) => {
-    const auth = await context.storage.getLinearAuth();
+    const auth = await context.storage.kanban.getLinearAuth();
     if (!auth?.apiKey) return { connected: false, hasToken: false };
     try {
       const viewer = await verifyLinearConnection(auth.apiKey);
-      await context.storage.saveLinearAuth(auth.apiKey, viewer);
+      await context.storage.kanban.saveLinearAuth(auth.apiKey, viewer);
       return { connected: true, hasToken: true, viewer };
     } catch (error) {
       return {
@@ -38,14 +38,14 @@ export function registerLinearCommands(
     if (!token) throw new Error("Linear API key is required");
     try {
       const viewer = await verifyLinearConnection(token);
-      await context.storage.saveLinearAuth(token, viewer);
+      await context.storage.kanban.saveLinearAuth(token, viewer);
       return { connected: true, hasToken: true, viewer };
     } catch (error) {
       throw new Error(sanitizeLinearError(error, token));
     }
   });
   register("disconnect_linear", async (_args, { storage }) => {
-    await storage.clearLinearAuth();
+    await storage.kanban.clearLinearAuth();
     return { connected: false, hasToken: false };
   });
   register("get_linear_issues", async (_args, context) => {
@@ -82,7 +82,7 @@ export function registerLinearCommands(
     const targetIssueId = asString(issueId, "issueId");
     const commentBody = asString(body, "body");
     return withLinearCompletionCommentLock(runId, async () => {
-      const existing = await context.storage.getLinearCompletionComment(runId);
+      const existing = await context.storage.kanban.getLinearCompletionComment(runId);
       if (existing?.status === "posted" && existing.commentId) {
         return {
           status: "already-posted",
@@ -98,7 +98,7 @@ export function registerLinearCommands(
           issueId: targetIssueId,
           body: commentBody,
         });
-        await context.storage.saveLinearCompletionComment({
+        await context.storage.kanban.saveLinearCompletionComment({
           pipelineId: runId,
           issueId: targetIssueId,
           status: "posted",
@@ -108,7 +108,7 @@ export function registerLinearCommands(
         return result;
       } catch (error) {
         const message = sanitizeLinearError(error, apiKey);
-        await context.storage.saveLinearCompletionComment({
+        await context.storage.kanban.saveLinearCompletionComment({
           pipelineId: runId,
           issueId: targetIssueId,
           status: "failed",

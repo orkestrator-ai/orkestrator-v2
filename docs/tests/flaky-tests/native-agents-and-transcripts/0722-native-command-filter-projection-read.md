@@ -79,3 +79,17 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 - **Complete unchanged owner:** `mise run test:logged -- --name native-command-rerun -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 9.4 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of this tracked intermittent failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.
+
+
+## Desktop recovery validation — 2026-10-26
+
+`mise run test:logged -- --name recovery-repository -- mise run test` on Linux
+x64 repeated the maximal-list failure with two web workers: expected one
+projection read, received three (4226.70 ms). The complete unchanged owner,
+run with the rich-content owner using
+`mise run test:logged -- --name unrelated-web-owners -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`,
+also failed: expected one read, received two (2224.98 ms). That command reported
+30 passed and one failed across both files (15.4 seconds). This recurrence
+remains non-green in isolation; no new flake classification or test relaxation
+is inferred. Evidence: `/tmp/orkestrator-test-run.O5dRFB/unrelated-web-owners.log.gz`
+and the aggregate log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.

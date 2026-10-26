@@ -843,6 +843,11 @@ When touching any of them:
   `/transcript/detail` and `/transcript/page`, all built from one per-bridge
   read source via `bridge-transcript-routes`. Detail/page answer an unknown
   session 200 `missing`/`expired`, never 404; absent `version` stays v1.
+  The summary route's 404 must mean the session does not exist: load a
+  persisted session that is not resident before answering, as `/messages`
+  does (Claude materializes it). Older Claude bridges did not, which is why
+  the backend's `/messages` fallback stays until the support window passes
+  them ([version-compatibility.md](docs/architecture/version-compatibility.md#register)).
 
 ### Native slash commands
 
@@ -1109,7 +1114,8 @@ else is rejected outright. `full` mode skips the firewall entirely.
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
   re-adds Codex's (`chatgpt.com`, `auth.openai.com`, for ChatGPT sign-in),
-  Cursor's, Grok's and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
+  Cursor's, OpenCode's (`opencode.ai`, its own Zen and Go providers), Grok's
+  and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
@@ -1195,9 +1201,10 @@ Storage rules:
   `deleteStore` awaited inside the store's lease, or `updateStore`/
   `updateStoreRow`, never both. `storage-writer-guards.test.ts` enforces it.
 - `StorageService` is a facade over per-store repositories sharing one
-  `StorageContext`; add store code to the owning repository and a forwarder
-  to the facade, never a base class (`docs/architecture/storage.md`, "Code
-  layout").
+  `StorageContext`; add store code to the owning repository and expose it
+  through that repository's area type (`KanbanStorage`, a `Pick` reached as
+  `storage.kanban`) or, for repositories without one yet, a forwarder on the
+  facade, never a base class (`docs/architecture/storage.md`, "Code layout").
 - An older record shape is upgraded once by a migration
   (`storage-record-upgrades.ts`), not by a reader on every load.
 - Tests seed and inspect stores through `storage-test-support.ts`, never by
@@ -1482,11 +1489,13 @@ that a missed event can be recovered.
   or installed dependencies require stopping and starting the profile again.
 - Backend business-logic changes generally require a restart because the
   supervised backend is not a Vite module.
-- Bridge changes need a rebuild first: a profile runs local bridges from
-  `bridges/<name>/dist/index.js`, and `dev:test` bundles only Electron. Run
-  that bridge's `build` script (for example
-  `bun run --cwd bridges/codex-bridge build`), then restart the profile, or
-  the run silently exercises the old bridge.
+- Bridge changes need a profile restart: a profile runs local bridges from
+  `bridges/<name>/dist/index.js`, which `dev:test` builds (through Turbo) only
+  when it starts. The browser and coordinator agent-testing Playwright configs
+  (including the browser-derived Claude warm and paused-interactions configs)
+  refuse to run against a profile whose bridge sources or `dist` changed since
+  then; restart it with `dev:stop` and `dev:test`. The Electron config does not
+  use this freshness guard.
 - Use `dev:reset` only when the scenario requires pristine persisted state. A
   normal implementation loop should preserve the profile so reload and
   rehydration behavior remain testable.

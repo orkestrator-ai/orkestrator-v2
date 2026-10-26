@@ -53,7 +53,7 @@ async function openWorkerDelegation(
   workerTabId: string,
   requestId: string,
 ): Promise<boolean> {
-  const association = await context.storage.saveCoordinatorWorkflowAssociation({
+  const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
     projectId: scope.projectId,
     coordinatorId: scope.coordinatorId,
@@ -69,7 +69,10 @@ async function openWorkerDelegation(
   ) {
     throw new Error("Coordinator request id was reused with a different delegation target");
   }
-  const opened = await context.storage.openCoordinatorDelegation(association.id, workerTabId);
+  const opened = await context.storage.coordinators.openCoordinatorDelegation(
+    association.id,
+    workerTabId,
+  );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   return opened.delegation?.state === "running";
 }
@@ -82,7 +85,7 @@ async function assertWorkerDelegationAvailable(
   requestId: string,
 ): Promise<void> {
   const idempotencyKey = `delegation:${requestId}`;
-  const overlapping = (await context.storage.listOpenCoordinatorDelegations()).find(
+  const overlapping = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
     (association) =>
       association.coordinatorId === scope.coordinatorId &&
       association.conversationId === scope.conversationId &&
@@ -308,7 +311,7 @@ export function registerCoordinatorCommands(
       if (!coordinatorId || !conversationId) {
         throw new Error("Coordinator runtime identity is required");
       }
-      return context.storage.writeCoordinatorAttachment(
+      return context.storage.coordinators.writeCoordinatorAttachment(
         coordinatorId,
         conversationId,
         asNonBlankString(filename, "filename"),
@@ -335,7 +338,7 @@ export function registerCoordinatorCommands(
       const project = asNonBlankString(projectId, "projectId");
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const conversation = asNonBlankString(conversationId, "conversationId");
-      const workspace = await context.storage.getCoordinatorWorkspaceById(coordinator);
+      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
       if (!workspace || workspace.projectId !== project || workspace.lifecycleState !== "ready") {
         throw new Error("Coordinator identity is unavailable");
       }
@@ -384,7 +387,7 @@ export function registerCoordinatorCommands(
         // that delegation rather than opening a second one. The open delegation
         // does not close while this message is undelivered, so the worker reads
         // it in its next turn and the coordinator is woken once, after both.
-        const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
+        const joining = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
           (association) =>
             association.coordinatorId === coordinator &&
             association.kind === "environment" &&
@@ -469,7 +472,7 @@ export function registerCoordinatorCommands(
     ) => {
       const project = asNonBlankString(projectId, "projectId");
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
-      const workspace = await context.storage.getCoordinatorWorkspaceById(coordinator);
+      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
       if (!workspace || workspace.projectId !== project) throw new Error("Coordinator not found");
       if (kind !== "environment" && kind !== "build-pipeline" && kind !== "multi-review") {
         throw new Error("Invalid coordinator workflow kind");
@@ -486,7 +489,7 @@ export function registerCoordinatorCommands(
         ...(typeof baseCommit === "string" ? { baseCommit } : {}),
         createdAt: new Date().toISOString(),
       };
-      return context.storage.saveCoordinatorWorkflowAssociation(association);
+      return context.storage.coordinators.saveCoordinatorWorkflowAssociation(association);
     },
   );
   register(
@@ -496,7 +499,7 @@ export function registerCoordinatorCommands(
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const conversation = asNonBlankString(conversationId, "conversationId");
       await requireCoordinatorConversation(context, project, coordinator, conversation);
-      return context.storage.adoptCoordinatorWorkflowAssociation(
+      return context.storage.coordinators.adoptCoordinatorWorkflowAssociation(
         project,
         coordinator,
         asNonBlankString(associationId, "associationId"),
@@ -526,7 +529,7 @@ export function registerCoordinatorCommands(
     }
     const payloadHash = actionHash(input);
     return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
-      const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
+      const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
         id: randomUUID(),
         projectId,
         coordinatorId,
@@ -586,7 +589,7 @@ export function registerCoordinatorCommands(
             },
           })
         : createdEnvironment;
-      await context.storage.completeCoordinatorWorkflowAssociation(
+      await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
         receipt.association.id,
         environmentId,
       );
@@ -606,7 +609,10 @@ export function registerCoordinatorCommands(
         // The worker owes this conversation exactly one answer only after it
         // was successfully started. A failed start must not promise a wake.
         coordinatorDelegationOpened = Boolean(
-          await context.storage.openCoordinatorDelegation(receipt.association.id, "startup-agent"),
+          await context.storage.coordinators.openCoordinatorDelegation(
+            receipt.association.id,
+            "startup-agent",
+          ),
         );
       }
       return {
@@ -711,7 +717,7 @@ export function registerCoordinatorCommands(
     }
     const payloadHash = actionHash(requestedInput);
     return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
-      const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
+      const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
         id: randomUUID(),
         projectId,
         coordinatorId,
@@ -735,7 +741,7 @@ export function registerCoordinatorCommands(
       // BuildPipelineService has its own durable admission key, so reclaiming a
       // reservation after a crash returns the already-created workflow.
       const workflow = await buildPipelines.start(input);
-      await context.storage.completeCoordinatorWorkflowAssociation(
+      await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
         receipt.association.id,
         workflow.id,
       );
@@ -779,7 +785,7 @@ export function registerCoordinatorCommands(
         buildPipelineId: requiredBuildPipelineId,
       });
       return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
-        const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
+        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
           projectId,
           coordinatorId,
@@ -812,7 +818,7 @@ export function registerCoordinatorCommands(
           receipt.association.resourceId,
         );
         if (recovered) {
-          await context.storage.completeCoordinatorWorkflowAssociation(
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
             receipt.association.id,
             receipt.association.resourceId,
           );
@@ -843,7 +849,7 @@ export function registerCoordinatorCommands(
         if (!record(workflow) || typeof workflow.id !== "string") {
           throw new Error("Multi-review creation returned an invalid workflow");
         }
-        await context.storage.completeCoordinatorWorkflowAssociation(
+        await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
         );

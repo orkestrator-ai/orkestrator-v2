@@ -99,7 +99,7 @@ async function setup(
   const run = (name: string, args: Record<string, unknown>) =>
     commands.get(name)!(args, context) as Promise<Record<string, unknown>>;
   const associations = async () =>
-    (await world.storage.listCoordinatorWorkflowAssociations(world.projectId)).filter(
+    (await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)).filter(
       (entry) => entry.nodeId === "bk_leaf",
     );
   return {

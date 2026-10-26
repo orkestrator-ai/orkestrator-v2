@@ -190,16 +190,6 @@ export class SessionsRepository {
     return this.usageHistoryStore().report(query);
   }
 
-  /**
-   * Forgets one environment's recorded usage. Deleting an environment does
-   * not call this: a usage report of the last ninety days must not change
-   * because an environment was removed today, and the rows hold no
-   * conversation content.
-   */
-  deleteAgentUsageHistoryByEnvironment(environmentId: string): number {
-    return this.usageHistoryStore().deleteByEnvironment(environmentId);
-  }
-
   async createSession(
     environmentId: string,
     containerId: string,

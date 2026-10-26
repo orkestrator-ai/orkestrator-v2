@@ -284,7 +284,7 @@ export function operationHandle(
     operationId: record.operationId,
     current: () => current,
     async update(patch: OperationPatch) {
-      const next = await context.command.storage.updatePublicOperation(
+      const next = await context.command.storage.publicOperations.updatePublicOperation(
         record.operationId,
         (stored) => ({
           ...stored,
@@ -343,7 +343,7 @@ async function runMutation(
 
   // Fast path: an earlier admission of this key answers without re-validating
   // a target that may since have changed (e.g. a deleted environment).
-  const existing = await storage.findPublicOperationByKey(key);
+  const existing = await storage.publicOperations.findPublicOperationByKey(key);
   if (existing) {
     if (existing.fingerprint !== fingerprint) {
       throw new PublicActionError(
@@ -358,19 +358,19 @@ async function runMutation(
     // Prepare before changing ownership. A failed prepare leaves the old
     // generation visible to reconciliation and later same-key retries.
     const prepared = await handler.prepare(parsed.value, context);
-    const claimed = await storage.claimStalePublicOperation(
+    const claimed = await storage.publicOperations.claimStalePublicOperation(
       existing.operationId,
       context.generation,
     );
     if (!claimed) {
-      const latest = await storage.getPublicOperation(existing.operationId);
+      const latest = await storage.publicOperations.getPublicOperation(existing.operationId);
       return replayResponse(latest.status === "found" ? latest.record : existing);
     }
     return execute(handler, prepared, claimed, context, false);
   }
 
   const prepared = await handler.prepare(parsed.value, context);
-  const { record, replayed } = await storage.admitPublicOperation({
+  const { record, replayed } = await storage.publicOperations.admitPublicOperation({
     authority: context.authority,
     action: handler.action,
     scope: parsed.scope,
@@ -428,7 +428,7 @@ export function registerPublicActionCommand(
   table: PublicHandlerTable,
 ): void {
   register("public_action", async (args, command) => {
-    const identity = await command.storage.getPreviewBackendIdentity();
+    const identity = await command.storage.previewServices.getPreviewBackendIdentity();
     const backend = {
       installationId: identity.instanceId,
       generation: command.storage.getResourceGeneration(),

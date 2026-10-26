@@ -21,6 +21,7 @@ import {
   runCommand,
   runCommandBuffer,
   spawnCommand,
+  spawnParentBoundCommand,
   writeFileBase64,
 } from "../src/core/shell";
 
@@ -339,6 +340,60 @@ describe("runCommand", () => {
     }
     await new Promise<void>((resolve) => child.once("exit", () => resolve()));
     expect(child.signalCode).toBe("SIGTERM");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("spawnParentBoundCommand", () => {
+  const isAlive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** A follower that reports its own PID, then outlives any test unless stopped. */
+  const startFollower = async () => {
+    const child = spawnParentBoundCommand("/bin/sh", ["-c", "echo $$; exec sleep 30"]);
+    const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+    let output = "";
+    for await (const chunk of child.stdout) {
+      output += String(chunk);
+      if (output.includes("\n")) break;
+    }
+    const inner = Number(output.trim());
+    expect(isAlive(inner)).toBe(true);
+    return { child, exited, inner };
+  };
+  const waitForDeath = async (pid: number) => {
+    const deadline = Date.now() + 5_000;
+    while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(25);
+    return !isAlive(pid);
+  };
+
+  test("stops the command when the backend's end of stdin closes", async () => {
+    // EOF is what a SIGKILLed backend leaves behind: no shutdown path ran.
+    const { child, exited, inner } = await startFollower();
+    child.stdin.end();
+    await exited;
+    expect(await waitForDeath(inner)).toBe(true);
+  });
+
+  test("stops the command when the wrapper is terminated", async () => {
+    const { child, exited, inner } = await startFollower();
+    child.kill("SIGTERM");
+    await exited;
+    expect(await waitForDeath(inner)).toBe(true);
+  });
+
+  test("passes the command's output and exit status through", async () => {
+    const child = spawnParentBoundCommand("/bin/sh", ["-c", "echo out; echo err >&2; exit 7"]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += String(chunk)));
+    child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+    const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+    expect({ stdout, stderr, code }).toEqual({ stdout: "out\n", stderr: "err\n", code: 7 });
   });
 });
 

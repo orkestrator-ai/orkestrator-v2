@@ -3,7 +3,12 @@
 Checked against `main` at `2459b05c` (2026-10-15); account-switching gap 4
 against `9b3f53a2` (2026-10-21). Every code item and switching gap was
 implemented on 2026-10-24 against `8454d18b` (branch
-`todo-0003-accounts-sign-in-cf5acbb74387`, node mbp3).
+`todo-0003-accounts-sign-in-cf5acbb74387`, node mbp3). The live
+qualification was run on 2026-10-26 against `93018933` (branch
+`todo-0003-agent-accounts-sign-in-7ea5f29c4c61`, node mbp3, macOS, Docker
+Desktop 29.7.2, Claude Code 2.1.310, Codex 0.162.1 on PATH and 0.164.0 in the
+profiles), and fixed the four defects it found (see
+[Qualification](#qualification)).
 
 Each platform should report a normalized sign-in state. Sign-in should happen
 in the app wherever the vendor has an API for it, and losing auth mid-turn
@@ -11,9 +16,9 @@ should show in the tab, not as a spawn failure. Claude and Codex can also hold
 more than one login, switched globally per platform. All of that is now in the
 tree: the status type, the bridge routes, the per-session and settings account
 cards, the turn-time `auth` notice, Codex sign-in cancel, the bridge-output
-scrub and the four switching gaps. What is left is live qualification that
-needs a person approving a sign-in, a second account, an older container image
-or Docker (see [What is left](#what-is-left)). How accounts work is in
+scrub and the four switching gaps, each checked on the real stack. What is left
+needs a person to approve a Codex sign-in, and a Claude turn that reports
+rate-limit windows (see [What is left](#what-is-left)). How accounts work is in
 [agent-accounts.md](../../architecture/agent-accounts.md).
 
 ## Current state
@@ -66,6 +71,9 @@ or Docker (see [What is left](#what-is-left)). How accounts work is in
   launch and stale-login flags in `LocalServerRuntime` (`local-server-runtime.ts`), container hand-off, Claude reauthentication.
   Shared entries a CLI replaced with its own copy are now reported per account
   (`privateEntries`).
+  A Codex bridge on an added account keeps its session records in the host
+  login's `orkestrator-bridge` (`CODEX_BRIDGE_STATE_DIR`), so a tab keeps its
+  conversation when its bridge is replaced after a switch (2026-10-26).
 
 ## Outstanding work
 
@@ -140,8 +148,8 @@ or Docker (see [What is left](#what-is-left)). How accounts work is in
 
 ### Account switching gaps
 
-All four were closed in code on 2026-10-24; the live checks are under
-[What is left](#what-is-left).
+All four were closed in code on 2026-10-24. Gaps 1, 2 and 4 passed live on
+2026-10-26 (see [Qualification](#qualification)); gap 3 needs no live run.
 
 1. **Older images without staged inputs.** Done. A legacy image mounts the
    host homes read-only and the entrypoint copies them into `/home/node`, so
@@ -188,46 +196,157 @@ All four were closed in code on 2026-10-24; the live checks are under
 
 ### Qualification
 
+All runs below used disposable `dev:test` profiles and made-up logins in
+throwaway directories; no real login was signed out, renewed or written. Each
+profile was stopped and reset afterwards, and the throwaway Keychain entry one
+probe created was deleted.
+
 - Each auth state from fixtures, visible in the per-session card and in the
   settings card for every enabled platform. Done (2026-10-24):
   `AgentInfoButton.test.tsx` ("shows the %s auth fixture in the session's
   account card", five states) and `AgentSignInCard.test.tsx` (five states ×
   six platforms); the Claude settings card also renders in Playwright
   (`e2e/GlobalSettings.spec.ts`).
-- A Codex sign-out then sign-in round trip on a fixture profile with
-  `--credential-source codex`. Not run; see [What is left](#what-is-left).
-- After item 1: an expired Claude login mid-turn shows the `auth` notice and
-  the transcript sign-in card, not a spawn failure. The refused-login path is
-  proved against the real Claude CLI at the bridge (item 1 evidence) and in
-  the tab with fixtures. Seeing a genuinely expired token in the running app
-  is still open.
+- **A Codex sign-out then sign-in round trip.** Done except approving the
+  sign-in (2026-10-26, profile `qa-0003-auth`, `--no-agent-credentials`, the
+  profile's own `CODEX_HOME` holding a made-up API key from
+  `codex login --with-api-key`, so no host login was involved):
+  - Agent Info showed `apiKey · signed in`. **Sign out** removed the profile's
+    `auth.json` (the host `~/.codex/auth.json` was untouched), the card turned
+    to `needs auth`, the composer locked ("Sign in to Codex before sending")
+    and the banner offered **Sign in to Codex**.
+  - Browser flow: **Sign in to Codex** opened OpenAI's sign-in page and the
+    profile's app-server listened on `127.0.0.1:1455`. **Cancel sign-in**
+    cleared the link and the button, and the listener closed within a second
+    while app-server kept running, so app-server cancelled the login.
+  - Device-code flow (`begin_native_agent_sign_in` with `deviceCode: true`, as
+    a remote or container tab sends): OpenAI issued a 10-character code, the
+    banner recovered it with the link and **Cancel sign-in**, and after Cancel
+    the bridge reported `pendingSignIn: null` and the code left the banner.
+    The code was never logged or screenshotted.
+  - Unlock: storing a login outside the tab (`codex login --with-api-key`)
+    unlocked the tab within one 10-second read (three runs; one earlier run
+    right after a page reload did not re-read, and did not reproduce). That
+    needed a fix, below.
+  - Still open: approving a real browser or device-code sign-in, which needs a
+    person (see [What is left](#what-is-left)).
+- **An expired Claude login mid-turn shows the `auth` notice and the sign-in
+  card, not a spawn failure.** Done (2026-10-26, profile `qa-0003-auth`): the
+  profile's `CLAUDE_CONFIG_DIR` held a made-up OAuth login with a future
+  `expiresAt`, which Claude Code 2.1.310 reads as signed in and refuses on the
+  first request. The turn ended with Claude's own reply "Failed to
+  authenticate. API Error: 401 OAuth access token is invalid.", and the tab
+  showed the warning "Claude's login was refused. Sign in to Claude again to
+  keep working." The sign-in card was missing; after the fix below the card
+  is pinned above the composer next to the warning, survives a reload, and
+  clears with the notice once a model answers (seen in `qa-0003-gap4`). **Sign
+  in to Claude** answered "The host login cannot be signed in again from this
+  profile.", which is the documented agent-test refusal. The bridge and
+  profile logs held no part of the made-up token.
+- **Usage windows after a switch** ([Needs verification](#needs-verification)).
+  Done for Codex (2026-10-26, profile `qa-0003-usage`): account A was the
+  profile's host Codex login (an access-only snapshot), B an added account
+  with a made-up key. After one turn A's usage read `ok`, `primary 10%`.
+  During a 40-second turn on A the active account was switched to B; B's usage
+  read "Sign in to Codex to see plan usage" with no windows at every 5-second
+  poll for 80 s, through the end of A's turn and the bridge's replacement, so
+  A's windows were never folded into B's card. Claude could not be exercised:
+  its turns on this login reported no rate-limit windows to fold (see
+  [What is left](#what-is-left)).
+- **Switching gap 1 (an image without staged inputs).** Done (2026-10-26,
+  profile `qa-0003-ctr`, Codex and Claude authorized). No supported release
+  image lacks staged inputs (v2.21.0, the support floor, already declares
+  `staged-inputs=1`), so the run used the profile's current dev image with
+  `staged-inputs` removed from its image manifest, which is what the backend
+  reads. The environment created from it had no inputs-revision label and the
+  host homes bound read-only at `/codex-home` and `/claude-config`, the legacy
+  shape. With added accounts B (made-up Codex key) and C (made-up Claude
+  login) made active, the container was stopped and started with no terminal
+  attached: the entrypoint copied the host logins at boot and, 0.8 s later,
+  the container held B's Codex login (`apikey …BBBBB`) and C's Claude
+  identity (`qa-0003-ctr@example.invalid`) and token, with the Codex marker
+  left `unstaged` as designed.
+- **Switching gap 2 (a container terminal after a switch).** Done (2026-10-26,
+  profile `qa-0003-ctr`). After switching Codex to B, opening a terminal in
+  `fixture-container` wrote B's login into it (`codex login status`: "API key
+  configured - sk-proj-***BBBBB"), while the second container, with no
+  terminal opened, kept the host's ChatGPT login. Switching back and opening
+  another terminal restored the ChatGPT login. For Claude, switching to C and
+  opening a terminal gave `claude auth status`: "Email:
+  qa-0003-ctr@example.invalid", again only in that container.
+- **Switching gap 4 (`dev:test` from a shell naming an added account).** Done
+  (2026-10-26, profile `qa-0003-gap4`, `--credential-source claude`):
+  - With `CLAUDE_CONFIG_DIR` naming a throwaway directory holding a made-up
+    login, the backend received `ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR`
+    with `…_EXPLICIT=1`, the Claude bridge's `ANTHROPIC_AUTH_TOKEN` hashed to
+    the made-up token, and the turn was refused with a 401 rather than
+    answered by the default login.
+  - From this agent's own shell, whose `CLAUDE_CONFIG_DIR` names one of this
+    machine's added Claude accounts, the bridge's token matched that account's
+    hashed Keychain entry (sha256 prefix `0f5822…`), not the default login's
+    (`86725d…`), and the turn answered "pong", so the profile spent that
+    account's quota. Only hashes were compared; no credential was printed.
+
+Defects the runs found, all fixed in this branch with tests:
+
+- **Claude's sign-in card never appeared for an expired login.** The card was
+  pinned only for a terminal error row or Claude's exact "Not logged in"
+  reply; a dead login ends the turn with an ordinary reply. The turn-time
+  `auth` notice now pins `ClaudeAuthRecoveryCard`, without locking the
+  composer, unless a terminal auth error row after the last prompt already
+  carries one (`AgentNativeTab.controller.tsx`). Evidence:
+  `AgentNativeTab.test.tsx` ("shows a turn-time sign-in notice as a warning
+  the user can act on", "pins Claude's sign-in card for a turn-time auth
+  notice until it clears", "does not pin a second Claude sign-in card over a
+  terminal auth error row") and the live run above.
+- **A Codex tab locked for sign-in did not notice a login made elsewhere.**
+  Its account was re-read only while a sign-in it started was pending. A
+  visible locked Codex tab now re-reads every 10 s; that read lets the bridge
+  pick up the stored login and clear the lock. Evidence: `AgentNativeTab.test.tsx`
+  ("a visible signed-out Codex tab asks again, so a login made elsewhere
+  unlocks it", which fails without the change) and the live run above.
+- **A Codex tab lost its conversation when its bridge was replaced after a
+  switch.** The bridge kept the tab-to-thread records under
+  `CODEX_HOME/orkestrator-bridge`, which is per account, so the replacement
+  did not know the session: the tab showed "Unable to connect to Codex" and
+  **Retry** opened an empty session (reproduced twice). Session records,
+  dispatch journals, titles, change evidence and command-change journals now
+  live in the host login's directory (`CODEX_BRIDGE_STATE_DIR`, set by
+  `applyActiveAgentAccountEnvironment`; `bridges/codex-bridge/src/bridge-state-dir.ts`).
+  Records an account kept in its own directory are adopted on load. Live
+  re-run after the fix: the turn finished on A, the tab kept "pong" and
+  "finished", survived a reload, and the next prompt ran on B in the same
+  conversation. Evidence: `bridge-state-dir.test.ts`,
+  `sessions/persistence.test.ts` ("BridgeSessionStore across Codex accounts"),
+  `session-titles.test.ts`, `sessions/command-changes.test.ts`,
+  `agent-accounts-active.test.ts`.
+- **A Codex `needs-auth` notice could never clear.** It locks the composer and
+  was cleared only by a completed turn. A successful `account/login/completed`
+  now clears every thread's notice (`account.signedIn` engine event).
+  Evidence: `app-server-runtime-sessions.test.ts` ("a failed renewal's notice
+  clears once the user signs in again", which fails without the change).
+
+A gap the runs found and left for its own file: a Codex turn refused for its
+login (an invalid API key) shows its 401 only while running, and the tab then
+renders neither the error row the projection holds nor a sign-in prompt
+([0235](0235-codex-refused-login-turn-invisible.md)).
 
 ### What is left
 
-Everything here needs a person, a second account or hardware this node lacks.
-Nothing in it needs more code unless a run fails.
-
-1. **Codex sign-out and sign-in round trip.** Start
-   `mise run dev:test --profile codex-auth-qa --fixture --credential-source codex --agent-platforms codex`,
-   open a Codex tab, sign out from Agent Info, confirm the composer locks,
-   then sign in from the banner with a device code and confirm it unlocks.
-   Also start a sign-in and press **Cancel sign-in** and confirm app-server
-   reports the login cancelled. Not run on mbp3: signing back in needs a
-   person to approve the device code, and the profile's sign-out acts on a
-   login taken from the host's `auth.json`, so an unattended run could leave
-   the host's Codex signed out.
-2. **An expired Claude login mid-turn in the app.** Needs a Claude login whose
-   access token expires (or is revoked) while a tab is open. The bridge and
-   tab paths are covered above; this checks the toast and the transcript card
-   together on the real stack.
-3. **Usage windows after a switch** (see [Needs verification](#needs-verification)).
-4. **Switching gaps on real containers and Keychain.** Gap 1: restart an
-   older-image container after a switch and check the Claude identity and the
-   Codex login inside it. Gap 2: open a container terminal after a switch and
-   run `claude auth status` and `codex login status`. Gap 4: start `dev:test`
-   from a shell whose `CLAUDE_CONFIG_DIR` names an added account and confirm
-   the profile spends that account's quota. These need Docker with an older
-   image and a second Claude account in the macOS Keychain.
+1. **Approve a real Codex sign-in from the tab.** Needs a person. Start
+   `mise run dev:test --profile codex-auth-qa --fixture --no-agent-credentials --agent-platforms codex`,
+   store a made-up key in the profile's Codex home
+   (`CODEX_HOME=<dataDir>/agent-credentials/codex codex login --with-api-key`),
+   open a Codex tab, sign out from Agent Info, then press **Sign in to Codex**
+   and finish the ChatGPT sign-in in the browser (or a device code, through a
+   remote browser). Confirm the composer unlocks without a send, then sign out
+   again so the profile holds no real login, and reset the profile. Everything
+   before the approval passed on 2026-10-26.
+2. **Usage windows after a switch, for Claude.** Repeat the Codex run above
+   with Claude once a Claude turn reports rate-limit windows (Claude sends
+   them only sparsely, near a limit): a long turn on account A, a switch to B
+   mid-turn, and B's card must not show A's windows. The gate is the same
+   function for both platforms (`contextUsageWithPlanUsage`).
 
 ## Assumptions and decisions
 
@@ -368,11 +487,81 @@ cons.
       directory's hashed Keychain entry with no fallback to `~/.claude`,
       which matches what the CLI it launches does.
 
+Decisions from the 2026-10-26 qualification:
+
+15. **How to qualify without touching a real login.**
+    - Options: use the host logins as the profiles allow by default; ask for a
+      person and a spare account; drive the real CLIs and the real app with
+      made-up logins in throwaway homes, and use real logins only where a run
+      must reach the provider, read-only.
+    - Chosen: the last. Made-up Codex API keys, made-up Claude OAuth logins
+      and fixture-only accounts in the profiles' own stores; the host Codex
+      login only as the profile's access-only snapshot (never signed out); a
+      real Claude account only for gap 4, compared by hash.
+    - Why: signing out a profile's copy of a real login could revoke the
+      host's, and the brief forbids changing a real login.
+    - Pros: every flow up to the provider's own approval ran on the real
+      stack with no risk to a real account. Cons: a made-up login is
+      "revoked", not "expired" (Claude reports both the same way, as
+      `authentication_failed`); approving a sign-in still needs a person.
+16. **Where to show Claude's turn-time notice as a card.**
+    - Options: match Claude's 401 reply text in the transcript; pin the card
+      while the backend's structured `auth` notice is up; lock the composer.
+    - Chosen: pin on the notice, never lock, and skip it when a terminal auth
+      error row after the last prompt already has the card.
+    - Why: assistant prose must never activate sign-in UI (the existing rule
+      in `claude-auth.ts`), and the notice is authoritative state that clears
+      once a model answers.
+    - Pros: one card, rehydrates after reload, no false positives. Cons: an
+      older bridge without `authNotice` still shows no card for this case.
+17. **How a locked Codex tab notices a login made elsewhere.**
+    - Options: a backend poll for every Codex bridge; watch `auth.json`; have
+      the visible locked tab re-read its account every 10 s.
+    - Chosen: the visible tab re-reads.
+    - Why: the existing account read already makes the bridge reload a stored
+      login; only visible, locked tabs need it.
+    - Pros: no new process-wide timer, no cost when unlocked or hidden. Cons:
+      a hidden tab stays locked until shown (it reads again on activation).
+18. **Where the Codex bridge keeps per-conversation state across accounts.**
+    - Options: link the whole `orkestrator-bridge` into each account home as a
+      shared entry; a state-directory override for the bookkeeping only;
+      re-resolve sessions from the backend's tab records after a 404.
+    - Chosen: the override (`CODEX_BRIDGE_STATE_DIR`), keeping the model cache
+      and app-server pid file per login, and adopting an account's own earlier
+      records on load (if absent, so a newer record or tombstone wins).
+    - Why: conversations are shared across accounts but the model cache is
+      per login, and moving the pid file would change the handover between
+      the old and new bridge. Claude already keeps its state under HOME.
+    - Pros: a switch keeps every tab; no change for a user without added
+      accounts. Cons: one more environment variable; a record an account
+      wrote before the change is adopted only when a bridge on that account
+      next loads, so switching away right after upgrading can still lose an
+      older tab's mapping once.
+19. **Clearing a Codex thread's `auth` notice.**
+    - Options: also on any `account/updated`; on a successful
+      `account/login/completed`; on a bridge restart only.
+    - Chosen: a successful login completion clears every thread's notice.
+    - Why: `account/updated` also fires on a sign-out, and the notice locks
+      the composer, so without this a `needs-auth` notice could only clear by
+      restarting the bridge.
+    - Pros: signing in from the banner unlocks the tab. Cons: a login made
+      outside app-server (a terminal) does not clear an existing thread
+      notice until the bridge restarts or a turn completes.
+20. **The refused-login turn on Codex.**
+    - Options: fix it here; record it.
+    - Chosen: record it in [0235](0235-codex-refused-login-turn-invisible.md).
+    - Why: the missing error row is in the transcript update path and may
+      affect every provider; the notice for a 401 needs that row visible and
+      a careful rule so the composer lock follows only a refused login.
+    - Pros: this change stays about accounts and sign-in. Cons: a Codex user
+      with a bad key still sees no error after the turn.
+
 Assumptions:
 
 - Claude reports an expired or revoked login on a turn as
   `error: "authentication_failed"` (seen with a missing login on Claude Code
-  2.1.309; an expired token was not produced on this node).
+  2.1.309, and with a made-up OAuth login on 2.1.310 on 2026-10-26; a
+  genuinely expired token was not produced on this node).
 - Codex 0.162 sends `modelProvider/authRecovery*` with `threadId` and a
   human-readable `message`, as the generated protocol types say.
 - Pi's and OpenCode's `auth.json` keep one entry per provider id with a
@@ -438,10 +627,12 @@ Assumptions:
   reporting bridge's account: `contextUsageWithPlanUsage`
   (`plan-usage-cache.ts`) folds only when the connection's `accountId`
   (`LocalServerRuntime.launchedAccountId`, set at launch) matches the active account. Container
-  bridges report `"unknown"`, so their windows never fold. Confirm with a live
-  switch during a running turn, then drop the gap or restate it. Not run on
-  mbp3 (2026-10-24): it needs two signed-in Claude accounts in one profile and
-  a turn long enough to switch during.
+  bridges report `"unknown"`, so their windows never fold. Confirmed live for
+  Codex on 2026-10-26 (see [Qualification](#qualification)): windows A's
+  bridge reported during and after the switch never reached B's card. The
+  gap as stated does not happen. What remains is the same run for Claude,
+  whose turns reported no windows to fold (item 2 of
+  [What is left](#what-is-left)).
 
 ## Related
 
@@ -454,6 +645,9 @@ Assumptions:
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Codex round trip and agent-test credential isolation.
 - [agent-engines.md](../../architecture/agent-engines.md).
+- [0235-codex-refused-login-turn-invisible.md](0235-codex-refused-login-turn-invisible.md)
+  (a Codex turn refused for its login shows no error or sign-in prompt; found
+  by this file's qualification).
 
 ## Replaces
 

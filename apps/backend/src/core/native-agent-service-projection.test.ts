@@ -1180,7 +1180,7 @@ describe("NativeAgentService", () => {
           order: 0,
         });
         const now = new Date(0).toISOString();
-        await storage.mutateCoordinatorWorkspace(project.id, () => ({
+        await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
           version: COORDINATOR_WORKSPACE_VERSION,
           id: "coordinator-1",
           projectId: project.id,
@@ -1270,7 +1270,7 @@ describe("NativeAgentService", () => {
           order: 0,
         });
         const now = new Date(0).toISOString();
-        await storage.mutateCoordinatorWorkspace(project.id, () => ({
+        await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
           version: COORDINATOR_WORKSPACE_VERSION,
           id: "coordinator-1",
           projectId: project.id,

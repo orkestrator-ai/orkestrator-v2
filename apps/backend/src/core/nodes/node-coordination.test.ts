@@ -212,7 +212,7 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     const world = await MailWorld.create();
     worlds.push(world);
     const main = await world.main();
-    const association = await world.storage.saveCoordinatorWorkflowAssociation({
+    const association = await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "remote-launch",
       projectId: world.projectId,
       coordinatorId: world.coordinatorId,
@@ -223,7 +223,7 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
       requestId: "launch-remote",
       createdAt: new Date().toISOString(),
     });
-    await world.storage.openCoordinatorDelegation(association.id, "startup-agent");
+    await world.storage.coordinators.openCoordinatorDelegation(association.id, "startup-agent");
     let collected = false;
     const link = {
       connected: true,

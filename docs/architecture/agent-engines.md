@@ -590,6 +590,27 @@ rewritten (`OpenCodeStreamState.markGap`/`verifyGap`), not on every reconnect.
 Messages changed in place are noted in the stream state, and those before the
 window travel as `revisedMessages`.
 
+**Undo hides a turn OpenCode still holds.** OpenCode 1.19 does not delete a
+reverted turn: `session.revert` records `Session.revert = { messageID,
+partID?, snapshot, diff }` and keeps every message, `session.unrevert` clears
+it, and only the next prompt deletes the covered messages
+(`SessionRevert.cleanup`: a `message.removed` for each, then a
+`session.updated` without the marker). The transcript snapshot, history pages,
+revised rows and the joined `interactiveSnapshot` therefore drop what the
+marker covers (`opencode-revert.ts`), following `cleanup` exactly: every
+message from `messageID` on, and with a `partID` only that message's parts
+from the part on. A read that does not hold the target compares ids, which
+OpenCode mints ascending, as its TUI does. Nothing is deleted on the backend's
+side, so Redo restores the rows from the same cache. The marker comes from
+the revert and unrevert answers (both return the updated Session), from
+`session.updated` (every one carries the whole merged Session, and a cleared
+revert is published without the field), and from `session.get` when a stream
+gap or a fresh backend leaves it unknown. A marker change moves the revision
+and the history epoch, so a cached snapshot and paged history named under
+the old marker expire. While a revert is pending the session state carries an
+info advisory saying the next prompt discards the turn and Redo restores it.
+Re-check `revert.ts` and `Session.patch` on every OpenCode bump.
+
 | Component                         | Purpose                                      |
 | --------------------------------- | -------------------------------------------- |
 | `OpenCodeProvider`                | SDK session surface and backend SSE handling |
@@ -1102,6 +1123,25 @@ session, under a fresh request id and result slot
     that error (`errorClass: "process_killed_by_signal"`, pinned in
     `sdk-compatibility.test.ts`). A non-zero exit is not a restart, because it
     is as likely a launch or sign-in fault.
+
+  Both bridges also name the request the restart cut short
+  (`interruptedRequestId`): Codex from its dispatch journal record for the
+  interrupted turn, Claude from the request id the `turnInFlight` mark (or the
+  killed turn) carries. Status is per session, so until the continuation's
+  turn starts the notice still describes the earlier request; given the
+  watched request id, `readProviderStatus` reads a notice that names another
+  request, while the provider's dispatch journal reports the watched one
+  accepted and unfinished (`pending`), as "this request's turn has not
+  settled" (`idle`, `turnSettled: false`) instead of a failure. The Claude
+  and Codex `/dispatch` routes add `pending: true` beside `dispatched` for a
+  request still in flight (Claude `processing`, a Codex `accepted` journal
+  record); a finished request stays plain `dispatched`, and older backends
+  read either as `dispatched`. The confirmation matters both ways: a name can
+  be stale (Claude rewrites the mark after the turn starts, so a bridge killed
+  in between restores the previous request's name, and a restarted bridge no
+  longer holds the request it lost), and a finished watched request must not
+  mask a later turn's restart. A bridge or mark that predates either field
+  names nothing, and without both the notice is taken at face value.
 
   The other bridges report none yet, so their cut-short turns fail as before.
   A step or reviewer whose bridge is unreachable keeps its state and

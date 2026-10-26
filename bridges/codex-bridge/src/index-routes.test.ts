@@ -978,8 +978,14 @@ describe("session detail route outcomes", () => {
           expect(response.status).toBe(200);
           return response.json();
         };
-        expect(await status("?requestId=running")).toEqual({ dispatch: "dispatched" });
-        expect(await status("?requestId=finished")).toEqual({ dispatch: "dispatched" });
+        expect(await status("?requestId=running")).toEqual({
+          dispatch: "dispatched",
+          pending: true,
+        });
+        expect(await status("?requestId=finished")).toEqual({
+          dispatch: "dispatched",
+          pending: false,
+        });
         expect(await status("?requestId=unresolved")).toEqual({ dispatch: "unknown" });
         expect(await status("?requestId=never-ran")).toEqual({ dispatch: "unknown" });
         expect(await status("?requestId=absent")).toEqual({ dispatch: "unknown" });

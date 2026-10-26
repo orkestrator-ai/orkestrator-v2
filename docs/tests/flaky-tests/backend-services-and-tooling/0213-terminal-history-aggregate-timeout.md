@@ -193,3 +193,29 @@ text, durations, commands, suite counts and retained evidence are recorded in
 [0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
 No implementation, assertion, deadline or skip changed; the original aggregate
 remains failed.
+
+## Storage facade size validation — 2026-10-26
+
+`mise run test` on `todo-0163-storage-facade-size-a8e92b2563c1` (head
+`7e64cd377`, todo 0163: storage area fields and the agent mail split; no
+terminal-history code changed) failed this case at the five-second deadline
+(5001.62 ms) in the backend workspace aggregate: 11768 passed, 97 skipped, 1
+failed across 11866 tests in 703 files. The same case also timed out once in a
+direct `bun test src tests --parallel=8` run on the branch. The unchanged
+complete owner passed alone both times
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`:
+25 passed, 7.4 s). Evidence:
+`orkestrator-test-run.m0KWc5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the platform temporary directory. No implementation, assertion,
+deadline or skip changed; the aggregate failure is retained.
+
+## Recurrence on 2026-10-26 (todo 0035 validation)
+
+`mise run test:logged -- --name full-test -- mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` (head `aaea46d6a`, renderer-only
+changes), at host load averages of 38 to 44 on 18 cores, failed this case after
+5235.50 ms, along with [0962](../coordinator-and-multi-review/0962-diff-stats-in-flight-baseline-aggregate-timeout.md) and one other known case. The
+unchanged owner passed alone with
+`mise run test:logged -- --name backend-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts ./src/core/looped-review-scheduling.test.ts ./src/core/feature-planning-scheduling.test.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures`
+(exit 0, 23.6 s). Evidence: `orkestrator-test-run.xIhDQt/` below the host
+temporary directory. No assertion, timeout or skip changed.

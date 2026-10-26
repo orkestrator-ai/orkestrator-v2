@@ -99,4 +99,22 @@ describe("backend shutdown handler", () => {
     expect(warn).toHaveBeenCalledTimes(2);
     expect(exit).toHaveBeenCalledWith(1);
   });
+
+  test("logs the signal and the exit so a clean quit is distinguishable from a kill", async () => {
+    const info = mock((_message: string) => undefined);
+    const handler = createBackendShutdownHandler({
+      stopGateway: mock(async () => undefined),
+      stopBackend: mock(async () => undefined),
+      warn: mock(() => undefined),
+      info,
+      exit: mock(() => undefined),
+    });
+
+    await handler("SIGTERM");
+
+    expect(info.mock.calls.map(([message]) => message)).toEqual([
+      "[Backend] Received SIGTERM; shutting down",
+      "[Backend] Shutdown finished; exiting with 0",
+    ]);
+  });
 });

@@ -17,6 +17,7 @@ import {
 import {
   agentAccountHome,
   claudeKeychainService,
+  hostAgentAccountSources,
   prepareAgentAccountHome,
   readCodexAuthFile,
 } from "./agent-accounts-homes.js";
@@ -41,18 +42,27 @@ export async function resolveActiveAgentAccount(
   context: CommandContext,
   platform: AgentAccountPlatform,
 ): Promise<ResolvedAgentAccount> {
-  const store = await context.storage.loadAgentAccounts();
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
   const accountId = store.active[platform];
   initializeActivePlanUsageAccount(platform, accountId ?? DEFAULT_AGENT_ACCOUNT_ID);
   const loginGeneration = store.loginGeneration?.[platform];
   return {
     accountId: accountId ?? DEFAULT_AGENT_ACCOUNT_ID,
     ...(accountId
-      ? { home: agentAccountHome(context.storage.agentAccountsDirectory(), platform, accountId) }
+      ? {
+          home: agentAccountHome(
+            context.storage.agentAccounts.agentAccountsDirectory(),
+            platform,
+            accountId,
+          ),
+        }
       : {}),
     ...(loginGeneration ? { loginGeneration } : {}),
   };
 }
+
+/** Read by the Codex bridge (`bridges/codex-bridge/src/bridge-state-dir.ts`). */
+export const CODEX_BRIDGE_STATE_DIR_ENV = "CODEX_BRIDGE_STATE_DIR";
 
 /**
  * Point a Claude or Codex bridge's environment at the active account.
@@ -63,20 +73,29 @@ export async function resolveActiveAgentAccount(
  * profile may have injected for the host login, which the CLI would otherwise
  * prefer over the account's own credential. Returns the account id so the
  * caller can tell later whether the bridge is still on the active account.
+ *
+ * The Codex bridge keeps the record that ties a tab to its thread under its
+ * `CODEX_HOME`, so on an added account it is pointed at the host login's
+ * (`CODEX_BRIDGE_STATE_DIR`): a bridge replaced after a switch then finds the
+ * tab's session instead of starting an empty one. Claude's bridge keeps its
+ * records under HOME, which no account changes.
  */
 export async function applyActiveAgentAccountEnvironment(
   context: CommandContext,
   platform: AgentAccountPlatform,
   env: NodeJS.ProcessEnv,
 ): Promise<string> {
+  if (platform === "codex") delete env[CODEX_BRIDGE_STATE_DIR_ENV];
   const active = await resolveActiveAgentAccount(context, platform);
   if (!active.home) return active.accountId;
-  await prepareAgentAccountHome(platform, active.home);
+  const sources = hostAgentAccountSources();
+  await prepareAgentAccountHome(platform, active.home, sources);
   stripInheritedAgentCredentials(env);
   if (platform === "claude") {
     env.CLAUDE_CONFIG_DIR = active.home;
   } else {
     env.CODEX_HOME = active.home;
+    env[CODEX_BRIDGE_STATE_DIR_ENV] = path.join(sources.codexHome, "orkestrator-bridge");
   }
   return active.accountId;
 }

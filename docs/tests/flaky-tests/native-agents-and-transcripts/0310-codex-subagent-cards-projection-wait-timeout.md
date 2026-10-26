@@ -58,3 +58,10 @@
 - **Suite counts:** backend 11,709 passed, 142 skipped, 4 failed across 11,855 tests in 703 files (731.65 s); the others were 0785, 1006 and the CLI package's 1007.
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts --parallel=2 tests/codex-subagent-cards.test.ts` from `apps/backend`: 1 passed.
 - **Evidence:** `/tmp/orkestrator-test-run.s0jA9M/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` on omarchy-hp.
+
+## Hidden-resume review recurrence — 2026-10-26
+
+- **Failure:** Cold projection returned `recovering` instead of `idle` at line 170 (1544.23 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name codex-cards-owner -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (0.8 s logged).
+- **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
+- **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.

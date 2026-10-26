@@ -174,7 +174,9 @@ export function createFixture(
           ([environment, ...extraEnvironments].find((candidate) => candidate.id === id) ??
             null) as never,
         getProject: async () => ({ id: "proj-1", name: "project-one" }) as never,
-        getPreviewBackendIdentity: async () => ({ instanceId: "backend-1" }),
+        previewServices: {
+          getPreviewBackendIdentity: async () => ({ instanceId: "backend-1", created: false }),
+        },
       },
       emit: (event, payload) => events.push([event, payload]),
       probe,

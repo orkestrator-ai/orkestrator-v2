@@ -13,10 +13,12 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 export function registerBackendProfileCommands(register: CommandRegistrar): void {
   register("get_backend_profile", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return context.storage.getBackendProfile();
+    return context.storage.previewServices.getBackendProfile();
   });
   register("update_backend_profile", async (args, context) => {
-    const profile = await context.storage.updateBackendProfile(parseBackendProfileUpdate(args));
+    const profile = await context.storage.previewServices.updateBackendProfile(
+      parseBackendProfileUpdate(args),
+    );
     context.emit(BACKEND_PROFILE_CHANGED_EVENT, profile);
     context.nodePortal?.readModel.noteLocalEvent(BACKEND_PROFILE_CHANGED_EVENT, profile);
     return profile;

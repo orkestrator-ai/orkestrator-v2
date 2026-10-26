@@ -81,7 +81,7 @@ describe("backend remote Git callers", () => {
     );
     await fixture.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
     await fixture.git(["branch", "--set-upstream-to=origin/main", "main"]);
-    await storage.mutateCoordinatorWorkspace(project.id, () => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       id: "test-coordinator",
       projectId: project.id,

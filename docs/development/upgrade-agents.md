@@ -229,7 +229,8 @@ every backend-only host, then restart the service.
 - **The managed `claude` does not update itself.** Host processes running it get
   `CLAUDE_PINNED_RUNTIME_ENV` (`DISABLE_AUTOUPDATER=1`, with
   `FORCE_AUTOUPDATE_PLUGINS=1` so the user's plugins still update). A `claude` on
-  PATH is left alone.
+  PATH is left alone. The container image sets the same two variables
+  (`docker/Dockerfile`), so container Claude stays on `CLAUDE_CLI_VERSION`.
 
 ### Container environments
 
@@ -561,10 +562,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    but update the module's header to say so.
 
    Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
-   `@inline` plugins the bridge passes, `.mcp.json` before the manifest's
-   `mcpServers`, the `plugin:<plugin>:<server>` names and the live panel's
-   plugin layer). This starts the real CLI three times in a temporary home,
-   with no credentials and no prompt:
+   `@inline` plugins the bridge passes, the bridge passing an install only
+   when its `<name>@<marketplace>` id is `true`, Claude Code's own installed
+   copy, `.mcp.json` before the manifest's `mcpServers`, the
+   `plugin:<plugin>:<server>` names and the live panel's plugin layer). This
+   starts the real CLI six times in a temporary home, with no credentials and
+   no prompt:
 
    ```bash
    mise run verify:claude:plugin-mcp-live
@@ -814,6 +817,36 @@ hermetic `codex exec` exception.
    `features.mcp_2026_07_28` defaulting to off, and a version that flips that
    default silently breaks those servers in native sessions while they keep
    working in the Codex CLI.
+
+   Check the blocks Codex writes into a thread as user messages of its own.
+   A reload from the rollout drops a user message only when every segment is
+   one of them (`CODEX_CONTEXT_FRAGMENTS` and the AGENTS.md heading checks in
+   `bridges/codex-bridge/src/history/rollout.ts`); a new one would show as a
+   **You** row after a resume that the live tab never showed. On 0.164.0
+   they are `environment_context`, `skill`, `turn_aborted`,
+   `subagent_notification` and `user_shell_command` (0.164.0 writes
+   `turn_aborted` as a developer message; older releases wrote it as a user
+   one). A loopback test runs a plain, a skill and an interrupted turn on the
+   new binary, without credits, and checks the reload shows only the
+   prompts:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-resume-context.test.ts
+   ```
+
+   It cannot see a block a turn it does not run would add, so also list how
+   each user segment opens in rollouts the new binary wrote, and add any new
+   Codex block to the list:
+
+   ```bash
+   find ~/.codex/sessions -name '*.jsonl' -mtime -2 -exec jq -r \
+     'select(.type == "response_item" and .payload.type == "message" and .payload.role == "user")
+      | .payload.content[] | (.text // "")[0:40] | gsub("\n"; " ")' {} + \
+     | grep -E '^ *(<[a-z_]+>|# AGENTS)' | sed -E 's/^ *(<[a-z_]+>|# AGENTS[a-z. ]*).*/\1/' \
+     | sort | uniq -c
+   ```
 
    Run the separately gated approval canary when an upgrade could affect MCP
    tool approval semantics; it copies the local auth file and spends one short

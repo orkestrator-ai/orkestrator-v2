@@ -35,7 +35,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
-import { StorageService } from "./storage.js";
+import { StorageService, type CoordinatorsStorage } from "./storage.js";
 import { DesignService } from "./design/index.js";
 import { createTestRenderer } from "./design/test-support.js";
 import { deleteStoredValue, seedStore, seedUnreadableStore } from "./storage-test-support.js";
@@ -230,9 +230,9 @@ describe("orphaned environment state sweep", () => {
     const { context, storage, dataDir } = await reconcileContext();
     await storage.addEnvironment(environment("live"));
     const coordinatorConversation = coordinatorRuntimeId("coord-1", "conversation-1");
-    storage.listCoordinatorWorkspaces = async () =>
+    storage.coordinators.listCoordinatorWorkspaces = async () =>
       [{ id: "coord-1", conversations: [{ id: "conversation-1" }] }] as Awaited<
-        ReturnType<StorageService["listCoordinatorWorkspaces"]>
+        ReturnType<CoordinatorsStorage["listCoordinatorWorkspaces"]>
       >;
     const old = ORPHANED_STATE_MIN_AGE_MS * 2;
     const orphan = environmentStateDirectory(dataDir, "cursor-bridge-state", "deleted");
@@ -265,7 +265,7 @@ describe("orphaned environment state sweep", () => {
     const { context, storage, dataDir } = await reconcileContext();
     const orphan = environmentStateDirectory(dataDir, "cursor-bridge-state", "deleted");
     await makeStateDirectory(orphan, ORPHANED_STATE_MIN_AGE_MS * 2);
-    storage.listCoordinatorWorkspaces = async () => {
+    storage.coordinators.listCoordinatorWorkspaces = async () => {
       throw new Error("coordinator store unreadable");
     };
 
@@ -424,9 +424,9 @@ describe("orphaned environment state sweep", () => {
     const { context, storage, dataDir } = await reconcileContext();
     const orphan = environmentStateDirectory(dataDir, "cursor-bridge-state", "deleted");
     await makeStateDirectory(orphan, ORPHANED_STATE_MIN_AGE_MS * 2);
-    const original = storage.listCoordinatorWorkspaces.bind(storage);
+    const original = storage.coordinators.listCoordinatorWorkspaces.bind(storage.coordinators);
     let calls = 0;
-    storage.listCoordinatorWorkspaces = async () => {
+    storage.coordinators.listCoordinatorWorkspaces = async () => {
       if (++calls === 1) throw new Error("temporary lookup failure");
       return original();
     };

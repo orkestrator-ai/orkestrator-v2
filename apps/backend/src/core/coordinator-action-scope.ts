@@ -25,7 +25,7 @@ export async function requireCoordinatorConversation(
   coordinatorId: string,
   conversationId: string,
 ): Promise<void> {
-  const workspace = await context.storage.getCoordinatorWorkspaceById(coordinatorId);
+  const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
   if (
     !workspace ||
     workspace.projectId !== projectId ||

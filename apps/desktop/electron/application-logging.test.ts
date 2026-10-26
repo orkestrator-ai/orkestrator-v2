@@ -503,6 +503,59 @@ describe("application logging shutdown", () => {
     expect(effectiveQuits).toBe(1);
   });
 
+  test("closes the log only after pending output settles", async () => {
+    // The backend's drain is logged through Electron: closing the log as the
+    // quit began lost exactly the lines that said how it ended.
+    const app = fakeApp();
+    const backend = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const logging = {
+      logDirectory: "/tmp/logs",
+      retentionDays: 7,
+      flush: async () => {},
+      dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
+      stop: async () => {
+        order.push("log-closed");
+      },
+    } satisfies InstalledApplicationLogging;
+
+    registerApplicationLoggingShutdown(app.host, logging, 5_000, {
+      settled: () => backend.promise.then(() => void order.push("backend-stopped")),
+      timeoutMs: 5_000,
+    });
+    app.emit();
+    await Bun.sleep(5);
+    expect(order).toEqual([]);
+
+    backend.resolve();
+    await Bun.sleep(5);
+    expect(order).toEqual(["backend-stopped", "log-closed"]);
+    expect(app.quitCount).toBe(1);
+  });
+
+  test("closes the log anyway when pending output outlives its own bound", async () => {
+    const app = fakeApp();
+    let closed = false;
+    const logging = {
+      logDirectory: "/tmp/logs",
+      retentionDays: 7,
+      flush: async () => {},
+      dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
+      stop: async () => {
+        closed = true;
+      },
+    } satisfies InstalledApplicationLogging;
+
+    registerApplicationLoggingShutdown(app.host, logging, 5_000, {
+      settled: () => new Promise<void>(() => {}),
+      timeoutMs: 10,
+    });
+    app.emit();
+    await Bun.sleep(60);
+    expect(closed).toBe(true);
+    expect(app.quitCount).toBe(1);
+  });
+
   test("registers nothing when logging was not installed", () => {
     const app = fakeApp();
     registerApplicationLoggingShutdown(app.host, null);

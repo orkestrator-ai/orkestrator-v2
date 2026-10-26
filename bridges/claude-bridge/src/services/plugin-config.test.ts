@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { InstalledPluginsFile } from "../types/plugins.js";
 import {
   getMergedPlugins,
+  getPluginInfo,
   getPluginsForSdk,
   loadCliInstalledPlugins,
   loadGlobalPlugins,
@@ -14,7 +15,7 @@ import {
   readPluginManifest,
   remapInstalledPlugins,
 } from "./plugin-config.js";
-import { setClaudeHomeForTesting } from "./claude-home.js";
+import { claudeUserSettingsPath, setClaudeHomeForTesting } from "./claude-home.js";
 import { clearJsonFileCache } from "./json-file-cache.js";
 
 const PLUGINS_DIR = "/home/node/.claude/plugins";
@@ -44,7 +45,11 @@ describe("remapInstalledPlugins", () => {
     );
 
     expect(result).toEqual([
-      { type: "local", path: "/home/node/.claude/plugins/marketplaces/foo" },
+      {
+        type: "local",
+        path: "/home/node/.claude/plugins/marketplaces/foo",
+        installedId: "market",
+      },
     ]);
   });
 
@@ -54,7 +59,9 @@ describe("remapInstalledPlugins", () => {
       installed({ custom: [entry("/opt/custom/my-plugin")] }),
     );
 
-    expect(result).toEqual([{ type: "local", path: "/opt/custom/my-plugin" }]);
+    expect(result).toEqual([
+      { type: "local", path: "/opt/custom/my-plugin", installedId: "custom" },
+    ]);
   });
 
   test("drops entries whose rebased path escapes the plugins dir (traversal)", () => {
@@ -70,7 +77,7 @@ describe("remapInstalledPlugins", () => {
 
     // Only the safe, in-bounds entry survives; the traversal entry is skipped.
     expect(result).toEqual([
-      { type: "local", path: "/home/node/.claude/plugins/marketplaces/safe" },
+      { type: "local", path: "/home/node/.claude/plugins/marketplaces/safe", installedId: "evil" },
     ]);
   });
 
@@ -87,9 +94,9 @@ describe("remapInstalledPlugins", () => {
     );
 
     expect(result).toEqual([
-      { type: "local", path: "/home/node/.claude/plugins/marketplaces/one" },
-      { type: "local", path: "/home/node/.claude/plugins/marketplaces/two" },
-      { type: "local", path: "/opt/external/three" },
+      { type: "local", path: "/home/node/.claude/plugins/marketplaces/one", installedId: "groupA" },
+      { type: "local", path: "/home/node/.claude/plugins/marketplaces/two", installedId: "groupA" },
+      { type: "local", path: "/opt/external/three", installedId: "groupB" },
     ]);
   });
 
@@ -196,7 +203,116 @@ describe("plugin config resolution", () => {
     );
 
     expect(await loadCliInstalledPlugins()).toEqual([
-      { type: "local", path: join(pluginsDir, "marketplaces", "foo") },
+      { type: "local", path: join(pluginsDir, "marketplaces", "foo"), installedId: "market" },
+    ]);
+  });
+
+  test("passes an install only when Claude Code's own settings for the session enable it", async () => {
+    const pluginsDir = join(home, ".claude", "plugins");
+    const dir = (name: string) => join(pluginsDir, "cache", "m", name, "1.0.0");
+    const ids = ["on", "off", "unnamed", "project-off", "local-on"];
+    for (const name of ids) await makePlugin(dir(name), { name });
+    await writeFile(
+      join(pluginsDir, "installed_plugins.json"),
+      JSON.stringify(
+        installed(
+          Object.fromEntries(
+            ids.map((name) => [
+              `${name}@m`,
+              // Recorded on another machine, as a container's copy is.
+              [entry(`/Users/alice/.claude/plugins/cache/m/${name}/1.0.0`)],
+            ]),
+          ),
+        ),
+      ),
+    );
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({
+        enabledPlugins: {
+          "on@m": true,
+          "off@m": false,
+          // Only the install's own id applies, never `@inline`.
+          "unnamed@inline": true,
+          "project-off@m": true,
+        },
+      }),
+    );
+    await mkdir(join(cwd, ".claude"), { recursive: true });
+    await writeFile(
+      join(cwd, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "project-off@m": false } }),
+    );
+    await writeFile(
+      join(cwd, ".claude", "settings.local.json"),
+      JSON.stringify({ enabledPlugins: { "local-on@m": true } }),
+    );
+    const paths = async (includeProjectSources: boolean, sources?: string[]) =>
+      (await getPluginsForSdk(cwd, includeProjectSources, sources)).map((plugin) => plugin.path);
+
+    expect(await paths(false, ["user"])).toEqual([dir("on"), dir("project-off")]);
+    // The defaults are the sources a session loads without local settings.
+    expect(await paths(false)).toEqual([dir("on"), dir("project-off")]);
+    expect(await paths(true)).toEqual([dir("on")]);
+    expect(await paths(true, ["user", "project", "local"])).toEqual([dir("on"), dir("local-on")]);
+    // A coordinator loads no settings sources, so no install is passed.
+    expect(await paths(true, [])).toEqual([]);
+
+    // Turning a plugin off in Claude Code reaches the next turn.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "on@m": false, "project-off@m": true } }),
+    );
+    expect(await paths(false, ["user"])).toEqual([dir("project-off")]);
+  });
+
+  test("reads user settings from CLAUDE_CONFIG_DIR as the CLI does, but never in a test home", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "claude-bridge-config-dir-"));
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      // A test home ignores the environment, so the developer's settings stay unread.
+      expect(claudeUserSettingsPath()).toBe(join(home, ".claude", "settings.json"));
+      setClaudeHomeForTesting(null);
+      expect(claudeUserSettingsPath()).toBe(join(configDir, "settings.json"));
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the /plugins display excludes turned-off, never-enabled and local-only installs by default", async () => {
+    const pluginsDir = join(home, ".claude", "plugins");
+    const plugins: InstalledPluginsFile["plugins"] = {};
+    for (const id of ["on", "off", "never", "local-only"]) {
+      const plugin = await makePlugin(join(pluginsDir, id), { name: id });
+      plugins[`${id}@market`] = [entry(plugin)];
+    }
+    await writeFile(join(pluginsDir, "installed_plugins.json"), JSON.stringify(installed(plugins)));
+    await writeFile(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "on@market": true, "off@market": false } }),
+    );
+    await mkdir(join(cwd, ".claude"), { recursive: true });
+    await writeFile(
+      join(cwd, ".claude", "settings.local.json"),
+      JSON.stringify({ enabledPlugins: { "local-only@market": true } }),
+    );
+    expect(await getMergedPlugins(cwd)).toEqual([{ type: "local", path: join(pluginsDir, "on") }]);
+    expect(await getPluginInfo(cwd)).toEqual([
+      {
+        name: "on",
+        path: join(pluginsDir, "on"),
+        source: "cli",
+        enabled: true,
+        description: undefined,
+      },
+    ]);
+    expect(await getMergedPlugins(cwd, true, ["user", "project", "local"])).toEqual([
+      { type: "local", path: join(pluginsDir, "on") },
+      { type: "local", path: join(pluginsDir, "local-only") },
     ]);
   });
 

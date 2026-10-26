@@ -23,12 +23,13 @@ import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecyc
 
 import type { Environment, Project } from "../models.js";
 import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
+import type { PreviewServicesStorage } from "../storage-preview-services.js";
 import type { TargetContextInfo } from "./types.js";
 
 export interface TargetStorage {
   getEnvironment(id: string): Promise<Environment | null>;
   getProject(id: string): Promise<Project | null>;
-  getPreviewBackendIdentity(): Promise<{ instanceId: string }>;
+  previewServices: Pick<PreviewServicesStorage, "getPreviewBackendIdentity">;
 }
 
 export interface ResolvedTarget {
@@ -150,7 +151,7 @@ export async function resolveTarget(
   if (parts[0] !== PREFIX || !isAgentPlatform(parts[1])) throw mcpFailure("unknown-target");
   const provider = parts[1];
   if (parts.length === 4 && parts[2] === "backend") {
-    const { instanceId } = await storage.getPreviewBackendIdentity();
+    const { instanceId } = await storage.previewServices.getPreviewBackendIdentity();
     if (parts[3] !== backendBinding(instanceId)) throw mcpFailure("unknown-target");
     return backendTarget(provider, instanceId);
   }
@@ -167,7 +168,7 @@ export async function listTargets(
   storage: TargetStorage,
   environmentId?: string,
 ): Promise<ResolvedTarget[]> {
-  const { instanceId } = await storage.getPreviewBackendIdentity();
+  const { instanceId } = await storage.previewServices.getPreviewBackendIdentity();
   const targets = AGENT_PLATFORMS.map((provider) => backendTarget(provider, instanceId));
   if (environmentId) {
     const environment = await storage.getEnvironment(environmentId);

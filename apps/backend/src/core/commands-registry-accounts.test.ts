@@ -17,7 +17,11 @@ describe("account login argument validation", () => {
       const loadAgentAccounts = mock(async () => ({ version: 1, accounts: [], active: {} }));
       await expect(
         command({ platform: "claude", reauthenticate }, {
-          storage: { loadAgentAccounts },
+          storage: {
+            agentAccounts: {
+              loadAgentAccounts,
+            },
+          },
         } as unknown as CommandContext),
       ).rejects.toThrow("reauthenticate");
       expect(loadAgentAccounts).not.toHaveBeenCalled();
@@ -29,8 +33,10 @@ describe("account login argument validation", () => {
     async (reauthenticate) => {
       const context = {
         storage: {
-          loadAgentAccounts: async () => {
-            throw new Error("stop before spawn");
+          agentAccounts: {
+            loadAgentAccounts: async () => {
+              throw new Error("stop before spawn");
+            },
           },
         },
       } as unknown as CommandContext;
@@ -217,7 +223,13 @@ describe("preferred identity argument validation", () => {
       throw new Error("unexpected storage access");
     });
     await expect(
-      setPreferred(args, { storage: { mutateAgentAccounts } } as unknown as CommandContext),
+      setPreferred(args, {
+        storage: {
+          agentAccounts: {
+            mutateAgentAccounts,
+          },
+        },
+      } as unknown as CommandContext),
     ).rejects.toThrow();
     expect(mutateAgentAccounts).not.toHaveBeenCalled();
   });
@@ -240,7 +252,11 @@ describe("preferred identity argument validation", () => {
       );
       await expect(
         setPreferred({ platform: "claude", ...args }, {
-          storage: { mutateAgentAccounts },
+          storage: {
+            agentAccounts: {
+              mutateAgentAccounts,
+            },
+          },
         } as unknown as CommandContext),
       ).resolves.toEqual({ codex: "code@example.com" });
       expect(mutateAgentAccounts).toHaveBeenCalledTimes(1);

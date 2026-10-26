@@ -90,6 +90,25 @@ function configuredControlMcpPort(): number {
   return port;
 }
 
+/**
+ * The port a backend asks for instead of the configured one, or undefined.
+ *
+ * The installed app owns the fixed port. The test runner and every agent-test
+ * backend (fixtures, dev profiles, qualification services, headless backends an
+ * agent starts) take an ephemeral one, so none of them can hold the user's port:
+ * a forgotten qualification service once kept it for hours and the desktop came
+ * up without a control MCP. An explicit ORKESTRATOR_CONTROL_MCP_PORT still wins
+ * outside the test runner.
+ */
+export function controlMcpPortOverride(
+  runtimeFlavor: "production" | "development" | "agent-test" | undefined,
+  env: NodeJS.ProcessEnv,
+): 0 | undefined {
+  if (env.NODE_ENV === "test") return 0;
+  if (runtimeFlavor === "agent-test" && !env.ORKESTRATOR_CONTROL_MCP_PORT?.trim()) return 0;
+  return undefined;
+}
+
 function bearerToken(request: IncomingMessage): string | null {
   const authorization = request.headers.authorization;
   if (!authorization || Array.isArray(authorization)) return null;

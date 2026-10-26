@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { LOCAL_BRIDGES } from "../../apps/desktop/scripts/dev/bridge-builds";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
@@ -59,6 +60,10 @@ function listBuildableBridges(bridgesRoot: string): string[] {
 const buildableBridges = listBuildableBridges(path.join(root, "bridges"));
 
 describe("bridge packaging", () => {
+  test("every buildable bridge is built and checked for agent-test freshness", () => {
+    expect(Array.from<string>(LOCAL_BRIDGES).sort()).toEqual(buildableBridges);
+  });
+
   test("there is at least one buildable bridge to check", () => {
     // Guards the enumeration itself: a discovery bug that found nothing would
     // otherwise make every assertion below vacuously pass.

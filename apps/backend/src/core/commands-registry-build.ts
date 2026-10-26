@@ -205,7 +205,7 @@ export function registerBuildPipelineCommands(
   });
   register("clear_task_build_status", async ({ taskId }, context) => {
     const id = asNonBlankString(taskId, "taskId");
-    const task = await context.storage.getKanbanTask(id);
+    const task = await context.storage.kanban.getKanbanTask(id);
     if (!task) throw new Error(`Kanban task not found: ${id}`);
     const records = await context.storage.listBuildPipelines(task.projectId);
     const pipelineIds = new Set(
@@ -225,7 +225,7 @@ export function registerBuildPipelineCommands(
       if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
       else await context.storage.deleteBuildPipeline(pipelineId);
     }
-    const updated = await context.storage.updateKanbanTask(id, {
+    const updated = await context.storage.kanban.updateKanbanTask(id, {
       environmentId: undefined,
       buildPipelineId: undefined,
       prUrl: "",

@@ -49,11 +49,11 @@ describe("background-work delegation holds", () => {
     await pause();
     advance(119_999);
     await world.coordinator.reconcileWorkerDelegations();
-    expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
     expect(await world.storage.listPendingAgentMailInjects()).toHaveLength(0);
     advance(1);
     await world.coordinator.reconcileWorkerDelegations();
-    expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
     await world.deliver();
     expect(world.received(main)[0]).toContain("none of it reported for 2 minutes");
   });
@@ -75,13 +75,13 @@ describe("background-work delegation holds", () => {
       setActivity("idle");
       await pause();
       await world.coordinator.reconcileWorkerDelegations();
-      expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+      expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
       advance(119_999);
       await world.coordinator.reconcileWorkerDelegations();
-      expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+      expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
       advance(1);
       await world.coordinator.reconcileWorkerDelegations();
-      expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+      expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
     });
   }
 
@@ -109,7 +109,7 @@ describe("background-work delegation holds", () => {
           send.mockRestore();
         }
       }
-      expect(await world.storage.listUnwokenCoordinatorDelegations()).toMatchObject([
+      expect(await world.storage.coordinators.listUnwokenCoordinatorDelegations()).toMatchObject([
         { delegation: { state: "completed", backgroundWorkTimeoutMs: 60_000 } },
       ]);
       if (restart) await world.restart();
@@ -121,7 +121,7 @@ describe("background-work delegation holds", () => {
         "work it started in the background was still running",
       );
       expect(world.received(main)[0]).toContain("none of it reported for 1 minute");
-      expect(await world.storage.listUnwokenCoordinatorDelegations()).toHaveLength(0);
+      expect(await world.storage.coordinators.listUnwokenCoordinatorDelegations()).toHaveLength(0);
     });
   }
 });

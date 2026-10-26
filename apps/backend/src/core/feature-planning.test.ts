@@ -217,8 +217,8 @@ async function harness(
     worktreePath: "/tmp/planning",
     setupScriptsComplete: true,
   });
-  const plan = await storage.createFeaturePlan("project-1");
-  await storage.updateFeaturePlan(plan.id, {
+  const plan = await storage.kanban.createFeaturePlan("project-1");
+  await storage.kanban.updateFeaturePlan(plan.id, {
     codexEnvironmentId: "env-1",
     codexSessionId: "session-existing",
     ...(options.withStory
@@ -271,7 +271,7 @@ async function harness(
       await service.start({ featureId: plan.id, ...input });
       await service.advanceNow(plan.id);
     },
-    record: async () => (await storage.getFeaturePlan(plan.id))?.planning,
+    record: async () => (await storage.kanban.getFeaturePlan(plan.id))?.planning,
     dispose: async () => {
       await service.shutdown();
       workflowResults?.closeStorage();
@@ -351,7 +351,7 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
 
-      const settled = await context.storage.getFeaturePlan(context.featureId);
+      const settled = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(context.provider.settleCalls).toEqual([
         { sessionId: "session-existing", requestId: record.requestId! },
       ]);
@@ -469,7 +469,7 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
 
-      const settled = await context.storage.getFeaturePlan(context.featureId);
+      const settled = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(settled?.planning).toBeUndefined();
       expect(settled?.title).toBe("Bulk export");
       // Acceptance and workflow completion stay distinct: the slot is consumed
@@ -504,7 +504,9 @@ describe("FeaturePlanningService", () => {
       context.provider.reply("The export plan is ready for confirmation.");
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe("Bulk export");
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.title).toBe(
+        "Bulk export",
+      );
     } finally {
       await context.dispose();
     }
@@ -528,7 +530,9 @@ describe("FeaturePlanningService", () => {
       expect(context.provider.settleCalls).toEqual([
         { sessionId: "session-existing", requestId: record.requestId! },
       ]);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe("Bulk export");
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.title).toBe(
+        "Bulk export",
+      );
     } finally {
       await context.dispose();
     }
@@ -556,7 +560,9 @@ describe("FeaturePlanningService", () => {
       context.provider.settleResult = true;
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.planning).toBeUndefined();
+      expect(
+        (await context.storage.kanban.getFeaturePlan(context.featureId))?.planning,
+      ).toBeUndefined();
       expect(context.provider.settleCalls).toEqual([
         { sessionId: "session-existing", requestId: record.requestId! },
         { sessionId: "session-existing", requestId: record.requestId! },
@@ -657,7 +663,7 @@ describe("FeaturePlanningService", () => {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
 
       // The user's message is durable before anything reaches the bridge.
-      const plan = await context.storage.getFeaturePlan(context.featureId);
+      const plan = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(plan?.messages.at(-1)).toMatchObject({
         role: "user",
         content: "Let me export reports",
@@ -675,7 +681,7 @@ describe("FeaturePlanningService", () => {
       expect((await context.record())?.rawResponse).toBe(PLANNER_REPLY);
 
       await context.service.advanceNow(context.featureId);
-      const settled = await context.storage.getFeaturePlan(context.featureId);
+      const settled = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(settled?.planning).toBeUndefined();
       expect(settled?.status).toBe("confirming");
       expect(settled?.title).toBe("Bulk export");
@@ -703,7 +709,7 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
 
-      const plan = await context.storage.getFeaturePlan(context.featureId);
+      const plan = await context.storage.kanban.getFeaturePlan(context.featureId);
       const story = plan?.stories[0];
       expect(story?.title).toBe("Export as CSV");
       expect(story?.acceptanceCriteria).toEqual(["The file downloads"]);
@@ -737,7 +743,9 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
       expect(context.provider.sends).toHaveLength(1);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.status).toBe("confirming");
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.status).toBe(
+        "confirming",
+      );
     } finally {
       await context.dispose();
     }
@@ -752,7 +760,7 @@ describe("FeaturePlanningService", () => {
       // Rewind the record to the state a crash immediately after stamping the
       // dispatch id would have left behind.
       const record = (await context.record())!;
-      await context.storage.mutateFeaturePlanning(
+      await context.storage.kanban.mutateFeaturePlanning(
         context.featureId,
         record.operationId,
         (_plan, current) => {
@@ -784,7 +792,7 @@ describe("FeaturePlanningService", () => {
       expect(record?.failure?.retryPhase).toBe("dispatching");
       // The answer itself is on the record and on the plan.
       expect(record?.rawResponse).toBe("I have no idea what a state block is.");
-      const plan = await context.storage.getFeaturePlan(context.featureId);
+      const plan = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(plan?.messages.at(-1)).toMatchObject({
         role: "assistant",
         content: "I have no idea what a state block is.",
@@ -799,7 +807,7 @@ describe("FeaturePlanningService", () => {
       context.provider.reply(PLANNER_REPLY);
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
-      const retried = await context.storage.getFeaturePlan(context.featureId);
+      const retried = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(
         retried?.messages.filter(
           (entry) =>
@@ -894,7 +902,7 @@ describe("FeaturePlanningService", () => {
         networkAccess: "full",
       });
       expect(context.provider.sends[0]?.sessionId).toBe("session-1");
-      expect((await context.storage.getFeaturePlan(context.featureId))?.codexSessionId).toBe(
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.codexSessionId).toBe(
         "session-1",
       );
     } finally {
@@ -933,7 +941,7 @@ describe("FeaturePlanningService", () => {
       expect(context.provider.created).toEqual([]);
       expect(context.provider.sends).toHaveLength(1);
       expect(context.provider.sends[0]?.sessionId).toBe("session-existing");
-      expect((await context.storage.getFeaturePlan(context.featureId))?.codexSessionId).toBe(
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.codexSessionId).toBe(
         "session-existing",
       );
       expect((await context.record())?.phase).toBe("running");
@@ -952,7 +960,7 @@ describe("FeaturePlanningService", () => {
         },
     });
     try {
-      await context.storage.updateFeaturePlan(context.featureId, {
+      await context.storage.kanban.updateFeaturePlan(context.featureId, {
         codexEnvironmentId: undefined,
         codexSessionId: undefined,
       });
@@ -1004,7 +1012,7 @@ describe("FeaturePlanningService", () => {
         },
     });
     try {
-      await context.storage.updateFeaturePlan(context.featureId, {
+      await context.storage.kanban.updateFeaturePlan(context.featureId, {
         codexEnvironmentId: undefined,
         codexSessionId: undefined,
       });
@@ -1043,7 +1051,7 @@ describe("FeaturePlanningService", () => {
       await context.service.cancel(context.featureId);
 
       expect(context.provider.aborted).toEqual(["session-existing"]);
-      const plan = await context.storage.getFeaturePlan(context.featureId);
+      const plan = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(plan?.planning).toBeUndefined();
       // The user's message is theirs; cancelling the workflow does not erase it.
       expect(plan?.messages.at(-1)?.content).toBe("Let me export reports");
@@ -1112,7 +1120,7 @@ describe("FeaturePlanningService", () => {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
       const record = (await context.record())!;
       const requestId = record.requestId!;
-      await context.storage.mutateFeaturePlanning(
+      await context.storage.kanban.mutateFeaturePlanning(
         context.featureId,
         record.operationId,
         (_plan, current) => {
@@ -1158,7 +1166,7 @@ describe("FeaturePlanningService", () => {
         throw new Error("injected consumption failure");
       };
       await context.service.advanceNow(context.featureId);
-      const applied = await context.storage.getFeaturePlan(context.featureId);
+      const applied = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(applied?.title).toBe("Applied once");
       expect(applied?.planning?.resultAppliedAt).toBeDefined();
 
@@ -1175,7 +1183,7 @@ describe("FeaturePlanningService", () => {
       });
       await restarted.advanceNow(context.featureId);
 
-      const settled = await context.storage.getFeaturePlan(context.featureId);
+      const settled = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(settled?.planning).toBeUndefined();
       expect(settled?.title).toBe("Applied once");
       expect(await restartedResults.status(scope, requestId)).toMatchObject({
@@ -1214,7 +1222,9 @@ describe("FeaturePlanningService", () => {
 
       expect(context.provider.sends).toHaveLength(1);
       expect(context.provider.aborted).toEqual(["session-existing"]);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.planning).toBeUndefined();
+      expect(
+        (await context.storage.kanban.getFeaturePlan(context.featureId))?.planning,
+      ).toBeUndefined();
     } finally {
       await context.dispose();
     }
@@ -1228,7 +1238,7 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
 
       const record = await context.record();
-      const story = (await context.storage.getFeaturePlan(context.featureId))?.stories[0];
+      const story = (await context.storage.kanban.getFeaturePlan(context.featureId))?.stories[0];
       expect(record?.phase).toBe("running");
       expect(record?.rawResponse).toBeUndefined();
       expect(story?.title).toBe("Export");
@@ -1244,7 +1254,7 @@ describe("FeaturePlanningService", () => {
       await context.start({ kind: "story", storyId: "story-1", userMessage: "Tighten it" });
       const record = (await context.record())!;
       const wrongReply = STORY_REPLY.replace('"story-1"', '"story-other"');
-      await context.storage.mutateFeaturePlanning(
+      await context.storage.kanban.mutateFeaturePlanning(
         context.featureId,
         record.operationId,
         (_plan, current) => {
@@ -1255,7 +1265,7 @@ describe("FeaturePlanningService", () => {
 
       await context.service.advanceNow(context.featureId);
       const failed = await context.record();
-      const story = (await context.storage.getFeaturePlan(context.featureId))?.stories[0];
+      const story = (await context.storage.kanban.getFeaturePlan(context.featureId))?.stories[0];
       expect(failed?.phase).toBe("failed");
       expect(failed?.failure?.code).toBe("parse");
       expect(failed?.failure?.retryPhase).toBe("dispatching");
@@ -1271,7 +1281,7 @@ describe("FeaturePlanningService", () => {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
       const running = (await context.record())!;
       expect(running.dispatchedAt).toBeString();
-      await context.storage.mutateFeaturePlanning(
+      await context.storage.kanban.mutateFeaturePlanning(
         context.featureId,
         running.operationId,
         (_plan, current) => {
@@ -1284,7 +1294,7 @@ describe("FeaturePlanningService", () => {
       expect((await context.record())?.phase).toBe("running");
 
       const stillRunning = (await context.record())!;
-      await context.storage.mutateFeaturePlanning(
+      await context.storage.kanban.mutateFeaturePlanning(
         context.featureId,
         stillRunning.operationId,
         (_plan, current) => {
@@ -1342,7 +1352,7 @@ describe("FeaturePlanningService", () => {
       await restarted.advanceNow(context.featureId);
       await restarted.shutdown();
 
-      const plan = await context.storage.getFeaturePlan(context.featureId);
+      const plan = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(plan?.status).toBe("confirming");
       expect(plan?.planning).toBeUndefined();
       expect(context.provider.sends).toHaveLength(1);
@@ -1367,7 +1377,9 @@ describe("FeaturePlanningService", () => {
       second.reply(PLANNER_REPLY);
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.status).toBe("confirming");
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.status).toBe(
+        "confirming",
+      );
       expect(first.sends).toHaveLength(1);
       expect(second.sends).toHaveLength(0);
     } finally {
@@ -1397,7 +1409,11 @@ describe("FeaturePlanningService", () => {
     try {
       // What an older version left behind: a persisted user message with no
       // answer after it, and no record of any kind.
-      await context.storage.appendFeaturePlanMessage(context.featureId, "user", "Left in flight");
+      await context.storage.kanban.appendFeaturePlanMessage(
+        context.featureId,
+        "user",
+        "Left in flight",
+      );
 
       await context.service.init();
 
@@ -1412,7 +1428,9 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
       expect(context.provider.sends).toHaveLength(0);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.status).toBe("confirming");
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.status).toBe(
+        "confirming",
+      );
     } finally {
       await context.dispose();
     }
@@ -1421,15 +1439,21 @@ describe("FeaturePlanningService", () => {
   test("legacy adoption ignores assistant history from before the pending user message", async () => {
     const context = await harness();
     try {
-      await context.storage.appendFeaturePlanMessage(
+      await context.storage.kanban.appendFeaturePlanMessage(
         context.featureId,
         "assistant",
         PLANNER_REPLY,
         "applied",
       );
       await Bun.sleep(2);
-      await context.storage.appendFeaturePlanMessage(context.featureId, "user", "Left in flight");
-      const pending = (await context.storage.getFeaturePlan(context.featureId))?.messages.at(-1);
+      await context.storage.kanban.appendFeaturePlanMessage(
+        context.featureId,
+        "user",
+        "Left in flight",
+      );
+      const pending = (await context.storage.kanban.getFeaturePlan(context.featureId))?.messages.at(
+        -1,
+      );
       context.provider.transcript = [
         {
           id: "historical-assistant",
@@ -1467,7 +1491,7 @@ describe("FeaturePlanningService", () => {
       });
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
-      expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe(
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.title).toBe(
         "Current export",
       );
     } finally {
@@ -1479,7 +1503,7 @@ describe("FeaturePlanningService", () => {
     const context = await harness({ withStory: true });
     try {
       await context.start({ kind: "story", storyId: "story-1", userMessage: "Tighten it" });
-      await context.storage.updateFeaturePlan(context.featureId, { stories: [] });
+      await context.storage.kanban.updateFeaturePlan(context.featureId, { stories: [] });
       context.provider.reply(STORY_REPLY);
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
@@ -1487,7 +1511,7 @@ describe("FeaturePlanningService", () => {
       const failed = await context.record();
       expect(failed?.phase).toBe("failed");
       expect(failed?.failure?.code).toBe("persistence");
-      expect((await context.storage.getFeaturePlan(context.featureId))?.stories).toEqual([]);
+      expect((await context.storage.kanban.getFeaturePlan(context.featureId))?.stories).toEqual([]);
     } finally {
       await context.dispose();
     }
@@ -1497,13 +1521,13 @@ describe("FeaturePlanningService", () => {
     const context = await harness();
     try {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
-      await context.storage.updateFeaturePlan(context.featureId, { status: "building" });
+      await context.storage.kanban.updateFeaturePlan(context.featureId, { status: "building" });
 
       context.provider.reply(PLANNER_REPLY);
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
 
-      const plan = await context.storage.getFeaturePlan(context.featureId);
+      const plan = await context.storage.kanban.getFeaturePlan(context.featureId);
       expect(plan?.status).toBe("building");
       expect(plan?.messages.at(-1)?.stateApplication).toBe("superseded");
     } finally {

@@ -40,6 +40,7 @@ import {
 import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error-text";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { removeLabelledResources } from "./container-live-cleanup";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -393,40 +394,10 @@ afterAll(async () => {
     `label=${RUN_LABEL}`,
     ...scenarios.map((s) => `label=orkestrator-owner=${s.owner}`),
   ];
-  const ids = new Set<string>();
-  for (const filter of filters) {
-    for (const id of (await docker(["ps", "-aq", "--filter", filter]).catch(() => "")).split(
-      "\n",
-    )) {
-      if (id) ids.add(id);
-    }
-  }
-  if (ids.size > 0) await docker(["rm", "-f", ...ids], 300_000).catch(() => undefined);
-  for (const scene of scenarios) {
-    const volumes = (
-      await docker([
-        "volume",
-        "ls",
-        "-q",
-        "--filter",
-        `label=orkestrator-owner=${scene.owner}`,
-      ]).catch(() => "")
-    )
-      .split("\n")
-      .filter(Boolean);
-    if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
-  }
-  const networks = new Set<string>();
-  for (const filter of filters) {
-    for (const id of (await docker(["network", "ls", "-q", "--filter", filter]).catch(() => ""))
-      .split("\n")
-      .filter(Boolean)) {
-      networks.add(id);
-    }
-  }
-  if (networks.size > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  const leftovers = await removeLabelledResources(docker, filters);
   for (const tag of derivedImages) await docker(["image", "rm", tag]).catch(() => undefined);
   for (const scene of scenarios) await fs.rm(scene.root, { recursive: true, force: true });
+  expect(leftovers).toEqual([]);
 }, 600_000);
 
 describe("C09/readiness failure injection at the lifecycle boundary", () => {
@@ -447,11 +418,11 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
         (failure: unknown) => failure,
       );
       // The entrypoint records the specific code and exits; the backend
-      // surfaces it when it reads the record before the container stops,
-      // otherwise the exit itself.
+      // surfaces it whether it reads the record before the container stops
+      // or, with `docker cp`, from the stopped container.
       expectRefusedLaunch(fixture, environment.id, error, {
         reason: "failed",
-        failureCodes: ["firewall-missing", "container-exited"],
+        failureCodes: ["firewall-missing"],
       });
       const containerId = fixture.environments.get(environment.id)!.containerId!;
       expect(await waitForExit(containerId)).not.toBe(0);
@@ -610,7 +581,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
       const error = await outcome;
       expectRefusedLaunch(fixture, environment.id, error, {
         reason: "failed",
-        failureCodes: ["firewall-failed", "container-exited"],
+        failureCodes: ["firewall-failed"],
       });
       expect(await waitForExit(containerId)).not.toBe(0);
       expect(await finalBootRecord(scene, containerId)).toMatchObject({
@@ -753,9 +724,11 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
         // The backend saw the container stopped: a typed, retryable refusal
         // with nothing dispatched. The retry is explicit.
         branch = "refused-then-retried";
+        // The restart's SIGTERM makes the held entrypoint record its exit,
+        // which the stopped container's final record then reports.
         expectRefusedLaunch(fixture, environment.id, error, {
           reason: "failed",
-          failureCodes: ["container-exited"],
+          failureCodes: ["container-exited", "entrypoint-failed"],
         });
         ({ error } = await startEnvironment(environment.id, fixture.context).then(
           () => ({ error: null as unknown }),

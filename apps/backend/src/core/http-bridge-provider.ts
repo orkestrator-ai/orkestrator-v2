@@ -269,6 +269,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const body = asRecord(
       await boundedJson(response, `${this.agent} dispatch status`).catch(() => null),
     );
+    // The additive flag preserves `dispatched` for older backends, while a
+    // newer backend can distinguish a pending turn from a completed one.
+    if (body?.dispatch === "dispatched" && body.pending === true) return "pending";
     // `lost` is additive: a bridge that predates it answers `unknown` there.
     return body?.dispatch === "dispatched" || body?.dispatch === "lost" ? body.dispatch : "unknown";
   }
@@ -457,7 +460,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           remaining: 16 * 1024 * 1024,
         }),
       ) ?? {};
-    const interruption = throwExplainedTurnFailure(this.agent, body);
+    const failure = throwExplainedTurnFailure(this.agent, body);
     const status =
       body.status === "running" || body.status === "idle" || body.status === "error"
         ? body.status
@@ -465,7 +468,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const contextUsage = this.contextUsage(body.contextUsage);
     return {
       status,
-      ...(interruption ? { interruption } : {}),
+      ...failure,
       // sessionTokens has explicit cumulative semantics. Do not expose an
       // occupancy-only bridge snapshot as review consumption.
       ...(contextUsage?.sessionTokens !== undefined ? { contextUsage } : {}),

@@ -360,6 +360,31 @@ mise run test:logged -- --name codex-bridge-example -- \
   --parallel=1 --only-failures
 ```
 
+### Opt-in Pi ChatGPT default-model check
+
+`bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts` sends one real
+provider prompt through `createSession`, `ensureSession` and `dispatchPrompt`,
+with no saved default, host fallback or model override. It requires a current
+`openai` ChatGPT OAuth credential; a legacy `openai-codex` credential cannot
+substitute. The test is skipped in normal suites. To opt in:
+
+```bash
+ORKESTRATOR_PI_CHATGPT_LIVE=1 \
+  mise run test:logged -- --name pi-chatgpt-live -- \
+  bun test ./bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts \
+  --preload ./tests/setup-node.ts \
+  --preload ./bridges/pi-bridge/src/testing/test-isolation.ts \
+  --parallel=1 --only-failures
+```
+
+By default it reads `~/.pi/agent/auth.json`. Set
+`ORKESTRATOR_PI_CHATGPT_AUTH_FILE` to use a disposable login's auth file.
+Only the `openai` credential is copied into a temporary agent directory; the
+refresh token is replaced so the test cannot rotate the source credential.
+The access token must have at least ten minutes remaining. The test checks
+the selected model and an error-free provider answer, then removes its
+temporary home, settings and sessions. It does not read or change host settings.
+
 ### Opt-in preview checks
 
 Service preview checks that need Docker, a pinned framework, or a real

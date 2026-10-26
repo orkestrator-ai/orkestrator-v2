@@ -1,5 +1,7 @@
 # container firewall policy > firewall uses stored domains and tolerates a repeated GitHub bootstrap range
 
+Restart-status coverage validation on 2026-10-26 repeated the GitHub seed/live/cache deadline at 5009.12 ms. That case passed in the complete owner rerun, which retained a different policy-3 timeout (33 passed, 1 failed). Commands, worker counts and evidence are recorded in [0983](0983-firewall-root-entrypoint-shell-timeout.md#restart-status-coverage-validation--2026-10-26); the owner result does not establish a new flake classification.
+
 - **ID:** 0192
 - **Status:** open
 - **Date observed:** 2026-10-12

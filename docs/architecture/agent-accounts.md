@@ -95,6 +95,21 @@ replaced. A bridge with observed live work keeps running on the old account
 until it is idle. The replacement resumes its sessions from the shared
 transcripts on the next prompt.
 
+The replacement also needs the bridge's own record of which thread each tab is
+on. Claude's bridge keeps those under HOME (`~/.claude/orkestrator`), which no
+account changes. Codex's keeps them under `CODEX_HOME/orkestrator-bridge`, so
+on an added account `applyActiveAgentAccountEnvironment` also sets
+`CODEX_BRIDGE_STATE_DIR` to the host login's `orkestrator-bridge`. The bridge
+(`codexBridgeStateDir`) keeps session records, dispatch journals, session
+titles, change evidence and command-change journals there; its model cache and
+app-server pid file stay under the account's own `CODEX_HOME`, because they
+belong to the login. Records an account wrote in its own directory before this
+(2026-10-26) are moved over the next time a bridge on it loads its sessions,
+without replacing a newer record or a tombstone, and earlier titles and
+command-change badges are still read from there. Without this, a tab whose
+bridge was replaced after a switch showed "Unable to connect to Codex" and
+**Retry** opened an empty session.
+
 `applyActiveAgentAccountEnvironment` sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME`
 for an added account. It also strips inherited bearer credentials
 (`INHERITED_CREDENTIAL_ENV`: Anthropic, Claude OAuth, OpenAI and Codex keys),
@@ -205,7 +220,7 @@ the tab without a send.
 
 | Platform | Locked when | Cleared by |
 | --- | --- | --- |
-| Codex | `account/read` confirms a sign-out | the next account read |
+| Codex | `account/read` confirms a sign-out | the next account read; a visible locked tab asks every 10 s, so a `codex login` made elsewhere unlocks it |
 | Cursor | no stored or environment credential | each status read |
 | Claude | an `accountInfo()` probe finds no credential | a probe that finds one, at most every 30 s while locked; a replaced bridge |
 | Pi | the model catalogue read succeeds with no models | the next catalogue read, at most every 30 s |
@@ -245,12 +260,26 @@ Codex put an `authNotice` on their session read (`GET /session/:id`,
 | Platform | Raised by | Cleared by |
 | --- | --- | --- |
 | Claude | `auth_status` with an `error` (`expired`) or `isAuthenticating` (`needs-auth`); a turn refused with `authentication_failed` (`expired`) | `auth_status` reporting the authentication finished; any real model answer |
-| Codex | `modelProvider/authRecoveryStarted` (`expired`) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn |
+| Codex | `modelProvider/authRecoveryStarted` (`expired`) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`) |
 
 Codex's completion carries no outcome field (codex 0.162 says succeeded,
 failed-permanent or failed-transient only in its message), so the failure check
 reads its text; a real sign-out still locks the composer through readiness. The
 notice is in memory on the bridge: a restarted bridge starts without one.
+
+How each tab shows it:
+
+- Claude: the notice pins `ClaudeAuthRecoveryCard` above the composer, beside
+  the warning, without locking the composer. Claude Code 2.1.310 ends a turn
+  whose login is dead with an ordinary reply ("Failed to authenticate. API
+  Error: 401 OAuth access token is invalid.", `error: "authentication_failed"`),
+  not a terminal error row, so the notice is the only thing that can ask for
+  the card. A terminal auth error row after the last prompt already carries
+  the card in the transcript, so nothing is pinned then. The CLI also blanks
+  the stored credential once it fails to refresh it.
+- Codex: the notice is treated like readiness: the banner offers the in-tab
+  sign-in and the composer locks. Because no turn can complete while it is
+  locked, a successful sign-in clears every thread's notice.
 
 ### Codex in-tab sign-in: browser or device code
 
@@ -624,7 +653,9 @@ names another version.
   `CLAUDE_CONFIG_DIR=~/.claude` explicitly reads as signed out. Account
   directories are therefore always built the same way (`agentAccountHome`),
   and the host login never sets the variable. Without a Keychain entry Claude
-  falls back to `<dir>/.credentials.json` and does not migrate it.
+  falls back to `<dir>/.credentials.json` and does not migrate it while it
+  stays valid (2.1.310 writes it to the Keychain entry after a failed
+  refresh; see below).
 - With `CLAUDE_CONFIG_DIR` set, `.claude.json` and its `mcpServers` are read
   from inside that directory only.
 - Symlinked `projects/`, `CLAUDE.md` and `skills/` load, and `claude --resume`
@@ -654,3 +685,18 @@ names another version.
   the URL (`bridges/cursor-bridge/src/login-no-open-browser.test.ts`).
 - With `sessions/` symlinked, a second `CODEX_HOME` with a fresh state
   database lists, resumes and continues the first home's threads.
+- Claude Code 2.1.310 (checked 2026-10-26 with a throwaway
+  `CLAUDE_CONFIG_DIR` holding a made-up OAuth login with a future
+  `expiresAt`): `claude auth status` and the readiness probe read it as signed
+  in, and a turn ends with an assistant reply carrying
+  `error: "authentication_failed"` ("OAuth session expired and could not be
+  refreshed" from `claude -p`; "Failed to authenticate. API Error: 401 OAuth
+  access token is invalid." through the bridge). After the failed refresh the
+  CLI wrote the credential, blanked, to that directory's hashed Keychain entry
+  and removed `.credentials.json`.
+- Codex 0.162.1 app-server with an invalid API key (checked 2026-10-26):
+  `codex login --with-api-key` stores it unchecked and `account/read` reports
+  it signed in. A turn retries and then fails with
+  `codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } }`
+  (`responseStreamDisconnected` with 401 on the retries), not `unauthorized`,
+  and sends no `modelProvider/authRecovery*`, so no `auth` notice is raised.

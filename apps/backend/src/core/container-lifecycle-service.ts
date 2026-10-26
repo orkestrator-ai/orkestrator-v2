@@ -24,6 +24,7 @@ import {
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RUNTIME_GENERATION,
 } from "./constants.js";
+import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
 import { removeRuntimeContainer } from "./egress-gateway.js";
@@ -432,14 +433,7 @@ export function operationFailureCode(error: unknown): ContainerOperationRecord["
   const parsed = parseContainerLifecycleError(error);
   if (parsed) return parsed.code;
   const message = error instanceof Error ? error.message : String(error);
-  if (
-    /cannot connect to the docker daemon|error during connect|is the docker daemon running/i.test(
-      message,
-    )
-  ) {
-    return "daemon-unavailable";
-  }
-  return "unknown";
+  return isDockerDaemonUnreachable(message) ? "daemon-unavailable" : "unknown";
 }
 
 /**

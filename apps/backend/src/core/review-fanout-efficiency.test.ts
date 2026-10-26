@@ -646,6 +646,12 @@ describe("bounded concurrent admission", () => {
     const requestId = reviewers[0]!.requestId;
 
     provider.sendImpl = async () => {};
+    // Nothing for this request yet: a result naming it would prove it ran.
+    const answered = provider.structured.bind(provider);
+    provider.structured = async <T>(sessionId: string, observedRequestId: string) =>
+      observedRequestId === requestId
+        ? (null as unknown as StructuredOutputResult<T>)
+        : answered<T>(sessionId, observedRequestId);
     await h.runner().advanceReviewers(reviewers);
     // A working session or transport is not acceptance of this exact ID.
     expect(reviewers[0]!.dispatchState).toBe("dispatching");

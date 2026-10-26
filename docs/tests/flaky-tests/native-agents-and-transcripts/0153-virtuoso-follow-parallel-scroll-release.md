@@ -100,3 +100,9 @@ See [0963](../web-ui/0963-close-retention-cursor-cases-under-load.md) for
 that run's other result. Evidence: `orkestrator-test-run.sKTHlZ/`. No
 assertion, timeout or skip changed.
 
+## Hidden-resume review recurrence — 2026-10-26
+
+- **Failure:** Desktop `a small wheel release stays unfollowed through growth inside the bottom band` retained `false` instead of `auto` at five seconds.
+- **Complete unchanged owner:** `mise run test:logged -- --name follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/resume-follow-owner` passed (4.2 s logged).
+- **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
+- **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.

@@ -360,6 +360,18 @@ async function evaluateRun(
     target.logicalSessionKey,
   );
 
+  // Request-scoped durable evidence survives idle observations and later turns.
+  if (!record.stopRequestedAt && session.interruptedRequestIds?.includes(target.requestId)) {
+    return settle(
+      {
+        state: "interrupted",
+        evidence: "none",
+        reason: "The turn was interrupted by a stop; changes made before the stop may remain",
+      },
+      accepted,
+    );
+  }
+
   if (!laterTurn && activity === "waiting") {
     const requests = await native
       .sessionPendingInteractions({
@@ -392,6 +404,25 @@ async function evaluateRun(
   }
 
   let outcome = session.turnOutcomes?.find((entry) => entry.requestId === target.requestId) ?? null;
+  if (
+    !outcome &&
+    !laterTurn &&
+    !record.stopRequestedAt &&
+    native.sessionStoppedMidTurn(target.environmentId, target.agent, target.logicalSessionKey)
+  ) {
+    // The runtime stopped under the turn and took its bridge with it, so no
+    // outcome can be read any more. It did not finish here; whether it would
+    // have is unknowable.
+    return settle(
+      {
+        state: "interrupted",
+        evidence: "none",
+        reason:
+          "The environment stopped while the turn was running; changes made before the stop may remain",
+      },
+      accepted,
+    );
+  }
   let evidence: PublicExecutionState["evidence"] = outcome ? "turn-outcome-record" : "none";
   if (!outcome && !laterTurn) {
     const read = await native

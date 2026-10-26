@@ -87,6 +87,18 @@ export type PersistedAgentMailStore = {
     verifyRequestId?: string;
     /** `retryAt` is a coalescing window other notices may join, not a failure backoff. */
     coalescing?: true;
+    /**
+     * The person pressed Deliver now: if the recipient is mid-turn, the next
+     * dispatch steers into that turn rather than waiting for it to end. One
+     * attempt; any settlement clears it.
+     */
+    steerRequested?: true;
+    /**
+     * The steer request id of the dispatch in flight (stamped at claim) or
+     * awaiting confirmation (with `verifyRequestId`). Restart recovery and
+     * verification ask the steer journal under it.
+     */
+    steerRequestId?: string;
   }>;
   counterparts: Record<string, AgentMailMessageSummary>;
   /**

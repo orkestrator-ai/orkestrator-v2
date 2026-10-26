@@ -562,10 +562,12 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    but update the module's header to say so.
 
    Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
-   `@inline` plugins the bridge passes, `.mcp.json` before the manifest's
-   `mcpServers`, the `plugin:<plugin>:<server>` names and the live panel's
-   plugin layer). This starts the real CLI three times in a temporary home,
-   with no credentials and no prompt:
+   `@inline` plugins the bridge passes, the bridge passing an install only
+   when its `<name>@<marketplace>` id is `true`, Claude Code's own installed
+   copy, `.mcp.json` before the manifest's `mcpServers`, the
+   `plugin:<plugin>:<server>` names and the live panel's plugin layer). This
+   starts the real CLI six times in a temporary home, with no credentials and
+   no prompt:
 
    ```bash
    mise run verify:claude:plugin-mcp-live

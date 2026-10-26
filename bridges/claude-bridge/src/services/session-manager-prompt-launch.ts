@@ -215,11 +215,10 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
     ? [AGENT_MCP_SERVER_NAME, ...(options?.agentMcp?.design ? ["orkestrator-design"] : [])]
     : [];
   // Launch-only settings may have changed while this turn was preparing.
-  await assertClaudeRuntimeAccepts(
-    session,
-    options,
-    claudeLaunchResourceProfile(plugins, queryEnvironment),
-  );
+  await assertClaudeRuntimeAccepts(session, options, {
+    ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+    settingSources: JSON.stringify(plan.settingSources),
+  });
   // Held from here so the process is not closed as unused while the
   // settings below are applied.
   session.queryControl = running.control;
@@ -308,6 +307,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     activeTaskIds: stream.activeTaskIds,
     launch: {
       ...claudeLaunchedProfile(session, options),
+      settingSources: JSON.stringify(plan.settingSources),
       ...claudeLaunchResourceProfile(plugins, queryEnvironment),
     },
     mcpServers: mcpServersKey,
@@ -383,6 +383,7 @@ function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | unde
   if (!running || claudeRuntimeOwesWork(running)) return running;
   const requested = {
     ...claudeLaunchProfile(turn.session, turn.options),
+    settingSources: JSON.stringify(plan.settingSources),
     ...claudeLaunchResourceProfile(plan.plugins, plan.queryEnvironment),
   };
   return claudeLaunchConflict(running.launch, requested) ? undefined : running;

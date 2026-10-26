@@ -26,6 +26,17 @@ export function claudeJsonPath(): string {
   return join(claudeHome(), ".claude.json");
 }
 
+/**
+ * User settings as the CLI reads them: `$CLAUDE_CONFIG_DIR/settings.json`,
+ * else `~/.claude/settings.json`. The CLI inherits this process's environment
+ * (`runtimeEnvironmentForAgentQuery`), so this is the file it reads. A test
+ * home ignores the environment, so no test reads the developer's settings.
+ */
+export function claudeUserSettingsPath(): string {
+  const configDir = overrideHome === null ? process.env.CLAUDE_CONFIG_DIR?.trim() : undefined;
+  return join(configDir || join(claudeHome(), ".claude"), "settings.json");
+}
+
 /** Directory the Claude CLI installs marketplace plugins into. */
 export function claudePluginsDir(): string {
   return join(claudeHome(), ".claude", "plugins");

@@ -4,7 +4,8 @@
  * Loads plugin configurations from:
  * 1. ~/.claude.json (global configuration)
  * 2. <project>/.claude/plugins.json (project-specific configuration)
- * 3. ~/.claude/plugins/ (CLI-installed plugins)
+ * 3. ~/.claude/plugins/ (CLI-installed plugins), only those Claude Code's own
+ *    `enabledPlugins` settings enable for the session's settings sources
  *
  * Project-specific configs override global configs for plugins with the same name.
  */
@@ -13,9 +14,12 @@ import { readdir, access } from "node:fs/promises";
 import { join } from "node:path";
 import {
   claudePluginConfigList,
+  claudePluginSettingSources,
+  enabledInstalledPlugins,
   mergeClaudePluginLayers,
   remapInstalledPlugins as remapInstalledPluginPaths,
   resolveClaudePluginPath,
+  type ClaudePluginSettingSource,
 } from "@orkestrator/protocol/node/claude-plugin-set";
 import type {
   PluginInfo,
@@ -23,7 +27,12 @@ import type {
   ClaudeJsonPluginsConfig,
   InstalledPluginsFile,
 } from "../types/plugins.js";
-import { claudeHome, claudeJsonPath, claudePluginsDir } from "./claude-home.js";
+import {
+  claudeHome,
+  claudeJsonPath,
+  claudePluginsDir,
+  claudeUserSettingsPath,
+} from "./claude-home.js";
 import { readJsonSliceCached } from "./json-file-cache.js";
 
 /**
@@ -134,6 +143,39 @@ export async function loadCliInstalledPlugins(): Promise<PluginConfig[]> {
   return remapInstalledPlugins(pluginsDir, { plugins });
 }
 
+/** Where the CLI reads each settings layer that can carry `enabledPlugins`. */
+function pluginSettingsPath(source: ClaudePluginSettingSource, cwd: string): string {
+  switch (source) {
+    case "user":
+      return claudeUserSettingsPath();
+    case "project":
+      return join(cwd, ".claude", "settings.json");
+    case "local":
+      return join(cwd, ".claude", "settings.local.json");
+  }
+}
+
+/**
+ * The `enabledPlugins` of each settings layer a session loads, as the CLI
+ * reads them. A missing or malformed file names nothing.
+ */
+export async function loadPluginSettings(
+  cwd: string,
+  sources: readonly ClaudePluginSettingSource[],
+): Promise<Partial<Record<ClaudePluginSettingSource, unknown>>> {
+  const entries = await Promise.all(
+    sources.map(async (source) => {
+      const enabledPlugins = await readJsonSliceCached<{ enabledPlugins?: unknown }, unknown>(
+        pluginSettingsPath(source, cwd),
+        "enabledPlugins",
+        (config) => config?.enabledPlugins ?? null,
+      );
+      return [source, enabledPlugins === null ? undefined : { enabledPlugins }] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
 /**
  * Remap the install paths recorded in installed_plugins.json onto the local
  * plugins directory.
@@ -201,13 +243,25 @@ function resolvePath(pluginPath: string, cwd: string): string {
   return resolveClaudePluginPath(pluginPath, cwd, claudeHome());
 }
 
+/** The settings sources a session loads when it loads project resources, and when it does not. */
+function defaultSettingSources(includeProjectSources: boolean): string[] {
+  return includeProjectSources ? ["user", "project"] : ["user"];
+}
+
 /**
  * Get merged plugins for a project.
  * Priority (highest to lowest):
  * 1. Project .claude/plugins.json
  * 2. Project entry in ~/.claude.json
- * 3. CLI-installed plugins (~/.claude/plugins/)
+ * 3. CLI-installed plugins (~/.claude/plugins/) that Claude Code enables
  * 4. Global plugins in ~/.claude.json
+ *
+ * `settingSources` are the session's (the SDK option): an install is passed
+ * only when the first of those layers whose `enabledPlugins` names its exact
+ * `<name>@<marketplace>` id sets it to `true`, the CLI's rule for its own
+ * installs. Every plugin passed here gets the id `<name>@inline`, where the
+ * marketplace id Claude Code's `/plugin` toggles never applies, so an install
+ * passed regardless would load after the user turned it off.
  *
  * Deduplicates by resolved path. The merge itself is shared with the
  * backend's MCP editor (`@orkestrator/protocol/node/claude-plugin-set`), so
@@ -216,15 +270,23 @@ function resolvePath(pluginPath: string, cwd: string): string {
 export async function getMergedPlugins(
   cwd: string,
   includeProjectSources = true,
+  settingSources: readonly string[] = defaultSettingSources(includeProjectSources),
 ): Promise<PluginConfig[]> {
-  const [global, cliInstalled, projectGlobal, projectLocal] = await Promise.all([
+  const sources = claudePluginSettingSources(settingSources);
+  const [global, cliInstalled, projectGlobal, projectLocal, settings] = await Promise.all([
     loadGlobalPlugins(),
     loadCliInstalledPlugins(),
     includeProjectSources ? loadProjectOverridesFromGlobal(cwd) : [],
     includeProjectSources ? loadProjectPlugins(cwd) : [],
+    loadPluginSettings(cwd, sources),
   ]);
   return mergeClaudePluginLayers(
-    { global, cliInstalled, projectGlobal, projectLocal },
+    {
+      global,
+      cliInstalled: enabledInstalledPlugins(cliInstalled, settings, sources),
+      projectGlobal,
+      projectLocal,
+    },
     { cwd, home: claudeHome(), includeProjectSources },
   ).map((path) => ({ type: "local", path }));
 }
@@ -235,8 +297,9 @@ export async function getMergedPlugins(
 export async function getPluginsForSdk(
   cwd: string,
   includeProjectSources = true,
+  settingSources: readonly string[] = defaultSettingSources(includeProjectSources),
 ): Promise<SdkPluginConfig[]> {
-  const configs = await getMergedPlugins(cwd, includeProjectSources);
+  const configs = await getMergedPlugins(cwd, includeProjectSources, settingSources);
 
   // Filter to only include plugins that exist
   const validPlugins: SdkPluginConfig[] = [];

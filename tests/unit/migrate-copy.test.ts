@@ -92,6 +92,40 @@ describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", 
     });
   });
 
+  test("a selective copy that matches nothing is a complete, empty copy", () => {
+    // A legacy ~/.codex always exists (the entrypoint creates it) but holds no
+    // databases until Codex runs; this read as a symlinked root and refused
+    // the whole migration.
+    const { root, src } = workspace();
+    mkdirSync(join(src, ".codex"));
+    writeFileSync(join(src, ".codex", "config.toml"), "model = 'x'\n");
+    const archive = execFileSync("tar", ["-C", src, "-cf", "-", ".codex"], { env: SHELL_ENV });
+    const output = runCopy(
+      archive,
+      join(root, "no-databases"),
+      1,
+      ".codex/*.sqlite",
+      ".codex/*.sqlite-wal",
+      ".codex/*.sqlite-shm",
+    );
+    expect(output).not.toContain("root-symlink");
+    expect(parseCopyOutput(output)).toMatchObject({ ok: true, files: 0, bytes: 0 });
+  });
+
+  test("a symlinked root is refused for whole-tree and selective copies", () => {
+    const { root } = workspace();
+    const linked = join(root, "linked");
+    mkdirSync(join(root, "real"));
+    writeFileSync(join(root, "real", "state_5.sqlite"), "db");
+    mkdirSync(linked);
+    symlinkSync("../real", join(linked, ".codex"));
+    const archive = execFileSync("tar", ["-C", linked, "-cf", "-", ".codex"], { env: SHELL_ENV });
+    expect(runCopy(archive, join(root, "whole"), 1)).toContain("status=root-symlink");
+    expect(runCopy(archive, join(root, "selected-link"), 1, ".codex/*.sqlite")).toContain(
+      "status=root-symlink",
+    );
+  });
+
   test("device nodes are refused", () => {
     const { root } = workspace();
     // A character device member, written without needing mknod.

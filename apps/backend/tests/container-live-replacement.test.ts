@@ -21,6 +21,7 @@ import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { startRuntime } from "./container-live-start";
 import {
+  POPULATE,
   STATE_SNAPSHOT,
   WORKSPACE_SNAPSHOT,
   exec,
@@ -70,12 +71,18 @@ afterAll(async () => {
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
 }, 120_000);
 
-function replacementContext(environment: Environment) {
+/** Providers whose host inputs are staged into the runtime (none by default). */
+interface StagedProviders {
+  credentialSources?: string[];
+}
+
+function replacementContext(environment: Environment, staged: StagedProviders = {}) {
   const fixture = memoryLifecycleContext([environment], dataDir);
+  const credentialSources = staged.credentialSources ?? [];
   Object.assign(fixture.context, {
     dockerImage: IMAGE,
     runtimeFlavor: "agent-test",
-    credentialSources: new Set(),
+    credentialSources: new Set(credentialSources),
   });
   Object.assign(fixture.context.storage, {
     getProject: async () => ({
@@ -88,7 +95,10 @@ function replacementContext(environment: Environment) {
     }),
     loadConfig: async () => ({
       version: "1.0.0",
-      global: { allowedDomains: [] },
+      global: {
+        allowedDomains: [],
+        ...(credentialSources.length > 0 ? { enabledAgentPlatforms: credentialSources } : {}),
+      },
       repositories: {},
     }),
     listMultiReviewWorkflows: async () => [],
@@ -97,7 +107,11 @@ function replacementContext(environment: Environment) {
   return fixture;
 }
 
-async function createLegacyEnvironment(name: string, overrides: Partial<Environment> = {}) {
+async function createLegacyEnvironment(
+  name: string,
+  overrides: Partial<Environment> = {},
+  options: StagedProviders & { populate?: (containerId: string) => Promise<void> } = {},
+) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
   const { resolveDockerImage } = await import("../src/core/docker-image");
   const environment = lifecycleEnvironment({
@@ -105,7 +119,7 @@ async function createLegacyEnvironment(name: string, overrides: Partial<Environm
     networkAccessMode: "full",
     ...overrides,
   });
-  const fixture = replacementContext(environment);
+  const fixture = replacementContext(environment, options);
   const resolved = await resolveDockerImage(IMAGE);
   if (resolved.kind !== "present") throw new Error("qualification image missing");
   // A legacy runtime: no storage set, the workspace lives in the writable layer.
@@ -133,7 +147,7 @@ async function createLegacyEnvironment(name: string, overrides: Partial<Environm
       outcomes: [],
     },
   });
-  await populateLegacyRuntime(containerId);
+  await (options.populate ?? populateLegacyRuntime)(containerId);
   return { fixture, environmentId: environment.id, containerId };
 }
 
@@ -205,6 +219,86 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
       expect(await exec(outcome!.containerId, "mountpoint -q /workspace && echo mounted")).toBe(
         "mounted",
       );
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+describe("C14 legacy migration with staged provider inputs", () => {
+  live(
+    "migrates a runtime whose Codex inputs were staged and whose ~/.codex holds no databases",
+    async () => {
+      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      // The host's Codex home: only allowlisted inputs are staged from it.
+      const codexHome = path.join(dataDir, "host-codex");
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.writeFile(path.join(codexHome, "config.toml"), 'model = "staged-host"\n');
+      const previousCodexHome = process.env.CODEX_HOME;
+      process.env.CODEX_HOME = codexHome;
+      try {
+        // Codex never ran here, the common case: the entrypoint created
+        // ~/.codex but no SQLite store exists, so the relocation step selects
+        // nothing. That empty selection was refused as a symlinked root.
+        const { fixture, environmentId, containerId } = await createLegacyEnvironment(
+          "c14s",
+          {},
+          {
+            credentialSources: ["codex"],
+            populate: async (id) => {
+              await exec(id, POPULATE);
+            },
+          },
+        );
+        expect(await exec(containerId, "cat /codex-home/config.toml")).toBe(
+          'model = "staged-host"',
+        );
+        expect(await exec(containerId, "ls /home/node/.codex/*.sqlite* 2>/dev/null | wc -l")).toBe(
+          "0",
+        );
+        const before = await exec(containerId, WORKSPACE_SNAPSHOT);
+
+        const outcome = await replaceRuntimePreservingState(
+          { environmentId, expectedContainerId: containerId },
+          fixture.context,
+        );
+        expect(outcome?.kind).toBe("migrate");
+        const record = lifecycleOf(await fixture.context.storage.getEnvironment(environmentId));
+        expect(record.storage.format).toBe("volume-v1");
+        expect(record.outcomes.at(-1)).toMatchObject({ kind: "migrate", status: "succeeded" });
+        expect(record.retainedRuntimes?.map((entry) => entry.containerId)).toEqual([containerId]);
+
+        await startRuntime(outcome!.containerId);
+        await waitForContainerBoot(outcome!.containerId);
+        expect(await exec(outcome!.containerId, WORKSPACE_SNAPSHOT)).toBe(before);
+        expect(
+          await exec(
+            outcome!.containerId,
+            [
+              "cat /home/node/.claude/projects/p/s.jsonl",
+              "cat /home/node/.codex/sessions/2026/r.jsonl",
+              "cat /home/node/.codex/orkestrator-bridge/session-titles.jsonl",
+              "cat /home/node/.grok/sessions/w/s/updates.jsonl; echo",
+              "ls /home/node/.codex/orkestrator-sqlite | wc -l",
+            ].join(" && "),
+          ),
+        ).toBe(
+          [
+            '{"t":1}',
+            "{}",
+            '{"threadId":"t","title":"Explicit title!","source":"explicit"}',
+            "update",
+            "0",
+          ].join("\n"),
+        );
+        // The candidate's inputs are staged afresh from the host, not copied
+        // from the source's edited home.
+        expect(await exec(outcome!.containerId, "cat /home/node/.codex/config.toml")).toBe(
+          'model = "staged-host"',
+        );
+      } finally {
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
     },
     LIVE_TIMEOUT_MS,
   );

@@ -58,19 +58,22 @@ copy_stream() {
     mapfile -t filter < <(tar_filter_args "$strip" "$@")
     local select=()
     [ "$#" -gt 0 ] && select=(--wildcards --no-wildcards-match-slash "$@")
-    # One read of the source feeds three consumers: extraction, the regular
-    # file manifest and the listing used for symlinks and directories.
+    # One read of the source feeds four consumers: extraction, the regular
+    # file manifest, the listing used for symlinks and directories, and the
+    # copied root (the stream's first member). A selective listing holds only
+    # the matching members, so there the root is read from the whole stream;
+    # a whole-tree listing already starts with it.
     tee >(tar -x -C "$dst" -f - "${filter[@]}" 2>"$WORK/extract.err"; echo "$?" > "$WORK/extract.status") \
-        >(tar -tv -f - "${select[@]}" > "$WORK/raw-listing" 2>/dev/null) \
+        >(tar -tv -f - "${select[@]}" > "$WORK/raw-listing" 2>/dev/null; echo done > "$WORK/listing.status") \
+        >(if [ "${#select[@]}" -gt 0 ]; then tar -tv -f - 2>/dev/null | awk 'NR == 1' > "$WORK/root-entry"; else cat > /dev/null; fi; echo done > "$WORK/root.status") \
         | tar -x -f - "${filter[@]}" \
             --to-command='printf "%s\t%s\t%s:%s\t%s\t%s\n" "$TAR_FILENAME" "$TAR_MODE" "$TAR_UID" "$TAR_GID" "$TAR_SIZE" "$(sha256sum | cut -d" " -f1)"' \
             > "$WORK/source.files" 2>/dev/null
     # Process substitutions finish asynchronously; wait for their outputs.
     for _ in $(seq 1 600); do
-        [ -s "$WORK/extract.status" ] && break
+        [ -s "$WORK/extract.status" ] && [ -s "$WORK/listing.status" ] && [ -s "$WORK/root.status" ] && break
         sleep 0.1
     done
-    sleep 0.2
     # Device nodes are refused whatever extraction made of them (the
     # candidate is discarded on any failure).
     if awk '$1 ~ /^[bc]/ { found = 1 } END { exit !found }' "$WORK/raw-listing"; then
@@ -87,8 +90,12 @@ copy_stream() {
     fi
     # Docker does not follow a symlink at the copied path, so a source root
     # that is a link would arrive as nothing. Refuse it rather than report an
-    # empty copy as complete.
-    if awk -v strip="$strip" 'NR == 1 { name = $0; sub(/^([^ ]+ +){5}/, "", name); sub(/ -> .*$/, "", name); n = split(name, parts, "/"); if ($1 ~ /^l/ && n <= strip) exit 0; exit 1 }' "$WORK/raw-listing"; then
+    # empty copy as complete. Only a link entry is refused, never an empty
+    # listing: a selective copy that matched nothing (a ~/.codex holding no
+    # databases yet) is a complete, empty copy.
+    local root_entry="$WORK/raw-listing"
+    [ "${#select[@]}" -gt 0 ] && root_entry="$WORK/root-entry"
+    if awk -v strip="$strip" 'NR == 1 { name = $0; sub(/^([^ ]+ +){5}/, "", name); sub(/ -> .*$/, "", name); n = split(name, parts, "/"); if ($1 ~ /^l/ && n <= strip) found = 1 } END { exit !found }' "$root_entry"; then
         result status=root-symlink
         return 3
     fi

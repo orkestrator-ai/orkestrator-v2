@@ -404,7 +404,13 @@ capabilities but not `user.*` attributes; a volume source is archived with
 both. Images built before 2026-10-25 archived a volume source without them,
 so their volume rebuilds dropped file capabilities. Host labels such as
 `security.selinux` are never copied. A copied root that is itself a symlink is refused
-(`root-symlink`) because Docker would otherwise deliver nothing for it. Codex
+(`root-symlink`) because Docker would otherwise deliver nothing for it. The
+root is the archive's first member, read from the whole stream even when a
+step selects members, so a selection that matches nothing (a `~/.codex` with
+no databases yet, which every image has) is a complete, empty copy. Images
+built before 2026-10-26 read the root from the selected listing and refused
+such a step as `root-symlink`, which blocked migrating any legacy environment
+without Codex or OpenCode databases. Codex
 databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
 into their state sub-directories; the rest of those homes (configuration,
 credentials, caches, OpenCode snapshots) is not copied. Hashes and paths never

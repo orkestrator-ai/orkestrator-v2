@@ -29,9 +29,11 @@ async function bootRecordTar(content: string): Promise<string> {
   cleanup.push(dir);
   await fs.writeFile(path.join(dir, "boot-status.json"), content);
   const tarPath = path.join(dir, "out.tar");
+  // One-block records, as Docker writes: GNU tar's default 20-block record
+  // pads the archive to 10 KiB, past the bounded copy-out's limit.
   const result = spawnSync(
     "tar",
-    ["--format=ustar", "-cf", tarPath, "-C", dir, "boot-status.json"],
+    ["--format=ustar", "-b", "1", "-cf", tarPath, "-C", dir, "boot-status.json"],
     { env: { ...process.env, COPYFILE_DISABLE: "1" } },
   );
   expect(result.status).toBe(0);

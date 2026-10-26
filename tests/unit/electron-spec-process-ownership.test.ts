@@ -203,7 +203,9 @@ describe("Electron spec process ownership", () => {
   });
 
   test("a close that stops Electron is left alone", async () => {
-    const electronProcess = spawn("sh", ["-c", "sleep 600"], { stdio: "ignore" });
+    // Not `sh -c`: dash forks the sleep instead of exec'ing it, and the
+    // orphaned child would make a clean close look like a kill.
+    const electronProcess = spawn("sleep", ["600"], { stdio: "ignore" });
     const exited = new Promise((resolve) => electronProcess.once("exit", resolve));
     try {
       const app = {

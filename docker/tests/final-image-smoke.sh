@@ -66,6 +66,34 @@ field() {
     printf '%s' "$manifest" | docker exec -i "$RUN" jq -r "$1"
 }
 
+# Run the same regression checks against the installed final-image artifact.
+docker exec -i -u node "$RUN" bash -s -- /usr/local/bin/orkestrator-log-writer \
+    <"$(dirname "$0")/log-writer-test.sh" || fail "log writer runtime checks failed"
+# Close a real docker exec launch session while its detached producer keeps
+# writing. The later exec must see output emitted after the launcher exited.
+docker exec -i -u node "$RUN" bash -s <<'LAUNCH' || fail "log writer launch session failed"
+    mkfifo /tmp/exec-session-start
+    setsid bash -c '
+        read -r _ </tmp/exec-session-start
+        for ((i = 0; i < 30; i++)); do
+            printf "session line %s\n" "$i"
+            sleep 0.1
+        done | /usr/local/bin/orkestrator-log-writer /tmp/exec-session.log 100 2
+    ' </dev/null >/dev/null 2>&1 &
+LAUNCH
+# Release the producer only after the launch exec has returned.
+in_container 'printf "start\n" >/tmp/exec-session-start' || fail "producer gate failed"
+session_drained=0
+for _ in $(seq 1 50); do
+    if in_container 'grep -q "session line 29" /tmp/exec-session.log 2>/dev/null'; then
+        session_drained=1
+        break
+    fi
+    sleep 0.1
+done
+[ "$session_drained" = 1 ] || fail "log writer stopped after exec session closed"
+echo "ok   bounded log writer (node, detached exec session)"
+
 # Versions: the manifest must name what is installed.
 for entry in claude codex opencode grok pi playwright; do
     expected="$(field ".agents.\"$entry\"")"

@@ -39,3 +39,11 @@ the immediately preceding validation; its source was not changed. Evidence:
 Root/support reported 5004 passed, 24 skipped, 11 failed and five errors; bridges
 and the protocol lockfile passed. The root failures are retained as failed
 validation, not classified as flakes solely from this run.
+
+## Agent accounts qualification validation — 2026-10-26
+
+`mise run test` on the todo 0003 branch at `93018933` timed out three
+`isolated browser overrides an inherited live … opt-in` cases (design,
+idle-observation, revision-token; 5002 to 5012 ms) at host load 20 to 40. The
+complete unchanged owner passed alone in 9.0 s. Recorded with the rest of that
+run in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md).

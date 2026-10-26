@@ -26,6 +26,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
 import type { EngineTurnConfig } from "../engine/types.js";
 import type { RestartFailureNotice, SessionTitleSource } from "./thread-registry.js";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -265,7 +266,7 @@ export class BridgeSessionStore {
   }
 
   private dir(): string {
-    return join(this.codexHome, "orkestrator-bridge");
+    return codexBridgeStateDir(this.codexHome);
   }
 
   private path(): string {
@@ -274,6 +275,12 @@ export class BridgeSessionStore {
 
   private recordsDir(): string {
     return join(this.dir(), `bridge-sessions-${this.cwdHash}`);
+  }
+
+  /** This login's own records directory, when the state directory is somewhere else. */
+  private loginRecordsDir(): string | undefined {
+    const directory = join(codexLoginBridgeDir(this.codexHome), `bridge-sessions-${this.cwdHash}`);
+    return directory === this.recordsDir() ? undefined : directory;
   }
 
   private recordKey(bridgeSessionId: string): string {
@@ -313,6 +320,8 @@ export class BridgeSessionStore {
       migrationFailed = true;
       this.warnPersistenceFailure(error);
     });
+
+    await this.adoptLoginRecords().catch((error) => this.warnPersistenceFailure(error));
 
     let names: string[];
     try {
@@ -446,6 +455,41 @@ export class BridgeSessionStore {
       }),
     );
     await rm(this.path(), { force: true }).catch(() => undefined);
+  }
+
+  /**
+   * Moves the records a bridge on this login kept in its own `CODEX_HOME`,
+   * before the state directory was shared across accounts, into the shared one.
+   * Each is published only where none exists, so a newer write or a tombstone
+   * already there wins, and is then removed from the login's directory. Copied
+   * rather than linked, because the two homes can be on different filesystems.
+   */
+  private async adoptLoginRecords(): Promise<void> {
+    const source = this.loginRecordsDir();
+    if (!source) return;
+    const names = (await readdir(source).catch(() => [] as string[])).filter((name) =>
+      name.endsWith(".json"),
+    );
+    if (names.length === 0) return;
+    await this.ensurePrivateStorage();
+    await Promise.all(
+      names.map(async (name) => {
+        const from = join(source, name);
+        const target = join(this.recordsDir(), name);
+        const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+        await writeFile(temporary, await readFile(from), { mode: PRIVATE_FILE_MODE });
+        await chmod(temporary, PRIVATE_FILE_MODE);
+        try {
+          await link(temporary, target).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "EEXIST") throw error;
+          });
+        } finally {
+          await rm(temporary, { force: true }).catch(() => undefined);
+        }
+        await chmod(target, PRIVATE_FILE_MODE);
+        await rm(from, { force: true }).catch(() => undefined);
+      }),
+    );
   }
 
   private async writeRecordAtomic(session: PersistedBridgeSession): Promise<void> {

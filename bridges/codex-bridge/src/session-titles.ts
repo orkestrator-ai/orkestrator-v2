@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { codexBridgeStateDir, codexLoginBridgeDir } from "./bridge-state-dir.js";
 import {
   CODEX_BACKGROUND_TASK_MODEL,
   CODEX_BACKGROUND_TASK_REASONING_EFFORT,
@@ -436,7 +437,17 @@ export async function generateSessionTitleWithCodexExec(
 }
 
 function sessionTitleIndexPath(codexHome: string): string {
-  return join(codexHome, "orkestrator-bridge", SESSION_TITLE_INDEX_FILENAME);
+  return join(codexBridgeStateDir(codexHome), SESSION_TITLE_INDEX_FILENAME);
+}
+
+/**
+ * The index a bridge on this login wrote before titles moved to the shared
+ * state directory, when that is somewhere else. Read under the shared index,
+ * which wins a tie, so an added account keeps its earlier titles.
+ */
+function legacySessionTitleIndexPath(codexHome: string): string | undefined {
+  const legacy = join(codexLoginBridgeDir(codexHome), SESSION_TITLE_INDEX_FILENAME);
+  return legacy === sessionTitleIndexPath(codexHome) ? undefined : legacy;
 }
 
 export async function readPersistedSessionTitles(codexHome: string): Promise<Map<string, string>> {
@@ -453,7 +464,10 @@ function persistedSourcePriority(source: PersistedSessionTitleSource): number {
 export async function readPersistedSessionTitleEntries(
   codexHome: string,
 ): Promise<Map<string, PersistedSessionTitle>> {
-  const raw = await readFile(sessionTitleIndexPath(codexHome), "utf8").catch(() => "");
+  const legacyPath = legacySessionTitleIndexPath(codexHome);
+  const legacy = legacyPath ? await readFile(legacyPath, "utf8").catch(() => "") : "";
+  const current = await readFile(sessionTitleIndexPath(codexHome), "utf8").catch(() => "");
+  const raw = legacy ? `${legacy}\n${current}` : current;
   const selected = new Map<string, PersistedSessionTitle & { updatedAt: number; line: number }>();
 
   for (const [lineIndex, line] of raw.split("\n").entries()) {
@@ -530,7 +544,7 @@ export async function persistSessionTitle(
   }
   const updatedAt = requestedUpdatedAt.toISOString();
 
-  const directory = join(codexHome, "orkestrator-bridge");
+  const directory = codexBridgeStateDir(codexHome);
   await mkdir(directory, { recursive: true });
   await appendFile(
     sessionTitleIndexPath(codexHome),

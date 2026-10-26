@@ -24,6 +24,7 @@
  */
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { codexBridgeStateDir } from "../bridge-state-dir.js";
 import { hashCwd } from "./persistence.js";
 
 export type DispatchState = "prepared" | "accepted" | "retryable" | "terminal";
@@ -189,7 +190,7 @@ export class DispatchJournal {
   }
 
   private path(): string {
-    return join(this.codexHome, "orkestrator-bridge", `dispatch-journal-${this.cwdHash}.json`);
+    return join(codexBridgeStateDir(this.codexHome), `dispatch-journal-${this.cwdHash}.json`);
   }
 
   async load(): Promise<void> {
@@ -574,7 +575,7 @@ export class DispatchJournal {
     const attempt = this.writeChain.then(async () => {
       try {
         const path = this.path();
-        await mkdir(join(this.codexHome, "orkestrator-bridge"), { recursive: true });
+        await mkdir(codexBridgeStateDir(this.codexHome), { recursive: true });
         const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
         await writeFile(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
         await rename(temporary, path).catch(async (error: unknown) => {

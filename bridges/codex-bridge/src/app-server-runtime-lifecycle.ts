@@ -775,6 +775,13 @@ export class CodexRuntimeLifecycle {
       return;
     }
     if (event.kind === "unknown.protocol") return;
+    if (event.kind === "account.signedIn") {
+      // Each thread's notice was about the login just replaced.
+      for (const context of this.ctx.registry.listThreads()) {
+        this.setThreadAuthNotice(context, undefined);
+      }
+      return;
+    }
     if (event.kind === "account.reload.requested") {
       void this.ctx.callbacks.reloadStoredAccountLogin().catch((error: unknown) => {
         console.warn(

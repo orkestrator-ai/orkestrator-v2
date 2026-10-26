@@ -1185,6 +1185,12 @@ export class AppServerEngine implements CodexEngine {
       this.invalidateAccountServing(sequence);
       this.checkAccountSignIn(true);
     }
+    if (
+      notification.method === "account/login/completed" &&
+      objectRecord(notification.params).success === true
+    ) {
+      this.emit({ kind: "account.signedIn", engineGeneration: generation });
+    }
 
     const result = reduceNotification(notification, generation);
     if (result.unknownMethod) {

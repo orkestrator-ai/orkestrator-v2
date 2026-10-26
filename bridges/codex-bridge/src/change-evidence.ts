@@ -24,6 +24,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { codexBridgeStateDir } from "./bridge-state-dir.js";
 import type {
   ExecutionOccurrence,
   ProviderChangeCapabilities,
@@ -430,7 +431,7 @@ function suppliedMovePath(change: FileUpdateChange): string | undefined {
  */
 export function codexChangeEvidenceDir(codexHome: string, cwd: string): string {
   const cwdHash = createHash("sha256").update(cwd).digest("hex").slice(0, 16);
-  return join(codexHome, "orkestrator-bridge", "change-evidence", cwdHash);
+  return join(codexBridgeStateDir(codexHome), "change-evidence", cwdHash);
 }
 
 /** The process's spool and adapter, persisted under the bridge state dir. */

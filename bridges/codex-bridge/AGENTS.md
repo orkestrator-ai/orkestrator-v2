@@ -25,6 +25,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/app-server/server-request-router.ts` | Answers every server request, exactly once       |
 | `src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
+| `src/bridge-state-dir.ts`               | Where session records live; shared across accounts |
 | `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
 | `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |

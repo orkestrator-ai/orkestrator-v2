@@ -2275,7 +2275,7 @@ describe("ActionBar toolbar interactions", () => {
     });
     // The toolbar renders no copy of its own, and a later selection change does
     // not retarget the request.
-    expect(screen.queryByRole("status", { name: "Loading environment settings…" })).toBeNull();
+    expectDomAbsent(screen.queryByRole("status", { name: "Loading environment settings…" }));
     currentOtherEnvironments = [{ ...selectedEnvironment }];
     currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
     currentSelectedEnvironmentId = currentEnvironment.id;

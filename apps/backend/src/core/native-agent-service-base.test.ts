@@ -235,6 +235,7 @@ async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    userCommandContext?: NativeAgentServiceOptions["userCommandContext"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -279,6 +280,7 @@ async function withService(
     ...(setup.toolDetailCacheMaxBytes === undefined
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
+    ...(setup.userCommandContext ? { userCommandContext: setup.userCommandContext } : {}),
   });
   try {
     await run({ storage, service });
@@ -3048,6 +3050,51 @@ describe("NativeAgentService", () => {
     }
   });
 
+  test("starts the next prompt with the user's ! commands and commits them only once sent", async () => {
+    let refuse = true;
+    const provider = createProviderStub("claude", {
+      send: async () => {
+        if (refuse) throw new Error("provider refused");
+      },
+    });
+    const block = "<orkestrator-user-commands>\n$ npm whoami\n</orkestrator-user-commands>\n\n";
+    let pending = true;
+    const take = mock((_environmentId: string, _tabId: string) =>
+      pending ? { block, ids: ["cmd-1"] } : { block: "", ids: [] },
+    );
+    const delivered = mock((_ids: readonly string[], _requestId: string) => {
+      pending = false;
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-user-commands-",
+        provider: async () => provider.provider,
+        userCommandContext: { take, delivered },
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+          origin: "interactive-native" as const,
+        };
+        await expect(
+          service.dispatchPrompt({ ...identity, prompt: "Did it work?", requestId: "r-1" }),
+        ).rejects.toThrow();
+        expect(take).toHaveBeenCalledWith("env-1", "tab-1");
+        // A refused send commits nothing: the commands are offered again.
+        expect(delivered).not.toHaveBeenCalled();
+        refuse = false;
+        await service.dispatchPrompt({ ...identity, prompt: "Did it work?", requestId: "r-2" });
+        const sent = provider.send.mock.calls.at(-1)![1];
+        expect(sent).toBe(`${block}Did it work?`);
+        expect(delivered).toHaveBeenCalledWith(["cmd-1"], "r-2");
+        await service.dispatchPrompt({ ...identity, prompt: "Next", requestId: "r-3" });
+        expect(provider.send.mock.calls.at(-1)![1]).toBe("Next");
+      },
+    );
+  });
+
   test("holds native mail behind a compose draft without leaving the session parked", async () => {
     const provider = createProviderStub("claude");
     await withService(
@@ -3801,4 +3848,47 @@ describe("NativeAgentService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+});
+
+test("ambiguous retry preserves one command block and never acknowledges a newer undisclosed snapshot", async () => {
+  let ambiguous = true;
+  const provider = createProviderStub("claude", {
+    send: async () => {
+      if (ambiguous) throw new AmbiguousPromptDispatchError("acknowledgment lost");
+    },
+  });
+  const block =
+    '<orkestrator-user-commands>\n{"command":"echo first"}\n</orkestrator-user-commands>\n\n';
+  const take = mock(() => ({ block, ids: ["command:1"] }));
+  const delivered = mock(() => {});
+  await withService(
+    {
+      prefix: "command-context-replay-",
+      provider: async () => provider.provider,
+      userCommandContext: { take, delivered },
+    },
+    async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab",
+        origin: "interactive-native" as const,
+      };
+      expect(
+        await service.dispatchIntent({
+          ...identity,
+          prompt: "original message",
+          requestId: "retry-command",
+        }),
+      ).toMatchObject({ outcome: "unknown" });
+      expect(delivered).not.toHaveBeenCalled();
+      ambiguous = false;
+      expect(
+        await service.retryRecoverableDispatch({ ...identity, requestId: "retry-command" }),
+      ).toMatchObject({ outcome: "accepted" });
+      expect(provider.send.mock.calls.at(-1)?.[1]).toBe(`${block}original message`);
+      expect(take).toHaveBeenCalledTimes(1);
+      expect(delivered).not.toHaveBeenCalled();
+    },
+  );
 });

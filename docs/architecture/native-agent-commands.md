@@ -12,6 +12,10 @@ Every enabled row in the native composer's `/` menu must run exactly what it
 describes, through a tested executor, and a chosen command must never silently
 become an ordinary model prompt.
 
+A leading `!` is not a slash command: the composer runs it as a shell command
+by the user before any command classification, and it never reaches the
+provider. See [user-commands.md](user-commands.md).
+
 ## Descriptor
 
 `NativeAgentSlashCommand` keeps its legacy display fields (`name`,

@@ -173,6 +173,16 @@ export class StorageService {
     this.context.changes.announce("transcript-artifact", conversationKey);
   }
 
+  /** A tab's user `!` commands changed; the id is the conversation key. */
+  announceUserCommands(environmentId: string, tabId: string): void {
+    this.context.changes.announce("user-command", `env-${environmentId}:${tabId}`);
+  }
+
+  /** The prompts waiting on the user in an environment changed. */
+  announceHumanPrompts(environmentId: string): void {
+    this.context.changes.announce("human-prompt", environmentId);
+  }
+
   scheduledJobStore(): ScheduledJobStore {
     return this.repos.scheduledJobs.store();
   }

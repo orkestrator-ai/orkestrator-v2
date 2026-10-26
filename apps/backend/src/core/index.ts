@@ -1,3 +1,9 @@
+import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
+import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
+import { readTaskOutputTail } from "./task-output-tail.js";
+import { HumanPromptRegistry } from "./human-prompt-registry.js";
+import { UserCommandService } from "./user-commands.js";
+import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
 import { workerSessionActivity } from "./worker-session-activity.js";
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { defaultOwnerLabel, ScheduledJobService } from "./scheduled-jobs/service.js";
@@ -183,6 +189,8 @@ export class OrkestratorBackend {
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
+  private readonly userCommands: UserCommandService;
+  private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
   readonly nodePortal: NodePortal;
@@ -508,6 +516,64 @@ export class OrkestratorBackend {
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
       image: () => readImageStatus(context),
     });
+    // User `!` commands and the prompts waiting on the user. One registry,
+    // fed by every detector; it publishes a hint per environment and tells
+    // the owning coordinator about agent commands that need the user.
+    const humanPrompts = new HumanPromptRegistry();
+    context.humanPrompts = humanPrompts;
+    humanPrompts.subscribe((change) => {
+      storage.announceHumanPrompts(change.entry.environmentId);
+      if (change.type !== "set" || change.previous?.prompt.key === change.entry.prompt.key) return;
+      void this.coordinators.noteWorkerHumanPrompt(change.entry).catch((error: unknown) => {
+        console.warn(
+          "[backend] Failed to tell the coordinator about a prompt waiting on the user:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+    });
+    this.userCommands = new UserCommandService({
+      prompts: humanPrompts,
+      resolve: (environmentId, tabId) => resolveUserCommandLaunch(context, environmentId, tabId),
+      announce: (environmentId, tabId) => storage.announceUserCommands(environmentId, tabId),
+    });
+    context.userCommands = this.userCommands;
+    this.agentHumanPrompts = new AgentHumanPromptMonitor({
+      prompts: humanPrompts,
+      workingSessions: async () => {
+        const [sessions, environments] = await Promise.all([
+          storage.listNativeAgentSessions(),
+          storage.loadEnvironments(),
+        ]);
+        const local = new Set(
+          environments
+            .filter((environment) => environment.environmentType === "local")
+            .map((environment) => environment.id),
+        );
+        return sessions
+          .filter(
+            (session) =>
+              session.owner?.kind !== "coordinator" &&
+              this.nativeAgents?.sessionActivitySnapshot(
+                session.environmentId,
+                session.agent,
+                session.logicalSessionKey,
+              ) === "working",
+          )
+          .map((session) => ({
+            environmentId: session.environmentId,
+            agent: session.agent,
+            logicalSessionKey: session.logicalSessionKey,
+            local: local.has(session.environmentId),
+          }));
+      },
+      projection: (session) =>
+        this.nativeAgents.humanPromptOutputIfRunning(
+          session.environmentId,
+          session.agent as BuildPipelineAgent,
+          session.logicalSessionKey,
+        ),
+      readFileTail: readTaskOutputTail,
+    });
     this.coordinators = new CoordinatorService(
       storage,
       () => this.controlMcp.getSettings(),
@@ -521,6 +587,7 @@ export class OrkestratorBackend {
           (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId))
             .backgroundWorkPending,
         waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
+        workerNeedsHuman: (environmentId) => humanPrompts.hasEnvironmentPrompt(environmentId),
       },
     );
     context.coordinators = this.coordinators;
@@ -793,6 +860,10 @@ export class OrkestratorBackend {
             environment_id: event.environmentId,
             session_key: event.sessionKey,
           });
+        },
+        userCommandContext: {
+          take: (environmentId, tabId) => this.userCommands.takeContext(environmentId, tabId),
+          delivered: (ids, requestId) => this.userCommands.markDelivered(ids, requestId),
         },
         beginCoordinatorTurn: (projectId) => {
           const projectGit = context.projectGit;
@@ -1842,6 +1913,8 @@ export class OrkestratorBackend {
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.
     this.scheduledJobs.start();
+    // Agent shell commands waiting on the user (sign-in links, codes, ENTER).
+    this.agentHumanPrompts.start();
     this.reserveOwnedPreviewPorts();
     // Node links reach other machines; they start after local recovery and
     // never block it.
@@ -2068,6 +2141,12 @@ export class OrkestratorBackend {
     // under the same request key, so it never acts twice.
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
+    this.agentHumanPrompts.stop();
+    // A user's `!` commands end with the backend; their processes must not outlive it.
+    const userCommandsStopped = this.userCommands.shutdown().then(
+      () => ({ stopped: true as const }),
+      () => ({ stopped: false as const }),
+    );
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
@@ -2093,6 +2172,7 @@ export class OrkestratorBackend {
         }
         await nodesStopped;
         await scheduledJobsStopped;
+        const commandTermination = await userCommandsStopped;
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {
@@ -2129,6 +2209,8 @@ export class OrkestratorBackend {
         await this.runtime.localServers.shutdown({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
+        if (!commandTermination.stopped)
+          throw new Error("User command termination could not be confirmed. Retry shutdown.");
       } finally {
         await this.context.registryWriterLease?.release().catch(() => undefined);
         this.context.previews?.dispose();

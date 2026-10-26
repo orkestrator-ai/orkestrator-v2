@@ -459,6 +459,11 @@ COPY docker/orkestrator-worktree-signal.sh /usr/local/bin/orkestrator-worktree-s
 # orchestration evidence, not a security boundary against the same user.
 RUN install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
  && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal /usr/local/bin/orkestrator-worktree-signal
+# Exercise the installed writer as its runtime user, including actual Perl
+# startup, rotation errors, signals, /dev/full and the no-Perl drain fallback.
+COPY docker/tests/log-writer-test.sh /tmp/orkestrator-log-writer-test.sh
+RUN su node -s /bin/bash -c 'bash /tmp/orkestrator-log-writer-test.sh /usr/local/bin/orkestrator-log-writer' \
+ && rm /tmp/orkestrator-log-writer-test.sh
 COPY docker/git-branch-helpers.sh /usr/local/bin/
 COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
 RUN apt-get update && apt-get install -y --no-install-recommends util-linux \

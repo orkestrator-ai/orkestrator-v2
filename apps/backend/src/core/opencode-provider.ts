@@ -1,3 +1,4 @@
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import { OpenCodeSessionPolicy } from "./opencode-session-policy.js";
 import { createOpenCodeSdkClient, type OpencodeClient } from "./opencode-sdk-client.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
@@ -815,6 +816,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       .find((value): value is string => value !== undefined);
     if (sessionId) return this.streamState.contextUsage(sessionId, messages);
     return openCodeContextUsage(messages);
+  }
+
+  async humanPromptOutput(sessionId: string) {
+    const messages = normalizeOpenCodeTranscriptMessages(
+      this.streamState.retainedMessages(sessionId) ?? [],
+      () => {},
+    );
+    return humanPromptObservation(messages);
   }
 
   async messages(sessionId: string, options: { limit?: number } = {}): Promise<unknown[]> {

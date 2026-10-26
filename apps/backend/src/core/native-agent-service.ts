@@ -93,6 +93,10 @@ import {
   agentSessionOwnerKey,
 } from "@orkestrator/protocol/coordinator";
 import {
+  insertUserCommandContext,
+  leadingUserCommandContext,
+} from "@orkestrator/protocol/user-commands";
+import {
   type NativeAgentCommandRefreshOutcome,
   type NativeAgentDefaultModelResolution,
   type NativeAgentModelSubstitution,
@@ -3424,6 +3428,32 @@ export class NativeAgentService {
        */
       const commandPlan = await this.planDispatchCommand(input, session, provider);
       if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      /*
+       * Commands the user ran with `!` since the agent's last turn start this
+       * prompt, after any coordinator block (which display strips first). Only
+       * ordinary text: a provider command parses the prompt's start. Marked
+       * delivered only once this prompt is dispatched, so a refused send
+       * offers them again; an ambiguous one replays this exact prompt.
+       */
+      let userCommandTab = session.logicalSessionKey.startsWith(`env-${input.environmentId}:`)
+        ? session.logicalSessionKey.slice(`env-${input.environmentId}:`.length)
+        : "";
+      if (!userCommandTab && session.owner?.kind === "coordinator") {
+        const workspace = await this.storage.coordinators.getCoordinatorWorkspaceById(
+          session.owner.coordinatorId,
+        );
+        userCommandTab =
+          workspace?.conversations.find(
+            (conversation) => conversation.logicalSessionKey === session.logicalSessionKey,
+          )?.tabId ?? "";
+      }
+      const userCommands =
+        commandPlan.kind !== "session-action" &&
+        !commandPlan.command &&
+        userCommandTab &&
+        !leadingUserCommandContext(input.prompt)
+          ? this.options.userCommandContext?.take(input.environmentId, userCommandTab)
+          : undefined;
       if (commandPlan.kind === "session-action") {
         const result = await this.storage.dispatchNativeAgentPromptOnce(
           session.key,
@@ -3498,6 +3528,10 @@ export class NativeAgentService {
           );
         });
       await this.prepareEnvironmentFirstPrompt(input, session, provider);
+      const commandContextBlock = userCommands?.block || leadingUserCommandContext(input.prompt);
+      if (commandContextBlock) {
+        input = { ...input, prompt: insertUserCommandContext(input.prompt, commandContextBlock) };
+      }
       /*
        * Validate liveness before opening the durable dispatch window, but do not
        * keep the global environments.json mutation lock across provider I/O.
@@ -3550,42 +3584,46 @@ export class NativeAgentService {
             const groupKey = nativeAgentObservationGroupKey(durable.environmentId, durable.agent);
             const releaseDispatchFence = this.observations.beginDispatch(durable.key, groupKey);
             try {
-              await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
-                requestId: input.requestId,
-                // Only a person typing into the composer can mean "run this
-                // command"; workflow-authored prompts are literal text. The plan
-                // above already applied that default and resolved any command.
-                allowProviderCommands: commandPlan.allowProviderCommands,
-                ...(commandPlan.command ? { command: commandPlan.command } : {}),
-                images: input.images,
-                attachments: input.attachments,
-                schema: input.schema,
-                mode: input.mode,
-                fastMode: input.fastMode,
-                subAgent: input.subAgent,
-                executionAgent: preparation.executionAgent ?? input.executionAgent,
-                includeLocalSettings: input.includeLocalSettings,
-                promptSuggestions: input.promptSuggestions,
-                model: preparation.model ?? input.model,
-                effort:
-                  durable.agent === "claude"
-                    ? claudeReasoningSelection(
-                        preparation.effort ??
-                          input.reasoningEffort ??
-                          durable.controls?.reasoningId,
-                        durable.controls?.parameterValues,
-                      )
-                    : (preparation.effort ?? input.reasoningEffort),
-                parameterValues: durable.controls?.parameterValues,
-                persistDefaults: durable.controls?.persistDefaults,
-                approvalMode: resolveNativeAgentApprovalMode(
-                  durable.agent,
-                  durable.policy,
-                  durable.controls?.approvalMode,
-                ),
-                agentMcp,
-                ...(artifactGrant ? { artifactGrant } : {}),
-              });
+              await provider.send(
+                durable.providerSessionId,
+                insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
+                {
+                  requestId: input.requestId,
+                  // Only a person typing into the composer can mean "run this
+                  // command"; workflow-authored prompts are literal text. The plan
+                  // above already applied that default and resolved any command.
+                  allowProviderCommands: commandPlan.allowProviderCommands,
+                  ...(commandPlan.command ? { command: commandPlan.command } : {}),
+                  images: input.images,
+                  attachments: input.attachments,
+                  schema: input.schema,
+                  mode: input.mode,
+                  fastMode: input.fastMode,
+                  subAgent: input.subAgent,
+                  executionAgent: preparation.executionAgent ?? input.executionAgent,
+                  includeLocalSettings: input.includeLocalSettings,
+                  promptSuggestions: input.promptSuggestions,
+                  model: preparation.model ?? input.model,
+                  effort:
+                    durable.agent === "claude"
+                      ? claudeReasoningSelection(
+                          preparation.effort ??
+                            input.reasoningEffort ??
+                            durable.controls?.reasoningId,
+                          durable.controls?.parameterValues,
+                        )
+                      : (preparation.effort ?? input.reasoningEffort),
+                  parameterValues: durable.controls?.parameterValues,
+                  persistDefaults: durable.controls?.persistDefaults,
+                  approvalMode: resolveNativeAgentApprovalMode(
+                    durable.agent,
+                    durable.policy,
+                    durable.controls?.approvalMode,
+                  ),
+                  agentMcp,
+                  ...(artifactGrant ? { artifactGrant } : {}),
+                },
+              );
               // Provider acceptance is the authoritative working edge. Record it
               // before the durable dispatch bookkeeping completes so a newer
               // idle activity snapshot cannot be overwritten by a late return
@@ -3638,6 +3676,9 @@ export class NativeAgentService {
             return this.applySessionHeldDispatchModel(input, durable, provider);
           },
         );
+        if (result.dispatched && userCommands?.ids.length) {
+          this.options.userCommandContext?.delivered(userCommands.ids, input.requestId);
+        }
         if (
           result.dispatched &&
           input.owner?.kind === "coordinator" &&
@@ -4019,6 +4060,20 @@ export class NativeAgentService {
         state: "idle",
       });
     }
+  }
+
+  /** Background observation bypasses the tab-facing projection and its shared cache. */
+  async humanPromptOutputIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ) {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return null;
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    return provider?.humanPromptOutput?.(session.providerSessionId) ?? null;
   }
 
   /**

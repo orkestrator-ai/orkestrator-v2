@@ -67,6 +67,7 @@ import { registerHostMaintenanceCommands } from "./commands-registry-host.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerPublicApiCommands } from "./public-api/registry.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
+import { registerUserCommandCommands } from "./commands-registry-user-commands.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 import { readPlanUsage } from "./plan-usage.js";
@@ -315,6 +316,7 @@ export function createCommandRegistry(
   registerBuildPipelineCommands(register, dependencies);
   registerPromptCommands(register, dependencies);
   registerTerminalCommands(register, dependencies);
+  registerUserCommandCommands(register);
   registerChangeCommands(register);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);

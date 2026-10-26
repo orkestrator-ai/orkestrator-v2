@@ -35,6 +35,7 @@ export interface NodeStoreMutation<TStore, TResult> {
 export interface NodeMailRouter {
   route(input: {
     fromEnvironmentId: string;
+    fromTabId?: string;
     toEnvironmentId: string;
     replyToMessageId?: string;
   }): Promise<{ controllerId: string; controllerName?: string } | null>;

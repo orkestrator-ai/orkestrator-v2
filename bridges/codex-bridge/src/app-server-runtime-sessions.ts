@@ -1,3 +1,4 @@
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import {
   SteerOrdering,
   DEFAULT_SESSION_RETENTION_MS,
@@ -1399,6 +1400,10 @@ export class CodexRuntimeSessions {
   }
 
   /** No-touch activity read with bounded, content-free background attention. */
+  humanPromptOutput(sessionId: string) {
+    return humanPromptObservation(this.ctx.registry.getThreadForSession(sessionId)?.messages);
+  }
+
   getActivitySnapshot(sessionId: string): {
     activity: "idle" | "working" | "waiting" | "missing";
     asyncQuestionItemIds?: string[];

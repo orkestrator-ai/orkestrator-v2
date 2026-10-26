@@ -1,3 +1,5 @@
+import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
+import { useHumanPrompts } from "@/hooks/useUserCommands";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -446,6 +448,27 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     });
   }, [snapshot, selected, environments, nodes]);
   const workersNeedingPerson = awaitingWorkers.filter((worker) => worker.needsPerson).length;
+  /*
+   * Commands in this coordinator's workers that are waiting on the user — a
+   * sign-in link, a code, a password — shown here so the person talking to
+   * the coordinator sees them without opening the worker.
+   */
+  const workerEnvironmentIds = useMemo(
+    () =>
+      snapshot
+        ? snapshot.workflows
+            .filter(
+              (association) =>
+                association.kind === "environment" &&
+                association.coordinatorId === snapshot.workspace.id &&
+                !association.nodeId &&
+                !association.pending,
+            )
+            .map((association) => association.resourceId)
+        : [],
+    [snapshot],
+  );
+  const workerPrompts = useHumanPrompts(workerEnvironmentIds);
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -913,6 +936,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           </p>
         ) : null}
       </div>
+
+      <HumanPromptBanner
+        prompts={workerPrompts}
+        label={(entry) =>
+          environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
+        }
+      />
 
       {latestContextEvent ? (
         <div

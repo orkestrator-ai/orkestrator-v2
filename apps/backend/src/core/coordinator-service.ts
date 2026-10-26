@@ -1,4 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { isSignInLink } from "@orkestrator/protocol/human-prompts";
+import { createHash, randomUUID } from "node:crypto";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
@@ -54,6 +56,12 @@ export interface CoordinatorDelegationOptions {
   workerBackgroundWork?: (environmentId: string, tabId: string) => Promise<boolean>;
   /** Overrides {@link DELEGATION_BACKGROUND_WORK_HOLD_MS}; for tests. */
   backgroundWorkHoldMs?: number;
+  /**
+   * Whether a command in the worker environment is waiting on the user (a
+   * sign-in link, a code, a password; see `human-prompt-registry.ts`). Such a
+   * turn end is a hand-off to a person, so it is never held for background work.
+   */
+  workerNeedsHuman?: (environmentId: string) => boolean;
 }
 
 export function sanitizeCoordinatorError(value: unknown): string {
@@ -884,6 +892,8 @@ export class CoordinatorService {
     const probe = this.options.workerBackgroundWork;
     if (
       !delegation ||
+      // Waiting on the user: the coordinator has to hear now, not in minutes.
+      this.options.workerNeedsHuman?.(association.resourceId) ||
       !(
         backgroundWorkPending ??
         (await probe?.(association.resourceId, delegation.workerTabId).catch(() => false))
@@ -1257,6 +1267,104 @@ export class CoordinatorService {
       }
       await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
     }
+  }
+
+  /**
+   * A command an agent ran in a worker environment is waiting on the user: tell
+   * the coordinator that owns the worker, once per prompt, so the person
+   * talking to the coordinator sees the link and code without opening the
+   * worker. A user's own `!` command is not announced: the user is at that
+   * tab, and the coordinator panel already shows it.
+   *
+   * The notice is a coordinator-route workflow notice, so it wakes the
+   * coordinator even while it waits on the delegation; it is idempotent on the
+   * prompt, so a redrawn or re-detected prompt is not sent twice.
+   */
+  async noteWorkerHumanPrompt(entry: HumanPromptEntry): Promise<void> {
+    if (entry.source === "user-command" || (entry.prompt.url && !isSignInLink(entry.prompt.url)))
+      return;
+    const environment = await this.storage.getEnvironment(entry.environmentId).catch(() => null);
+    if (!environment) return;
+    const associations = (
+      await this.storage.coordinators.listCoordinatorWorkflowAssociations(environment.projectId)
+    ).filter(
+      (association) =>
+        association.kind === "environment" &&
+        association.resourceId === entry.environmentId &&
+        !association.nodeId &&
+        !association.pending,
+    );
+    const owner = associations.at(-1);
+    if (!owner) return;
+    const workspace = await this.storage.coordinators.getCoordinatorWorkspaceById(
+      owner.coordinatorId,
+    );
+    const main = workspace ? coordinatorMainConversation(workspace) : undefined;
+    if (!workspace || !main) return;
+    const prompt = entry.prompt;
+    const digest = createHash("sha256")
+      .update(`${entry.id}\u0000${prompt.key}`)
+      .digest("hex")
+      .slice(0, 24);
+    const what =
+      prompt.kind === "host-key"
+        ? "an SSH host-key confirmation"
+        : prompt.kind === "secret"
+          ? "a password or passphrase"
+          : prompt.kind === "device-code"
+            ? "a sign-in with a code"
+            : prompt.kind === "sign-in"
+              ? "a sign-in in the browser"
+              : "a keypress (ENTER)";
+    const label = environment.name ?? entry.environmentId;
+    const tabArgs = `{ "environmentId": "${entry.environmentId}", "tabId": "${entry.tabId}" }`;
+    const lines = [
+      `A command in worker environment ${label} (${entry.environmentId}, tab ${entry.tabId}) is waiting on the user for ${what}.`,
+      ...(entry.command ? [`Command: \`${entry.command.replace(/`/g, "'")}\``] : []),
+      ...(prompt.url ? [`Open: ${prompt.url}`] : []),
+      ...(prompt.code ? [`Code: \`${prompt.code}\``] : []),
+      `Prompt: ${prompt.text}`,
+      "",
+      "Tell the user now, with the link and code above: the command is blocked until they act. " +
+        (prompt.kind === "secret" || prompt.kind === "host-key"
+          ? "They answer it in the worker's tab; never ask them to send a password through chat."
+          : "The worker's tab shows the same prompt."),
+      "",
+      `Read more: \`get_tab_state ${tabArgs}\`.`,
+    ];
+    await this.storage
+      .sendAgentMail(
+        {
+          kind: "system",
+          projectId: environment.projectId,
+          source: "workflow",
+          resourceId: entry.environmentId,
+        },
+        {
+          requestId: `human-prompt-${owner.id}-${digest}`,
+          toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
+          toTabId: main.tabId,
+          subject: `Worker ${label} needs you: ${prompt.url ? "sign in" : what}`,
+          body: lines.join("\n"),
+        },
+        {
+          notice: {
+            resource: {
+              kind: "agent-tab",
+              id: entry.tabId,
+              environmentId: entry.environmentId,
+              tabId: entry.tabId,
+              label,
+            },
+            state: "waiting",
+            tone: "attention",
+          },
+        },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
+        throw error;
+      });
   }
 
   static runtimeId(workspace: CoordinatorWorkspace): string {

@@ -197,48 +197,57 @@ export function registerCoordinatorCommands(
     if (!current) throw new Error("Coordinator workspace was not found");
     const item = current?.workspace.conversations.find((entry) => entry.id === conversation);
     if (!item) throw new Error("Coordinator conversation was not found");
-    // An unassigned conversation never reached a provider: there is no session
-    // to stop, no bridge to retire and no rollout to invalidate. Only the
-    // credential revocation below is unconditional.
-    if (item.agent) {
-      if (context.nativeAgents) {
-        await context.nativeAgents
-          .stopProjectionSession({
-            environmentId: coordinatorRuntimeId(current.workspace.id, item.id),
-            agent: item.agent,
-            logicalSessionKey: item.logicalSessionKey,
-          })
-          .catch(() => undefined);
+    const runtimeId = coordinatorRuntimeId(current.workspace.id, item.id);
+    const releaseOwner = context.userCommands?.beginOwnerClose?.(runtimeId);
+    try {
+      await context.userCommands?.terminateForEnvironment(runtimeId);
+      context.humanPrompts?.clearEnvironment(runtimeId);
+      // An unassigned conversation never reached a provider: there is no session
+      // to stop, no bridge to retire and no rollout to invalidate. Only the
+      // credential revocation below is unconditional.
+      if (item.agent) {
+        if (context.nativeAgents) {
+          await context.nativeAgents
+            .stopProjectionSession({
+              environmentId: coordinatorRuntimeId(current.workspace.id, item.id),
+              agent: item.agent,
+              logicalSessionKey: item.logicalSessionKey,
+            })
+            .catch(() => undefined);
+        }
       }
-    }
-    context.controlMcp?.revokeCoordinatorCredentials(current.workspace.id, conversation);
-    if (item.agent) {
-      // A bridge carries one private MCP configuration. Retire it when a tab
-      // credential is revoked; another open tab reattaches through a fresh child
-      // and freshly scoped credential without losing provider history.
-      await Promise.resolve(
-        dependencies.commands.get(localServerStopCommandName(item.agent))?.(
-          { environmentId: coordinatorRuntimeId(current.workspace.id, item.id) },
-          context,
-        ),
-      ).catch(() => undefined);
-      const sessionKey = nativeAgentSessionStorageKey(
-        coordinatorRuntimeId(current.workspace.id, item.id),
-        item.agent,
-        item.logicalSessionKey,
-      );
-      const session = await context.storage.getNativeAgentSession(sessionKey);
-      if (session) {
-        await context.storage.invalidateNativeAgentSession(sessionKey, session.providerSessionId);
+      context.controlMcp?.revokeCoordinatorCredentials(current.workspace.id, conversation);
+      if (item.agent) {
+        // A bridge carries one private MCP configuration. Retire it when a tab
+        // credential is revoked; another open tab reattaches through a fresh child
+        // and freshly scoped credential without losing provider history.
+        await Promise.resolve(
+          dependencies.commands.get(localServerStopCommandName(item.agent))?.(
+            { environmentId: coordinatorRuntimeId(current.workspace.id, item.id) },
+            context,
+          ),
+        ).catch(() => undefined);
+        const sessionKey = nativeAgentSessionStorageKey(
+          coordinatorRuntimeId(current.workspace.id, item.id),
+          item.agent,
+          item.logicalSessionKey,
+        );
+        const session = await context.storage.getNativeAgentSession(sessionKey);
+        if (session) {
+          await context.storage.invalidateNativeAgentSession(sessionKey, session.providerSessionId);
+        }
       }
+      const snapshot = await context.coordinators.closeConversation(id, conversation);
+      await context.storage.synchronizeAgentMailboxes();
+      // A side agent's schedules end with it; the main's move to the next main.
+      if (item.role === "side") {
+        context.scheduledJobs?.coordinatorConversationClosed(current.workspace.id, conversation);
+      }
+      context.humanPrompts?.clearEnvironment(runtimeId);
+      return snapshot;
+    } finally {
+      releaseOwner?.();
     }
-    const snapshot = await context.coordinators.closeConversation(id, conversation);
-    await context.storage.synchronizeAgentMailboxes();
-    // A side agent's schedules end with it; the main's move to the next main.
-    if (item.role === "side") {
-      context.scheduledJobs?.coordinatorConversationClosed(current.workspace.id, conversation);
-    }
-    return snapshot;
   });
   register("pause_project_coordinator", ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");

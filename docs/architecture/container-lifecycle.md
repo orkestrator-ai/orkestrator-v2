@@ -1158,14 +1158,18 @@ the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer
 <file>'`, otherwise the plain redirect. The writer owns the open file, so
 rotation cannot lose writes behind a still-writing process; it only writes a
 local file and drains its input to end of file, so it never blocks or
-SIGPIPEs its producer. Each line is written as it arrives: the image's awk is
-mawk, which block-buffers a piped stdin unless run with `-W interactive`, so
-until 2026-10-26 a quiet, long-lived bridge (most print nothing until a turn
-runs with debug logging on) had no log file at all and the last few KiB of a
-noisy one, the lines a failure diagnosis needs, were held back. The writer
-passes the option only to an awk that accepts it silently (BSD awk rejects
-it, gawk warns and ignores it), and an image built before then keeps the old
-behaviour until it is rebuilt.
+SIGPIPEs its producer, even when it cannot open or write the file. Each line
+is written as it arrives. The writer is one Perl process (perl-base is
+Essential on Debian): an earlier `stdbuf fold | awk` pipeline lost lines to
+each tool's own pipe buffering. The image's mawk block-buffers a piped stdin
+unless run with `-W interactive`, so until 2026-10-26 a quiet, long-lived
+bridge (most print nothing until a turn runs with debug logging on) had no log
+file at all and the last few KiB of a noisy one, the lines a failure diagnosis
+needs, were held back; Rust coreutils' `fold` (Ubuntu 26.04) buffers its
+output whatever `stdbuf` asks, and mawk exited when the file could not be
+opened. Only a line still waiting for its newline is held, and at most 64 KiB
+of it before it is split, so output without newlines stays bounded. An image
+built before the rewrite keeps the old behaviour until it is rebuilt.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,

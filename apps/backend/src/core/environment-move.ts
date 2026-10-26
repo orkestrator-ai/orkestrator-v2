@@ -72,7 +72,7 @@ function isAgentActive(environment: Environment): boolean {
  */
 export function assertEnvironmentMovable(
   environment: Environment,
-  context: Pick<CommandContext, "runtime">,
+  context: Pick<CommandContext, "runtime" | "userCommands">,
 ): void {
   context.runtime.environments.assertNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
@@ -104,6 +104,11 @@ export function assertEnvironmentMovable(
     context.runtime.environments.hasSetupSession(environment.id)
   ) {
     throw new Error("Environment setup is still running; move the environment when it finishes");
+  }
+  if (context.userCommands?.hasRunning(environment.id)) {
+    throw new Error(
+      "A command you ran with ! is still running in the environment; cancel it first",
+    );
   }
   if (isAgentActive(environment)) throw new Error(AGENT_ACTIVE_MOVE_ERROR);
 }

@@ -1,7 +1,7 @@
 # Relay read assertion after queued EOF
 
 - **ID:** 0340
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-17
 - **Test:** `PreviewTunnelServer > relay upstream preserves unshifted bytes and EOF across a stopped tunnel reader`
   in `apps/backend/src/preview-tunnel-server.test.ts`.
@@ -35,3 +35,12 @@ passed all preview tunnel tests with two isolated backend workers. Its backend
 failures were unrelated cases 0227 and 0341; root/support failed case 0178.
 Evidence: `orkestrator-test-run.bXnknL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 under the same temporary root.
+
+## Interactive command main merge — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name merge-repository -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, including two backend workers. Component-browser validation also ran on the host.
+- **Aggregate:** backend 11,960 passed, 141 skipped, 11 failed and seven errors across 719 files (1196.99 s); root/support 3,524 passed, four failed and one error (439.93 s). Aggregate exit 1 after 1354.0 s. Web passed all 9,937 active tests; bridges and protocol passed.
+- **Evidence:** `orkestrator-test-run.uWXxA5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, `orkestrator-test-run.uWXxA5/root-and-agent-support-tests.log.gz`, and enclosing `orkestrator-test-run.doKdov/merge-repository.log.gz` below the host temporary directory.
+- **Observation:** The relay/EOF case expected close code 1000, received 1001 (7839.11 ms). This differs from the earlier read-count assertion.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-tunnel-owner -- bun test --cwd apps/backend ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed (exit 0, 1.0 s).
+- **Assessment:** Reopened after this aggregate-only recurrence; the current cause is unconfirmed. Earlier fix history remains valid for its documented failure. No implementation, assertion, deadline or skip changed.

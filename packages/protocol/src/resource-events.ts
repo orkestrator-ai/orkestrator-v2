@@ -41,6 +41,17 @@ export const RESOURCE_KINDS = [
    * `transcript-artifact`: the list read is authoritative.
    */
   "scheduled-job",
+  /**
+   * A tab's user `!` commands changed (started, printed output, exited). The
+   * id is the conversation key (`env-<environment>:<tab>`); clients re-read
+   * `list_user_commands`. A hint only, throttled while output streams.
+   */
+  "user-command",
+  /**
+   * The shell prompts waiting on the user in an environment changed. The id
+   * is the environment id; clients re-read `list_human_prompts`. A hint only.
+   */
+  "human-prompt",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

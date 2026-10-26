@@ -689,6 +689,10 @@ export interface AgentSessionProvider {
    * narrow test providers and non-interactive integrations can fall back to
    * the coarser status contract.
    */
+  /** No-touch bounded shell output; never hydrates or attaches a session. */
+  humanPromptOutput?(
+    sessionId: string,
+  ): Promise<{ messages?: unknown; backgroundTasks?: unknown } | null>;
   activity?(sessionId: string): Promise<ProviderActivityState>;
   /**
    * Activity plus content-free attention metadata from the same no-touch read.

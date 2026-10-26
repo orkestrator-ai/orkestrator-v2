@@ -27,6 +27,8 @@
     "./agent-interactions": "./src/agent-interactions.ts",
     "./agent-interaction-deadline": "./src/agent-interaction-deadline.ts",
     "./agent-mail": "./src/agent-mail.ts",
+    "./human-prompts": "./src/human-prompts.ts",
+    "./user-commands": "./src/user-commands.ts",
     "./agent-registry": "./src/agent-registry.ts",
     "./agent-slash-commands": "./src/agent-slash-commands.ts",
     "./backend-instance": "./src/backend-instance.ts",

@@ -1019,6 +1019,14 @@ describe("coordinator command registry", () => {
         coordinatorId: snapshot.workspace.id,
       },
     });
+    const terminateCommands = mock(async () => undefined);
+    const clearPrompts = mock(() => undefined);
+    context.userCommands = {
+      terminateForEnvironment: terminateCommands,
+    } as unknown as CommandContext["userCommands"];
+    context.humanPrompts = {
+      clearEnvironment: clearPrompts,
+    } as unknown as CommandContext["humanPrompts"];
     const stopProjection = mock(async () => undefined);
     const revoke = mock(() => undefined);
     const stopBridge = mock(async () => undefined);
@@ -1034,6 +1042,8 @@ describe("coordinator command registry", () => {
       { projectId: project.id, conversationId: conversation.id },
       context,
     );
+    expect(terminateCommands).toHaveBeenCalledWith(runtimeId);
+    expect(clearPrompts).toHaveBeenCalledWith(runtimeId);
     expect(stopProjection).toHaveBeenCalledWith({
       environmentId: runtimeId,
       agent: "codex",

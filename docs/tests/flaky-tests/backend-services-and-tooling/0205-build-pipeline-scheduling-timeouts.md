@@ -1,7 +1,7 @@
 # Build pipeline scheduling timeouts under aggregate load
 
 - **ID:** 0205
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-13
 - **Tests:** `BuildPipelineService keyed scheduling > old and new drivers make the same transitions from one persisted fixture`
   and `BuildPipelineService keyed scheduling > retained history is enumerated only by the safety scan`.
@@ -133,3 +133,12 @@ GitHub Actions `lint.yml` "Unit and integration tests" job,
     run → 140 pass and 35 pass, 0 fail.
   - `oxfmt --check`, `oxlint` and `tsc --noEmit -p tsconfig.json` /
     `tsconfig.test.json` in `apps/backend` passed.
+
+## Interactive command main merge — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name merge-repository -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, including two backend workers. Component-browser validation also ran on the host.
+- **Aggregate:** backend 11,960 passed, 141 skipped, 11 failed and seven errors across 719 files (1196.99 s); root/support 3,524 passed, four failed and one error (439.93 s). Aggregate exit 1 after 1354.0 s. Web passed all 9,937 active tests; bridges and protocol passed.
+- **Evidence:** `orkestrator-test-run.uWXxA5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, `orkestrator-test-run.uWXxA5/root-and-agent-support-tests.log.gz`, and enclosing `orkestrator-test-run.doKdov/merge-repository.log.gz` below the host temporary directory.
+- **Observation:** `retained history is enumerated only by the safety scan` exceeded its deadline (109988.53 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-build-scheduling-owner -- bun test --cwd apps/backend ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 0.9 s).
+- **Assessment:** Reopened after this aggregate-only recurrence; the current cause is unconfirmed. Earlier fix history remains valid for its documented failure. No implementation, assertion, deadline or skip changed.

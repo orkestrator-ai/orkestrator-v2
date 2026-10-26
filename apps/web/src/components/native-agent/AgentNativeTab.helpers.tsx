@@ -1,3 +1,4 @@
+import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { History } from "lucide-react";
@@ -852,6 +853,14 @@ export function UnassignedNativeAgentComposer({
   // same way the locked composer adds them to every later one.
   const hasSendableAnnotations = sendableTranscriptAnnotations(draft.annotations).length > 0;
   const send = () => {
+    // A `!` command needs the tab's conversation to show it and an agent to
+    // hear about it; neither exists until the first prompt starts one.
+    if (parseUserCommand(draft.text)) {
+      toast.error(
+        "Send a first message to start the conversation, then run ! commands here. To send this text to the agent, drop the !.",
+      );
+      return;
+    }
     const prompt = buildPromptWithTranscriptAnnotations(
       buildInitialPromptWithAttachmentReferences(
         serializeForLLM(draft.text, draft.mentions),

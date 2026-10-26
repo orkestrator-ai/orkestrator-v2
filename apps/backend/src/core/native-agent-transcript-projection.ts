@@ -1,3 +1,4 @@
+import { stripUserCommandContext } from "@orkestrator/protocol/user-commands";
 import * as shared from "./native-agent-service-shared.js";
 import type {
   BuildPipelineAgent,
@@ -544,13 +545,20 @@ function normalizedProgressiveMessages(value: unknown): unknown[] | null {
   return value;
 }
 
-function coordinatorDisplayMessage<T>(raw: T): T {
+/**
+ * Remove server-authored preambles from a user row for display: the
+ * coordinator block (coordinator conversations only), then the block telling
+ * the agent what the user ran with `!` (shown as its own cards instead).
+ */
+function displayMessage<T>(raw: T, coordinator: boolean): T {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const message = raw as Record<string, unknown>;
   if (message.role !== "user") return raw;
+  const strip = (text: string) =>
+    stripUserCommandContext(coordinator ? stripCoordinatorContext(text) : text);
   const projected: Record<string, unknown> = { ...message };
   if (typeof message.content === "string") {
-    projected.content = stripCoordinatorContext(message.content);
+    projected.content = strip(message.content);
   }
   if (Array.isArray(message.parts)) {
     let stripped = false;
@@ -560,7 +568,7 @@ function coordinatorDisplayMessage<T>(raw: T): T {
       }
       const part = rawPart as Record<string, unknown>;
       if (part.type !== "text" || typeof part.content !== "string") return rawPart;
-      const content = stripCoordinatorContext(part.content);
+      const content = strip(part.content);
       if (content === part.content) return rawPart;
       stripped = true;
       return { ...part, content };
@@ -1401,9 +1409,7 @@ export class NativeAgentTranscriptProjection {
         ...(typeof row.planReview === "boolean" ? { planReview: row.planReview } : {}),
         ...(promptPresentation ? { promptPresentation } : {}),
       };
-      projected = context.coordinator
-        ? coordinatorDisplayMessage(projectedMessage)
-        : projectedMessage;
+      projected = displayMessage(projectedMessage, Boolean(context.coordinator));
     } finally {
       this.detailRegistrations = sink;
     }

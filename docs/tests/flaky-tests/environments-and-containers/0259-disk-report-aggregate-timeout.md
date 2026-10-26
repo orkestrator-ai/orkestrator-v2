@@ -229,3 +229,21 @@ The complete unchanged owner passed: `mise run test:logged -- --name cleanup-dis
 - **Complete unchanged owner:** `env -u PORT mise run test:logged -- --name disk-report -- bun test ./tests/unit/disk-report.test.ts` passed (1.9 s).
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.ZrjtAX`.
 - **Assessment:** known recurrence under shared host load; the branch does not touch disk reporting. No assertion, deadline or skip changed.
+
+## Interactive command/prompt review — 2026-10-26
+
+- **Original command:** `mise run test` through `test:logged`, standard 4/1/2/1 workspace/root/bridge/protocol reservations.
+- **Observation:** The isolated-checkout report timed out at 5027.35 ms, with null subprocess status and an error between tests. The complete unchanged owner passed alone in 3.1 s.
+- **Owner command:** `mise run test:logged -- --name owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`.
+- **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
+- **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
+- **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.
+
+## Interactive command main merge — 2026-10-26
+
+- **Parents:** feature `4401a71829fc3bf7c61b50366d443b57ea457ec8` and main `6048aad1ae77f4639e4ffbdc9a38837789137daa`.
+- **Original command:** `mise run test:logged -- --name merge-repository -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, with the component browser suite also running.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded its five-second deadline (5032.27 ms), with null subprocess status and an error between tests. Root/support: 3,524 passed, four failed and one error across 170 files (439.93 s).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 2.1 s).
+- **Evidence:** `orkestrator-test-run.uWXxA5/root-and-agent-support-tests.log.gz` and enclosing `orkestrator-test-run.doKdov/merge-repository.log.gz` under the host temporary directory.
+- **Assessment:** another timing recurrence; cause unconfirmed. No disk-report implementation, assertion, timeout or skip changed. The aggregate remains non-green.

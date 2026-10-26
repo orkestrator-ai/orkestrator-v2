@@ -812,7 +812,7 @@ export function renderAgentMailCarrier(message: AgentMailMessage): string {
       : message.from.kind === "user"
         ? "This block is a message from your user, delivered through Orkestrator."
         : message.from.kind === "coordinator"
-          ? `This is an authenticated delegation from the read-only coordinator for project ${message.from.projectId}.`
+          ? `This is an authenticated delegation from the read-only coordinator for project ${message.from.projectId} on this machine.`
           : message.from.kind === "node" && message.from.role === "coordinator"
             ? `This is an authenticated delegation from this project's coordinator on the command node ${message.from.nodeName}.`
             : message.from.kind === "node"

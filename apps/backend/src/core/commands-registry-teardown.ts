@@ -181,6 +181,22 @@ export function registerTeardownCommands(
     intent: TabTeardownIntent,
     context: CommandContext,
   ): Promise<void> => {
+    const releaseOwner = context.userCommands?.beginOwnerClose?.(environment.id, intent.tabId);
+    try {
+      await context.userCommands?.terminateForTab(environment.id, intent.tabId);
+      context.humanPrompts?.clearTab(environment.id, intent.tabId);
+      await performTabTeardown(environment, intent, context);
+      context.humanPrompts?.clearTab(environment.id, intent.tabId);
+    } finally {
+      releaseOwner?.();
+    }
+  };
+
+  const performTabTeardown = async (
+    environment: Environment,
+    intent: TabTeardownIntent,
+    context: CommandContext,
+  ): Promise<void> => {
     if (intent.kind === "terminal") {
       const sessionIds = new Set<string>();
       if (intent.sessionId) {

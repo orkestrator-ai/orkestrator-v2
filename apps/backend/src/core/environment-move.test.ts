@@ -1349,3 +1349,24 @@ test("an incomplete copy rollback never asks recovery to adopt its partially rem
   );
   expect(await registeredWorktrees(projectPath)).toContain(environment.worktreePath!);
 });
+
+test("a running user command refuses move before quiescing or recording a lifecycle error", async () => {
+  const { root, context, startLocal, storage } = await setup();
+  const environment = await startLocal();
+  const terminate = mock(async () => []);
+  const original = context.runtime.terminals.terminateSessionsForEnvironment;
+  context.runtime.terminals.terminateSessionsForEnvironment = terminate;
+  context.userCommands = { hasRunning: () => true } as unknown as CommandContext["userCommands"];
+  try {
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "destination"), context),
+    ).rejects.toThrow("still running");
+    expect(terminate).not.toHaveBeenCalled();
+    const current = await storage.getEnvironment(environment.id);
+    expect(current?.lifecycleError).toBeFalsy();
+    expect(current?.lifecycleOperation).toBeUndefined();
+    expect(current?.worktreePath).toBe(environment.worktreePath);
+  } finally {
+    context.runtime.terminals.terminateSessionsForEnvironment = original;
+  }
+});

@@ -188,7 +188,12 @@ Mail between a command node's coordinator and an agent on a node it
 controls ([command-nodes.md](command-nodes.md#coordinators)) crosses the node
 link: the command node delivers coordinator mail with `deliver_node_mail`,
 and collects an agent's mail to `"coordinator"` (or a reply on such a
-thread) from that node's outbox. Each side stores it with a `node` sender
+thread) from that node's outbox. On a leaf, `"coordinator"` is the
+coordinator that last contacted the sending environment, local or remote,
+and a reply always goes back to its sender; see
+[command-nodes.md](command-nodes.md#updates-from-leaves). The `send_message`
+result names the destination in `coordinator` (`this machine` or
+`command node <name>`). Each side stores it with a `node` sender
 (`NodeMailActor`): the node, the remote party's role (`coordinator` or
 `agent`) and its address on its own node, and the recipient's own project for
 the same repository. The node link authenticates it, so it is

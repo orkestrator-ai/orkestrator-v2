@@ -337,6 +337,10 @@ export class AppServerRuntime {
     return this.sessions.getActivity(...args);
   }
 
+  humanPromptOutput(sessionId: string) {
+    return this.sessions.humanPromptOutput(sessionId);
+  }
+
   getActivitySnapshot(
     ...args: Parameters<CodexRuntimeSessions["getActivitySnapshot"]>
   ): ReturnType<CodexRuntimeSessions["getActivitySnapshot"]> {

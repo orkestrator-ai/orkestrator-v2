@@ -217,3 +217,32 @@ describe("POST /sessions/activity", () => {
     expect((await post("x".repeat(200_000))).status).toBe(413);
   });
 });
+
+test("human-prompt output is bounded and does not hydrate or touch the session", async () => {
+  const state = createSession("prompt-observation");
+  track(state.id);
+  state.messages.push({
+    id: "shell",
+    role: "assistant",
+    content: "",
+    createdAt: new Date(0).toISOString(),
+    parts: [
+      {
+        type: "tool-invocation",
+        toolName: "Bash",
+        toolUseId: "login",
+        toolState: "pending",
+        toolOutput: "https://github.com/login/device\nPress ENTER",
+      },
+    ],
+  } as (typeof state.messages)[number]);
+  const before = JSON.stringify(state.messages);
+  const hydrationReads = mockSdkGetSessionMessages.mock.calls.length;
+  const response = await app.request(`/session/${state.id}/human-prompts`);
+  expect(response.status).toBe(200);
+  expect(JSON.stringify(await response.json())).toContain("https://github.com/login/device");
+  expect(mockSdkGetSessionMessages.mock.calls).toHaveLength(hydrationReads);
+  expect(JSON.stringify(state.messages)).toBe(before);
+  const missing = await app.request("/session/not-held/human-prompts");
+  expect(await missing.json()).toEqual({ messages: [{ parts: [] }], backgroundTasks: [] });
+});

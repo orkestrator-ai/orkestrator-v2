@@ -3132,3 +3132,20 @@ describe("HTTP bridge progressive transcript", () => {
     expect((await provider.interactiveSnapshot!("session-1")).readiness).toBeUndefined();
   });
 });
+
+test("background human-prompt observations use only the no-touch route", async () => {
+  const body = {
+    messages: [
+      { parts: [{ toolState: "pending", toolOutput: "https://github.com/login/device" }] },
+    ],
+    backgroundTasks: [],
+  };
+  const { provider, requests } = httpProvider(() => Response.json(body));
+  expect(await provider.humanPromptOutput!("session-1")).toEqual(body);
+  expect(requests.map((request) => request.url)).toEqual([
+    "http://claude.test/session/session-1/human-prompts",
+  ]);
+  const legacy = httpProvider(() => new Response("", { status: 404 }));
+  expect(await legacy.provider.humanPromptOutput!("session-1")).toBeNull();
+  expect(legacy.requests).toHaveLength(1);
+});

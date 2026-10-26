@@ -449,6 +449,13 @@ Five complete browser owners passed separately; both native branch-suggestion ca
 - **Evidence:** host temporary-directory `orkestrator-test-run.7ZX2fG/browser-tests.log.gz`; first repository group logs `orkestrator-test-run.f6RC8E/`, outer `orkestrator-test-run.hmtTh7/`; corrected root/bridge logs `orkestrator-test-run.9IYTzJ/`, outer `orkestrator-test-run.WJ4BM5/`; persistent owner logs `orkestrator-test-run.ZgS1YD/firewall-owner.log.gz` and `orkestrator-test-run.leZJav/disk-owner.log.gz`. Browser failure traces remain under `output/playwright/test-results/`; owner outputs use distinct `resume-*` directories. Passing text output is deleted by the logged runner.
 - **Scope:** no unrelated implementation, assertion, deadline or skip was changed. Shared-host contention is a hypothesis, not a proven cause. The broad suite exits remain failed. Dedicated real-stack, Docker, Electron and iOS scenario suites were outside this harness/test-only change.
 
+## Interactive command/prompt review — 2026-10-26
+
+- `mise run test:browser`: 770 passed, 103 skipped, three failures (nine workers, 478.8 s).
+- Tool-fold threshold geometry passed in the unchanged complete one-worker owner (77.9 s); tracked in [1012](../web-ui/1012-live-tool-fold-threshold-gap.md).
+- Both native branch-suggestion cases still fail in the unchanged complete one-worker `AgentLaunchDialog.spec.ts` owner (22.4 s): expected `release/2.0`, received `rel`. This recurrence is not classified as a flake.
+- Public-site browser suite passed separately (11.0 s). Component evidence: `orkestrator-test-run.pU67Df`; branch-owner evidence: `orkestrator-test-run.g7ileN`, below the host temporary directory.
+
 ## On-demand file-tree review validation — 2026-10-26
 
 - **Original component command:** `mise run test:logged -- --name component-browser -- mise run test:browser`, nine Playwright workers, alongside the full non-iOS and disposable-stack browser suites. Result: 763 passed, 103 skipped, ten failed across 876 cases (737.4 s logged). Evidence: host temporary-directory `orkestrator-test-run.fAxUpS/component-browser.log.gz`.

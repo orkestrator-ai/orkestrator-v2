@@ -9,12 +9,17 @@ import { COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coordinator";
  *   `deliver_node_mail`, which stores it as incoming mail for that agent
  *   (processed like any message) and remembers which command node and
  *   coordinator conversation the thread belongs to.
- * - Leaf agent → coordinator: mail to "coordinator", a reply on such a
- *   thread, or a report from an environment a command node launched goes to
- *   the command node that started that conversation or environment; with no
- *   origin, to the command node that contacted this leaf most recently. It
- *   waits in this leaf's outbox until that command node collects it; it is
- *   never dropped or sent to another command node.
+ * - Leaf agent → coordinator: a reply goes back to whoever sent the message
+ *   it answers, a command node's coordinator through the outbox, a local
+ *   coordinator locally. Mail to "coordinator" goes to the coordinator that
+ *   last contacted the environment (launched it, delegated to it or mailed
+ *   it), local or remote. An environment a local coordinator launched reports
+ *   locally until a command node's coordinator contacts it, and back again
+ *   once the local one does. With no coordinator contact at all, it goes to
+ *   this project's local coordinator if there is one, otherwise to the
+ *   command node that contacted this leaf most recently. Remote mail waits in
+ *   this leaf's outbox until that command node collects it; it is never
+ *   dropped or sent to another command node.
  * With no command node attached, mail stays local exactly as before.
  */
 
@@ -51,10 +56,27 @@ export interface OutboxItem {
   bytes: number;
 }
 
+/** A command node's coordinator's latest contact with one environment. */
+export type CoordinatorContact = CoordinatorMailbox & { at: string };
+
+/** What this backend's own coordinators did with one environment. */
+export interface LocalCoordinatorContact {
+  /** Latest launch, delegation or mail from a local coordinator (ISO time). */
+  at?: string;
+  /** The environment's project has a coordinator on this backend. */
+  hasCoordinator: boolean;
+}
+
 export interface NodeMailState {
   version: 1;
   /** Environments launched by a command node's coordinator. */
   origins: Record<string, CoordinatorMailbox>;
+  /**
+   * The latest contact by a command node's coordinator, per environment:
+   * a launch, a prompt, or mail. Optional: written since contact-ordered
+   * routing; an origin without one counts as the oldest contact.
+   */
+  contacts?: Record<string, CoordinatorContact>;
   /** Leaf message IDs of incoming coordinator mail → its coordinator mailbox. */
   threads: Record<string, CoordinatorMailbox>;
   outbox: Record<string, { nextSeq: number; items: OutboxItem[] }>;
@@ -76,6 +98,8 @@ export interface LeafMailContext {
   /** Attached command nodes, most recent contact first. */
   attachedControllers(): Array<{ controllerId: BackendId; displayName: string }>;
   mostRecentControllerId(): BackendId | undefined;
+  /** This backend's coordinators' contact with an environment's tab. */
+  localCoordinatorContact?(environmentId: string, tabId?: string): Promise<LocalCoordinatorContact>;
 }
 
 export class LeafNodeMail {
@@ -86,13 +110,29 @@ export class LeafNodeMail {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** A command node launched this environment for one of its coordinators. */
-  async recordOrigin(environmentId: string, origin: CoordinatorMailbox): Promise<void> {
+  /**
+   * A command node's coordinator launched or prompted this environment, or
+   * mailed it. The first one is its origin; every one is its latest contact.
+   */
+  async recordOrigin(
+    environmentId: string,
+    origin: CoordinatorMailbox,
+    options: { keepOrigin?: boolean } = {},
+  ): Promise<void> {
     await this.store.mutate((state) => {
-      const origins = { ...state.origins, [environmentId]: origin };
+      const origins =
+        options.keepOrigin && state.origins[environmentId]
+          ? state.origins
+          : { ...state.origins, [environmentId]: origin };
       const keys = Object.keys(origins);
       for (const key of keys.slice(0, Math.max(0, keys.length - MAX_ORIGINS))) delete origins[key];
-      return { next: { ...state, origins }, result: undefined };
+      const contacts: Record<string, CoordinatorContact> = { ...state.contacts };
+      delete contacts[environmentId];
+      contacts[environmentId] = { ...origin, at: new Date(this.now()).toISOString() };
+      const contactKeys = Object.keys(contacts);
+      for (const key of contactKeys.slice(0, Math.max(0, contactKeys.length - MAX_ORIGINS)))
+        delete contacts[key];
+      return { next: { ...state, origins, contacts }, result: undefined };
     });
   }
 
@@ -112,6 +152,7 @@ export class LeafNodeMail {
    */
   async route(input: {
     fromEnvironmentId: string;
+    fromTabId?: string;
     toEnvironmentId: string;
     replyToMessageId?: string;
   }): Promise<CoordinatorMailbox | { controllerId: BackendId; controllerName?: string } | null> {
@@ -120,13 +161,25 @@ export class LeafNodeMail {
     const isAttached = (id: string) => attached.some((entry) => entry.controllerId === id);
     const state = await this.store.load();
     if (input.replyToMessageId) {
+      // A reply goes back to whoever sent the message it answers: a command
+      // node's coordinator through the outbox, anyone on this node locally.
       const thread = state.threads[input.replyToMessageId];
-      if (thread && isAttached(thread.controllerId)) return thread;
-      if (thread) return null;
+      return thread && isAttached(thread.controllerId) ? thread : null;
     }
     if (input.toEnvironmentId !== COORDINATOR_MAIL_ADDRESS) return null;
+    // "coordinator" is whichever coordinator last contacted the environment.
     const origin = state.origins[input.fromEnvironmentId];
-    if (origin && isAttached(origin.controllerId)) return origin;
+    const remote: CoordinatorContact | undefined =
+      state.contacts?.[input.fromEnvironmentId] ?? (origin ? { ...origin, at: "" } : undefined);
+    const local = await this.context.localCoordinatorContact?.(
+      input.fromEnvironmentId,
+      input.fromTabId,
+    );
+    if (remote && isAttached(remote.controllerId) && !(local?.at && local.at >= remote.at)) {
+      const { at: _at, ...mailbox } = remote;
+      return mailbox;
+    }
+    if (local?.at || local?.hasCoordinator) return null;
     const recent = this.context.mostRecentControllerId();
     if (!recent || !isAttached(recent)) return null;
     const name = attached.find((entry) => entry.controllerId === recent)?.displayName;
@@ -235,7 +288,8 @@ export function describeLeafMail(item: OutboxItem, node: { nodeId: string; name:
 /** Text a leaf agent reads for mail from a command node's coordinator. */
 export function describeCoordinatorMail(body: string, controllerName: string): string {
   return (
-    `From the coordinator on ${controllerName}, which controls this node. ` +
-    `Reply to this message, or send_message to "coordinator", to answer it.\n\n${body}`
+    `From the coordinator on ${controllerName}, which controls this node, not a coordinator on this machine. ` +
+    `Answer it with reply_message on this message, which always goes back to ${controllerName}. ` +
+    `Until another coordinator contacts this environment, send_message to "coordinator" also reaches it.\n\n${body}`
   );
 }

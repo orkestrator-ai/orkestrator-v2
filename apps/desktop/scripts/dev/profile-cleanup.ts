@@ -145,21 +145,38 @@ export type KeychainItemRemoval = { removed: number; warning: string | null };
  * Removes a profile's `safeStorage` key from the macOS login Keychain.
  * Electron stores it as the generic password "<app name> Safe Storage" with
  * account "<app name>", and a profile's app name is its `electronTitle`, so
- * every reset profile used to leave one behind. Only the title `dev:test`
- * gives this profile id is accepted: a `profile.json` naming another title
- * (the production app's, say) must never delete that app's key. A failure is
- * reported, not thrown, because the profile state is already gone by then.
+ * every reset profile used to leave one behind. The item is named by title
+ * alone, so two guards keep this to the profile's own item:
+ *
+ * - The title must be the one `dev:test` gives this profile id. A
+ *   `profile.json` naming another title (the production app's, say) must
+ *   never delete that app's key.
+ * - The profile must live under `ownerRoots`, the platform's own development
+ *   root. A profile of the same id under another root (a test harness, a
+ *   temporary root) has the same title, so the item is the real profile's.
+ *
+ * A failure is reported, not thrown, because the profile state is already
+ * gone by then.
  */
 export function removeProfileKeychainItem(
   profile: RuntimeProfile,
   run: CommandRunner = runKeychainCommand,
   platform: NodeJS.Platform = process.platform,
+  ownerRoots?: RuntimeProfileRoots,
 ): KeychainItemRemoval {
   if (platform !== "darwin") return { removed: 0, warning: null };
   if (profile.electronTitle !== runtimeProfileElectronTitle(profile.id)) {
     return {
       removed: 0,
       warning: `Kept the login Keychain item for "${profile.electronTitle}": it is not this profile's title.`,
+    };
+  }
+  const owners = ownerRoots ?? defaultRuntimeProfileRoots(platform);
+  const ownProfileRoot = path.resolve(owners.developmentRoot, "profiles", profile.id);
+  if (path.resolve(profile.profileRoot) !== ownProfileRoot) {
+    return {
+      removed: 0,
+      warning: `Kept the login Keychain item for "${profile.electronTitle}": the profile is outside the default development root, whose profile of the same id owns it.`,
     };
   }
   const service = `${profile.electronTitle} Safe Storage`;
@@ -205,6 +222,11 @@ export type RemoveProfileOptions = {
   run?: CommandRunner;
   /** Selects the Keychain step; defaults to the host platform. */
   platform?: NodeJS.Platform;
+  /**
+   * The roots whose profiles own their title's Keychain item; defaults to the
+   * platform's own development root. Tests point it at their temporary roots.
+   */
+  keychainRoots?: RuntimeProfileRoots;
 };
 
 /**
@@ -291,6 +313,7 @@ export async function removeProfile(
     profile,
     options.run ?? runKeychainCommand,
     options.platform,
+    options.keychainRoots,
   );
 
   const branchesDeleted: string[] = [];
@@ -344,6 +367,8 @@ export type PruneProfilesOptions = {
   isLive?: (status: RuntimeStatusManifest) => Record<RuntimeProcessName, boolean>;
   /** Selects the Keychain step of each removal; defaults to the host platform. */
   platform?: NodeJS.Platform;
+  /** See `RemoveProfileOptions.keychainRoots`. */
+  keychainRoots?: RuntimeProfileRoots;
 };
 
 async function lastUsedAt(
@@ -443,6 +468,7 @@ export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise
         roots,
         run,
         platform: options.platform,
+        keychainRoots: options.keychainRoots,
       });
       if (orphaned) orphanImages.add(profile.dockerImage);
       outcomes.push({

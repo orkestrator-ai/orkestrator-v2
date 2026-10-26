@@ -28,7 +28,9 @@ left behind by hand: the pending steps say which of its worktree, branch
 (only once you have checked it is merged), container, volumes, network or
 bridge state directories remain. The backend log names the environment once
 per start (`Cleanup for deleted environment ... is still failing`). The entry
-itself is not retried again; see
+itself is not retried again, and nothing removes it, so it stays in this row
+after you have cleaned up by hand (whether to retry or clear such entries is an
+open question in todo 0023); see
 [environment-deletion.md](../architecture/environment-deletion.md#reconciler).
 
 In the app, **Settings > Disk usage** lists every environment's size: its

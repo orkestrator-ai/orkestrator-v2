@@ -192,6 +192,7 @@ describe("profile Keychain item", () => {
       keepToolchains: false,
       roots,
       platform: "darwin",
+      keychainRoots: roots,
       run: (command, args) => {
         if (command === "security") stateGoneFirst &&= !existsSync(profile.profileRoot);
         return keychainRun(command, args);
@@ -221,7 +222,13 @@ describe("profile Keychain item", () => {
           ? { status: 1, stdout: "", stderr: "container is busy" }
           : run(command, args);
     await expect(
-      removeProfile(profile, { keepToolchains: false, roots, platform: "darwin", run: failing }),
+      removeProfile(profile, {
+        keepToolchains: false,
+        roots,
+        platform: "darwin",
+        keychainRoots: roots,
+        run: failing,
+      }),
     ).rejects.toThrow("container is busy");
     expect(securityCalls).toEqual([]);
   });
@@ -250,6 +257,26 @@ describe("profile Keychain item", () => {
     expect(securityCalls).toEqual([]);
   });
 
+  test("keeps the item of a same-id profile under another development root", async () => {
+    const profile = await createProfile("keychain-shadow");
+    // `roots` is a temporary root, so the platform's own root, where the real
+    // profile of this id lives and whose title is the same, owns the item.
+    const result = await removeProfile(profile, {
+      keepToolchains: false,
+      roots,
+      platform: "darwin",
+      run,
+    });
+    expect(existsSync(profile.profileRoot)).toBe(false);
+    expect(result.keychainItemsRemoved).toBe(0);
+    expect(result.keychainWarning).toContain("outside the default development root");
+    expect(securityCalls).toEqual([]);
+
+    const other = { ...roots, developmentRoot: path.join(root, "other-dev") };
+    expect(removeProfileKeychainItem(profile, run, "darwin", other).removed).toBe(0);
+    expect(securityCalls).toEqual([]);
+  });
+
   test("reports a Keychain failure without failing the removal", async () => {
     const profile = await createProfile("keychain-locked");
     const locked: CommandRunner = (command, args) =>
@@ -258,6 +285,7 @@ describe("profile Keychain item", () => {
       keepToolchains: false,
       roots,
       platform: "darwin",
+      keychainRoots: roots,
       run: locked,
     });
     expect(existsSync(profile.profileRoot)).toBe(false);
@@ -271,7 +299,12 @@ describe("profile Keychain item", () => {
     const orphan = await createProfile("keychain-orphan", gone());
     const locked: CommandRunner = (command, args) =>
       command === "security" ? { status: 51, stdout: "", stderr: "" } : run(command, args);
-    const [outcome] = await pruneProfiles({ roots, run: locked, platform: "darwin" });
+    const [outcome] = await pruneProfiles({
+      roots,
+      run: locked,
+      platform: "darwin",
+      keychainRoots: roots,
+    });
     expect(outcome).toMatchObject({ id: orphan.id, action: "removed" });
     expect(formatPruneOutcome(outcome!)).toEndWith(
       'Could not remove the login Keychain item "Orkestrator AI — DEV [keychain-orphan] Safe Storage" (security exited 51); delete it in Keychain Access.',

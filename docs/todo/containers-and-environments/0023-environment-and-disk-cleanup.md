@@ -143,15 +143,19 @@ macOS run of that last change.
    pruning. `removeProfile` calls it
    only after the profile state is removed, so `dev:reset`, `dev:prune` and
    start-up pruning all use it, and a failed reset keeps the key. It runs only
-   on macOS, and only when the profile's `electronTitle` equals
+   on macOS, only when the profile's `electronTitle` equals
    `runtimeProfileElectronTitle(id)` (new in `electron/runtime-profile.ts`), so
-   an edited `profile.json` can never delete the production app's key. Any
+   an edited `profile.json` can never delete the production app's key, and
+   only when the profile is the platform's own development root's profile of
+   that id. The item is named by title alone, so a same-id profile under
+   another root (a test harness, a temporary root) would otherwise delete the
+   real profile's key; `keychainRoots` lets tests name their own root. Any
    other `security` failure becomes a warning (`dev:reset` prints it,
    `dev:prune` appends it to the outcome) and does not fail the removal. Unit
    tests in `profile-cleanup.test.ts` cover deletion of every copy and no
    other item, ordering after state removal, no call when removal fails, no
-   call off macOS, refusal of a foreign title, a locked Keychain, and the
-   prune outcome. The suite's command runner now records `security` calls, so
+   call off macOS, refusal of a foreign title, refusal of a same-id profile
+   under another root, a locked Keychain, and the prune outcome. The suite's command runner now records `security` calls, so
    no test can reach a host Keychain.
 
    Still owed (needs a macOS host; omarchy-hp is Linux): start a development
@@ -384,11 +388,15 @@ Decisions made on 2026-10-26 while working through the file.
    profile's own item.
 5. **How narrowly to match the item (item 3).** Options: (a) by service only
    (`-s`); (b) by service and account (`-s` and `-a`); (c) also check the
-   profile's title against the one `dev:test` derives from its id. Chose (b)
-   and (c). Electron sets both names from the app name, so (b) still matches
-   every item Electron created, and (c) means an edited `profile.json` naming
-   `Orkestrator AI` cannot delete the production key. Cons: a profile created
-   under an older title format keeps its item (none is known).
+   profile's title against the one `dev:test` derives from its id; (d) also
+   require the profile to be the default development root's profile of that
+   id. Chose (b), (c) and (d). Electron sets both names from the app name, so
+   (b) still matches every item Electron created; (c) means an edited
+   `profile.json` naming `Orkestrator AI` cannot delete the production key;
+   (d), added in self-review, stops a same-id profile under a test or
+   temporary root from deleting the real profile's key, since the item is
+   named by title alone. Cons: a profile created under an older title format,
+   or under a non-default root, keeps its item (it says so in a warning).
 6. **When to delete it, and what a failure does (item 3).** Chose: after the
    profile state is removed, and a failure is a warning, not an error. Pros:
    a reset that fails earlier keeps both the encrypted data and its key; a

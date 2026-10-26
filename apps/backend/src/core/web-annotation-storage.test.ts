@@ -276,6 +276,32 @@ describe("web annotation storage commit protocol", () => {
     expect(changes() - before).toBeLessThanOrEqual(8);
   });
 
+  test("a mutation that writes into a committed row is refused and commits nothing", async () => {
+    harness = await createHarness();
+    const receipt = await createAnnotation(harness.service, ENV_A);
+    const store = await harness.service.storage.environment(ENV_A);
+    const committed = store.manifest;
+    const revision = store.revision;
+    // Committed rows are frozen: an in-place write cannot slip past the row
+    // plan or corrupt the committed manifest; it throws and rolls back.
+    await expect(
+      store.mutate((tx) => {
+        tx.edit("annotations", receipt.annotationId)!.title = "Edited first";
+        tx.touch({ annotationIds: [receipt.annotationId] });
+        tx.manifest.annotations[receipt.annotationId] = {
+          ...tx.manifest.annotations[receipt.annotationId]!,
+        };
+        Object.assign(committed.annotations[receipt.annotationId]!, { title: "In place" });
+      }),
+    ).rejects.toThrow(TypeError);
+    expect(store.revision).toBe(revision);
+    expect(store.manifest).toBe(committed);
+    expect(store.manifest.annotations[receipt.annotationId]!.title).not.toBe("In place");
+    expect(store.manifest.annotations[receipt.annotationId]!.title).not.toBe("Edited first");
+    const reloaded = await (await harness.restart()).get(ENV_A, receipt.annotationId);
+    expect(reloaded.annotation.title).toBe(committed.annotations[receipt.annotationId]!.title);
+  });
+
   test("stale staging uploads are removed only after the grace period", async () => {
     harness = await createHarness();
     const store = await harness.service.storage.environment(ENV_A);
@@ -386,7 +412,7 @@ describe("two backends sharing a data directory", () => {
       body: "reply",
     });
     await theirs.mutate((tx) => {
-      tx.manifest.annotations[receipt.annotationId]!.hidden = true;
+      tx.edit("annotations", receipt.annotationId)!.hidden = true;
       tx.touch({ annotationIds: [receipt.annotationId] });
     });
     const annotation = mine.manifest.annotations[receipt.annotationId]!;

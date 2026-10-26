@@ -318,7 +318,7 @@ describe("garbage collection", () => {
   test("old terminal records are dropped", async () => {
     let clock = 0;
     const store = new DispatchJournal({
-      codexHome: mkdtempSync(join(tmpdir(), "ork-journal-gc-")),
+      codexHome: journalHome("ork-journal-gc-").codexHome,
       cwd: "/workspace",
       persist: false,
       retentionMs: 1_000,

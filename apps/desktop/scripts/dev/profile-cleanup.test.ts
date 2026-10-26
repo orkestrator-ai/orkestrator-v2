@@ -15,9 +15,12 @@ import {
 import { parsePruneArguments } from "./arguments.js";
 import {
   dockerBuildCacheWarning,
+  formatPruneOutcome,
+  KEYCHAIN_ITEM_NOT_FOUND_EXIT,
   parseDockerSize,
   pruneProfiles,
   removeProfile,
+  removeProfileKeychainItem,
   type CommandRunner,
 } from "./profile-cleanup.js";
 import { atomicWriteJson, initializeProfile } from "./profile-io.js";
@@ -26,12 +29,20 @@ let root: string;
 let roots: RuntimeProfileRoots;
 let checkout: string;
 let dockerCalls: string[][];
+let securityCalls: string[][];
 
-/** Real git, recorded Docker: no test here may reach a real daemon. */
+/**
+ * Real git, recorded Docker and `security`: no test here may reach a real
+ * daemon or the host's login Keychain. No Keychain item exists by default.
+ */
 const run: CommandRunner = (command, args) => {
   if (command === "docker") {
     dockerCalls.push(args);
     return { status: 0, stdout: "", stderr: "" };
+  }
+  if (command === "security") {
+    securityCalls.push(args);
+    return { status: KEYCHAIN_ITEM_NOT_FOUND_EXIT, stdout: "", stderr: "" };
   }
   const result = spawnSync(command, args, { encoding: "utf8" });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -88,6 +99,7 @@ beforeEach(async () => {
   checkout = path.join(root, "checkout");
   await mkdir(checkout, { recursive: true });
   dockerCalls = [];
+  securityCalls = [];
 });
 
 afterEach(async () => {
@@ -152,6 +164,118 @@ describe("removeProfile", () => {
       removeProfile(profile, { keepToolchains: false, roots, run: resourceRun }),
     ).rejects.toThrow("volume is in use");
     expect(existsSync(profile.profileRoot)).toBe(true);
+  });
+});
+
+describe("profile Keychain item", () => {
+  /** A Keychain holding `items` copies of each named service. */
+  function keychain(items: Record<string, number>): CommandRunner {
+    return (command, args) => {
+      if (command !== "security") return run(command, args);
+      securityCalls.push(args);
+      const service = args[args.indexOf("-s") + 1]!;
+      if ((items[service] ?? 0) === 0) {
+        return { status: KEYCHAIN_ITEM_NOT_FOUND_EXIT, stdout: "", stderr: "" };
+      }
+      items[service]! -= 1;
+      return { status: 0, stdout: "", stderr: "" };
+    };
+  }
+
+  test("reset deletes only the profile's own Safe Storage item, after its state", async () => {
+    const profile = await createProfile("keychain");
+    const service = `${profile.electronTitle} Safe Storage`;
+    const items = { [service]: 2, "Orkestrator AI Safe Storage": 1 };
+    let stateGoneFirst = true;
+    const keychainRun = keychain(items);
+    const result = await removeProfile(profile, {
+      keepToolchains: false,
+      roots,
+      platform: "darwin",
+      run: (command, args) => {
+        if (command === "security") stateGoneFirst &&= !existsSync(profile.profileRoot);
+        return keychainRun(command, args);
+      },
+    });
+
+    expect(result).toMatchObject({ keychainItemsRemoved: 2, keychainWarning: null });
+    expect(stateGoneFirst).toBe(true);
+    expect(items).toEqual({ [service]: 0, "Orkestrator AI Safe Storage": 1 });
+    expect(securityCalls).toEqual(
+      Array.from({ length: 3 }, () => [
+        "delete-generic-password",
+        "-s",
+        "Orkestrator AI — DEV [keychain] Safe Storage",
+        "-a",
+        "Orkestrator AI — DEV [keychain]",
+      ]),
+    );
+  });
+
+  test("keeps the item when the profile state could not be removed", async () => {
+    const profile = await createProfile("keychain-kept");
+    const failing: CommandRunner = (command, args) =>
+      command === "docker" && args[0] === "ps"
+        ? { status: 0, stdout: "container-one\n", stderr: "" }
+        : command === "docker" && args[0] === "rm"
+          ? { status: 1, stdout: "", stderr: "container is busy" }
+          : run(command, args);
+    await expect(
+      removeProfile(profile, { keepToolchains: false, roots, platform: "darwin", run: failing }),
+    ).rejects.toThrow("container is busy");
+    expect(securityCalls).toEqual([]);
+  });
+
+  test("never touches the Keychain off macOS", async () => {
+    const profile = await createProfile("keychain-linux");
+    const result = await removeProfile(profile, {
+      keepToolchains: false,
+      roots,
+      platform: "linux",
+      run,
+    });
+    expect(result).toMatchObject({ keychainItemsRemoved: 0, keychainWarning: null });
+    expect(securityCalls).toEqual([]);
+  });
+
+  test("refuses a profile whose title is not the one dev:test gives its id", async () => {
+    const profile = await createProfile("keychain-foreign");
+    const result = removeProfileKeychainItem(
+      { ...profile, electronTitle: "Orkestrator AI" },
+      run,
+      "darwin",
+    );
+    expect(result.removed).toBe(0);
+    expect(result.warning).toContain('Kept the login Keychain item for "Orkestrator AI"');
+    expect(securityCalls).toEqual([]);
+  });
+
+  test("reports a Keychain failure without failing the removal", async () => {
+    const profile = await createProfile("keychain-locked");
+    const locked: CommandRunner = (command, args) =>
+      command === "security" ? { status: 51, stdout: "", stderr: "" } : run(command, args);
+    const result = await removeProfile(profile, {
+      keepToolchains: false,
+      roots,
+      platform: "darwin",
+      run: locked,
+    });
+    expect(existsSync(profile.profileRoot)).toBe(false);
+    expect(result.keychainItemsRemoved).toBe(0);
+    expect(result.keychainWarning).toBe(
+      'Could not remove the login Keychain item "Orkestrator AI — DEV [keychain-locked] Safe Storage" (security exited 51); delete it in Keychain Access.',
+    );
+  });
+
+  test("pruning removes an orphan's item and reports a failure in its outcome", async () => {
+    const orphan = await createProfile("keychain-orphan", gone());
+    const locked: CommandRunner = (command, args) =>
+      command === "security" ? { status: 51, stdout: "", stderr: "" } : run(command, args);
+    const [outcome] = await pruneProfiles({ roots, run: locked, platform: "darwin" });
+    expect(outcome).toMatchObject({ id: orphan.id, action: "removed" });
+    expect(formatPruneOutcome(outcome!)).toEndWith(
+      'Could not remove the login Keychain item "Orkestrator AI — DEV [keychain-orphan] Safe Storage" (security exited 51); delete it in Keychain Access.',
+    );
   });
 });
 

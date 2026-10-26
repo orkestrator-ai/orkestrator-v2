@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   defaultRuntimeProfileRoots,
+  runtimeProfileElectronTitle,
   statusManifestPath,
   type RuntimeProfile,
   type RuntimeProfileRoots,
@@ -120,6 +121,70 @@ export function branchIsDisposable(run: CommandRunner, gitDir: string, branch: s
   );
 }
 
+/** `security` exits with errSecItemNotFound once no matching item is left. */
+export const KEYCHAIN_ITEM_NOT_FOUND_EXIT = 44;
+/** A Keychain can hold more than one matching item; this bounds the loop. */
+const MAX_KEYCHAIN_ITEM_DELETIONS = 8;
+/**
+ * A locked login Keychain can make `security` wait on an unlock dialog, and
+ * start-up pruning runs unattended. A timed-out call reports no status.
+ */
+const KEYCHAIN_COMMAND_TIMEOUT_MS = 15_000;
+
+const runKeychainCommand: CommandRunner = (command, args) => {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    timeout: KEYCHAIN_COMMAND_TIMEOUT_MS,
+  });
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+};
+
+export type KeychainItemRemoval = { removed: number; warning: string | null };
+
+/**
+ * Removes a profile's `safeStorage` key from the macOS login Keychain.
+ * Electron stores it as the generic password "<app name> Safe Storage" with
+ * account "<app name>", and a profile's app name is its `electronTitle`, so
+ * every reset profile used to leave one behind. Only the title `dev:test`
+ * gives this profile id is accepted: a `profile.json` naming another title
+ * (the production app's, say) must never delete that app's key. A failure is
+ * reported, not thrown, because the profile state is already gone by then.
+ */
+export function removeProfileKeychainItem(
+  profile: RuntimeProfile,
+  run: CommandRunner = runKeychainCommand,
+  platform: NodeJS.Platform = process.platform,
+): KeychainItemRemoval {
+  if (platform !== "darwin") return { removed: 0, warning: null };
+  if (profile.electronTitle !== runtimeProfileElectronTitle(profile.id)) {
+    return {
+      removed: 0,
+      warning: `Kept the login Keychain item for "${profile.electronTitle}": it is not this profile's title.`,
+    };
+  }
+  const service = `${profile.electronTitle} Safe Storage`;
+  let removed = 0;
+  for (let attempt = 0; attempt < MAX_KEYCHAIN_ITEM_DELETIONS; attempt += 1) {
+    const result = run("security", [
+      "delete-generic-password",
+      "-s",
+      service,
+      "-a",
+      profile.electronTitle,
+    ]);
+    if (result.status === 0) {
+      removed += 1;
+      continue;
+    }
+    if (result.status === KEYCHAIN_ITEM_NOT_FOUND_EXIT) return { removed, warning: null };
+    return {
+      removed,
+      warning: `Could not remove the login Keychain item "${service}" (security exited ${result.status ?? "without a status"}); delete it in Keychain Access.`,
+    };
+  }
+  return { removed, warning: null };
+}
+
 export type ProfileRemoval = {
   containersRemoved: number;
   volumesRemoved: number;
@@ -127,6 +192,9 @@ export type ProfileRemoval = {
   worktreesReleased: number;
   branchesDeleted: string[];
   branchesKept: string[];
+  /** macOS `safeStorage` Keychain items removed (always 0 elsewhere). */
+  keychainItemsRemoved: number;
+  keychainWarning: string | null;
 };
 
 export type RemoveProfileOptions = {
@@ -135,6 +203,8 @@ export type RemoveProfileOptions = {
   force?: boolean;
   roots?: RuntimeProfileRoots;
   run?: CommandRunner;
+  /** Selects the Keychain step; defaults to the host platform. */
+  platform?: NodeJS.Platform;
 };
 
 /**
@@ -216,6 +286,12 @@ export async function removeProfile(
   recheckWorktrees();
   recheckProfile();
   await removeProfileState(profile, options.keepToolchains);
+  // Only once the state it encrypts is gone: a failed reset keeps both.
+  const keychain = removeProfileKeychainItem(
+    profile,
+    options.run ?? runKeychainCommand,
+    options.platform,
+  );
 
   const branchesDeleted: string[] = [];
   const branchesKept: string[] = [];
@@ -240,6 +316,8 @@ export async function removeProfile(
     worktreesReleased: worktrees.length,
     branchesDeleted,
     branchesKept,
+    keychainItemsRemoved: keychain.removed,
+    keychainWarning: keychain.warning,
   };
 }
 
@@ -248,6 +326,7 @@ export type PruneOutcome = {
   action: "removed" | "would-remove" | "kept" | "failed";
   reason: string;
   branchesKept?: string[];
+  keychainWarning?: string;
 };
 
 export type PruneProfilesOptions = {
@@ -263,6 +342,8 @@ export type PruneProfilesOptions = {
   now?: () => number;
   run?: CommandRunner;
   isLive?: (status: RuntimeStatusManifest) => Record<RuntimeProcessName, boolean>;
+  /** Selects the Keychain step of each removal; defaults to the host platform. */
+  platform?: NodeJS.Platform;
 };
 
 async function lastUsedAt(
@@ -361,6 +442,7 @@ export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise
         force: options.force,
         roots,
         run,
+        platform: options.platform,
       });
       if (orphaned) orphanImages.add(profile.dockerImage);
       outcomes.push({
@@ -368,6 +450,7 @@ export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise
         action: "removed",
         reason,
         ...(removal.branchesKept.length ? { branchesKept: removal.branchesKept } : {}),
+        ...(removal.keychainWarning ? { keychainWarning: removal.keychainWarning } : {}),
       });
     } catch (error) {
       keptImages.add(profile.dockerImage);
@@ -398,7 +481,8 @@ export function formatPruneOutcome(outcome: PruneOutcome): string {
   const kept = outcome.branchesKept?.length
     ? ` Kept unmerged branch(es): ${outcome.branchesKept.join(", ")}.`
     : "";
-  return `${verb} profile ${outcome.id}: ${outcome.reason}.${kept}`;
+  const keychain = outcome.keychainWarning ? ` ${outcome.keychainWarning}` : "";
+  return `${verb} profile ${outcome.id}: ${outcome.reason}.${kept}${keychain}`;
 }
 
 const BUILD_CACHE_WARNING_BYTES = 25e9;

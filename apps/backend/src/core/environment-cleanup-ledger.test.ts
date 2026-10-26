@@ -6,6 +6,9 @@ import {
   closeEnvironmentCleanupStorage,
   EnvironmentCleanupLedger,
   environmentCleanupSweepState,
+  isEnvironmentCleanupExhausted,
+  MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
+  parseEnvironmentCleanupLedger,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
 import { StorageDatabase } from "./storage-database.js";
@@ -100,6 +103,32 @@ describe("environment cleanup ledger", () => {
     expect(await ledger.get("e1")).toBeNull();
     await ledger.record(entry());
     expect((await ledger.list()).map((item) => item.environmentId)).toEqual(["e1"]);
+  });
+
+  test("an entry is exhausted once its passes reach the attempt cap", async () => {
+    const { ledger } = await ledgerInTempDir();
+    await ledger.record(entry());
+    for (let pass = 1; pass < MAX_ENVIRONMENT_CLEANUP_ATTEMPTS; pass += 1) {
+      await ledger.noteAttempt("e1", new Date("2026-09-26T01:00:00.000Z"));
+    }
+    expect(isEnvironmentCleanupExhausted((await ledger.get("e1"))!)).toBe(false);
+    await ledger.noteAttempt("e1", new Date("2026-09-26T02:00:00.000Z"));
+    const exhausted = (await ledger.get("e1"))!;
+    expect(exhausted.attempts).toBe(MAX_ENVIRONMENT_CLEANUP_ATTEMPTS);
+    expect(isEnvironmentCleanupExhausted(exhausted)).toBe(true);
+  });
+
+  test("parses a stored value the way the ledger reads it", () => {
+    expect(parseEnvironmentCleanupLedger(undefined)).toEqual([]);
+    expect(parseEnvironmentCleanupLedger({ version: 2, entries: { e1: entry() } })).toEqual([]);
+    const parsed = parseEnvironmentCleanupLedger({
+      version: 1,
+      entries: {
+        bad: { version: 2, environmentId: "bad" },
+        e1: { ...entry(), attempts: -3, pending: ["worktree", "format-disk"] },
+      },
+    });
+    expect(parsed).toEqual([entry({ attempts: 0, pending: ["worktree"], worktreeRoot: null })]);
   });
 
   test("ignores malformed entries and unknown steps", async () => {

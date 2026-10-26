@@ -73,6 +73,19 @@ interface EnvironmentCleanupLedgerFile {
 /** The backend database store that replaced `environment-cleanup-ledger.json`. */
 export const ENVIRONMENT_CLEANUP_LEDGER_STORE = "environment-cleanup-ledger";
 
+/** After this many passes an entry is kept for inspection but no longer retried. */
+export const MAX_ENVIRONMENT_CLEANUP_ATTEMPTS = 8;
+
+/**
+ * True once the reconciler has stopped retrying an entry. The entry stays in
+ * the ledger, so `disk:report` can show what a deletion never finished.
+ */
+export function isEnvironmentCleanupExhausted(
+  entry: Pick<EnvironmentCleanupEntry, "attempts">,
+): boolean {
+  return entry.attempts >= MAX_ENVIRONMENT_CLEANUP_ATTEMPTS;
+}
+
 /**
  * An entry is bounded by what a single deletion can name, and the ledger by
  * how many deletions can fail without recovering. The cap keeps a pathological
@@ -140,6 +153,14 @@ function normalizeLedger(value: unknown): EnvironmentCleanupLedgerFile {
     if (entry) ledger.entries[entry.environmentId] = entry;
   }
   return ledger;
+}
+
+/**
+ * The entries of a stored ledger value, normalized exactly as the ledger reads
+ * them. For read-only callers (`disk:report`) that load the store themselves.
+ */
+export function parseEnvironmentCleanupLedger(value: unknown): EnvironmentCleanupEntry[] {
+  return Object.values(normalizeLedger(value).entries);
 }
 
 /**
@@ -235,7 +256,7 @@ export class EnvironmentCleanupLedger {
       if (isUnreadable(error)) return [];
       throw error;
     }
-    return Object.values(normalizeLedger(value).entries);
+    return parseEnvironmentCleanupLedger(value);
   }
 
   async get(environmentId: string): Promise<EnvironmentCleanupEntry | null> {

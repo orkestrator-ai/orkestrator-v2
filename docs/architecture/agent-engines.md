@@ -1105,9 +1105,14 @@ session, under a fresh request id and result slot
   killed turn) carries. Status is per session, so until the continuation's
   turn starts the notice still describes the earlier request; given the
   watched request id, `readProviderStatus` reads a notice that names another
-  request as "this request's turn has not settled" (`idle`,
-  `turnSettled: false`) instead of a failure. A bridge or mark that predates
-  the field names nothing, and the notice is taken at face value.
+  request, while the provider's dispatch journal confirms it holds the
+  watched one (`dispatched`), as "this request's turn has not settled"
+  (`idle`, `turnSettled: false`) instead of a failure. The confirmation
+  matters because a name can be stale: Claude rewrites the mark after the
+  turn starts, so a bridge killed in between restores the previous request's
+  name, and a restarted bridge no longer holds the request it lost. A bridge
+  or mark that predates the field names nothing, and without both the notice
+  is taken at face value.
 
   The other bridges report none yet, so their cut-short turns fail as before.
   A step or reviewer whose bridge is unreachable keeps its state and

@@ -96,8 +96,10 @@ What the file found, and what changed.
      restores it; older marks and bridges simply omit it.
    - `throwExplainedTurnFailure` parses it (bounded to 512 characters), and
      `readProviderStatus` reads a notice naming another request than the one
-     watched as "this request's turn has not settled" (`idle`,
-     `turnSettled: false`). That fixes the fan-out, the Multi Review steps,
+     watched, while the provider's dispatch journal confirms the watched one
+     (`dispatched`), as "this request's turn has not settled" (`idle`,
+     `turnSettled: false`). Without that confirmation the notice is taken at
+     face value (decision 8). That fixes the fan-out, the Multi Review steps,
      Build Pipeline consolidation and the Build Pipeline stage supervisor (which
      had the same "interrupted again" failure) in one place.
    - The interleaving harness starts half of all continuation turns late,
@@ -109,8 +111,10 @@ What the file found, and what changed.
    - Tests: `review-fanout-restart-continuation.test.ts` ("waits out the
      notice about the turn its continuation replaced", which fails without the
      fix, and "fails closed when the notice names the continuation itself"),
-     `build-pipeline-restart-continuation.test.ts` ("pipeline stage handles
-     stale-notice after restart", which also fails without the fix),
+     "fails closed on a stale name once the bridge no longer holds the
+     continuation"), `build-pipeline-restart-continuation.test.ts` ("pipeline
+     stage handles stale-notice after restart", which also fails without the
+     fix), the real-bridge `tests/multi-review-claude-bridge-restart.test.ts`,
      `http-bridge-provider.test.ts` ("a restart notice about an earlier request
      is not the watched request's outcome"), the Claude bridge's
      `session-manager-turn-interruption.test.ts` and `routes/session.test.ts`,
@@ -172,8 +176,9 @@ What the file found, and what changed.
    another request as `idle` with `turnSettled: false`. Why: every workflow
    caller already waits on `turnSettled === false`, and the Build Pipeline
    supervisor had the same bug. Pros: one rule for four callers. Cons: the
-   wait is not counted against the idle bound; it lasts only until the bridge
-   starts the journaled turn.
+   wait is not counted against the idle bound; decision 8 confines it to a
+   request the provider confirms it holds, so it lasts only until the bridge
+   starts that turn.
 6. **How Codex names the request.** Options: add it to the persisted restart
    notice, or look it up. Chosen: look it up in the dispatch journal by turn
    id. Why: the session record validator rejects unknown fields, so a new
@@ -184,6 +189,26 @@ What the file found, and what changed.
    consolidation keep their own parking (no `lost` fast-fail or result proof).
    Why: they have one writer per request, so the peer-commit cause cannot
    arise, and they get the restart scoping through `readProviderStatus`.
+
+8. **Trust the name alone, or also ask the dispatch journal.** First
+   implementation: the name alone. The real-bridge test
+   `multi-review-claude-bridge-restart.test.ts` then failed 1 run in 5:
+   Claude writes the turn-in-flight mark asynchronously after the turn
+   starts, so a bridge killed before the continuation's rewrite lands
+   restores the original request's name, and the continuation's second
+   restart read as "not started yet", waiting forever. Options: make the mark
+   write synchronous before the turn starts (latency on every Claude prompt),
+   bound the wait with the idle-poll counter (still waits minutes, and the
+   test's four passes would still fail), or require the provider to confirm it
+   holds the watched request. Chosen: the confirmation (`dispatchStatus` is
+   `dispatched`). Why: in the real late-start window the bridge has just
+   journaled the request, so it always is; a restarted bridge never holds the
+   request it lost (Claude answers `lost` or `unknown`), so a stale name falls
+   back to the old reading and fails closed. Pros: no bridge timing change,
+   and a stale name can only cost the fix, never a hang. Cons: one dispatch
+   read, only when a notice names another request; providers without
+   `dispatchStatus` keep the old behaviour. 8 of 8 runs of the real-bridge
+   test passed afterwards.
 
 ## Open questions
 

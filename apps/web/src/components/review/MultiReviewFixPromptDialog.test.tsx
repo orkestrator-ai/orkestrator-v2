@@ -76,6 +76,34 @@ afterEach(cleanup);
 beforeEach(setFavoritesEmpty);
 
 describe("MultiReviewFixPromptDialog", () => {
+  test("switching to Pi selects its later session-default row", () => {
+    const { onSubmit } = renderDialog({
+      catalog: {
+        ...catalog,
+        pi: [
+          { id: "openai/gpt-4", name: "Refused first model", reasoningEfforts: ["low"] },
+          {
+            id: "openai/gpt-6.1-sol",
+            name: "Saved Pi default",
+            sessionDefault: true,
+            reasoningEfforts: ["medium", "high"],
+          },
+        ],
+      },
+    });
+    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    fireEvent.pointerDown(picker);
+    fireEvent.click(screen.getByRole("button", { name: "pi models" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(picker.textContent).toContain("Saved Pi default");
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+      agent: "pi",
+      model: "openai/gpt-6.1-sol",
+    });
+    expect(onSubmit.mock.calls[0]?.[0]).not.toHaveProperty("fastMode");
+  });
+
   test("renders OpenCode provider captions from the shared flattened catalog", () => {
     renderDialog({ defaultSelection: { agent: "opencode", model: "provider/model" } });
 

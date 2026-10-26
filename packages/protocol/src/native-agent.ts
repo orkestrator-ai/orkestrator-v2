@@ -173,6 +173,14 @@ export interface AgentModel {
    * models instead, and dispatch still checks the live report.
    */
   connected?: boolean;
+  /**
+   * True on the model a new session with no model chosen starts on, when a
+   * saved or configured default chose it. Only Pi reports it today: its
+   * tabs start on Pi's own saved default, which a ChatGPT-backed login needs
+   * because the first catalogue model can be one it refuses. Launch defaults
+   * prefer it over the first entry (`sessionDefaultModel` in `model-id.ts`).
+   */
+  sessionDefault?: boolean;
 }
 
 export interface AgentModelParameter {

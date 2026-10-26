@@ -365,3 +365,12 @@ Result: 36 passed, one failed at 5028.11 ms, one between-tests error from a
 terminated `git submodule status --recursive` child, 46.4 s logged. Evidence:
 `orkestrator-test-run.68yelP`. The existing case stays open; no assertion,
 timeout, skip or environment-move implementation changed.
+
+## Todo 0166 validation — 2026-10-26
+
+- **Original command:** `mise run test` (full suite) on `todo-0166-opencode-attach-prompt-0d17ce147985` at `ce1d6890e` (OpenCode attachment MIME and dispatch-failure outcome, CLI scenario toolchain install; no terminal, environment-move or shell-completion code changed), macOS 27.0 arm64, Bun 1.4.4, host load average 22 to 36 from other worktrees.
+- **Failure:** the restart re-link case exceeded its five-second deadline (5062.22 ms).
+- **Aggregate:** Workspace group failed with backend 2 and CLI 1 failures (this case among them), all three five-second deadlines; web, desktop, web-public, protocol and toolchain passed; bridges and the Codex protocol lockfile passed; root failed only on the pre-existing duplicate flake number fixed by renumbering 0953.
+- **Owning-file rerun:** `mise exec -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (37 pass, 0 fail).
+- **Evidence:** `orkestrator-test-run.fcOpb4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.

@@ -16,6 +16,7 @@ import {
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   executionModeForSessionPhase,
+  pipelineReviewIssueCounts,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   newReviewValidationRun,
@@ -1970,6 +1971,7 @@ export class BuildPipelineSupervisor {
     const report = stripStructuredReviewProvenance(parsed.data);
     session.structuredResultStatus = "accepted";
     session.reviewReport = report;
+    session.reviewIssueCounts = pipelineReviewIssueCounts(report);
     pipeline.structuredReview = report;
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     if (report.issues.length || report.testCoverageGaps.length) {

@@ -29,7 +29,9 @@
 import { randomUUID } from "node:crypto";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
+  boundedPipelineSessionError,
   pipelineIndependentReviewLabel,
+  pipelineReviewIssueCounts,
   pipelineReviewerConfigs,
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -97,6 +99,8 @@ import {
   type ReviewFanoutHost,
   type ReviewerPollGate,
 } from "./review-fanout.js";
+import { clearReviewerAdmission } from "./review-fanout-admission.js";
+import { dropProvisionalFindings } from "./review-provisional-findings.js";
 import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
@@ -316,6 +320,55 @@ export class BuildPipelineReviewFanout {
     return true;
   }
 
+  /**
+   * Runs one failed reviewer of the current pass again, keeping the rest of
+   * the panel. The caller persists the pipeline.
+   *
+   * Consolidation is derived from every reviewer's report, so an attempt that
+   * has started (or failed) is discarded: it runs again once the retried
+   * reviewer settles. An accepted consolidated report means the pass has
+   * moved on, and the reviewer can only be rerun by restarting the stage.
+   * The failed attempt's session stays in the pipeline as history; the retry
+   * opens a session of its own.
+   */
+  async prepareReviewerRetry(pipeline: BuildPipeline, reviewerId: string): Promise<void> {
+    const state = pipeline.reviewFanout;
+    const reviewer = state?.reviewers.find((candidate) => candidate.id === reviewerId);
+    if (!state || !reviewer) {
+      throw new Error("This reviewer is no longer part of the current review");
+    }
+    if (state.report) {
+      throw new Error("The review has been consolidated; restart the review stage to rerun it");
+    }
+    if (reviewer.status !== "failed") {
+      throw new Error("Only a failed reviewer can be retried");
+    }
+    const consolidation = state.consolidation;
+    if (consolidation) {
+      this.deps.progress.forget(consolidation.providerSessionId);
+      await this.abandonSession(
+        pipeline,
+        consolidation.agent as BuildPipelineAgent,
+        consolidation.providerSessionId,
+      );
+      if (consolidation.resultTransport === "tool-v1") {
+        await this.deps.workflowResults?.close(consolidation.requestId, "superseded");
+      }
+      const session = pipeline.sessions.find(
+        (candidate) => candidate.sessionKey === consolidation.sessionKey,
+      );
+      if (session) {
+        session.status = "idle";
+        session.completedAt ??= reviewFanoutNowIso();
+      }
+      delete state.consolidation;
+      delete pipeline.structuredReview;
+      delete pipeline.structuredReviewRequestId;
+    }
+    if (reviewer.providerSessionId) this.deps.progress.forget(reviewer.providerSessionId);
+    resetReviewerForRetry(reviewer);
+  }
+
   // -------------------------------------------------------------------------
   // Reviewers
   // -------------------------------------------------------------------------
@@ -338,7 +391,7 @@ export class BuildPipelineReviewFanout {
       targetBranch,
       label: FANOUT_LABEL,
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
-      sessionKeyFor: (reviewer) => `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`,
+      sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
       providerUnavailable: (selection, provider) =>
@@ -562,6 +615,30 @@ export class BuildPipelineReviewFanout {
         session.reviewReport = reviewer.report;
         session.structuredRequestId = reviewer.requestId;
         session.structuredResultStatus = "accepted";
+        changed = true;
+      }
+      if (reviewer.report && !session.reviewIssueCounts) {
+        session.reviewIssueCounts = pipelineReviewIssueCounts(reviewer.report);
+        changed = true;
+      }
+      // The fan-out record is retired with its pass; the session keeps how
+      // this attempt ended, so the graph can still show a failed reviewer.
+      const outcome =
+        reviewer.status === "completed" ||
+        reviewer.status === "failed" ||
+        reviewer.status === "cancelled"
+          ? reviewer.status
+          : undefined;
+      if (outcome && session.reviewerOutcome !== outcome) {
+        session.reviewerOutcome = outcome;
+        changed = true;
+      }
+      const error =
+        reviewer.status === "failed" && reviewer.error?.trim()
+          ? boundedPipelineSessionError(reviewer.error)
+          : undefined;
+      if (error && session.error !== error) {
+        session.error = error;
         changed = true;
       }
       if (reviewer.completedAt && session.completedAt !== reviewer.completedAt) {
@@ -1006,6 +1083,7 @@ export class BuildPipelineReviewFanout {
     session.status = "idle";
     session.reviewReport = provenance.report;
     session.reviewOverlap = consolidationOverlap(parsed.data, state.reviewers);
+    session.reviewIssueCounts = pipelineReviewIssueCounts(provenance.report);
     session.structuredRequestId = consolidation.requestId;
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
@@ -1213,6 +1291,52 @@ export class BuildPipelineReviewFanout {
     await this.save(pipeline);
     return { kind: "working" };
   }
+}
+
+/**
+ * The conversation key for a reviewer's next session. The first attempt keeps
+ * the key it always had; a retry gets a numbered one, because the failed
+ * attempt's session stays in the pipeline under the original key.
+ */
+export function reviewerSessionKey(
+  pipeline: Pick<BuildPipeline, "id" | "iteration" | "sessions">,
+  reviewer: Pick<ReviewerRecord, "id">,
+): string {
+  const base = `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`;
+  const taken = new Set(pipeline.sessions.map((session) => session.sessionKey));
+  if (!taken.has(base)) return base;
+  let attempt = 2;
+  while (taken.has(`${base}:attempt-${attempt}`)) attempt += 1;
+  return `${base}:attempt-${attempt}`;
+}
+
+/** Returns a failed reviewer to the admission queue for a fresh attempt. */
+export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
+  reviewer.status = "pending";
+  clearReviewerAdmission(reviewer);
+  dropProvisionalFindings(reviewer);
+  delete reviewer.sessionKey;
+  delete reviewer.providerSessionId;
+  delete reviewer.requestId;
+  delete reviewer.dispatchState;
+  delete reviewer.resultTransport;
+  delete reviewer.resultSubmission;
+  delete reviewer.schemaRepairAttempts;
+  delete reviewer.schemaRepairPrompt;
+  delete reviewer.continuationPrompt;
+  delete reviewer.resultReminderSent;
+  delete reviewer.restartContinuationSent;
+  delete reviewer.idleResultPolls;
+  delete reviewer.progressAt;
+  delete reviewer.progressDigest;
+  delete reviewer.stalledSince;
+  delete reviewer.tokenCount;
+  delete reviewer.cacheReadTokens;
+  delete reviewer.usageFinalizationPolls;
+  delete reviewer.report;
+  delete reviewer.error;
+  delete reviewer.startedAt;
+  delete reviewer.completedAt;
 }
 
 function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {

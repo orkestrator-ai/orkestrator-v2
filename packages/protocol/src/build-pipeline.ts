@@ -479,6 +479,26 @@ export interface PipelineSession {
    */
   reviewOverlap?: ReviewPanelOverlapV1;
   /**
+   * Issues by severity in the report this session filed. Unlike
+   * {@link reviewReport}, it is kept when the report copy is discarded, so a
+   * superseded review pass still says what it found. Optional: absent for a
+   * session that filed no report and for snapshots written before it existed.
+   */
+  reviewIssueCounts?: PipelineReviewIssueCounts;
+  /**
+   * How a fan-out reviewer's attempt ended. The live fan-out record holds the
+   * reviewer's status only while its pass runs; this keeps the outcome once
+   * that record is retired. Absent while the reviewer runs, for non-reviewer
+   * sessions, and for snapshots written before it existed.
+   */
+  reviewerOutcome?: PipelineReviewerOutcome;
+  /**
+   * Why this session's attempt failed, at most
+   * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
+   * reviewer that failed; other stages report failures on the pipeline.
+   */
+  error?: string;
+  /**
    * Whether the backend is still waiting for this request's schema result or
    * has validated and accepted it.
    *
@@ -554,6 +574,44 @@ export interface PipelineSession {
  * but only on the single-review path: fan-out and explicit review-preparation
  * pipelines stamp those fields on resume of ordinary build turns.
  */
+/** Issue counts by severity, as a review session's report filed them. */
+export interface PipelineReviewIssueCounts {
+  P0: number;
+  P1: number;
+  P2: number;
+}
+
+export type PipelineReviewerOutcome = "completed" | "failed" | "cancelled";
+
+/** The longest per-session error kept on the record. */
+export const MAX_PIPELINE_SESSION_ERROR_LENGTH = 2_000;
+
+/** Counts a report's issues by severity. */
+export function pipelineReviewIssueCounts(report: {
+  issues: readonly { severity: "P0" | "P1" | "P2" }[];
+}): PipelineReviewIssueCounts {
+  const counts: PipelineReviewIssueCounts = { P0: 0, P1: 0, P2: 0 };
+  for (const issue of report.issues) counts[issue.severity] += 1;
+  return counts;
+}
+
+/** Bounds an error for {@link PipelineSession.error}. */
+export function boundedPipelineSessionError(error: string): string {
+  const trimmed = error.trim();
+  return trimmed.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, MAX_PIPELINE_SESSION_ERROR_LENGTH - 1)}…`;
+}
+
+function isPipelineReviewIssueCounts(value: unknown): value is PipelineReviewIssueCounts {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.P0) &&
+    isNonNegativeInteger(value.P1) &&
+    isNonNegativeInteger(value.P2)
+  );
+}
+
 export function isReviewPackagePreparationSession(
   session:
     | Pick<
@@ -1107,6 +1165,14 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.reviewReport === undefined ||
       (value.phase === "review" && isStructuredReviewReport(value.reviewReport))) &&
     (value.reviewOverlap === undefined || isReviewPanelOverlap(value.reviewOverlap)) &&
+    (value.reviewIssueCounts === undefined ||
+      isPipelineReviewIssueCounts(value.reviewIssueCounts)) &&
+    (value.reviewerOutcome === undefined ||
+      value.reviewerOutcome === "completed" ||
+      value.reviewerOutcome === "failed" ||
+      value.reviewerOutcome === "cancelled") &&
+    (value.error === undefined ||
+      (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||
       value.structuredResultStatus === "pending" ||
       value.structuredResultStatus === "accepted") &&

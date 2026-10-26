@@ -462,6 +462,15 @@ export interface NativeAgentServiceOptions {
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
   beginCoordinatorTurn?: (projectId: string) => () => void;
+  /**
+   * The user `!` commands this tab's agent has not been told about yet
+   * (`user-commands.ts`): a block to start the next ordinary prompt with, and
+   * a commit once that prompt was dispatched.
+   */
+  userCommandContext?: {
+    take(environmentId: string, tabId: string): { block: string; ids: string[] };
+    delivered(ids: readonly string[], requestId: string): void;
+  };
   resolveAgentToolConnection?: (
     environmentId: string,
     projectId: string,

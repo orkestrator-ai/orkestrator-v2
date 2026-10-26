@@ -91,6 +91,7 @@ import {
   coordinatorConversationIdFromRuntimeId,
   agentSessionOwnerKey,
 } from "@orkestrator/protocol/coordinator";
+import { insertUserCommandContext } from "@orkestrator/protocol/user-commands";
 import {
   type NativeAgentCommandRefreshOutcome,
   type NativeAgentDefaultModelResolution,
@@ -3294,6 +3295,23 @@ export class NativeAgentService {
        */
       const commandPlan = await this.planDispatchCommand(input, session, provider);
       if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      /*
+       * Commands the user ran with `!` since the agent's last turn start this
+       * prompt, after any coordinator block (which display strips first). Only
+       * ordinary text: a provider command parses the prompt's start. Marked
+       * delivered only once this prompt is dispatched, so a refused send
+       * offers them again; an ambiguous one replays this exact prompt.
+       */
+      const userCommandTab = session.logicalSessionKey.startsWith(`env-${input.environmentId}:`)
+        ? session.logicalSessionKey.slice(`env-${input.environmentId}:`.length)
+        : "";
+      const userCommands =
+        commandPlan.kind !== "session-action" && !commandPlan.command && userCommandTab
+          ? this.options.userCommandContext?.take(input.environmentId, userCommandTab)
+          : undefined;
+      if (userCommands?.block) {
+        input = { ...input, prompt: insertUserCommandContext(input.prompt, userCommands.block) };
+      }
       if (commandPlan.kind === "session-action") {
         const result = await this.storage.dispatchNativeAgentPromptOnce(
           session.key,
@@ -3508,6 +3526,9 @@ export class NativeAgentService {
             return this.applySessionHeldDispatchModel(input, durable, provider);
           },
         );
+        if (result.dispatched && userCommands?.ids.length) {
+          this.options.userCommandContext?.delivered(userCommands.ids, input.requestId);
+        }
         if (
           result.dispatched &&
           input.owner?.kind === "coordinator" &&

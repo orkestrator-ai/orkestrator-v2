@@ -1386,6 +1386,9 @@ export async function deleteEnvironment(
       context.agentTools?.revokeEnvironment(environmentId);
       await stopEnvironmentReviewValidation(environmentId, context);
       await stopEnvironmentExecWorkers(environmentId, context);
+      // The user's `!` commands run in the worktree too.
+      await context.userCommands?.terminateForEnvironment(environmentId);
+      context.humanPrompts?.clearEnvironment(environmentId);
       // Waits for every terminal tree, including setup's build descendants, so
       // nothing re-creates files in the worktree after it is removed below.
       const survivingTerminals =

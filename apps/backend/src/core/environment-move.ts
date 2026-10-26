@@ -355,6 +355,9 @@ async function quiesceLocalEnvironment(
 ): Promise<void> {
   await stopEnvironmentReviewValidation(environment.id, context);
   await stopEnvironmentExecWorkers(environment.id, context, { requireStopped: true });
+  if (context.userCommands?.hasRunning(environment.id)) {
+    throw new Error("A command you ran with ! is still running in the environment; cancel it first");
+  }
   const survivingTerminals = await context.runtime.terminals.terminateSessionsForEnvironment(
     environment.id,
   );

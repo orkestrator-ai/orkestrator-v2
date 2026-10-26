@@ -84,6 +84,10 @@ export type CommandContext = {
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
+  /** User `!` commands run from agent composers (user-commands.ts). */
+  userCommands?: import("./user-commands.js").UserCommandService;
+  /** Shell prompts waiting on the user, from every detector (human-prompt-registry.ts). */
+  humanPrompts?: import("./human-prompt-registry.js").HumanPromptRegistry;
   /** Command-node registry and leaf attachments (docs/architecture/command-nodes.md). */
   nodes?: import("./nodes/node-service.js").NodeService;
   /** Portal read model, routing and workspaces (command node); client grants (leaf). */

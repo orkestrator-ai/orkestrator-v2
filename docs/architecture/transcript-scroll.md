@@ -37,7 +37,10 @@ operation owns it) or **inactive**.
   pin, so geometry alone flickered false while content streamed; the native
   dock reserves its own height (button included) below the transcript, so
   each flicker pushed the transcript up and snapped it back
-  (`NativeFollowStability.spec.ts`).
+  (`NativeFollowStability.spec.ts`). Idle upward movement away without end
+  growth releases follow even without classified input (browser find,
+  focus navigation, assistive technology), so the control remains available
+  after the dock lays out again.
 - Every navigation (latest, find, message link, history, restore, row) is one
   operation with a generation. Starting one retires the previous one at every
   layer: its frames, the library's pending work (`cancelPendingNavigation`)

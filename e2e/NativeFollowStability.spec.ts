@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { ScrollDiagnostics } from "../apps/web/src/lib/transcript-scroll/transcript-scroll-controller";
 
 declare global {
   interface Window {
@@ -69,5 +70,51 @@ test("a follower never sees the scroll-down button while a response streams", as
   // A reader who scrolls away still gets the button.
   await scroller.hover();
   await page.mouse.wheel(0, -800);
+  await expect(page.getByRole("button", { name: pillName })).toBeVisible();
+});
+
+test("bare viewport movement in an idle transcript keeps return-to-latest visible", async ({
+  page,
+}) => {
+  await page.goto("/rich-transcript-perf");
+  await page.waitForFunction(() => window.__richPerf?.ready === true);
+  const scroller = page.locator(scrollerSelector);
+  await page.evaluate(() => window.__richPerf!.scrollToBottom());
+  await expect
+    .poll(() => scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+    .toBeLessThanOrEqual(1);
+  // Geometry can arrive before the bounded latest journey retires its latch.
+  await expect
+    .poll(() =>
+      scroller.evaluate((el) => {
+        const stats = (
+          el as HTMLElement & {
+            orkTranscriptScrollDiagnostics: () => ScrollDiagnostics;
+          }
+        ).orkTranscriptScrollDiagnostics();
+        return (
+          stats.operationsStarted -
+          stats.converged -
+          stats.clamped -
+          stats.expired -
+          stats.unresolved -
+          stats.cancelled -
+          stats.superseded
+        );
+      }),
+    )
+    .toBe(0);
+  await scroller.evaluate((el) => {
+    el.scrollTop -= 800;
+  });
+  await expect(page.getByRole("button", { name: pillName })).toBeVisible();
+  await page.evaluate(async () => {
+    for (let frame = 0; frame < 5; frame += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  });
+  expect(
+    await scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+  ).toBeGreaterThan(100);
   await expect(page.getByRole("button", { name: pillName })).toBeVisible();
 });

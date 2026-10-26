@@ -176,8 +176,10 @@ interface Operation {
 export interface ScrollViewState {
   /**
    * At the true end, or kept there by following or a latest journey that has
-   * reached it (UI affordances: the return-to-latest button). Growth reaches a follower a moment before its
-   * pin, so the geometry alone flickers while content streams.
+   * reached it (UI affordances: the return-to-latest button). Growth reaches
+   * a follower a moment before its pin, so geometry alone flickers while
+   * content streams. Idle upward movement away without end growth releases
+   * follow even without classified input.
    */
   isAtBottom: boolean;
   /** Literal `false` reaches the virtualizer's follow prop otherwise. */
@@ -246,6 +248,7 @@ export class TranscriptScrollController {
   /** Geometry only: whether the viewport is within a pixel of the true end. */
   private atBottom = true;
   private lastObservedTop = 0;
+  private lastObservedEnd = 0;
   private userScrollUntil = 0;
   /** When the reader last gave input that will scroll this transcript. */
   private lastInputAt = Number.NEGATIVE_INFINITY;
@@ -476,6 +479,7 @@ export class TranscriptScrollController {
     }
     if (!element) return;
     this.lastObservedTop = element.scrollTop;
+    this.lastObservedEnd = readScrollMetrics(element).maxScrollTop;
     const detach = this.listen(element);
     Object.defineProperty(element, SCROLL_DIAGNOSTICS_PROPERTY, {
       configurable: true,
@@ -1183,7 +1187,9 @@ export class TranscriptScrollController {
   private handleScroll(el: HTMLElement): void {
     const metrics = readScrollMetrics(el);
     const previous = this.lastObservedTop;
+    const previousEnd = this.lastObservedEnd;
     this.lastObservedTop = metrics.scrollTop;
+    this.lastObservedEnd = metrics.maxScrollTop;
     this.setAtBottom(metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX);
     this.scheduleAnchorCapture();
     const written = this.adapter.lastWrittenTop;
@@ -1210,7 +1216,24 @@ export class TranscriptScrollController {
       this.lastInputAt = t;
     }
     const armed = t < this.userScrollUntil;
-    if (!armed && !this.pointerHeld && !this.touchActive) return;
+    if (!armed && !this.pointerHeld && !this.touchActive) {
+      // Browser find, focus navigation and assistive technology can move an
+      // idle viewport without a classified input event. Upward movement that
+      // increases the gap without end growth is a departure too. Comparing
+      // gaps also excludes shrinking-content compensation at the end.
+      // Release follow before the affordance resizes the dock and pins again.
+      if (
+        metrics.maxScrollTop <= previousEnd &&
+        metrics.scrollTop < previous - POINTER_SCROLL_UP_TOLERANCE_PX &&
+        metrics.distanceFromEnd >= STICK_RELEASE_DISTANCE_PX &&
+        metrics.distanceFromEnd >
+          Math.max(0, previousEnd - previous) + POINTER_SCROLL_UP_TOLERANCE_PX
+      ) {
+        this.dispatch({ type: "user-departed" }, "cancelled");
+        this.scheduleAnchorCapture();
+      }
+      return;
+    }
     if (armed || this.touchActive) {
       this.userScrollUntil = Math.max(this.userScrollUntil, t + MOMENTUM_CHAIN_MS);
     }

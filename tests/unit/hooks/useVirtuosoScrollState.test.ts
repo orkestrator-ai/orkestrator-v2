@@ -1152,7 +1152,7 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("keeps stick intent for an upward scroll with no pointer held", () => {
+    test("keeps stick intent for shrinking-content compensation with no pointer held", () => {
       // Virtuoso corrects over-estimated heights after restoring a snapshot,
       // which moves scrollTop up with no user involved. Treating that as
       // intent would silently stop auto-follow on mount.
@@ -1166,6 +1166,7 @@ describe("useVirtuosoScrollState", () => {
           scroller.dispatchEvent(new Event("scroll"));
         });
 
+        Object.defineProperty(scroller, "scrollHeight", { value: 500 });
         scroller.scrollTop = 200;
         act(() => {
           scroller.dispatchEvent(new Event("scroll"));
@@ -1192,12 +1193,15 @@ describe("useVirtuosoScrollState", () => {
           window.dispatchEvent(new Event("pointerup"));
         });
 
+        const generation = result.current.scrollProps.controller.generation;
+        Object.defineProperty(scroller, "scrollHeight", { value: 500 });
         scroller.scrollTop = 200;
         act(() => {
           scroller.dispatchEvent(new Event("scroll"));
         });
 
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+        expect(result.current.scrollProps.controller.generation).toBe(generation);
       } finally {
         document.body.removeChild(scroller);
       }

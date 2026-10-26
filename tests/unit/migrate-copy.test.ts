@@ -112,6 +112,61 @@ describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", 
     expect(parseCopyOutput(output)).toMatchObject({ ok: true, files: 0, bytes: 0 });
   });
 
+  test.each(["listing", "root"])(
+    "a missing %s completion times out as extract-failed",
+    (missing) => {
+      const { root } = workspace();
+      const work = join(root, "copy-work");
+      const waitLog = join(root, "waits");
+      mkdirSync(work);
+      // Discard this consumer's completion marker while letting every archive
+      // consumer finish normally. The other markers must be present so each
+      // side of the timeout guard is exercised independently.
+      symlinkSync("/dev/null", join(work, `${missing}.status`));
+      const run = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            'mktemp() { printf "%s\\n" "$COPY_TEST_WORK"; }',
+            // Join the asynchronous consumers before advancing the wait loop,
+            // then count its polls without spending 60 seconds on real sleeps.
+            'sleep() { wait; printf "%s\\n" "$1" >> "$COPY_TEST_WAIT_LOG"; }',
+            'source "$1" "${@:2}"',
+            "status=$?",
+            // Preserve the markers for assertions; afterEach owns cleanup.
+            "trap - EXIT",
+            'exit "$status"',
+          ].join("\n"),
+          "copy-timeout-test",
+          SCRIPT,
+          "copy-stream",
+          join(root, "selected"),
+          "1",
+          "ws/a.txt",
+        ],
+        {
+          input: archiveOf(root),
+          env: { ...SHELL_ENV, COPY_TEST_WORK: work, COPY_TEST_WAIT_LOG: waitLog },
+          timeout: 5_000,
+        },
+      );
+      expect(run.error).toBeUndefined();
+      expect(run.status).toBe(3);
+      expect(run.stdout.toString().trim()).toBe("ORKESTRATOR_COPY status=extract-failed");
+      expect(parseCopyOutput(run.stdout.toString())).toEqual({
+        ok: false,
+        reason: "extract-failed",
+      });
+      expect(readFileSync(waitLog, "utf8").trim().split("\n")).toEqual(Array(600).fill("0.1"));
+      expect(statSync(join(work, `${missing}.status`)).size).toBe(0);
+      expect(
+        readFileSync(join(work, `${missing === "listing" ? "root" : "listing"}.status`), "utf8"),
+      ).toBe("done\n");
+      expect(readFileSync(join(work, "extract.status"), "utf8")).toBe("0\n");
+    },
+  );
+
   test("a symlinked root is refused for whole-tree and selective copies", () => {
     const { root } = workspace();
     const linked = join(root, "linked");

@@ -102,3 +102,8 @@ The broad run and complete unchanged owner both retained five-second failures. T
 - **Assessment:** the complete owner remains non-green, so this observation does not independently establish a new flake classification or cause. Neither `tests/unit/firewall-policy.test.ts` nor `docker/firewall-domains.sh` differs from the merge base; no implementation, assertion, deadline or skip changed for this observation.
 
 - **Completed aggregate:** workspace (web, backend, desktop, web-public, CLI, protocol, toolchain), bridge and protocol-lockfile groups passed; only the root probe timeout remained. The logged command exited 1 after 496.1 s; complete evidence is `orkestrator-test-run.3F8HQ0/mergead-tests.log.gz`. Static checks passed, and the credential-free isolated design suite passed both cases (33.8 s); profile `qa-browser-6b014289-52b` was stopped and reset.
+
+
+## Shared Codex state review fixes — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` on `74841142b` repeated `the root entrypoint runs the firewall itself and records the outcome per mode`: `exitCode` was `null` at the five-second deadline (5005.35 ms). The complete unchanged owner passed alone in 51.5 s: `mise run test:logged -- --name codex-auth-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. Root and workspace groups used one and four reserved worker slots respectively, alongside two bridge slots and one protocol slot. The generic shell-test deadline remains the observed boundary; no new cause is established. Aggregate evidence and results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md).

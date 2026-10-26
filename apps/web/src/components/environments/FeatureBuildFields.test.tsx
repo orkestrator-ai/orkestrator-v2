@@ -17,6 +17,15 @@ const catalog: AgentModelCatalog = {
     },
   ],
   codex: [{ id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["medium"], supportsSpeed: true }],
+  pi: [
+    { id: "openai/gpt-4", name: "Refused first model", reasoningEfforts: ["low"] },
+    {
+      id: "openai/gpt-6.1-sol",
+      name: "Saved Pi default",
+      sessionDefault: true,
+      reasoningEfforts: ["medium", "high"],
+    },
+  ],
   opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
 };
 
@@ -56,7 +65,7 @@ function Harness({ onModels }: { onModels: (models: FeatureBuildModelState) => v
         onModels(next);
       }}
       catalog={catalog}
-      enabledPlatforms={["claude", "codex"]}
+      enabledPlatforms={["claude", "codex", "pi"]}
       promptFields={null}
     />
   );
@@ -68,6 +77,21 @@ function openBuildPicker() {
 }
 
 describe("FeatureBuildFields build step speed", () => {
+  test("switching to Pi selects its later session-default row and efforts", async () => {
+    let latest: FeatureBuildModelState | undefined;
+    render(<Harness onModels={(models) => (latest = models)} />);
+    await openBuildPicker();
+    fireEvent.click(screen.getByRole("button", { name: "pi models", hidden: true }));
+    expect(latest?.build).toEqual({ agent: "pi", model: "openai/gpt-6.1-sol" });
+    const reasoning = screen.getByRole("group", { name: "Reasoning", hidden: true });
+    expect(
+      within(reasoning).getByRole("menuitemradio", { name: "High", hidden: true }),
+    ).toBeTruthy();
+    expect(
+      within(reasoning).queryByRole("menuitemradio", { name: "Low", hidden: true }),
+    ).toBeNull();
+  });
+
   test("keeps the Fast choice when the reasoning level changes afterwards", async () => {
     let latest: FeatureBuildModelState | undefined;
     render(<Harness onModels={(models) => (latest = models)} />);

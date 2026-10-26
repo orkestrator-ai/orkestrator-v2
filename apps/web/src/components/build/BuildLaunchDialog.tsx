@@ -403,7 +403,7 @@ function cleanStep(state: StepState, catalog: AgentModelCatalog): BuildLaunchSte
   };
 }
 
-function resolveStepState(state: StepState, catalog: AgentModelCatalog): ResolvedStep {
+export function resolveStepState(state: StepState, catalog: AgentModelCatalog): ResolvedStep {
   const matched = matchCatalogModel(catalog, state.agent, state.model);
   // An explicit configured id that the catalogue has not listed yet must not
   // collapse onto the first (often placeholder) entry.

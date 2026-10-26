@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   isRootAssistantRecord,
   normalizeBackendModelId,
+  reportsSessionDefault,
   sessionDefaultModel,
 } from "@orkestrator/protocol/model-id";
 
@@ -58,4 +59,10 @@ describe("sessionDefaultModel", () => {
     expect(sessionDefaultModel(unmarked)?.id).toBe("first");
     expect(sessionDefaultModel([])).toBeUndefined();
   });
+});
+
+test("only Pi reports its session default, so only Pi treats an unmarked catalogue as unknown", () => {
+  expect(reportsSessionDefault("pi")).toBe(true);
+  expect(reportsSessionDefault("claude")).toBe(false);
+  expect(reportsSessionDefault("codex")).toBe(false);
 });

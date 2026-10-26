@@ -70,3 +70,16 @@ export function sessionDefaultModel<T extends { sessionDefault?: boolean }>(
 ): T | undefined {
   return models.find((model) => model.sessionDefault === true) ?? models[0];
 }
+
+/**
+ * Platforms whose catalogue marks `sessionDefault` whenever a saved or
+ * configured default chooses where a session starts (the Pi bridge). For
+ * these, an unmarked catalogue says nothing about the first row: it can be a
+ * cache written before the mark existed, so a launch that has no saved model
+ * leaves the choice to the session rather than pinning the first entry.
+ */
+const SESSION_DEFAULT_REPORTING_PLATFORMS: readonly AgentPlatform[] = ["pi"];
+
+export function reportsSessionDefault(agent: AgentPlatform): boolean {
+  return SESSION_DEFAULT_REPORTING_PLATFORMS.includes(agent);
+}

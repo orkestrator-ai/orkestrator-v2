@@ -28,6 +28,7 @@ import {
   defaultFastModeFor,
   defaultEffortFor,
   effortLabel,
+  firstModelFor,
   modelsForAgent,
   platformOwnsSpeed,
   toPickerModel,
@@ -534,7 +535,7 @@ function ModelPicker({
    */
   const selectPlatform = (platform: LaunchAgent) => {
     if (platform === selection.agent) return;
-    const nextModel = modelsForAgent(catalog, platform)[0]?.id ?? "default";
+    const nextModel = firstModelFor(platform, catalog);
     onSelectionChange(selectionForModel(platform, nextModel));
   };
 

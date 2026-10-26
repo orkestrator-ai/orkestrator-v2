@@ -157,20 +157,41 @@ describe("multiReviewDefaultRows", () => {
       expect(resolved.reviewModel).toEqual({ agent: "pi", model: "openai/gpt-6.1-sol" });
     });
 
-    test("a disconnected session default is skipped like any disconnected model", () => {
+    test("a disconnected session default leaves the model to the session", () => {
       const resolved = piRows(
         { actionDefaults: { review: { platform: "pi" } } },
         piCatalog.map((model) => (model.sessionDefault ? { ...model, connected: false } : model)),
       );
-      expect(resolved.reviewModel).toEqual({ agent: "pi", model: "openai/gpt-4" });
+      expect(resolved.reviewModel).toEqual({ agent: "pi", model: "default" });
     });
 
-    test("an unmarked catalogue keeps the first model, as a tab with no default starts there", () => {
+    test("an unmarked catalogue (a pre-upgrade cache) never pins the first model", () => {
+      // The review's P1: a cache written before the mark existed would
+      // otherwise pin the refused `openai/gpt-4`. `default` lets the session
+      // start on Pi's saved default, or on the first model when there is none.
+      const unmarked = piCatalog.map(({ sessionDefault: _unused, ...model }) => model);
       const resolved = piRows(
-        { actionDefaults: { review: { platform: "pi" } } },
-        piCatalog.map(({ sessionDefault: _unused, ...model }) => model),
+        {
+          actionDefaults: {
+            review: { platform: "pi", reasoningEffort: "high" },
+            fixReviewIssues: { platform: "pi", model: "gone/x" },
+          },
+        },
+        unmarked,
       );
-      expect(resolved.reviewModel).toEqual({ agent: "pi", model: "openai/gpt-4" });
+      expect(resolved.reviewModel).toEqual({
+        agent: "pi",
+        model: "default",
+        reasoningEffort: "high",
+      });
+      expect(resolved.fixModel).toEqual({ agent: "pi", model: "default" });
+      // A saved model the catalogue offers still wins.
+      expect(
+        piRows(
+          { actionDefaults: { review: { platform: "pi", model: "openai/gpt-5.5" } } },
+          unmarked,
+        ).reviewModel,
+      ).toEqual({ agent: "pi", model: "openai/gpt-5.5" });
     });
   });
 

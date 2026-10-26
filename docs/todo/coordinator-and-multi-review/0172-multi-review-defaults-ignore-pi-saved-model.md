@@ -88,6 +88,27 @@ reviewer, the preparation turn and the Fix fail at once.
      uses the same row. Evidence: `apps/web/src/lib/agent-launch.test.ts`
      ("falls back to the model a tab with no model starts on…") and
      `review-launch-options.test.ts` ("carries Pi's session-default mark…").
+   - Multi Review fixes (2026-10-26, review
+     `action-2fe2218d7b7b27f0a6f2e0ea53ae2e58`):
+     - P2: the Restart and Fix prompt platform switches and the feature-build
+       platform switch picked index 0. They now use `sessionDefaultModel` /
+       `firstModelFor`. Evidence: the component tests in
+       `MultiReviewRestartDialog.test.tsx`, `MultiReviewFixPromptDialog.test.tsx`
+       and `FeatureBuildFields.test.tsx`, plus `e2e/PiLaunchDefaults.spec.ts`
+       (all three switches in Chromium at desktop and mobile sizes, submission,
+       and a fresh draft after reload). `BuildLaunchDialog.test.tsx` covers both
+       unset-step spellings picking the marked model's effort list.
+     - P1: a durable Pi catalogue cached before the mark existed would still
+       pin the refused first model when no Pi bridge is running. Now a Pi
+       catalogue with no connected marked row leaves the backend row `default`
+       (`reportsSessionDefault` in `model-id.ts`, used by `concreteRow`), and
+       the Pi session starts on Pi's saved default, or on its first model when
+       there is none. The cache itself is kept. Evidence:
+       `coordinator-launch-defaults.test.ts` ("an unmarked catalogue (a
+       pre-upgrade cache) never pins the first model", "a disconnected session
+       default leaves the model to the session") and
+       `commands-registry-coordinator.test.ts` ("resolves persisted Pi defaults
+       with no bridge", marked and unmarked caches with no bridge running).
    - `launchSelectionReport` (Control MCP) reports `model: null` for an unset
      model, meaning "the agent picks its own", which is still true; left as is.
 
@@ -103,10 +124,12 @@ reviewer, the preparation turn and the Fix fail at once.
   `defaultProvider`/`defaultModel` saved in `~/.pi/agent/settings.json` and no
   Pi model saved in Orkestrator, run the command above and check that the
   coordinator's Multi Review rows name the saved default (not `openai/gpt-4`)
-  and that the preparation, reviewers and Fix finish. The catalogue cached
-  before this change has no mark; the first live `/global/models` read after
-  upgrading writes it, so open a Pi tab or refresh the Pi catalogue in
-  Settings first if the cache predates the upgrade.
+  and that the preparation, reviewers and Fix finish. The opt-in
+  `ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT=1` adds assertions for the refused
+  first-model catalogue shape, an unset Orkestrator Pi model, every persisted
+  Multi Review row matching the later marked default, completed reviewers and
+  consolidation, and a completed Fix turn. It refreshes the real catalogue;
+  it never writes a model preference or substitutes a synthetic catalogue.
 
 ## Assumptions and decisions
 
@@ -123,8 +146,10 @@ reviewer, the preparation turn and the Fix fail at once.
     platform whose session default is not its first entry can set the same
     flag; old backends and bridges simply omit it and keep today's behaviour.
   - Cons: the mark is only as fresh as the catalogue read. A durable cache
-    written before the upgrade, or before the user changed Pi's default, is
-    stale until the next `/global/models` read: any catalogue read that
+    written before the user changed Pi's default is stale until the next
+    `/global/models` read (a cache with no mark at all, such as one written
+    before this change, leaves backend rows to the session instead; see the
+    next decision): any catalogue read that
     reaches a running Pi bridge (an environment where a Pi tab or worker has
     run) and the Settings refresh both do one. Within a running bridge the
     mark is recomputed from Pi's settings on every read. (a) would always be current but
@@ -141,6 +166,19 @@ reviewer, the preparation turn and the Fix fail at once.
   `.pi/settings.json` naming its own default makes the tab start there while
   the review row uses the global default. Both are defaults the user saved,
   so the row normally still runs, but it is not the same model.
+- **An unmarked Pi catalogue in backend rows (review P1).** Options: (1)
+  discard unmarked Pi caches when reading them (what the failed automatic Fix
+  started); (2) bump the cache schema; (3) leave a Pi row with no saved match
+  `default` when nothing is marked. **Chose (3).** Why: an unmarked Pi
+  catalogue means either a pre-upgrade cache or a login with no saved default,
+  and in both cases the session's own choice is the right one, so `default` is
+  correct at run time without throwing away a cache. (1) and (2) also empty
+  the Pi picker on every host that has no saved Pi default and no running Pi
+  bridge, and (1) does so on every read, not once. Con: in those cases the
+  record and the coordinator's report say `default` rather than a model name.
+  The renderer dialogs still fall back to the first row of an unmarked
+  catalogue, which they show and the user can change; a mark arrives with the
+  next live catalogue read.
 - **Ordering versus a flag.** Putting the default first in the catalogue would
   have fixed every `[0]` fallback without a type change, but it reorders the
   picker, and normalizers or stores that sort would silently undo it. An

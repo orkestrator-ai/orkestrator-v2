@@ -234,50 +234,52 @@ function TabRecorder() {
   return null;
 }
 
+/** Seeds the stores and the fake backend before the first render. */
+function seed(): BuildPipeline {
+  const pipeline = scenario();
+  installBackend(pipeline);
+  useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
+  useBuildPipelineStore.setState({
+    pipelines: new Map([[pipeline.id, pipeline]]),
+    buildEnvironmentIds: new Set([pipeline.environmentId]),
+  });
+  const shipped = pipeline.sessions.some((session) => session.phase === "pr");
+  const prUrl = shipped ? "https://github.com/acme/app/pull/42" : null;
+  useEnvironmentStore.setState({
+    environments: [
+      {
+        id: pipeline.environmentId,
+        projectId: pipeline.projectId,
+        prUrl,
+        prState: shipped ? "open" : null,
+      } as Environment,
+    ],
+  });
+  if (shipped) {
+    usePrMonitorStore.setState({
+      states: new Map([
+        [
+          pipeline.environmentId,
+          {
+            environmentId: pipeline.environmentId,
+            mode: "normal",
+            checkInProgress: false,
+            consecutiveErrors: 0,
+            lastCheckAt: at(1800),
+            prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+            checkSummary: { passed: 2, total: 4, pending: 1 },
+          },
+        ],
+      ]),
+    });
+  }
+  return pipeline;
+}
+
 export function PipelineFlowFixture() {
-  const [pipeline] = useState(scenario);
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    installBackend(pipeline);
-    useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
-    useBuildPipelineStore.setState({
-      pipelines: new Map([[pipeline.id, pipeline]]),
-      buildEnvironmentIds: new Set([pipeline.environmentId]),
-    });
-    const shipped = pipeline.sessions.some((session) => session.phase === "pr");
-    useEnvironmentStore.setState({
-      environments: [
-        {
-          id: pipeline.environmentId,
-          projectId: pipeline.projectId,
-          prUrl: shipped ? "https://github.com/acme/app/pull/42" : null,
-          prState: shipped ? "open" : null,
-        } as Environment,
-      ],
-    });
-    if (shipped) {
-      usePrMonitorStore.setState({
-        states: new Map([
-          [
-            pipeline.environmentId,
-            {
-              environmentId: pipeline.environmentId,
-              mode: "normal",
-              checkInProgress: false,
-              consecutiveErrors: 0,
-              lastCheckAt: at(1800),
-              prUrl: "https://github.com/acme/app/pull/42",
-              prState: "open",
-              hasMergeConflicts: false,
-              checkSummary: { passed: 2, total: 4, pending: 1 },
-            },
-          ],
-        ]),
-      });
-    }
-    setReady(true);
-  }, [pipeline]);
-  if (!ready) return null;
+  const [pipeline] = useState(seed);
   return (
     <TerminalProvider>
       <TabRecorder />

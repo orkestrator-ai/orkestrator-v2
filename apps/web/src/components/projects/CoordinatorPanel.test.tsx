@@ -6,6 +6,7 @@ import {
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import { useConfigStore } from "@/stores/configStore";
@@ -22,6 +23,7 @@ import {
   splitCoordinatorPaneAtEdge,
 } from "@/lib/coordinator-pane-layout";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
 import * as paneTree from "./CoordinatorPaneTree";
 import { createSessionKey } from "@/lib/utils";
 
@@ -158,6 +160,87 @@ const getCoordinatorView = mock(
 );
 const assignAgent = mock(async () => ensuredSnapshot);
 
+const launchEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+const launchSessionKey = createSessionKey(launchEnvironmentId, "coordinator-tab");
+const openingPrompt = "Inspect the repository";
+function launchProjection(
+  phase: NativeAgentSessionProjection["turn"]["phase"],
+  messages: unknown[] = [],
+  revision = 1,
+): NativeAgentSessionProjection {
+  return {
+    platform: "claude",
+    environmentId: launchEnvironmentId,
+    sessionId: "claude-session",
+    connection: phase === "recovering" ? "connecting" : "connected",
+    turn: { phase },
+    messages,
+    interactions: [],
+    composerControls: [],
+    capabilities: {
+      attachments: { files: false, images: false },
+      queue: false,
+      resume: false,
+      fork: false,
+      slashCommands: false,
+      backgroundTasks: false,
+      composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
+    },
+    revision,
+    generation: "launch-test",
+  };
+}
+const getAgentProjection = mock(async (): Promise<NativeAgentSessionProjection> =>
+  launchProjection("idle"),
+);
+const dispatchIntent = mock(
+  async (input: Parameters<typeof realBackend.dispatchNativeAgentIntent>[0]) => ({
+    outcome: "accepted" as const,
+    requestId: input.requestId,
+  }),
+);
+
+function prepareUnassignedLaunch() {
+  const conversation = { ...snapshot.workspace.conversations[0]!, agent: undefined };
+  ensuredSnapshot = {
+    ...snapshot,
+    workspace: { ...snapshot.workspace, conversations: [conversation] },
+  };
+  const assignedSnapshot: CoordinatorSnapshot = {
+    ...snapshot,
+    workspace: {
+      ...snapshot.workspace,
+      conversations: [{ ...conversation, agent: "claude" }],
+    },
+  };
+  assignAgent.mockImplementation(async () => assignedSnapshot);
+  return assignedSnapshot;
+}
+
+async function refreshCoordinator(assignedSnapshot: CoordinatorSnapshot, revision: number) {
+  const reads = getCoordinatorView.mock.calls.length;
+  await act(async () => {
+    ensuredSnapshot = {
+      ...assignedSnapshot,
+      workspace: {
+        ...assignedSnapshot.workspace,
+        conversations: assignedSnapshot.workspace.conversations.map((conversation) => ({
+          ...conversation,
+          title: `Refreshed ${revision}`,
+        })),
+      },
+    };
+    dispatchResourceChange({
+      resource: "coordinator",
+      id: "project-1",
+      projectId: "project-1",
+      revision,
+    });
+  });
+  await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
+  await screen.findByRole("button", { name: `Refreshed ${revision}, Claude Code` });
+}
+
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -178,6 +261,15 @@ mock.module("@/lib/backend", () => ({
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
   assignCoordinatorConversationAgent: assignAgent,
+  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
+  ensureNativeAgentSession: async (
+    input: Parameters<typeof realBackend.ensureNativeAgentSession>[0],
+  ) => ({
+    ...input,
+    providerSessionId: "claude-session",
+  }),
+  getNativeAgentProjection: getAgentProjection,
+  dispatchNativeAgentIntent: dispatchIntent,
 }));
 
 const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
@@ -235,6 +327,10 @@ import { useUIStore } from "@/stores";
 describe("CoordinatorPanel", () => {
   beforeEach(() => {
     useRealAgentTab = false;
+    resetNativeAgentSyncCapabilityForTests();
+    getAgentProjection.mockReset();
+    getAgentProjection.mockImplementation(async () => launchProjection("idle"));
+    dispatchIntent.mockClear();
     useConfigStore.setState({ config: initialConfig });
     useNativeComposeStore
       .getState()
@@ -330,86 +426,111 @@ describe("CoordinatorPanel", () => {
     expect(assigned.getAttribute("data-initial-model")).toBe("opus");
   });
 
-  test("the opening prompt is held until the turn is observed, not dropped on the next render", async () => {
-    const unassignedConversation = {
-      ...snapshot.workspace.conversations[0]!,
-      agent: undefined,
-    };
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: { ...snapshot.workspace, conversations: [unassignedConversation] },
-    };
-    const assignedSnapshot: CoordinatorSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [{ ...unassignedConversation, agent: "claude" }],
-      },
-    };
-    assignAgent.mockImplementation(async () => assignedSnapshot);
+  test.each([
+    { phase: "running", messages: [] },
+    { phase: "blocked", messages: [] },
+    { phase: "cancelling", messages: [] },
+    {
+      phase: "idle",
+      messages: [{ id: "opening-user-message", role: "user", text: openingPrompt }],
+    },
+    {
+      phase: "error",
+      messages: [{ id: "opening-user-message", role: "user", text: openingPrompt }],
+    },
+  ] satisfies { phase: NativeAgentSessionProjection["turn"]["phase"]; messages: unknown[] }[])(
+    "retains the opening prompt through empty error and recovery, then releases on %p",
+    async ({ phase, messages }) => {
+      const assignedSnapshot = prepareUnassignedLaunch();
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() =>
+        expect(screen.getByTestId("native-agent").getAttribute("data-platform")).toBe("claude"),
+      );
+      const expectPrompt = (prompt: string) =>
+        expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(prompt);
+      expectPrompt(openingPrompt);
 
-    render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      // Prove a resource-driven read actually reached the rendered panel.
+      await refreshCoordinator(assignedSnapshot, 2);
+      expectPrompt(openingPrompt);
+
+      let revision = 0;
+      for (const placeholder of ["idle", "recovering", "error", "recovering"] as const) {
+        act(() => {
+          useNativeAgentProjectionStore
+            .getState()
+            .setProjection(launchSessionKey, launchProjection(placeholder, [], ++revision));
+        });
+        expectPrompt(openingPrompt);
+      }
+      await refreshCoordinator(assignedSnapshot, 3);
+      expectPrompt(openingPrompt);
+
+      act(() => {
+        useNativeAgentProjectionStore
+          .getState()
+          .setProjection(launchSessionKey, launchProjection(phase, messages, ++revision));
+      });
+      await waitFor(() => expectPrompt(""));
+      // Releasing is permanent even when the next snapshot is quiet again.
+      act(() => {
+        useNativeAgentProjectionStore
+          .getState()
+          .setProjection(launchSessionKey, launchProjection("idle", [], ++revision));
+      });
+      await refreshCoordinator(assignedSnapshot, 4);
+      expectPrompt("");
+    },
+  );
+
+  test("the real tab dispatches the opening prompt once after a delayed authoritative read", async () => {
+    useRealAgentTab = true;
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    const assignedSnapshot = prepareUnassignedLaunch();
+    let resolveRead!: (projection: NativeAgentSessionProjection) => void;
+    const pendingRead = new Promise<NativeAgentSessionProjection>((resolve) => {
+      resolveRead = resolve;
+    });
+    getAgentProjection.mockImplementationOnce(() => pendingRead);
+    const panel = render(<CoordinatorPanel projectId="project-1" />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: openingPrompt } });
+    fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
-    const assigned = await screen.findByTestId("native-agent");
-    await waitFor(() => expect(assigned.getAttribute("data-platform")).toBe("claude"));
-    expect(assigned.getAttribute("data-initial-prompt")).toBe("Inspect the repository");
+    await waitFor(() => expect(getAgentProjection).toHaveBeenCalledTimes(1));
+    expect(dispatchIntent).not.toHaveBeenCalled();
 
-    // The snapshot poll re-renders the panel within a second or two. The agent
-    // tab dispatches only after its own first authoritative read, so dropping
-    // the prompt here raced that read and left it unsent in the composer.
-    act(() => {
-      ensuredSnapshot = { ...assignedSnapshot };
-    });
-    await waitFor(() => expect(getCoordinatorView).toHaveBeenCalled());
-    expect((await screen.findByTestId("native-agent")).getAttribute("data-initial-prompt")).toBe(
-      "Inspect the repository",
-    );
+    await refreshCoordinator(assignedSnapshot, 2);
+    panel.rerender(<CoordinatorPanel projectId="project-1" />);
+    await refreshCoordinator(assignedSnapshot, 3);
+    expect(dispatchIntent).not.toHaveBeenCalled();
 
-    const sessionKey = createSessionKey(
-      coordinatorRuntimeId("coordinator-1", "conversation-1"),
-      "coordinator-tab",
-    );
-    // A new session's first read is the backend's reconnecting placeholder. It
-    // is not a turn, and releasing on it dropped the prompt unsent, so the user
-    // had to press Enter a second time.
-    act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-        platform: "claude",
-        environmentId: "coordinator:coordinator-1:conversation-1",
-        connection: "connecting",
-        turn: { phase: "recovering" },
-        messages: [],
-        interactions: [],
-        composerControls: [],
-        capabilities: {},
-        revision: 0,
-        generation: "test",
-      } as never);
+    await act(async () => resolveRead(launchProjection("idle")));
+    await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+    expect(dispatchIntent.mock.calls[0]?.[0]).toMatchObject({
+      agent: "claude",
+      environmentId: launchEnvironmentId,
+      logicalSessionKey: launchSessionKey,
+      prompt: openingPrompt,
+      requestId: `initial-prompt:${launchEnvironmentId}:coordinator-tab`,
     });
-    expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(
-      "Inspect the repository",
-    );
 
-    // Evidence of the turn is what releases it.
+    // Exercise rerenders both while the parent still holds the prompt and
+    // after the authoritative turn releases it.
+    await refreshCoordinator(assignedSnapshot, 4);
+    panel.rerender(<CoordinatorPanel projectId="project-1" />);
     act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-        platform: "claude",
-        environmentId: "coordinator:coordinator-1:conversation-1",
-        connection: "connected",
-        turn: { phase: "running" },
-        messages: [],
-        interactions: [],
-        composerControls: [],
-        capabilities: {},
-        revision: 1,
-        generation: "test",
-      } as never);
+      useNativeAgentProjectionStore
+        .getState()
+        .setProjection(launchSessionKey, launchProjection("running", [], 2));
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(""),
-    );
+    await refreshCoordinator(assignedSnapshot, 5);
+    expect(dispatchIntent).toHaveBeenCalledTimes(1);
   });
 
   test("a caveat on an available platform reaches the picker, an unavailable one does not", async () => {

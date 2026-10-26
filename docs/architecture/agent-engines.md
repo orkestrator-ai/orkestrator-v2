@@ -500,6 +500,19 @@ theirs too: `message.updated`, `message.part.updated`, `session.updated`,
 The SDK and CLI are pinned to the same exact version, and
 `tests/unit/version-drift.test.ts` enforces that they agree.
 
+Attachments travel as `file` parts (`openCodePromptParts` in
+`opencode-provider-helpers.ts`), and OpenCode routes a `file://` part by its
+declared MIME type alone: `text/plain` runs its Read tool (text inline, images
+and PDFs as attachments, binary refused in a message the model still gets), an
+image type is decoded as an image, and anything else is inlined as a data URL.
+`openCodeAttachmentMime` therefore labels a non-image file `text/plain`; a text
+file once labelled `image/png` failed decoding after `promptAsync` had
+returned 204, and OpenCode stored no message. Such a background failure
+reaches the backend only as a `session.error`; `OpenCodeStreamState` keeps the
+first one after each dispatch (`dispatchFailure`), and
+`readOpenCodeTurnTerminalError` settles the request `failed` with it when the
+history holds no message for the request.
+
 ### Maintaining the OpenCode integration
 
 The v2 SDK uses flat parameters instead of nested `path`/`body` objects:

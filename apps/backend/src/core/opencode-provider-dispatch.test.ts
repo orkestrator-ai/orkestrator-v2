@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openCodeCommandBindingRevision } from "./opencode-commands.js";
 import {
   OPEN_CODE_MESSAGE_HISTORY_LIMIT,
@@ -22,10 +25,12 @@ import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-poli
 import {
   deferred,
   expectedOpenCodeMessageId,
+  openCodeActivityProvider,
   openCodeFake,
   openCodeProvider,
   waitUntil,
 } from "./agent-provider-test-support.js";
+import { OPEN_CODE_DISPATCH_FAILURE_GRACE_MS } from "./opencode-turn-outcome.js";
 
 type PermissionRule = { permission: string; pattern: string; action: string };
 
@@ -735,6 +740,111 @@ describe("OpenCode provider dispatch", () => {
       await expect(provider.turnTerminalError?.("owned-session", "request-1")).rejects.toThrow();
       fake.setMessagesHandler(async () => ({ error: { message: "unavailable" } }));
       await expect(provider.turnTerminalError?.("owned-session", "request-1")).rejects.toThrow();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("fails a prompt OpenCode accepted and then dropped with a session error", async () => {
+    // Todo 0166: `promptAsync` returned 204 for a text attachment labelled
+    // `image/png`, OpenCode failed to decode it in the background and
+    // published only a `session.error`; no message for the request was ever
+    // stored, so the outcome read settled `unknown` instead of `failed`.
+    const fake = openCodeFake();
+    let now = 10_000;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    const sessionError = (message: string) => ({
+      type: "session.error",
+      properties: {
+        sessionID: "owned-session",
+        error: { name: "UnknownError", data: { message } },
+      },
+    });
+    // The stream applied the event once its error notice is in the snapshot.
+    const errorNoticeShown = async (matches: (message: string) => boolean) => {
+      for (let attempt = 0; attempt < 500; attempt += 1) {
+        const snapshot = await provider.sessionStateSnapshot?.("owned-session");
+        if (snapshot?.notices?.some((notice) => notice.kind === "error" && matches(notice.message)))
+          return;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      throw new Error("Timed out waiting for the session error notice");
+    };
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.setMessagesResponse({ data: [] });
+      await provider.send("owned-session", "Read the attached file", {
+        requestId: "request-dropped",
+      });
+      fake.subscriptions[0]!.push(
+        sessionError("ImageDecodeError: Image could not be decoded\n    at catch (chunk.js:1:1)"),
+      );
+      await errorNoticeShown((message) => message.startsWith("ImageDecodeError"));
+
+      // Within the grace window OpenCode may still store the message.
+      await expect(
+        provider.turnTerminalError?.("owned-session", "request-dropped"),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
+
+      now += OPEN_CODE_DISPATCH_FAILURE_GRACE_MS - 1;
+      await expect(
+        provider.turnTerminalError?.("owned-session", "request-dropped"),
+      ).rejects.toMatchObject({
+        retryAfterMs: 1,
+      });
+      now += 1;
+      await expect(provider.turnTerminalError?.("owned-session", "request-dropped")).resolves.toBe(
+        "OpenCode did not accept the prompt: ImageDecodeError: Image could not be decoded",
+      );
+      // Another request is never settled by this request's error.
+      await expect(
+        provider.turnTerminalError?.("owned-session", "request-other"),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
+
+      // A binary attachment also raises a session error, but OpenCode still
+      // stores the message and answers it: that turn is judged by its answer.
+      await provider.send("owned-session", "Describe the attachment", {
+        requestId: "request-binary",
+      });
+      fake.subscriptions[0]!.push(sessionError("Cannot read binary file: /workspace/blob.bin"));
+      await errorNoticeShown((message) => message.startsWith("Cannot read binary file"));
+      now += OPEN_CODE_DISPATCH_FAILURE_GRACE_MS;
+      // Attachment processing can outlast the grace. A later authoritative
+      // message overrides an earlier dispatch-only failure classification.
+      await expect(provider.turnTerminalError?.("owned-session", "request-binary")).resolves.toBe(
+        "OpenCode did not accept the prompt: Cannot read binary file: /workspace/blob.bin",
+      );
+      now += 1;
+      const user = {
+        info: { id: expectedOpenCodeMessageId("request-binary"), role: "user" },
+        parts: [],
+      };
+      fake.setMessagesResponse({ data: [user] });
+      await expect(
+        provider.turnTerminalError?.("owned-session", "request-binary"),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
+      fake.setMessagesResponse({
+        data: [
+          user,
+          {
+            info: {
+              id: "msg_assistant_binary",
+              role: "assistant",
+              parentID: expectedOpenCodeMessageId("request-binary"),
+              time: { created: 1, completed: 2 },
+            },
+            parts: [],
+          },
+        ],
+      });
+      await expect(
+        provider.turnTerminalError?.("owned-session", "request-binary"),
+      ).resolves.toBeNull();
     } finally {
       await provider.dispose?.();
     }
@@ -2091,6 +2201,11 @@ describe("OpenCode provider dispatch", () => {
             type: "file",
             path: "/workspace/image.gif",
           },
+          {
+            type: "file",
+            path: "/workspace/.orkestrator/prompt-attachments/op/01-attached-note.txt",
+            filename: "attached-note.txt",
+          },
         ],
       });
 
@@ -2104,11 +2219,67 @@ describe("OpenCode provider dispatch", () => {
           { type: "text", text: "Inspect the file" },
           {
             type: "file",
-            mime: "image/gif",
+            mime: "text/plain",
             url: "file:///workspace/image.gif",
+          },
+          // Todo 0166: a non-image file goes as `text/plain`, which OpenCode
+          // reads with its Read tool. Labelled `image/png` (the old default),
+          // OpenCode failed to decode it and dropped the prompt.
+          {
+            type: "file",
+            mime: "text/plain",
+            filename: "attached-note.txt",
+            url: "file:///workspace/.orkestrator/prompt-attachments/op/01-attached-note.txt",
           },
         ],
       });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps text bytes named notes.png on the file-read path", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const directory = await mkdtemp(join(tmpdir(), "opencode-text-attachment-"));
+    const attachmentPath = join(directory, "notes.png");
+    await writeFile(attachmentPath, "plain text notes");
+    try {
+      await provider.send("owned-session", "Read the notes", {
+        requestId: "request-text-png",
+        attachments: [{ type: "file", path: attachmentPath, filename: "notes.png" }],
+      });
+      expect(fake.promptCalls[0]?.parts).toEqual([
+        { type: "text", text: "Read the notes" },
+        {
+          type: "file",
+          mime: "text/plain",
+          filename: "notes.png",
+          url: `file://${attachmentPath}`,
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("uses the inline image media type when a staged image retains a clipboard.png name", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const data = Buffer.from("RIFF\x04\x00\x00\x00WEBP", "binary").toString("base64");
+    const dataUrl = `data:image/webp;base64,${data}`;
+    try {
+      await provider.send("owned-session", "Describe the clipboard", {
+        requestId: "request-staged-webp",
+        attachments: [
+          { type: "image", path: "/workspace/clipboard.png", filename: "clipboard.png", dataUrl },
+        ],
+      });
+      expect(fake.promptCalls[0]?.parts).toEqual([
+        { type: "text", text: "Describe the clipboard" },
+        { type: "file", mime: "image/webp", filename: "clipboard.png", url: dataUrl },
+      ]);
     } finally {
       await provider.dispose?.();
     }

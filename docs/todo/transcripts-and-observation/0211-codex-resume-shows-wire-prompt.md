@@ -48,12 +48,13 @@ Fixed 2026-10-26:
   `<system-reminder>` the user typed or a reworded copy, is left as written.
 - For the three cases that cannot be read back from what was sent, the
   runtime records the live row's text once the turn is accepted
-  (`recordTypedPrompt`, `sessions/typed-prompts.ts`): one sparse JSONL file
-  per thread under the bridge state directory (`typed-prompts/<thread>.jsonl`),
+  (`recordTypedPrompt`, `sessions/typed-prompts.ts`): independent per-turn files
+  under `typed-prompts/<thread>.jsonl.d/<turn-digest>.json` (old JSONL
+  journals stay readable),
   holding the turn id, a sha256 of the sent text item and the typed text.
   It is written only when the sent prompt differs from the typed one for a
   reason other than the plan preamble.
-- `replayPersistedRollout` (`history/rollout.ts`) reads that file once per
+- `replayPersistedRollout` (`history/rollout.ts`) loads the current turn on demand during
   replay and passes `extractPersistedMessageContent` a `typedPrompt` resolver:
   a user message shows the recorded text only when it belongs to the
   recorded turn and its joined text hashes to the recorded digest.
@@ -83,17 +84,17 @@ Fixed 2026-10-26:
      bridge sent, plus Codex's `<skill>` block and a turn continued from the
      CLI. After closing the tab and resuming from a fresh bridge, the **You**
      rows equal the live ones, turn ids included, and the CLI turn shows its
-     rollout text. Further cases: a record never applies to a steer in its
+     rollout text. Further cases: a record never applies to a steer repeating the wire text in its
      turn, to the same text in another turn or to a rewritten turn; a fork
      keeps its parent's typed prompts. All three tests fail against the old
      reader; the fork test also fails without `inheritTypedPrompts`.
    - `history/rollout-typed-prompts.test.ts`: the extraction rules
      (preamble with coordinator context inside it, user reminders kept, an
      attachment-only plan prompt, attachments kept under a typed answer,
-     Codex blocks dropped before the resolver is asked, assistant rows never
+     exact recorded matches precede synthetic-block heuristics, assistant rows never
      ask).
    - `sessions/typed-prompts.test.ts`: digest matching, what is not
-     recorded, malformed lines, newest-wins, compaction bounds, fork
+     recorded, malformed lines, newest-wins, long-history retention and concurrent-process writes, fork
      inheritance, unusable thread ids. `prompts/slash-commands.test.ts`:
      exact-strip cases.
    - `app-server/live-resume-context.test.ts` (gated by
@@ -106,16 +107,17 @@ Fixed 2026-10-26:
      the new test fails. This proves Codex writes the text item verbatim, so
      the digest matches a real rollout.
 
-## Needs verification
+## Verification
 
-- **Real-stack reload.** Not run: a disposable `dev:test --fixture` profile
-  with Codex, sending a plan-mode prompt, a `/skill:` command and a template
-  from the composer, then reloading the tab and resuming the thread from the
-  picker, checking the **You** rows match. The runtime path that writes the
-  record is covered by the scripted-child test and the reader by the real
-  binary, but no test drives a real composer send through the runtime into
-  the real binary and back. This needs model credits (real turns) and a
-  browser; it was not done in this build session.
+- **Real-stack reload.** Passed 2026-10-26 in the disposable
+  `typed-prompts-qa-20261026` profile: three real Codex turns sent through
+  the browser composer (plan, skill, template), an inactive-environment
+  round trip, page reload, tab close and resume through the picker.
+  `codex-typed-prompts-live.spec.ts` asserts the three user rows equal the
+  typed prompts, in backend snapshots and rendered rows. Profile stopped
+  and reset after the run.
+- **Pinned-binary loopback.** Passed locally 2026-10-26 (2 tests), including
+  recovered context and a rewritten prompt with an actual PNG attachment.
 - **Recovered context in the wild.** No local rollout holds a
   recovered-context turn, so that case is proven only by the tests above.
 
@@ -156,8 +158,10 @@ Fixed 2026-10-26:
 - **How a record is matched.** Options: turn id alone; sent-text digest
   alone; both. Chose both. Why: a turn can hold more than one user message
   (a steer), and the same sent text can occur in another turn from another
-  client; requiring the turn and a sha256 of the trimmed sent text means a
-  record applies only to the exact message the bridge wrote. Pros: a CLI
+  client; requiring the turn and a sha256 of the trimmed sent text, consumed at its
+  first chronological match, identifies the original prompt even when a steer
+  repeats its wire text. Balanced image framing added by Codex is excluded
+  from the digest when the original text has a bridge attachment marker. Pros: a CLI
   turn, a steer or a rewritten rollout always shows its own text; only a
   digest of the sent text is stored, never the (possibly large) recovered
   transcript. Cons: if a future Codex rewrote the text item before
@@ -167,8 +171,10 @@ Fixed 2026-10-26:
   prompt with the coordinator context already removed), not `input.prompt`.
   Why: the reader then shows it verbatim, so a forged coordinator block the
   user typed is not stripped a second time. A typed prompt over 32,000
-  characters is not recorded (its reload shows what was sent); 500 turns per
-  thread are kept, newest first, compacted on write.
+  characters is not recorded (its reload shows what was sent). Independent
+  per-turn files retain every recorded turn, with atomic rename from unique
+  temporary files; replay and inheritance keep only one record in memory.
+  No compaction or journal-instance eviction can lose another writer's turn.
 - **When it is written.** Right after `markAccepted`, without awaiting it on
   the prompt response; writes are serialized per thread and a reload's read
   waits for pending writes in the same process. A turn whose `turn/start`
@@ -206,3 +212,24 @@ Fixed 2026-10-26:
   (Codex's own user blocks on reload).
 - [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md)
   (Codex history semantics).
+
+## Review follow-up (2026-10-26)
+
+- Replaced destructive 500-record compaction with independent atomic per-turn
+  files. Existing journals are streamed with bounded line buffers; old entries
+  before the former 4 MiB tail limit remain readable. Forks copy incrementally.
+- Typed matches are consumed once per turn and checked before synthetic
+  filtering. Added same-wire steer and synthetic-template runtime regressions.
+- Added full 1,005-turn replay, fresh-process persistence, fork retention,
+  concurrent bridge-process writes and in-flight writes across 300 threads.
+- The real pinned-binary loopback test now includes an actual image. It exposed
+  extra image framing segments in Codex's rollout; matching now uses the original
+  text item only for balanced image framing with a bridge attachment marker.
+- Added opt-in composer/reload/inactive-environment/picker-resume qualification
+  in `e2e/agent-testing/codex-typed-prompts-live.spec.ts`.
+
+Validation for the review follow-up: focused persistence/replay/cache tests,
+complete Codex bridge tests, pinned-binary loopback, isolated real-composer
+qualification, format/lint/typecheck and Codex bridge build passed. The default
+repository suite also ran; failures outside the changed Codex paths are recorded
+separately in the validation report and flaky-test registry.

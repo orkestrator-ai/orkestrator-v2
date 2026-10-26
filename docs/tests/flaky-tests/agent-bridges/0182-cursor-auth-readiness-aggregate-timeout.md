@@ -251,3 +251,24 @@ groups passed; root and bridges failed only the four firewall timeouts and
 one Cursor hook timeout described above. Backend reported 11,749 passed and
 zero failed; Pi reported 649 passed and zero failed. Formatting, lint,
 typechecking, and the flake-index contract check passed.
+
+## Codex typed-prompt review fixes — 2026-10-26
+
+During `mise run test` on macOS/Bun 1.4.4, the aggregate reserved 4/1/2/1
+worker slots for workspace/root/bridges/protocol; two bridge package tasks ran
+concurrently, one Bun worker each. `authentication > reports an authenticated
+credential as ready` in `bridges/cursor-bridge/src/http.test.ts` hit a
+beforeEach/afterEach hook timeout at 10004.21 ms. Cursor reported 800 passed,
+one failed across 46 files (34.21 s). Evidence: host temporary artifact
+`orkestrator-test-run.InAFaV/bridges.log` (compressed after aggregate completion).
+
+The unchanged owner passed alone (exit 0, 1.5 s):
+
+```sh
+mise run test:logged -- --name cursor-http-isolated -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+The hook-only aggregate failure and isolated pass match earlier readiness
+recurrences under host load. The root cause remains unconfirmed; no Cursor
+implementation, assertion, deadline or skip changed. The complete Codex bridge
+suite passed both in the aggregate and independently.

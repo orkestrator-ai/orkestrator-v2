@@ -203,7 +203,10 @@ own verdicts (a rejected structured result, a lost rebind) add none.
   `<system-reminder>` the user typed stays), and for a `/skill:` command, a
   template and a recovered-context turn the runtime records the live row's
   text after `markAccepted` (`sessions/typed-prompts.ts`). A record applies
-  only to the user message of its turn whose sent text matches its digest;
+  only to the first matching user message of its turn, before synthetic-block
+  heuristics are applied. Independent per-turn files retain every record; legacy
+  JSONL journals remain readable, and replay loads one turn at a time. Codex's
+  balanced image framing is excluded from matching an attached prompt;
   anything else, a thread from the Codex CLI included, shows the rollout's
   text. Changing `PLAN_MODE_PREAMBLE` needs the old wording stripped too, or
   every earlier plan-mode turn reloads with it. A fork copies its parent's

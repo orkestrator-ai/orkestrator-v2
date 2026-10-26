@@ -67,6 +67,33 @@ describe("a persisted user message shows the prompt as typed", () => {
     expect(persisted?.attachments).toHaveLength(1);
   });
 
+  test("image framing matches the original text item without swallowing unrelated segments", () => {
+    const sent = appendAttachmentTags("expanded", [{ path: "/tmp/shot.png" }]);
+    const resolve = (text: string) => (text === sent ? "/template" : undefined);
+    for (const middle of [
+      [],
+      [{ type: "input_text", text: "image content omitted because it could not be processed" }],
+    ]) {
+      const parts = [
+        ...content(sent, '<image name=[Image #1] path="/tmp/shot.png">'),
+        { type: "input_image", image_url: "data:image/png;base64,fixture" },
+        ...middle,
+        ...content("</image>"),
+      ];
+      expect(extractPersistedMessageContent(parts, "user", { typedPrompt: resolve })?.text).toBe(
+        "/template",
+      );
+      expect(
+        extractPersistedMessageContent([...parts, ...content("extra user text")], "user", {
+          typedPrompt: resolve,
+        })?.text,
+      ).toContain("extra user text");
+      expect(
+        extractPersistedMessageContent(parts.slice(0, -1), "user", { typedPrompt: resolve })?.text,
+      ).toContain("expanded");
+    }
+  });
+
   test("without a typed answer the sent text renders, as for a thread from another client", () => {
     expect(
       extractPersistedMessageContent(content("$tidy from the CLI"), "user", {
@@ -75,17 +102,18 @@ describe("a persisted user message shows the prompt as typed", () => {
     ).toBe("$tidy from the CLI");
   });
 
-  test("Codex's own blocks are still dropped before any typed answer is asked", () => {
-    let asked = false;
+  test("exact typed records precede synthetic heuristics, unmatched injected blocks stay hidden", () => {
+    const synthetic = content("<skill>\n<name>tidy</name>\n</skill>");
     expect(
-      extractPersistedMessageContent(content("<skill>\n<name>tidy</name>\n</skill>"), "user", {
-        typedPrompt: () => {
-          asked = true;
-          return "typed";
-        },
+      extractPersistedMessageContent(synthetic, "user", {
+        typedPrompt: () => "/template",
+      })?.text,
+    ).toBe("/template");
+    expect(
+      extractPersistedMessageContent(synthetic, "user", {
+        typedPrompt: () => undefined,
       }),
     ).toBeNull();
-    expect(asked).toBe(false);
   });
 
   test("assistant messages never ask for a typed answer", () => {

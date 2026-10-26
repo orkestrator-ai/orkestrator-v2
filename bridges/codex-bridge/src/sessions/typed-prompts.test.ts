@@ -4,23 +4,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   MAX_TYPED_PROMPT_CHARS,
-  MAX_TYPED_PROMPT_ENTRIES,
   inheritTypedPrompts,
-  readTypedPrompts,
+  readTypedPrompt,
   recordTypedPrompt,
   typedPromptDigest,
   typedPromptFor,
   typedPromptJournalPath,
+  typedPromptRecordPath,
 } from "./typed-prompts.js";
 
 const temporaryDirectories: string[] = [];
-
 async function temporaryCodexHome(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "typed-prompts-"));
   temporaryDirectories.push(directory);
   return directory;
 }
-
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
@@ -28,102 +26,143 @@ afterEach(async () => {
 });
 
 describe("typed prompts", () => {
-  test("a record answers only its own turn and the exact text that was sent", async () => {
-    const codexHome = await temporaryCodexHome();
-    await recordTypedPrompt(codexHome, "thread-1", "turn-1", "$tidy now\n", "/skill:tidy now");
-    const prompts = await readTypedPrompts(codexHome, "thread-1");
-
-    // The rollout's text is compared trimmed, as the reader joins it.
-    expect(typedPromptFor(prompts, "turn-1", "$tidy now")).toBe("/skill:tidy now");
-    expect(typedPromptFor(prompts, "turn-1", "$tidy later")).toBeUndefined();
-    expect(typedPromptFor(prompts, "turn-2", "$tidy now")).toBeUndefined();
-    expect(typedPromptFor(prompts, undefined, "$tidy now")).toBeUndefined();
-    expect((await readTypedPrompts(codexHome, "thread-2")).size).toBe(0);
-    // Only a digest of what was sent is kept, never the sent text itself.
-    const file = await readFile(typedPromptJournalPath(codexHome, "thread-1")!, "utf8");
+  test("a record answers only its own turn and exact sent text", async () => {
+    const home = await temporaryCodexHome();
+    // Read immediately, without waiting for the background write.
+    const pending = recordTypedPrompt(home, "thread", "turn-1", "$tidy now\n", "/skill:tidy now");
+    const record = await readTypedPrompt(home, "thread", "turn-1");
+    await pending;
+    expect(typedPromptFor(record, "$tidy now")).toBe("/skill:tidy now");
+    expect(typedPromptFor(record, "$tidy later")).toBeUndefined();
+    expect(await readTypedPrompt(home, "thread", "turn-2")).toBeUndefined();
+    expect(await readTypedPrompt(home, "thread", undefined)).toBeUndefined();
+    expect(await readTypedPrompt(home, "other", "turn-1")).toBeUndefined();
+    const file = await readFile(typedPromptRecordPath(home, "thread", "turn-1")!, "utf8");
     expect(file).not.toContain("$tidy now");
     expect(file).toContain(typedPromptDigest("$tidy now"));
+    expect((await stat(typedPromptRecordPath(home, "thread", "turn-1")!)).mode & 0o777).toBe(0o600);
   });
 
-  test("nothing is written when the typed text is what was sent, or too long to keep", async () => {
-    const codexHome = await temporaryCodexHome();
-    await recordTypedPrompt(codexHome, "thread-1", "turn-1", "same", "same");
+  test("unchanged, oversized and invalid records are not written", async () => {
+    const home = await temporaryCodexHome();
+    await recordTypedPrompt(home, "thread", "turn-1", "same", "same");
     await recordTypedPrompt(
-      codexHome,
-      "thread-1",
+      home,
+      "thread",
       "turn-2",
       "sent",
       "x".repeat(MAX_TYPED_PROMPT_CHARS + 1),
     );
-    await recordTypedPrompt(codexHome, "thread-1", "", "sent", "typed");
-    expect(await stat(typedPromptJournalPath(codexHome, "thread-1")!).catch(() => null)).toBeNull();
+    await recordTypedPrompt(home, "thread", "", "sent", "typed");
+    expect(await stat(`${typedPromptJournalPath(home, "thread")}.d`).catch(() => null)).toBeNull();
+    expect(typedPromptJournalPath(home, "..")).toBeUndefined();
+    await recordTypedPrompt(home, "..", "turn-1", "sent", "typed");
+    expect(await readTypedPrompt(home, "..", "turn-1")).toBeUndefined();
   });
 
-  test("malformed lines are skipped and the newest record for a turn wins", async () => {
-    const codexHome = await temporaryCodexHome();
-    const path = typedPromptJournalPath(codexHome, "thread-1")!;
+  test("legacy journals are streamed completely, ignoring malformed and oversized lines", async () => {
+    const home = await temporaryCodexHome();
+    const path = typedPromptJournalPath(home, "thread")!;
     await mkdir(dirname(path), { recursive: true });
+    const line = (turnId: string, typed: unknown) =>
+      JSON.stringify({ turnId, sent: typedPromptDigest("a"), typed });
     await appendFile(
       path,
       [
         "not json",
-        JSON.stringify({ turnId: "turn-1", sent: "short", typed: "bad digest" }),
-        JSON.stringify({ turnId: "turn-1", sent: typedPromptDigest("a"), typed: 7 }),
-        JSON.stringify({ turnId: "turn-1", sent: typedPromptDigest("a"), typed: "first" }),
+        line("turn-1", 7),
+        line("turn-1", "first"),
+        line("turn-old", "before tail"),
+        // More than the former 4 MiB tail limit, without allocating it in the reader.
+        "x".repeat(5 * 1024 * 1024),
+        line("turn-2", "last"),
+        line("turn-1", "second"),
         "",
       ].join("\n"),
     );
-    await recordTypedPrompt(codexHome, "thread-1", "turn-1", "a", "second");
-    const prompts = await readTypedPrompts(codexHome, "thread-1");
-    expect([...prompts.values()]).toEqual([
-      { turnId: "turn-1", sent: typedPromptDigest("a"), typed: "second" },
-    ]);
+    expect((await readTypedPrompt(home, "thread", "turn-old"))?.typed).toBe("before tail");
+    expect((await readTypedPrompt(home, "thread", "turn-1"))?.typed).toBe("second");
+    expect((await readTypedPrompt(home, "thread", "turn-2"))?.typed).toBe("last");
+    const before = await readFile(path);
+    await recordTypedPrompt(home, "thread", "turn-1", "a", "current");
+    expect((await readTypedPrompt(home, "thread", "turn-1"))?.typed).toBe("current");
+    expect(await readFile(path)).toEqual(before);
+    await inheritTypedPrompts(home, "thread", "fork");
+    expect((await readTypedPrompt(home, "fork", "turn-1"))?.typed).toBe("current");
+    expect((await readTypedPrompt(home, "fork", "turn-2"))?.typed).toBe("last");
   });
 
-  test("a thread keeps only its newest records, compacting the file", async () => {
-    const codexHome = await temporaryCodexHome();
-    const total = 2 * MAX_TYPED_PROMPT_ENTRIES + 5;
-    for (let index = 0; index < total; index += 1) {
-      void recordTypedPrompt(
-        codexHome,
-        "thread-1",
-        `turn-${index}`,
-        `sent ${index}`,
-        `/t ${index}`,
-      );
+  test("more than 500 turns remain readable by a fresh process and a fork", async () => {
+    const home = await temporaryCodexHome();
+    for (let index = 0; index < 1005; index += 1) {
+      await recordTypedPrompt(home, "thread", `turn-${index}`, `sent ${index}`, `/t ${index}`);
     }
-    const prompts = await readTypedPrompts(codexHome, "thread-1");
-    expect(prompts.size).toBe(MAX_TYPED_PROMPT_ENTRIES);
-    expect(prompts.has("turn-0")).toBe(false);
-    expect(typedPromptFor(prompts, `turn-${total - 1}`, `sent ${total - 1}`)).toBe(
-      `/t ${total - 1}`,
+    const modulePath = join(import.meta.dir, "typed-prompts.ts");
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "--eval",
+        `
+      const { readTypedPrompt } = await import(${JSON.stringify(modulePath)});
+      for (const i of [0, 500, 1004]) {
+        if ((await readTypedPrompt(process.argv[1], 'thread', 'turn-' + i))?.typed !== '/t ' + i) process.exit(1);
+      }
+    `,
+        home,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
     );
-    const lines = (await readFile(typedPromptJournalPath(codexHome, "thread-1")!, "utf8"))
-      .split("\n")
-      .filter(Boolean);
-    // Compacted every `MAX_TYPED_PROMPT_ENTRIES` appends, so never twice that.
-    expect(lines.length).toBeLessThan(2 * MAX_TYPED_PROMPT_ENTRIES);
-  });
+    expect(await child.exited).toBe(0);
+    await inheritTypedPrompts(home, "thread", "fork");
+    for (const index of [0, 500, 1004]) {
+      expect((await readTypedPrompt(home, "fork", `turn-${index}`))?.typed).toBe(`/t ${index}`);
+    }
+  }, 30_000);
 
-  test("a fork inherits its parent's records without touching the parent's", async () => {
-    const codexHome = await temporaryCodexHome();
-    await recordTypedPrompt(codexHome, "parent", "turn-1", "$tidy", "/skill:tidy");
-    await inheritTypedPrompts(codexHome, "parent", "fork");
-    await inheritTypedPrompts(codexHome, "empty-parent", "fork-2");
-    expect(typedPromptFor(await readTypedPrompts(codexHome, "fork"), "turn-1", "$tidy")).toBe(
-      "/skill:tidy",
+  test("independent writers and pending writes across hundreds of threads retain every turn", async () => {
+    const home = await temporaryCodexHome();
+    // Exceeds the former journal LRU capacity while its writes are in flight.
+    const pending = Array.from({ length: 300 }, (_, i) =>
+      recordTypedPrompt(home, `thread-${i}`, "turn", "sent", `typed ${i}`),
     );
-    expect((await readTypedPrompts(codexHome, "parent")).size).toBe(1);
-    expect(await stat(typedPromptJournalPath(codexHome, "fork-2")!).catch(() => null)).toBeNull();
-  });
+    const modulePath = join(import.meta.dir, "typed-prompts.ts");
+    const children = [0, 1].map((writer) =>
+      Bun.spawn(
+        [
+          process.execPath,
+          "--eval",
+          `
+      const { recordTypedPrompt } = await import(${JSON.stringify(modulePath)});
+      for (let i = 0; i < 520; i++) await recordTypedPrompt(process.argv[1], 'shared', process.argv[2] + '-' + i, 'sent', 'typed ' + i);
+    `,
+          home,
+          String(writer),
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      ),
+    );
+    const last = recordTypedPrompt(home, "thread-0", "later", "sent", "later typed");
+    expect((await readTypedPrompt(home, "thread-0", "turn"))?.typed).toBe("typed 0");
+    await Promise.all([...pending, last]);
+    for (const child of children) expect(await child.exited).toBe(0);
+    for (let writer = 0; writer < 2; writer += 1) {
+      for (let i = 0; i < 520; i += 1) {
+        expect((await readTypedPrompt(home, "shared", `${writer}-${i}`))?.typed).toBe(`typed ${i}`);
+      }
+    }
+    expect((await readTypedPrompt(home, "thread-0", "later"))?.typed).toBe("later typed");
+  }, 30_000);
 
-  test("an unusable thread id records and reads nothing", async () => {
-    const codexHome = await temporaryCodexHome();
-    expect(typedPromptJournalPath(codexHome, "..")).toBeUndefined();
-    await recordTypedPrompt(codexHome, "..", "turn-1", "sent", "typed");
-    expect((await readTypedPrompts(codexHome, "..")).size).toBe(0);
-    expect(typedPromptJournalPath(codexHome, "../escape")).toEndWith(
-      join("typed-prompts", ".._escape.jsonl"),
-    );
+  test("a fork waits for pending parent writes and leaves the parent intact", async () => {
+    const home = await temporaryCodexHome();
+    const pending = recordTypedPrompt(home, "parent", "turn", "$tidy", "/skill:tidy");
+    await inheritTypedPrompts(home, "parent", "fork");
+    await pending;
+    expect((await readTypedPrompt(home, "fork", "turn"))?.typed).toBe("/skill:tidy");
+    expect((await readTypedPrompt(home, "parent", "turn"))?.typed).toBe("/skill:tidy");
+    await inheritTypedPrompts(home, "empty", "empty-fork");
+    expect(
+      await stat(`${typedPromptJournalPath(home, "empty-fork")}.d`).catch(() => null),
+    ).toBeNull();
   });
 });

@@ -71,6 +71,7 @@ describe("resumed transcript of rewritten prompts", () => {
     // A thread whose rollout app-server can no longer resume: the bridge
     // shows it from the parser and sends it as context with the next prompt.
     writeRollout("thread-gone", [user("Remember the parser constraint"), assistant("Kept.")]);
+    writeUserPrompt("synthetic", "<skill>\n<name>template</name>\n</skill>");
     writeUserPrompt("review", "---\nargument-hint: <target>\n---\nReview $ARGUMENTS and report.");
     let turn = 0;
     const handlers = {
@@ -124,13 +125,18 @@ describe("resumed transcript of rewritten prompts", () => {
       { prompt: "<system-reminder>Mine too</system-reminder>", mode: "build" },
       // Both rewrites at once: a template in plan mode.
       { prompt: "/review src/b.ts", mode: "plan" },
+      { prompt: "/synthetic", mode: "build" },
+      { prompt: "/review image", mode: "build" },
     ];
     for (const [index, { prompt, mode }] of prompts.entries()) {
       await live.runtime.updateConfig(sessionId, { mode });
       const outcome = await live.runtime.prompt(sessionId, {
         prompt,
         requestId: `req-${index + 1}`,
-        attachments: [],
+        attachments:
+          index === 8
+            ? [{ path: "/tmp/ws/shot.png", filename: "shot.png", mimeType: "image/png" }]
+            : [],
       });
       expect(outcome).toMatchObject({ ok: true });
       live.child().notify("turn/completed", {
@@ -178,6 +184,8 @@ describe("resumed transcript of rewritten prompts", () => {
     const resumedUsers = userRows(await resumed.runtime.getMessages(session!.sessionId)).map(
       (message) => ({ content: message.content, turnId: message.turnId }),
     );
+    const rows = userRows(await resumed.runtime.getMessages(session!.sessionId));
+    expect(rows[8]?.parts.some((part) => part.type === "file")).toBe(true);
     expect(resumedUsers).toEqual([
       ...liveUsers,
       { content: "$tidy from the CLI", turnId: "turn-cli" },
@@ -193,7 +201,7 @@ describe("resumed transcript of rewritten prompts", () => {
       turnContext("turn-1"),
       user("$tidy now"),
       assistant("Working."),
-      user("Also the footer"),
+      user("$tidy now"),
       assistant("Done."),
       turnContext("turn-2"),
       user("$tidy now"),
@@ -205,9 +213,27 @@ describe("resumed transcript of rewritten prompts", () => {
     const h = await harness();
     const session = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
     expect(userRows(await h.runtime.getMessages(session!.sessionId)).map((m) => m.content)).toEqual(
-      ["/skill:tidy now", "Also the footer", "$tidy now", "$tidy something else"],
+      ["/skill:tidy now", "$tidy now", "$tidy now", "$tidy something else"],
     );
   });
+
+  test("full replay retains the earliest and latest rewritten turns beyond the old cap", async () => {
+    const records: unknown[] = [];
+    for (let i = 0; i < 1005; i += 1) {
+      await recordTypedPrompt(codexHome, "long-thread", `turn-${i}`, `expanded ${i}`, `/t ${i}`);
+      records.push(turnContext(`turn-${i}`), user(`expanded ${i}`), assistant("done"));
+    }
+    writeRollout("long-thread", records);
+    for (let restart = 0; restart < 2; restart += 1) {
+      const h = await harness();
+      const session = await h.runtime.resumeSession({ threadId: "long-thread", mode: "build" });
+      const rows = userRows(await h.runtime.getMessages(session!.sessionId));
+      expect(rows.map((row) => row.content)).toEqual(
+        Array.from({ length: 1005 }, (_, i) => `/t ${i}`),
+      );
+      await h.runtime.closeSessionRetaining(session!.sessionId);
+    }
+  }, 30_000);
 
   test("a fork keeps its parent's typed prompts", async () => {
     await recordTypedPrompt(codexHome, "thread-1", "turn-1", "$tidy now", "/skill:tidy now");

@@ -26,6 +26,7 @@ import { hydrateMessagesFromPersistedSession } from "../history/rollout.js";
 import { resolveCodexBinary } from "./live-binary.js";
 import { buildRecoveredContextPrompt } from "../app-server-runtime-base.js";
 import { wrapPromptForConversationMode } from "../prompts/slash-commands.js";
+import { appendAttachmentTags } from "../messages/attachment-tags.js";
 import { recordTypedPrompt } from "../sessions/typed-prompts.js";
 
 // See `live-contract.test.ts`: the test preload replaces `Response`, and
@@ -314,6 +315,28 @@ describeLive("live resumed transcript", () => {
       },
     ];
 
+    const imagePath = join(codexHome, "shot.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    turns.push({
+      typed: "/review image",
+      input: [
+        {
+          type: "text",
+          text: appendAttachmentTags("Review the image and report.", [
+            { path: imagePath, filename: "shot.png" },
+          ]),
+        },
+        { type: "local_image", path: imagePath },
+      ],
+      records: true,
+    });
+
     let threadId: string | null = null;
     const previousCodexHome = process.env.CODEX_HOME;
     try {
@@ -348,6 +371,8 @@ describeLive("live resumed transcript", () => {
     try {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId!);
       expect(hydrated.transcriptStatus).not.toBe("unavailable");
+      const imageRow = hydrated.messages.filter((message) => message.role === "user").at(-1);
+      expect(imageRow?.parts.find((part) => part.type === "file")?.fileUrl).toBe(imagePath);
       expect(
         hydrated.messages.filter((message) => message.role === "user").map((m) => m.content),
       ).toEqual(turns.map((turn) => turn.typed));

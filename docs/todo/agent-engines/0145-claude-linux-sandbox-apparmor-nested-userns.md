@@ -2,7 +2,8 @@
 
 Found on 2026-10-25 by todo 0030's CI probes on GitHub's `ubuntu-latest`
 runner, which is now Ubuntu 26.04 (kernel 7.0). The code items were done on
-2026-10-26 against `main` at `93018933`; only qualification remains.
+2026-10-26 against `main` at `93018933`. Paired Ubuntu runner qualification
+passed on 2026-10-26; desktop and other-distribution qualification remains.
 
 On that host, with `bwrap` and `socat` installed, the pinned Claude CLI
 (2.1.309) starts its command sandbox, but every sandboxed command fails before
@@ -66,9 +67,17 @@ failed every Bash call.
   `required`. The prompt route answers 422 `{ kind: "sandbox-unavailable" }` before journaling; the query
   plan throws the same reason for any other path. The backend shows the
   bridge's reason as the prompt error (`http-bridge-provider.ts`).
-- **CI is unchanged.** `.github/workflows/ci.yml` still removes the two
-  profiles and checks a nested namespace before the tests (todo 0030), so the
-  probe passes there and the live suite proves real containment.
+- **CI now requires paired qualification.** Before removing either AppArmor
+  profile, `.github/workflows/ci.yml` runs
+  `conformance-apparmor-live.test.ts` with phase `restricted`: the real probe
+  must refuse nesting, the backend must downgrade Claude, the pinned CLI must
+  fail with `apply-seccomp`/`setgroups`, hook-only reads must work and writes
+  must be refused, and the real provider prompt route must return 422 without
+  dispatch. After the existing disposable-runner remediation, phase
+  `remediated` requires `enforced`, sandboxed reads and write containment.
+  Both JSON reports are uploaded as one `claude-apparmor-<run>-<attempt>`
+  artifact. Missing dependencies or an unexpected outcome fail qualification;
+  they are never accepted as equivalent evidence.
 - **Durable docs:** "Claude's sandbox on Linux" in
   [`coordinator.md`](../../architecture/coordinator.md#claudes-sandbox-on-linux)
   (the probe, the refusal, how to allow nested namespaces and what each choice
@@ -76,6 +85,8 @@ failed every Bash call.
   [`agent-engines.md`](../../architecture/agent-engines.md#execution-policy),
   and a Claude-bump re-check in
   [`upgrade-agents.md`](../../development/upgrade-agents.md).
+- **Verified on an AppArmor-restricted Ubuntu 26.04.1 CI host:** the paired
+  run below demonstrates downgrade before remediation and enforcement after it.
 - **Not verified:** a stock Ubuntu 24.04 or 26.04 desktop, Debian with
   AppArmor, Fedora (SELinux) and Docker containers.
 
@@ -128,10 +139,14 @@ the pinned CLI 2.1.309 on macOS and on `omarchy-hp`.
 
 ### Qualification
 
-- [ ] **Stock AppArmor hosts, live.** Run the coordinator sandbox
+- [x] **AppArmor-restricted Ubuntu runner, paired probe/CLI qualification.**
+  Passed 2026-10-26 in [CI run 40259536593](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/40259536593/job/121368688956),
+  before and after remediation on the same runner. See the evidence below.
+- [ ] **Stock AppArmor desktops, live.** Run the coordinator sandbox
   qualification on a stock Ubuntu 24.04 host and a stock 26.04 desktop, with
   and without the profile change, and record the tier Agent Info shows. Not
-  run: no such host is available here, and `omarchy-hp` has no AppArmor
+  run on a desktop: no such desktop is available here, and `omarchy-hp` has no
+  AppArmor
   (`/sys/kernel/security/lsm` lists none) and must not be changed. How:
   1. On the stock host, from a checkout of this branch,
      `bun test --cwd packages/protocol --preload ../../tests/setup-node.ts ./src/node/claude-linux-sandbox.test.ts`
@@ -150,6 +165,35 @@ the pinned CLI 2.1.309 on macOS and on `omarchy-hp`.
      passing. Restore the profile afterwards.
   Batched in
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+
+## Paired qualification evidence — 2026-10-26
+
+[CI run 40259536593](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/40259536593/job/121368688956)
+qualified commit `823d91677` (PR merge revision
+`18811727e82822fe6ef1fc36a1164d23acb79716`) on Ubuntu 26.04.1 LTS,
+kernel `7.0.0-1017-azure`, with pinned Claude CLI **2.1.309**. Both phases
+passed on the same disposable runner. The test required AppArmor enabled and
+the Ubuntu bwrap profile installed; no policy change preceded the first phase.
+The second phase followed CI's existing two sysctl changes and removal of
+`bwrap-userns-restrict` and `unprivileged_userns` from the loaded policy.
+
+| Observation | Stock policy | After remediation |
+| --- | --- | --- |
+| Real namespace probe | `nested-user-namespace`, reason names `bwrap-userns-restrict` | `available: true` |
+| Backend coordinator qualification | `provider-configured`; rejected at safety level `enforced` | `enforced`; accepted at both safety levels |
+| Pinned CLI sandboxed read | Fails with `apply-seccomp`, `setgroups`, `Permission denied` | Reads fixture successfully |
+| Coordinator with unavailable sandbox | Hook-only `cat` succeeds; quoted writing option refused | Not needed |
+| Provider-sandbox prompt | Real HTTP route returns 422 `sandbox-unavailable`; no dispatch id, runtime or transcript message | Direct provider-sandbox write control succeeds |
+| Coordinator sandbox without the hook | Read fails before execution | Read succeeds; write to checkout refused and no file created |
+
+The complete machine reports are retained in
+[restricted.json](../../tests/claude-apparmor/40259536593/restricted.json) and
+[remediated.json](../../tests/claude-apparmor/40259536593/remediated.json),
+mirroring CI artifact `claude-apparmor-40259536593-1`. Every CLI scenario made
+two calls to the local scripted endpoint with fake credentials and a temporary
+home; no external model service was used. Reports omit prompts and tool output.
+This proves the authoritative backend tier used by the picker and Agent Info;
+a graphical desktop inspection remains in the checklist above.
 
 ## Constraints and rationale
 

@@ -1,4 +1,4 @@
-# OpenCode undo (0175) validation: three backend five-second timeouts
+# OpenCode undo (0175) validation: five-second timeouts across two aggregate runs
 
 - **ID:** 0978
 - **Status:** open
@@ -37,3 +37,20 @@ bun test --preload ../../tests/setup-node.ts ./src/core/looped-review-service.te
 The unchanged owners' isolated passes establish intermittent behavior. Shared
 host contention is a hypothesis, not a confirmed root cause. No
 implementation, assertion, timeout or skip in these owners changed.
+
+## Third aggregate run — 2026-10-26
+
+`mise run test` at `7f1a2e0ec` (the same code plus flake-register documents)
+passed bridges and protocol regeneration and failed two different
+five-second timeouts, again with the host's worker slots shared with other
+worktrees (the protocol group ran 223.2 s; bridges 1183.5 s). Evidence:
+`orkestrator-test-run.u88JLP` in the host temporary directory.
+
+| Owning file | Failing test | Aggregate failure | Complete unchanged owner rerun |
+| --- | --- | --- | --- |
+| `tests/unit/firewall-policy.test.ts` | `container firewall policy > a gateway workload records its egress once and verifies enforcement without running the firewall: the destination answered` | Five-second timeout at 5003.89 ms. | 34 pass, 0 fail (`bun test ./tests/unit/firewall-policy.test.ts`). |
+| `apps/backend/src/core/review-validation-worker.test.ts` | `precise repository resource profiles admit lightweight checks with spare host capacity` | Five-second timeout at 5192.77 ms. | 50 pass, 0 fail (`bun test --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts` from `apps/backend`). |
+
+The second run's backend failures above passed in this run, and this run's
+failures passed in the earlier ones, consistent with load-dependent timing.
+Nothing was changed in these owners.

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { openAgentMailForTab } from "./agent-mail-ui";
+import { deliverNowNotice, openAgentMailForTab } from "./agent-mail-ui";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   isAgentMailBudgetHeld,
@@ -100,19 +100,13 @@ export function AgentMailBanner({
     const deliverable = pending ?? pullOnly;
     if (!deliverable) return;
     setActionError(undefined);
-    if (descriptor?.presence !== "idle" && descriptor?.presence !== "unknown") {
-      toast.info("Delivery is still waiting", {
-        description:
-          descriptor?.presence === "draft"
-            ? "You have unsent text in the composer."
-            : `Recipient is ${descriptor?.presence.replaceAll("_", " ")}.`,
-      });
-      return;
-    }
     try {
-      // Releases this one message; the tab's delivery policy is unchanged.
-      await backend.retryAgentMailInject(environmentId, tabId, deliverable.id);
+      // Releases this one message; the tab's delivery policy is unchanged. An
+      // agent mid-turn has it steered into that turn when it can take it.
+      const result = await backend.deliverAgentMailNow(environmentId, tabId, deliverable.id);
       await refresh();
+      const notice = deliverNowNotice(result);
+      if (notice) toast.info(notice.title, { description: notice.description });
     } catch (error) {
       reportActionError("deliver message", error);
     }
@@ -128,6 +122,10 @@ export function AgentMailBanner({
     text = "Delivery was refused · retrying automatically";
   else if (pending?.placementReason === "verifying")
     text = "Checking whether the last delivery arrived · retries automatically";
+  else if (pending?.placementReason === "steer-unsupported")
+    text = "This agent can't take messages mid-turn · delivers when the turn ends";
+  else if (pending?.placementReason === "steer-refused")
+    text = "Couldn't deliver into the running turn · delivers when the turn ends";
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
   else if (pullOnly) {

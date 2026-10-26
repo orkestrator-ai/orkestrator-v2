@@ -54,6 +54,40 @@ export function agentMailStatus(
   }
 }
 
+/** What to tell the person when Deliver now could not deliver the message yet. */
+export function deliverNowNotice(
+  message: Pick<AgentMailMessageSummary, "placement" | "placementReason">,
+): { title: string; description: string } | null {
+  if (message.placement !== "pending-inject") return null;
+  switch (message.placementReason) {
+    case "steer-unsupported":
+      return {
+        title: "This agent can't take messages mid-turn",
+        description: "It will be delivered when the current turn ends.",
+      };
+    case "steer-refused":
+      return {
+        title: "Couldn't deliver into the running turn",
+        description: "It will be delivered when the current turn ends.",
+      };
+    case "verifying":
+      return {
+        title: "Checking whether it arrived",
+        description: "It is confirmed before anything is sent again.",
+      };
+    case "draft":
+      return {
+        title: "Delivery is still waiting",
+        description: "You have unsent text in the composer.",
+      };
+    default:
+      return {
+        title: "Delivery is still waiting",
+        description: "It will be delivered when this agent is idle.",
+      };
+  }
+}
+
 export const AGENT_MAIL_STATUS_TONE_CLASS: Record<AgentMailStatusTone, string> = {
   muted: "bg-zinc-800/80 text-muted-foreground",
   progress: "bg-cyan-400/10 text-cyan-300",

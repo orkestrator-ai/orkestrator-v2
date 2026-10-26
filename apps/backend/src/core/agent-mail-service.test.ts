@@ -1902,4 +1902,249 @@ describe("AgentMailService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  describe("Deliver now while the recipient is mid-turn", () => {
+    async function busyRecipientMail(storage: StorageService, body: string) {
+      return storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: `deliver-now-${body}`, toEnvironmentId: "recipient", toTabId: "agent", body },
+      );
+    }
+
+    function steeringAgents(options: {
+      presence: () => "working" | "idle";
+      steer: () => Promise<Awaited<ReturnType<NonNullable<NativeAgentService["steerMailInject"]>>>>;
+      journal?: () => "dispatched" | "not-dispatched" | "unknown";
+    }) {
+      const steers: Array<{ text: string; requestId: string }> = [];
+      const reconciled: string[] = [];
+      const dispatches: string[] = [];
+      return {
+        steers,
+        reconciled,
+        dispatches,
+        agents: {
+          reconcileMailInject: async () => "unknown" as const,
+          sessionActivitySnapshot: () => options.presence(),
+          mailInjectPresence: async () => options.presence(),
+          steerMailInject: async (input: { text: string; requestId: string }) => {
+            steers.push({ text: input.text, requestId: input.requestId });
+            return options.steer();
+          },
+          reconcileMailSteer: async (input: { requestId: string }) => {
+            reconciled.push(input.requestId);
+            return options.journal?.() ?? "unknown";
+          },
+          dispatchMailInject: async (input: { prompt: string; requestId: string }) => {
+            dispatches.push(input.prompt);
+            return { outcome: "accepted" as const, requestId: input.requestId };
+          },
+        },
+      };
+    }
+
+    test("steers the waiting mail into the running turn", async () => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const first = await busyRecipientMail(storage, "First.");
+        const second = await busyRecipientMail(storage, "Second.");
+        const world = steeringAgents({
+          presence: () => "working",
+          steer: async () => ({ outcome: "applied" }),
+        });
+        const service = new AgentMailService(storage, world.agents, {
+          dispatchMailInject: async () => ({ outcome: "accepted" }),
+        });
+        await service.init();
+
+        // Waiting for the turn to end is the default; nothing is offered.
+        await service.drainInjects();
+        expect(world.steers).toHaveLength(0);
+
+        await storage.retryAgentMailInject("recipient", "agent", first.id, { steer: true });
+        await service.drainInjects();
+
+        // One steer carries everything waiting, in send order, under a fresh uuid.
+        expect(world.steers).toHaveLength(1);
+        expect(world.steers[0]!.requestId).toMatch(/^[0-9a-f-]{36}$/);
+        expect(world.steers[0]!.text.indexOf("First.")).toBeLessThan(
+          world.steers[0]!.text.indexOf("Second."),
+        );
+        expect(world.dispatches).toHaveLength(0);
+        for (const message of [first, second]) {
+          expect(
+            (await storage.getAgentMailMessage("recipient", "agent", message.id)).placement,
+          ).toBe("injected");
+        }
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    test("an agent that cannot steer says so and delivers when the turn ends", async () => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const message = await busyRecipientMail(storage, "Later.");
+        let presence: "working" | "idle" = "working";
+        const world = steeringAgents({
+          presence: () => presence,
+          steer: async () => ({ outcome: "refused", reason: "steer-unsupported" }),
+        });
+        const service = new AgentMailService(storage, world.agents, {
+          dispatchMailInject: async () => ({ outcome: "accepted" }),
+        });
+        await service.init();
+        await storage.retryAgentMailInject("recipient", "agent", message.id, { steer: true });
+        await service.drainInjects();
+        expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+          placement: "pending-inject",
+          placementReason: "steer-unsupported",
+        });
+
+        // One attempt: the next pass mid-turn does not offer it again.
+        await service.drainInjects();
+        expect(world.steers).toHaveLength(1);
+
+        presence = "idle";
+        await service.drainInjects();
+        expect(world.dispatches).toHaveLength(1);
+        expect(
+          (await storage.getAgentMailMessage("recipient", "agent", message.id)).placement,
+        ).toBe("injected");
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a turn that ended before the steer gets the mail the ordinary way at once", async () => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const message = await busyRecipientMail(storage, "Just missed.");
+        const world = steeringAgents({
+          presence: () => "working",
+          steer: async () => ({ outcome: "idle" }),
+        });
+        const service = new AgentMailService(storage, world.agents, {
+          dispatchMailInject: async () => ({ outcome: "accepted" }),
+        });
+        await service.init();
+        await storage.retryAgentMailInject("recipient", "agent", message.id, { steer: true });
+        await service.drainInjects();
+        expect(world.steers).toHaveLength(1);
+        expect(world.dispatches).toHaveLength(1);
+        expect(
+          (await storage.getAgentMailMessage("recipient", "agent", message.id)).placement,
+        ).toBe("injected");
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    test("an unanswered steer is confirmed against the steer journal, never resent", async () => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const message = await busyRecipientMail(storage, "Did it land?");
+        let journal: "dispatched" | "unknown" = "unknown";
+        const world = steeringAgents({
+          presence: () => "working",
+          steer: async () => ({ outcome: "unknown" }),
+          journal: () => journal,
+        });
+        const service = new AgentMailService(storage, world.agents, {
+          dispatchMailInject: async () => ({ outcome: "accepted" }),
+        });
+        await service.init();
+        await storage.retryAgentMailInject("recipient", "agent", message.id, { steer: true });
+        await service.drainInjects();
+        expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+          placement: "pending-inject",
+          placementReason: "verifying",
+        });
+
+        // Pressing Deliver now again skips the wait, but only asks the journal.
+        await storage.retryAgentMailInject("recipient", "agent", message.id, { steer: true });
+        await service.drainInjects();
+        expect(world.reconciled).toEqual([world.steers[0]!.requestId]);
+
+        journal = "dispatched";
+        await storage.retryAgentMailInject("recipient", "agent", message.id);
+        await service.drainInjects();
+        expect(world.steers).toHaveLength(1);
+        expect(world.dispatches).toHaveLength(0);
+        expect(world.reconciled).toHaveLength(2);
+        expect(
+          (await storage.getAgentMailMessage("recipient", "agent", message.id)).placement,
+        ).toBe("injected");
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a steer interrupted by a restart settles from the steer journal", async () => {
+      const { storage, dataDir } = await fixture();
+      try {
+        const delivered = await busyRecipientMail(storage, "Landed.");
+        const mailbox = (await storage.getAgentMailMailbox("recipient", "agent")).descriptor;
+        await storage.beginAgentMailInject(
+          mailbox.mailboxId,
+          delivered.id,
+          mailbox.incarnationId,
+          undefined,
+          { steerRequestId: "steer-before-crash" },
+        );
+        const world = steeringAgents({
+          presence: () => "working",
+          steer: async () => ({ outcome: "applied" }),
+          journal: () => "dispatched",
+        });
+        const service = new AgentMailService(storage, world.agents, {
+          dispatchMailInject: async () => ({ outcome: "accepted" }),
+        });
+        await service.init();
+        expect(world.reconciled).toEqual(["steer-before-crash"]);
+        expect(
+          (await storage.getAgentMailMessage("recipient", "agent", delivered.id)).placement,
+        ).toBe("injected");
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a terminal agent mid-turn is told it cannot take mail now", async () => {
+      const { storage, dataDir } = await fixture();
+      try {
+        await replaceRecipientTab(storage, "claude-tmux");
+        const message = await busyRecipientMail(storage, "Terminal.");
+        const tmuxDispatches: string[] = [];
+        const service = new AgentMailService(
+          storage,
+          {
+            reconcileMailInject: async () => "unknown",
+            sessionActivitySnapshot: () => "idle",
+            dispatchMailInject: async (input) => ({
+              outcome: "accepted",
+              requestId: input.requestId,
+            }),
+          },
+          {
+            mailInjectPresence: async () => "working",
+            dispatchMailInject: async (input) => {
+              tmuxDispatches.push(input.text);
+              return { outcome: "accepted" };
+            },
+          },
+        );
+        await service.init();
+        await storage.retryAgentMailInject("recipient", "agent", message.id, { steer: true });
+        await service.drainInjects();
+        expect(tmuxDispatches).toHaveLength(0);
+        expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+          placement: "pending-inject",
+          placementReason: "steer-unsupported",
+        });
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

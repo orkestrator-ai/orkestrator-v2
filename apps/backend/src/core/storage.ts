@@ -1696,8 +1696,14 @@ export class StorageService {
     environmentId: string,
     tabId: string,
     messageId: string,
+    options: { steer?: boolean } = {},
   ): Promise<AgentMailMessage> {
-    return this.repos.agentMailInjects.retryAgentMailInject(environmentId, tabId, messageId);
+    return this.repos.agentMailInjects.retryAgentMailInject(
+      environmentId,
+      tabId,
+      messageId,
+      options,
+    );
   }
 
   discardAgentMail(
@@ -1777,7 +1783,7 @@ export class StorageService {
     messageId: string,
     incarnationId: string,
     verificationRequestId?: string,
-    options: { joinCoalescing?: boolean } = {},
+    options: { joinCoalescing?: boolean; steerRequestId?: string } = {},
   ): Promise<AgentMailMessage | null> {
     return this.repos.agentMailInjects.beginAgentMailInject(
       mailboxId,
@@ -1797,8 +1803,11 @@ export class StorageService {
       | { outcome: "failed"; reason: "ambiguous" | "rejected" }
       /** Refused before it reached the agent: queue it again after a delay. */
       | { outcome: "retry"; reason: string }
-      /** Outcome unknown: confirm `requestId` against the journal before resending. */
-      | { outcome: "verify"; requestId: string },
+      /**
+       * Outcome unknown: confirm `requestId` against the journal before
+       * resending — the steer journal when `steer` is set.
+       */
+      | { outcome: "verify"; requestId: string; steer?: true },
   ): Promise<AgentMailMessage | null> {
     return this.repos.agentMailInjects.finishAgentMailInject(mailboxId, messageId, outcome);
   }

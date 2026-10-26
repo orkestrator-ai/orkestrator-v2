@@ -10,7 +10,10 @@ import type {
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
-import { mockToastError as toastError } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastError as toastError,
+  mockToastInfo as toastInfo,
+} from "../../../../../tests/mocks/sonner";
 
 const AGENT_1 = "env-1\0tab-1";
 const AGENT_2 = "env-2\0tab-2";
@@ -30,6 +33,10 @@ const getAgentMailConversation = mock(
 const markAgentMailConversationSeen = mock(async () => ({ marked: 0 }));
 const sendAgentMail = mock(async (_input: Record<string, unknown>) => mail("stored"));
 const retryAgentMailInject = mock(async () => mail("pending-inject"));
+const deliverAgentMailNow = mock(
+  async (_environmentId: string, _tabId: string, _messageId: string): Promise<AgentMailMessage> =>
+    mail("injected"),
+);
 const discardAgentMailInject = mock(async () => mail("expired"));
 const updateAgentMailboxPolicy = mock(async (_input: Record<string, unknown>) => descriptor());
 const listAgentMailboxes = mock(async () => ({
@@ -55,6 +62,7 @@ mock.module("@/lib/backend", () => ({
   markAgentMailConversationSeen,
   sendAgentMail,
   retryAgentMailInject,
+  deliverAgentMailNow,
   discardAgentMailInject,
   updateAgentMailboxPolicy,
   listAgentMailboxes,
@@ -208,16 +216,19 @@ beforeEach(() => {
     markAgentMailConversationSeen,
     sendAgentMail,
     retryAgentMailInject,
+    deliverAgentMailNow,
     discardAgentMailInject,
     updateAgentMailboxPolicy,
     listAgentMailboxes,
     openInBrowser,
+    toastInfo,
   ])
     fn.mockClear();
   listAgentMailConversations.mockImplementation(async () => ({ revision: 1, conversations: [] }));
   getAgentMailConversation.mockImplementation(async () => conversation([agent1, user], []));
   sendAgentMail.mockImplementation(async () => mail("stored"));
   retryAgentMailInject.mockImplementation(async () => mail("pending-inject"));
+  deliverAgentMailNow.mockImplementation(async () => mail("injected"));
   setMessagingEnabled(true);
 });
 
@@ -616,15 +627,42 @@ describe("AgentMailBanner actions", () => {
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
-      expect(retryAgentMailInject).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
+      expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
     );
     expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
+    // Delivered: the banner goes away on refresh, with nothing more to say.
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
-  test("waits rather than delivering to a busy recipient", () => {
+  test("Deliver now asks a busy recipient to take the message mid-turn", async () => {
     installBanner("pending-inject", { presence: "working" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
-    expect(retryAgentMailInject).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
+    );
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+
+  test("says why when the running turn could not take the message", async () => {
+    installBanner("pending-inject", { presence: "working" });
+    deliverAgentMailNow.mockImplementationOnce(async () =>
+      mail("pending-inject", { id: "message-1", placementReason: "steer-unsupported" }),
+    );
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() =>
+      expect(toastInfo).toHaveBeenCalledWith("This agent can't take messages mid-turn", {
+        description: "It will be delivered when the current turn ends.",
+      }),
+    );
+  });
+
+  test("names a refused steer on the banner itself", () => {
+    installBanner("pending-inject", { presence: "working", reason: "steer-refused" });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(
+      screen.getByText("Couldn't deliver into the running turn · delivers when the turn ends"),
+    ).toBeTruthy();
   });
 });

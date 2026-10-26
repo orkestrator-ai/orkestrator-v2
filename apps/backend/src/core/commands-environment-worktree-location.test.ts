@@ -12,6 +12,7 @@ import { createProject, StorageService } from "./storage.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import { updateWorktreeLocations } from "./worktree-locations.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { CoordinatorService } from "./coordinator-service.js";
 
 const roots: string[] = [];
 const runtimes: BackendRuntime[] = [];
@@ -153,22 +154,42 @@ test("start uses and persists both explicit and configured roots; generic reads 
 });
 
 test("generic reads reach a coordinator's staged attachments but nothing else in application data", async () => {
-  const { storage, context, commands } = await setup();
-  const attachment = path.join(
-    coordinatorAttachmentsRoot(storage.getDataDir()),
-    "coordinator",
-    "conversation",
+  const { project, storage, context, commands } = await setup();
+  const coordinator = new CoordinatorService(storage, () => ({
+    enabled: true,
+    running: true,
+    error: null,
+  }));
+  const { workspace } = await coordinator.ensure(project.id);
+  const imageData = "iVBORw0KGgo=";
+  const attachment = await storage.coordinators.writeCoordinatorAttachment(
+    workspace.id,
+    workspace.conversations[0]!.id,
     "pasted.png",
+    imageData,
   );
-  await fs.mkdir(path.dirname(attachment), { recursive: true });
-  await fs.writeFile(attachment, "png");
+  expect(path.dirname(attachment)).toBe(
+    path.join(
+      coordinatorAttachmentsRoot(storage.getDataDir()),
+      workspace.id,
+      workspace.conversations[0]!.id,
+    ),
+  );
+  expect(path.basename(attachment)).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.png$/,
+  );
+  expect((await fs.stat(attachment)).mode & 0o777).toBe(0o600);
   await fs.writeFile(path.join(storage.getDataDir(), "secret.json"), "{}");
   const read = (filePath: string) => commands.get("read_file_base64")!({ filePath }, context);
 
-  expect(await read(attachment)).toBe(Buffer.from("png").toString("base64"));
+  expect(await read(attachment)).toBe(imageData);
   await expect(read(path.join(storage.getDataDir(), "secret.json"))).rejects.toThrow(
     "outside Orkestrator workspace storage",
   );
+  // Preserve the traversal in the request rather than normalizing it in the test.
+  await expect(
+    read(`${coordinatorAttachmentsRoot(storage.getDataDir())}/../secret.json`),
+  ).rejects.toThrow("outside Orkestrator workspace storage");
 });
 
 test("start rejects a configured default inside its project before creating directories", async () => {

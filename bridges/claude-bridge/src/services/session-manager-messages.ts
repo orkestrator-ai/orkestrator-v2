@@ -17,6 +17,7 @@ import {
   toolDiffFromToolInput,
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
+import { parseBase64ImageData } from "./image-attachment-data.js";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
@@ -900,9 +901,6 @@ const RECOGNIZED_UNRENDERED_BLOCK_TYPES = new Set<unknown>([
   "redacted_thinking",
 ]);
 
-const PERSISTED_IMAGE_MEDIA_TYPE = /^image\/[a-z0-9.+-]+$/i;
-const BASE64_PAYLOAD = /^[A-Za-z0-9+/]+={0,2}$/;
-
 /**
  * The images a user attached to a root prompt, rebuilt from the provider's
  * own transcript.
@@ -938,19 +936,19 @@ export function persistedUserImageParts(record: {
     if (
       source?.type !== "base64" ||
       typeof source.media_type !== "string" ||
-      !PERSISTED_IMAGE_MEDIA_TYPE.test(source.media_type) ||
-      typeof source.data !== "string" ||
-      !BASE64_PAYLOAD.test(source.data)
+      typeof source.data !== "string"
     ) {
       continue;
     }
-    const mediaType = source.media_type.toLowerCase();
+    const parsed = parseBase64ImageData(`data:${source.media_type};base64,${source.data}`);
+    if (!parsed?.mediaType) continue;
+    const mediaType = parsed.mediaType;
     // The original name is not in the transcript; this one is only a caption.
     const extension = mediaType === "image/jpeg" ? "jpg" : mediaType.slice("image/".length);
     parts.push({
       type: "image",
       content: `image-${parts.length + 1}.${extension}`,
-      fileUrl: `data:${mediaType};base64,${source.data}`,
+      fileUrl: `data:${mediaType};base64,${parsed.data}`,
       imageSource: "attachment",
     });
   }

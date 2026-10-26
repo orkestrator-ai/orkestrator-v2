@@ -66,7 +66,11 @@ run on an `openai` ChatGPT login, which this host does not have.
     the refused `openai/gpt-5.5`) win. An API key keeps `openai/gpt-4`.
     Another provider first is kept. A catalogue with none of the backend's
     ids, and a runtime whose `isUsingSubscription` throws, keep the first
-    model. A provider no ChatGPT login uses gets no candidates.
+    model. So do `getModels` throwing or returning a non-array, and composer
+    hydration losing its runtime after caching the catalogue. The legacy-login
+    fake now supplies subscription detection and a separate backend catalogue,
+    and checks the ChatGPT fallback rather than missing-method degradation.
+    A provider no ChatGPT login uses gets no candidates.
   - Same file, § "ChatGPT login fallback against the pinned SDK": a real
     1.4.0 `ModelRuntime` over a temporary `auth.json` (fake tokens that never
     expire, no network). An `openai` OAuth login's catalogue starts on
@@ -112,6 +116,17 @@ run on an `openai` ChatGPT login, which this host does not have.
 
 ### Qualification
 
+- **Repeatable bridge-level live check added (2026-10-26).**
+  `bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts` keeps the runtime,
+  SDK session and provider prompt real. It verifies no default preferences,
+  `openai/gpt-4` first in the catalogue, selection and attachment on
+  `openai/gpt-6.1-sol`, and a successful first provider answer. See the
+  [opt-in command](../../development/testing-guide.md#opt-in-pi-chatgpt-default-model-check).
+  The attempted run on this host stopped at credential preflight: its auth
+  file still has only legacy `openai-codex` OAuth and an `opencode-go` API
+  key. No provider prompt ran. Current-`openai` live qualification remains
+  unverified until that credential is available; no host settings or credentials
+  were changed.
 - **A fresh agent-test profile whose host has a ChatGPT `openai` login and no
   saved default should answer its first Pi prompt with no model override.**
   Still open. This host's Pi login on 2026-10-26 is the legacy

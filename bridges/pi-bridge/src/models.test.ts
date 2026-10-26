@@ -222,10 +222,11 @@ describe("composer", () => {
 describe("default model", () => {
   // The catalogue Pi 1.2.0 listed for a ChatGPT-backed `openai-codex` login,
   // first entry first: that entry is the one the account cannot use. Pi 1.4.0
-  // no longer lists either id there; the shape, a first model the login
-  // refuses, is what these pin.
+  // no longer lists either id there; these keep that legacy shape while
+  // supplying the backend catalogue separately, as the runtime does.
   const spark = model({ provider: "openai-codex", id: "gpt-5.3-codex-spark" });
   const gpt55 = model({ provider: "openai-codex", id: "gpt-5.5" });
+  const backendModel = model({ provider: "openai-codex", id: "gpt-6.1-sol" });
   const kimi = model({ provider: "opencode-go", id: "kimi-k3" });
 
   function catalogue(models: Model<Api>[]): void {
@@ -235,6 +236,8 @@ describe("default model", () => {
           getAvailable: () => Promise.resolve(models),
           getModel: () => undefined,
           getProvider: () => undefined,
+          getModels: (provider: string) => (provider === "openai-codex" ? [backendModel] : []),
+          isUsingSubscription: (provider: string) => provider === "openai-codex",
         }) as unknown as ModelRuntime,
     );
     refreshModels();
@@ -264,26 +267,26 @@ describe("default model", () => {
     expect(composer.selectedModelId).toBe("opencode-go/kimi-k3");
   });
 
-  test("falls back to the catalogue's first model when no preference is offered", async () => {
-    catalogue([spark, gpt55]);
+  test("falls back to a ChatGPT backend model when no usable preference is offered", async () => {
+    catalogue([spark, gpt55, backendModel]);
 
     expect((await hydrateComposer(emptyComposer())).selectedModelId).toBe(
-      "openai-codex/gpt-5.3-codex-spark",
+      "openai-codex/gpt-6.1-sol",
     );
     expect(
       (await hydrateComposer(emptyComposer(), undefined, ["signed-out/model"])).selectedModelId,
-    ).toBe("openai-codex/gpt-5.3-codex-spark");
+    ).toBe("openai-codex/gpt-6.1-sol");
   });
 
   test("resolves a missing or stale selection to the first preferred model offered", async () => {
-    catalogue([spark, gpt55, kimi]);
+    catalogue([spark, gpt55, backendModel, kimi]);
 
     expect(await resolveModel(undefined, ["openai-codex/gpt-5.5"])).toBe(gpt55);
     expect(await resolveModel("signed-out/model", ["signed-out/x", "opencode-go/kimi-k3"])).toBe(
       kimi,
     );
-    expect(await resolveModel(undefined, ["signed-out/model"])).toBe(spark);
-    expect(await resolveModel(undefined)).toBe(spark);
+    expect(await resolveModel(undefined, ["signed-out/model"])).toBe(backendModel);
+    expect(await resolveModel(undefined)).toBe(backendModel);
   });
 });
 
@@ -386,6 +389,39 @@ describe("ChatGPT login fallback", () => {
 
     expect((await hydrateComposer(emptyComposer())).selectedModelId).toBe("openai/gpt-4");
     expect(await resolveModel(undefined)).toBe(gpt4);
+  });
+
+  test.each([
+    [
+      "throws",
+      () => {
+        throw new Error("backend catalogue unavailable");
+      },
+    ],
+    ["returns a non-array", () => ({ models: backend })],
+  ])("keeps the first model when getModels %s", async (_label, getModels) => {
+    catalogue([gpt4, gpt61Sol], ["openai"], { getModels });
+
+    expect((await hydrateComposer(emptyComposer())).selectedModelId).toBe("openai/gpt-4");
+    expect(await resolveModel(undefined)).toBe(gpt4);
+  });
+
+  test("hydrates from the cached catalogue when runtime reconstruction rejects", async () => {
+    catalogue([gpt4, gpt61Sol]);
+    // Populate the catalogue before losing the runtime, so this exercises the
+    // fallback's runtime read, rather than listModels returning an empty list.
+    const cached = await listModels();
+    let attempts = 0;
+    setModelRuntimeFactoryForTests(async () => {
+      attempts += 1;
+      throw new Error("runtime unavailable");
+    });
+
+    const composer = await hydrateComposer(emptyComposer());
+
+    expect(attempts).toBe(1);
+    expect(composer.models).toEqual(cached);
+    expect(composer.selectedModelId).toBe("openai/gpt-4");
   });
 
   test("ignores a subscription on a provider no ChatGPT login uses", () => {

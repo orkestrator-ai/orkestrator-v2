@@ -115,11 +115,23 @@ Fixed 2026-10-26:
   round trip, page reload, tab close and resume through the picker.
   `codex-typed-prompts-live.spec.ts` asserts the three user rows equal the
   typed prompts, in backend snapshots and rendered rows. Profile stopped
-  and reset after the run.
+  and reset after the run. Evidence: the run's Playwright report
+  (`output/agent-testing/typed-prompts-qa-20261026/browser/results.json`,
+  git-ignored, local to the build worktree) records one expected test, none
+  unexpected, skipped or flaky, started 22:41:08 UTC and lasting 62.9 s. Every
+  bridge source file in the fix was last written by 22:38 and the spec at
+  22:41:07, so the run exercised the code as committed in `fdcb5345d`.
 - **Pinned-binary loopback.** Passed locally 2026-10-26 (2 tests), including
   recovered context and a rewritten prompt with an actual PNG attachment.
 - **Recovered context in the wild.** No local rollout holds a
   recovered-context turn, so that case is proven only by the tests above.
+
+## Needs verification
+
+Nothing blocks this file. The one case without real-stack composer evidence is
+recovered context, which needs a thread whose rollout app-server refuses to
+resume; see the "Finished with recovered context unproved through the
+composer" decision below.
 
 ## Constraints and rationale
 
@@ -205,6 +217,30 @@ Fixed 2026-10-26:
 - **Flake seen while validating.** The focused parallel run hit
   [0492](../../tests/flaky-tests/agent-bridges/0492-codex-deleted-session-initial-retry-race.md)
   in a new shape; the owner passed alone three times. Recorded there.
+- **Finished with recovered context unproved through the composer.** Options:
+  (a) keep the file open until a real-stack run reaches a recovered-context
+  turn; (b) add a test-only hook to the live profile that makes app-server
+  refuse a resume; (c) treat the bridge runtime test plus the pinned-binary
+  loopback test as the proof and mark the file finished. Chose (c). Why: the
+  case is only reachable after app-server fails to resume a rollout, which no
+  composer action produces; the loopback test runs the real 0.164.0 binary on
+  the bridge's own recovered-context wire text and proves the digest matches
+  what Codex writes, and the runtime test proves the bridge records and
+  replays it. Pros: no production hook for a test; the folder index stops
+  showing work that has none left. Cons: the browser rendering of that one
+  row is inferred from the plan/skill/template run, which uses the same
+  replay path. The folder index was out of step with this file (it still
+  listed the real-stack check as remaining after it had passed); it now says
+  Finished = Yes.
+- **Repository-suite failures outside this change.** The branch's
+  `mise run test` failed in files this change does not touch
+  (`apps/desktop`, `apps/backend` and `tests/unit` are identical to
+  `origin/main`). Options: fix them here, or reproduce and register them.
+  Chose to register: they belong to other todos and the ticket forbids hiding
+  unrelated failures. Recorded in
+  [1101](../../tests/flaky-tests/aggregate-validation-runs/1101-codex-typed-prompts-0211-validation.md),
+  with the macOS-only profile-cleanup failure as its own case,
+  [1100](../../tests/flaky-tests/electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md).
 
 ## Related
 
@@ -231,5 +267,10 @@ Fixed 2026-10-26:
 Validation for the review follow-up: focused persistence/replay/cache tests,
 complete Codex bridge tests, pinned-binary loopback, isolated real-composer
 qualification, format/lint/typecheck and Codex bridge build passed. The default
-repository suite also ran; failures outside the changed Codex paths are recorded
-separately in the validation report and flaky-test registry.
+repository suite also ran; it failed only in files this change does not touch,
+each reproduced on `origin/main` or passing alone, as recorded in
+[1101](../../tests/flaky-tests/aggregate-validation-runs/1101-codex-typed-prompts-0211-validation.md)
+(with new case
+[1100](../../tests/flaky-tests/electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md)
+and a reopened
+[0187](../../tests/flaky-tests/environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md)).

@@ -269,6 +269,20 @@ describe("startup", () => {
     expect(written[1]!.method).toBe("initialized");
   });
 
+  test("app-server and its model shells cannot inherit the bridge state override", async () => {
+    const previous = process.env.CODEX_BRIDGE_STATE_DIR;
+    process.env.CODEX_BRIDGE_STATE_DIR = "/host/shared/orkestrator-bridge";
+    try {
+      const h = harness();
+      await h.supervisor.ensureReady();
+      expect(h.spawnEnvironments[0]?.CODEX_BRIDGE_STATE_DIR).toBeUndefined();
+      expect(h.spawnEnvironments[0]?.CODEX_HOME).toBe("/tmp/codex-home");
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = previous;
+    }
+  });
+
   test("passes managed GitHub credentials to the app-server generation", async () => {
     const originalGitHubToken = process.env.GITHUB_TOKEN;
     const originalGhToken = process.env.GH_TOKEN;

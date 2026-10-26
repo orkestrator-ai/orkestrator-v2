@@ -122,6 +122,28 @@ credentials, or isolated application profile. The server is owned and stopped
 by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
 Authenticated renderer flows still use isolated profiles as described below.
 
+### Other browser engines
+
+The component suite runs in Chromium. For a qualification run in Safari's engine,
+set `ORKESTRATOR_E2E_BROWSER=webkit` (or `firefox`). The `mobile-chromium` and
+`desktop-chromium` project names still name the viewport profile:
+
+```bash
+ORKESTRATOR_E2E_BROWSER=webkit mise run test:logged -- --name browser-webkit -- \
+  bunx playwright test --config e2e/playwright.config.ts \
+  e2e/PaneBreakpoint.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts
+```
+
+The Chrome-only native datalist spec is skipped on alternate engines, as are
+CDP touch-input cases. Engine checks use `browserName`, independently of the
+viewport project name.
+
+Playwright's WebKit has no `moveBefore`, so it exercises the stable-host
+`appendChild` fallback natively. It runs on the host, so it does not stand in
+for iOS Safari on a device or simulator. Install it with
+`mise exec -- bunx playwright install webkit`. Assertions on Electron-only CSS
+such as `-webkit-app-region` only run under Chromium.
+
 ### Native browser controls
 
 `e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
@@ -337,6 +359,31 @@ mise run test:logged -- --name codex-bridge-example -- \
   bun test ./bridges/codex-bridge/src/example.test.ts \
   --parallel=1 --only-failures
 ```
+
+### Opt-in Pi ChatGPT default-model check
+
+`bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts` sends one real
+provider prompt through `createSession`, `ensureSession` and `dispatchPrompt`,
+with no saved default, host fallback or model override. It requires a current
+`openai` ChatGPT OAuth credential; a legacy `openai-codex` credential cannot
+substitute. The test is skipped in normal suites. To opt in:
+
+```bash
+ORKESTRATOR_PI_CHATGPT_LIVE=1 \
+  mise run test:logged -- --name pi-chatgpt-live -- \
+  bun test ./bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts \
+  --preload ./tests/setup-node.ts \
+  --preload ./bridges/pi-bridge/src/testing/test-isolation.ts \
+  --parallel=1 --only-failures
+```
+
+By default it reads `~/.pi/agent/auth.json`. Set
+`ORKESTRATOR_PI_CHATGPT_AUTH_FILE` to use a disposable login's auth file.
+Only the `openai` credential is copied into a temporary agent directory; the
+refresh token is replaced so the test cannot rotate the source credential.
+The access token must have at least ten minutes remaining. The test checks
+the selected model and an error-free provider answer, then removes its
+temporary home, settings and sessions. It does not read or change host settings.
 
 ### Opt-in preview checks
 

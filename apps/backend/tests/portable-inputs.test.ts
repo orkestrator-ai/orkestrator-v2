@@ -5,6 +5,9 @@ import path from "node:path";
 import {
   INPUT_LIMITS,
   INPUT_REVISION_PRUNE_GRACE_MS,
+  defaultInputSourceRoots,
+  grokStagingConfig,
+  grokStagingHome,
   portableInputSpec,
   pruneInputRevisions,
   readInputsManifest,
@@ -158,6 +161,66 @@ describe("portable input staging", () => {
     expect(summary.skipped["too-large"]).toBe(1);
     expect(summary.skipped["aggregate-budget"]).toBeGreaterThan(0);
     expect(summary.files).toBeLessThanOrEqual(6);
+  });
+
+  test("an agent-test profile stages its own Grok snapshot, never the real host's", async () => {
+    // The profile's isolated HOME holds the restricted copy `dev:test` seeded
+    // (and a test may edit); the real host home is somewhere else.
+    const { dataDir, root, home } = await fixtureHome();
+    const host = path.join(root, "real-host-home");
+    const login = (key: string) =>
+      JSON.stringify({
+        live: { key, refresh_token: "", expires_at: "2099-01-01T00:00:00Z" },
+      });
+    await write(path.join(home, ".grok", "auth.json"), login("profile-snapshot"));
+    await write(path.join(home, ".config", "grok", "settings.toml"), "profile = true");
+    await write(path.join(host, ".grok", "auth.json"), login("SENTINEL-HOST-LOGIN"));
+    await write(path.join(host, ".config", "grok", "settings.toml"), "SENTINEL-HOST-CONFIG");
+    const staged = await stagePortableInputs(dataDir, "env-grok-profile", new Set(["grok"]), {
+      home: host,
+      agentTest: true,
+      agentTestHostHome: host,
+      grokHome: path.join(home, ".grok"),
+    });
+    expect(
+      JSON.parse(await fs.readFile(path.join(staged.directory, "grok-home", "auth.json"), "utf8"))
+        .live.key,
+    ).toBe("profile-snapshot");
+    for (const file of await listFiles(staged.directory)) {
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL-HOST",
+      );
+    }
+  });
+
+  test("an agent-test run's Grok home is GROK_HOME, else its own HOME, never the host's", () => {
+    const saved = { HOME: process.env.HOME, GROK_HOME: process.env.GROK_HOME };
+    try {
+      process.env.HOME = "/profile/home";
+      delete process.env.GROK_HOME;
+      // A `dev:test` profile: its isolated HOME.
+      expect(grokStagingHome(defaultInputSourceRoots("agent-test", "UNSET"))).toBe(
+        "/profile/home/.grok",
+      );
+      expect(grokStagingConfig(defaultInputSourceRoots("agent-test", "UNSET"))).toBe(
+        "/profile/home/.config/grok",
+      );
+      // A CLI scenario keeps HOME and names its disposable copy.
+      process.env.GROK_HOME = "/scenario/provider-homes/.grok";
+      expect(grokStagingHome(defaultInputSourceRoots("agent-test", "UNSET"))).toBe(
+        "/scenario/provider-homes/.grok",
+      );
+      expect(grokStagingConfig(defaultInputSourceRoots("agent-test", "UNSET"))).toBe(
+        "/scenario/provider-homes/.config/grok",
+      );
+      // Outside agent-test nothing changes.
+      expect(defaultInputSourceRoots("production", "UNSET").grokHome).toBeUndefined();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   test("stages single-use Codex and Grok logins access-only, never their refresh tokens", async () => {

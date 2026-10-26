@@ -16,6 +16,11 @@ import {
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
+import {
+  dockerDaemonUnreachableNow,
+  isDockerDaemonUnreachable,
+  isDockerPathNotFound,
+} from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand, spawnCommand } from "./shell.js";
 import {
@@ -65,6 +70,7 @@ import { createDockerContainer } from "./commands-containers.js";
 import { assertEnvironmentBudgetEnforceable } from "./container-resources.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
+import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
 
 /**
@@ -251,27 +257,27 @@ function helperArguments(
 }
 
 /**
- * Only the daemon's own answer that the path does not exist means there is
- * nothing to preserve. A CLI that reached no daemon (its socket gone) also
- * says "no such file or directory"; that step copied nothing and must fail,
- * or a rebuild during a daemon outage would commit an empty candidate.
- */
-const MISSING_SOURCE_PATH = /error response from daemon: could not find the file/i;
-
-/**
  * Streams `docker cp <container>:<path> -` into a helper's stdin. Bounded by a
- * deadline; the daemon's "could not find" is reported as an absent path
- * (nothing to preserve), not a failure.
+ * deadline. Only the daemon's own "could not find the file" is an absent path
+ * (nothing to preserve): a CLI that reached no daemon (its socket gone) also
+ * says "no such file or directory", and that step copied nothing and must
+ * fail, or a rebuild during a daemon outage would commit an empty candidate.
+ * Either side saying it reached no daemon is reported as such, so the failure
+ * names the outage rather than the files.
  */
 export async function pipeContainerPath(
   containerId: string,
   sourcePath: string,
   consumerArgs: string[],
-): Promise<{ absent: true } | { absent: false; output: string; producerFailed: boolean }> {
+): Promise<
+  | { absent: true }
+  | { absent: false; output: string; producerFailed: boolean; daemonUnavailable: boolean }
+> {
   return new Promise((resolve) => {
     const producer = spawnCommand("docker", ["cp", `${containerId}:${sourcePath}`, "-"]);
     const consumer = spawnCommand("docker", consumerArgs);
     let producerErr = "";
+    let consumerErr = "";
     let output = "";
     let producerCode: number | null = null;
     let consumerCode: number | null = null;
@@ -295,15 +301,24 @@ export async function pipeContainerPath(
     consumer.stdout.on("data", (chunk: Buffer) => {
       if (output.length < 16_384) output += chunk.toString();
     });
-    consumer.stderr.on("data", () => undefined);
+    consumer.stderr.on("data", (chunk: Buffer) => {
+      if (consumerErr.length < 4096) consumerErr += chunk.toString();
+    });
     const finish = () => {
       if (producerCode === null || consumerCode === null) return;
       clearTimeout(timer);
-      if (producerCode !== 0 && MISSING_SOURCE_PATH.test(producerErr)) {
+      if (producerCode !== 0 && isDockerPathNotFound(producerErr)) {
         resolve({ absent: true });
         return;
       }
-      resolve({ absent: false, output, producerFailed: producerCode !== 0 });
+      resolve({
+        absent: false,
+        output,
+        producerFailed: producerCode !== 0,
+        daemonUnavailable:
+          (producerCode !== 0 && isDockerDaemonUnreachable(producerErr)) ||
+          (consumerCode !== 0 && isDockerDaemonUnreachable(consumerErr)),
+      });
     };
     producer.on("close", (code) => {
       producerCode = code ?? 1;
@@ -364,7 +379,8 @@ async function runCopyStep(
       ),
       { timeoutMs: COPY_TIMEOUT_MS },
     ).catch((error: unknown) => ({ stdout: error instanceof Error ? error.message : "" }));
-    return parseCopyOutput(stdout);
+    const result = parseCopyOutput(stdout);
+    return !result.ok && isDockerDaemonUnreachable(stdout) ? DAEMON_UNAVAILABLE_COPY : result;
   }
   const piped = await pipeContainerPath(
     source.containerId,
@@ -378,8 +394,26 @@ async function runCopyStep(
     ),
   );
   if (piped.absent) return { ok: true, files: 0, bytes: 0, absent: true };
+  if (piped.daemonUnavailable) return DAEMON_UNAVAILABLE_COPY;
   if (piped.producerFailed) return { ok: false, reason: "source-read-failed" };
   return parseCopyOutput(piped.output);
+}
+
+/** A copy step that failed because Docker went away, not because of the files. */
+const DAEMON_UNAVAILABLE_COPY = { ok: false, reason: "daemon-unavailable" } as const;
+
+/** Classify a failed copy before rollback, including a stream cut without daemon wording. */
+export async function replacementCopyFailure(reason: string): Promise<ContainerLifecycleError> {
+  if (reason === DAEMON_UNAVAILABLE_COPY.reason || (await dockerDaemonUnreachableNow())) {
+    return lifecycleError(
+      "daemon-unavailable",
+      "Docker stopped responding while the environment's files were being copied. The original container was kept unchanged; rebuild again once Docker is running.",
+    );
+  }
+  return lifecycleError(
+    "needs-attention",
+    `Copying the environment's files failed verification (${reason}). The original container was kept unchanged.`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +618,9 @@ export async function quiesceRuntime(
     return result;
   });
   shutdownClaudeStatePolling(containerId);
+  // The bridges stopped with the runtime, and their turns and parked requests
+  // with them. Before a commit too: a failed rebuild leaves it stopped.
+  await settleStoppedRuntimeAgents(environmentId, context);
   return {
     forced: (drain?.remaining ?? 0) > 0 || (await containerStopWasForced(containerId)) === true,
   };
@@ -808,10 +845,7 @@ async function replaceRuntimePreservingStateUnfenced(
         candidateStorage,
       );
       if (!copied.ok) {
-        throw lifecycleError(
-          "needs-attention",
-          `Copying the environment's files failed verification (${copied.reason}). The original container was kept unchanged.`,
-        );
+        throw await replacementCopyFailure(copied.reason);
       }
       files += copied.files;
       bytes += copied.bytes;

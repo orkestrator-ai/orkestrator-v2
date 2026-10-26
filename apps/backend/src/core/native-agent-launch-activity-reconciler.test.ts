@@ -44,6 +44,7 @@ function harness(
       return task;
     },
     recordAsyncQuestionAttention: async () => undefined,
+    withdrawEnvironmentInteractions: () => undefined,
     dispatchPrompt: mock(async () => {
       throw new Error("unexpected dispatch");
     }),

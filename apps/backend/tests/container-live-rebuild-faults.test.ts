@@ -38,6 +38,7 @@ import { openRegistryWriter, type RegistryWriter } from "../src/core/registry-wr
 import { StorageService } from "../src/core/storage";
 import { readStoredValue } from "../src/core/storage-test-support";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
+import { removeLabelledResources } from "./container-live-cleanup";
 import { startRuntime } from "./container-live-start";
 import {
   QUALIFICATION_PROJECT,
@@ -106,32 +107,11 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!ENABLED) return;
   for (const proxy of proxies) await proxy.close();
-  const leftovers: string[] = [];
-  for (const dataDir of dataDirs) {
-    const filter = `label=orkestrator-owner=${dockerOwnerNamespace(dataDir)}`;
-    // One resource per call: a multi-argument removal intermittently answered
-    // "404 page not found" on Docker Desktop 4.95 under load.
-    for (const [list, remove] of [
-      [
-        ["ps", "-aq", "--filter", filter],
-        ["rm", "-f"],
-      ],
-      [
-        ["volume", "ls", "-q", "--filter", filter],
-        ["volume", "rm"],
-      ],
-      [
-        ["network", "ls", "-q", "--filter", filter],
-        ["network", "rm"],
-      ],
-    ] as const) {
-      for (const id of await dockerList([...list]).catch(() => [])) {
-        await docker([...remove, id]).catch(() => undefined);
-      }
-      leftovers.push(...(await dockerList([...list]).catch(() => [`unlisted ${list[0]}`])));
-    }
-    await fs.rm(dataDir, { recursive: true, force: true });
-  }
+  const leftovers = await removeLabelledResources(
+    docker,
+    dataDirs.map((dataDir) => `label=orkestrator-owner=${dockerOwnerNamespace(dataDir)}`),
+  );
+  for (const dataDir of dataDirs) await fs.rm(dataDir, { recursive: true, force: true });
   expect(leftovers).toEqual([]);
 }, 300_000);
 
@@ -333,7 +313,8 @@ async function expectDisconnectRetainedOriginal(
   originalSetId: string | undefined,
   error: Error | undefined,
 ) {
-  expect(error?.message).toStartWith("ContainerLifecycleError:");
+  // Named as the outage it is, not as files that failed verification.
+  expect(error?.message).toStartWith("ContainerLifecycleError:daemon-unavailable:");
   let environment = await env.storage.getEnvironment(env.environmentId);
   let record = lifecycleOf(environment);
   expect(record.operation).toBeUndefined();
@@ -342,8 +323,7 @@ async function expectDisconnectRetainedOriginal(
   expect(record.runtime?.containerId).toBe(originalId);
   expect(record.storage.storageSetId).toBe(originalSetId);
   const outcome = record.outcomes.at(-1);
-  expect(outcome).toMatchObject({ status: "failed" });
-  expect(outcome?.failureCode).toBeDefined();
+  expect(outcome).toMatchObject({ status: "failed", failureCode: "daemon-unavailable" });
   const failed = (record.retainedStorage ?? []).filter((set) => set.reason === "failed-candidate");
   expect(failed).toEqual([
     expect.objectContaining({ operationId: outcome!.operationId, reason: "failed-candidate" }),

@@ -38,6 +38,7 @@ import {
   createOrkestratorScriptPrompt,
 } from "@/prompts";
 import * as backend from "@/lib/backend";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isGatewayBrowserPreviewSupported, isRemoteGatewayConnection } from "@/lib/gateway-url";
@@ -139,7 +140,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
   const setProjectBoardNotesOpen = useUIStore((state) => state.setProjectBoardNotesOpen);
-  const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
   const selectedEnvironment = useEnvironmentStore((state) =>
     selectedEnvironmentId
       ? state.environments.find((environment) => environment.id === selectedEnvironmentId)
@@ -165,14 +165,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Settings dialogs are pinned by id, not by snapshot: the store stays the
   // single source of truth, so a background update to the pinned entity is
   // reflected live and a deletion closes the dialog instead of leaving an
-  // orphaned copy whose saves would silently no-op.
+  // orphaned copy whose saves would silently no-op. Environment settings open
+  // in `AppDialogHost`, the one host the projects drawer also uses.
+  const openAppDialog = useAppDialogStore((state) => state.open);
+  const openEnvironmentSettings = useCallback(
+    (environmentId: string) => openAppDialog({ kind: "environment-settings", environmentId }),
+    [openAppDialog],
+  );
   const [repoSettingsProjectId, setRepoSettingsProjectId] = useState<string | null>(null);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
   const [globalSettingsDefaultSection, setGlobalSettingsDefaultSection] =
     useState<GlobalSettingsSection>();
   /** Bumped per section request so a repeat request for the same section navigates. */
   const [globalSettingsSectionRequest, setGlobalSettingsSectionRequest] = useState(0);
-  const [envSettingsEnvironmentId, setEnvSettingsEnvironmentId] = useState<string | null>(null);
   const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -289,23 +294,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       ? (state.projects.find((project) => project.id === repoSettingsProjectId) ?? null)
       : null,
   );
-  const envSettingsEnvironment = useEnvironmentStore((state) =>
-    envSettingsEnvironmentId
-      ? (state.environments.find((environment) => environment.id === envSettingsEnvironmentId) ??
-        null)
-      : null,
-  );
   // The pinned entity disappeared (deleted, or the project list was replaced).
   // Drop the pin too, so a later entity that happens to reuse the id cannot
   // resurrect a dialog the user never reopened.
   useEffect(() => {
     if (repoSettingsProjectId && !repoSettingsProject) setRepoSettingsProjectId(null);
   }, [repoSettingsProject, repoSettingsProjectId]);
-  useEffect(() => {
-    if (envSettingsEnvironmentId && !envSettingsEnvironment) {
-      setEnvSettingsEnvironmentId(null);
-    }
-  }, [envSettingsEnvironment, envSettingsEnvironmentId]);
   // A project's page runs on its project home, the environment that works
   // directly in the checkout: the toolbar's environment controls target it
   // while the project tabs choose between its own tabs and the board panels.
@@ -2336,7 +2330,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     projectBoardTab,
     openProjectBoardTab,
     openProjectNotes,
-    updateEnvironment,
     selectedEnvironment,
     workspaceReady,
     setupRunning,
@@ -2359,8 +2352,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     globalSettingsDefaultSection,
     globalSettingsSectionRequest,
     setGlobalSettingsOpen: updateGlobalSettingsOpen,
-    envSettingsEnvironmentId,
-    setEnvSettingsEnvironmentId,
+    openEnvironmentSettings,
     dockerStatsOpen,
     setDockerStatsOpen,
     isOpeningEditor,
@@ -2432,7 +2424,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setScrollLeft,
     selectedProject,
     repoSettingsProject,
-    envSettingsEnvironment,
     isProjectView,
     hasProjectCheckout,
     isCleanupTargetDeleting,

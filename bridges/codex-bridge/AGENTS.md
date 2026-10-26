@@ -25,6 +25,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/app-server/server-request-router.ts` | Answers every server request, exactly once       |
 | `src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
+| `src/bridge-state-dir.ts`               | Where session records live; shared across accounts |
 | `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
 | `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
@@ -79,6 +80,14 @@ reaches readers; clear it whenever the history is replaced. Note through
 never when the change is sent: a send waits for the coalesced flush and can be
 dropped, and a note that lands after a read bumps nothing. Never note the
 newest row, which every window holds.
+
+A turn app-server reports failed (`turn/completed` with `status: "failed"`)
+ends with an error `status` line on its last row saying why
+(`messages/turn-failure.ts`; the provider's JSON body is reduced to its
+`error.message`). A refused model fails the turn before anything streams, so
+without it the turn read as idle with an empty reply. The rollout keeps the
+same error on `task_complete`, and the replay adds the same line. The bridge's
+own verdicts (a rejected structured result, a lost rebind) add none.
 
 ## File changes and change evidence
 

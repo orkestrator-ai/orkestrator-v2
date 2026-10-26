@@ -5,6 +5,14 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..");
 // Override to run beside another checkout's fixture server on the default port.
 const port = Number.parseInt(process.env.ORKESTRATOR_E2E_PORT ?? "1422", 10);
 const baseURL = `http://127.0.0.1:${port}`;
+// Opt-in engine override for qualification runs, e.g. `webkit` for Safari's
+// engine, which has no `moveBefore`. The project names keep naming the layout
+// profile (phone or desktop viewport), whichever engine runs them. Specs that
+// require Chrome or CDP must gate on browserName rather than the project name.
+const browserName = process.env.ORKESTRATOR_E2E_BROWSER ?? "chromium";
+if (browserName !== "chromium" && browserName !== "webkit" && browserName !== "firefox") {
+  throw new Error(`Unsupported ORKESTRATOR_E2E_BROWSER: ${browserName}`);
+}
 
 export default defineConfig({
   testDir: import.meta.dirname,
@@ -27,7 +35,7 @@ export default defineConfig({
   },
   use: {
     baseURL,
-    browserName: "chromium",
+    browserName,
     trace: "retain-on-failure",
   },
   projects: [

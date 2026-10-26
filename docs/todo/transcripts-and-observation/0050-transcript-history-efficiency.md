@@ -2,7 +2,8 @@
 
 Checked against `main` at `2459b05c` (2026-10-15); code items 1 to 6, the
 measurement gaps and the deferred-item measurements closed against `main` at
-`71227437` (2026-10-24).
+`71227437` (2026-10-24); item 3 re-checked, and the hidden-document
+measurement run, against `main` at `930189337` (2026-10-26).
 
 Agent transcripts are the largest repeated data flow in the app. Providers
 produce them, bridges summarise them, the backend projects them, clients retain
@@ -11,11 +12,16 @@ read does metadata work only, a changed read costs what changed, and history
 and large artifacts are fetched separately from the live window, without making
 background work depend on a mounted view. Most of this shipped in #875, and
 build-pipeline supervision no longer reads whole transcripts on every pass.
-Every code item is now done or decided (2026-10-24). What remains is
-real-stack qualification this node could not run: a long inactive Cursor run,
-the pre-acceptance pipeline dispatch window, Electron and Docker with real
-providers, a truly hidden browser document, and a mounted tab across a
-bridge-only restart.
+Every code item is now done or decided. On 2026-10-26 item 3's check found
+that neither older-bridge path can retire yet: the `/messages` fallback also
+loads Claude sessions after a bridge restart, and the renderer pages through
+joined `sync-v1` history itself. The Claude bridge now loads those sessions on
+`/transcript`, which starts the fallback's retirement clock, and the joined
+path moved to [0232](0232-direct-history-cursor-minting.md). The hidden
+browser document is measured. What remains is real-stack qualification not
+run here: a long inactive Cursor run (now reachable in a short run), the
+pre-acceptance pipeline dispatch window, Electron and Docker with real
+providers, and a mounted tab across a bridge-only restart.
 
 ## Current state
 
@@ -26,7 +32,9 @@ bridge-only restart.
   backend prefers them through `apps/backend/src/core/http-bridge-transcript-v2.ts`
   and falls back to v1 per bridge connection. Wire bounds (locator and cursor
   lengths, page size, detail ceilings) are the exported constants in
-  `bridge-transcript-summary.ts`.
+  `bridge-transcript-summary.ts`. Since 2026-10-26 Claude's summary route
+  loads a persisted session that is not resident yet, as `/messages` does,
+  so a 404 from it means the session does not exist (item 3).
 - Unchanged reads. Claude keeps a content revision
   (`bridges/claude-bridge/src/services/transcript-revision.ts`). The shared
   token in `packages/protocol/src/node/progressive-transcript.ts` also covers
@@ -47,7 +55,10 @@ bridge-only restart.
   (`DirectHistoryPageCache`) serves provider pages for v2 bridges, and
   OpenCode pages in-process through `OpenCodeProvider.transcriptPage`.
   Providers without page routes use the joined sync-v1 path, which refreshes
-  and fingerprints the retained projection before it serves a page.
+  and fingerprints the retained projection before it serves a page. So does
+  the renderer when the progressive view carries no direct cursor: Load
+  earlier messages mints its first cursor from the sync-v1 projection, which
+  mints only v1 cursors ([0232](0232-direct-history-cursor-minting.md)).
 - Workflows. Progress probes read a conditional window of the newest
   `PROGRESS_TRANSCRIPT_WINDOW_MESSAGES` (8) messages through
   `readTranscriptProgressSample` (`apps/backend/src/core/transcript-progress.ts`).
@@ -82,7 +93,8 @@ bridge-only restart.
   (`native-agent-progressive-metrics.ts`) splits transcript, direct-page,
   state and discovery reads into source, normalise and scheduler-wait phases.
   `e2e/perf/rich-transcripts-perf.ts --retained-mib N` profiles a large
-  retained history in real Chrome. `scripts/codex-parent-exit-live.ts` and
+  retained history in real Chrome, and `e2e/perf/hidden-resume-perf.ts` the
+  same page hidden and resumed (no Playwright page can be hidden). `scripts/codex-parent-exit-live.ts` and
   `scripts/activity-sweep-live.ts` repeat the live parent-death and sweep runs.
 - Codex rows. A row opens per model response, using app-server's
   per-response usage report as well as reasoning or messages after a call.
@@ -140,19 +152,49 @@ bridge-only restart.
      1 ms for a 50 ms synchronous block. Like wall-clock time, these are
      machine-specific and never compared. See
      [efficiency-harness.md](../../development/efficiency-harness.md).
-3. **Window decided (2026-10-24): the older-bridge fallbacks may be
-   retired under 0034's published-release support window.** The floor is
-   v2.21.0 today ([version-compatibility.md](../../architecture/version-compatibility.md)).
-   Every bridge in that release has `/transcript` (#670) and the v2 contract
-   (#875), so the whole `/messages` fallback and joined sync-v1 bridge history
-   path serve only unpublished builds outside the window. Before removing the
-   joined path, confirm that no in-process provider still pages through it.
+3. **Checked (2026-10-26): neither older-bridge path can retire yet; the
+   bridge half that lets the `/messages` fallback retire is done.** The
+   2026-10-24 reading was that both served only bridges outside the support
+   window (floor v2.21.0, [version-compatibility.md](../../architecture/version-compatibility.md)).
+   The required check found otherwise for both:
+   - **The `/messages` fallback** (`readHttpBridgeTranscriptSnapshot`) runs on
+     any 404 or 405 from `/transcript`. Every Claude bridge to date, v2.21.0
+     included, answered that route with `peekSession` only, so after a bridge
+     restart a persisted session not yet resident answered 404, and only the
+     fallback's `/messages` read (`resolveSession` →
+     `ensurePersistedSession`) loaded it. Codex, Cursor, Pi and ACP look a
+     session up the same way on both routes, so their 404 already meant
+     missing. Done in this change:
+     - Claude's summary route now loads such a session first (through the
+       same `resolveSession` as `/messages`), serves its preview and starts
+       hydration in the background, so its 404 means the session does not
+       exist. Covered by `the summary route materializes a persisted session,
+       serves its preview, then hydrates` in
+       `bridges/claude-bridge/src/services/session-manager-transcript-v2.test.ts`,
+       which fails with 404 on the old route.
+     - The backend counts `bridge-transcript.messages-fallback` only when
+       `/messages` served the session. Both routes answering 404 is a missing
+       session, answered with an empty, complete snapshot as before
+       (`compatibility-path-recording.test.ts`).
+     - The register row now reads: retire when the floor is at or above the
+       first Stable release whose Claude bridge has this change. The
+       fallback itself stays until then.
+   - **Joined `sync-v1` paging** is not only for bridges without page
+     routes. No in-process provider needs it (OpenCode pages directly), but
+     the renderer does: when the progressive view has no direct cursor,
+     `loadEarlierMessages` mints one from the `sync-v1` projection, which
+     reads the whole transcript and mints only v1 cursors, so v2 bridges and
+     OpenCode page through the joined copy too. Pinned by `a pageable
+     provider's sync-v1 projection still mints a joined v1 cursor` in
+     `native-agent-service-summary-transcripts.test.ts`. Renderers in the
+     window take the same path, so retiring it needs renderer work first; that
+     is new work in [0232](0232-direct-history-cursor-minting.md), which now
+     owns the register row.
 
-   Both implementations remain pending that retirement work. Main now counts
-   their use through `bridge-transcript.messages-fallback` and
-   `history.joined-v1-page`. The earlier decision to retain them pending a
-   support-window agreement is superseded by 0034's decision; the existing
-   legacy-route and sync-v1 tests still cover their current behavior.
+   Left in this item: removing the `/messages` fallback once the floor passes
+   the first Stable release with the Claude change, after checking its counter
+   on the machines you can reach. `/messages` itself stays: bounded
+   `messages({ limit })` reads and the `sync-v1` refresh use it.
 4. **Done (2026-10-24): Codex has a per-response row boundary.** app-server
    sends `thread/tokenUsage/updated` once per Responses API completion,
    tool-only responses included. A probe of the pinned 0.164.0 showed one
@@ -226,8 +268,10 @@ bridge-only restart.
 
    The one long task (73 to 76 ms) is the first open of the transcript. So
    immutable retained pages, split subscriptions and revisioned indexes would
-   remove no measured latency. If the still-open hidden-document measurement
-   below shows a resume cost, that goes in a new file.
+   remove no measured latency. The hidden-document measurement ran on
+   2026-10-26 (results below) and showed no resume cost either: no long task
+   in the 3 s after a page hidden for 10 s to 5 min came back, with updates
+   arriving at full rate while it was hidden.
 8. **Closed (2026-10-24): bridge-to-backend part deltas are not justified.**
    Measured with workloads `e` and `j` on this node. A changed read of a
    100-message window sends the whole v2 summary over the bridge hop: 219,127
@@ -265,17 +309,32 @@ Done on 2026-10-24 (results below):
 - Display-tail cost and the maximum checkpoint age with workload `d`.
 - Codex parent-death detection and shutdown (Code item 6).
 
+Done on 2026-10-26 (results below): a truly hidden and resumed document at
+an 8 MiB retained history, with `e2e/perf/hidden-resume-perf.ts`.
+
 Still open:
 
 - A Cursor run long enough to reach the producer trim thresholds while its
   environment is inactive; return and check the bounded window, sub-agent
-  lifecycle and controls. Not run on 2026-10-24. Cursor is signed in on
-  mbp3, but the production threshold is `MAX_TRANSCRIPT_BYTES` (16 MiB minus
-  128 KiB, or 2,000 messages) in `bridges/cursor-bridge/src/config.ts`.
-  Reaching it takes a far longer turn than a qualification run, and none was
-  budgeted. The cheaper route is `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES`, which
-  can lower it to 256 KiB, but that needs the variable passed through to the
-  profile's bridge spawn.
+  lifecycle and controls. Not run on 2026-10-24 or 2026-10-26. The
+  production threshold is `MAX_TRANSCRIPT_BYTES` (16 MiB minus 128 KiB, or
+  2,000 messages) in `bridges/cursor-bridge/src/config.ts`, far past a
+  qualification turn. `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` lowers it (to
+  256 KiB at least), and since 2026-10-26 an agent-test profile passes it
+  through: it is on the backend's allowlist (`AGENT_TEST_SAFE_ENV_NAMES` in
+  `apps/desktop/electron/backend-process.ts`, covered in
+  `apps/desktop/tests/backend-process.test.ts`), and local bridges inherit
+  the backend's environment. To run it: rebuild the Cursor bridge
+  (`bun run --cwd bridges/cursor-bridge build`), start
+  `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 mise run dev:test --profile
+  qa-0050-cursor --fixture --credential-source cursor --agent-platforms
+  cursor`, sign in with `mise run dev:login --profile qa-0050-cursor`, give
+  a Cursor tab a prompt that reads a chain of 20 KB files with a sub-agent
+  for part of it, switch to another environment for the turn, and on return
+  check `/runtime-health` `transcriptBounds`, the
+  `truncated` window and its history pages, the sub-agent card and the stop
+  and steer controls. Still owed: it is a paid provider run, and no Cursor
+  live spec exists yet to drive it.
 - Hit the pre-acceptance build-pipeline dispatch window live. In the
   2026-10-21 cold-restart runs the backend was killed while the prompt was
   journaled (`pendingPromptAttempt`), but each time the provider already
@@ -286,13 +345,85 @@ Still open:
   dispatch route is its own change.
 - Electron window and Docker environments with real providers; native iOS
   only where the wrapper changes.
-- A truly hidden and resumed document at an 8 MiB retained history. Headless
-  Chrome kept a page `visible` behind another tab, when minimized and under
-  `Page.setWebLifecycleState` freezing (its timers kept running), so only
-  `--headed` or Electron can measure it.
 - A mounted tab with retained history across a bridge-only restart (Code
   item 5): no duplicate rows and the reader's place kept, through the one
   re-key that remains.
+
+## Qualification results (2026-10-26): hidden document at 8 MiB
+
+Run on node mbp3 (Apple M5 Max, macOS arm64, Bun 1.4.4) on `930189337` plus
+this change, in Google Chrome 155.0.8059.85, with other workspaces loading the
+host (load average 20 to 159), so timings are upper bounds. Reports are in
+`output/benchmarks/hidden-resume/` (untracked).
+
+First, why the 2026-10-24 plan (`--headed`) could not work. Probes on the
+same Chrome showed that a page with any DevTools session attached stays
+`visible`, timers at full rate (about 100 ticks of a 50 ms interval in 5 s),
+when it is behind another tab, when its window is minimized (CDP
+`Browser.setWindowBounds` reported `minimized`), with Playwright's three
+background flags removed through `ignoreDefaultArgs`, and with focus emulation
+off, headed or not, and also in a Chrome launched without Playwright once
+Playwright attached over CDP. The same page with no page session went
+`hidden` on the minimize, its timer dropped to one tick a second, and it
+went `visible` again on restore. Every Playwright page has a session, so no Playwright run can measure
+a hidden document.
+
+`mise exec -- bun e2e/perf/hidden-resume-perf.ts --runs 3 --hidden-seconds
+10,60`, then 5-minute runs (`--hidden-seconds 300`), as described in
+[rich-transcripts.md](../../architecture/rich-transcripts.md#performance-gate):
+the `/rich-transcript-perf` fixture at `?retainedMiB=8` (3,001 messages,
+8.0 MiB encoded), scrolled to its tail with a response streaming 12
+characters a tick, minimized and restored through the browser target only.
+`timer` is the fixture's own 50 ms interval; `network` ticks it from a
+server-sent event every 50 ms, as a backend's updates arrive.
+
+| Stream, hidden for | Runs hidden | Ticks while hidden | Next frame after shown | Long tasks in the 3 s after | Long animation frames (blocking) | JS heap before / after |
+| --- | --- | --- | --- | --- | --- | --- |
+| timer, 10 s | 3 of 3 | 1 to 11 | 1.2 to 2.2 ms | 0 | none | 31.8 to 32.0 / 26.7 to 27.8 MiB |
+| timer, 60 s | 3 of 3 | 52 to 60 | 1.2 to 1.5 ms | 0 | one 53 ms frame, 0 ms blocking | 24.7 to 31.7 / 21.0 to 23.7 MiB |
+| network, 10 s | 3 of 3 | 199 to 204 | 7.6 to 12.2 ms | 0 | none | 31.3 to 31.7 / 20.5 to 35.9 MiB |
+| network, 60 s | 3 of 3 | 1,155 to 1,169 | 0.5 to 1.0 ms | 0 | none | 31.0 to 32.4 / 26.7 to 28.6 MiB |
+| timer, 5 min | 1 of 1 | 64 | 3.7 ms | 0 | not kept (see below) | not kept |
+| network, 5 min | 3 of 3 | 5,724 to 5,827 | 0.4 to 0.5 ms | 0 | none | 31.3 to 32.8 / 26.1 to 30.6 MiB |
+
+The first 5-minute network attempt, before the probe had diagnostics, sent
+no report within 33 s of the restore. The harness then threw, which also lost
+the report of the timer run before it (its printed line is the row above). The
+probe now reports at once on `visibilitychange` and every 400 updates while
+hidden, waits 180 s, and keeps whatever arrived. Three reruns with it
+reported 3.56 to 3.60 s after the restore (the 3 s window plus the post), all
+14 progress reports arrived while hidden, and the load average reached 159.
+The first miss did not recur and its cause is unknown.
+
+So a hidden document at 8 MiB pays nothing measurable on return: while hidden
+the network stream kept its full rate (about 20 updates a second, each
+re-deriving rows over the whole array), and the shown page reached its next
+frame within 13 ms with no long task. The JS heap did not grow across the
+hide. Like item 7's gate, the fixture renders the shell from an array; it does
+not run `useNativeAgentSession`'s retained-page join or the projection
+store's subscriptions (workload `g` covers their accounting), and it was not
+an Electron window.
+
+### Validation (2026-10-26)
+
+`mise run format:check`, `mise run lint` (no findings in changed files) and
+`mise run typecheck` passed. Focused suites passed: the Claude bridge suite
+(`bun test --cwd bridges/claude-bridge --parallel=4`), the backend
+compatibility-path, summary-transcript, v2-transcript and projection-sync
+tests (51 tests), `apps/desktop/tests/backend-process.test.ts`,
+`tests/unit/mise-tasks.test.ts` and `tests/unit/flaky-tests-index.test.ts`.
+
+`env -u PORT mise run test` (890 s) passed the workspace, bridges and
+protocol groups. The root group failed three cases, none from this change:
+- `firewall-policy.test.ts`'s root-entrypoint case at the five-second budget,
+  a recurrence of [0632](../../tests/flaky-tests/environments-and-containers/0632-firewall-policy-probe-budget.md);
+  the owner passed alone (43.0 s), and failed again in a root-only rerun under
+  the same host load;
+- `disk-report.test.ts`, a recurrence of
+  [0259](../../tests/flaky-tests/environments-and-containers/0259-disk-report-aggregate-timeout.md);
+  the owner passed alone (1.9 s) and in the root-only rerun;
+- the flake-register test, because flake 0887's case file on `main` lacked
+  its `- **ID:**` and `- **Status:**` lines; fixed in this change.
 
 ## Qualification results (2026-10-24)
 
@@ -767,9 +898,8 @@ considered, the choice, and why.
    - Current decision after merging 0034 (2026-10-24): the v2.21.0 floor
      allows both older-bridge paths to be retired; no supported bridge needs
      them. Main also supplies their content-free use counters.
-   - Remaining work: check that no in-process provider still uses joined
-     sync-v1 paging, then retire the eligible paths as described in code
-     item 3. Both implementations remain until that work is complete.
+   - Superseded on 2026-10-26 by decisions 12 and 13: the check found that
+     neither path serves only bridges outside the window.
 6. **Progressive metrics (item 2).**
    - Options: one shared 256-sample ring; a ring per domain. For discovery:
      time the view read, the provider jobs, or both.
@@ -824,6 +954,87 @@ considered, the choice, and why.
       are unaffected.
     - Code mode is the default Codex tool surface (every probe call was a
       code-mode `exec`).
+
+Made on 2026-10-26 while re-checking item 3 and running the hidden-document
+measurement.
+
+12. **The `/messages` fallback (item 3).**
+    - Options: (a) retire it now, reading a `/transcript` 404 as a missing
+      session; (b) keep it unchanged; (c) keep it, and make Claude's summary
+      route load a persisted session itself so the fallback can retire once
+      the window passes that bridge; (d) keep it and tell the two 404s apart
+      by body shape.
+    - Chosen: (c), with the counter recorded only when `/messages` served the
+      session.
+    - Why: (a) would show an empty, complete transcript for every Claude
+      session read after a bridge restart until something else loaded it, on
+      every Claude bridge in the window. (b) never ends. (d) is shape
+      sniffing on an error body, which the compatibility rules avoid. Loading
+      the session on the summary route does what the backend's fallback
+      already did (the same `resolveSession`), but serves the cheap preview and
+      hydrates in the background instead of one whole `/messages` read.
+    - Pros: the retirement condition becomes a release, not a guess; a
+      restarted Claude bridge answers its first read with a preview instead of
+      a whole transcript; the counter no longer counts missing sessions.
+    - Cons: the summary route is now async and may touch disk for an unknown
+      bridge id (as `/messages` already did for the same read); older Claude
+      bridges keep costing a whole read until they leave the window; the
+      counter still cannot tell an older Claude bridge from a pre-#670 one.
+13. **Joined `sync-v1` paging (item 3).**
+    - Options: (a) retire it now; (b) make the `sync-v1` projection or the
+      renderer mint direct cursors in this change; (c) record the finding,
+      pin it with a test, and move the work to a new file.
+    - Chosen: (c), as [0232](0232-direct-history-cursor-minting.md).
+    - Why: the current renderer and every renderer in the window mint their
+      first cursor through it, so (a) would break Load earlier messages for
+      every provider. (b) changes the renderer's paging state machine and the
+      held-place logic, needs its own measurement of how often the progressive
+      view lacks a direct cursor, and is new work, which the README puts in a
+      new file.
+    - Pros: no behaviour change; the evidence is a test, not a reading; the
+      register names the real condition.
+    - Cons: a click on Load earlier messages without a direct cursor still
+      costs a whole transcript read until 0232 lands.
+14. **Hidden-document measurement method.**
+    - Options: Playwright `--headed` (what this file said would work); headed
+      plus Chrome's default backgrounding; minimizing through CDP; launching
+      Chrome without Playwright and attaching only to the browser target;
+      Electron.
+    - Chosen: the last but one, as `e2e/perf/hidden-resume-perf.ts`, over the
+      same fixture, with a probe injected by a local proxy and a
+      network-driven stream.
+    - Why: probes on 2026-10-26 (Chrome 155) showed that a page with any
+      DevTools session attached stays `visible`, timers at full rate, when
+      covered, minimized or with Playwright's background flags and focus
+      emulation removed, headed or not. The same page with no page session
+      went `hidden` on minimize and its timers dropped to one a second. Electron
+      would need its own driver and adds nothing for this question: its window
+      keeps Chrome's default throttling. The fixture's stream is a timer,
+      which Chrome throttles while hidden, so the `network` driver ticks it
+      from a server-sent event, as a real backend's updates arrive.
+    - Pros: a truly hidden document, measured by the page itself; reuses the
+      gate's fixture, retained-size padding and stream rate.
+    - Cons: a Chrome window appears on screen; macOS and installed Chrome
+      only as written; like the gate, it renders the shell from an array and
+      not `useNativeAgentSession`'s join or the projection store.
+15. **Cursor trim-threshold qualification.**
+    - Options: run with the production 16 MiB threshold; pass
+      `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` through the agent-test allowlist;
+      add a profile flag for it.
+    - Chosen: the allowlist entry.
+    - Why: the backend already hands local bridges its whole environment;
+      only the agent-test allowlist dropped the variable. It is a size the
+      bridge bounds to its reviewed cap, never a credential, like the other
+      policy switches on that list.
+    - Pros: a one-line, tested change; no new flag.
+    - Cons: the run itself is still owed (paid provider, no spec); a
+      container bridge does not inherit it.
+16. **Live runs not done here.** The Cursor run, the pre-acceptance dispatch
+    window (it needs a bridge fault hook, its own change), Electron and Docker
+    with real providers, and the mounted tab across a bridge-only restart
+    stay open with the steps above. None was run on 2026-10-26: each needs a
+    paid provider turn or a platform run that 0031 batches, and the dispatch
+    window also needs the hook first.
 
 ## Constraints and rationale
 
@@ -923,6 +1134,8 @@ All three checked on 2026-10-24.
   container file-tree watcher deferred from the file-tree cache work.
 - [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md): retiring
   the sync-v1 fallback.
+- [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
+  the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).
 - `../architecture/storage.md` (display tails, pipeline transcripts),
   `../architecture/agent-engines.md` (OpenCode history paging), `AGENTS.md`
   (v2 route, batch activity and Cursor bound invariants).

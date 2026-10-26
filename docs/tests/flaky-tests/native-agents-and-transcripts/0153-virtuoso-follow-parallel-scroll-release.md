@@ -87,3 +87,22 @@ No follow implementation, assertion, timeout or skip changed.
   Repository and isolated application validation were active during the
   aggregate. Host contention remains a hypothesis; no owning spec, assertion,
   timeout or skip changed.
+
+## Recurrence on 2026-10-26 (todo 0035 validation)
+
+`mise run test:logged -- --name browser -- mise run test:browser` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` (head `87a6751fd`; it does not
+touch transcripts), at a host load average of about 40, failed in
+`desktop-chromium`: `expect(locator).toHaveText("auto")` received `"false"`.
+The unchanged owner passed both projects in
+`mise run test:logged -- --name browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/CloseRetention.spec.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/owners-0035`.
+See [0963](../web-ui/0963-close-retention-cursor-cases-under-load.md) for
+that run's other result. Evidence: `orkestrator-test-run.sKTHlZ/`. No
+assertion, timeout or skip changed.
+
+## Hidden-resume review recurrence — 2026-10-26
+
+- **Failure:** Desktop `a small wheel release stays unfollowed through growth inside the bottom band` retained `false` instead of `auto` at five seconds.
+- **Complete unchanged owner:** `mise run test:logged -- --name follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/resume-follow-owner` passed (4.2 s logged).
+- **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
+- **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.

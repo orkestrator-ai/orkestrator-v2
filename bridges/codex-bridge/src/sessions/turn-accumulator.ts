@@ -25,6 +25,7 @@ import {
   resolveTranscriptToolOutputState,
   stringifyTranscriptToolOutput,
 } from "../subagent-transcript.js";
+import { turnFailureItemId, turnFailureText } from "../messages/turn-failure.js";
 
 export type TurnPhase =
   | "starting"
@@ -618,6 +619,22 @@ export class TurnAccumulator {
     for (const accumulator of this.items.values()) {
       if (!accumulator.completed && !accumulator.interrupted) this.touch(accumulator);
     }
+  }
+
+  /**
+   * The provider failed the turn (app-server's `turn/completed` with
+   * `status: "failed"`): say why on the turn's last row
+   * (`messages/turn-failure.ts`). Only for that report; the bridge's own
+   * verdicts (a structured result it rejected, a lost rebind) have their own
+   * presentation.
+   */
+  recordProviderFailure(error: EngineError): void {
+    this.onItemCompleted({
+      id: turnFailureItemId(this.turnId),
+      type: "status",
+      text: turnFailureText(error.message),
+      severity: "error",
+    });
   }
 
   /**

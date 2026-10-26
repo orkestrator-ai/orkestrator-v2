@@ -229,7 +229,8 @@ every backend-only host, then restart the service.
 - **The managed `claude` does not update itself.** Host processes running it get
   `CLAUDE_PINNED_RUNTIME_ENV` (`DISABLE_AUTOUPDATER=1`, with
   `FORCE_AUTOUPDATE_PLUGINS=1` so the user's plugins still update). A `claude` on
-  PATH is left alone.
+  PATH is left alone. The container image sets the same two variables
+  (`docker/Dockerfile`), so container Claude stays on `CLAUDE_CLI_VERSION`.
 
 ### Container environments
 
@@ -1109,7 +1110,14 @@ Dockerfile pins the same archive digests the manifest does.
 6. Review `src/models.ts` against `Model` and `ThinkingLevel`. A new thinking
    level that is not in `THINKING_LEVELS` is simply never offered. Remember the
    rule is asymmetric: `xhigh` and `max` need an *explicit* mapping, while every
-   other level is included unless mapped to `null`.
+   other level is included unless mapped to `null`. Also recheck the ChatGPT
+   login fallback (`chatGptLoginModelIds`): it reads the `openai-codex`
+   provider's built-in catalogue as the list a ChatGPT login runs, newest id
+   last, and relies on `ModelRuntime.isUsingSubscription`. The "ChatGPT login
+   fallback against the pinned SDK" tests in `src/models.test.ts` fail if the
+   catalogue stops starting on `openai/gpt-4`, stops covering the backend's
+   ids, or the pick moves off `gpt-6.1-sol`; a moved pick is fine only if
+   Pi's own `defaultModelPerProvider["openai-codex"]` moved with it.
 7. Re-verify the three SDK behaviours the bridge depends on, in
    `dist/core/agent-session.js`, rather than trusting the version in a comment:
 

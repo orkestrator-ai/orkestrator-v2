@@ -77,7 +77,9 @@ export function MobileAppShellLayout({
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocusRef = useRef(false);
   const restoreToolsFocusRef = useRef(false);
-  const restoreFocusAfterAppDialogRef = useRef(false);
+  const appDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
+  /** Bumped when a shell-requested dialog closes; the trigger takes focus after that commit. */
+  const [appDialogFocusReturn, setAppDialogFocusReturn] = useState(0);
   const titleUsesNativeDragRegion = usesNativeWindowDragRegion();
 
   const handleSidebarOpenChange = (open: boolean) => {
@@ -111,31 +113,45 @@ export function MobileAppShellLayout({
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
 
+  const toolsOpenRef = useRef(toolsOpen);
+  useEffect(() => {
+    toolsOpenRef.current = toolsOpen;
+  }, [toolsOpen]);
+
   const sidebarOpenRef = useRef(sidebarOpen);
   useEffect(() => {
     sidebarOpenRef.current = sidebarOpen;
   }, [sidebarOpen]);
 
-  // A dialog requested from a drawer row renders in `AppDialogHost`, outside
-  // the drawer. The drawer gives way to it: left open, it would keep the
-  // dialog behind its modal layer. The dialog takes focus as it opens, so the
-  // closing drawer must not pull focus back to its trigger; the trigger gets it
-  // once the dialog closes, standing in for the row that opened it.
+  // App dialogs render outside both mobile surfaces. Collapse the originating
+  // surface without stealing focus, then restore its trigger after the commit
+  // that unmounts the dialog and its focus trap (including cached lazy dialogs).
   useEffect(
     () =>
       useAppDialogStore.subscribe((state, previous) => {
         if (state.request && !previous.request) {
-          if (!sidebarOpenRef.current) return;
-          restoreSidebarFocusRef.current = false;
-          restoreFocusAfterAppDialogRef.current = true;
-          setSidebarOpen(false);
-        } else if (!state.request && previous.request && restoreFocusAfterAppDialogRef.current) {
-          restoreFocusAfterAppDialogRef.current = false;
-          sidebarTriggerRef.current?.focus();
+          if (sidebarOpenRef.current) {
+            appDialogOpenerRef.current = sidebarTriggerRef.current;
+            restoreSidebarFocusRef.current = false;
+            setSidebarOpen(false);
+          } else if (toolsOpenRef.current) {
+            appDialogOpenerRef.current = toolsTriggerRef.current;
+            restoreToolsFocusRef.current = false;
+            setToolsOpen(false);
+          }
+        } else if (!state.request && previous.request && appDialogOpenerRef.current) {
+          setAppDialogFocusReturn((count) => count + 1);
         }
       }),
     [],
   );
+
+  useEffect(() => {
+    if (appDialogFocusReturn > 0) {
+      appDialogOpenerRef.current?.focus();
+      appDialogOpenerRef.current = null;
+    }
+  }, [appDialogFocusReturn]);
 
   // Realm dialogs live in another document and never update the local dialog
   // store. Yield on each request even when local selection was already empty.

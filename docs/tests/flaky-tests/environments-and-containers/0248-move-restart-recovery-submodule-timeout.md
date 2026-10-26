@@ -344,6 +344,28 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Aggregate evidence:** `orkestrator-test-run.VrI5KW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` (enclosing log `orkestrator-test-run.JFzi7O/full-0048.log.gz`) under the host temporary directory. Backend 11433 passed, 89 skipped and 4 failed across 11526 tests in 680 files (872.95 s); web 9760 passed; root/support, bridges and the Codex protocol lockfile passed. Test groups finished in 942.4 s; the run exited 1.
 - **Assessment:** the host load average was 50 to 55 from other worktrees' suites throughout, so this observation cannot separate load from a defect; it adds to the existing evidence that these submodule fixtures exceed five seconds under heavy load. No environment-move code, assertion, deadline or skip changed.
 
+
+## Mobile settings review-fix validation — 2026-10-26
+
+The review-fix `mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` used workspace/root/bridges/protocol
+allocations of 4/1/2/1, with two backend workers. Backend finished with 11762
+passed, 97 skipped and four failed across 703 files (636.58 s); the aggregate
+finished in 654.9 s. Web passed 9834 tests. Aggregate evidence is
+`orkestrator-test-run.x766cu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. The change touches no backend implementation
+or backend tests.
+
+The restart-recovery submodule case timed out at 5024.53 ms. The complete
+unchanged owner also failed alone:
+
+`mise run test:logged -- --name backend-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+
+Result: 36 passed, one failed at 5028.11 ms, one between-tests error from a
+terminated `git submodule status --recursive` child, 46.4 s logged. Evidence:
+`orkestrator-test-run.68yelP`. The existing case stays open; no assertion,
+timeout, skip or environment-move implementation changed.
+
 ## Todo 0166 validation — 2026-10-26
 
 - **Original command:** `mise run test` (full suite) on `todo-0166-opencode-attach-prompt-0d17ce147985` at `ce1d6890e` (OpenCode attachment MIME and dispatch-failure outcome, CLI scenario toolchain install; no terminal, environment-move or shell-completion code changed), macOS 27.0 arm64, Bun 1.4.4, host load average 22 to 36 from other worktrees.
@@ -353,3 +375,10 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Evidence:** `orkestrator-test-run.fcOpb4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Changes:** recorded recurrence only; no test, timeout, assertion or skip changed.
 
+## Live terminal cleanup validation recurrence — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name terminal-signal-repository -- mise run test`, Bun 1.4.4, standard worker leases. Workspace admission waited 132.8 seconds for shared host capacity. The change only edits the live terminal E2E spec; the move implementation and its tests are unchanged.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline (5043.76 ms), followed by a Git subprocess error between tests (`could not read IPC response`, unavailable config blob and submodule mapping).
+- **Complete unchanged owner:** `mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed, exit 0 in 32.0 seconds.
+- **Evidence:** `orkestrator-test-run.zbtDAc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; enclosing log `orkestrator-test-run.3FhzyC/terminal-signal-repository.log.gz`. Backend 11197 passed, 95 skipped, two failed and one between-test error across 655 files (367.97 s). The other failure is [0091](0091-startworktreewatcher-observes-a-real-file-write.md); all other groups and workspace packages passed. The aggregate exited 1 after 549.1 seconds.
+- **Changes:** recorded recurrence only; no move code, assertions, deadlines or skips changed. The original aggregate remains failed.

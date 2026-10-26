@@ -124,6 +124,12 @@ export interface InputSourceRoots {
   /** Agent-test profiles read credentials from isolated locations. */
   agentTest: boolean;
   agentTestHostHome?: string;
+  /**
+   * Agent-test only: the Grok home holding the run's own restricted login,
+   * `GROK_HOME` (a CLI scenario's disposable copy) or else `$HOME/.grok` (a
+   * `dev:test` profile's isolated HOME). See {@link grokStagingHome}.
+   */
+  grokHome?: string;
   claudeConfigDir?: string;
   codexHome?: string;
   xdgConfigHome?: string;
@@ -150,12 +156,41 @@ export function defaultInputSourceRoots(
     home: os.homedir(),
     agentTest,
     agentTestHostHome: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim() || undefined,
+    // `HOME`, not `os.homedir()`: Bun reads the latter once at startup.
+    ...(agentTest
+      ? {
+          grokHome:
+            process.env.GROK_HOME?.trim() ||
+            path.join(process.env.HOME?.trim() || os.homedir(), ".grok"),
+        }
+      : {}),
     claudeConfigDir: process.env[claudeConfigDirEnv]?.trim() || undefined,
     codexHome: process.env.CODEX_HOME?.trim() || undefined,
     xdgConfigHome: process.env.XDG_CONFIG_HOME?.trim() || undefined,
     xdgDataHome: process.env.XDG_DATA_HOME?.trim() || undefined,
     xdgStateHome: process.env.XDG_STATE_HOME?.trim() || undefined,
   };
+}
+
+/**
+ * Where Grok's home is staged from. Outside agent-test it is the user's
+ * `~/.grok`. An agent-test run has its own restricted login, and that is the
+ * one a container must get: a `dev:test` profile keeps it in its isolated
+ * HOME (where its local Grok reads it) and a CLI scenario in `GROK_HOME`
+ * (`InputSourceRoots.grokHome`). Staging the real host's `~/.grok` instead
+ * handed containers a login the run never authorized in that form and ignored
+ * a disposable copy. Grok's `.config/grok` is read beside the home it uses.
+ */
+export function grokStagingHome(roots: InputSourceRoots): string {
+  if (roots.agentTest && roots.grokHome) return roots.grokHome;
+  const hostHome =
+    roots.agentTest && roots.agentTestHostHome ? roots.agentTestHostHome : roots.home;
+  return path.join(hostHome, ".grok");
+}
+
+/** Grok's `.config/grok`, beside {@link grokStagingHome}. */
+export function grokStagingConfig(roots: InputSourceRoots): string {
+  return path.join(path.dirname(grokStagingHome(roots)), ".config", "grok");
 }
 
 /**
@@ -308,7 +343,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
         {
           stage: "grok-home",
           target: "/grok-home",
-          root: path.join(hostHome, ".grok"),
+          root: grokStagingHome(roots),
           files: [
             "xai-api-key",
             "auth.json",
@@ -326,7 +361,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
         {
           stage: "grok-config",
           target: "/grok-config",
-          root: path.join(hostHome, ".config", "grok"),
+          root: grokStagingConfig(roots),
           directories: [{ path: ".", mode: "tree" }],
         },
       ],

@@ -20,3 +20,8 @@ The nine-worker `mise run test:browser` run repeated failures in this owner; the
 - **Disposition:** open.
 - **Evidence:** two observations, both in nine-worker browser suites (the second had 89 failures). The owner passes with one worker.
 - **Next step:** on recurrence, read the trace to see whether the 30 s went to fixture startup or to the assertion. If it was startup, fold this case into [0382](0382-component-browser-parallel-load.md).
+
+
+## Shared Codex state review fixes — 2026-10-26
+
+Both mobile cases reached 30 seconds again in the nine-worker component browser suite on `74841142b`. The complete unchanged owner passed all four cases with one worker in 69.3 s: `ORKESTRATOR_E2E_PORT=62459 mise run test:logged -- --name codex-auth-owner-agentusage -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1 --output output/playwright/codex-auth-owner-agentusage`. The repository suite and other browser checks were running concurrently. Original command, suite evidence and broader results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md); no cause or fix is established.

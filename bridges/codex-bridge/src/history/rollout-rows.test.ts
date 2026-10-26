@@ -82,6 +82,49 @@ async function writeRollouts(records: object[]): Promise<void> {
 }
 
 describe("rollout rows", () => {
+  test("a turn the provider refused reloads with its reason, as it showed live", async () => {
+    const refusal = "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.";
+    await writeRollouts([
+      { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+      { timestamp: at(0), type: "turn_context", payload: { turn_id: "turn-1" } },
+      message(1, "user", "Reply with only OK."),
+      {
+        timestamp: at(2),
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          turn_id: "turn-1",
+          last_agent_message: null,
+          error: {
+            message: JSON.stringify({
+              type: "error",
+              status: 400,
+              error: { type: "invalid_request_error", message: refusal, code: "model_not_found" },
+            }),
+            codex_error_info: "other",
+          },
+        },
+      },
+      // A turn that completed has no error and gains nothing.
+      { timestamp: at(3), type: "turn_context", payload: { turn_id: "turn-2" } },
+      message(4, "user", "Again"),
+      message(5, "assistant", "OK"),
+      {
+        timestamp: at(6),
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-2" },
+      },
+    ]);
+
+    const rows = (await hydrateMessagesFromPersistedSession("steps")).messages;
+    expect(rows.map((row) => [row.role, row.turnId, row.parts])).toEqual([
+      ["user", "turn-1", [{ type: "text", content: "Reply with only OK." }]],
+      ["assistant", "turn-1", [{ type: "status", severity: "error", content: refusal }]],
+      ["user", "turn-2", [{ type: "text", content: "Again" }]],
+      ["assistant", "turn-2", [{ type: "text", content: "OK" }]],
+    ]);
+  });
+
   test("a turn reloads as one row per model response, as it streamed", async () => {
     await writeRollouts([
       { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },

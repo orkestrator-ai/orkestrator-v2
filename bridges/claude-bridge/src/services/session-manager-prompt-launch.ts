@@ -134,6 +134,9 @@ function endClaudeRuntime(
     session.status = "error";
     session.error = claudeProcessKilledMessage(killedBy);
     session.interruption = "restart";
+    // The latest turn the SDK took, which is what the mark names after a
+    // bridge restart too.
+    session.interruptedRequestId = session.turnInFlightRequestId;
     session.turnStartedAt = undefined;
     session.abortController = undefined;
     session.completionBlockedByBackgroundTasks = false;
@@ -352,7 +355,7 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
   session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
   turn.queryStarted = true;
   // From here a restart cuts the turn short rather than losing it unsent.
-  syncTurnInFlightMark(session, { started: true });
+  syncTurnInFlightMark(session, { started: true, requestId: turn.dispatchRequestId });
   testHooks?.onQueryStarted?.();
   // One control read per turn, off the message path, so the inventory a
   // selected command is validated against is the session's own.

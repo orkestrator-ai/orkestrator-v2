@@ -773,8 +773,13 @@ chmod 700 "$HOME/.claude"
 # load these user settings too, and a zero-turn probe fires UserPromptSubmit
 # without a matching Stop, so they must not write the state file.
 # env section sets BASH_MAX_OUTPUT_LENGTH to increase output limit for code reviews
+# skipDangerousModePermissionPrompt records the bypass-mode consent where
+# current Claude Code reads it (2.1.309 ignores ~/.claude.json's legacy
+# bypassPermissionsModeAccepted); without it terminal Claude stops at the
+# consent dialog on every container start, because this file is rewritten.
 cat > "$HOME/.claude/settings.json" << 'EOF'
 {
+  "skipDangerousModePermissionPrompt": true,
   "permissions": {
     "allow": [],
     "deny": [],

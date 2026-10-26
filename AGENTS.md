@@ -843,6 +843,11 @@ When touching any of them:
   `/transcript/detail` and `/transcript/page`, all built from one per-bridge
   read source via `bridge-transcript-routes`. Detail/page answer an unknown
   session 200 `missing`/`expired`, never 404; absent `version` stays v1.
+  The summary route's 404 must mean the session does not exist: load a
+  persisted session that is not resident before answering, as `/messages`
+  does (Claude materializes it). Older Claude bridges did not, which is why
+  the backend's `/messages` fallback stays until the support window passes
+  them ([version-compatibility.md](docs/architecture/version-compatibility.md#register)).
 
 ### Native slash commands
 

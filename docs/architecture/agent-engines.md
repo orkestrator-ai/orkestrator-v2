@@ -577,6 +577,27 @@ rewritten (`OpenCodeStreamState.markGap`/`verifyGap`), not on every reconnect.
 Messages changed in place are noted in the stream state, and those before the
 window travel as `revisedMessages`.
 
+**Undo hides a turn OpenCode still holds.** OpenCode 1.19 does not delete a
+reverted turn: `session.revert` records `Session.revert = { messageID,
+partID?, snapshot, diff }` and keeps every message, `session.unrevert` clears
+it, and only the next prompt deletes the covered messages
+(`SessionRevert.cleanup`: a `message.removed` for each, then a
+`session.updated` without the marker). The transcript snapshot, history pages,
+revised rows and the joined `interactiveSnapshot` therefore drop what the
+marker covers (`opencode-revert.ts`), following `cleanup` exactly: every
+message from `messageID` on, and with a `partID` only that message's parts
+from the part on. A read that does not hold the target compares ids, which
+OpenCode mints ascending, as its TUI does. Nothing is deleted on the backend's
+side, so Redo restores the rows from the same cache. The marker comes from
+the revert and unrevert answers (both return the updated Session), from
+`session.updated` (every one carries the whole merged Session, and a cleared
+revert is published without the field), and from `session.get` when a stream
+gap or a fresh backend leaves it unknown. A marker change moves the revision
+and the history epoch, so a cached snapshot and paged history named under
+the old marker expire. While a revert is pending the session state carries an
+info advisory saying the next prompt discards the turn and Redo restores it.
+Re-check `revert.ts` and `Session.patch` on every OpenCode bump.
+
 | Component                         | Purpose                                      |
 | --------------------------------- | -------------------------------------------- |
 | `OpenCodeProvider`                | SDK session surface and backend SSE handling |

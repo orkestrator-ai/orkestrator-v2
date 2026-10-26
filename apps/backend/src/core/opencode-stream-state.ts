@@ -14,6 +14,11 @@ import {
 } from "./agent-provider-runtime.js";
 import { openCodeSessionModelRef } from "./opencode-model-catalog.js";
 import {
+  openCodeRevertMarker,
+  sameOpenCodeRevertMarker,
+  type OpenCodeRevertMarker,
+} from "./opencode-revert.js";
+import {
   createOpenCodeUsageLedger,
   openCodeContextUsage,
   openCodeContextUsageFromLedger,
@@ -142,6 +147,23 @@ type OpenCodeStreamSession = {
   revised?: RecentlyRevisedRows;
   /** Monotonic count of inbound session events, including events seen while dirty. */
   eventVersion: number;
+  /**
+   * OpenCode's pending revert (`Session.revert`), which the transcript hides;
+   * see `opencode-revert.ts`. Kept apart from the messages because OpenCode
+   * keeps the reverted ones until the next prompt.
+   */
+  revert?: OpenCodeRevertMarker;
+  /**
+   * Whether `revert` reflects OpenCode as of the last `session.updated`,
+   * action result or session read. A stream gap can hide the update that
+   * changed it, so it then waits for a read.
+   */
+  revertKnown: boolean;
+  /**
+   * Moves with every source of `revert`, so a session read that a newer
+   * update overtook does not install its older marker.
+   */
+  revertVersion: number;
   notices: NativeAgentNotice[];
   /**
    * Notices derived from `session.status` rather than from the transcript.
@@ -235,6 +257,8 @@ export class OpenCodeStreamState {
       messagesFromStart: false,
       historyEpoch: this.nextHistoryEpoch(),
       eventVersion: 0,
+      revertKnown: false,
+      revertVersion: 0,
       notices: [],
       revision: 0,
       usageLedger: createOpenCodeUsageLedger(),
@@ -298,6 +322,49 @@ export class OpenCodeStreamState {
   /** The epoch older-history page cursors for this session belong to. */
   historyEpoch(sessionId: string): string {
     return `opencode:${this.epochScope}:${this.session(sessionId).historyEpoch}`;
+  }
+
+  /** The pending revert last observed, known or retained across a gap. */
+  revertMarker(sessionId: string): OpenCodeRevertMarker | undefined {
+    return this.sessions.get(sessionId)?.revert;
+  }
+
+  /** Whether the revert marker is current, or must be read from the session. */
+  revertMarkerKnown(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.revertKnown === true;
+  }
+
+  /** Pass to `observeRevert` to discard a session read an update overtook. */
+  revertVersion(sessionId: string): number {
+    return this.session(sessionId).revertVersion;
+  }
+
+  /**
+   * Install OpenCode's revert marker from a session read or an action result.
+   *
+   * A change rewrites the transcript under readers' feet, as a removal does:
+   * the revision moves so a cached snapshot is not served, and the history
+   * epoch moves so paged history and page cursors named under the old marker
+   * expire instead of keeping rows it hid (or hiding rows it no longer
+   * covers). Returns false when `expectedVersion` was overtaken.
+   */
+  observeRevert(
+    sessionId: string,
+    marker: OpenCodeRevertMarker | undefined,
+    expectedVersion?: number,
+  ): boolean {
+    const state = this.session(sessionId);
+    if (expectedVersion !== undefined && state.revertVersion !== expectedVersion) return false;
+    this.setRevert(state, marker);
+    return true;
+  }
+
+  /** Forget the marker's freshness, so the next transcript read asks OpenCode. */
+  invalidateRevert(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.revertKnown = false;
+    state.revertVersion += 1;
   }
 
   /** Revision-note sequence, including changes outside the cached window. */
@@ -502,6 +569,9 @@ export class OpenCodeStreamState {
     for (const state of this.sessions.values()) {
       state.messagesCurrent = false;
       state.gapBaseline ??= baselineOf(state.messages);
+      // The update that changed the marker may be inside the gap.
+      state.revertKnown = false;
+      state.revertVersion += 1;
       this.bumpEventVersion(state);
       this.bump(state);
     }
@@ -603,6 +673,9 @@ export class OpenCodeStreamState {
       if (Array.isArray(info?.permission) && serializedByteLength(info.permission) <= 64 * 1024) {
         state.permission = info.permission;
       }
+      // Every update carries the whole merged Session, and a cleared revert
+      // is published without the field, so its absence clears the marker.
+      if (info) this.setRevert(state, openCodeRevertMarker(info));
       this.bump(state);
       return { sessionId };
     }
@@ -864,6 +937,16 @@ export class OpenCodeStreamState {
       if (this.messageIndex(messages, messageId) < 0) return;
     }
     (state.revised ??= new RecentlyRevisedRows()).note(messageId);
+  }
+
+  private setRevert(state: OpenCodeStreamSession, marker: OpenCodeRevertMarker | undefined): void {
+    state.revertKnown = true;
+    state.revertVersion += 1;
+    if (sameOpenCodeRevertMarker(state.revert, marker)) return;
+    if (marker) state.revert = marker;
+    else delete state.revert;
+    state.historyEpoch = this.nextHistoryEpoch();
+    this.bump(state);
   }
 
   private nextHistoryEpoch(): number {

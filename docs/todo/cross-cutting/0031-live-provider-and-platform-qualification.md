@@ -147,7 +147,8 @@ evidence. This file only points at it.
   spec evidence" below. The run found that undo leaves the reverted turn in
   the transcript, now
   [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md);
-  the spec's full pass is that file's qualification. OpenCode 1.19's
+  the spec's full pass is that file's qualification (passed 2026-10-26 on
+  OpenCode 1.19.4, pinned and unpinned; recorded in 0175). OpenCode 1.19's
   `session.fork` does **not** fill in `Session.model`: both fork sessions
   had empty `model` and `agent` columns in the profile's `opencode.db`, while
   their sources held `{"id":"gpt-5.6-luna","providerID":"opencode-go"}`. The
@@ -394,7 +395,8 @@ e2e/agent-testing/opencode-live.spec.ts`.
 
 - Undo: OpenCode's `session.revert` applied (the session row's `revert.messageID`
   was the second user message), but the projection still listed the reverted
-  reply 30 s later. Tracked in 0175.
+  reply 30 s later. Tracked in 0175, fixed there 2026-10-26; the spec's
+  undo step then passed.
 - No Share dialog was opened in any run.
 - Host after the runs: `~/.local/share/opencode/auth.json` kept its
   2026-10-19 mtime; the profile used its own snapshot and its own

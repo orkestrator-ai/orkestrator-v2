@@ -1,6 +1,9 @@
 # Docker rebuild dialog after reload
 
-Status: Open. Observed 2026-10-25 during container security validation.
+- **ID:** 0977
+- **Renumbered:** filed as 0887, which `aggregate-validation-runs` already uses.
+- **Status:** open
+- **Date observed:** 2026-10-25, during container security validation.
 
 `Docker fixture rebuild keeps running while another environment is open and rehydrates`
 failed in `mise run test:agent:docker` because `Before a rebuild` was not visible

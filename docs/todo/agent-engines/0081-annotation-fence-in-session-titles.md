@@ -29,6 +29,10 @@ design context. <orke`.
   Test: "titles a session from the request, not the transcript-annotation
   block after it" in `native-agent-service-projection.test.ts`, which also
   asserts the old fallback would have ended in `<orke`.
+  Follow-up projection tests cover Codex and Claude with an annotation-only
+  first message followed by a user request (including provider title updates),
+  and all-annotation transcripts that retain the provider placeholder rather
+  than deriving a title from annotation text.
 - Other title fallbacks checked:
   - Codex bridge `buildFallbackSessionTitle`
     (`bridges/codex-bridge/src/session-titles.ts`): its tag pass removed the

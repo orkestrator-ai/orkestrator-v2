@@ -27,6 +27,64 @@ const reloadCount = (events: EngineEvent[]) =>
   events.filter((event) => event.kind === "account.reload.requested").length;
 
 describe("stored account reload admission", () => {
+  test("a stored-login replacement clears needs-auth without a login-completed event", async () => {
+    let signedIn = false;
+    const h = await harness({
+      "account/read": () => ({
+        account: signedIn ? { type: "chatgpt" } : null,
+        requiresOpenaiAuth: true,
+      }),
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "hello",
+      requestId: "auth-failure",
+      attachments: [],
+    });
+    h.child().notify("modelProvider/authRecoveryStarted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      provider: "openai",
+    });
+    h.child().notify("modelProvider/authRecoveryCompleted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      provider: "openai",
+      message: "Login renewal failed",
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "failed", error: { message: "401" } },
+    });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice?.state === "needs-auth",
+      "notice was not raised",
+    );
+    await h.engine.readAccount();
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+    // The old child stays signed out; only its replacement loads the login.
+    const original = h.child();
+    storeLogin();
+    const events = observeReloads(h.engine);
+    await h.engine.readAccount();
+    signedIn = true;
+    await waitUntil(() => h.children.length === 2, "stored login did not replace the child");
+    await h.drain();
+    await waitUntil(
+      () =>
+        !h.engine.isAccountSignInRequired() &&
+        h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "confirmed stored-login recovery did not clear the notice",
+    );
+    expect(h.runtime.getStatus(sessionId)?.readiness).toBeUndefined();
+    expect(events.some((event) => event.kind === "account.signedIn")).toBe(true);
+    expect(original.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+    await h.runtime.stop();
+  });
+
   test.each(["probe", "journal", "review"] as const)(
     "drains other threads after admitted %s preparation, then rebinds before later prompts",
     async (preparation) => {

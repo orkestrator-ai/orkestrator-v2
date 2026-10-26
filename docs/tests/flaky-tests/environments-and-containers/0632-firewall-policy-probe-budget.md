@@ -127,3 +127,7 @@ groups passed; root and bridges failed only the four firewall timeouts and
 one Cursor hook timeout described above. Backend reported 11,749 passed and
 zero failed; Pi reported 649 passed and zero failed. Formatting, lint,
 typechecking, and the flake-index contract check passed.
+
+## Shared Codex state review fixes — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` on `74841142b` repeated `the root entrypoint runs the firewall itself and records the outcome per mode`: `exitCode` was `null` at the five-second deadline (5005.35 ms). The complete unchanged owner passed alone in 51.5 s: `mise run test:logged -- --name codex-auth-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. Root and workspace groups used one and four reserved worker slots respectively, alongside two bridge slots and one protocol slot. The generic shell-test deadline remains the observed boundary; no new cause is established. Aggregate evidence and results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md).

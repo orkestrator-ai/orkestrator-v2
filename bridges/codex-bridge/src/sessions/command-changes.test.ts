@@ -159,6 +159,35 @@ describe("overlayCommandChanges", () => {
 });
 
 describe("journal", () => {
+  test("an added account records in the shared state and still reads its earlier badges", async () => {
+    const host = await temporaryCodexHome();
+    const account = await temporaryCodexHome();
+    const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    const later: MeasuredWorkspaceChange = { ...change, additions: change.additions + 1 };
+    try {
+      delete process.env.CODEX_BRIDGE_STATE_DIR;
+      await recordCommandChanges(account, "thread-1", "call-old", change);
+      await recordCommandChanges(account, "thread-1", "call-both", change);
+
+      process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
+      expect(commandChangeJournalPath(account, "thread-1")).toBe(
+        join(host, "orkestrator-bridge", "command-changes", "thread-1.jsonl"),
+      );
+      await recordCommandChanges(account, "thread-1", "call-both", later);
+      await recordCommandChanges(account, "thread-1", "call-new", change);
+      expect(await readCommandChanges(account, "thread-1")).toEqual(
+        new Map([
+          ["call-old", change],
+          ["call-both", later],
+          ["call-new", change],
+        ]),
+      );
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = saved;
+    }
+  });
+
   test("keeps one file per thread under the bridge's sidecar directory", async () => {
     const codexHome = await temporaryCodexHome();
     expect(commandChangeJournalPath(codexHome, "thread-1")).toBe(

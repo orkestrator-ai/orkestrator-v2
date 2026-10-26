@@ -6,6 +6,7 @@ import {
 } from "./review-launch-options";
 import { useConfigStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { firstModelFor } from "@/lib/agent-launch";
 
 const originalClaudeModels = useAgentModelCatalogStore.getState().claudeModels;
 const originalCodexModels = useAgentModelCatalogStore.getState().codexModels;
@@ -188,6 +189,17 @@ describe("buildReviewModelCatalog", () => {
         reasoningEfforts: ["high"],
       },
     ]);
+  });
+
+  test("carries Pi's session-default mark so the Multi Review button picks it (0172)", () => {
+    useAgentModelCatalogStore.getState().setAcpModels([
+      { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
+      { platform: "pi", id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol", sessionDefault: true },
+    ]);
+
+    const catalog = buildReviewModelCatalog();
+    expect(catalog.pi?.map((model) => model.sessionDefault ?? false)).toEqual([false, true]);
+    expect(firstModelFor("pi", catalog)).toBe("openai/gpt-6.1-sol");
   });
 
   test("propagates the resolved Claude model used to match configured defaults", () => {

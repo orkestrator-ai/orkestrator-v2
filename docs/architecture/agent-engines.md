@@ -919,7 +919,11 @@ user's own credentials, so:
   catalogue's first model. A login can refuse a model its provider lists, so
   the first model is a last resort. An agent-test profile also receives the
   host's saved default, which it uses when its own settings name no default
-  that a signed-in provider serves.
+  that a signed-in provider serves. `/global/models` marks that starting model
+  `sessionDefault` (`markSessionDefault` in `models.ts`; global settings only,
+  as no session asks), and every launch default that has no saved model (Multi
+  Review rows, the launch dialogs' `firstModelFor`) picks the marked row before
+  the first, so a review row runs where a tab would.
 - **"Signed in" is per provider.** `GET /global/auth` reports each provider's
   status; there is no single account. Sign-in itself is not served: Pi's login
   is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no

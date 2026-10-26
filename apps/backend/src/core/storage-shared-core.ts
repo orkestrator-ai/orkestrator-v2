@@ -1427,7 +1427,8 @@ export function normalizeAcpModelCatalogEntries(
         (typeof candidate.contextWindow !== "number" ||
           !Number.isSafeInteger(candidate.contextWindow) ||
           candidate.contextWindow <= 0)) ||
-      (candidate.supportsImageInput != null && typeof candidate.supportsImageInput !== "boolean")
+      (candidate.supportsImageInput != null && typeof candidate.supportsImageInput !== "boolean") ||
+      (candidate.sessionDefault != null && typeof candidate.sessionDefault !== "boolean")
     ) {
       continue;
     }
@@ -1494,6 +1495,7 @@ export function normalizeAcpModelCatalogEntries(
       ...(typeof candidate.supportsImageInput === "boolean"
         ? { supportsImageInput: candidate.supportsImageInput }
         : {}),
+      ...(candidate.sessionDefault === true ? { sessionDefault: true } : {}),
     });
   }
   return normalized;

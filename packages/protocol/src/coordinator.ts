@@ -10,9 +10,9 @@ export const COORDINATOR_RUNTIME_PREFIX = "coordinator:" as const;
  *
  * `required` means the platform was qualified on that sandbox, so a bridge must
  * refuse to run commands without it. `unavailable` means it was qualified
- * without one (Claude on Windows, or Linux without bubblewrap and socat), so a
- * bridge asks for the sandbox but runs without it, and its own command filter is
- * the boundary. Anything else, including absent, reads as `required`: an older
+ * without one (Claude on Windows, or on Linux without bubblewrap and socat or
+ * whose bubblewrap cannot nest the CLI's user namespace), so a bridge leaves
+ * the sandbox off and its own command filter is the boundary. Anything else, including absent, reads as `required`: an older
  * launcher must not turn a missing sandbox into an unsandboxed coordinator.
  */
 export const COORDINATOR_COMMAND_SANDBOX_ENV = "ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX";

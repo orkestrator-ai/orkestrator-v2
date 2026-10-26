@@ -626,6 +626,13 @@ Pipeline runs are unattended. The coordinator always
 uses the immutable `coordinator-read-only` policy regardless of an environment
 override.
 
+On Linux the Claude bridge refuses a turn that requires the CLI's command
+sandbox (a `provider` sandbox, or a coordinator qualified on it) when
+bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
+Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
+probe's reason instead of every Bash call failing; see
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
+
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the
 agent, what becomes of an action nothing pre-approved, whether repository

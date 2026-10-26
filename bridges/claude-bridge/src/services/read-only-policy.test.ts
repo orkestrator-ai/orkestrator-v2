@@ -79,13 +79,17 @@ describe("Claude coordinator read-only policy", () => {
     expect(sandbox.failIfUnavailable).toBe(true);
   });
 
-  test("a host the launcher found without a sandbox asks for one without requiring it", () => {
+  test("a host the launcher found without a working sandbox does not ask for one", () => {
+    // The launcher's probe covers bubblewrap that cannot nest the CLI's
+    // namespace (Ubuntu's AppArmor profile), where the CLI would start a
+    // requested sandbox and every command would fail.
     const sandbox = claudeReadOnlySandbox(coordinatorPolicy, { commandSandbox: "unavailable" });
-    expect(sandbox.enabled).toBe(true);
+    expect(sandbox.enabled).toBe(false);
     expect(sandbox.failIfUnavailable).toBe(false);
     // The escape hatch stays closed whether or not the sandbox starts.
     expect(sandbox.allowUnsandboxedCommands).toBe(false);
     expect(claudeReadOnlySandbox(coordinatorPolicy, { commandSandbox: "required" })).toMatchObject({
+      enabled: true,
       failIfUnavailable: true,
     });
   });

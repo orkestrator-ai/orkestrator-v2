@@ -34,6 +34,11 @@ type Scenario =
   | "coordinator-sandbox-reads"
   /** The whole coordinator turn: the hook refuses the writing reader. */
   | "coordinator-hook-refuses"
+  /**
+   * Qualified without a working sandbox (on Linux, also a host whose
+   * bubblewrap cannot nest the CLI's namespace): a reading command still runs.
+   */
+  | "unavailable-hook-reads"
   | "unavailable-hook-refuses-quoted"
   | "unavailable-hook-refuses-escaped"
   | "unavailable-hook-refuses-glob"
@@ -56,7 +61,7 @@ async function qualify(scenario: Scenario) {
             ? "uniq [io]*.txt"
             : scenario === "unavailable-hook-refuses-abbreviation"
               ? "sort --out=out.txt in.txt"
-              : scenario === "coordinator-sandbox-reads"
+              : scenario === "coordinator-sandbox-reads" || scenario === "unavailable-hook-reads"
                 ? "cat in.txt"
                 : scenario === "coordinator-hook-refuses"
                   ? "uniq in.txt out.txt"
@@ -116,7 +121,11 @@ async function qualify(scenario: Scenario) {
             }),
       env: {
         ...scriptedClaudeEnv(fixture, endpoint, join(fixture.root, "claude")),
-        ...(unavailable && process.platform === "linux" ? { PATH: fixture.root } : {}),
+        // Hides bubblewrap, so the refusals below cannot lean on a sandbox.
+        // The reading case keeps PATH: the bridge leaves the sandbox off there.
+        ...(unavailable && scenario !== "unavailable-hook-reads" && process.platform === "linux"
+          ? { PATH: fixture.root }
+          : {}),
       },
       ...(unavailable && process.platform === "darwin"
         ? {
@@ -172,7 +181,7 @@ async function qualify(scenario: Scenario) {
     if (scenario === "default-sandbox-writes") {
       expect(commandFailure(toolResults[0]!)).toBeUndefined();
       expect(written).toBe(true);
-    } else if (scenario === "coordinator-sandbox-reads") {
+    } else if (scenario === "coordinator-sandbox-reads" || scenario === "unavailable-hook-reads") {
       expect(commandFailure(toolResults[0]!)).toBeUndefined();
       expect(JSON.stringify(toolResults[0]!.content)).toContain("a\\na\\nb");
     } else {
@@ -194,6 +203,7 @@ describe("Claude coordinator sandbox qualification", () => {
     "coordinator-sandbox-refuses",
     "coordinator-sandbox-reads",
     "coordinator-hook-refuses",
+    "unavailable-hook-reads",
     "unavailable-hook-refuses-quoted",
     "unavailable-hook-refuses-escaped",
     "unavailable-hook-refuses-glob",

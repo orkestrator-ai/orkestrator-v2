@@ -65,6 +65,13 @@ describe("normalizeClaudeBackgroundTasks", () => {
     });
   });
 
+  test("carries a resume cleanup as its own end reason", () => {
+    const [task] = normalizeClaudeBackgroundTasks({
+      bfs6uwwmn: { status: "killed", endReason: "resume_cleanup" },
+    })!;
+    expect(task?.endReason).toBe("resume-cleanup");
+  });
+
   test("maps every provider kind and preserves prompt and workflow name", () => {
     const kinds = {
       local_bash: "shell",

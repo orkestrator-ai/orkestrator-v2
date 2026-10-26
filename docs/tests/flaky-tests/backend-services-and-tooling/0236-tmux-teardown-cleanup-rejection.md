@@ -13,3 +13,19 @@
 - **Evidence:** `/tmp/orkestrator-test-run.j0YfiD/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** aggregate load may expose ordering or process-cleanup timing in the fake tmux runtime; the isolated pass establishes intermittency, not its cause. The owning test and implementation were unchanged by this merge. No assertion, timeout or skip was changed.
 - **2026-10-22, deterministic on one host:** on macOS with Homebrew tmux 3.7c, `mise run test:logged -- --name tmux-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/tmux-commands-teardown.test.ts ./tests/tmux-commands-mcp.test.ts --parallel=1 --only-failures` failed the same five cases every time (27 passed, 5 failed): the four `Electron tmux environment teardown` cases above plus `Electron tmux MCP config and session start > does not hold the tmux install lock while first-prompt naming is prepared`, with `cleanupEnvironmentTmux` rejecting. The log shows `uninstallWorkspaceHooks failed during environment cleanup Error: EISDIR: illegal operation on a directory, open '<tmp>/ork-tmux-runtime-*/worktree/.claude/settings.local.json'`. The same five failed in a clean worktree of `main` at `b83ae534`, so they predate the 0039 MCP branch that observed them. While this holds it is not a flake on this host; it needs a fix.
+
+
+## Migration timeout coverage review recurrence — 2026-10-26
+
+- Command: `mise run test:logged -- --name repository-tests -- mise run test`,
+  Linux x64, workspace/root/bridge/protocol reservations 4/1/2/1, two backend
+  workers, migration test-only commit `006b1000`.
+- The deletion-tombstone case rejected cleanup at 85.49 ms.
+- Backend: 11,793 passed, 143 skipped, eight failed in 707 files (547.71 s).
+  Full suite evidence and the other failures are recorded in
+  [1003](../aggregate-validation-runs/1003-legacy-migration-0058-validation.md#timeout-coverage-review-validation--2026-10-26).
+- Complete unchanged owner:
+  `mise run test:logged -- --name tmux-teardown-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/tmux-commands-teardown.test.ts --parallel=1 --only-failures`
+  passed, exit 0, 1.2 s.
+- Artifact: `/tmp/orkestrator-test-run.1QvzPF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+  Cause remains unconfirmed; no implementation, assertion, timeout or skip changed.

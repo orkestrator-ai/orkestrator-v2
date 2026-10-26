@@ -588,6 +588,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    setting that avoids it without weakening isolation (2.1.309's
    `allowNestedUserNamespaces` removes code-execution isolation, so it is not
    one), update the probe.
+
+   Re-check the coordinator's skills ("Skills" in
+   `docs/architecture/coordinator.md`): run
+   `CLAUDE_CLI_PATH=<managed claude> bun src/services/coordinator-skills.live-probe.ts`
+   from `bridges/claude-bridge` (one billed Haiku turn per scenario on your
+   own login). Every marker must stay `false`, the mirrored skill must load
+   and the raw one be refused. Also look in the binary for new skill
+   frontmatter keys or tools that write, run a shell or reach the network;
+   such a tool belongs in the capability translation in `read-only-policy.ts`.
+   The other platforms' coordinator skills have their own checks: on a Codex
+   bump run `live-coordinator-skills.test.ts` with `RUN_LIVE_CODEX_APP_SERVER=1`
+   (no credits); a Pi or Cursor SDK bump re-runs that bridge's
+   `coordinator-skills.test.ts`, and a Grok bump re-checks whether `GROK_CONFIG`
+   now accepts a `skills` section.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash

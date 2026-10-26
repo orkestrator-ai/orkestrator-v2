@@ -271,6 +271,29 @@ the gateway token — sign in with `mise run dev:login`. Never use broad cleanup
 [`orkestrator` CLI](docs/development/cli-testing.md) can drive the same profiles
 without the UI.
 
+### Production Orkestrator shares this host
+
+Orkestrator is built with Orkestrator, so assume the production app is running
+on the same machine, and that your shell, tests, and fixtures are descendants
+of its backend. Its backend, bridges, agent CLIs, and `opencode serve`
+processes look like the ones tests start. Killing one ends every agent session
+on the host, including yours. The production backend has been SIGKILLed during
+agent-run `mise run test` suites.
+
+- Signal only processes you spawned, through the handle or PID you recorded at
+  spawn time. Signal a process group only if you created it detached.
+- Never kill by name, pattern, or port (`pkill`, `killall`, `fuser -k`,
+  `kill $(lsof ...)`), and never signal `process.ppid`, an ancestor, PID `0`,
+  or a group you did not create.
+- Before signalling a PID read from a file, registry, or `ps` scan, confirm
+  its identity (start time and exact command line), because PIDs are reused.
+- Never point a test or fixture at `~/.config/orkestrator-v2`, its toolchains,
+  or its fixed ports; use a temporary data directory or an isolated `dev:test`
+  profile.
+
+[`testing-guide.md`](docs/development/testing-guide.md#production-orkestrator-shares-this-host)
+has the details.
+
 ### Updating Bun and lockfiles
 
 When bumping the Bun runtime, changing a dependency, or changing package
@@ -319,6 +342,11 @@ version as the `typescript` dev dependency). Run them from the repo root with
 to a `package.json`, because `bun check` runs that script instead of the type
 checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
 are in [`docs/development/linting.md`](docs/development/linting.md).
+
+Format with `bun fmt` (or `mise run format`) only. oxfmt is not a dependency,
+despite the config's file name: do not run `oxfmt`, `npx oxfmt` or Prettier.
+To format or check only the files you touched, pass them to `bun fmt` or
+`bun fmt --check`.
 
 - Only `correctness` is enabled, as errors, including the seven React
   Compiler rules (`react/refs`, `react/set-state-in-effect`, …). The one

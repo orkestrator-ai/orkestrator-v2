@@ -5,6 +5,7 @@ import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontex
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { workingDirectory } from "./config.js";
+import { COORDINATOR_SKILLS_SERVER } from "./coordinator-skills.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
 import { sliceToBytes } from "./transcript.js";
 import {
@@ -585,7 +586,9 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
       name,
       status: tools.length > 0 ? "connected" : "unknown",
       // Research servers are configured in Orkestrator's settings, not a file.
-      ...(name === "orkestrator" || state.researchMcpServerNames?.includes(name)
+      ...(name === "orkestrator" ||
+      name === COORDINATOR_SKILLS_SERVER ||
+      state.researchMcpServerNames?.includes(name)
         ? { scope: "orkestrator" as const }
         : configured.has(name)
           ? { scope: "project" as const }

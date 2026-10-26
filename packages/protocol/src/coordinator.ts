@@ -24,6 +24,23 @@ export function coordinatorCommandSandboxFromEnv(
   return env[COORDINATOR_COMMAND_SANDBOX_ENV] === "unavailable" ? "unavailable" : "required";
 }
 
+/**
+ * Launch-time process authority: the skills directory a Claude worker would
+ * read for the same account (`$CLAUDE_CONFIG_DIR/skills` of the active
+ * account, else `~/.claude/skills`). A coordinator's own `CLAUDE_CONFIG_DIR` is
+ * private and holds no skills, so the launcher names the real one here. Only a
+ * coordinator bridge reads it; worker launches never inherit it.
+ */
+export const COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV =
+  "ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR";
+
+/**
+ * The same for Codex: `skills` in the active account's `CODEX_HOME`, else the
+ * host's. A coordinator's own `CODEX_HOME` holds only an access-only login.
+ */
+export const COORDINATOR_CODEX_USER_SKILLS_DIR_ENV =
+  "ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR";
+
 export type AgentSessionOwner =
   | { kind: "environment"; projectId: string; environmentId: string }
   | { kind: "coordinator"; projectId: string; coordinatorId: string };

@@ -268,6 +268,35 @@ sender.
 released message once even when the mailbox policy is off, so the banner no
 longer rewrites the tab's policy to deliver a single message.
 
+**Deliver now into a running turn.** Deliver now passes `now: true`, which
+also marks the message's pending entry `steerRequested`. If the recipient's
+presence is `working`, `waiting` or `draft`, the next drain pass claims the
+batch as usual. Instead of waiting for the turn to end, it offers the batch to
+the running turn through `steerMailInject`, the same persisted steer path as a
+typed `/steer`. The carrier is capped at 60 KB because a steer carries at most
+64 KB.
+
+Each attempt gets a fresh UUID: the Claude bridge uses the id as the message
+uuid and remembers every id it has been offered. The id is stamped on the
+claim (`steerRequestId`), so a restart asks the steer journal about it. The
+outcomes:
+
+- **Applied:** the message is `injected`.
+- **The turn has already ended:** the message goes out the ordinary way in the
+  same pass.
+- **No answer:** the message waits as `verifying`, and `reconcileMailSteer`
+  confirms it against the session's delivered history, its parked steer, and
+  then the provider's steer journal. A steer id that none of these knows is
+  `unknown`, never treated as unsent, so it eventually fails closed like any
+  other ambiguous dispatch.
+- **Refused:** the agent can't steer (`steer-unsupported`; tmux agents always
+  get this), or the turn or session refused the steer (`steer-refused`). The
+  message goes back to waiting for the turn to end, and the banner says why.
+
+There is one steer attempt per press, and any settlement clears the flag. The
+command waits for the drain before it answers, so the banner reports the
+result as soon as the attempt finishes.
+
 **Logs.** The backend logs one `[agent-mail] placed` line per send, one
 `[agent-mail] waiting` line each time the drain's reason for passing over a
 pending message changes, and one `[agent-mail] dispatched` line per batch.

@@ -79,6 +79,18 @@ export function claudeChangeEvidenceDir(): string {
 }
 
 /**
+ * Bridge-owned directory for the plugins that carry a coordinator's mirrored
+ * skills (see `coordinator-skills.ts`). Inside the CLI's own config directory,
+ * which for a coordinator is private to its conversation, so two conversations
+ * never share or prune each other's mirrors. A test home ignores the
+ * environment, as `claudeUserSettingsPath` does.
+ */
+export function claudeCoordinatorSkillPluginsDir(): string {
+  const configDir = overrideHome === null ? process.env.CLAUDE_CONFIG_DIR?.trim() : undefined;
+  return join(configDir || join(claudeHome(), ".claude"), "orkestrator", "coordinator-skills");
+}
+
+/**
  * Point every resolver at a different home directory.
  *
  * Exported for tests. Mocking `node:os` instead would be visible to every

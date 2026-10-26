@@ -27,6 +27,7 @@ import { EMPTY_AGENT_MAIL_DRAFT, useAgentMailStore } from "@/stores/agentMailSto
 import {
   AGENT_MAIL_STATUS_TONE_CLASS,
   agentMailStatus,
+  deliverNowNotice,
   formatAgentMailTime,
 } from "./agent-mail-ui";
 import { mailMarkdownComponents } from "./mail-markdown-components";
@@ -135,14 +136,22 @@ export function AgentMailConversationView({
     : undefined;
 
   const act = async (
-    action: "retry" | "discard",
+    action: "retry" | "deliver" | "discard",
     message: AgentMailMessage,
     label: string,
   ): Promise<void> => {
     try {
       if (action === "retry")
         await backend.retryAgentMailInject(message.toEnvironmentId, message.toTabId, message.id);
-      else
+      else if (action === "deliver") {
+        const result = await backend.deliverAgentMailNow(
+          message.toEnvironmentId,
+          message.toTabId,
+          message.id,
+        );
+        const notice = deliverNowNotice(result);
+        if (notice) toast.info(notice.title, { description: notice.description });
+      } else
         await backend.discardAgentMailInject(message.toEnvironmentId, message.toTabId, message.id);
       setReload((value) => value + 1);
     } catch (cause) {
@@ -336,7 +345,7 @@ export function AgentMailConversationView({
                         size="sm"
                         variant="outline"
                         className="h-6 text-[11px]"
-                        onClick={() => void act("retry", message, "deliver message")}
+                        onClick={() => void act("deliver", message, "deliver message")}
                       >
                         Deliver now
                       </Button>

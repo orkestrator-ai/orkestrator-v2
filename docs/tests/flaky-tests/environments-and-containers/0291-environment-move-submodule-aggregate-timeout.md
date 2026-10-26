@@ -75,3 +75,13 @@ The combined merge repeated a failure in this owner during `mise run test:logged
 ## Composer model parameters validation — 2026-10-25
 
 `mise run test` on `todo-0004-composer-model-params-803868a90fcb` (workspace/root/bridges/protocol 4/1/2/1, other worktrees active) timed out `move_environment > a failed submodule re-link restores the original checkout` at 5040.07 ms, preceded by an unhandled `CommandFailedError` (`git submodule` killed with SIGTERM: "cd to 'libs/sub' failed"). The complete unchanged owner passed alone: `mise exec -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1` (37 pass, 0 fail). Evidence: `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The branch changes no environment-move code. No assertion, deadline or skip changed.
+
+
+## Coordinator launch coverage validation — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test` at `64e7f8262` (only coordinator renderer tests changed). Standard workspace/root/bridges/protocol reservations were 4/1/2/1 slots, including two backend workers; other worktrees were validating concurrently.
+- **Failure:** `move_environment > a failed submodule re-link restores the original checkout` exceeded its five-second deadline (5139.68 ms), with a terminated Git child error between tests.
+- **Aggregate:** backend 11,343 passed, 99 skipped, five failed and four between-test errors across 663 files (366.63 s); desktop had two assertion failures; web passed all 9,875 active tests. Root/support, bridges and the protocol lockfile passed. Aggregate exit 1 after 441.9 s.
+- **Unchanged owner:** `mise run test:logged -- --name environment-move-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the complete file, exit 0 in 48.3 s.
+- **Evidence:** `orkestrator-test-run.iPZEJ3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.BxYW3V/repository-tests.log.gz` under the host temporary directory.
+- **Assessment:** another intermittent recurrence; host contention remains a hypothesis. No move implementation, assertion, deadline or skip changed. The aggregate remains failed.

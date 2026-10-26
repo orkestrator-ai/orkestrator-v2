@@ -1894,8 +1894,10 @@ export interface NativeAgentBackgroundTaskSummary {
   /**
    * Why the task ended other than by completing, failing or being stopped:
    * `process-restart` is a task orphaned when the provider process restarted.
+   * `resume-cleanup` is a task from an earlier provider process that the
+   * provider settled when resuming, which this session never saw run.
    */
-  endReason?: "process-restart";
+  endReason?: "process-restart" | "resume-cleanup";
 }
 
 export type NativeAgentBackgroundTaskKind =

@@ -1,9 +1,10 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COORDINATOR_CODEX_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -18,6 +19,9 @@ import {
   ORKESTRATOR_AGENT_MCP_URL_ENV,
   codexAppServerConfigOverrides,
   codexCoordinatorPolicy,
+  codexCoordinatorSkillExtraRoots,
+  codexCoordinatorSkillReadRoots,
+  codexLoadsProjectSkills,
   codexHostedNetworkLockGaps,
   codexToolHistoryGaps,
   codexNetworkDeniedConfig,
@@ -706,5 +710,99 @@ describe("codexProjectSkillsConfig", () => {
       enabled: true,
     }));
     expect(() => codexProjectSkillsConfig(listed(many))).toThrow("more than");
+  });
+});
+
+describe("coordinator skills", () => {
+  let root: string;
+
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  async function skill(dir: string, name: string): Promise<string> {
+    await mkdir(join(dir, name), { recursive: true });
+    await writeFile(join(dir, name, "SKILL.md"), `---\nname: ${name}\n---\n`);
+    return join(dir, name);
+  }
+
+  test("only a coordinator process loads the checkout's skills with project resources off", () => {
+    const off = { ...codexCoordinatorPolicy({}) };
+    expect(codexLoadsProjectSkills(off, COORDINATOR_ENV)).toBe(true);
+    // The same policy outside a coordinator process, and an ordinary host
+    // session, keep them out.
+    expect(codexLoadsProjectSkills(off, {})).toBe(false);
+    expect(
+      codexLoadsProjectSkills(
+        {
+          id: "interactive-host",
+          sandbox: "provider",
+          approvals: "ask",
+          projectResources: false,
+          networkAccess: "full",
+        },
+        COORDINATOR_ENV,
+      ),
+    ).toBe(false);
+    expect(codexLoadsProjectSkills(undefined, {})).toBe(true);
+  });
+
+  test("extra roots are the account's skills and the checkout's Claude skills, in a coordinator only", async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), "codex-skill-roots-")));
+    const userSkills = join(root, "account", "skills");
+    const checkout = join(root, "checkout");
+    await mkdir(userSkills, { recursive: true });
+    await mkdir(join(checkout, ".claude", "skills"), { recursive: true });
+    const env = {
+      ...COORDINATOR_ENV,
+      CWD: checkout,
+      [COORDINATOR_CODEX_USER_SKILLS_DIR_ENV]: userSkills,
+    };
+    expect(codexCoordinatorSkillExtraRoots(env)).toEqual([
+      userSkills,
+      join(checkout, ".claude", "skills"),
+    ]);
+    expect(
+      codexCoordinatorSkillExtraRoots({ ...env, CODEX_BRIDGE_EXECUTION_POLICY: undefined }),
+    ).toEqual([]);
+    // A directory that does not exist is not handed to Codex.
+    await rm(join(checkout, ".claude"), { recursive: true });
+    expect(codexCoordinatorSkillExtraRoots(env)).toEqual([userSkills]);
+  });
+
+  test("read grants follow the user's skill links, never HOME, the root or the checkout's links", async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), "codex-skill-grants-")));
+    const home = join(root, "home");
+    const userSkills = join(root, "account", "skills");
+    const agentsSkills = join(home, ".agents", "skills");
+    await mkdir(userSkills, { recursive: true });
+    await skill(userSkills, "local");
+    await skill(agentsSkills, "shared");
+    // A user skill linked from elsewhere is granted where it really lives.
+    const elsewhere = await skill(join(root, "elsewhere"), "linked");
+    await symlink(elsewhere, join(userSkills, "linked"));
+    // Links that would widen the profile are not followed.
+    await symlink(home, join(userSkills, "home"));
+    await symlink("/", join(userSkills, "slash"));
+    await mkdir(join(root, "no-skill"), { recursive: true });
+    await symlink(join(root, "no-skill"), join(userSkills, "not-a-skill"));
+    await writeFile(join(home, "SKILL.md"), "home is never a skill root\n");
+
+    const grants = codexCoordinatorSkillReadRoots(
+      { ...COORDINATOR_ENV, [COORDINATOR_CODEX_USER_SKILLS_DIR_ENV]: userSkills },
+      home,
+    );
+    expect(grants.toSorted()).toEqual([agentsSkills, userSkills, elsewhere].toSorted());
+
+    const overrides = codexAppServerConfigOverrides({
+      ...COORDINATOR_ENV,
+      HOME: home,
+      [COORDINATOR_CODEX_USER_SKILLS_DIR_ENV]: userSkills,
+    });
+    const filesystem = overrides["permissions.coordinator-conversation-1.filesystem"]!;
+    for (const grant of grants) expect(filesystem).toContain(`${JSON.stringify(grant)} = "read"`);
+    expect(filesystem).not.toContain('"write"');
+    expect(filesystem).toContain('":root" = "deny"');
+    expect(overrides["features.skill_env_var_dependency_prompt"]).toBe("false");
   });
 });

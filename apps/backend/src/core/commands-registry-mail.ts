@@ -244,11 +244,14 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
   );
   register(
     "retry_agent_mail_inject",
-    async ({ environmentId, tabId, messageId }, { storage, drainAgentMail }) => {
+    async ({ environmentId, tabId, messageId, now }, { storage, drainAgentMail }) => {
       const resolvedEnvironmentId = required(environmentId, "environmentId");
       const resolvedTabId = required(tabId, "tabId");
       const resolvedMessageId = required(messageId, "messageId");
-      await storage.retryAgentMailInject(resolvedEnvironmentId, resolvedTabId, resolvedMessageId);
+      // `now` is Deliver now: a recipient mid-turn has the message steered into that turn.
+      await storage.retryAgentMailInject(resolvedEnvironmentId, resolvedTabId, resolvedMessageId, {
+        steer: optionalBoolean(now, "now") === true,
+      });
       await drainAgentMail?.();
       return storage.getAgentMailMessage(resolvedEnvironmentId, resolvedTabId, resolvedMessageId);
     },

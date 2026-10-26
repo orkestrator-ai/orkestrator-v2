@@ -114,6 +114,30 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Legacy migration without provider databases, Linux Engine (2026-10-26)
+
+Todo 0058, on Arch Linux (Docker Engine 29.9.1, linux/amd64), with images
+built by `mise run docker:build:dev --profile todo0058` before and after the
+`orkestrator-migrate.sh` fix (`sha256:3eb5e5e4…` and `sha256:dc006c63…`).
+
+- **Cause.** The image ships `/home/node/.codex` and
+  `/home/node/.local/share/opencode`, and a legacy runtime that never ran
+  Codex or OpenCode has no databases in them. The SQLite relocation steps
+  select `*.sqlite*` / `opencode.db*`; with no match the selected listing was
+  empty, and the root check's `awk 'NR == 1 { … }'` exits 0 on empty input,
+  so the helper reported `status=root-symlink`. Every copied root
+  (`.codex/`, `.claude/`, `opencode/`, `workspace/`) was a real directory in
+  the raw `docker cp` listing; staged Codex inputs were incidental.
+- **Before the fix.** The new C14 case (staged Codex inputs, `POPULATE`
+  without databases) failed with `needs-attention: … (root-symlink)` and the
+  source kept.
+- **After the fix.** Every case in `container-live-replacement.test.ts` passed
+  (12/12, run in three batches because the host's address pools were
+  exhausted by leaked probe networks, see
+  [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+  including the new case and C16's symlinked-root refusal. The live data
+  contracts suite passed 2/2.
+
 ## Egress gateway on Docker Desktop (2026-10-25)
 
 The backend's egress gateway (todo 0018 item 1), on Docker Desktop 4.96.3
@@ -383,7 +407,7 @@ Live test names carry the scenario id.
 | C11 | Stop with running descendants and a pending approval | Bounded drain; approval never granted; children reaped |
 | C12 | Persistent workspace stop/start | Full fixture state retained; real mounts verified |
 | C13 | Provider session restore after a rebuild | Correct history and lineage; an ambiguous dispatch stays unresolved |
-| C14 | Legacy migration and volume rebuild | Verified bytes and Git state; correct workspace generation |
+| C14 | Legacy migration and volume rebuild, including a legacy runtime with staged provider inputs and no provider databases | Verified bytes and Git state; correct workspace generation; inputs staged afresh |
 | C15 | Failure at every transaction boundary | One authoritative set; original retained before commit |
 | C16 | Disk or inode exhaustion, archive or link corruption | Fails safely without modifying the original |
 | C17 | Candidate writes after commit, then a health failure | New work preserved; no automatic restore of the old copy |

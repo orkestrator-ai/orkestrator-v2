@@ -68,8 +68,10 @@ const {
   CONTAINER_FILE_TREE_LISTER,
   CONTAINER_SAFE_BASE64_READER,
   buildContainerSafeBase64Reader,
+  buildFileSubtree,
   buildFileTree,
   createCommandRegistry,
+  parseContainerFileSubtree,
   parseContainerFileTree,
 } = await import("../src/core/commands");
 const { resolveBunBinary } = await import("../src/core/commands-agent-support");
@@ -683,6 +685,96 @@ describe("backend command I/O coverage", () => {
     expect(() => parseContainerFileTree("t\tmissing\0")).toThrow("missing truncated directory");
   });
 
+  test("lists a Turborepo cache unopened and reads truncated directories on demand in both walkers", async () => {
+    const root = await createTempDir("ork-tree-subtree-");
+    await fs.mkdir(path.join(root, ".turbo", "cache"), { recursive: true });
+    await fs.writeFile(path.join(root, ".turbo", "cache", "run.log"), "");
+    await fs.mkdir(path.join(root, "src", "nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "nested", "deep.ts"), "");
+    await fs.writeFile(path.join(root, "src", "index.ts"), "");
+    await fs.symlink(path.join(root, "src"), path.join(root, "src-link"));
+    const listSubtree = async (directory: string, limit = 5_000) =>
+      parseContainerFileSubtree(
+        (
+          await runCommand("node", [
+            "-e",
+            CONTAINER_FILE_TREE_LISTER,
+            "--",
+            root,
+            String(limit),
+            directory,
+          ])
+        ).stdout,
+        directory,
+      );
+
+    const tree = await buildFileTree(root);
+    const listing = await runCommand("node", [
+      "-e",
+      CONTAINER_FILE_TREE_LISTER,
+      "--",
+      root,
+      "5000",
+    ]);
+    expect(parseContainerFileTree(listing.stdout)).toEqual(tree);
+    expect(tree[0]).toEqual({
+      name: ".turbo",
+      path: ".turbo",
+      isDirectory: true,
+      children: [],
+      truncated: true,
+    });
+    expect(tree[1]?.truncated).toBeUndefined();
+
+    const turbo = await buildFileSubtree(root, ".turbo");
+    expect(await listSubtree(".turbo")).toEqual(turbo);
+    expect(turbo).toEqual({
+      children: [
+        {
+          name: "cache",
+          path: ".turbo/cache",
+          isDirectory: true,
+          children: [
+            {
+              name: "run.log",
+              path: ".turbo/cache/run.log",
+              isDirectory: false,
+              extension: ".log",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+    });
+
+    // The budget applies below the requested directory, which reports itself
+    // incomplete when its own entries do not all fit.
+    const capped = await buildFileSubtree(root, "src", { remaining: 1 });
+    expect(await listSubtree("src", 1)).toEqual(capped);
+    expect(capped).toEqual({
+      children: [
+        { name: "nested", path: "src/nested", isDirectory: true, children: [], truncated: true },
+      ],
+      truncated: true,
+    });
+    expect(await buildFileSubtree(root, "src/nested")).toEqual({
+      children: [
+        { name: "deep.ts", path: "src/nested/deep.ts", isDirectory: false, extension: ".ts" },
+      ],
+      truncated: false,
+    });
+
+    for (const directory of ["src-link", "src-link/nested"]) {
+      await expect(buildFileSubtree(root, directory)).rejects.toThrow("symlink ancestor");
+      await expect(listSubtree(directory)).rejects.toThrow();
+    }
+    await expect(buildFileSubtree(root, ".git")).rejects.toThrow("Git metadata is not listed");
+    await expect(buildFileSubtree(root, "../outside")).rejects.toThrow(
+      "parent directory traversal is not allowed",
+    );
+    await expect(buildFileSubtree(root, "missing")).rejects.toThrow();
+  });
+
   test("reads base64 only from regular files in workspace storage", async () => {
     const workspaceStorage = getWorktreeBaseDir();
     const allowedRoot = await createTempDir("commands-io-host-", workspaceStorage);
@@ -1127,6 +1219,51 @@ done
         expect(generatedChildren).toHaveLength(4_999);
         expect(generatedChildren.some((node) => node.path === "generated/file-4999.ts")).toBe(true);
         expect(await fs.readFile(logPath, "utf8")).toContain("-- /workspace 5000");
+      },
+    );
+  });
+
+  test("reads one container tree directory on demand through docker", async () => {
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
+`,
+      async ({ logPath }) => {
+        const commands = createCommandRegistry();
+        const context = createContext();
+        await expect(
+          commands.get("get_file_subtree")?.(
+            { containerId: "container-1", directory: ".turbo" },
+            context,
+          ),
+        ).resolves.toEqual({
+          children: [
+            {
+              name: "cache",
+              path: ".turbo/cache",
+              isDirectory: true,
+              children: [
+                {
+                  name: "run.log",
+                  path: ".turbo/cache/run.log",
+                  isDirectory: false,
+                  extension: ".log",
+                },
+              ],
+            },
+          ],
+          truncated: true,
+        });
+        expect(await fs.readFile(logPath, "utf8")).toMatch(/-- \/workspace 5000 '?\.turbo'?/);
+
+        for (const directory of [".git/objects", "../outside"]) {
+          await expect(
+            commands.get("get_file_subtree")?.({ containerId: "container-1", directory }, context),
+          ).rejects.toThrow("Invalid directory");
+        }
+        // Rejected directories never reach docker.
+        expect((await fs.readFile(logPath, "utf8")).match(/-- \/workspace 5000/g)).toHaveLength(1);
       },
     );
   });

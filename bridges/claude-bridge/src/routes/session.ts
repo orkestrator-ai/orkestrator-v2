@@ -1,5 +1,6 @@
 // Session management routes
 import { isValidClaudeFormContent } from "../services/claude-elicitation-schema.js";
+import { parseBase64ImageData } from "../services/image-attachment-data.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -94,7 +95,6 @@ import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
-const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 // Leave room for the small `{ "answers": ... }` JSON envelope while keeping
 // the body consumed by Hono bounded before `c.req.json()` allocates a parsed
 // object. The semantic answer payload is still capped separately below.
@@ -187,18 +187,7 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function isValidImageDataUrl(value: string): boolean {
-  const match = /^data:image\/(?:jpeg|png|gif|webp);base64,([\s\S]+)$/.exec(value);
-  if (!match) return false;
-  const data = match[1].replace(/\s+/g, "");
-  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-  const decodedBytes =
-    data.length % 4 === 0 ? (data.length / 4) * 3 - padding : Number.POSITIVE_INFINITY;
-  return (
-    data.length > 0 &&
-    data.length % 4 === 0 &&
-    /^[A-Za-z0-9+/]+={0,2}$/.test(data) &&
-    decodedBytes <= MAX_IMAGE_ATTACHMENT_BYTES
-  );
+  return parseBase64ImageData(value)?.mediaType !== undefined;
 }
 
 function isBoundedClaudeQuestionAnswers(

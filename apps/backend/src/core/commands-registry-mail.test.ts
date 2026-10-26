@@ -71,3 +71,36 @@ describe("conversation commands", () => {
     expect(storage.markAgentMailConversationSeen).toHaveBeenCalledWith("a", "b", ["m1", "m2"]);
   });
 });
+
+describe("retry_agent_mail_inject", () => {
+  test("now asks for the message to be steered into a running turn", async () => {
+    const retryAgentMailInject = mock(
+      async (_environmentId: string, _tabId: string, _messageId: string, _options: unknown) => ({}),
+    );
+    const storage = {
+      retryAgentMailInject,
+      getAgentMailMessage: mock(async () => ({ id: "m" })),
+    };
+    const drainAgentMail = mock(async () => undefined);
+    const handlers = new Map<string, CommandHandler>();
+    registerAgentMailCommands((name, handler) => handlers.set(name, handler));
+    const call = (args: Record<string, unknown>) =>
+      handlers.get("retry_agent_mail_inject")!(args, {
+        storage,
+        drainAgentMail,
+      } as unknown as CommandContext);
+
+    await call({ environmentId: "e", tabId: "t", messageId: "m" });
+    await call({ environmentId: "e", tabId: "t", messageId: "m", now: true });
+    await expect(
+      call({ environmentId: "e", tabId: "t", messageId: "m", now: "yes" }),
+    ).rejects.toThrow();
+
+    expect(retryAgentMailInject.mock.calls).toEqual([
+      ["e", "t", "m", { steer: false }],
+      ["e", "t", "m", { steer: true }],
+    ]);
+    // The delivery attempt runs before the command answers, so the caller sees its result.
+    expect(drainAgentMail).toHaveBeenCalledTimes(2);
+  });
+});

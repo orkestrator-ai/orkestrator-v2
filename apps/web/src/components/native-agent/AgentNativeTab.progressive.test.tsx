@@ -68,7 +68,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
       {props.header as never}
       {props.messages.length === 0 ? (props.emptyState as never) : null}
       {props.messages.map((entry, index) => (
-        <div key={props.computeItemKey(index, entry)}>
+        <div key={props.computeItemKey(index, entry)} data-message-id={entry.id}>
           {
             props.renderMessage(
               index,
@@ -420,6 +420,87 @@ function installHeldSubmitClock() {
 }
 
 describe("AgentNativeTab progressive controller", () => {
+  test("orders cleanup notices with rowless tasks and pinned settled cards using transcript anchors", async () => {
+    identity.platform = "claude";
+    const launch: TestMessage = {
+      ...message("launch", "Launch context"),
+      createdAt: "2026-10-25T09:59:00.000Z",
+      parts: [
+        { type: "text", content: "Launch context" },
+        {
+          type: "tool-invocation",
+          content: "Investigate rendering",
+          toolName: "Agent",
+          toolUseId: "launch-1",
+          toolState: "success",
+          toolArgs: { description: "Investigate rendering", run_in_background: true },
+        },
+      ],
+    };
+    transcriptUpdates = [
+      async () =>
+        transcriptSnapshot("transcript-1", [
+          launch,
+          { ...message("anchor-a", "Before cleanup"), createdAt: "2026-10-25T10:00:00.000Z" },
+          { ...message("anchor-b", "After cleanup"), createdAt: "2026-10-25T10:01:00.000Z" },
+        ]),
+    ];
+    stateUpdates = [
+      async () =>
+        stateSnapshot("state-1", {
+          backgroundTasks: [
+            {
+              id: "agent-1",
+              toolUseId: "launch-1",
+              description: "Investigate rendering",
+              status: "completed",
+              settledAt: "2026-10-25T10:00:20.000Z",
+            },
+            {
+              id: "rowless-settled",
+              description: "Build the image",
+              status: "completed",
+              settledAt: "2026-10-25T10:00:40.000Z",
+            },
+            {
+              id: "rowless-live",
+              description: "Watch the build",
+              status: "running",
+              startedAt: "2026-10-25T09:00:00.000Z",
+            },
+            ...["orphan-1", "orphan-2"].map((id) => ({
+              id,
+              status: "killed" as const,
+              endReason: "resume-cleanup" as const,
+              settledAt: "2026-10-25T10:00:30.000Z",
+            })),
+          ],
+        }),
+    ];
+
+    renderTab();
+    await screen.findByText("2 earlier background tasks were cleaned up");
+    const rows = [...screen.getByTestId("progressive-transcript-list").children].filter((row) =>
+      row.hasAttribute("data-message-id"),
+    );
+    expect(rows.map((row) => row.getAttribute("data-message-id"))).toEqual([
+      "launch",
+      "anchor-a",
+      "anchor-a:settled-agents",
+      "resume-cleanup:anchor-a",
+      "anchor-b",
+      "active-agents",
+    ]);
+    // Both terminal cards share the real transcript anchor even though the
+    // rowless task settled after the notice's own timestamp.
+    expect(rows[2]?.textContent).toContain("Investigate rendering");
+    expect(rows[2]?.textContent).toContain("Build the image");
+    expect(rows[3]?.textContent).toContain("2 earlier background tasks were cleaned up");
+    expect(rows[5]?.textContent).toContain("Watch the build");
+    expect(screen.getAllByRole("button", { name: /Task Build the image/ })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Stop Watch the build" })).toBeTruthy();
+  });
+
   test("keeps a Claude agent pinned when returning before task status has refreshed", async () => {
     identity.platform = "claude";
     const launch: TestMessage = {

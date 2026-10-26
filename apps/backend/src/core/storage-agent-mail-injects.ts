@@ -35,6 +35,10 @@ export type PendingAgentMailInject = {
    * for: it may join a batch going to the same mailbox, never start one.
    */
   coalescingUntil?: string;
+  /** The person pressed Deliver now: steer into a running turn rather than wait for it. */
+  steerRequested?: true;
+  /** The steer this claim or verification belongs to, when it was one. */
+  steerRequestId?: string;
 };
 
 /**
@@ -353,10 +357,15 @@ export class AgentMailInjects {
     });
   }
 
+  /**
+   * `steer`: Deliver now. If the recipient is mid-turn, the next dispatch
+   * offers the message to that turn instead of waiting for it to end.
+   */
   async retryAgentMailInject(
     environmentId: string,
     tabId: string,
     messageId: string,
+    options: { steer?: boolean } = {},
   ): Promise<AgentMailMessage> {
     const settings = normalizeAgentMessagingSettings(
       (await this.repos.config.loadConfig()).global.agentMessaging,
@@ -438,6 +447,13 @@ export class AgentMailInjects {
           store.pendingInject.push({ mailboxId, messageId: entry.id });
         }
       }
+      if (options.steer) {
+        const entry = store.pendingInject.find(
+          (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === message.id,
+        );
+        // An unconfirmed dispatch is confirmed first; it is never offered again.
+        if (entry && !entry.verifyRequestId) entry.steerRequested = true;
+      }
       message.revision += 1;
       mailbox.revision += 1;
       store.revision += 1;
@@ -470,6 +486,8 @@ export class AgentMailInjects {
       verificationAttempts,
       verifyRequestId,
       coalescing,
+      steerRequested,
+      steerRequestId,
     } of entries) {
       const held = Boolean(retryAt && Date.parse(retryAt) > now);
       if (held && !(coalescing && options.includeCoalescing)) continue;
@@ -486,6 +504,8 @@ export class AgentMailInjects {
         ...(retryAttempts ? { retryAttempts } : {}),
         ...(verificationAttempts ? { verificationAttempts } : {}),
         ...(held && retryAt ? { coalescingUntil: retryAt } : {}),
+        ...(steerRequested ? { steerRequested } : {}),
+        ...(steerRequestId ? { steerRequestId } : {}),
       });
       if (pending.length >= Math.max(1, Math.min(limit, AGENT_MAIL_MAX_PENDING_INJECTS))) break;
     }
@@ -516,9 +536,13 @@ export class AgentMailInjects {
         if (message.placement !== "inject-held" || message.placementReason !== "submitting") {
           continue;
         }
+        const steerRequestId = store.pendingInject.find(
+          (entry) => entry.mailboxId === mailbox.mailboxId && entry.messageId === message.id,
+        )?.steerRequestId;
         interrupted.push({
           mailbox: this.repos.agentMailboxes.descriptor(mailbox, settings.defaultInjectPolicy),
           message,
+          ...(steerRequestId ? { steerRequestId } : {}),
         });
       }
     }
@@ -573,14 +597,15 @@ export class AgentMailInjects {
    * Claim one pending message for dispatch. `joinCoalescing` lets a status
    * notice still inside its coalescing hold ride along with a batch already
    * going to this mailbox: the hold only exists to gather notices into one
-   * wake, and that wake is happening now.
+   * wake, and that wake is happening now. `steerRequestId` records, with the
+   * claim, that this dispatch is a steer, so a restart asks the right journal.
    */
   async beginAgentMailInject(
     mailboxId: string,
     messageId: string,
     incarnationId: string,
     verificationRequestId?: string,
-    options: { joinCoalescing?: boolean } = {},
+    options: { joinCoalescing?: boolean; steerRequestId?: string } = {},
   ): Promise<AgentMailMessage | null> {
     return this.store.enqueue(async () => {
       const store = await this.store.load();
@@ -607,7 +632,10 @@ export class AgentMailInjects {
       )
         return null;
       message.placement = "inject-held";
-      if (pendingEntry) pendingEntry.lastHoldReason = message.placementReason;
+      if (pendingEntry) {
+        pendingEntry.lastHoldReason = message.placementReason;
+        if (options.steerRequestId) pendingEntry.steerRequestId = options.steerRequestId;
+      }
       message.placementReason = "submitting";
       await this.store.save(store);
       return message;
@@ -623,8 +651,11 @@ export class AgentMailInjects {
       | { outcome: "failed"; reason: "ambiguous" | "rejected" }
       /** Refused before it reached the agent: queue it again after a delay. */
       | { outcome: "retry"; reason: string }
-      /** Outcome unknown: confirm `requestId` against the journal before resending. */
-      | { outcome: "verify"; requestId: string },
+      /**
+       * Outcome unknown: confirm `requestId` against the journal before
+       * resending — the steer journal when `steer` is set.
+       */
+      | { outcome: "verify"; requestId: string; steer?: true },
   ): Promise<AgentMailMessage | null> {
     return this.store.enqueue(async () => {
       const store = await this.store.load();
@@ -692,6 +723,9 @@ export class AgentMailInjects {
           ).toISOString(),
           lastHoldReason: reason,
           ...(outcome.outcome === "verify" ? { verifyRequestId: outcome.requestId } : {}),
+          ...(outcome.outcome === "verify" && outcome.steer
+            ? { steerRequestId: outcome.requestId }
+            : {}),
           ...(outcome.outcome === "retry" &&
           pendingEntry?.coalescing &&
           pendingEntry.retryAt &&

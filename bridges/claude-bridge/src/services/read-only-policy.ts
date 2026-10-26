@@ -21,17 +21,25 @@ import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
  * module is the only place that decides what Claude calls it.
  */
 
+// A tool missing from the coordinator allowlist normally reaches `canUseTool`,
+// which a `deny` policy refuses. A skill's or plugin command's `allowed-tools`
+// grants its tools without that step, so every built-in that writes, runs an
+// unvetted shell or reaches the network is named here too: the hook refuses
+// it whatever granted it.
 const CAPABILITY_TOOLS: ReadonlyMap<NativeAgentCapability, readonly string[]> = new Map([
-  ["file.write", ["Write", "NotebookEdit"]],
+  // A worktree is a checkout and a branch written into the repository.
+  ["file.write", ["Write", "NotebookEdit", "EnterWorktree", "ExitWorktree"]],
   ["file.patch", ["Edit", "MultiEdit", "ApplyPatch"]],
-  ["shell", ["Bash", "BashOutput", "KillShell"]],
-  // Shell itself stays available for reads; the hook is what separates a
-  // `git log` from a `git commit`, which no tool-name rule can express.
-  ["shell.mutate", []],
+  ["shell", ["Bash", "BashOutput", "KillShell", "PowerShell"]],
+  // Bash itself stays available for reads; the hook is what separates a
+  // `git log` from a `git commit`, which no tool-name rule can express. The
+  // hook vets Bash commands only, so PowerShell is refused outright.
+  ["shell.mutate", ["PowerShell"]],
   // WebSearch runs on Anthropic's servers and WebFetch from the CLI process,
   // so the sandbox's network allowlist reaches neither. A `network` denial
-  // takes both, unless the policy's `allow` names `web.search`.
-  ["network", ["WebFetch", "WebSearch"]],
+  // takes both, unless the policy's `allow` names `web.search`. RemoteTrigger
+  // creates scheduled cloud agents.
+  ["network", ["WebFetch", "WebSearch", "RemoteTrigger"]],
   ["web.search", ["WebSearch"]],
 ]);
 
@@ -460,9 +468,17 @@ export function claudeReadOnlyAllowedTools(options: {
   policy?: NativeAgentExecutionPolicy;
   /** Remote research servers the launcher named and the session loaded. */
   researchMcpServerNames?: readonly string[];
+  /**
+   * The coordinator's mirrored skills (`coordinator-skills.ts`), allowed by
+   * exact name. Loading one only adds its text to the conversation: the
+   * mirror carries no hooks or tool grants. Other plugins' skills still reach
+   * `canUseTool`, which refuses them.
+   */
+  skillNames?: readonly string[];
 }): string[] {
   return [
     ...READ_ONLY_TOOLS,
+    ...(options.skillNames ?? []).map((name) => `Skill(${name})`),
     ...(options.policy && !nativeAgentPolicyDeniesWebSearch(options.policy) ? ["WebSearch"] : []),
     ...(options.agentMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
     ...(options.researchMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),

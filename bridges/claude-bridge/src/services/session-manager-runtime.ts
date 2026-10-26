@@ -13,7 +13,6 @@
 // routed to it, and the newest one owns the root conversation.
 
 import { createHash } from "node:crypto";
-import { getPluginsForSdk } from "./plugin-config.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import type {
   CanUseTool,
@@ -39,6 +38,7 @@ import {
   claudeSettingSources,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
+  resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import { claudeRuntimeOwnsLiveWork } from "./session-manager-background-tasks.js";
@@ -205,7 +205,7 @@ export function claudeLaunchedProfile(
 
 /**
  * The settings sources whose `enabledPlugins` decide this turn's plugin set
- * (`getPluginsForSdk`): the ones the prompt asks for; else, when it leaves
+ * (`resolveClaudeTurnPlugins`): the ones the prompt asks for; else, when it leaves
  * them unsaid and could join the running CLI, the ones that CLI was launched
  * with, since a joining turn inherits them; else a new launch's default.
  */
@@ -265,12 +265,8 @@ export async function assertClaudeRuntimeAccepts(
   refuse(claudeLaunchConflict(runtime.launch, request));
   if (!resources) {
     const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
-    const [plugins, environment] = await Promise.all([
-      getPluginsForSdk(
-        request.cwd,
-        policy?.projectResources !== false,
-        claudeTurnSettingSources(session, options),
-      ),
+    const [{ plugins }, environment] = await Promise.all([
+      resolveClaudeTurnPlugins(request.cwd, policy, claudeTurnSettingSources(session, options)),
       runtimeEnvironmentForAgentQuery(),
     ]);
     resources = claudeLaunchResourceProfile(plugins, environment);

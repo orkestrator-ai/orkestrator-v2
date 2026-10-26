@@ -13,6 +13,7 @@
  * state costs a rendered transcript; it never costs the conversation.
  */
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type {
@@ -467,7 +468,7 @@ export async function createPiSessionServices(
     "resourceLoaderOptions" | "resourceLoaderReloadOptions"
   >,
 ): ReturnType<typeof createAgentSessionServices> {
-  const loaderPolicy = piResourceLoaderPolicy(state);
+  const loaderPolicy = piResourceLoaderPolicy(state, options.cwd);
   const services = await createAgentSessionServices({
     ...options,
     resourceLoaderOptions: {
@@ -830,16 +831,46 @@ export function projectResourceDiscoveryOptions(
   };
 }
 
+/**
+ * The checkout's skill directories a coordinator reads without trusting the
+ * project: Pi's own `.pi/skills` and `.agents/skills`, and `.claude/skills`, so
+ * a project that keeps its procedures there is not invisible to a Pi
+ * coordinator. Only those that exist, since Pi reports a missing one.
+ */
+export function coordinatorProjectSkillPaths(cwd: string = workingDirectory): string[] {
+  return [
+    join(cwd, ".pi", "skills"),
+    join(cwd, ".agents", "skills"),
+    join(cwd, ".claude", "skills"),
+  ].filter((path) => existsSync(path));
+}
+
 /** What a session's resource loader discovers, and whether it trusts the project. */
-export function piResourceLoaderPolicy(state: Pick<SessionState, "policy" | "readOnly">): {
-  discovery: ReturnType<typeof projectResourceDiscoveryOptions>;
+export function piResourceLoaderPolicy(
+  state: Pick<SessionState, "policy" | "readOnly">,
+  cwd: string = workingDirectory,
+): {
+  discovery: ReturnType<typeof projectResourceDiscoveryOptions> & {
+    additionalSkillPaths?: string[];
+  };
   projectTrusted: boolean;
 } {
+  const discovery = projectResourceDiscoveryOptions(
+    state.policy?.projectResources,
+    state.readOnly === true,
+  );
+  // A coordinator loads the user's skills (`~/.pi/agent/skills`,
+  // `~/.agents/skills`) and the checkout's, the way the other platforms'
+  // coordinators do, while the project stays untrusted and extensions stay
+  // off. A Pi skill is markdown the model reads with `read`; the read-only
+  // gate admits no tool that could run anything it ships.
+  const coordinator =
+    state.policy?.id === "coordinator-read-only" &&
+    process.env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only";
   return {
-    discovery: projectResourceDiscoveryOptions(
-      state.policy?.projectResources,
-      state.readOnly === true,
-    ),
+    discovery: coordinator
+      ? { ...discovery, noSkills: false, additionalSkillPaths: coordinatorProjectSkillPaths(cwd) }
+      : discovery,
     projectTrusted: state.policy?.projectResources === true,
   };
 }

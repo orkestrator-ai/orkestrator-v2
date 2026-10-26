@@ -100,6 +100,8 @@ test that reads the host's real state. This file holds that newly found work;
   (the first leak list and the sweep that found these).
 - [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md).
 - [Disk usage](../../development/disk-usage.md).
+- [0248-playwright-profile-dir-leaks.md](0248-playwright-profile-dir-leaks.md)
+  (leftover Playwright profiles, including those inside `ork-artifact-preview-*`).
 
 ## Replaces
 

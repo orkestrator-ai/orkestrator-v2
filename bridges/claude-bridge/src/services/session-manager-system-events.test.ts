@@ -1072,6 +1072,81 @@ describe("replayed transcripts match the live tab", () => {
     expect(messages[2]!.sdkUuid).toBeUndefined();
   });
 
+  test("a replayed prompt shows the images the user attached to it", () => {
+    const image = (mediaType: string, data: string) => ({
+      type: "image",
+      source: { type: "base64", media_type: mediaType, data },
+    });
+    const { messages } = normalizePersistedSessionMessages(
+      persisted([
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "Why is this?" },
+              image("image/png", "iVBORw0KGgo="),
+              image("image/jpeg", "/9j/4AAQ"),
+              image("image/png", "not base64!"),
+              image("text/html", "PGI+"),
+            ],
+          },
+        },
+        // An image-only prompt still has a row.
+        { type: "user", message: { role: "user", content: [image("image/webp", "UklGRg==")] } },
+        // A subagent's prompt is the parent's, not the user's.
+        {
+          type: "user",
+          parent_tool_use_id: "agent-1",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Look" }, image("image/png", "AAAA")],
+          },
+        },
+        // A tool's image lives in its result, not the user's prompt.
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "read-1", content: "ok" },
+              image("image/png", "AAAA"),
+            ],
+          },
+        },
+      ]),
+    );
+
+    expect(
+      messages.map((message) => message.parts.filter((part) => part.type === "image")),
+    ).toEqual([
+      [
+        {
+          type: "image",
+          content: "image-1.png",
+          fileUrl: "data:image/png;base64,iVBORw0KGgo=",
+          imageSource: "attachment",
+        },
+        {
+          type: "image",
+          content: "image-2.jpg",
+          fileUrl: "data:image/jpeg;base64,/9j/4AAQ",
+          imageSource: "attachment",
+        },
+      ],
+      [
+        {
+          type: "image",
+          content: "image-1.webp",
+          fileUrl: "data:image/webp;base64,UklGRg==",
+          imageSource: "attachment",
+        },
+      ],
+      [],
+    ]);
+    expect(messages[0]!.content).toBe("Why is this?");
+  });
+
   test("an unattached report exposes its detailed result on replay", () => {
     const { messages } = normalizePersistedSessionMessages(
       persisted([

@@ -17,6 +17,7 @@ import {
   toolDiffFromToolInput,
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
+import { parseBase64ImageData } from "./image-attachment-data.js";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
@@ -887,10 +888,11 @@ export function parseMessageContent(
 }
 
 /**
- * Block types this parser knows and deliberately produces no part for. A user
- * turn's images are rendered from the bridge's own copy of the prompt, and
- * redacted thinking has no readable content. Anything outside these and the
- * branches above is counted as drift rather than skipped silently.
+ * Block types this parser knows and deliberately produces no part for. A live
+ * user turn's images are rendered from the bridge's own copy of the prompt (a
+ * replayed one's by `persistedUserImageParts`), and redacted thinking has no
+ * readable content. Anything outside these and the branches above is counted
+ * as drift rather than skipped silently.
  */
 const RECOGNIZED_UNRENDERED_BLOCK_TYPES = new Set<unknown>([
   "tool_use",
@@ -899,6 +901,60 @@ const RECOGNIZED_UNRENDERED_BLOCK_TYPES = new Set<unknown>([
   "document",
   "redacted_thinking",
 ]);
+
+/**
+ * The images a user attached to a root prompt, rebuilt from the provider's
+ * own transcript.
+ *
+ * The live row names each image by the staged file it was read from, and the
+ * prompt the CLI persisted carries none of those names: the image went to the
+ * model as an inline block instead. That block is the only copy that outlives
+ * the bridge process, so a replayed prompt shows it as an attachment image
+ * with the bytes inline. The backend projection moves them behind a deferred
+ * reference, so they never travel with the live window.
+ *
+ * Only a root prompt the user wrote: a subagent's prompt is the parent's, and a
+ * record carrying tool results holds the tool's images inside those results.
+ */
+export function persistedUserImageParts(record: {
+  type: string;
+  message: unknown;
+  parent_tool_use_id: string | null;
+  isSidechain?: boolean;
+}): NormalizedPart[] {
+  if (
+    record.type !== "user" ||
+    !isRootAssistantRecord(record.parent_tool_use_id, record.isSidechain)
+  )
+    return [];
+  const content = (record.message as { content?: unknown } | null | undefined)?.content;
+  if (!Array.isArray(content)) return [];
+  if (content.some((block) => block?.type === "tool_result")) return [];
+  const parts: NormalizedPart[] = [];
+  for (const block of content) {
+    if (block?.type !== "image") continue;
+    const source = block.source as { type?: unknown; media_type?: unknown; data?: unknown };
+    if (
+      source?.type !== "base64" ||
+      typeof source.media_type !== "string" ||
+      typeof source.data !== "string"
+    ) {
+      continue;
+    }
+    const parsed = parseBase64ImageData(`data:${source.media_type};base64,${source.data}`);
+    if (!parsed?.mediaType) continue;
+    const mediaType = parsed.mediaType;
+    // The original name is not in the transcript; this one is only a caption.
+    const extension = mediaType === "image/jpeg" ? "jpg" : mediaType.slice("image/".length);
+    parts.push({
+      type: "image",
+      content: `image-${parts.length + 1}.${extension}`,
+      fileUrl: `data:${mediaType};base64,${parsed.data}`,
+      imageSource: "attachment",
+    });
+  }
+  return parts;
+}
 
 /**
  * Build message parts from ordered sequence.
@@ -1813,8 +1869,9 @@ export function normalizePersistedSessionMessages(
       messages.push(message);
     });
     if (entry.raw.type === "system") continue;
-    const parts = buildMessageParts(entry.orderedParts, toolTracker);
-    if (entry.raw.type === "user" && !entry.content.trim()) continue;
+    const images = persistedUserImageParts(entry.raw);
+    const parts = [...buildMessageParts(entry.orderedParts, toolTracker), ...images];
+    if (entry.raw.type === "user" && !entry.content.trim() && images.length === 0) continue;
     if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {
       continue;
     }

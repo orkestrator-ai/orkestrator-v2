@@ -65,6 +65,11 @@ export function deliverNowNotice(
         title: "This agent can't take messages mid-turn",
         description: "It will be delivered when the current turn ends.",
       };
+    case "steer-too-large":
+      return {
+        title: "This message is too large to deliver mid-turn",
+        description: "It will be delivered in full when the current turn ends.",
+      };
     case "steer-refused":
       return {
         title: "Couldn't deliver into the running turn",

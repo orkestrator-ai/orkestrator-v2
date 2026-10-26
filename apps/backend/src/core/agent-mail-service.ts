@@ -45,7 +45,7 @@ function idleFreshnessFlip(previous: MailboxPresence, next: MailboxPresence): bo
  */
 const MAX_MAIL_INJECT_BATCH = 10;
 const MAX_MAIL_INJECT_BATCH_BYTES = 128 * 1024;
-/** A steer carries at most 64 KB of text; leave room for the carrier around the batch. */
+/** Keep the fully rendered, joined steer below the native 64 KB text limit. */
 const MAX_MAIL_STEER_BATCH_BYTES = 60 * 1024;
 
 /** Presences that mean a turn may be running, so Deliver now tries steering into it. */
@@ -219,6 +219,7 @@ export class AgentMailService {
           agent: mailbox.agent,
           logicalSessionKey,
           requestId: message.injectRequestId,
+          steerRecovery: Boolean(steerRequestId),
         });
       } catch {
         status = "unknown";
@@ -661,6 +662,18 @@ export class AgentMailService {
        */
       const batched = [claimed];
       let carrierBytes = Buffer.byteLength(renderAgentMailCarrier(claimed), "utf8");
+      if (steerRequestId && carrierBytes > maxCarrierBytes) {
+        // Escaping can expand a valid mail body beyond the steer text limit.
+        // Keep the complete message queued for ordinary idle delivery.
+        this.skipReasons.delete(claimed.id);
+        await this.applyInjectorMutation(() =>
+          this.storage.finishAgentMailInject(mailbox.mailboxId, claimed.id, {
+            outcome: "held",
+            reason: "steer-too-large",
+          }),
+        );
+        continue;
+      }
       for (const sibling of pending) {
         if (batched.length >= MAX_MAIL_INJECT_BATCH) break;
         if (sibling.mailbox.mailboxId !== mailbox.mailboxId) continue;
@@ -685,7 +698,7 @@ export class AgentMailService {
         if (!siblingClaim) continue;
         const rendered = renderAgentMailCarrier(siblingClaim);
         const renderedBytes = Buffer.byteLength(rendered, "utf8");
-        if (carrierBytes + renderedBytes > maxCarrierBytes) {
+        if (carrierBytes + 2 + renderedBytes > maxCarrierBytes) {
           // Over budget: give it back rather than carry it, so the next pass
           // delivers it as its own turn instead of dropping it.
           await this.applyInjectorMutation(() =>
@@ -696,7 +709,7 @@ export class AgentMailService {
           );
           break;
         }
-        carrierBytes += renderedBytes;
+        carrierBytes += 2 + renderedBytes;
         batched.push(siblingClaim);
       }
       batched.sort((a, b) => a.createdAt.localeCompare(b.createdAt));

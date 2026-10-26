@@ -3055,7 +3055,7 @@ export class NativeAgentService {
   }
 
   async reconcileMailInject(
-    input: NativeAgentProjectionInput & { requestId: string },
+    input: NativeAgentProjectionInput & { requestId: string; steerRecovery?: boolean },
   ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
     const candidates = [input];
     const coordinatorId = coordinatorIdFromRuntimeId(input.environmentId);
@@ -3090,6 +3090,7 @@ export class NativeAgentService {
     let refused = false;
     let unresolved = false;
     for (const { candidate, key, session } of records) {
+      if (session?.retiredDispatch?.requestId === input.requestId) unresolved = true;
       if (session?.pendingDispatch?.requestId !== input.requestId) continue;
       if (session.pendingDispatch.mailRefused) refused = true;
       else if (
@@ -3099,7 +3100,14 @@ export class NativeAgentService {
       } else unresolved = true;
     }
     // A refusal in one identity cannot prove another identity's attempt unsent.
-    return refused && !unresolved ? "not-dispatched" : "unknown";
+    // A steer claim may never have entered ordinary dispatch. In recovery,
+    // absence of its durable ordinary record rules out a fallback send, but
+    // only alongside separate proof from the steer journal. An unsettled
+    // matching ordinary dispatch still blocks replay.
+    return !unresolved &&
+      (refused || (input.steerRecovery && records.some(({ session }) => session)))
+      ? "not-dispatched"
+      : "unknown";
   }
 
   async dispatchMailInject(

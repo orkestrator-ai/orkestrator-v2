@@ -222,6 +222,7 @@ beforeEach(() => {
     listAgentMailboxes,
     openInBrowser,
     toastInfo,
+    toastError,
   ])
     fn.mockClear();
   listAgentMailConversations.mockImplementation(async () => ({ revision: 1, conversations: [] }));
@@ -571,6 +572,84 @@ describe("AgentMailPanel", () => {
   });
 });
 
+describe("conversation Deliver now actions", () => {
+  async function openWaitingConversation() {
+    getAgentMailConversation.mockImplementation(async () =>
+      conversation([agent1, user], [mail("pending-inject", { id: "waiting-message" })]),
+    );
+    render(<AgentMailPanel />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    fireEvent.click(await screen.findByRole("button", { name: "Deliver now" }));
+  }
+
+  test.each([
+    {
+      reason: "steer-unsupported",
+      title: "This agent can't take messages mid-turn",
+      description: "It will be delivered when the current turn ends.",
+    },
+    {
+      reason: "steer-refused",
+      title: "Couldn't deliver into the running turn",
+      description: "It will be delivered when the current turn ends.",
+    },
+    {
+      reason: "steer-too-large",
+      title: "This message is too large to deliver mid-turn",
+      description: "It will be delivered in full when the current turn ends.",
+    },
+    {
+      reason: "verifying",
+      title: "Checking whether it arrived",
+      description: "It is confirmed before anything is sent again.",
+    },
+    {
+      reason: "draft",
+      title: "Delivery is still waiting",
+      description: "You have unsent text in the composer.",
+    },
+    {
+      reason: "busy",
+      title: "Delivery is still waiting",
+      description: "It will be delivered when this agent is idle.",
+    },
+  ])(
+    "conversation explains $reason and reloads its authoritative messages",
+    async ({ reason, title, description }) => {
+      deliverAgentMailNow.mockImplementationOnce(async () =>
+        mail("pending-inject", { placementReason: reason }),
+      );
+      await openWaitingConversation();
+      await waitFor(() => expect(toastInfo).toHaveBeenCalledWith(title, { description }));
+      expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "waiting-message");
+      await waitFor(() => expect(getAgentMailConversation).toHaveBeenCalledTimes(2));
+      expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
+    },
+  );
+
+  test("successful conversation delivery refreshes without a waiting notice", async () => {
+    await openWaitingConversation();
+    await waitFor(() => expect(getAgentMailConversation).toHaveBeenCalledTimes(2));
+    expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "waiting-message");
+    expect(toastInfo).not.toHaveBeenCalled();
+    expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
+  });
+
+  test("conversation delivery errors are reported and keep the message available", async () => {
+    deliverAgentMailNow.mockImplementationOnce(async () => {
+      throw new Error("Delivery unavailable");
+    });
+    await openWaitingConversation();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Could not deliver message", {
+        description: "Delivery unavailable",
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+});
+
 describe("AgentMailBanner actions", () => {
   function installBanner(
     placement: AgentMailMessage["placement"],
@@ -656,6 +735,16 @@ describe("AgentMailBanner actions", () => {
         description: "It will be delivered when the current turn ends.",
       }),
     );
+  });
+
+  test("names oversized mail on the banner", () => {
+    installBanner("pending-inject", { presence: "working", reason: "steer-too-large" });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(
+      screen.getByText(
+        "Message too large for mid-turn delivery · delivers in full when the turn ends",
+      ),
+    ).toBeTruthy();
   });
 
   test("names a refused steer on the banner itself", () => {

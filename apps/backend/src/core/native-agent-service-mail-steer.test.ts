@@ -87,6 +87,31 @@ describe("native agent mail steer", () => {
     );
   });
 
+  test("a turn changing after the active-run lookup refuses mail without ordinary fallback", async () => {
+    const stub = steerProvider({
+      active: async () => ({ state: "running", runId: "run-before-race" }),
+      respond: async () => ({ outcome: "mismatch" }),
+    });
+    await withService(
+      { prefix: "orkestrator-mail-steer-raced-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        await service.ensureSession(identity);
+        await expect(
+          service.steerMailInject({ ...identity, text: "mail", requestId: "steer-raced" }),
+        ).resolves.toEqual({ outcome: "refused", reason: "steer-refused" });
+        expect(stub.performSessionAction.mock.calls[0]![1]).toMatchObject({
+          kind: "steer",
+          expectedRunId: "run-before-race",
+          requestId: "steer-raced",
+        });
+        expect(stub.send).not.toHaveBeenCalled();
+        const session = await storage.getNativeAgentSession(key);
+        expect(session?.pendingSteer).toBeUndefined();
+        expect(session?.dispatchedRequestIds ?? []).not.toContain("steer-raced");
+      },
+    );
+  });
+
   test("a never-prompted tab has no turn to steer", async () => {
     const stub = steerProvider({});
     await withService(

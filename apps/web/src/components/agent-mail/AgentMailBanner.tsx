@@ -124,6 +124,8 @@ export function AgentMailBanner({
     text = "Checking whether the last delivery arrived · retries automatically";
   else if (pending?.placementReason === "steer-unsupported")
     text = "This agent can't take messages mid-turn · delivers when the turn ends";
+  else if (pending?.placementReason === "steer-too-large")
+    text = "Message too large for mid-turn delivery · delivers in full when the turn ends";
   else if (pending?.placementReason === "steer-refused")
     text = "Couldn't deliver into the running turn · delivers when the turn ends";
   else if (descriptor?.presence === "draft")

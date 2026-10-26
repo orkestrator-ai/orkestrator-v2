@@ -179,6 +179,7 @@ if (managedWebClient) {
   const browserUrl = gatewayInfo.browserUrl;
   if (!browserUrl) {
     await gateway.stop();
+    await backend.shutdown().catch(() => undefined);
     throw new Error("Tailscale Serve requires an available browser listener");
   }
   tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
@@ -193,6 +194,9 @@ if (managedWebClient) {
   } catch (error) {
     await tailscaleServe.stop().catch(() => undefined);
     await gateway.stop();
+    // The backend has started work of its own (the artifact preview probe's
+    // worker and its scratch directory); stop it before the process exits.
+    await backend.shutdown().catch(() => undefined);
     throw error;
   }
 }

@@ -293,6 +293,51 @@ describe("capacity after an unverified worker exit", () => {
   });
 });
 
+describe("closing the runner", () => {
+  test("cancels a running probe and waits for its worker's exit", async () => {
+    let cancelled = false;
+    let resolveOutcome!: (outcome: SupervisedOutcome) => void;
+    let resolveExited!: (report: ExitReport) => void;
+    let exitSeen = false;
+    const exited = new Promise<ExitReport>((resolve) => {
+      resolveExited = resolve;
+    });
+    void exited.then(() => {
+      exitSeen = true;
+    });
+    const target = create({
+      supervise: (): SupervisedJob => ({
+        outcome: new Promise<SupervisedOutcome>((resolve) => {
+          resolveOutcome = resolve;
+        }),
+        exited,
+        cancel: () => {
+          cancelled = true;
+          resolveOutcome({ type: "cancelled" });
+          // The verified exit, which removes the scratch, lands a little later.
+          setTimeout(() => resolveExited({ verified: true, pids: [], browserPid: null }), 20);
+        },
+        browserPid: () => null,
+        workerPid: () => null,
+        scratchDir: () => null,
+        reap: async () => true,
+      }),
+    });
+    const probing = target.probe(true);
+    expect(await until(() => resolveOutcome !== undefined)).toBe(true);
+
+    let closed = false;
+    const closing = target.close().then(() => {
+      closed = true;
+    });
+    expect(cancelled).toBe(true);
+    expect(closed).toBe(false);
+    await closing;
+    expect(exitSeen).toBe(true);
+    expect((await probing).available).toBe(false);
+  });
+});
+
 describe("Mermaid math labels", () => {
   test("detects $$…$$ outside comments", () => {
     expect(detectMermaidMathLabels('flowchart LR\n  A["$$x^2$$"] --> B')).toEqual({

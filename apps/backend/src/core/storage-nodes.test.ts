@@ -26,20 +26,20 @@ describe("RG-01/RG-02 command-node stores", () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
     try {
       const storage = new StorageService(dataDir);
-      expect((await storage.getNodeRegistry()).nodes).toEqual([]);
-      await storage.mutateNodeRegistry((current) => ({
+      expect((await storage.nodes.getNodeRegistry()).nodes).toEqual([]);
+      await storage.nodes.mutateNodeRegistry((current) => ({
         next: { ...current, registrationEnabled: true, nodes: [record] },
         result: undefined,
       }));
-      const registry = await storage.getNodeRegistry();
+      const registry = await storage.nodes.getNodeRegistry();
       expect(registry.revision).toBe(1);
       expect(registry.registrationEnabled).toBe(true);
       expect(registry.nodes).toEqual([record]);
       // Kept in the database, not as a plain JSON file beside it.
       await expect(readFile(path.join(dataDir, "node-registry.json"), "utf8")).rejects.toThrow();
       // A mutation that writes nothing leaves the revision alone.
-      await storage.mutateNodeRegistry(() => ({ next: null, result: undefined }));
-      expect((await storage.getNodeRegistry()).revision).toBe(1);
+      await storage.nodes.mutateNodeRegistry(() => ({ next: null, result: undefined }));
+      expect((await storage.nodes.getNodeRegistry()).revision).toBe(1);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }
@@ -49,14 +49,14 @@ describe("RG-01/RG-02 command-node stores", () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
     try {
       const storage = new StorageService(dataDir);
-      await storage.mutateNodeRegistry((current) => ({
+      await storage.nodes.mutateNodeRegistry((current) => ({
         next: {
           ...current,
           nodes: [record, { ...record, nodeId: "bad id with spaces" as never }],
         },
         result: undefined,
       }));
-      expect((await storage.getNodeRegistry()).nodes.map((node) => node.nodeId)).toEqual([
+      expect((await storage.nodes.getNodeRegistry()).nodes.map((node) => node.nodeId)).toEqual([
         "bk_leaf" as never,
       ]);
     } finally {
@@ -68,7 +68,7 @@ describe("RG-01/RG-02 command-node stores", () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
     try {
       const storage = new StorageService(dataDir);
-      await storage.mutateNodeAttachments((current) => ({
+      await storage.nodes.mutateNodeAttachments((current) => ({
         next: {
           ...current,
           controllers: [
@@ -83,7 +83,7 @@ describe("RG-01/RG-02 command-node stores", () => {
         },
         result: undefined,
       }));
-      const attachments = await storage.getNodeAttachments();
+      const attachments = await storage.nodes.getNodeAttachments();
       expect(attachments.controllers.map((entry) => entry.portalOrigins)).toEqual([
         ["https://desk.test"],
       ]);
@@ -99,15 +99,15 @@ describe("portal sidebar layout", () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
     try {
       const storage = new StorageService(dataDir);
-      expect(await storage.getPortalLayout()).toEqual({
+      expect(await storage.nodes.getPortalLayout()).toEqual({
         revision: 0,
         machineOrder: [],
         projectOrder: [],
         projectFolders: {},
         repositoryOrder: [],
       });
-      await storage.updatePortalLayout({ machineOrder: ["bk_b", "bk_a"] });
-      const layout = await storage.updatePortalLayout({
+      await storage.nodes.updatePortalLayout({ machineOrder: ["bk_b", "bk_a"] });
+      const layout = await storage.nodes.updatePortalLayout({
         projectOrder: ['["bk_a","project","p"]'],
         projectFolders: { '["bk_a","project","p"]': "Work" },
       });
@@ -118,7 +118,7 @@ describe("portal sidebar layout", () => {
         projectFolders: { '["bk_a","project","p"]': "Work" },
         repositoryOrder: [],
       });
-      expect(await new StorageService(dataDir).getPortalLayout()).toEqual(layout);
+      expect(await new StorageService(dataDir).nodes.getPortalLayout()).toEqual(layout);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }
@@ -134,20 +134,20 @@ test("controller settings round-trip, filter corruption and ignore detached cont
       changedAt: "2026-10-22T00:00:00.000Z",
       settings: { reviewInstruction: "Controller review" },
     };
-    await storage.mutateControllerSettings(() => ({
+    await storage.nodes.mutateControllerSettings(() => ({
       next: { version: 1, entries: [entry] },
       result: undefined,
     }));
     const reopened = new StorageService(dataDir);
-    expect((await reopened.getControllerSettings()).entries).toEqual([entry]);
-    await storage.mutateControllerSettings(() => ({
+    expect((await reopened.nodes.getControllerSettings()).entries).toEqual([entry]);
+    await storage.nodes.mutateControllerSettings(() => ({
       next: {
         version: 1,
         entries: [entry, { ...entry, controllerId: "bad id" }, { ...entry, settings: [] }],
       } as never,
       result: undefined,
     }));
-    expect((await reopened.getControllerSettings()).entries).toEqual([entry]);
+    expect((await reopened.nodes.getControllerSettings()).entries).toEqual([entry]);
     const leaf = new LeafControllerSettings({
       storage: reopened,
       attachedName: () => null,

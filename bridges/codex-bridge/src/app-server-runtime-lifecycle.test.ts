@@ -666,6 +666,9 @@ describe("session lifecycle", () => {
       phase: "failed",
       error: CODEX_RESTARTED_MID_TURN_MESSAGE,
       interruption: "restart",
+      // Named, so a workflow does not read the notice as the outcome of a
+      // newer request whose turn has not started yet (todo 0112).
+      interruptedRequestId: "req-interrupted",
     });
     expect(h.events).toContainEqual({
       type: "session.error",
@@ -1735,6 +1738,36 @@ describe("session lifecycle", () => {
         value: { summary: "Looks good" },
       },
     });
+  });
+
+  test("a turn the provider refused says why in its transcript, not with an empty reply", async () => {
+    // What codex 0.162 reports when a ChatGPT login is asked for `gpt-5.4`.
+    const refusal = "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.";
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "refused", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: JSON.stringify({
+            type: "error",
+            status: 400,
+            error: { type: "invalid_request_error", message: refusal, code: "model_not_found" },
+          }),
+          codexErrorInfo: "other",
+        },
+      },
+    });
+    await h.drain();
+
+    const parts = ((await h.runtime.getMessages(sessionId)) ?? [])
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) => message.parts);
+    expect(parts).toEqual([{ type: "status", severity: "error", content: refusal }]);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "error", phase: "failed" });
   });
 
   test("does not treat a plaintext final message as structured success", async () => {

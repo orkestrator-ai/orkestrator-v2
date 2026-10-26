@@ -62,3 +62,11 @@ does not establish a new aggregate-only flake. No OpenCode implementation,
 assertion, timeout or skip changed. Evidence:
 `/tmp/orkestrator-test-run.bTab6l/unrelated-opencode-owner.log.gz` and the aggregate
 log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.
+
+## Recurrence — 2026-10-26
+
+- Command: `mise run test` on branch `todo-0020-container-state-observation-fb5e330d3136` (`d3dcfd62b`: container image, entrypoint, e2e spec, CI workflow and docs; nothing near this test), macOS 27.0 arm64, default groups, host load average about 23 to 32 from other workers.
+- Failure: the case timed out at 40,002.04 ms, the backend's only failure. The root group's other failure was flake 0887's missing register fields, fixed in the same change.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.gmkkKT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Complete unchanged owner: `mise run test:logged -- --name opencode-research-isolated -- bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1` passed (exit 0, 2.4 s).
+- Assessment: another aggregate-only timeout at the 40 s deadline. Still open; nothing changed.

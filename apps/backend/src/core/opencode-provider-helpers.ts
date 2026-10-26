@@ -46,6 +46,7 @@ import {
   mimeTypeForFilename,
   mimeTypeForImageData,
   promptAttachmentUrl,
+  type PromptAttachment,
 } from "./prompt-attachments.js";
 
 export type OpenCodePromptPart = TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput;
@@ -632,6 +633,26 @@ export function openCodeAgentFor(
   return openCodeCoordinatorAgent(policy) ?? options.executionAgent ?? options.mode ?? fallback;
 }
 
+/**
+ * The media type an attachment's file part declares to OpenCode.
+ *
+ * OpenCode routes a `file://` part by this type alone. `text/plain` runs its
+ * Read tool, which reads text, returns images and PDFs as attachments, and
+ * refuses binary content in a message the model still receives. Any other
+ * non-image type is inlined as a data URL, and an image type is decoded as an
+ * image: a text file labelled `image/png` failed decoding in the background
+ * and the prompt never became a message (todo 0166).
+ */
+export function openCodeAttachmentMime(attachment: PromptAttachment): string {
+  const name = attachment.filename ?? attachment.path;
+  if (attachment.type === "file") return "text/plain";
+  // Staging derives the data URL's MIME from the bytes; its display name may
+  // still have the clipboard's original extension.
+  const inline = /^data:(image\/[^;,]+)[;,]/.exec(attachment.dataUrl ?? "");
+  if (inline) return inline[1]!;
+  return mimeTypeForFilename(name);
+}
+
 export function openCodePromptParts(
   prompt: string,
   options: ProviderSendOptions,
@@ -649,7 +670,7 @@ export function openCodePromptParts(
   for (const attachment of options.attachments ?? []) {
     parts.push({
       type: "file",
-      mime: mimeTypeForFilename(attachment.filename ?? attachment.path),
+      mime: openCodeAttachmentMime(attachment),
       filename: attachment.filename,
       url: promptAttachmentUrl(attachment),
     });

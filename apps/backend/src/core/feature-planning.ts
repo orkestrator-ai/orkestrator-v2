@@ -315,7 +315,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     if (!isStartFeaturePlanningInput(input)) {
       throw new Error("Invalid feature planning request");
     }
-    const plan = await this.storage.getFeaturePlan(input.featureId);
+    const plan = await this.storage.kanban.getFeaturePlan(input.featureId);
     if (!plan) throw new Error(`Feature plan not found: ${input.featureId}`);
     if (input.kind === "story") {
       const story = plan.stories.find((candidate) => candidate.id === input.storyId);
@@ -337,7 +337,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       updatedAt: timestamp,
       backendRevision: 0,
     };
-    const { started, feature } = await this.storage.startFeaturePlanning(record);
+    const { started, feature } = await this.storage.kanban.startFeaturePlanning(record);
     if (!started) {
       throw new Error("A planning request is already running for this feature");
     }
@@ -354,7 +354,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
 
   /** Every record for a project, including terminal ones the UI still renders. */
   async snapshot(projectId: string): Promise<FeaturePlanningRecord[]> {
-    const plans = await this.storage.getFeaturePlans(projectId);
+    const plans = await this.storage.kanban.getFeaturePlans(projectId);
     return plans
       .map((plan) => plan.planning)
       .filter((record): record is FeaturePlanningRecord => isFeaturePlanningRecord(record));
@@ -451,7 +451,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       kind: "feature-planning-tick",
       progressIntervalMs: pollMs,
       discoveryIntervalMs: this.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
-      discover: () => discoverFeaturePlanning(this.storage),
+      discover: () => discoverFeaturePlanning(this.storage.kanban),
       advance: (pass) => this.runLocked(pass.key),
       admission: this.options.workflowAdmission ?? null,
       ...(this.options.schedulerClock
@@ -473,13 +473,17 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     operationId: string,
     mutator: (plan: FeaturePlan, record: FeaturePlanningRecord) => T,
   ): Promise<{ result: T; feature: FeaturePlan }> {
-    const outcome = await this.storage.mutateFeaturePlanning(featureId, operationId, mutator);
+    const outcome = await this.storage.kanban.mutateFeaturePlanning(
+      featureId,
+      operationId,
+      mutator,
+    );
     this.noteRecord(featureId, outcome.feature.planning);
     return outcome;
   }
 
   private async clearPlanning(featureId: string, operationId: string): Promise<void> {
-    const plan = await this.storage.clearFeaturePlanning(featureId, operationId);
+    const plan = await this.storage.kanban.clearFeaturePlanning(featureId, operationId);
     this.noteRecord(featureId, plan.planning);
   }
 
@@ -509,7 +513,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
 
   private async tick(): Promise<void> {
     if (this.stopped) return;
-    const records = await this.storage.listActiveFeaturePlanning().catch(() => []);
+    const records = await this.storage.kanban.listActiveFeaturePlanning().catch(() => []);
     // Storage already filtered to active records, so every one is selected.
     recurringWorkMetrics.work("record-selected", records.length);
     await Promise.all(records.map((record) => this.runLocked(record.featureId)));
@@ -596,7 +600,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     const session = await this.ensureSession(record, environment.id, provider, launchSettings);
     const sessionId = session.sessionId;
     if (await this.clearIfCancellationRequested(record)) return;
-    const plan = await this.storage.getFeaturePlan(record.featureId);
+    const plan = await this.storage.kanban.getFeaturePlan(record.featureId);
     if (!plan)
       throw new DefiniteFeaturePlanningError(
         "persistence",
@@ -1072,7 +1076,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
    * needed. A `null` return means "not ready yet, try next tick".
    */
   private async ensureEnvironment(record: FeaturePlanningRecord): Promise<Environment | null> {
-    const plan = await this.storage.getFeaturePlan(record.featureId);
+    const plan = await this.storage.kanban.getFeaturePlan(record.featureId);
     if (!plan) {
       throw new DefiniteFeaturePlanningError(
         "persistence",
@@ -1086,7 +1090,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     if (environment?.deletionRequestedAt) environment = null;
     if (!environment) {
       environment = await this.createEnvironment(plan);
-      await this.storage.updateFeaturePlan(plan.id, {
+      await this.storage.kanban.updateFeaturePlan(plan.id, {
         codexEnvironmentId: environment.id,
       });
       await this.update(record, (_plan, current) => {
@@ -1143,7 +1147,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     provider: BuildPipelineProvider,
     launchSettings: { model?: string; effort: string; fastMode?: boolean },
   ): Promise<{ sessionId: string; created: boolean }> {
-    const plan = await this.storage.getFeaturePlan(record.featureId);
+    const plan = await this.storage.kanban.getFeaturePlan(record.featureId);
     const existing = plan?.codexSessionId;
     if (existing) {
       // Liveness only: a session whose last turn failed still exists, so it is
@@ -1176,7 +1180,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
         policy: resolveEnvironmentExecutionPolicy(environment, "build-pipeline"),
       }),
     );
-    await this.storage.updateFeaturePlan(record.featureId, { codexSessionId: created });
+    await this.storage.kanban.updateFeaturePlan(record.featureId, { codexSessionId: created });
     await this.update(record, (_plan, current) => {
       current.providerSessionId = created;
       // A new session has none of the old transcript, so the previous baseline
@@ -1468,12 +1472,12 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
    * `running`, which the reply watcher settles from the transcript.
    */
   private async adoptLegacyConversations(): Promise<void> {
-    for (const plan of await this.storage.listAllFeaturePlans()) {
+    for (const plan of await this.storage.kanban.listAllFeaturePlans()) {
       if (plan.planning !== undefined) continue;
       if (!plan.codexSessionId || !plan.codexEnvironmentId) continue;
       const pending = this.unansweredMessage(plan);
       if (!pending) continue;
-      await this.storage
+      await this.storage.kanban
         .startFeaturePlanning({
           version: FEATURE_PLANNING_RECORD_VERSION,
           operationId: randomUUID(),
@@ -1518,7 +1522,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
   }
 
   private async read(featureId: string): Promise<FeaturePlanningRecord | null> {
-    const plan = await this.storage.getFeaturePlan(featureId);
+    const plan = await this.storage.kanban.getFeaturePlan(featureId);
     const record = plan?.planning;
     this.noteRecord(featureId, record);
     return isFeaturePlanningRecord(record) ? record : null;

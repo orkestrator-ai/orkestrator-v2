@@ -1,3 +1,5 @@
+import { claudeInstalledPluginIdEnablement } from "@orkestrator/protocol/node/claude-plugin-set";
+
 /**
  * A self-contained scanner executed inside the selected environment.
  *
@@ -17,6 +19,10 @@ const operation = process.argv[2];
 const requestedPath = process.argv[3] || "";
 const home = os.homedir();
 const cwd = process.cwd();
+const claudeHome = process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.trim()
+  ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(home, ".claude");
+// Embed the shared, filesystem-free rule in this standalone environment script.
+const claudeInstalledPluginIdEnablement = ${claudeInstalledPluginIdEnablement.toString()};
 const isolatedAgentTest = process.env.ORKESTRATOR_AGENT_TEST_ISOLATED === "1";
 const maxEntriesPerRoot = 500;
 const maxRoots = 256;
@@ -100,8 +106,15 @@ async function claudePluginRoots() {
   if (isolatedAgentTest) return [];
   const manifest = await jsonFile(path.join(home, ".claude", "plugins", "installed_plugins.json"));
   if (!manifest || typeof manifest !== "object" || !manifest.plugins || typeof manifest.plugins !== "object") return [];
+  // Environment discovery follows the ordinary session's user/project
+  // sources. Local settings are opt-in per prompt, not an environment default.
+  const settings = {
+    user: await jsonFile(path.join(claudeHome, "settings.json")),
+    project: await jsonFile(path.join(cwd, ".claude", "settings.json")),
+  };
   const result = [];
   for (const [id, value] of Object.entries(manifest.plugins).slice(0, maxRoots)) {
+    if (!claudeInstalledPluginIdEnablement(id, settings, ["user", "project"]).enabled) continue;
     for (const install of Array.isArray(value) ? value : []) {
       if (install && typeof install.installPath === "string" && path.isAbsolute(install.installPath)) {
         const marketplace = id.lastIndexOf("@");
@@ -227,7 +240,7 @@ async function rootPlan() {
     return {
       specs: [
         ...(isolatedAgentTest ? [] : [{ path: managed, scope: "admin", recursive: false }]),
-        ...(isolatedAgentTest ? [] : [{ path: path.join(home, ".claude", "skills"), scope: "user", recursive: false }]),
+        ...(isolatedAgentTest ? [] : [{ path: path.join(claudeHome, "skills"), scope: "user", recursive: false }]),
         ...projects.map((dir) => ({ path: path.join(dir, ".claude", "skills"), scope: "project", projectBoundary: dir, recursive: false })),
         ...(await claudePluginRoots()),
       ].slice(0, maxRoots),

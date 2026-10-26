@@ -68,7 +68,9 @@ export interface ScheduledJobRuntime {
         body: string;
       },
     ): Promise<{ id: string; toEnvironmentId: string; toTabId: string }>;
-    getCoordinatorWorkspace(projectId: string): Promise<CoordinatorWorkspace | null>;
+    coordinators: {
+      getCoordinatorWorkspace(projectId: string): Promise<CoordinatorWorkspace | null>;
+    };
   };
   /** The public handler table, used to check an action's input without running it. */
   publicHandlers?: () => readonly PublicActionHandler[];
@@ -608,7 +610,9 @@ export class ScheduledJobExecutor {
   async coordinatorScope(
     owner: Extract<ScheduleOwner, { kind: "coordinator" }>,
   ): Promise<CoordinatorControlScope> {
-    const workspace = await this.runtime.storage.getCoordinatorWorkspace(owner.projectId);
+    const workspace = await this.runtime.storage.coordinators.getCoordinatorWorkspace(
+      owner.projectId,
+    );
     if (!workspace || workspace.id !== owner.coordinatorId) {
       throw new ScheduleAuthorityError(
         "The coordinator that created this schedule no longer exists",

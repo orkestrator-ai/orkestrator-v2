@@ -88,6 +88,31 @@ describe("firstModelFor", () => {
     expect(firstModelFor("claude", catalog, { claude: "" })).toBe("claude-a");
   });
 
+  test("falls back to the model a tab with no model starts on, before the first one", () => {
+    const pi: AgentModelCatalog = {
+      ...catalog,
+      pi: [
+        { id: "openai/gpt-4", name: "GPT-4", reasoningEfforts: [] },
+        {
+          id: "openai/gpt-6.1-sol",
+          name: "GPT-6.1 Sol",
+          reasoningEfforts: [],
+          sessionDefault: true,
+        },
+      ],
+    };
+    expect(firstModelFor("pi", pi)).toBe("openai/gpt-6.1-sol");
+    expect(firstModelFor("pi", pi, { pi: "gone/x" })).toBe("openai/gpt-6.1-sol");
+    // A saved choice still wins.
+    expect(firstModelFor("pi", pi, { pi: "openai/gpt-4" })).toBe("openai/gpt-4");
+    // A disconnected mark is never an implicit pick.
+    const disconnected = {
+      ...pi,
+      pi: pi.pi!.map((model) => (model.sessionDefault ? { ...model, connected: false } : model)),
+    };
+    expect(firstModelFor("pi", disconnected)).toBe("openai/gpt-4");
+  });
+
   test("returns the default placeholder when the agent has no models", () => {
     expect(firstModelFor("opencode", catalog)).toBe("default");
     expect(firstModelFor("opencode", catalog, { opencode: "provider/model-a" })).toBe("default");

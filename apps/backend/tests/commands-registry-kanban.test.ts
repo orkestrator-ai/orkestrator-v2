@@ -9,11 +9,13 @@ import type { CommandContext } from "./command-fixtures";
 describe("feature plan commands", () => {
   function featureContext() {
     const storage = {
-      createFeaturePlan: mock(async () => ({ id: "feature-1" })),
-      updateFeaturePlan: mock(async () => ({ id: "feature-1" })),
-      getFeaturePlans: mock(async () => []),
-      appendFeaturePlanMessage: mock(async () => ({ id: "feature-1" })),
-      appendFeatureStoryMessage: mock(async () => ({ id: "feature-1" })),
+      kanban: {
+        createFeaturePlan: mock(async () => ({ id: "feature-1" })),
+        updateFeaturePlan: mock(async () => ({ id: "feature-1" })),
+        getFeaturePlans: mock(async () => []),
+        appendFeaturePlanMessage: mock(async () => ({ id: "feature-1" })),
+        appendFeatureStoryMessage: mock(async () => ({ id: "feature-1" })),
+      },
     };
     return { context: { storage } as unknown as CommandContext, storage };
   }
@@ -27,7 +29,7 @@ describe("feature plan commands", () => {
       context,
     );
 
-    expect(storage.appendFeaturePlanMessage).toHaveBeenCalledWith(
+    expect(storage.kanban.appendFeaturePlanMessage).toHaveBeenCalledWith(
       "feature-1",
       "assistant",
       "hello",
@@ -50,7 +52,7 @@ describe("feature plan commands", () => {
       },
       context,
     );
-    expect(storage.appendFeaturePlanMessage).toHaveBeenCalledWith(
+    expect(storage.kanban.appendFeaturePlanMessage).toHaveBeenCalledWith(
       "feature-1",
       "assistant",
       "hello",
@@ -70,7 +72,7 @@ describe("feature plan commands", () => {
         context,
       ),
     ).toThrow(/stateApplication/i);
-    expect(storage.appendFeatureStoryMessage).not.toHaveBeenCalled();
+    expect(storage.kanban.appendFeatureStoryMessage).not.toHaveBeenCalled();
   });
 
   test("rejects malformed feature-plan model attribution", () => {
@@ -88,7 +90,7 @@ describe("feature plan commands", () => {
         context,
       ),
     ).toThrow(/modelId/i);
-    expect(storage.appendFeaturePlanMessage).not.toHaveBeenCalled();
+    expect(storage.kanban.appendFeaturePlanMessage).not.toHaveBeenCalled();
   });
 
   test("rejects an invalid feature plan message role before touching storage", async () => {
@@ -101,7 +103,7 @@ describe("feature plan commands", () => {
         context,
       ),
     ).toThrow(/role/i);
-    expect(storage.appendFeaturePlanMessage).not.toHaveBeenCalled();
+    expect(storage.kanban.appendFeaturePlanMessage).not.toHaveBeenCalled();
   });
 
   test("rejects an invalid story message role before touching storage", async () => {
@@ -114,6 +116,6 @@ describe("feature plan commands", () => {
         context,
       ),
     ).toThrow(/role/i);
-    expect(storage.appendFeatureStoryMessage).not.toHaveBeenCalled();
+    expect(storage.kanban.appendFeatureStoryMessage).not.toHaveBeenCalled();
   });
 });

@@ -171,6 +171,39 @@ stop holding images (request attachments and result evidence still do), so
 its images become orphans. Orphaned images are collected after 24 hours in
 small batches from the reconciler loop.
 
+### Commit cost
+
+A commit costs CPU in proportion to the rows it changes, not to the size of
+the environment. The committed manifest and every row in it are deep-frozen,
+so an unchanged object is an unchanged row. A transaction works on a
+copy-on-write manifest (`web-annotation-working-manifest.ts`): a collection is
+shallow-copied the first time the transaction touches it, and that copy
+records which keys are written. A change replaces a row
+(`tx.manifest.requests[id] = { ...request, state }`) or edits the private clone
+`tx.edit(collection, key)` returns. Writing into a committed row throws, so the
+transaction rolls back rather than corrupting the committed manifest or
+changing a row the commit would not see. At commit only the written rows are
+serialized (`planChangedRows`); ordered groups (a thread's entries, the
+receipts) keep the append-only position rule. The full diff (`planRows`) runs
+only for the one-off legacy import and repair, and under `bun test` it checks
+every commit's plan (`verifyRowPlans`).
+
+What is still proportional to the collection is pointer work: the shallow copy
+of each collection a commit touches, a copy of the snapshot's row maps, and a
+shallow freeze of the copied containers. Copying keeps an older manifest
+intact for readers that hold it across an `await`, and for a commit that rolls
+back. Each commit reports `storage_commit_rows_serialized` and
+`storage_commit_collections_copied` (gauges, per scope);
+`web-annotation-payloads.bench.test.ts` asserts that a create at 1,900 notes
+serializes and copies exactly as much as one at 1 note.
+`bun scripts/web-annotation-commit-profile.ts` measures median CPU per create
+as the environment fills. On 2026-10-26 (18 cores at load 10 to 31, shared
+with other work, so read the proportions) a create at 0 / 500 / 1,000 / 1,900
+notes took 1.3–2.6 / 1.5–2.4 / 1.8–3.2 / 2.6–3.8 ms of CPU, against
+1.7–2.8 / 7.9–9.3 / 13.8–14.8 / 18.1–28.3 ms before this change, and
+serialized 6 rows at every size. At 1,900 notes the largest remaining share
+is the SQLite writes themselves.
+
 ## Synchronization
 
 `web-annotations-changed` carries only environment id, generation, revision and

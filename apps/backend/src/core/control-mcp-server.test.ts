@@ -219,7 +219,9 @@ describe("Orkestrator control MCP server", () => {
         });
         const main = await world.main();
         const worker = await world.addEnvironment("review");
-        const workspace = (await world.storage.getCoordinatorWorkspace(world.projectId))!;
+        const workspace = (await world.storage.coordinators.getCoordinatorWorkspace(
+          world.projectId,
+        ))!;
         const conversation = workspace.conversations.find(
           (item) => item.id === main.conversationId,
         )!;
@@ -246,7 +248,7 @@ describe("Orkestrator control MCP server", () => {
               1,
               snapshot,
             );
-          await world.storage.saveCoordinatorWorkflowAssociation({
+          await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
             id: `a-${id}`,
             projectId: world.projectId,
             coordinatorId: world.coordinatorId,

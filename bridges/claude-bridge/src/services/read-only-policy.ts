@@ -483,7 +483,7 @@ export function claudeReadOnlySandbox(
     commandSandbox?: CoordinatorCommandSandbox;
   } = {},
 ): {
-  enabled: true;
+  enabled: boolean;
   failIfUnavailable: boolean;
   autoAllowBashIfSandboxed: true;
   allowUnsandboxedCommands: false;
@@ -496,7 +496,13 @@ export function claudeReadOnlySandbox(
   };
 } {
   return {
-    enabled: true,
+    // Off where the launcher's probe found no working sandbox. The CLI decides
+    // availability from the programs alone, so on a host whose bubblewrap
+    // starts but cannot nest the namespace its seccomp helper needs (Ubuntu's
+    // AppArmor bwrap profile) a requested sandbox starts and every command
+    // then fails. Where it is genuinely absent, asking for it changes nothing.
+    // The hook is the boundary either way, as the tier says.
+    enabled: options.commandSandbox !== "unavailable",
     // Fail rather than silently running unsandboxed where the platform was
     // qualified on the sandbox. A host the launcher's probe found without one
     // was offered at a weaker tier, with the hook as its boundary; requiring

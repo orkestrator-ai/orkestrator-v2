@@ -278,16 +278,31 @@ export function sessionSnapshotBudget(agent: ProviderAgent): { remaining: number
  * Reads a failed turn from a bridge session snapshot body. A failure the bridge
  * explained is thrown as a {@link ProviderSessionFailedError}; otherwise the
  * turn's interruption, if the body reports a failed one, is returned.
+ *
+ * `interruptedRequestId` names the request the interruption cut short, so a
+ * workflow can tell it from a newer request whose turn has not started yet.
+ * Older bridges omit it.
  */
 export function throwExplainedTurnFailure(
   agent: ProviderAgent,
   body: Record<string, unknown>,
-): ProviderTurnInterruption | undefined {
+): { interruption: ProviderTurnInterruption; interruptedRequestId?: string } | undefined {
   const interruption = body.interruption === "restart" ? ("restart" as const) : undefined;
   if (body.status !== "error") return undefined;
+  const interruptedRequestId =
+    interruption &&
+    typeof body.interruptedRequestId === "string" &&
+    body.interruptedRequestId.length > 0 &&
+    body.interruptedRequestId.length <= 512
+      ? body.interruptedRequestId
+      : undefined;
   const detail = typeof body.error === "string" ? body.error.trim().slice(0, 4_000) : "";
-  if (detail) throw new ProviderSessionFailedError(agent, detail, { interruption });
-  return interruption;
+  if (detail) {
+    throw new ProviderSessionFailedError(agent, detail, { interruption, interruptedRequestId });
+  }
+  return interruption
+    ? { interruption, ...(interruptedRequestId ? { interruptedRequestId } : {}) }
+    : undefined;
 }
 
 export async function boundedJson(

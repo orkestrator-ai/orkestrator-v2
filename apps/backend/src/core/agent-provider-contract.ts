@@ -89,6 +89,14 @@ export interface ProviderSessionObservation {
    * one; an unknown value is dropped, so that turn fails as before.
    */
   interruption?: ProviderTurnInterruption;
+  /**
+   * The request id of the turn `interruption` cut short, when the provider
+   * knows it. Session status is per session, not per request: until the next
+   * turn starts, the notice still describes the earlier one. A bridge that
+   * predates this field leaves it unset, and the notice is then taken to be
+   * about whichever request the caller is watching, as before.
+   */
+  interruptedRequestId?: string;
 }
 
 /** A provider-caused stop of a turn the same session can continue. */
@@ -145,9 +153,13 @@ export class PromptRejectedError extends Error {
 }
 
 export class ProviderUnavailableError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+  /** Delay the next dispatch while a request's terminal evidence is still settling. */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { cause?: unknown; retryAfterMs?: number }) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ProviderUnavailableError";
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 
@@ -186,22 +198,82 @@ export class ProviderSessionFailedError extends Error {
   readonly agent: ProviderAgent;
   readonly detail: string;
   readonly interruption?: ProviderTurnInterruption;
+  /** See {@link ProviderSessionObservation.interruptedRequestId}. */
+  readonly interruptedRequestId?: string;
 
   constructor(
     agent: ProviderAgent,
     detail: string,
-    options: { interruption?: ProviderTurnInterruption } = {},
+    options: { interruption?: ProviderTurnInterruption; interruptedRequestId?: string } = {},
   ) {
     super(`The ${agent} session failed: ${detail}`);
     this.name = "ProviderSessionFailedError";
     this.agent = agent;
     this.detail = detail;
     if (options.interruption) this.interruption = options.interruption;
+    if (options.interruption && options.interruptedRequestId) {
+      this.interruptedRequestId = options.interruptedRequestId;
+    }
   }
 }
 
+/**
+ * Whether a restart notice is about an earlier request than `requestId`.
+ *
+ * Bridges clear the notice when the next turn starts, so a notice naming
+ * another request, while the provider confirms `requestId` is still pending,
+ * means its own turn was accepted and has not started yet. Both halves are
+ * needed: a name can be stale (Claude rewrites its turn-in-flight mark after
+ * the turn starts, so a bridge killed in between restores the previous
+ * request's name), and a provider that restarted no longer holds the request
+ * it lost. Anything short of both reads the notice at face value.
+ */
+async function interruptionSuperseded(
+  provider: Pick<AgentSessionProvider, "dispatchStatus">,
+  sessionId: string,
+  observation: Pick<ProviderSessionObservation, "status" | "interruption" | "interruptedRequestId">,
+  requestId: string | undefined,
+): Promise<boolean> {
+  if (
+    requestId === undefined ||
+    observation.status !== "error" ||
+    observation.interruption === undefined ||
+    observation.interruptedRequestId === undefined ||
+    observation.interruptedRequestId === requestId ||
+    !provider.dispatchStatus
+  ) {
+    return false;
+  }
+  const accepted = await provider
+    .dispatchStatus(sessionId, requestId)
+    .catch(() => "unknown" as const);
+  return accepted === "pending";
+}
+
+/**
+ * The superseded notice read as what it says about `requestId`: its turn has
+ * not settled. Idle rather than error, so no caller fails or continues the
+ * request on another turn's outcome; `turnSettled: false` makes every workflow
+ * owner wait for the turn instead of reading its result.
+ */
+function supersededInterruption(
+  observation: ProviderSessionObservation,
+): ProviderSessionObservation {
+  const superseded: ProviderSessionObservation = {
+    ...observation,
+    status: "idle",
+    turnSettled: false,
+  };
+  delete superseded.interruption;
+  delete superseded.interruptedRequestId;
+  return superseded;
+}
+
 export async function readProviderStatus(
-  provider: Pick<AgentSessionProvider, "status" | "observeSession" | "settleTurn">,
+  provider: Pick<
+    AgentSessionProvider,
+    "status" | "observeSession" | "settleTurn" | "dispatchStatus"
+  >,
   sessionId: string,
   requestId?: string,
 ): Promise<ProviderSessionObservation & { error?: string }> {
@@ -209,6 +281,9 @@ export async function readProviderStatus(
     const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
       : { status: await provider.status(sessionId) };
+    if (await interruptionSuperseded(provider, sessionId, observation, requestId)) {
+      return supersededInterruption(observation);
+    }
     if (
       requestId &&
       observation.status === "idle" &&
@@ -227,12 +302,19 @@ export async function readProviderStatus(
     return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
+      const failed: ProviderSessionObservation = {
+        status: "error",
+        ...(error.interruption ? { interruption: error.interruption } : {}),
+        ...(error.interruptedRequestId ? { interruptedRequestId: error.interruptedRequestId } : {}),
+      };
+      if (await interruptionSuperseded(provider, sessionId, failed, requestId)) {
+        return supersededInterruption(failed);
+      }
       const settled = requestId ? await provider.settleTurn?.(sessionId, requestId) : undefined;
       return {
-        status: "error",
+        ...failed,
         ...(settled !== undefined ? { turnSettled: settled } : {}),
         error: error.detail,
-        ...(error.interruption ? { interruption: error.interruption } : {}),
       };
     }
     throw error;
@@ -250,7 +332,10 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * What a provider can still prove about one dispatch request id.
  *
  * `dispatched` is an assertion, not a guess: the provider holds a durable
- * record that this exact id was accepted. `lost` is the other assertion: an
+ * record that this exact id was accepted, including a completed request.
+ * `pending` additionally proves the accepted request has not finished yet;
+ * only that stronger evidence can supersede another request's restart notice.
+ * `lost` is the other assertion: an
  * earlier provider process recorded the id, this one cannot tell whether its
  * turn ran, and it will refuse the id for good (the read-only twin of a prompt
  * refused with `requestIdRetired`). Neither is "never sent". Everything else —
@@ -258,7 +343,7 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * `unknown`, so a lost record can never be mistaken for a prompt that was never
  * sent.
  */
-export type ProviderDispatchStatus = "dispatched" | "unknown" | "lost";
+export type ProviderDispatchStatus = "dispatched" | "pending" | "unknown" | "lost";
 /**
  * Steering reports positive evidence that a queued instruction was removed,
  * and never `lost`: a steer journal has no retired state.
@@ -570,7 +655,7 @@ export interface AgentSessionProvider {
    *
    * Read-only. It exists so an ambiguous dispatch can be settled from the
    * provider's own durable journal instead of being parked for the user:
-   * `dispatched` confirms it, `lost` retires it, `unknown` leaves it parked.
+   * `dispatched` and `pending` confirm it, `lost` retires it, `unknown` leaves it parked.
    */
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   /**

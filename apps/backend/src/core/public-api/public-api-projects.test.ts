@@ -219,10 +219,12 @@ describe("request keys and receipts", () => {
   test("a retired namespace refuses replays as expired instead of executing them", async () => {
     const h = await harness();
     const now = Date.now();
-    const old = await h.storage.publicOperationNamespaces(now - 40 * 24 * 60 * 60 * 1000);
+    const old = await h.storage.publicOperations.publicOperationNamespaces(
+      now - 40 * 24 * 60 * 60 * 1000,
+    );
     // Force rotation to a fresh namespace, then collect the old one.
-    await h.storage.publicOperationNamespaces(now);
-    const collected = await h.storage.collectPublicOperations(now);
+    await h.storage.publicOperations.publicOperationNamespaces(now);
+    const collected = await h.storage.publicOperations.collectPublicOperations(now);
     expect(collected.retired).toContain(old.current);
     const replay = await h.call(
       "project.add",

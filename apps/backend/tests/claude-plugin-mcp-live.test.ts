@@ -9,8 +9,10 @@
  * Fixture plugins with one stdio server each are installed in a disposable
  * home and project. The bridge's own probe (`plugin-mcp.live-probe.ts`)
  * resolves the plugin set exactly as a turn does and starts the CLI with it;
- * the editor's catalogue reads the same files. Nothing reads or writes the
- * operator's Claude configuration.
+ * the editor's catalogue reads the same files. Installs are passed only when
+ * Claude Code's own `enabledPlugins` enables their `<name>@<marketplace>` id
+ * (todo 0151), so turning one off in Claude Code turns it off here too.
+ * Nothing reads or writes the operator's Claude configuration.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import path from "node:path";
@@ -54,7 +56,12 @@ function json(relative: string, value: unknown): void {
   fixture.write(relative, JSON.stringify(value));
 }
 
-/** Installed plugins, recorded with another machine's paths as the CLI writes them. */
+/**
+ * Installed plugins, recorded with another machine's paths as the CLI writes
+ * them, and plugins listed in `~/.claude.json` and the project. No marketplace
+ * is known, so the CLI never loads an install of its own here: every plugin
+ * that loads is one the bridge passed.
+ */
 function installFixture(): void {
   // The CLI's own configuration file, so it starts without onboarding.
   json("home/.claude/.claude.json", { hasCompletedOnboarding: true });
@@ -68,11 +75,10 @@ function installFixture(): void {
     ];
   };
   install("alpha", {}, { mcpServers: { one: server("alpha") } });
-  install("beta", {}, { mcpServers: { one: server("beta") } });
   install("gamma", {}, { mcpServers: { one: server("gamma") } });
-  install("delta", { defaultEnabled: false }, { mcpServers: { one: server("delta") } });
-  install("zeta", {}, { one: server("zeta") });
-  install("eta", {}, { mcpServers: { one: server("eta") } });
+  install("iota", {}, { mcpServers: { one: server("iota") } });
+  install("kappa", {}, { mcpServers: { one: server("kappa") } });
+  install("lambda", {}, { mcpServers: { one: server("lambda") } });
   install(
     "epsilon",
     {
@@ -84,20 +90,53 @@ function installFixture(): void {
     { mcpServers: { one: server("epsilon-mcp-json") } },
   );
   json("home/.claude/plugins/installed_plugins.json", { version: 2, plugins: installed });
-  // The global and project plugin lists the bridge also reads.
-  json("home/.claude.json", { plugins: [{ type: "local", path: "~/extra/omega" }] });
-  json("home/extra/omega/.mcp.json", { one: server("omega") });
+  // The global and project plugin lists the bridge also reads. Only the
+  // `@inline` id applies to these: they have no install.
+  const listed = (name: string, manifest: Record<string, unknown> | null, mcpJson: unknown) => {
+    if (manifest) json(`home/listed/${name}/.claude-plugin/plugin.json`, { name, ...manifest });
+    json(`home/listed/${name}/.mcp.json`, mcpJson);
+    return { type: "local", path: `~/listed/${name}` };
+  };
+  json("home/.claude.json", {
+    plugins: [
+      listed("omega", null, { one: server("omega") }),
+      listed("beta", {}, { mcpServers: { one: server("beta") } }),
+      listed("delta", { defaultEnabled: false }, { mcpServers: { one: server("delta") } }),
+      listed("zeta", {}, { one: server("zeta") }),
+      listed("eta", {}, { mcpServers: { one: server("eta") } }),
+    ],
+  });
   json("worktree/.claude/plugins.json", { plugins: [{ type: "local", path: "./tools/theta" }] });
   json("worktree/tools/theta/.mcp.json", { mcpServers: { one: server("theta") } });
-  // enabledPlugins in each settings layer.
+  // enabledPlugins in each settings layer. `claude plugin install` writes
+  // `true` under the install's id; `claude plugin disable` writes `false`.
   json("home/.claude/settings.json", {
-    enabledPlugins: { "gamma@market": false, "ZETA@Inline": false },
+    enabledPlugins: {
+      "alpha@market": true,
+      "epsilon@market": true,
+      "gamma@market": false,
+      "iota@market": true,
+      "kappa@market": true,
+      // lambda@market is installed but enabled nowhere.
+      "ZETA@Inline": false,
+    },
   });
-  json("worktree/.claude/settings.json", { enabledPlugins: { "beta@inline": false } });
-  json("worktree/.claude/settings.local.json", { enabledPlugins: { "eta@inline": false } });
+  json("worktree/.claude/settings.json", {
+    enabledPlugins: { "beta@inline": false, "iota@market": false },
+  });
+  json("worktree/.claude/settings.local.json", {
+    enabledPlugins: { "eta@inline": false, "kappa@market": false },
+  });
 }
 
 async function runCli(settingSources: string[]): Promise<LiveServer[]> {
+  return (await runProbe(settingSources)).servers;
+}
+
+/** The plugin folders the bridge passed, and the servers the CLI loaded. */
+async function runProbe(
+  settingSources: string[],
+): Promise<{ plugins: string[]; servers: LiveServer[] }> {
   const probe = Bun.spawn(
     [
       process.execPath,
@@ -116,7 +155,7 @@ async function runCli(settingSources: string[]): Promise<LiveServer[]> {
     expect(exitCode, stderr).toBe(0);
     const line = stdout.split("\n").find((candidate) => candidate.startsWith(SENTINEL));
     if (!line) throw new Error(`no ${SENTINEL} line:\n${stdout}\n${stderr}`);
-    return (JSON.parse(line.slice(SENTINEL.length)) as { servers: LiveServer[] }).servers;
+    return JSON.parse(line.slice(SENTINEL.length)) as { plugins: string[]; servers: LiveServer[] };
   } finally {
     clearTimeout(deadline);
     if (probe.exitCode === null) probe.kill();
@@ -220,6 +259,23 @@ describe.skipIf(!ENABLED)("Claude plugin MCP servers on the pinned CLI", () => {
     });
     expect(editorLoaded(await editor(false))).toEqual([]);
     expect(liveLoaded(await runCli(["user"]))).toEqual([]);
+
+    // Turned off in Claude Code alone (`claude plugin disable` writes only
+    // the marketplace id): the bridge no longer passes it, the CLI's own copy
+    // is off too, and the editor's row says why.
+    json("home/.claude/settings.json", {
+      enabledPlugins: { "installed@fixture-market": false },
+    });
+    const off = await editor(false);
+    expect(editorLoaded(off)).toEqual([]);
+    expect(off.definitions.find((row) => row.name === "plugin:installed:one")).toMatchObject({
+      status: "disabled",
+      statusReason:
+        'Disabled: enabledPlugins["installed@fixture-market"] is false in ~/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+    });
+    const probe = await runProbe(["user"]);
+    expect(probe.plugins).toEqual([]);
+    expect(liveLoaded(probe.servers)).toEqual([]);
   }, 120_000);
 
   test("the editor's rows, the live rows and the join agree", async () => {
@@ -233,8 +289,9 @@ describe.skipIf(!ENABLED)("Claude plugin MCP servers on the pinned CLI", () => {
       "plugin:epsilon:one",
       "plugin:epsilon:two",
       "plugin:eta:one",
-      // A marketplace id never turns off the copy the bridge passes.
-      "plugin:gamma:one",
+      // Installs turned off in Claude Code (gamma, iota in project settings)
+      // or never enabled (lambda) are not passed, so they do not load.
+      "plugin:kappa:one",
       "plugin:omega:one",
       "plugin:theta:one",
     ]);
@@ -256,6 +313,15 @@ describe.skipIf(!ENABLED)("Claude plugin MCP servers on the pinned CLI", () => {
     expect(reason("plugin:beta:one")).toContain('enabledPlugins["beta@inline"]');
     expect(reason("plugin:zeta:one")).toContain('enabledPlugins["ZETA@Inline"]');
     expect(reason("plugin:delta:one")).toContain("defaultEnabled");
+    expect(reason("plugin:gamma:one")).toBe(
+      'Disabled: enabledPlugins["gamma@market"] is false in ~/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+    );
+    expect(reason("plugin:iota:one")).toBe(
+      'Disabled: enabledPlugins["iota@market"] is false in <worktree>/.claude/settings.json, so Orkestrator does not pass this installed plugin to Claude Code.',
+    );
+    expect(reason("plugin:lambda:one")).toContain(
+      'no settings file these sessions load sets enabledPlugins["lambda@market"] to true',
+    );
     // Shown as written: the editor never expands the plugin root.
     const alpha = await fixture.service.getDefinition({
       targetId: withProject.target.targetId,
@@ -265,13 +331,18 @@ describe.skipIf(!ENABLED)("Claude plugin MCP servers on the pinned CLI", () => {
       { key: "ROOT", presence: "reference", reference: "${CLAUDE_PLUGIN_ROOT}" },
     ]);
 
-    // "Include local settings": local settings turn eta off, as the editor's note says.
+    // "Include local settings": local settings turn eta and kappa off, as the
+    // editor's notes say.
     const withLocal = await runCli(["user", "project", "local"]);
     expect(liveLoaded(withLocal)).toEqual(
-      liveLoaded(live).filter((name) => name !== "plugin:eta:one"),
+      liveLoaded(live).filter((name) => name !== "plugin:eta:one" && name !== "plugin:kappa:one"),
     );
-    const etaSource = withProject.sources.find((source) => source.label === "Plugin eta");
-    expect(etaSource?.note).toContain('"Include local settings" on do not load this plugin');
+    const note = (label: string) =>
+      withProject.sources.find((source) => source.label === label)?.note;
+    expect(note("Plugin eta")).toContain('"Include local settings" on do not load this plugin');
+    expect(note("Plugin kappa")).toContain(
+      '"Include local settings" on do not load this plugin: enabledPlugins["kappa@market"]',
+    );
 
     // Project resources off (the host default): no project plugin list or settings.
     const userOnly = await editor(false);
@@ -282,7 +353,9 @@ describe.skipIf(!ENABLED)("Claude plugin MCP servers on the pinned CLI", () => {
       "plugin:epsilon:one",
       "plugin:epsilon:two",
       "plugin:eta:one",
-      "plugin:gamma:one",
+      // Project settings turn iota off; without them user settings enable it.
+      "plugin:iota:one",
+      "plugin:kappa:one",
       "plugin:omega:one",
     ]);
     expect(editorLoaded(userOnly)).toEqual(liveLoaded(liveUser));

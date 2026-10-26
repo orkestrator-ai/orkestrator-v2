@@ -9,7 +9,11 @@ import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js
 import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
 import { listRecoveryCopies } from "./recovery-copies.js";
 import { applyEnvironmentAllowedDomains, environmentNetworkPolicy } from "./container-network.js";
-import { environmentResourcePolicy, updateEnvironmentResources } from "./container-resources.js";
+import {
+  environmentResourcePolicy,
+  unenforceableOnThisDaemon,
+  updateEnvironmentResources,
+} from "./container-resources.js";
 import {
   parseResourceLimits,
   type ContainerResourceLimits,
@@ -615,7 +619,14 @@ export function registerEnvironmentCommands(
     // `null` removes the budget (the built-in default applies); all-null
     // limits are explicitly unrestricted.
     await storage.setContainerResourceLimits(limits);
-    return { limits: limits ?? null };
+    // Saved either way: the default may be meant for another daemon, and an
+    // unreachable Docker must not block Settings. But a budget this daemon
+    // cannot enforce makes every create refuse it, so say so now.
+    const unenforceable =
+      limits && Object.values(limits).some((limit) => limit !== null)
+        ? await unenforceableOnThisDaemon(limits)
+        : [];
+    return { limits: limits ?? null, ...(unenforceable.length > 0 ? { unenforceable } : {}) };
   });
   register("get_environment_network_policy", async (args, context) => {
     assertOnlyKeys(args, ["environmentId"], "arguments");

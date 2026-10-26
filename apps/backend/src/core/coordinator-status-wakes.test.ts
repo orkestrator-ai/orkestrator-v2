@@ -126,7 +126,7 @@ async function associate(
 ): Promise<string> {
   const main = await world.main();
   const id = `association-${resourceId}`;
-  await world.storage.saveCoordinatorWorkflowAssociation({
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id,
     projectId: world.projectId,
     coordinatorId: world.coordinatorId,
@@ -234,7 +234,7 @@ describe("coordinator status wakes", () => {
 
     // Ownership is durable: the association remembers what it was told.
     const association = (
-      await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
+      await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
     ).find((item) => item.resourceId === "review-1");
     expect(association?.statusNotice?.key).toMatch(/^ready:/);
   });
@@ -404,7 +404,7 @@ describe("coordinator status wakes", () => {
     expect(world.received(coordinator)[2]).toContain("Files changed: 2");
     // A terminal state closes the association's reporting, as before.
     const association = (
-      await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
+      await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
     ).find((item) => item.resourceId === "review-1");
     expect(association?.terminalNotifiedAt).toBeDefined();
   });
@@ -1023,10 +1023,13 @@ describe("coordinator status wakes", () => {
     const associationId = await associate(world, "multi-review", "review-1");
     await world.coordinator.reconcileWorkflowNotifications();
     // The bookkeeping write is lost.
-    await world.storage.updateCoordinatorWorkflowAssociation(associationId, (association) => {
-      delete association.statusNotice;
-      return true;
-    });
+    await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (association) => {
+        delete association.statusNotice;
+        return true;
+      },
+    );
 
     await world.restart();
     await settle(context);
@@ -1050,7 +1053,7 @@ describe("coordinator status wakes", () => {
     await settle(context);
     expect(world.wakes(coordinator)).toBe(0);
     const association = (
-      await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
+      await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
     ).find((item) => item.resourceId === "review-old");
     expect(association?.statusNotice?.key).toMatch(/^ready:/);
   });
@@ -1193,7 +1196,7 @@ describe("coordinator status wakes", () => {
         activity.set(key, "waiting");
         await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
         expect(announced).toEqual([world.projectId]);
-        const open = await world.storage.listOpenCoordinatorDelegations();
+        const open = await world.storage.coordinators.listOpenCoordinatorDelegations();
         expect(open[0]!.delegation!.waiting?.since).toBeString();
 
         // The notice's own bookkeeping is not a change the panel shows.
@@ -1204,7 +1207,7 @@ describe("coordinator status wakes", () => {
         activity.set(key, "working");
         await world.coordinator.noteWorkerActivity({ ...worker, state: "working" });
         expect(announced).toEqual([world.projectId, world.projectId]);
-        const after = await world.storage.listOpenCoordinatorDelegations();
+        const after = await world.storage.coordinators.listOpenCoordinatorDelegations();
         expect(after[0]!.delegation!.waiting).toBeUndefined();
       } finally {
         unsubscribe();

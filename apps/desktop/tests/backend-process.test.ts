@@ -481,6 +481,7 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_RECURRING_METRICS: "1",
         ORKESTRATOR_PREVIEW_TRANSPORT: "1",
         ORKESTRATOR_PREVIEW_RELAY: "0",
+        CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES: "262144",
       },
       "2.8.2",
       {
@@ -512,6 +513,8 @@ describe("Electron backend process supervisor", () => {
     // qualify the desktop tunnel and relay.
     expect(isolated.ORKESTRATOR_PREVIEW_TRANSPORT).toBe("1");
     expect(isolated.ORKESTRATOR_PREVIEW_RELAY).toBe("0");
+    // And Cursor's trim threshold, so a short run can reach the producer bound.
+    expect(isolated.CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES).toBe("262144");
     expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
     expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");

@@ -747,6 +747,89 @@ describe("BridgeSessionStore", () => {
   });
 });
 
+describe("BridgeSessionStore across Codex accounts", () => {
+  const savedStateDir = process.env.CODEX_BRIDGE_STATE_DIR;
+  afterEach(() => {
+    if (savedStateDir === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+    else process.env.CODEX_BRIDGE_STATE_DIR = savedStateDir;
+  });
+
+  async function homes() {
+    const root = await mkdtemp(join(tmpdir(), "bridge-session-accounts-"));
+    temporaryDirectories.push(root);
+    const host = join(root, "host-codex");
+    const account = join(root, "agent-accounts", "codex", "b");
+    await mkdir(host, { recursive: true });
+    await mkdir(account, { recursive: true });
+    return { host, account, shared: join(host, "orkestrator-bridge") };
+  }
+
+  function record(store: BridgeSessionStore, bridgeSessionId: string, threadId: string) {
+    return store.toRecord({
+      bridgeSessionId,
+      threadId,
+      cwd: "/workspace",
+      config: { mode: "build" },
+    });
+  }
+
+  test("a bridge replaced after a switch finds the tab's session", async () => {
+    const { host, account, shared } = await homes();
+    // The host login's bridge records the tab's session.
+    delete process.env.CODEX_BRIDGE_STATE_DIR;
+    const before = new BridgeSessionStore({ codexHome: host, cwd: "/workspace" });
+    await before.upsert(record(before, "tab-session", "thread-1"));
+
+    // Its replacement on the added account is pointed at the host's state.
+    process.env.CODEX_BRIDGE_STATE_DIR = shared;
+    const after = new BridgeSessionStore({ codexHome: account, cwd: "/workspace" });
+    expect((await after.load()).map((session) => session.threadId)).toEqual(["thread-1"]);
+
+    // And what it writes is there for the host login's next bridge.
+    await after.upsert(record(after, "second-tab", "thread-2"));
+    delete process.env.CODEX_BRIDGE_STATE_DIR;
+    const back = new BridgeSessionStore({ codexHome: host, cwd: "/workspace" });
+    expect((await back.load()).map((session) => session.threadId).sort()).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+    await expect(readdir(join(account, "orkestrator-bridge"))).rejects.toThrow();
+  });
+
+  test("adopts the records an account kept in its own home before the move", async () => {
+    const { host, account, shared } = await homes();
+    const now = Date.now();
+    await writeRecordFile(account, "only-on-account", validRecordFields("only-on-account", now));
+    const stale = await writeRecordFile(account, "on-both", {
+      ...validRecordFields("on-both", now),
+      threadId: "thread-stale",
+    });
+    await writeRecordFile(host, "on-both", {
+      ...validRecordFields("on-both", now),
+      threadId: "thread-current",
+    });
+    await writeRecordFile(account, "closed", validRecordFields("closed", now));
+    await writeRecordFile(host, "closed", {
+      bridgeSessionId: "closed",
+      deleted: true,
+      deletedAt: new Date(now).toISOString(),
+    });
+
+    process.env.CODEX_BRIDGE_STATE_DIR = shared;
+    const store = new BridgeSessionStore({ codexHome: account, cwd: "/workspace" });
+    const loaded = await store.load();
+
+    // The shared record and the tombstone win; the account-only record moves over.
+    expect(Object.fromEntries(loaded.map((s) => [s.bridgeSessionId, s.threadId]))).toEqual({
+      "only-on-account": "thread-only-on-account",
+      "on-both": "thread-current",
+    });
+    expect(await readdir(recordsDirFor(account))).toEqual([]);
+    await expect(stat(stale)).rejects.toThrow();
+    expect((await stat(recordPathFor(host, "only-on-account"))).mode & 0o777).toBe(0o600);
+  });
+});
+
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!(await Bun.file(path).exists())) {

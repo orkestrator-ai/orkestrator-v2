@@ -503,16 +503,16 @@ describe("StorageService resource change announcements", () => {
   test("announces kanban changes against the owning project", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
-      const task = await storage.addKanbanTask("p1", "title", "body");
+      const task = await storage.kanban.addKanbanTask("p1", "title", "body");
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
 
-      await storage.updateKanbanTask(task.id, { title: "next" });
+      await storage.kanban.updateKanbanTask(task.id, { title: "next" });
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
 
-      await storage.addKanbanComment(task.id, "comment");
+      await storage.kanban.addKanbanComment(task.id, "comment");
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
 
-      await storage.deleteKanbanTask(task.id);
+      await storage.kanban.deleteKanbanTask(task.id);
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
     });
   });
@@ -555,11 +555,11 @@ describe("StorageService resource change announcements", () => {
 
   test("announces Kanban comment and image additions and deletions", async () => {
     await withStorage(async (storage, changes) => {
-      const task = await storage.addKanbanTask("p1", "title", "body");
-      const commented = await storage.addKanbanComment(task.id, "comment");
+      const task = await storage.kanban.addKanbanTask("p1", "title", "body");
+      const commented = await storage.kanban.addKanbanComment(task.id, "comment");
 
       changes.length = 0;
-      await storage.deleteKanbanComment(task.id, commented.comments[0]!.id);
+      await storage.kanban.deleteKanbanComment(task.id, commented.comments[0]!.id);
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
 
       const onePixelPng = Buffer.from(
@@ -567,11 +567,11 @@ describe("StorageService resource change announcements", () => {
           '<rect width="1" height="1"/></svg>',
       ).toString("base64");
       changes.length = 0;
-      const imaged = await storage.addKanbanImage(task.id, "pixel.png", onePixelPng);
+      const imaged = await storage.kanban.addKanbanImage(task.id, "pixel.png", onePixelPng);
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
 
       changes.length = 0;
-      await storage.deleteKanbanImage(task.id, imaged.images[0]!.id);
+      await storage.kanban.deleteKanbanImage(task.id, imaged.images[0]!.id);
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
     });
   });
@@ -580,20 +580,20 @@ describe("StorageService resource change announcements", () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
 
-      const plan = await storage.createFeaturePlan("p1");
+      const plan = await storage.kanban.createFeaturePlan("p1");
       expect(changes.at(-1)).toMatchObject({ resource: "feature-plan", id: "p1" });
 
-      await storage.appendFeaturePlanMessage(plan.id, "user", "hello");
+      await storage.kanban.appendFeaturePlanMessage(plan.id, "user", "hello");
       expect(changes.at(-1)).toMatchObject({ resource: "feature-plan", id: "p1" });
 
-      await storage.saveProjectNotes("p1", "notes");
+      await storage.kanban.saveProjectNotes("p1", "notes");
       expect(changes.at(-1)).toMatchObject({ resource: "project-notes", id: "p1" });
     });
   });
 
   test("announces feature-plan updates and story messages against the project", async () => {
     await withStorage(async (storage, changes) => {
-      const plan = await storage.createFeaturePlan("p1");
+      const plan = await storage.kanban.createFeaturePlan("p1");
       const story = {
         id: "story-1",
         title: "Story",
@@ -605,11 +605,11 @@ describe("StorageService resource change announcements", () => {
       };
 
       changes.length = 0;
-      await storage.updateFeaturePlan(plan.id, { title: "renamed", stories: [story] });
+      await storage.kanban.updateFeaturePlan(plan.id, { title: "renamed", stories: [story] });
       expect(changes.at(-1)).toMatchObject({ resource: "feature-plan", id: "p1" });
 
       changes.length = 0;
-      await storage.appendFeatureStoryMessage(plan.id, story.id, "user", "refine it");
+      await storage.kanban.appendFeatureStoryMessage(plan.id, story.id, "user", "refine it");
       expect(changes.at(-1)).toMatchObject({ resource: "feature-plan", id: "p1" });
     });
   });
@@ -721,8 +721,8 @@ describe("StorageService resource change announcements", () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
-      await storage.saveProjectNotes("p1", "notes");
-      await storage.addKanbanTask("p1", "title", "body");
+      await storage.kanban.saveProjectNotes("p1", "notes");
+      await storage.kanban.addKanbanTask("p1", "title", "body");
 
       expect(kinds(changes)).toEqual(["project", "environment", "project-notes", "kanban"]);
       const revisions = changes.map((change) => change.revision);
@@ -752,7 +752,7 @@ describe("StorageService resource change announcements", () => {
       const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
       expect(initial.reset).toBe(true);
 
-      await storage.saveProjectNotes("p1", "one");
+      await storage.kanban.saveProjectNotes("p1", "one");
       const scoped = await storage.getScopedResourceRevisionManifest(
         initial.generation,
         initial.cursor,
@@ -791,7 +791,7 @@ describe("StorageService resource change announcements", () => {
       // journal is what a reconnecting cursor replays from, so it must record
       // the change whether or not anything was listening when it landed.
       storage.setResourceChangeListener(null);
-      await storage.saveProjectNotes("p1", "written while disconnected");
+      await storage.kanban.saveProjectNotes("p1", "written while disconnected");
       expect(changes.some(({ resource }) => resource === "project-notes")).toBe(false);
 
       const scoped = await storage.getScopedResourceRevisionManifest(
@@ -888,7 +888,7 @@ describe("StorageService resource change announcements", () => {
       await storage.addProject(project("p1"));
       const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
       for (let index = 0; index < 300; index += 1) {
-        await storage.saveProjectNotes("p1", `notes-${index}`);
+        await storage.kanban.saveProjectNotes("p1", `notes-${index}`);
       }
 
       const first = await storage.getScopedResourceRevisionManifest(

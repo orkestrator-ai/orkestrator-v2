@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import {
@@ -10,6 +10,7 @@ import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";
+import { deferred } from "../recurring-test-support.js";
 import type { PublicApiHarness } from "./test-support.js";
 
 /**
@@ -69,7 +70,7 @@ describe("session.start and request-specific completion", () => {
     // The same key can legitimately name another environment's operation.
     // Recovery must select its exact scope before checking for ambiguity.
     const otherInput = { ...original, environmentId: "env-other" };
-    const other = await harness.storage.admitPublicOperation({
+    const other = await harness.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "session.start",
       scope: "environment:env-other",
@@ -101,13 +102,16 @@ describe("session.start and request-specific completion", () => {
   test("restart during dispatch recovers a journaled turn", async () => {
     const { harness } = await setup();
     const started = await startSession(harness, "journaled-restart");
-    await harness.storage.updatePublicOperation(started.result.runId, (record) => ({
-      ...record,
-      generation: "previous-generation",
-      state: "running",
-      stage: "dispatching",
-      dispatch: undefined,
-    }));
+    await harness.storage.publicOperations.updatePublicOperation(
+      started.result.runId,
+      (record) => ({
+        ...record,
+        generation: "previous-generation",
+        state: "running",
+        stage: "dispatching",
+        dispatch: undefined,
+      }),
+    );
     const restarted = await harness.restart();
     const run = await receipt(restarted, started.result.runId);
     expect(run.dispatch?.state).toBe("accepted");
@@ -117,7 +121,7 @@ describe("session.start and request-specific completion", () => {
   for (const stage of ["executing", "dispatching"]) {
     test(`restart during ${stage} without a session settles interrupted`, async () => {
       const { harness } = await setup();
-      const admitted = await harness.storage.admitPublicOperation({
+      const admitted = await harness.storage.publicOperations.admitPublicOperation({
         authority: "operator",
         action: "session.start",
         scope: "environment:env-1",
@@ -127,12 +131,15 @@ describe("session.start and request-specific completion", () => {
         resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
         generation: "previous-generation",
       });
-      await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
-        ...record,
-        state: "running",
-        stage,
-        generation: "previous-generation",
-      }));
+      await harness.storage.publicOperations.updatePublicOperation(
+        admitted.record.operationId,
+        (record) => ({
+          ...record,
+          state: "running",
+          stage,
+          generation: "previous-generation",
+        }),
+      );
       const restarted = await harness.restart();
       expect(await receipt(restarted, admitted.record.operationId)).toMatchObject({
         state: "interrupted",
@@ -156,7 +163,7 @@ describe("session.start and request-specific completion", () => {
       { requestId: "parked-restart-prompt" },
     );
     const operationId = prompt.receipt!.operationId;
-    await harness.storage.updatePublicOperation(operationId, (record) => ({
+    await harness.storage.publicOperations.updatePublicOperation(operationId, (record) => ({
       ...record,
       generation: "previous-generation",
       state: "running",
@@ -206,6 +213,130 @@ describe("session.start and request-specific completion", () => {
     const settled = await receipt(harness, started.result.runId);
     expect(settled.state).toBe("failed");
     expect(settled.execution?.error).toContain("model overloaded");
+  });
+
+  test("a run whose environment stopped under it settles interrupted, not unknown", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "job-stopped");
+    const { tabId, runId } = started.result;
+    setActivity(service, "claude", tabId, stub.sends[0]!.sessionId, "waiting");
+    expect((await receipt(harness, runId)).state).toBe("running");
+
+    // The bridge is gone, so its status is unreadable from here on.
+    stub.setStatus(async () => {
+      throw new Error("bridge unreachable");
+    });
+    await harness.storage.updateEnvironment("env-1", { status: "stopped" });
+    await service.environmentRuntimeStopped("env-1");
+
+    const settled = await receipt(harness, runId);
+    expect(settled.state).toBe("interrupted");
+    expect(settled.execution).toMatchObject({ state: "interrupted", evidence: "none" });
+    expect(settled.error?.code).toBe("run-interrupted");
+    // And the session is no longer busy for a follow-up.
+    const session = await harness.call<{ activity: string }>("session.get", {
+      sessionId: started.result.sessionId,
+    });
+    expect(session.ok && session.result.activity).toBe("idle");
+  });
+
+  for (const followUp of [false, true]) {
+    test(`runtime interruption survives restart and idle before receipt (follow-up=${followUp})`, async () => {
+      const { harness, service, stub } = await setup();
+      const started = await startSession(harness, `stop-before-read-${followUp}`);
+      await service.reconcileAgentActivity();
+      await harness.storage.updateEnvironment("env-1", { status: "stopped" });
+      await service.environmentRuntimeStopped("env-1");
+      await harness.storage.updateEnvironment("env-1", { status: "running" });
+      stub.setStatus(async () => "idle");
+      await service.reconcileAgentActivity();
+      expect(
+        service.sessionStoppedMidTurn(
+          "env-1",
+          "claude",
+          nativeTabLogicalSessionKey("env-1", started.result.tabId),
+        ),
+      ).toBe(false);
+      if (followUp) {
+        stub.setStatus(async () => "running");
+        const sent = await harness.call(
+          "session.prompt",
+          {
+            sessionId: started.result.sessionId,
+            prompt: "a new turn",
+          },
+          { requestId: "after-runtime-stop" },
+        );
+        expect(sent.ok).toBe(true);
+      }
+      const restarted = await harness.restart();
+      const settled = await receipt(restarted, started.result.runId);
+      expect(settled.state).toBe("interrupted");
+      expect(settled.execution).toMatchObject({ state: "interrupted", evidence: "none" });
+      expect(settled.error?.code).toBe("run-interrupted");
+    });
+  }
+
+  test("a sweep with a stopped snapshot preserves a newly accepted public run", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "before-stale-stop");
+    stub.setStatus(async () => "idle");
+    await service.reconcileAgentActivity();
+    await harness.storage.updateEnvironment("env-1", {
+      environmentType: "containerized",
+      containerId: "old-runtime",
+      status: "stopped",
+    });
+    const entered = deferred<void>();
+    const released = deferred<void>();
+    const original = harness.storage.getEnvironment.bind(harness.storage);
+    const paused = spyOn(harness.storage, "getEnvironment").mockImplementationOnce(async (id) => {
+      const stopped = await original(id);
+      entered.resolve();
+      await released.promise;
+      return stopped;
+    });
+    const sweep = service.reconcileAgentActivity();
+    await entered.promise;
+    let nextRunId = "";
+    try {
+      await harness.storage.updateEnvironment("env-1", {
+        status: "running",
+        containerId: "new-runtime",
+      });
+      stub.setStatus(async () => "running");
+      const sent = await harness.call<{ runId: string }>(
+        "session.prompt",
+        {
+          sessionId: started.result.sessionId,
+          prompt: "new runtime work",
+        },
+        { requestId: "after-stale-stop" },
+      );
+      expect(sent.ok).toBe(true);
+      if (sent.ok) nextRunId = sent.result.runId;
+    } finally {
+      released.resolve();
+    }
+    await sweep;
+    paused.mockRestore();
+    expect((await receipt(harness, nextRunId)).execution?.state).toBe("running");
+    expect(
+      service.sessionTurnActivitySnapshot(
+        "env-1",
+        "claude",
+        nativeTabLogicalSessionKey("env-1", started.result.tabId),
+      ),
+    ).toBe("working");
+  });
+
+  test("an inherited default model stays a default the runtime may replace", async () => {
+    // The shipped Codex default is refused for a ChatGPT login. Pinned as if
+    // named, every `session start` on default settings failed its first turn.
+    const { harness, service } = await setup();
+    const ensure = spyOn(service, "ensureSession");
+    await startSession(harness, "job-default-model");
+    expect(ensure.mock.calls.at(-1)?.[0]).toMatchObject({ modelSource: "default" });
   });
 
   test("independent sessions settle independently", async () => {
@@ -371,7 +502,7 @@ describe("controls and interactions", () => {
       { requestId: "steer-stop-end" },
     );
     expect(stopped.ok).toBe(true);
-    const run = await harness.storage.getPublicOperation(started.result.runId);
+    const run = await harness.storage.publicOperations.getPublicOperation(started.result.runId);
     expect(run.status === "found" && run.record.stopRequestedAt).toBeDefined();
     setActivity(service, "claude", started.result.tabId, stub.sends[0]!.sessionId, "idle");
     expect((await receipt(harness, started.result.runId)).state).toBe("cancelled");

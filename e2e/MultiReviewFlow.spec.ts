@@ -904,7 +904,9 @@ test("a divider click keeps automatic sizing and supports keyboard resizing with
 test("touch resize captures the finger beyond the handle and prevents page panning", async ({
   page,
   context,
+  browserName,
 }, testInfo) => {
+  test.skip(browserName !== "chromium", "Requires Chromium CDP touch input");
   test.skip(testInfo.project.name !== "mobile-chromium", "Requires native touch input");
   // A tablet-sized touch client uses the wide graph and its divider.
   await page.setViewportSize({ width: 1400, height: 1200 });

@@ -9,7 +9,7 @@ import {
 } from "@orkestrator/protocol/agent-registry";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { paneLayoutLeaves } from "./storage-shared.js";
-import type { StorageService } from "./storage.js";
+import type { CoordinatorsStorage, StorageService } from "./storage.js";
 
 /** Live activity readers. In-memory only: a snapshot never waits on a provider. */
 export interface AgentRegistrySources {
@@ -56,11 +56,8 @@ export class AgentRegistry {
   constructor(
     private readonly storage: Pick<
       StorageService,
-      | "loadProjects"
-      | "loadEnvironments"
-      | "loadPaneLayoutsForReconciliation"
-      | "listCoordinatorWorkspaces"
-    >,
+      "loadProjects" | "loadEnvironments" | "loadPaneLayoutsForReconciliation"
+    > & { coordinators: Pick<CoordinatorsStorage, "listCoordinatorWorkspaces"> },
     private readonly sources: AgentRegistrySources = {},
   ) {}
 
@@ -71,7 +68,7 @@ export class AgentRegistry {
       this.storage.loadProjects(),
       this.storage.loadEnvironments(),
       this.storage.loadPaneLayoutsForReconciliation(),
-      this.storage.listCoordinatorWorkspaces(),
+      this.storage.coordinators.listCoordinatorWorkspaces(),
     ]);
     const projectIds = new Set(projects.map((project) => project.id));
     const entries: AgentRegistryEntry[] = [];

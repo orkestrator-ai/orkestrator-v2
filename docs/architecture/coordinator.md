@@ -207,8 +207,8 @@ it.
 
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
-| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can start (macOS; Linux with `bwrap` and `socat` on `PATH`); Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot start (Windows; Linux without `bwrap` or `socat`) |
+| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can run commands (macOS; Linux whose bubblewrap can nest a user namespace, with `socat` on `PATH`); Pi |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Agent platforms → Coordinator safety level** chooses the weakest
@@ -242,16 +242,19 @@ What each enforced platform actually does:
   a command write its working directory, so the coordinator sandbox denies
   writes to the checkout (`filesystem.denyWrite`); before that, `uniq in.txt
   out.txt` wrote the checkout of an `enforced` Claude coordinator.
-  `defaultCoordinatorHostCapabilities` decides whether the sandbox can start:
-  always on macOS, on Linux only with `bwrap` and `socat` on `PATH` (the CLI
-  refuses a required sandbox without either), never on Windows, where the
-  pinned CLI's sandbox sits behind a vendor flag that is off. Elsewhere Claude
-  is `provider-configured`. The launcher passes the same answer to the bridge
-  as process authority (`ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`, `required`
-  or `unavailable`; absent reads as `required`). `required` keeps
-  `failIfUnavailable` on, so a sandbox that fails to start fails the turn.
-  `unavailable` still asks for the sandbox but runs without it, with the hook
-  as the boundary, rather than failing every turn.
+  `defaultCoordinatorHostCapabilities` decides whether the sandbox can run
+  commands: always on macOS, never on Windows, where the pinned CLI's sandbox
+  sits behind a vendor flag that is off, and on Linux by running the probe in
+  [Claude's sandbox on Linux](#claudes-sandbox-on-linux). Elsewhere Claude is
+  `provider-configured`, and the reason the picker shows names the cause. The
+  launcher passes the same answer to the bridge as process authority
+  (`ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`, `required` or `unavailable`;
+  absent reads as `required`). `required` keeps `failIfUnavailable` on, so a
+  sandbox that fails to start fails the turn, and the bridge refuses the turn
+  up front if its own probe fails. `unavailable` leaves the sandbox off and
+  the hook is the boundary: the CLI decides availability from the programs
+  alone, so asking for a sandbox the probe found broken would start it and
+  fail every command.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -341,6 +344,72 @@ Every coordinator bridge is launched with
 authority: the bridge replaces whatever policy a request body or a persisted
 record carries, so a permissive record cannot survive a restart and widen a live
 conversation.
+
+### Claude's sandbox on Linux
+
+The Claude CLI checks only that `bwrap` and `socat` are on `PATH`. It runs each
+command under bubblewrap (`--unshare-user --unshare-pid … --proc /proc`) and,
+inside that, its embedded `apply-seccomp` helper, which creates a second user
+namespace with its own PID and mount namespaces. Ubuntu's AppArmor package
+ships `/etc/apparmor.d/bwrap-userns-restrict` (profile `unpriv_bwrap`), which
+lets bubblewrap create its namespace but strips capabilities from anything
+nested in it. On such a host the sandbox starts and every command then fails
+with `apply-seccomp: write /proc/self/setgroups (nested userns is
+capability-restricted …): Permission denied`. This was seen on GitHub's Ubuntu
+26.04 runner; neither `kernel.apparmor_restrict_unprivileged_userns=0` nor
+`kernel.apparmor_restrict_unprivileged_unconfined=0` is enough.
+
+So the probe runs what the CLI needs:
+`claudeLinuxSandboxStatus` (`packages/protocol/src/node/claude-linux-sandbox.ts`)
+runs `bwrap --new-session --die-with-parent --unshare-user --unshare-pid
+--ro-bind / / --dev /dev --proc /proc -- unshare --user --map-root-user --pid
+--mount --fork --mount-proc true`, and on failure `bwrap … -- true` to tell the
+two stages apart. Each run is bounded at 5 seconds and the answer is reused for
+5 minutes, so a host whose policy the user changes is re-read without a
+restart. It fails closed: a host without `bwrap`, `socat` or `unshare`, whose
+bubblewrap cannot create a user namespace, or whose nested namespace is
+refused, is not sandboxed. The reason names the cause, and names
+`bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
+
+Two consumers use it:
+
+- the backend's coordinator table, which reports Claude as
+  `provider-configured` with that reason; and
+- the Claude bridge, which runs the probe where the CLI runs (the host, or
+  inside a container) and refuses a turn that requires the sandbox: a session
+  whose execution policy sets `sandbox: "provider"`, or a coordinator launched
+  as `required`. A read-only review turn in an ordinary bridge is not refused
+  yet: it runs, and only its Bash calls fail
+  ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
+  The prompt route answers 422
+  `{ kind: "sandbox-unavailable" }` before anything is journaled, and the
+  backend shows the reason as the prompt's error
+  (`claudeSandboxRefusal`, `bridges/claude-bridge/src/services/claude-execution-sandbox.ts`).
+
+Orkestrator never changes AppArmor policy and does not ship a profile. To get
+`enforced` on such a host, an administrator chooses one of:
+
+- **A local profile for bubblewrap that allows nested namespaces.** For
+  example a profile in `/etc/apparmor.d/` attached to `/usr/bin/bwrap` that
+  keeps `userns` and capabilities for its children instead of
+  `bwrap-userns-restrict`'s capability-free `unpriv_bwrap`. This keeps the
+  restriction for every other program. It also widens what any bubblewrap
+  user (Flatpak, other sandboxes) may do inside its namespace, and the
+  profile has to be kept in step with Ubuntu's own across upgrades.
+- **Removing `bwrap-userns-restrict` (and `unprivileged_userns`) on a
+  dedicated host**, with `apparmor_parser --remove`. CI does this, and sets
+  both sysctls above to 0, on its disposable runner
+  (`.github/workflows/ci.yml`); that is the tested combination. It removes Ubuntu's mitigation against unprivileged user
+  namespace exploits for every program on the host, and the profiles return on
+  the next boot unless they are disabled in `/etc/apparmor.d/disable/`.
+
+Otherwise Claude still works as a `provider-configured` coordinator, with the
+hook as its boundary, and an interactive session can run without the provider
+sandbox.
+
+Not yet run: stock Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor,
+Fedora (SELinux) and Docker containers
+([0145](../todo/agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md)).
 
 ### Changing qualification
 
@@ -731,9 +800,13 @@ Overrides layer the way the launchers do. For `start_build_pipeline`:
 Each Multi Review row field is replaced independently.
 
 Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
-over the worker's model catalogue, mirroring the launch dialog: a stale saved
-model falls back to the first connected catalogue model, and an effort or speed
-is kept only when the chosen model offers it. When a platform has no catalogue,
+over the worker's model catalogue, mirroring the launch dialog: an unset or
+stale saved model falls back to the connected model a tab with no model would
+start on (the catalogue row marked `sessionDefault`, which the Pi bridge sets
+on Pi's saved default), else to the first connected catalogue model, and an
+effort or speed is kept only when the chosen model offers it. A Pi catalogue
+that marks no connected row (a cache written before the mark existed, or a
+login with no saved default) leaves the row `default`, so the session picks. When a platform has no catalogue,
 the saved model id is kept. The request hash covers the caller's payload, not
 the resolved rows, so retrying with the same `requestId` after the user edits
 their defaults replays the original work.

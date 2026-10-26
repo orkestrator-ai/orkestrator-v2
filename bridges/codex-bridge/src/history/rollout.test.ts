@@ -996,6 +996,100 @@ describe("rollout public helpers (continued)", () => {
     ).toBeNull();
   });
 
+  test("drops every Codex context block, judged per segment, and keeps quoted tags", () => {
+    const user = (...texts: string[]) =>
+      extractPersistedMessageText(
+        texts.map((text) => ({ type: "input_text", text })),
+        "user",
+      );
+    // Codex 0.164 writes the instructions and the environment as two segments
+    // of one message; with no instructions it writes the environment alone.
+    expect(
+      user(
+        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse the docs CLI.\n</INSTRUCTIONS>",
+        "<environment_context>\n  <cwd>/workspace</cwd>\n</environment_context>",
+      ),
+    ).toBeNull();
+    expect(
+      user("<environment_context>\n  <cwd>/workspace</cwd>\n</environment_context>"),
+    ).toBeNull();
+    // A skill's instructions follow the `$name` prompt that invoked it.
+    expect(
+      user("<skill>\n<name>tidy</name>\n<path>/skills/tidy/SKILL.md</path>\nTidy.\n</skill>"),
+    ).toBeNull();
+    expect(
+      user("<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"),
+    ).toBeNull();
+    expect(user('<subagent_notification>\n{"agent_id":"a"}\n</subagent_notification>')).toBeNull();
+    expect(user("<user_shell_command>\n<command>ls</command>\n</user_shell_command>")).toBeNull();
+
+    // The user's own words are never dropped, wherever a tag appears.
+    expect(user("<skill> is what I typed, run it")).toBe("<skill> is what I typed, run it");
+    expect(user("Why did <turn_aborted>\nappear?")).toBe("Why did <turn_aborted>\nappear?");
+    expect(user("<subagent_notification> never arrived")).toBe(
+      "<subagent_notification> never arrived",
+    );
+    // A segment of the user's own beside a Codex block keeps the message.
+    expect(
+      user("Explain this", "<environment_context>\n  <cwd>/w</cwd>\n</environment_context>"),
+    ).toBe("Explain this\n<environment_context>\n  <cwd>/w</cwd>\n</environment_context>");
+  });
+
+  const mixedUserMessages = [
+    ...[
+      "environment_context",
+      "skill",
+      "turn_aborted",
+      "subagent_notification",
+      "user_shell_command",
+    ].map((tag) => ({
+      name: `user text between two ${tag} blocks`,
+      segments: [`<${tag}>one</${tag}>`, "Please compare these", `<${tag}>two</${tag}>`],
+    })),
+    ...[
+      "# AGENTS.md instructions for /workspace",
+      "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse the docs CLI.\n</INSTRUCTIONS>",
+      "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+    ].map((prefix) => ({
+      name: `user text after ${prefix.split("\n")[0]}`,
+      segments: [prefix, "Why is this shown?"],
+    })),
+  ];
+
+  for (const { name, segments } of mixedUserMessages) {
+    test(`extracts ${name}`, () => {
+      const content = segments.map((text) => ({ type: "input_text", text }));
+      expect(extractPersistedMessageContent(content, "user")).toEqual({
+        text: segments.join("\n"),
+        attachments: [],
+      });
+      expect(extractPersistedMessageText(content, "user")).toBe(segments.join("\n"));
+    });
+
+    test(`hydrates ${name}`, async () => {
+      const threadId = "thread-mixed-context";
+      const hydrated = await hydrateRollout(threadId, [
+        sessionMeta(threadId),
+        {
+          timestamp: "2026-07-25T12:01:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: segments.map((text) => ({ type: "input_text", text })),
+          },
+        },
+      ]);
+
+      expect(hydrated.messages).toHaveLength(1);
+      expect(hydrated.messages[0]).toMatchObject({
+        role: "user",
+        content: segments.join("\n"),
+        parts: [{ type: "text", content: segments.join("\n") }],
+      });
+    });
+  }
+
   test("rehydrates a coordinator turn without its injected preamble", () => {
     const preamble =
       "<orkestrator-coordinator-context>\nProject: project-id\nCoordinator: coordinator-id\n" +

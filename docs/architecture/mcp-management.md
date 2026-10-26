@@ -178,8 +178,9 @@ is not permission to execute. The editor never changes an execution policy.
 - **Claude plugins** (todo 0121, rules read from the pinned CLI 2.1.309 and
   proven on it by `mise run verify:claude:plugin-mcp-live`):
   - The plugin set is the bridge's (`getPluginsForSdk`): `plugins` in
-    `~/.claude.json`, `installed_plugins.json` remapped onto the local plugins
-    folder (or, without it, the folders under `~/.claude/plugins` holding
+    `~/.claude.json`, the installs in `installed_plugins.json` that Claude
+    Code's own settings enable, remapped onto the local plugins folder (or,
+    without that file, the folders under `~/.claude/plugins` holding
     `.claude-plugin/plugin.json`), then, only when sessions load project
     resources, `projects[<worktree>].plugins` and `<worktree>/.claude/plugins.json`;
     de-duplicated by resolved path, missing folders dropped. The bridge and
@@ -190,6 +191,33 @@ is not permission to execute. The editor never changes an execution policy.
     through a bounded directory listing. An unreadable or oversized
     `~/.claude.json` produces a discovery notice and an incomplete snapshot;
     global and project plugin layers may be missing.
+  - An install (`<name>@<marketplace>`, a key of `installed_plugins.json`)
+    is passed only when the first settings layer the session loads (local,
+    then project, then user) whose `enabledPlugins` names that exact id sets
+    it to `true`: the CLI's rule for its own installs (todo 0151).
+    `claude plugin install` writes `true` and `claude plugin disable` (or
+    `/plugin`) writes `false` to the scope's settings, so turning a plugin
+    off in Claude Code turns it off for Orkestrator's sessions too. The
+    layers are the session's own `settingSources`: user only without project
+    resources, user and project by default, plus local with "Include local
+    settings", none for a coordinator (which therefore gets no installs). A
+    follow-up that leaves local settings unsaid and joins the running CLI
+    uses that CLI's layers (`claudeTurnSettingSources`). The bridge reads user
+    settings from `$CLAUDE_CONFIG_DIR/settings.json` when its environment sets
+    it, as the CLI does. A container's `~/.claude/settings.json` is its
+    entrypoint's own, with the host's `enabledPlugins` (and nothing else of
+    the host's file) merged in at boot from the staged inputs, so the same
+    rule holds there; the host's later toggles reach a container when it is
+    rebuilt. Plugins from the `~/.claude.json` and project lists,
+    and from the folder scan, have no install id and are always passed. The
+    editor still lists an install the bridge leaves out, disabled with
+    `Disabled: enabledPlugins["<id>"] is false in <file>, so Orkestrator does
+    not pass this installed plugin to Claude Code.` (or, when no loaded layer
+    names the id, that none sets it to `true`), and notes when local settings
+    would change that. The bridge keeps passing installs rather than leaving
+    them to the CLI: with the recorded paths of another machine (a
+    container's copied home) and no resolvable marketplace, the pinned CLI
+    loads no install of its own.
   - The bridge passes every plugin as a `--plugin-dir` plugin, whose id is
     `<name>@inline` (name from `plugin.json`, else the folder). The CLI skips
     one when the first loaded settings layer (local, then project, then user)
@@ -203,12 +231,15 @@ is not permission to execute. The editor never changes an execution policy.
     default on the host), and local settings only with "Include local
     settings"; the row is disabled for the default and the source notes when
     local settings would change it. A marketplace id (`<name>@<marketplace>`)
-    never applies to the copy the bridge passes, so turning a plugin off in
-    Claude Code does not turn it off for Orkestrator's sessions; the source
-    says so and names the `@inline` key (bridge follow-up:
-    [0151](../todo/mcp/0151-claude-bridge-plugin-settings.md)). When the `@inline` copy is off, an
-    installed copy whose exact id is `true` still loads (noted, kept in use).
-    Managed (policy) settings are not modelled.
+    never applies to the `@inline` copy itself; it decides only whether the
+    bridge passes an install (above). For a plugin from the `~/.claude.json`
+    or project lists that shares a name with a turned-off marketplace id, the
+    source says so and names the `@inline` key. When the `@inline` copy of a
+    passed install is off, Claude Code's own installed copy, whose exact id is
+    `true`, still loads (noted, kept in use); the pinned CLI does that only
+    when it can resolve the install's marketplace (proven on the host by the
+    live test), which the editor does not model. Managed (policy) settings are
+    not modelled.
   - The CLI reads `.mcp.json` first and the manifest's `mcpServers` after it;
     a later same-name server replaces the earlier one, so the manifest's row
     wins. MCPB bundles, inline maps inside an `mcpServers` list and files
@@ -752,7 +783,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge-mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | Apply (2026-10-25) | `service-apply.test.ts` (OpenCode idle-gated rebuild, its listing check, user files and containers kept on restart; Codex turn evidence, the open dispatch excluded, not-running, the evidence window), `commands-registry-mcp.test.ts` (OpenCode reload probe re-posts `orkestrator`), `opencode-capabilities.test.ts` (sign-in guidance, error redaction), `http-bridge-mcp-inventory.test.ts` (relay redaction), `apps/backend/tests/opencode-mcp-reload-live.test.ts` (`mise run verify:opencode:mcp-live`: the pinned OpenCode 1.19.4, credential-free) |
-| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings, including the enabled installed marketplace copy with its inline copy disabled); `apps/backend/tests/claude-plugin-mcp-container.test.ts` (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`, optional `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE`): real production container reader and directory listing with installed, absent and invalid installation state; bounded metadata, declaration omissions and merge winners, oversized manifests and discovery files, duplicate IDs, and rendered settings-now-off notice are regression-tested |
+| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings, including the enabled installed marketplace copy with its inline copy disabled, and installs whose marketplace id is turned off or never enabled not passed, not loaded and shown disabled with that reason (2026-10-26, todo 0151)); `apps/backend/tests/claude-plugin-mcp-container.test.ts` (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`, optional `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE`): real production container reader and directory listing with installed, absent and invalid installation state; bounded metadata, declaration omissions and merge winners, oversized manifests and discovery files, duplicate IDs, and rendered settings-now-off notice are regression-tested |
 | UI | `mcp-live-join.test.ts`, `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Environment overlay | `overlay.test.ts` (merge, rebase, tombstones, conflicts, divergence, import, server-map rewrite), `service-overlay.test.ts` (private save, host file unchanged, backend restart, stop/start and rebuild reapply, pending restart, conflicts and both resolutions, divergence blocks edits, import, reapply, reset, unreadable record, defaults refresh and stale token, persistent project writes, container apply plan, network and `localhost` warnings, path audit, sign-in) |

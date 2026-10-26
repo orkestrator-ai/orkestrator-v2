@@ -4,8 +4,16 @@
  * file reads and media streaming.
  */
 
-export const CONTAINER_WORKSPACE_SETUP_COMMAND =
-  "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
+/**
+ * Message shown when another setup run still holds the setup lock: usually one
+ * whose terminal's host process died. That run keeps going inside the
+ * container, so a retry waits for it and never starts setup a second time
+ * (or stops it part-way). Once it is done the script runs setup itself if the
+ * earlier run failed, or reports "Workspace already set up" if it succeeded.
+ */
+export const CONTAINER_WORKSPACE_SETUP_WAIT_MESSAGE =
+  "An earlier setup run is still running in this container (its terminal closed before it finished). Waiting for it to finish instead of starting setup a second time.";
+export const CONTAINER_WORKSPACE_SETUP_COMMAND = `if command -v flock >/dev/null 2>&1; then if ! flock -n /tmp/orkestrator-workspace-setup.lock true; then printf '%s\\n' '${CONTAINER_WORKSPACE_SETUP_WAIT_MESSAGE}'; fi; flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi`;
 export const CONTAINER_WORKSPACE_PREPARE_COMMAND =
   "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh --prepare-only'; else /usr/local/bin/workspace-setup.sh --prepare-only; fi";
 // The preparation phase is a contract with the script baked into the container

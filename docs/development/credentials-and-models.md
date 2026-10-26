@@ -260,12 +260,28 @@ writes), as long as a signed-in provider serves it. A project's
 `.pi/settings.json` counts only when the session trusts the project. With no
 usable default, the bridge falls back to `PI_BRIDGE_DEFAULT_MODEL`, then to the
 catalogue's first model. Pi's own fallback table of per-provider defaults is
-not exported by the SDK, so the bridge does not reproduce it. The first model
-can be one the login refuses. Pi 1.2.0 signs ChatGPT in under the `openai`
-provider, whose catalogue starts with `gpt-4`, and the ChatGPT backend
-rejects it. The legacy `openai-codex` provider lists `gpt-5.3-codex-spark`
-first and rejects that. See
+not exported by the SDK, so the bridge does not reproduce it.
+
+The first model can be one the login refuses. Since Pi 1.2.0, "Sign in with
+ChatGPT" is an OAuth login on the `openai` provider itself. Its catalogue
+starts with `gpt-4`, and the ChatGPT backend rejects that and `gpt-5.5`
+("not supported when using Codex with a ChatGPT account"); Pi's own table
+names `gpt-5.5` for `openai`, so `pi` fails the same way. So when the first
+model belongs to a ChatGPT subscription login (`openai` with an OAuth
+credential, or the legacy `openai-codex`), the bridge starts on the newest
+model of pi-ai's ChatGPT-backend catalogue, the `openai-codex` provider's
+built-in list, that the login's provider offers (`openai/gpt-6.1-sol` on Pi
+1.4.0). That list is Pi's own data and moves with each Pi release. An API key
+on `openai`, and every other provider, keeps the first model. A saved default
+or an explicit pick still wins, even one the login refuses. See
 [0062](../todo/agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
+
+The bridge's catalogue marks the model a tab with no model would start on
+(`sessionDefault: true`, from the global settings and the fallback only), and
+the backend keeps the mark through normalization and the durable catalogue
+cache. Launches resolved without a session prefer it over the first model:
+Multi Review rows from saved defaults (`concreteRow` in
+`coordinator-launch-defaults.ts`) and every launch dialog's `firstModelFor`.
 
 ### Grok Build
 
@@ -327,7 +343,7 @@ host's login to it, never the host directory. Pi is the one exception, below:
 | Claude | Process-scoped OAuth access token read from the host `CLAUDE_CONFIG_DIR`/`~/.claude` (or Keychain), and `ANTHROPIC_API_KEY` when inherited. The bridge keeps the profile's own `CLAUDE_CONFIG_DIR`. |
 | Codex | Owner-only snapshot of host `CODEX_HOME`/`~/.codex` `auth.json` in the profile's own `CODEX_HOME`: an API key, or the ChatGPT access and id tokens with a placeholder refresh token; `OPENAI_API_KEY` when inherited |
 | Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
-| Grok | Owner-only snapshot of host `~/.grok/auth.json`, with each refresh token blanked and expired logins dropped, for local runs and for containers |
+| Grok | Owner-only snapshot of host `~/.grok/auth.json` in the profile's own HOME, with each refresh token blanked and expired logins dropped, for local runs and for containers. Containers stage and are pushed that snapshot (not the real host file, as before 2026-10-26), so editing it is what a container receives; a run that sets `GROK_HOME` (the CLI scenarios' disposable copy) is staged from there instead |
 | OpenCode | Owner-only snapshot of host `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` in the profile's own XDG data directory: API keys and well-known tokens, OAuth access tokens with the refresh token blanked; `OPENCODE_API_KEY` when inherited. Host OpenCode config and state are not copied. |
 | Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory. Tilde overrides expand against the host home and relative overrides resolve before HOME changes. |
 
@@ -404,8 +420,8 @@ host's own `pi` does: Pi's transient `auth.json.lock` directory beside the file
 on each read or write, and a refreshed login when a token expires.
 
 The host's saved default model goes with its login, because the profile's own
-settings name none and the catalogue's first model may be one the login
-refuses. When the backend names the host `auth.json`, it also reads
+settings name none and the bridge's last resort is only a guess at a model
+the login runs. When the backend names the host `auth.json`, it also reads
 `defaultProvider` and `defaultModel` from the host's `settings.json`, and
 nothing else from that file, and passes them as `PI_BRIDGE_DEFAULT_MODEL`
 (`readPiDefaultModel` in `host-agent-credentials.ts`). The bridge uses it only

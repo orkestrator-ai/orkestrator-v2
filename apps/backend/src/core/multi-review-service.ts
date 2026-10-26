@@ -3994,7 +3994,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         .dispatchStatus?.(session.providerSessionId, request.requestId)
         .catch(() => "unknown" as const);
       await this.assertFence(workflow.id, token);
-      if (acceptance !== "dispatched") {
+      if (acceptance !== "dispatched" && acceptance !== "pending") {
         const scope = `${request.requestId}\0idle`;
         if (!this.countPoll(workflow.id, scope)) return;
         request.idleResultPolls = Math.min(

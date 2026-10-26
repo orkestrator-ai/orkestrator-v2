@@ -18,6 +18,9 @@ import {
 import { parseBackendId } from "@orkestrator/protocol/federation";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { seedStore } from "./storage-test-support.js";
+import { multiReviewInputWithDefaults } from "./coordinator-launch-defaults.js";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 
 describe("coordinator command registry", () => {
@@ -199,7 +202,7 @@ describe("coordinator command registry", () => {
       requestPending: true,
     });
     await coordinator.reconcileWorkerDelegations();
-    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
     await storage.updateEnvironment("worker-1", { pendingAgentLaunch: false });
     expect(await remote.workerState("bk_leaf", "worker-1", "startup-agent")).toMatchObject({
       requestPending: false,
@@ -214,6 +217,55 @@ describe("coordinator command registry", () => {
       ),
     ).rejects.toThrow("different payload");
   });
+
+  test.each([false, true])(
+    "resolves persisted Pi defaults with no bridge (marked: %p)",
+    async (marked) => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const snapshot = await coordinator.ensure(project.id);
+      const conversation = snapshot.workspace.conversations[0]!;
+      const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+      await storage.updateGlobalConfig({
+        ...(await storage.loadConfig()).global,
+        enabledAgentPlatforms: ["pi"],
+      });
+      seedStore(path.join(root, "data"), "agent-model-catalog.json", {
+        schemaVersion: 1,
+        pi: {
+          updatedAt: new Date(0).toISOString(),
+          models: [
+            { platform: "pi", id: "openai/gpt-4", label: "Refused first model" },
+            {
+              platform: "pi",
+              id: "openai/gpt-6.1-sol",
+              label: "Saved default",
+              ...(marked ? { sessionDefault: true } : {}),
+            },
+          ],
+        },
+      });
+      const catalog = (await commands.get("get_native_agent_model_catalog")!(
+        { environmentId },
+        context,
+      )) as AgentModel[];
+      // The durable cache is served either way; only the row resolution
+      // differs. An unmarked (pre-upgrade) cache leaves the model to Pi.
+      expect(catalog.filter((model) => model.platform === "pi")).toHaveLength(2);
+      const rows = await multiReviewInputWithDefaults(
+        {},
+        {
+          tiers: { global: { defaultAgent: "pi" } },
+          global: { defaultAgent: "pi" },
+          enabledAgentPlatforms: ["pi"],
+        },
+        async () => catalog,
+      );
+      const expected = { agent: "pi", model: marked ? "openai/gpt-6.1-sol" : "default" };
+      expect(rows.reviewers).toEqual([expected, expected]);
+      expect(rows.reviewModel).toEqual(expected);
+      expect(rows.fixModel).toEqual(expected);
+    },
+  );
 
   test("returns the Codex catalogue for a live coordinator conversation", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
@@ -319,13 +371,13 @@ describe("coordinator command registry", () => {
       catalogue({ environmentId: coordinatorRuntimeId(snapshot.workspace.id) }, context),
     ).rejects.toThrow("coordinator conversation is unavailable");
 
-    await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
       ...workspace!,
       lifecycleState: "paused",
     }));
     await expect(catalogue({ environmentId }, context)).rejects.toThrow("not ready");
 
-    await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
       ...workspace!,
       lifecycleState: "ready",
       conversations: workspace!.conversations.map((item) => ({
@@ -342,7 +394,7 @@ describe("coordinator command registry", () => {
     });
     await expect(catalogue({ environmentId }, context)).rejects.toThrow("not qualified");
 
-    await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
       ...workspace!,
       conversations: workspace!.conversations.map((item) => ({
         ...item,
@@ -383,7 +435,7 @@ describe("coordinator command registry", () => {
       ),
     ).rejects.toThrow("published to a remote branch");
     expect(create).not.toHaveBeenCalled();
-    expect(await storage.listCoordinatorWorkflowAssociations(project.id)).toEqual([]);
+    expect(await storage.coordinators.listCoordinatorWorkflowAssociations(project.id)).toEqual([]);
   });
 
   test("requires a matching worker commit and a completed build before downstream workflows", async () => {
@@ -492,7 +544,9 @@ describe("coordinator command registry", () => {
     expect(startBuild).toHaveBeenCalledTimes(1);
     releaseBuild();
     expect(await first).toEqual(await second);
-    expect(await storage.listCoordinatorWorkflowAssociations(project.id)).toContainEqual(
+    expect(
+      await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
+    ).toContainEqual(
       expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-1", pending: false }),
     );
   });
@@ -525,9 +579,11 @@ describe("coordinator command registry", () => {
         return saved;
       });
       context.multiReviews = { start } as unknown as CommandContext["multiReviews"];
-      const complete = storage.completeCoordinatorWorkflowAssociation.bind(storage);
+      const complete = storage.coordinators.completeCoordinatorWorkflowAssociation.bind(
+        storage.coordinators,
+      );
       let fail = true;
-      storage.completeCoordinatorWorkflowAssociation = async (...args) => {
+      storage.coordinators.completeCoordinatorWorkflowAssociation = async (...args) => {
         if (fail) {
           fail = false;
           throw new Error("receipt write failed");
@@ -555,9 +611,9 @@ describe("coordinator command registry", () => {
       });
       expect(await launch(args, context)).toEqual(saved);
       expect(start).toHaveBeenCalledTimes(1);
-      expect(await storage.listCoordinatorWorkflowAssociations(project.id)).toContainEqual(
-        expect.objectContaining({ resourceId: saved!.id, pending: false }),
-      );
+      expect(
+        await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
+      ).toContainEqual(expect.objectContaining({ resourceId: saved!.id, pending: false }));
     });
   }
 
@@ -749,7 +805,7 @@ describe("coordinator command registry", () => {
       startError: "boot failed",
       coordinatorDelegationOpened: false,
     });
-    expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
 
     const foreign = createEnvironment(otherProject.id, {
       name: "foreign",
@@ -817,7 +873,7 @@ describe("coordinator command registry", () => {
       placement: "stored",
       coordinatorDelegationOpened: false,
     });
-    expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
 
     await storage.savePaneLayout(
       worker.id,
@@ -895,7 +951,7 @@ describe("coordinator command registry", () => {
     await followUp;
     storage.sendAgentMail = originalSend;
     await completion;
-    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
     // A follow-up while the worker is still on the first request joins that
     // delegation: delivered, and one wake for both — never a second delegation.
     await expect(
@@ -913,7 +969,7 @@ describe("coordinator command registry", () => {
       toTabId: "agent",
       coordinatorDelegationOpened: true,
     });
-    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
     for (const item of await storage.listPendingAgentMailInjects()) {
       await storage.beginAgentMailInject(
         item.mailbox.mailboxId,
@@ -934,7 +990,7 @@ describe("coordinator command registry", () => {
       tabId: "agent",
       state: "completed",
     });
-    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
     expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
   });
 

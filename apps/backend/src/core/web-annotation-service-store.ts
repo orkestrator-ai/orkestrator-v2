@@ -315,8 +315,8 @@ export class WebAnnotationStoreOperations {
         const plan = planAssetCollection(tx.manifest, tx.nowMs, {
           pending: this.ctx.pendingAssetIds.keys(),
         });
-        for (const id of plan.unmark) tx.manifest.assets[id]!.orphanedAt = null;
-        for (const id of plan.markOrphaned) tx.manifest.assets[id]!.orphanedAt = tx.now;
+        for (const id of plan.unmark) tx.edit("assets", id)!.orphanedAt = null;
+        for (const id of plan.markOrphaned) tx.edit("assets", id)!.orphanedAt = tx.now;
         for (const id of plan.remove) {
           delete tx.manifest.assets[id];
           tx.dropAssetAfterCommit(id);
@@ -357,7 +357,7 @@ export class WebAnnotationStoreOperations {
     await store.mutate((tx) => {
       tx.markEssential();
       for (const item of done) {
-        const request = tx.manifest.requests[item.requestId];
+        const request = tx.edit("requests", item.requestId);
         if (!request) continue;
         let changed = false;
         request.attachments = request.attachments.map((attachment) => {

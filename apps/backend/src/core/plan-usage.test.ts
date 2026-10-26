@@ -24,8 +24,10 @@ import {
 
 /** Storage for a runtime with no added agent accounts: reads use the host login. */
 const NO_AGENT_ACCOUNTS = {
-  loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
-  agentAccountsDirectory: () => "/tmp/orkestrator-plan-usage/agent-accounts",
+  agentAccounts: {
+    loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
+    agentAccountsDirectory: () => "/tmp/orkestrator-plan-usage/agent-accounts",
+  },
 };
 
 function contextWithGlobal(
@@ -1220,12 +1222,14 @@ describe("createPlanUsageReader credential resolution", () => {
         storage: {
           loadConfig: async () => ({ global: {} }),
           getDataDir: () => dir,
-          loadAgentAccounts: async () => ({
-            version: 1,
-            accounts: [],
-            active: { codex: accountId },
-          }),
-          agentAccountsDirectory: () => path.join(dir, "agent-accounts"),
+          agentAccounts: {
+            loadAgentAccounts: async () => ({
+              version: 1,
+              accounts: [],
+              active: { codex: accountId },
+            }),
+            agentAccountsDirectory: () => path.join(dir, "agent-accounts"),
+          },
         },
       } as unknown as CommandContext;
       const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });

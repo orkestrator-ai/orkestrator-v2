@@ -1405,7 +1405,7 @@ describe("NativeAgentService", () => {
     await fs.mkdir(checkout);
     const project = await storage.addProject(createProject("remote", checkout));
     const now = new Date(0).toISOString();
-    await storage.mutateCoordinatorWorkspace(project.id, () => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       id: "coordinator-1",
       projectId: project.id,
@@ -1468,7 +1468,7 @@ describe("NativeAgentService", () => {
       expect(attachments[0]!.path.startsWith(checkout)).toBe(false);
       expect(
         attachments[0]!.path.startsWith(
-          storage.coordinatorAttachmentDirectory("coordinator-1", "conversation-1"),
+          storage.coordinators.coordinatorAttachmentDirectory("coordinator-1", "conversation-1"),
         ),
       ).toBe(true);
       expect(await fs.readFile(attachments[0]!.path)).toEqual(Buffer.from("cG5n", "base64"));

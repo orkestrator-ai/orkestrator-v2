@@ -37,6 +37,7 @@ import {
   modelsForAgent,
   platformOwnsSpeed,
   resolveCatalogModelId,
+  sessionDefaultModel,
   toPickerModel,
   type AgentModelCatalog,
   type AgentModelOption,
@@ -402,7 +403,7 @@ function cleanStep(state: StepState, catalog: AgentModelCatalog): BuildLaunchSte
   };
 }
 
-function resolveStepState(state: StepState, catalog: AgentModelCatalog): ResolvedStep {
+export function resolveStepState(state: StepState, catalog: AgentModelCatalog): ResolvedStep {
   const matched = matchCatalogModel(catalog, state.agent, state.model);
   // An explicit configured id that the catalogue has not listed yet must not
   // collapse onto the first (often placeholder) entry.
@@ -410,7 +411,7 @@ function resolveStepState(state: StepState, catalog: AgentModelCatalog): Resolve
     matched ??
     (state.model && state.model !== "default"
       ? undefined
-      : modelsForAgent(catalog, state.agent)[0]);
+      : sessionDefaultModel(modelsForAgent(catalog, state.agent)));
   const efforts = model?.reasoningEfforts ?? [];
   const effort =
     !model && state.reasoningEffort && state.reasoningEffort !== "default"

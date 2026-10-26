@@ -555,7 +555,7 @@ exit 0
     ).resolves.toBeUndefined();
   });
 
-  test("a committed stop withdraws the environment's outstanding agent requests", async () => {
+  test("a committed stop withdraws the environment's agent requests and settles its turns", async () => {
     const local = createEnvironment({
       id: "env-local",
       environmentType: "local",
@@ -569,7 +569,7 @@ exit 0
     const { context } = createContext([local, container]);
     const withdrawn: Array<{ id: string; status: string }> = [];
     context.nativeAgents = {
-      withdrawEnvironmentInteractions: (environmentId: string) => {
+      environmentRuntimeStopped: async (environmentId: string) => {
         const environment = environmentId === local.id ? local : container;
         withdrawn.push({ id: environmentId, status: environment.status });
       },
@@ -762,6 +762,10 @@ exit 0
             path.join(xdgDataHome, "opencode"),
             path.join(xdgStateHome, "opencode"),
             hostHome,
+            // Grok's login is the profile's own snapshot in its isolated HOME
+            // (`withFakeDocker` points $HOME there); the host's is a decoy.
+            path.join(home, ".grok"),
+            path.join(home, ".config", "grok"),
             path.join(hostHome, ".grok"),
             path.join(hostHome, ".config", "grok"),
             // Decoys: the developer's real agent homes, which `withFakeDocker`
@@ -797,8 +801,10 @@ exit 0
             `-v ${path.join(xdgStateHome, "opencode", "model.json")}:/opencode-state/model.json:ro`,
           );
           expect(log).not.toContain(":/cursor-config:ro");
-          expect(log).toContain(`-v ${path.join(hostHome, ".grok")}:/grok-home:ro`);
-          expect(log).toContain(`-v ${path.join(hostHome, ".config", "grok")}:/grok-config:ro`);
+          expect(log).toContain(`-v ${path.join(home, ".grok")}:/grok-home:ro`);
+          expect(log).toContain(`-v ${path.join(home, ".config", "grok")}:/grok-config:ro`);
+          expect(log).not.toContain(`${path.join(hostHome, ".grok")}:`);
+          expect(log).not.toContain(`${path.join(hostHome, ".config", "grok")}:`);
           expect(log).toContain("-e CURSOR_API_KEY");
           expect(log).not.toContain("agent-test-cursor-key");
           // `.claude.json` has no CLAUDE_CONFIG_DIR equivalent, so it is the one

@@ -73,8 +73,15 @@ describe("resolveCodexMaxConcurrentThreads", () => {
 
 describe("requiredAgentNetworkDomains", () => {
   test("returns nothing when no platform with its own hosts is enabled", () => {
-    expect(requiredAgentNetworkDomains(["claude", "opencode"])).toEqual([]);
+    // Claude's API host is already a default.
+    expect(requiredAgentNetworkDomains(["claude"])).toEqual([]);
     expect(requiredAgentNetworkDomains([])).toEqual([]);
+  });
+
+  test("OpenCode gets only its own providers' host", () => {
+    // OpenCode Zen and Go, its zero-login default providers; any other
+    // provider's host is the user's to add.
+    expect(requiredAgentNetworkDomains(["claude", "opencode"])).toEqual(["opencode.ai"]);
   });
 
   test("treats an unknown selection as opening nothing", () => {

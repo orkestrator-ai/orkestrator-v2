@@ -16,7 +16,8 @@ import {
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
-import { runCommand, spawnCommand } from "./shell.js";
+import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
+import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 
 /**
@@ -115,74 +116,6 @@ export function resetImageManifestCache(): void {
 }
 
 /**
- * Extracts the single regular file from a `docker cp … -` tar stream. The tar
- * header carries the type and size, so a symlink, directory or oversized entry
- * is refused without trusting anything but the bytes Docker produced.
- */
-export function extractSingleTarFile(
-  tar: Buffer,
-  maxBytes: number,
-): { ok: true; content: string } | { ok: false; reason: string } {
-  if (tar.length < 512) return { ok: false, reason: "truncated" };
-  const header = tar.subarray(0, 512);
-  const type = String.fromCharCode(header[156] ?? 0);
-  if (type !== "0" && type !== "\0") return { ok: false, reason: "not-a-regular-file" };
-  const sizeField = header.subarray(124, 136).toString("ascii").replace(/\0.*$/, "").trim();
-  const size = Number.parseInt(sizeField, 8);
-  if (!Number.isSafeInteger(size) || size < 0) return { ok: false, reason: "malformed" };
-  if (size > maxBytes) return { ok: false, reason: "oversized" };
-  if (tar.length < 512 + size) return { ok: false, reason: "truncated" };
-  return { ok: true, content: tar.subarray(512, 512 + size).toString("utf8") };
-}
-
-async function copyOutBounded(
-  containerId: string,
-  filePath: string,
-  maxBytes: number,
-): Promise<
-  { kind: "bytes"; tar: Buffer } | { kind: "absent" } | { kind: "failed" } | { kind: "oversized" }
-> {
-  // A tar stream of one small file is its content plus headers and padding.
-  const limit = maxBytes + 4 * 1024;
-  return new Promise((resolve) => {
-    const child = spawnCommand("docker", ["cp", `${containerId}:${filePath}`, "-"]);
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let stderr = "";
-    let settled = false;
-    const finish = (value: Awaited<ReturnType<typeof copyOutBounded>>) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish({ kind: "failed" });
-    }, 30_000);
-    child.stdout.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > limit) {
-        child.kill("SIGKILL");
-        finish({ kind: "oversized" });
-        return;
-      }
-      chunks.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < 4_096) stderr += chunk.toString();
-    });
-    child.on("error", () => finish({ kind: "failed" }));
-    child.on("close", (code) => {
-      if (code === 0) finish({ kind: "bytes", tar: Buffer.concat(chunks) });
-      else if (/could not find the file|no such file|not found/i.test(stderr)) {
-        finish({ kind: "absent" });
-      } else finish({ kind: "failed" });
-    });
-  });
-}
-
-/**
  * Reads the manifest of an immutable image id. Creates one owned, labelled,
  * network-less container that is never started, copies the manifest out with a
  * byte bound, and removes the container again (a failed removal leaves a
@@ -220,9 +153,13 @@ export async function readImageManifest(
   let result: ManifestRead;
   try {
     const copied = await copyOutBounded(probeId, IMAGE_MANIFEST_PATH, MAX_IMAGE_MANIFEST_BYTES);
+    // Only the daemon's own "could not find the file" means the image has no
+    // manifest. Anything else, a daemon that went away between the create
+    // and the copy above all, is unavailable and is not cached: reading it as
+    // `legacy` would stick for the life of the process.
     if (copied.kind === "absent") {
       result = { kind: "legacy" };
-    } else if (copied.kind === "failed") {
+    } else if (copied.kind === "failed" || copied.kind === "daemon-unavailable") {
       result = { kind: "unavailable" };
     } else if (copied.kind === "oversized") {
       result = { kind: "invalid", reason: "oversized" };

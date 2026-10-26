@@ -147,16 +147,16 @@ describe("StorageService feature edge cases", () => {
 
   test("filters Kanban tasks by project and appends status transitions to the target column", async () => {
     const { storage } = await createStorage("ork-storage-kanban-order-");
-    const firstReview = await storage.addKanbanTask("project-1", "Review one", "");
-    const secondReview = await storage.addKanbanTask("project-1", "Review two", "");
-    const moving = await storage.addKanbanTask("project-1", "Move me", "");
-    const otherProject = await storage.addKanbanTask("project-2", "Other project", "");
-    await storage.updateKanbanTask(firstReview.id, { status: "review" });
-    await storage.updateKanbanTask(secondReview.id, { status: "review" });
-    await storage.updateKanbanTask(otherProject.id, { status: "review" });
+    const firstReview = await storage.kanban.addKanbanTask("project-1", "Review one", "");
+    const secondReview = await storage.kanban.addKanbanTask("project-1", "Review two", "");
+    const moving = await storage.kanban.addKanbanTask("project-1", "Move me", "");
+    const otherProject = await storage.kanban.addKanbanTask("project-2", "Other project", "");
+    await storage.kanban.updateKanbanTask(firstReview.id, { status: "review" });
+    await storage.kanban.updateKanbanTask(secondReview.id, { status: "review" });
+    await storage.kanban.updateKanbanTask(otherProject.id, { status: "review" });
 
-    const transitioned = await storage.updateKanbanTask(moving.id, { status: "review" });
-    const projectTasks = await storage.getKanbanTasks("project-1");
+    const transitioned = await storage.kanban.updateKanbanTask(moving.id, { status: "review" });
+    const projectTasks = await storage.kanban.getKanbanTasks("project-1");
 
     expect(projectTasks.map((task) => task.id)).toEqual([
       firstReview.id,
@@ -173,17 +173,17 @@ describe("StorageService feature edge cases", () => {
   test("rejects task and image deletion for a missing Kanban task", async () => {
     const { storage } = await createStorage("ork-storage-kanban-missing-");
 
-    await expect(storage.deleteKanbanTask("missing-task")).rejects.toThrow(
+    await expect(storage.kanban.deleteKanbanTask("missing-task")).rejects.toThrow(
       "Kanban task not found: missing-task",
     );
-    await expect(storage.deleteKanbanImage("missing-task", "missing-image")).rejects.toThrow(
+    await expect(storage.kanban.deleteKanbanImage("missing-task", "missing-image")).rejects.toThrow(
       "Kanban task not found: missing-task",
     );
   });
 
   test("does not persist image metadata when writing the resized image fails", async () => {
     const { storage } = await createStorage("ork-storage-kanban-write-failure-");
-    const task = await storage.addKanbanTask("project-1", "Image task", "");
+    const task = await storage.kanban.addKanbanTask("project-1", "Image task", "");
     const originalWriteFile = fs.writeFile;
     fs.writeFile = (async () => {
       throw Object.assign(new Error("image write failed"), { code: "ENOSPC" });
@@ -191,7 +191,7 @@ describe("StorageService feature edge cases", () => {
 
     try {
       await expect(
-        storage.addKanbanImage(task.id, "pixel.svg", validImageBase64),
+        storage.kanban.addKanbanImage(task.id, "pixel.svg", validImageBase64),
       ).rejects.toMatchObject({
         code: "ENOSPC",
       });
@@ -199,19 +199,19 @@ describe("StorageService feature edge cases", () => {
       fs.writeFile = originalWriteFile;
     }
 
-    expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
+    expect((await storage.kanban.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
   });
 
   test("deleting a Kanban task removes each of its persisted image files", async () => {
     const { dataDir, storage } = await createStorage("ork-storage-kanban-task-images-");
-    const task = await storage.addKanbanTask("project-1", "Image task", "");
-    const first = await storage.addKanbanImage(task.id, "first.svg", validImageBase64);
-    const second = await storage.addKanbanImage(task.id, "second.svg", validImageBase64);
+    const task = await storage.kanban.addKanbanTask("project-1", "Image task", "");
+    const first = await storage.kanban.addKanbanImage(task.id, "first.svg", validImageBase64);
+    const second = await storage.kanban.addKanbanImage(task.id, "second.svg", validImageBase64);
     const imageIds = [first.images[0]!.id, second.images[1]!.id];
 
-    await storage.deleteKanbanTask(task.id);
+    await storage.kanban.deleteKanbanTask(task.id);
 
-    await expect(storage.getKanbanTasks("project-1")).resolves.toEqual([]);
+    await expect(storage.kanban.getKanbanTasks("project-1")).resolves.toEqual([]);
     for (const imageId of imageIds) {
       await expect(
         fs.access(path.join(dataDir, "kanban-images", `${imageId}.webp`)),

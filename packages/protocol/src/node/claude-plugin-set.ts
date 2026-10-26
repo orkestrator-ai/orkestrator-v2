@@ -11,7 +11,9 @@
  * The enablement and MCP rules mirror the pinned Claude CLI (2.1.309, read
  * from the binary on 2026-10-25). Every plugin the bridge passes in the SDK's
  * `plugins` option joins the session as a `--plugin-dir` plugin, whose id is
- * `<name>@inline`; see docs/architecture/mcp-management.md.
+ * `<name>@inline`, so the bridge passes a Claude Code install only when Claude
+ * Code's own settings enable it ({@link enabledInstalledPlugins}); see
+ * docs/architecture/mcp-management.md.
  */
 
 import path from "node:path";
@@ -20,6 +22,8 @@ import path from "node:path";
 export interface ClaudePluginConfig {
   type: "local";
   path: string;
+  /** The `installed_plugins.json` id (`<name>@<marketplace>`) the install is recorded under. */
+  installedId?: string;
 }
 
 /** The plugin layers the bridge reads, each as the file holds it. */
@@ -32,8 +36,9 @@ export interface ClaudePluginLayers {
   projectLocal: unknown;
   /**
    * CLI-installed plugins: from `installed_plugins.json` (see
-   * {@link remapInstalledPlugins}), or the plugins folder scan when that file
-   * is missing or unreadable.
+   * {@link remapInstalledPlugins}), already narrowed to the installs Claude
+   * Code enables ({@link enabledInstalledPlugins}), or the plugins folder scan
+   * when that file is missing or unreadable.
    */
   cliInstalled: ClaudePluginConfig[];
 }
@@ -69,7 +74,7 @@ function isPathWithin(parentDir: string, candidatePath: string): boolean {
  * which do not exist inside a container. The common `.claude/plugins/`
  * segment is detected and the remainder rebased onto `pluginsDir`. Entries
  * whose rebased path escapes `pluginsDir` are dropped and reported through
- * `onUnsafe`.
+ * `onUnsafe`. Each entry keeps the id it is recorded under.
  */
 export function remapInstalledPlugins(
   pluginsDir: string,
@@ -79,7 +84,7 @@ export function remapInstalledPlugins(
   const plugins: ClaudePluginConfig[] = [];
   const pluginsRoot = path.resolve(pluginsDir);
   if (!isRecord(installedPlugins.plugins)) return plugins;
-  for (const entries of Object.values(installedPlugins.plugins)) {
+  for (const [installedId, entries] of Object.entries(installedPlugins.plugins)) {
     if (!Array.isArray(entries)) continue;
     for (const entry of entries) {
       if (!isRecord(entry) || typeof entry.installPath !== "string") continue;
@@ -97,7 +102,7 @@ export function remapInstalledPlugins(
       } else {
         resolvedPath = installPath;
       }
-      plugins.push({ type: "local", path: resolvedPath });
+      plugins.push({ type: "local", path: resolvedPath, installedId });
     }
   }
   return plugins;
@@ -227,14 +232,107 @@ export function claudeInlinePluginEnablement(
 }
 
 /**
+ * Whether Claude Code enables its installed plugin `id` (`<name>@<marketplace>`,
+ * a key of `installed_plugins.json`), by the pinned CLI's rule for its own
+ * installs: the first loaded settings layer (local, then project, then user)
+ * whose `enabledPlugins` names that exact id decides, and only `true` enables.
+ * `claude plugin install` writes `true` to the scope it installs into and
+ * `claude plugin disable` writes `false`; an id no loaded layer names is off.
+ */
+export function claudeInstalledPluginIdEnablement(
+  id: string,
+  settings: Partial<Record<ClaudePluginSettingSource, unknown>>,
+  loadedSources: readonly ClaudePluginSettingSource[],
+): { enabled: boolean; decidedBy?: { source: ClaudePluginSettingSource; key: string } } {
+  // Self-contained so the environment scanner can embed this exact rule in
+  // its standalone script, including in a minified backend bundle.
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  for (const source of ["local", "project", "user"] as const) {
+    if (!loadedSources.includes(source)) continue;
+    const document = settings[source];
+    const enabledPlugins = isRecord(document) ? document.enabledPlugins : undefined;
+    if (!isRecord(enabledPlugins) || !Object.hasOwn(enabledPlugins, id)) continue;
+    return { enabled: enabledPlugins[id] === true, decidedBy: { source, key: id } };
+  }
+  return { enabled: false };
+}
+
+/**
+ * The installs the bridge passes: only those Claude Code itself enables
+ * ({@link claudeInstalledPluginIdEnablement}). The CLI gives every passed
+ * plugin the id `<name>@inline`, where the `<name>@<marketplace>` key that
+ * `/plugin` and `claude plugin disable` write never applies, so an install
+ * passed regardless would load after the user turned it off. Entries without
+ * an id (the plugins folder scan) are kept: no marketplace id exists for them.
+ */
+export function enabledInstalledPlugins(
+  plugins: readonly ClaudePluginConfig[],
+  settings: Partial<Record<ClaudePluginSettingSource, unknown>>,
+  loadedSources: readonly ClaudePluginSettingSource[],
+): ClaudePluginConfig[] {
+  return plugins.filter(
+    (plugin) =>
+      plugin.installedId === undefined ||
+      claudeInstalledPluginIdEnablement(plugin.installedId, settings, loadedSources).enabled,
+  );
+}
+
+/** Plugin ids a container's copy of the user settings keeps at most. */
+export const CLAUDE_CONTAINER_ENABLED_PLUGINS_MAX = 1000;
+
+/**
+ * What a container may see of the host's Claude user settings: only
+ * `enabledPlugins`, with boolean values and bounded ids, as JSON. `undefined`
+ * when the file is not a JSON object or names no plugin.
+ *
+ * A container's own `~/.claude/settings.json` is written by its entrypoint,
+ * which merges this in, so the bridge and the CLI there read the host's
+ * plugin enablement and nothing else of the host's settings (hooks,
+ * permissions, environment). Dropping a non-boolean value changes nothing:
+ * the user layer is read last, an install needs `true`, and an `@inline` id
+ * is off only for `false`.
+ */
+export function claudeContainerPluginSettings(text: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const enabledPlugins = isRecord(parsed) ? parsed.enabledPlugins : undefined;
+  if (!isRecord(enabledPlugins)) return undefined;
+  // No prototype, so an id such as `__proto__` stays an ordinary key.
+  const kept: Record<string, boolean> = Object.create(null);
+  let count = 0;
+  for (const [id, value] of Object.entries(enabledPlugins)) {
+    if (typeof value !== "boolean" || !id || id.length > 256) continue;
+    if (count >= CLAUDE_CONTAINER_ENABLED_PLUGINS_MAX) break;
+    kept[id] = value;
+    count += 1;
+  }
+  return count ? JSON.stringify({ enabledPlugins: kept }) : undefined;
+}
+
+/** The settings layers a session loads that can carry `enabledPlugins`, from the SDK's `settingSources`. */
+export function claudePluginSettingSources(
+  settingSources: readonly string[],
+): ClaudePluginSettingSource[] {
+  return CLAUDE_PLUGIN_SETTING_SOURCES.filter((source) => settingSources.includes(source));
+}
+
+/**
  * Claude Code's own installed copy of a plugin, which the CLI loads from its
  * plugin settings independently of the copy the bridge passes.
  *
- * The CLI loads an installed plugin `<name>@<marketplace>` when the first
- * loaded settings layer whose `enabledPlugins` names that exact id sets it to
- * `true`. When the bridge's `@inline` copy is enabled it replaces that copy
- * (same name, same server names); when the `@inline` copy is turned off, the
- * installed copy still loads. `installedIds` are the keys of
+ * The CLI loads an installed plugin `<name>@<marketplace>` when its exact id
+ * is enabled ({@link claudeInstalledPluginIdEnablement}). When the bridge's
+ * `@inline` copy is enabled it replaces that copy (same name, same server
+ * names); when the `@inline` copy is turned off, the installed copy still
+ * loads, provided the CLI can resolve the install's marketplace. (On
+ * 2026-10-26 the pinned CLI loaded its own copy with the recorded install
+ * path gone but the marketplace source present, and nothing with the source
+ * gone; that case is not modelled here.) `installedIds` are the keys of
  * `installed_plugins.json`.
  */
 export function claudeInstalledPluginEnablement(
@@ -247,14 +345,9 @@ export function claudeInstalledPluginEnablement(
     const at = id.lastIndexOf("@");
     if (at <= 0 || id.slice(0, at) !== pluginName) continue;
     if (id.slice(at + 1).toLowerCase() === CLAUDE_INLINE_PLUGIN_MARKETPLACE) continue;
-    for (const source of CLAUDE_PLUGIN_SETTING_SOURCES) {
-      if (!loadedSources.includes(source)) continue;
-      const document = settings[source];
-      const enabledPlugins = isRecord(document) ? document.enabledPlugins : undefined;
-      if (!isRecord(enabledPlugins) || !Object.hasOwn(enabledPlugins, id)) continue;
-      if (enabledPlugins[id] === true) return { id, source };
-      break;
-    }
+    const enablement = claudeInstalledPluginIdEnablement(id, settings, loadedSources);
+    if (enablement.enabled && enablement.decidedBy)
+      return { id, source: enablement.decidedBy.source };
   }
   return undefined;
 }

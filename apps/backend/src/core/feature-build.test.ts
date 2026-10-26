@@ -124,7 +124,7 @@ describe("createFeatureBuild", () => {
       expect(result.taskId).toBeTruthy();
       expect(result.pipelineId).toBe("pipeline-1");
       expect(prompts).toEqual(["Add sign in with passkeys."]);
-      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe(
         "Add sign in with passkeys.",
       );
       expect(supervisor.started).toHaveLength(1);
@@ -135,7 +135,7 @@ describe("createFeatureBuild", () => {
 
       releaseNaming!("passkey-sign-in");
       await waitForPendingFeatureTitleRefinements();
-      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("Passkey Sign In");
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe("Passkey Sign In");
     });
   });
 
@@ -160,7 +160,7 @@ describe("createFeatureBuild", () => {
         );
         await waitForPendingFeatureTitleRefinements();
 
-        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+        expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe(
           "Add account export controls",
         );
         expect(warn).toHaveBeenCalledWith(
@@ -196,7 +196,7 @@ describe("createFeatureBuild", () => {
           },
         );
         await waitForPendingFeatureTitleRefinements();
-        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("New Feature");
+        expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe("New Feature");
       } finally {
         warn.mockRestore();
       }
@@ -225,13 +225,13 @@ describe("createFeatureBuild", () => {
       const first = await createFeatureBuild(request, context);
       await waitForPendingFeatureTitleRefinements();
       expect(namingCalls).toBe(1);
-      expect((await storage.getKanbanTask(first.taskId))?.title).toBe("Passkey Sign In");
+      expect((await storage.kanban.getKanbanTask(first.taskId))?.title).toBe("Passkey Sign In");
 
       const second = await createFeatureBuild(request, context);
       await waitForPendingFeatureTitleRefinements();
       expect(second.taskId).toBe(first.taskId);
       expect(namingCalls).toBe(1);
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
     });
   });
 
@@ -267,8 +267,8 @@ describe("createFeatureBuild", () => {
       ]);
 
       expect(first.taskId).toBe(second.taskId);
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
-      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe(
         "Add sign in with passkeys.",
       );
 
@@ -276,7 +276,7 @@ describe("createFeatureBuild", () => {
       releaseSecond!("beta-two");
       await waitForPendingFeatureTitleRefinements();
       expect(["Alpha One", "Beta Two"]).toContain(
-        (await storage.getKanbanTasks("project-1"))[0]!.title,
+        (await storage.kanban.getKanbanTasks("project-1"))[0]!.title,
       );
     });
   });
@@ -329,13 +329,15 @@ printf '%s\\n' '{"slug":"from-codex-exec"}' > "$out"
         expect(created.taskId).toBeTruthy();
         expect(created.pipelineId).toBe("pipeline-1");
         expect(supervisor.started).toHaveLength(1);
-        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+        expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe(
           "Add sign in with passkeys.",
         );
 
         await fs.writeFile(gatePath, "go");
         await waitForPendingFeatureTitleRefinements();
-        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("From Codex Exec");
+        expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe(
+          "From Codex Exec",
+        );
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
@@ -387,7 +389,7 @@ exit 2
         await waitForPendingFeatureTitleRefinements();
 
         expect(existsSync(launchedPath)).toBe(false);
-        const tasks = await storage.getKanbanTasks("project-1");
+        const tasks = await storage.kanban.getKanbanTasks("project-1");
         expect(tasks).toHaveLength(1);
         expect(tasks[0]!.id).toBe(created.taskId);
         expect(tasks[0]!.title).toBe("Add account export controls");
@@ -418,7 +420,7 @@ exit 2
         buildPipelines: supervisor.service,
       });
 
-      const tasks = await storage.getKanbanTasks("project-1");
+      const tasks = await storage.kanban.getKanbanTasks("project-1");
       expect(tasks).toHaveLength(1);
       const task = tasks[0]!;
       expect(task.title).toBe("Dark mode toggle");
@@ -504,7 +506,7 @@ exit 2
       });
       expect(supervisor.started[0]!.taskSnapshot.comments).toEqual([]);
 
-      await storage.addKanbanComment(first.taskId, "Keep the header toggle labelled.");
+      await storage.kanban.addKanbanComment(first.taskId, "Keep the header toggle labelled.");
       const second = await createFeatureBuild(
         {
           ...input,
@@ -566,7 +568,7 @@ exit 2
         buildPipelines: supervisor.service,
       });
 
-      const task = (await storage.getKanbanTasks("project-1"))[0]!;
+      const task = (await storage.kanban.getKanbanTasks("project-1"))[0]!;
       expect(task.images.map((image) => image.filename)).toEqual([
         "reference.png",
         "expected-state.png",
@@ -574,7 +576,7 @@ exit 2
       const storedImages = await Promise.all(
         task.images.map(async (image) => ({
           filename: image.filename,
-          data: await storage.getKanbanImageData(image.id),
+          data: await storage.kanban.getKanbanImageData(image.id),
         })),
       );
       expect(storedImages.every((image) => image.data.length > 0)).toBe(true);
@@ -595,7 +597,7 @@ exit 2
         buildPipelines: supervisor.service,
       });
       expect(second.taskId).toBe(first.taskId);
-      const retriedTask = (await storage.getKanbanTasks("project-1"))[0]!;
+      const retriedTask = (await storage.kanban.getKanbanTasks("project-1"))[0]!;
       expect(retriedTask.images).toEqual(task.images);
       expect(supervisor.started[1]!.taskSnapshot.images).toEqual(storedImages);
     });
@@ -604,9 +606,9 @@ exit 2
   test("a retry completes only the missing writes after partial image persistence", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
-      const persistImage = storage.addNormalizedKanbanImageForRequest.bind(storage);
+      const persistImage = storage.kanban.addNormalizedKanbanImageForRequest.bind(storage.kanban);
       let attempts = 0;
-      storage.addNormalizedKanbanImageForRequest = async (...args) => {
+      storage.kanban.addNormalizedKanbanImageForRequest = async (...args) => {
         attempts += 1;
         if (attempts === 2) throw new Error("injected second image write failure");
         return persistImage(...args);
@@ -627,7 +629,9 @@ exit 2
         }),
       ).rejects.toThrow("injected second image write failure");
       expect(
-        (await storage.getKanbanTasks("project-1"))[0]!.images.map(({ filename }) => filename),
+        (await storage.kanban.getKanbanTasks("project-1"))[0]!.images.map(
+          ({ filename }) => filename,
+        ),
       ).toEqual(["first.png"]);
       expect(supervisor.started).toHaveLength(0);
 
@@ -635,7 +639,7 @@ exit 2
         storage,
         buildPipelines: supervisor.service,
       });
-      const task = (await storage.getKanbanTasks("project-1"))[0]!;
+      const task = (await storage.kanban.getKanbanTasks("project-1"))[0]!;
       expect(task.images.map(({ filename }) => filename)).toEqual(["first.png", "second.png"]);
       expect(new Set(task.images.map(({ id }) => id)).size).toBe(2);
       expect(supervisor.started[0]!.taskSnapshot.images.map(({ filename }) => filename)).toEqual([
@@ -663,7 +667,7 @@ exit 2
       expect(rejection).toBeInstanceOf(Error);
       expect((rejection as Error).message).toContain("not a supported image");
       expect((rejection as Error).cause).toBeInstanceOf(Error);
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
       expect(supervisor.started).toHaveLength(0);
     });
   });
@@ -680,7 +684,7 @@ exit 2
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("valid base64");
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
       expect(supervisor.started).toHaveLength(0);
     });
   });
@@ -694,7 +698,7 @@ exit 2
       );
       // The pipeline has moved the ticket on by the time the caller retries,
       // which is exactly the case a plain create-if-absent would fail on.
-      await storage.updateKanbanTask(first.taskId, { status: "review" });
+      await storage.kanban.updateKanbanTask(first.taskId, { status: "review" });
 
       const second = await createFeatureBuild(
         { ...input, requestId: "request-1" },
@@ -702,7 +706,7 @@ exit 2
       );
 
       expect(second.taskId).toBe(first.taskId);
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
     });
   });
 
@@ -734,7 +738,7 @@ exit 2
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("requestId was already used with different arguments");
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
       expect(supervisor.started).toHaveLength(1);
     });
   });
@@ -761,7 +765,7 @@ exit 2
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("requestId was already used with different arguments");
-      expect((await storage.getKanbanTasks("project-1"))[0]!.images).toHaveLength(1);
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.images).toHaveLength(1);
       expect(supervisor.started).toHaveLength(1);
     });
   });
@@ -777,7 +781,7 @@ exit 2
           ),
         ).rejects.toThrow("no local path");
         // Nothing was created, so there is no orphan ticket to clean up.
-        expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+        expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
       },
       { localPath: undefined },
     );
@@ -792,7 +796,7 @@ exit 2
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("Invalid feature build request");
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
     });
   });
 
@@ -801,7 +805,7 @@ exit 2
       await expect(createFeatureBuild(input, { storage })).rejects.toThrow(
         "Build pipeline supervisor is unavailable",
       );
-      expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
     });
   });
 });

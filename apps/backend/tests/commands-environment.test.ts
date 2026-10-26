@@ -59,9 +59,11 @@ describe("Electron backend command registry", () => {
       listLoopedReviewWorkflows: mock(async () => []),
       listBuildPipelines: mock(async () => []),
       listPromptQueues: mock(async () => []),
-      getKanbanTasks: mock(async () => []),
-      getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
-      getFeaturePlans: mock(async () => []),
+      kanban: {
+        getKanbanTasks: mock(async () => []),
+        getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
+        getFeaturePlans: mock(async () => []),
+      },
       readConditionalResourceSnapshot: mock(
         async (
           _resource: string,

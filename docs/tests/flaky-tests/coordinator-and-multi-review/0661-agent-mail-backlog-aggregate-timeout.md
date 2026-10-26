@@ -13,3 +13,11 @@
 
 - **Recurrence 2026-10-25 (residual module state branch `todo-0066-residual-module-state-40e8f98a7ef0`):** `mise run test` aggregate (reservations 4/1/2/1, backend in the workspace group); timed out at 5001.81 ms. Backend counts: 10963 pass, 84 skip, 1 fail, 11048 tests across 635 files (498.89 s). Artifact `orkestrator-test-run.sBEjBh` under the host temporary directory. The unchanged owner passed alone (`bun test src/core/storage-agent-mail.test.ts` in `apps/backend`: 50 pass, 0 fail, 5.42 s). The branch does not touch agent mail storage.
 
+
+
+## Hidden-resume review recurrence — 2026-10-26
+
+- **Failure:** The 200-message backlog refusal exceeded five seconds (5023.13 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name mail-owner -- bun test --cwd apps/backend ./src/core/storage-agent-mail.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (1.4 s logged).
+- **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
+- **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.

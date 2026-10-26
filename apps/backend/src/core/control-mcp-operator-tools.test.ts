@@ -194,7 +194,7 @@ describe("operator tools over public actions", () => {
       description: "Details",
     });
     expect((replay.structuredContent as { ticket: { id: string } }).ticket.id).toBe(ticket.id);
-    expect(await harness.harness.storage.getKanbanTasks(harness.projectId)).toHaveLength(1);
+    expect(await harness.harness.storage.kanban.getKanbanTasks(harness.projectId)).toHaveLength(1);
 
     const update = { projectId: harness.projectId, ticketId: ticket.id, status: "done" };
     const updated = await harness.call(harness.defaultToken, "update_ticket", update);

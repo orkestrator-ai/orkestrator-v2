@@ -600,12 +600,14 @@ describe("storage-backed command delegation", () => {
   test("delegates Kanban reads and typed updates", async () => {
     const task = { id: "task-1", title: "Investigate" };
     const storage = {
-      getKanbanTasks: mock(async () => [task]),
-      addKanbanTask: mock(async () => task),
-      updateKanbanTask: mock(async (_id: string, update: Record<string, unknown>) => ({
-        ...task,
-        ...update,
-      })),
+      kanban: {
+        getKanbanTasks: mock(async () => [task]),
+        addKanbanTask: mock(async () => task),
+        updateKanbanTask: mock(async (_id: string, update: Record<string, unknown>) => ({
+          ...task,
+          ...update,
+        })),
+      },
     };
     const context = { storage, runtime: createRuntime() } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -619,7 +621,11 @@ describe("storage-backed command delegation", () => {
         context,
       ),
     ).resolves.toEqual(task);
-    expect(storage.addKanbanTask).toHaveBeenCalledWith("project-1", "Investigate", "Details");
+    expect(storage.kanban.addKanbanTask).toHaveBeenCalledWith(
+      "project-1",
+      "Investigate",
+      "Details",
+    );
     await commands.get("add_kanban_task")?.(
       {
         projectId: "project-1",
@@ -631,7 +637,7 @@ describe("storage-backed command delegation", () => {
       },
       context,
     );
-    expect(storage.addKanbanTask).toHaveBeenLastCalledWith("project-1", "Ship it", "Ready", {
+    expect(storage.kanban.addKanbanTask).toHaveBeenLastCalledWith("project-1", "Ship it", "Ready", {
       acceptanceCriteria: "All checks pass",
       status: "review",
       requestId: "control-ticket-1",
@@ -651,7 +657,7 @@ describe("storage-backed command delegation", () => {
       },
       context,
     );
-    expect(storage.updateKanbanTask).toHaveBeenCalledWith("task-1", {
+    expect(storage.kanban.updateKanbanTask).toHaveBeenCalledWith("task-1", {
       title: "Fixed",
       acceptanceCriteria: "Tests pass",
       status: "done",
@@ -670,12 +676,14 @@ describe("storage-backed command delegation", () => {
       buildPipelineId: "pipeline-linked",
     };
     const storage = {
-      getKanbanTask: mock(async () => task),
+      kanban: {
+        getKanbanTask: mock(async () => task),
+        updateKanbanTask: mock(async () => ({ ...task, buildPipelineId: undefined })),
+      },
       listBuildPipelines: mock(async () => [
         { id: "pipeline-linked", snapshot: { taskId: "task-1" } },
         { id: "pipeline-stale", snapshot: { taskId: "task-1" } },
       ]),
-      updateKanbanTask: mock(async () => ({ ...task, buildPipelineId: undefined })),
     };
     const remove = mock(async (pipelineId: string) => {
       if (pipelineId === "pipeline-stale") throw new Error("cleanup failed");
@@ -692,7 +700,7 @@ describe("storage-backed command delegation", () => {
       "pipeline-linked",
       "pipeline-stale",
     ]);
-    expect(storage.updateKanbanTask).not.toHaveBeenCalled();
+    expect(storage.kanban.updateKanbanTask).not.toHaveBeenCalled();
   });
 
   test("delegates remaining environment, Kanban, notes, and feature-plan handlers", async () => {
@@ -701,17 +709,19 @@ describe("storage-backed command delegation", () => {
     const storage = {
       getLogDirectory: mock(() => "/data/logs"),
       reorderEnvironments: mock(async () => [{ id: "env-2" }, { id: "env-1" }]),
-      deleteKanbanTask: mock(async () => undefined),
-      addKanbanComment: mock(async () => ({ ...task, comments: [{ id: "comment-1" }] })),
-      deleteKanbanComment: mock(async () => ({ ...task, comments: [] })),
-      addKanbanImage: mock(async () => ({ ...task, images: [{ id: "image-1" }] })),
-      deleteKanbanImage: mock(async () => ({ ...task, images: [] })),
-      getKanbanImageData: mock(async () => "encoded-image"),
-      getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
-      saveProjectNotes: mock(async () => ({ projectId: "project-1", content: "updated" })),
-      getFeaturePlans: mock(async () => [feature]),
-      createFeaturePlan: mock(async () => feature),
-      updateFeaturePlan: mock(async () => ({ ...feature, title: "Updated" })),
+      kanban: {
+        deleteKanbanTask: mock(async () => undefined),
+        addKanbanComment: mock(async () => ({ ...task, comments: [{ id: "comment-1" }] })),
+        deleteKanbanComment: mock(async () => ({ ...task, comments: [] })),
+        addKanbanImage: mock(async () => ({ ...task, images: [{ id: "image-1" }] })),
+        deleteKanbanImage: mock(async () => ({ ...task, images: [] })),
+        getKanbanImageData: mock(async () => "encoded-image"),
+        getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
+        saveProjectNotes: mock(async () => ({ projectId: "project-1", content: "updated" })),
+        getFeaturePlans: mock(async () => [feature]),
+        createFeaturePlan: mock(async () => feature),
+        updateFeaturePlan: mock(async () => ({ ...feature, title: "Updated" })),
+      },
     };
     const context = { storage, runtime: createRuntime() } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -745,11 +755,11 @@ describe("storage-backed command delegation", () => {
     await expect(
       commands.get("get_kanban_image_data")?.({ imageId: "image-1" }, context),
     ).resolves.toBe("encoded-image");
-    expect(storage.deleteKanbanTask).toHaveBeenCalledWith("task-1");
-    expect(storage.addKanbanComment).toHaveBeenCalledWith("task-1", "Looks good");
-    expect(storage.deleteKanbanComment).toHaveBeenCalledWith("task-1", "comment-1");
-    expect(storage.addKanbanImage).toHaveBeenCalledWith("task-1", "image.png", "encoded");
-    expect(storage.deleteKanbanImage).toHaveBeenCalledWith("task-1", "image-1");
+    expect(storage.kanban.deleteKanbanTask).toHaveBeenCalledWith("task-1");
+    expect(storage.kanban.addKanbanComment).toHaveBeenCalledWith("task-1", "Looks good");
+    expect(storage.kanban.deleteKanbanComment).toHaveBeenCalledWith("task-1", "comment-1");
+    expect(storage.kanban.addKanbanImage).toHaveBeenCalledWith("task-1", "image.png", "encoded");
+    expect(storage.kanban.deleteKanbanImage).toHaveBeenCalledWith("task-1", "image-1");
 
     await expect(
       commands.get("get_project_notes")?.({ projectId: "project-1" }, context),
@@ -757,7 +767,7 @@ describe("storage-backed command delegation", () => {
     await expect(
       commands.get("save_project_notes")?.({ projectId: "project-1", content: "updated" }, context),
     ).resolves.toEqual({ projectId: "project-1", content: "updated" });
-    expect(storage.saveProjectNotes).toHaveBeenCalledWith("project-1", "updated");
+    expect(storage.kanban.saveProjectNotes).toHaveBeenCalledWith("project-1", "updated");
 
     await expect(
       commands.get("get_feature_plans")?.({ projectId: "project-1" }, context),
@@ -771,7 +781,9 @@ describe("storage-backed command delegation", () => {
         context,
       ),
     ).resolves.toEqual({ ...feature, title: "Updated" });
-    expect(storage.updateFeaturePlan).toHaveBeenCalledWith("feature-1", { title: "Updated" });
+    expect(storage.kanban.updateFeaturePlan).toHaveBeenCalledWith("feature-1", {
+      title: "Updated",
+    });
     expect(() =>
       commands.get("update_feature_plan")?.({ featureId: 1, updates: {} }, context),
     ).toThrow("Expected featureId to be a string");

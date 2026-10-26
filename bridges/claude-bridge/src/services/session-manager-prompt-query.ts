@@ -14,11 +14,10 @@ import {
   effectiveClaudeChrome,
   claudePermissionMode,
   claudePolicyPermissionMode,
-  claudeSettingSources,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
-import { claudeExecutionSandbox } from "./claude-execution-sandbox.js";
+import { claudeExecutionSandbox, claudeSandboxRefusal } from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -35,7 +34,11 @@ import {
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-manager-core.js";
+import {
+  claudeExecutableOptions,
+  sdkSessionIdFromBridgeId,
+  sessionOperationError,
+} from "./session-manager-core.js";
 import { answerClaudeElicitation } from "./session-manager-parked-interactions.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
 import {
@@ -52,6 +55,7 @@ import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.j
 import {
   claudeLiveSettings,
   type ClaudeRuntimeTurn,
+  claudeTurnSettingSources,
   effectiveClaudeContext1m,
 } from "./session-manager-runtime.js";
 import { requestsUltracode } from "./ultracode.js";
@@ -93,6 +97,10 @@ export async function resolveQueryPlan(
     session.executionPolicy,
     options?.readOnly,
   );
+  // The prompt route refuses this before accepting the prompt; this covers a
+  // turn that reaches the CLI another way, or a host that changed since.
+  const sandboxRefusal = claudeSandboxRefusal(policy);
+  if (sandboxRefusal) throw sessionOperationError("invalid", sandboxRefusal);
   // What a cold command-discovery probe must reproduce to answer for this
   // session rather than for a default CLI (see `claude-query-config.ts`).
   session.commandDiscoveryInputs = {
@@ -100,6 +108,8 @@ export async function resolveQueryPlan(
     includeLocalSettings: options?.includeLocalSettings === true,
   };
   const includeProjectResources = policy?.projectResources !== false;
+  const settingSources = claudeTurnSettingSources(session, options);
+  session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
   // Load MCP servers and plugins from config files. Both resolutions read
   // the same on-disk config, so they run concurrently and each merges once.
   // A coordinator's inline set is the injected Orkestrator server(s) only:
@@ -109,7 +119,8 @@ export async function resolveQueryPlan(
   const [{ servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision }, plugins] =
     await Promise.all([
       getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
-      getPluginsForSdk(cwd, includeProjectResources),
+      // Installs pass only when the settings this CLI reads enable them.
+      getPluginsForSdk(cwd, includeProjectResources, settingSources),
     ]);
   turn.mcpServerNames = mcpServerNames;
 
@@ -219,6 +230,7 @@ export async function resolveQueryPlan(
   // Content-free identity of the inline MCP servers, which carry credentials.
   const mcpServersKey = createHash("sha256").update(JSON.stringify(mcpServers)).digest("hex");
   return {
+    settingSources,
     cwd,
     policy,
     effortLevel,
@@ -397,7 +409,7 @@ export function claudeQueryOptions(
     // A coordinator loads nothing: user settings can declare their own
     // hooks and MCP servers, both of which run programs this boundary is
     // supposed to exclude.
-    settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
+    settingSources: plan.settingSources,
     // Fast mode (priority service tier) and Ultracode are Claude Code
     // flag-layer settings, so the user can opt into each per prompt. The
     // CLI keeps neither across processes, and each turn is its own query.

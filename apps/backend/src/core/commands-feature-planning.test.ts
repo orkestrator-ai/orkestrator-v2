@@ -11,7 +11,11 @@ function harness(withService = true) {
     updates,
   }));
   const context = {
-    storage: { updateFeaturePlan },
+    storage: {
+      kanban: {
+        updateFeaturePlan,
+      },
+    },
     ...(withService ? { featurePlanning: { start, snapshot, retry, cancel } } : {}),
   } as unknown as CommandContext;
   const commands = createCommandRegistry();

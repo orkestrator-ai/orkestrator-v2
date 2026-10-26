@@ -28,6 +28,7 @@ import type {
   LoadedPreviewServiceStore,
   PreviewMutationRecord,
   PreviewServiceStore,
+  PreviewServicesStorage,
 } from "./storage-preview-services.js";
 
 /** Internal resolved endpoint. Never serialized to clients as-is. */
@@ -78,11 +79,10 @@ export interface PreviewReadinessPort {
 }
 
 export interface PreviewRegistryStorage {
-  loadPreviewServiceStore(): Promise<LoadedPreviewServiceStore>;
-  mutatePreviewServiceStore<T>(
-    mutate: (store: PreviewServiceStore) => { changed: boolean; result: T },
-  ): Promise<T>;
-  getPreviewBackendIdentity(): Promise<{ instanceId: string }>;
+  previewServices: Pick<
+    PreviewServicesStorage,
+    "loadPreviewServiceStore" | "mutatePreviewServiceStore" | "getPreviewBackendIdentity"
+  >;
   loadEnvironments(): Promise<Environment[]>;
   getEnvironment(environmentId: string): Promise<Environment | null>;
   addResourceChangeListener(listener: (change: ResourceChange) => void): () => void;
@@ -285,8 +285,10 @@ export class PreviewServiceRegistry {
   }
 
   private async initialize(): Promise<void> {
-    this.instanceId = (await this.options.storage.getPreviewBackendIdentity()).instanceId;
-    const loaded = await this.options.storage.loadPreviewServiceStore();
+    this.instanceId = (
+      await this.options.storage.previewServices.getPreviewBackendIdentity()
+    ).instanceId;
+    const loaded = await this.options.storage.previewServices.loadPreviewServiceStore();
     this.invalidDefinitions = loaded.invalid;
     for (const problem of loaded.invalid) {
       this.logger.warn(`[previews] Ignoring invalid stored service definition: ${problem.reason}`);
@@ -432,7 +434,7 @@ export class PreviewServiceRegistry {
       throw previewFailure("not-found", { message: "Environment not found." });
     this.assertTargetKindFits(input.targetKind, environment);
     const operationId = this.operationId(options.operationId);
-    const result = await this.options.storage.mutatePreviewServiceStore((store) => {
+    const result = await this.options.storage.previewServices.mutatePreviewServiceStore((store) => {
       const replay = this.replayOperation(store, operationId, "register");
       if (replay) return { changed: false, result: replay };
       const inEnvironment = Object.values(store.definitions).filter(
@@ -499,7 +501,7 @@ export class PreviewServiceRegistry {
       if (!environment) throw previewFailure("not-found", { message: "Environment not found." });
       this.assertTargetKindFits(patch.targetKind, environment);
     }
-    const result = await this.options.storage.mutatePreviewServiceStore((store) => {
+    const result = await this.options.storage.previewServices.mutatePreviewServiceStore((store) => {
       const replay = this.replayOperation(store, operationId, "update");
       if (replay) return { changed: false, result: replay };
       const stored = store.definitions[serviceId];
@@ -554,7 +556,7 @@ export class PreviewServiceRegistry {
       throw previewFailure("configuration-conflict");
     }
     if (current) this.revoke([serviceId], "service-removed");
-    const result = await this.options.storage.mutatePreviewServiceStore((store) => {
+    const result = await this.options.storage.previewServices.mutatePreviewServiceStore((store) => {
       const replay = this.replayOperation(store, operationId, "remove");
       if (replay) return { changed: false, result: replay };
       const stored = store.definitions[serviceId];
@@ -722,7 +724,7 @@ export class PreviewServiceRegistry {
 
   /** Pull committed definitions into memory, revoking anything whose target changed. */
   private async reloadDefinitions(): Promise<void> {
-    const { store } = await this.options.storage.loadPreviewServiceStore();
+    const { store } = await this.options.storage.previewServices.loadPreviewServiceStore();
     const touched = new Set<string>();
     for (const definition of Object.values(store.definitions)) {
       const previous = this.definitions.get(definition.serviceId);
@@ -871,13 +873,15 @@ export class PreviewServiceRegistry {
   }
 
   private async removeEnvironmentDefinitions(environmentId: string): Promise<void> {
-    const removed = await this.options.storage.mutatePreviewServiceStore((store) => {
-      const ids = Object.values(store.definitions)
-        .filter((definition) => definition.environmentId === environmentId)
-        .map((definition) => definition.serviceId);
-      for (const id of ids) delete store.definitions[id];
-      return { changed: ids.length > 0, result: ids };
-    });
+    const removed = await this.options.storage.previewServices.mutatePreviewServiceStore(
+      (store) => {
+        const ids = Object.values(store.definitions)
+          .filter((definition) => definition.environmentId === environmentId)
+          .map((definition) => definition.serviceId);
+        for (const id of ids) delete store.definitions[id];
+        return { changed: ids.length > 0, result: ids };
+      },
+    );
     for (const serviceId of removed) this.dropDefinition(serviceId, environmentId);
     for (const definition of this.listDefinitions(environmentId))
       this.dropDefinition(definition.serviceId, environmentId);
@@ -887,65 +891,67 @@ export class PreviewServiceRegistry {
   private async seedEnvironment(environment: Environment): Promise<void> {
     if (environment.deletionRequestedAt) return;
     const desired = desiredGeneratedDefinitions(environment);
-    const changed = await this.options.storage.mutatePreviewServiceStore((store) => {
-      let dirty = false;
-      const peers = Object.values(store.definitions).filter(
-        (definition) => definition.environmentId === environment.id,
-      );
-      const generated = new Map(
-        peers
-          .filter((definition) => definition.provenanceKey)
-          .map((definition) => [definition.provenanceKey!, definition]),
-      );
-      const timestamp = new Date(this.now()).toISOString();
-      for (const want of desired) {
-        const existing = generated.get(want.key);
-        if (existing) {
-          generated.delete(want.key);
-          continue;
-        }
-        const userDuplicate = peers.some(
-          (peer) =>
-            peer.targetKind === want.targetKind &&
-            peer.applicationPort === want.port &&
-            peer.scheme === "http",
+    const changed = await this.options.storage.previewServices.mutatePreviewServiceStore(
+      (store) => {
+        let dirty = false;
+        const peers = Object.values(store.definitions).filter(
+          (definition) => definition.environmentId === environment.id,
         );
-        if (userDuplicate) continue;
-        if (peers.length >= this.limits.definitionsPerEnvironment) break;
-        if (Object.keys(store.definitions).length >= this.limits.definitionsPerBackend) break;
-        const hasEntry = peers.some((peer) => peer.entry);
-        const definition: PreviewServiceDefinition = {
-          schemaVersion: PREVIEW_DEFINITION_SCHEMA_VERSION,
-          serviceId: newServiceId(),
-          environmentId: environment.id,
-          label: want.label,
-          targetKind: want.targetKind,
-          applicationPort: want.port,
-          scheme: "http",
-          addressFamily: "auto",
-          provenance: want.kind,
-          provenanceKey: want.key,
-          userOverride: false,
-          entry: want.entry && !hasEntry,
-          enabled: true,
-          definitionRevision: 1,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
-        store.definitions[definition.serviceId] = definition;
-        peers.push(definition);
-        dirty = true;
-      }
-      // Generated definitions whose source mapping disappeared. A user override
-      // is kept so the user's configuration is not silently lost; it reports
-      // `target-unmapped` until the mapping returns or the user removes it.
-      for (const stale of generated.values()) {
-        if (stale.userOverride) continue;
-        delete store.definitions[stale.serviceId];
-        dirty = true;
-      }
-      return { changed: dirty, result: dirty };
-    });
+        const generated = new Map(
+          peers
+            .filter((definition) => definition.provenanceKey)
+            .map((definition) => [definition.provenanceKey!, definition]),
+        );
+        const timestamp = new Date(this.now()).toISOString();
+        for (const want of desired) {
+          const existing = generated.get(want.key);
+          if (existing) {
+            generated.delete(want.key);
+            continue;
+          }
+          const userDuplicate = peers.some(
+            (peer) =>
+              peer.targetKind === want.targetKind &&
+              peer.applicationPort === want.port &&
+              peer.scheme === "http",
+          );
+          if (userDuplicate) continue;
+          if (peers.length >= this.limits.definitionsPerEnvironment) break;
+          if (Object.keys(store.definitions).length >= this.limits.definitionsPerBackend) break;
+          const hasEntry = peers.some((peer) => peer.entry);
+          const definition: PreviewServiceDefinition = {
+            schemaVersion: PREVIEW_DEFINITION_SCHEMA_VERSION,
+            serviceId: newServiceId(),
+            environmentId: environment.id,
+            label: want.label,
+            targetKind: want.targetKind,
+            applicationPort: want.port,
+            scheme: "http",
+            addressFamily: "auto",
+            provenance: want.kind,
+            provenanceKey: want.key,
+            userOverride: false,
+            entry: want.entry && !hasEntry,
+            enabled: true,
+            definitionRevision: 1,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          store.definitions[definition.serviceId] = definition;
+          peers.push(definition);
+          dirty = true;
+        }
+        // Generated definitions whose source mapping disappeared. A user override
+        // is kept so the user's configuration is not silently lost; it reports
+        // `target-unmapped` until the mapping returns or the user removes it.
+        for (const stale of generated.values()) {
+          if (stale.userOverride) continue;
+          delete store.definitions[stale.serviceId];
+          dirty = true;
+        }
+        return { changed: dirty, result: dirty };
+      },
+    );
     if (changed) await this.reloadDefinitions();
   }
 

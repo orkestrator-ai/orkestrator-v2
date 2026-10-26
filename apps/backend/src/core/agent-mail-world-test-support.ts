@@ -19,7 +19,7 @@ import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
 import { runCommand } from "./shell.js";
-import type { AgentMailSender } from "./storage-agent-mail.js";
+import type { AgentMailSender } from "./storage-agent-mail-store.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 
 export type MailActor = {
@@ -192,7 +192,7 @@ export class MailWorld {
 
   /** The project's main coordinator as it stands now. */
   async main(): Promise<MailActor> {
-    const workspace = (await this.storage.getCoordinatorWorkspace(this.projectId))!;
+    const workspace = (await this.storage.coordinators.getCoordinatorWorkspace(this.projectId))!;
     const main = workspace.conversations.find((item) => item.role === "main" && !item.closedAt)!;
     return this.conversationActor("coordinator", main.id);
   }
@@ -216,7 +216,7 @@ export class MailWorld {
     role: "coordinator" | "side",
     conversationId: string,
   ): Promise<MailActor> {
-    const workspace = (await this.storage.getCoordinatorWorkspace(this.projectId))!;
+    const workspace = (await this.storage.coordinators.getCoordinatorWorkspace(this.projectId))!;
     const conversation = workspace.conversations.find((item) => item.id === conversationId)!;
     return {
       name: conversation.title,
@@ -269,7 +269,7 @@ export class MailWorld {
     };
     if (options.launched) {
       const main = await this.main();
-      const association = await this.storage.saveCoordinatorWorkflowAssociation({
+      const association = await this.storage.coordinators.saveCoordinatorWorkflowAssociation({
         id: `launch-${environment.id}`,
         projectId: this.projectId,
         coordinatorId: this.coordinatorId,
@@ -281,7 +281,7 @@ export class MailWorld {
         baseCommit: BASE_COMMIT,
         createdAt: new Date().toISOString(),
       });
-      await this.storage.openCoordinatorDelegation(association.id, "startup-agent");
+      await this.storage.coordinators.openCoordinatorDelegation(association.id, "startup-agent");
       // The launch prompt starts its first turn.
       this.busy.add(`${actor.environmentId}\0${actor.logicalSessionKey}`);
     }

@@ -436,3 +436,21 @@ export class PreviewServicesRepository {
     });
   }
 }
+
+/**
+ * Service previews, preview settings and the machine profile: what callers reach as `storage.previewServices`.
+ *
+ * Every name here is an entry point `storage-writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type PreviewServicesStorage = Pick<
+  PreviewServicesRepository,
+  | "loadPreviewServiceStore"
+  | "mutatePreviewServiceStore"
+  | "getPreviewBackendIdentity"
+  | "getBackendProfile"
+  | "updateBackendProfile"
+  | "loadPreviewSettings"
+  | "updatePreviewSettings"
+>;

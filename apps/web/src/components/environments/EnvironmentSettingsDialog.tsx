@@ -88,6 +88,8 @@ interface EnvironmentSettingsDialogProps {
    * discard: the default port-edit path saves settings instead.
    */
   onRestart?: (environmentId: string, options: backend.RecreateEnvironmentOptions) => Promise<void>;
+  /** The section to open on; the first section when absent or not shown. */
+  initialSection?: string;
 }
 
 const AGENT_ORDER: backend.AgentExtensionId[] = [
@@ -330,6 +332,7 @@ export function EnvironmentSettingsDialog({
   environment,
   onUpdate,
   onRestart,
+  initialSection,
 }: EnvironmentSettingsDialogProps) {
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
@@ -1499,6 +1502,7 @@ export function EnvironmentSettingsDialog({
         onOpenChange={onOpenChange}
         title="Environment Settings"
         menuItems={menuItems}
+        defaultSection={initialSection}
         headerActions={
           <>
             <Button variant="outline" onClick={() => onOpenChange(false)}>

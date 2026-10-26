@@ -189,6 +189,26 @@ test("restart confirmation identifies running agents with unknown activity", () 
   ).toContain("1 agent with unknown activity");
 });
 
+test("restart confirmation separates container terminals, whose shells keep running", () => {
+  const impact = {
+    workingAgents: 0,
+    waitingAgents: 0,
+    activePipelines: 0,
+    terminals: 3,
+    hostServers: 0,
+    measuredAt: "2026-10-26T12:00:00Z",
+  };
+  expect(describeRestartImpact({ ...impact, containerTerminals: 2 })).toBe(
+    "1 host terminal · 2 container terminals (their shells keep running)",
+  );
+  expect(describeRestartImpact({ ...impact, terminals: 1, containerTerminals: 1 })).toBe(
+    "1 container terminal (its shell keeps running)",
+  );
+  expect(describeRestartImpact({ ...impact, containerTerminals: 0 })).toBe("3 host terminals");
+  // An older backend reports one count for both.
+  expect(describeRestartImpact(impact)).toBe("3 open terminals");
+});
+
 test("switches the host's update channel", async () => {
   spyOn(backend, "getHostMaintenance").mockResolvedValue(snapshot());
   const change = spyOn(backend, "setHostUpdateChannel").mockResolvedValue(

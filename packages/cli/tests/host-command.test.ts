@@ -175,6 +175,43 @@ describe("orkestrator host status", () => {
     expect(result.out).toContain("Latest: 2.22.0 (up to date");
   });
 
+  test("separates container terminals from the host's when the backend reports them", async () => {
+    const box = await createSandbox();
+    const impact = {
+      workingAgents: 1,
+      waitingAgents: 0,
+      activePipelines: 0,
+      terminals: 3,
+      hostServers: 0,
+      measuredAt: "2026-10-26T12:00:00.000Z",
+    };
+    let containerTerminals: number | undefined = 2;
+    const gateway = await startFakeGateway((request) =>
+      String(request.body.args.action) === "host.status"
+        ? envelope(
+            publicSuccessEnvelope("host.status", {
+              ...host("2.22.0"),
+              impact: containerTerminals === undefined ? impact : { ...impact, containerTerminals },
+            }),
+          )
+        : defaultResponder()(request),
+    );
+    cleanups.push(
+      () => box.cleanup(),
+      () => gateway.stop(),
+    );
+    const dataDir = await box.publishDescriptor(gateway);
+    await box.run(["connection", "add", "local", "--data-dir", dataDir, "--default", "--no-check"]);
+    expect((await box.run(["host", "status"])).out).toContain(
+      "1 agents working, 0 waiting, 0 pipelines, 3 terminals (2 in containers)",
+    );
+    // An older backend does not split them.
+    containerTerminals = undefined;
+    const older = (await box.run(["host", "status"])).out;
+    expect(older).toContain("0 pipelines, 3 terminals");
+    expect(older).not.toContain("in containers");
+  });
+
   test("an unavailable updater is a structured refusal", async () => {
     const box = await createSandbox();
     const gateway = await startFakeGateway((request) =>

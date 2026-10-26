@@ -9,7 +9,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { requestCloseGlobalSettings } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
+import type { OutdatedEnvironment } from "../HostDependencySettings";
 import { HostUpdatesPanel } from "../HostUpdatesPanel";
 import { maintenanceIssues, type MachineEntry } from "./machine-list";
 import { MachineStatusDot } from "./machine-ui";
@@ -39,6 +42,23 @@ export function MachineUpdatesDialog({
     if (snapshot) onSnapshot(machine.key, snapshot);
   }, [machine.key, onSnapshot, snapshot]);
   const issues = snapshot ? maintenanceIssues(snapshot) : [];
+  // An environment on an older image is rebuilt one at a time, from its own
+  // settings: Rebuild (keep work) reviews preservation and space for it.
+  const nodeId = machine.role === "self" ? (machine.nodeId ?? "") : machine.nodeId;
+  const rebuild =
+    nodeId === null
+      ? undefined
+      : (environment: OutdatedEnvironment) => {
+          onOpenChange(false);
+          requestCloseGlobalSettings();
+          openMachineWorkspace({
+            connectionId: nodeId,
+            projectId: environment.projectId,
+            environmentId: environment.id,
+            dialog: "environment-rebuild",
+            title: environment.name,
+          });
+        };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -69,7 +89,13 @@ export function MachineUpdatesDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="machine-updates">
           {client ? (
-            <HostUpdatesPanel client={client} snapshot={snapshot} error={error} accept={accept} />
+            <HostUpdatesPanel
+              client={client}
+              snapshot={snapshot}
+              error={error}
+              accept={accept}
+              onRebuildEnvironment={rebuild}
+            />
           ) : (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />

@@ -87,15 +87,28 @@ export function realmCoordinatorDefers(grouping: RealmGrouping | null): boolean 
 /**
  * A dialog of the realm's node, opened over what the request selects: the
  * project's for the project dialogs, the environment's for its settings.
+ * `environment-rebuild` is the environment's settings on its Container
+ * section, where Rebuild (keep work) is; a node that predates it drops the
+ * dialog and only selects the environment.
  */
-export type RealmDialog = "repository-settings" | "delete-project" | "environment-settings";
+export type RealmDialog =
+  | "repository-settings"
+  | "delete-project"
+  | "environment-settings"
+  | "environment-rebuild";
 
 function realmDialog(value: unknown): RealmDialog | undefined {
   return value === "repository-settings" ||
     value === "delete-project" ||
-    value === "environment-settings"
+    value === "environment-settings" ||
+    value === "environment-rebuild"
     ? value
     : undefined;
+}
+
+/** Whether the dialog is one of an environment's rather than a project's. */
+export function isEnvironmentDialog(dialog: RealmDialog): boolean {
+  return dialog === "environment-settings" || dialog === "environment-rebuild";
 }
 
 /** What the window asks its realm to show. */
@@ -278,7 +291,9 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   const dialog = realmDialog(message.dialog);
   // A dialog needs what it is for: a project, or an environment for its settings.
   const dialogTarget =
-    dialog === "environment-settings" ? Boolean(projectId && environmentId) : Boolean(projectId);
+    dialog && isEnvironmentDialog(dialog)
+      ? Boolean(projectId && environmentId)
+      : Boolean(projectId);
   return {
     type: "select",
     ...(projectId ? { projectId } : {}),

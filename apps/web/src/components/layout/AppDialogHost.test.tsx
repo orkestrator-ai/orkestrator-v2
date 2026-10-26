@@ -20,15 +20,18 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
     onOpenChange,
     onUpdate,
     open,
+    initialSection,
   }: {
     environment: Environment;
     onOpenChange: (open: boolean) => void;
     onUpdate: (environment: Environment) => void;
     open: boolean;
+    initialSection?: string;
   }) =>
     open ? (
       <div role="dialog" aria-label="Environment Settings">
         <span>Settings for {environment.name}</span>
+        <span>Section: {initialSection ?? "first"}</span>
         <button type="button" onClick={() => onUpdate({ ...environment, status: "stopping" })}>
           Stop from settings
         </button>
@@ -91,6 +94,16 @@ describe("AppDialogHost", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expectDomAbsent(screen.queryByRole("dialog"));
     expect(useAppDialogStore.getState().request).toBeNull();
+  });
+
+  test("opens an environment's settings on the section the request names", async () => {
+    render(<AppDialogHost />);
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ kind: "environment-settings", environmentId: "env-1", section: "container" });
+    });
+    expect(await screen.findByText("Section: container")).toBeTruthy();
   });
 
   test("writes a settings change to the environment store, which every row reads", async () => {

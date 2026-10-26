@@ -27,7 +27,9 @@ export function AppDialogHost() {
   const request = useAppDialogStore((state) => state.request);
   switch (request?.kind) {
     case "environment-settings":
-      return <EnvironmentSettingsHost environmentId={request.environmentId} />;
+      return (
+        <EnvironmentSettingsHost environmentId={request.environmentId} section={request.section} />
+      );
     case "repository-settings":
       return <RepositorySettingsHost projectId={request.projectId} />;
     case "delete-project":
@@ -37,7 +39,13 @@ export function AppDialogHost() {
   }
 }
 
-function EnvironmentSettingsHost({ environmentId }: { environmentId: string }) {
+function EnvironmentSettingsHost({
+  environmentId,
+  section,
+}: {
+  environmentId: string;
+  section?: "container";
+}) {
   const close = useAppDialogStore((state) => state.close);
   const environment = useEnvironmentStore(
     (state) => state.environments.find((candidate) => candidate.id === environmentId) ?? null,
@@ -61,6 +69,7 @@ function EnvironmentSettingsHost({ environmentId }: { environmentId: string }) {
           if (!open) close();
         }}
         environment={environment}
+        initialSection={section}
         onUpdate={(updated) => updateEnvironment(updated.id, updated)}
         onRestart={backend.recreateEnvironment}
       />

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Container, Loader2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import type {
+  HostImageStatus,
   HostMaintenanceSnapshot,
   HostTask,
   HostTaskKind,
@@ -57,15 +58,23 @@ function sourceLabel(tool: HostToolStatus): string {
   return "missing";
 }
 
+export type OutdatedEnvironment = HostImageStatus["outdatedEnvironments"][number];
+
 /** The pinned toolchain, gh's channel, and the container image of the host. */
 export function HostDependencySettings({
   client,
   snapshot,
   accept,
+  onRebuildEnvironment,
 }: {
   client: HostMaintenanceClient;
   snapshot: HostMaintenanceSnapshot;
   accept: (snapshot: HostMaintenanceSnapshot) => void;
+  /**
+   * Opens one outdated environment's Rebuild (keep work), which carries its
+   * own preservation and capacity checks. Absent: the list only names them.
+   */
+  onRebuildEnvironment?: (environment: OutdatedEnvironment) => void;
 }) {
   const [starting, setStarting] = useState<HostTaskKind | null>(null);
   const [confirmGh, setConfirmGh] = useState<"pinned" | "latest" | null>(null);
@@ -203,14 +212,33 @@ export function HostDependencySettings({
             {image.outdatedEnvironments.length > 0 && (
               <div>
                 <p className="text-muted-foreground">
-                  Still on an older image — rebuild each from its environment menu (Rebuild → keep
-                  work):
+                  {onRebuildEnvironment
+                    ? "Still on an older image. Each rebuild keeps the environment's work and checks its own space first:"
+                    : "Still on an older image — rebuild each from its environment menu (Settings → Container → Rebuild, keeping work):"}
                 </p>
-                <ul className="mt-1 list-inside list-disc">
-                  {image.outdatedEnvironments.map((environment) => (
-                    <li key={environment.id}>{environment.name}</li>
-                  ))}
-                </ul>
+                {onRebuildEnvironment ? (
+                  <ul className="mt-1 space-y-1">
+                    {image.outdatedEnvironments.map((environment) => (
+                      <li key={environment.id} className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate">{environment.name}</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Rebuild ${environment.name}`}
+                          onClick={() => onRebuildEnvironment(environment)}
+                        >
+                          Rebuild…
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <ul className="mt-1 list-inside list-disc">
+                    {image.outdatedEnvironments.map((environment) => (
+                      <li key={environment.id}>{environment.name}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
           </div>

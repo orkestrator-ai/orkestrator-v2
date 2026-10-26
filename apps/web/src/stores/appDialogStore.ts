@@ -9,7 +9,12 @@ import { create } from "zustand";
  * outside the drawer, and the drawer closes when a request arrives.
  */
 export type AppDialogRequest =
-  | { kind: "environment-settings"; environmentId: string }
+  | {
+      kind: "environment-settings";
+      environmentId: string;
+      /** Open on this section, e.g. `container` for Rebuild (keep work). */
+      section?: "container";
+    }
   /** Also how another machine's project menu reaches these, in that machine's workspace. */
   | { kind: "repository-settings"; projectId: string }
   | { kind: "delete-project"; projectId: string };

@@ -70,6 +70,17 @@ test("a dialog request crosses only with what it opens on", () => {
   expect(
     parseShellMessage({ type: "select", projectId: "p", dialog: "environment-settings" }),
   ).toEqual({ type: "select", projectId: "p" });
+  expect(
+    parseShellMessage({
+      type: "select",
+      projectId: "p",
+      environmentId: "e",
+      dialog: "environment-rebuild",
+    }),
+  ).toEqual({ type: "select", projectId: "p", environmentId: "e", dialog: "environment-rebuild" });
+  expect(
+    parseShellMessage({ type: "select", projectId: "p", dialog: "environment-rebuild" }),
+  ).toEqual({ type: "select", projectId: "p" });
   expect(parseShellMessage({ type: "select", dialog: "repository-settings" })).toEqual({
     type: "select",
   });

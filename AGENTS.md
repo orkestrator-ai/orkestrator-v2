@@ -1477,11 +1477,11 @@ that a missed event can be recovered.
   or installed dependencies require stopping and starting the profile again.
 - Backend business-logic changes generally require a restart because the
   supervised backend is not a Vite module.
-- Bridge changes need a rebuild first: a profile runs local bridges from
-  `bridges/<name>/dist/index.js`, and `dev:test` bundles only Electron. Run
-  that bridge's `build` script (for example
-  `bun run --cwd bridges/codex-bridge build`), then restart the profile, or
-  the run silently exercises the old bridge.
+- Bridge changes need a profile restart: a profile runs local bridges from
+  `bridges/<name>/dist/index.js`, which `dev:test` builds (through Turbo) only
+  when it starts. The agent-testing Playwright configs refuse to run against a
+  profile whose bridge sources or `dist` changed since then; restart it with
+  `dev:stop` and `dev:test`.
 - Use `dev:reset` only when the scenario requires pristine persisted state. A
   normal implementation loop should preserve the profile so reload and
   rehydration behavior remain testable.

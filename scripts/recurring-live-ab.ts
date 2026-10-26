@@ -5,6 +5,7 @@ import {
   openSync,
   closeSync,
   readFileSync,
+  rmSync,
   writeFileSync,
   appendFileSync,
 } from "node:fs";
@@ -258,8 +259,8 @@ type FixtureEnvironment = {
   worktreePath?: string;
 };
 
-function cliRunner(profile: string) {
-  const configDir = mkdtempSync(path.join(os.tmpdir(), "recurring-live-ab-cli-"));
+/** `configDir` is the run's CLI config directory, which `runArm` owns and removes. */
+function cliRunner(profile: string, configDir: string) {
   return (args: string[]) =>
     spawnSync("bun", ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args], {
       encoding: "utf8",
@@ -272,8 +273,7 @@ type CliResult = { status: number | null; stdout: string };
 type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
 
 /** Wait for the CLI to exit before profile cleanup, escalating a stuck cancellation. */
-function asyncCliRunner(profile: string): AsyncCli {
-  const configDir = mkdtempSync(path.join(os.tmpdir(), "recurring-live-ab-cli-"));
+function asyncCliRunner(profile: string, configDir: string): AsyncCli {
   return (args, signal) => {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
@@ -692,6 +692,11 @@ export async function runArm(
     freshness: [],
     guardLines: null,
   };
+  // Created on first use and removed once the profile is stopped, so the
+  // CLI's config never outlives the run.
+  let cliConfigDir: string | undefined;
+  const cliConfig = () =>
+    (cliConfigDir ??= mkdtempSync(path.join(os.tmpdir(), "recurring-live-ab-cli-")));
   let child: ChildProcess | undefined;
   let exited = false;
   let spawnError: Error | undefined;
@@ -809,7 +814,7 @@ export async function runArm(
       log(`${profile}: freshness probes`);
       const freshness = await runtime.measureFreshness(
         gateway,
-        runtime.cliRunner(profile),
+        runtime.cliRunner(profile, cliConfig()),
         options.freshnessProbes,
         signal,
       );
@@ -824,7 +829,7 @@ export async function runArm(
       log(`${profile}: soak, ${options.soakCycles} cycles`);
       result.soak = await runtime.measureSoak(
         gateway,
-        runtime.asyncCliRunner(profile),
+        runtime.asyncCliRunner(profile, cliConfig()),
         options,
         () => runtime.processSamples(checkedStatus().pids).backend?.rssKiB ?? null,
         signal,
@@ -838,6 +843,7 @@ export async function runArm(
     log(`${profile}: ${result.error}`);
   } finally {
     await cleanup();
+    if (cliConfigDir) rmSync(cliConfigDir, { recursive: true, force: true });
   }
   return result;
 }

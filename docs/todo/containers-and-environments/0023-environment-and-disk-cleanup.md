@@ -89,14 +89,24 @@ macOS run of that last change.
      could exit first. The file's `afterEach` now awaits each cleanup.
    - `cursor-bridge-sdk-test-<pid>` in `bridges/cursor-bridge/src/agent-session.test.ts`:
      `afterAll` now removes `bridgeStateRoot`.
+   - `recurring-live-ab-cli-` (found by the full-suite sweep): every CLI
+     runner in `scripts/recurring-live-ab.ts` made a config directory nothing
+     removed, both in `tests/unit/recurring-live-ab-runner.test.ts` and in
+     real A/B runs. `runArm` now creates one lazily, passes it to both runners
+     and removes it after the profile cleanup; a new test checks it.
 
    Evidence: the four files run with `TMPDIR` set to an empty directory left
    it empty; with the test changes reverted the same runs left exactly
    `cursor-bridge-sdk-test-*`, `ork-gitpaths-*`, `ork-journal-gc-*`,
-   `ork-watch-*`, `pi-http-mcp-*` and `pi-http-rotate-*`. The full-suite
-   sweep is recorded under [Full-suite temp sweep](#full-suite-temp-sweep-2026-10-26).
-   `ork-runtime-`, `ork-preview-*`, `orkestrator-state-sync-` and
-   `orkestrator-activity-boot-` were already removed on the normal path, and
+   `ork-watch-*`, `pi-http-mcp-*` and `pi-http-rotate-*`; the A/B runner file
+   left two `recurring-live-ab-cli-*` before its fix and none after. The
+   full-suite sweep is recorded under
+   [Full-suite temp sweep](#full-suite-temp-sweep-2026-10-26).
+   `ork-preview-*` and `orkestrator-activity-boot-` are removed on the
+   normal path. `ork-runtime-` and `orkestrator-state-sync-` were believed to
+   be, but the direct sweep below left several of each; they and every other
+   leak that sweep found are in
+   [0247](0247-test-temp-dir-leaks-from-full-sweep.md).
    `orkestrator-test-run.*` is kept for 7 days on purpose by
    `scripts/test-all.ts`, because it holds failure logs.
 2. ~~Optional: surface permanently failing cleanup.~~ Done 2026-10-26 as a
@@ -160,6 +170,39 @@ macOS run of that last change.
 ### Qualification
 
 Only the macOS Keychain run in item 3. The 2026-10-17 results are below.
+
+## Full-suite temp sweep (2026-10-26)
+
+`TMPDIR=/tmp/ork0023-full-tmp mise run test:logged -- --name full-test -- mise run test`
+on omarchy-hp (Linux x86_64) at `d0de935d`, with the private directory empty
+beforehand. Afterwards it held only:
+
+| Left behind | Verdict |
+| --- | --- |
+| `orkestrator-test-run.*` | Intended: failure logs kept 7 days by `scripts/test-all.ts`. |
+| `orkestrator-test-scheduler-v1-<uid>`, `orkestrator-test-timings.*`, `playwright-transform-cache-<uid>`, `jiti` | Intended: the test scheduler's state and timing history, and tool caches, reused by the next run. |
+| `recurring-live-ab-cli-*` (2) | Leak, fixed in item 1. |
+| `policy-cli-*` | Only when the live OpenCode research test times out: the test is abandoned before `withPolicyCliFixture`'s `finally` runs. Recorded in flake [0785](../../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md) rather than fixed here, since the cause is the hang. |
+
+That sweep covers the root and agent-support group only. Turbo runs the
+workspace and bridge groups in strict environment mode and does not pass
+`TMPDIR` through, so those tests wrote to `/tmp` (an aggregate failure in
+`commands-project-creation.test.ts` named `/tmp/ork-project-create-*`, which
+that file creates through `os.tmpdir()`). The four workspace and bridge files
+in item 1 were swept one by one instead. A complete sweep of those groups
+would run each package's own script outside Turbo with a private `TMPDIR`,
+for example `TMPDIR=<empty dir> bun run --cwd apps/backend test:workspace`,
+and the same for each bridge's `test:bridge`. The suite itself did not pass;
+its failures are in flake
+[1010](../../tests/flaky-tests/aggregate-validation-runs/1010-environment-disk-cleanup-0023-validation.md).
+
+That direct sweep was then run: all five bridges' `test:bridge` and the
+backend's `test:workspace` with an empty private `TMPDIR`. The bridges
+passed; the backend had 11,721 passed, 142 skipped and 2 failed (flake 0785,
+and a test that reads the host's `XDG_STATE_HOME`). It left about twenty
+directories under fifteen test-owned prefixes. They are new work and are
+inventoried, with owners, in
+[0247](0247-test-temp-dir-leaks-from-full-sweep.md).
 
 ## Qualification results (2026-10-17)
 
@@ -352,7 +395,15 @@ Decisions made on 2026-10-26 while working through the file.
    locked or denied Keychain does not make an otherwise complete reset look
    failed. Cons: a warning can be missed; the item then stays until removed
    in Keychain Access.
-7. **Linux secret stores (outside this file's scope).** On Linux Electron
+7. **Leaks the sweep found beyond item 1's list.** Options: fix them all
+   here; or record them in a new file. Chose a new file,
+   [0247](0247-test-temp-dir-leaks-from-full-sweep.md), as `docs/README.md`
+   requires (an existing file takes no new todos). The one found in the
+   root group's aggregate sweep (`recurring-live-ab-cli-*`) was fixed here
+   because it was the only leak that sweep showed. Pros: item 1 stays the
+   list it named; the fifteen backend and bridge prefixes each need their
+   own owner check. Cons: the suite still leaks until 0247 is done.
+8. **Linux secret stores (outside this file's scope).** On Linux Electron
    keeps the key in the Secret Service or KWallet when one is available.
    Whether development profiles leave items there was not checked: doing so
    means reading this host's keyring, which the run's rules leave alone.

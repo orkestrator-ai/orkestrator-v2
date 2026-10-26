@@ -88,8 +88,8 @@ describe("UserCommandCard", () => {
       />,
     );
     expect(screen.getByText("Exit 1")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
-    expect(screen.queryByLabelText("Input for the running command")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Cancel/ }) === null).toBe(true);
+    expect(screen.queryByLabelText("Input for the running command") === null).toBe(true);
     expect(screen.getByText("npm ERR!")).toBeTruthy();
   });
 });

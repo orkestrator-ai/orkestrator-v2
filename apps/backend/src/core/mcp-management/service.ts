@@ -288,12 +288,12 @@ export class McpManagementService {
   }
 
   /**
-   * Resolves once an apply pass already running has finished; it can still
-   * write the operation history after `dispose()`. For teardown that removes
-   * the data directory.
+   * Resolves once no apply pass is running, including a pass a waiting caller
+   * starts when the current one ends; a pass can still write the operation
+   * history after `dispose()`. For teardown that removes the data directory.
    */
   async settled(): Promise<void> {
-    await this.ticking?.catch(() => undefined);
+    while (this.ticking) await this.ticking.catch(() => undefined);
   }
 
   // -------------------------------------------------------------------------

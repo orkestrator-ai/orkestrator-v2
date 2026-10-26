@@ -271,6 +271,29 @@ the gateway token — sign in with `mise run dev:login`. Never use broad cleanup
 [`orkestrator` CLI](docs/development/cli-testing.md) can drive the same profiles
 without the UI.
 
+### Production Orkestrator shares this host
+
+Orkestrator is built with Orkestrator, so assume the production app is running
+on the same machine, and that your shell, tests, and fixtures are descendants
+of its backend. Its backend, bridges, agent CLIs, and `opencode serve`
+processes look like the ones tests start. Killing one ends every agent session
+on the host, including yours. The production backend has been SIGKILLed during
+agent-run `mise run test` suites.
+
+- Signal only processes you spawned, through the handle or PID you recorded at
+  spawn time. Signal a process group only if you created it detached.
+- Never kill by name, pattern, or port (`pkill`, `killall`, `fuser -k`,
+  `kill $(lsof ...)`), and never signal `process.ppid`, an ancestor, PID `0`,
+  or a group you did not create.
+- Before signalling a PID read from a file, registry, or `ps` scan, confirm
+  its identity (start time and exact command line), because PIDs are reused.
+- Never point a test or fixture at `~/.config/orkestrator-v2`, its toolchains,
+  or its fixed ports; use a temporary data directory or an isolated `dev:test`
+  profile.
+
+[`testing-guide.md`](docs/development/testing-guide.md#production-orkestrator-shares-this-host)
+has the details.
+
 ### Updating Bun and lockfiles
 
 When bumping the Bun runtime, changing a dependency, or changing package

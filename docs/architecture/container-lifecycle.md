@@ -440,7 +440,8 @@ so their volume rebuilds dropped file capabilities. Host labels such as
 (`root-symlink`) because Docker would otherwise deliver nothing for it. The
 root is the archive's first member, read from the whole stream even when a
 step selects members, so a selection that matches nothing (a `~/.codex` with
-no databases yet, which every image has) is a complete, empty copy. Images
+no databases yet, which every image has) is a complete, empty copy, and a
+listing that did not finish fails the step. Images
 built before 2026-10-26 read the root from the selected listing and refused
 such a step as `root-symlink`, which blocked migrating any legacy environment
 without Codex or OpenCode databases. Codex

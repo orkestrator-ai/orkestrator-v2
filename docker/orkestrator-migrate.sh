@@ -74,6 +74,11 @@ copy_stream() {
         [ -s "$WORK/extract.status" ] && [ -s "$WORK/listing.status" ] && [ -s "$WORK/root.status" ] && break
         sleep 0.1
     done
+    # A listing that never finished cannot prove the root is not a link.
+    if [ ! -s "$WORK/listing.status" ] || [ ! -s "$WORK/root.status" ]; then
+        result status=extract-failed
+        return 3
+    fi
     # Device nodes are refused whatever extraction made of them (the
     # candidate is discarded on any failure).
     if awk '$1 ~ /^[bc]/ { found = 1 } END { exit !found }' "$WORK/raw-listing"; then

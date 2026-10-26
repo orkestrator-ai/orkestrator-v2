@@ -46,6 +46,8 @@ import {
   type CoordinatorConversation,
   type CoordinatorSnapshot,
 } from "@orkestrator/protocol/coordinator";
+import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { NativeAgentAuthState } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
@@ -779,7 +781,65 @@ async function statusCase(input: {
   cleanup: Array<() => Promise<unknown>>;
 }): Promise<void> {
   const { coordinator, summary } = input;
-  const { checks, watch, holdsApproval, waiterEnvironmentId } = await runStatusScenario(input);
+  const qualifyPiDefault =
+    coordinator.identity.agent === "pi" &&
+    process.env.ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT === "1";
+  let expectedPiModel: string | undefined;
+  if (qualifyPiDefault) {
+    // Read the real bridge catalogue before launching; do not seed a model in
+    // Orkestrator or edit Pi settings to make this qualification pass.
+    await coordinator.invoke("refresh_host_agent_model_catalog", { agent: "pi" });
+    const models = await coordinator.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+      environmentId: coordinator.identity.environmentId,
+    });
+    const pi = models.filter((model) => model.platform === "pi");
+    expectedPiModel = pi.find((model) => model.sessionDefault)?.id;
+    expect(pi[0]?.id, "qualify the ChatGPT-refused first catalogue model").toMatch(
+      /^openai(?:-codex)?\/gpt-4$/,
+    );
+    expect(
+      expectedPiModel,
+      "the host must have a saved Pi default beyond the first row",
+    ).toBeTruthy();
+    expect(expectedPiModel).not.toBe(pi[0]?.id);
+    const config = await coordinator.invoke<{
+      global: { agentSettings?: { platforms?: { pi?: { model?: string } } } };
+    }>("get_config");
+    expect(
+      config.global.agentSettings?.platforms?.pi?.model,
+      "Orkestrator must leave Pi's model unset",
+    ).toBeUndefined();
+  }
+  const { checks, watch, holdsApproval, waiterEnvironmentId, probe } =
+    await runStatusScenario(input);
+  if (qualifyPiDefault) {
+    const workflows = await coordinator.invoke<MultiReviewWorkflow[]>(
+      "list_multi_review_workflows",
+      {
+        environmentId: probe.revieweeEnvironmentId,
+      },
+    );
+    const workflow = workflows[0];
+    const rows = workflow ? [...workflow.reviewers, workflow.reviewModel, workflow.fixModel] : [];
+    checks.push({
+      name: "pi-saved-default-rows",
+      passed:
+        rows.length >= 4 &&
+        rows.every((row) => row?.agent === "pi" && row.model === expectedPiModel),
+      detail: `${rows.length} rows checked against the live Pi session default`,
+    });
+    checks.push({
+      name: "pi-saved-default-completed",
+      passed:
+        !!workflow &&
+        workflow.reviewers.every((row) => row.status === "completed") &&
+        !!workflow.consolidatedReport &&
+        (workflow.phase === "completed" ||
+          (workflow.phase === "interactive" &&
+            workflow.addressPromptPending !== true &&
+            workflow.fixSession?.status === "idle")),
+    });
+  }
   const coordinatorEnvironmentId = coordinator.identity.environmentId;
   const platform = coordinator.identity.agent;
   const projection = watch.projection();

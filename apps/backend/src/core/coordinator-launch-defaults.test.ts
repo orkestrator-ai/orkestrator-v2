@@ -97,6 +97,104 @@ describe("multiReviewDefaultRows", () => {
     ]);
   });
 
+  describe("a Pi row with no saved model (0172)", () => {
+    // The live failure: a ChatGPT-backed Pi login whose first catalogue model
+    // is one the login refuses, while Pi's own saved default (what a tab with
+    // no model starts on, marked by the bridge) works.
+    const piCatalog: AgentModel[] = [
+      { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
+      {
+        platform: "pi",
+        id: "openai/gpt-6.1-sol",
+        label: "GPT-6.1 Sol",
+        reasoning: [{ id: "high", label: "High" }],
+        sessionDefault: true,
+      },
+      { platform: "pi", id: "openai/gpt-5.5", label: "GPT-5.5" },
+    ];
+    const piRows = (global: AgentSettingsTier, models = piCatalog) =>
+      multiReviewDefaultRows({ tiers: { global }, global, enabledAgentPlatforms: ["pi"] }, models);
+
+    test("resolves every row to the model a Pi tab would start on", () => {
+      const resolved = piRows({ actionDefaults: { review: { platform: "pi" } } });
+      const row = { agent: "pi", model: "openai/gpt-6.1-sol" } as const;
+      expect(resolved).toEqual({ reviewers: [row, row], reviewModel: row, fixModel: row });
+    });
+
+    test("keeps an effort the session default offers", () => {
+      const resolved = piRows({
+        actionDefaults: { review: { platform: "pi", reasoningEffort: "high" } },
+      });
+      expect(resolved.reviewers[0]).toEqual({
+        agent: "pi",
+        model: "openai/gpt-6.1-sol",
+        reasoningEffort: "high",
+      });
+    });
+
+    test("an action default, a saved platform model and an explicit extra reviewer still win", () => {
+      const resolved = piRows({
+        actionDefaults: {
+          review: { platform: "pi" },
+          fixReviewIssues: { platform: "pi", model: "openai/gpt-5.5" },
+        },
+        platforms: { pi: { model: "openai/gpt-4" } },
+        multiReview: {
+          reviewerCount: 3,
+          additionalReviewers: [{ platform: "pi", model: "openai/gpt-5.5" }],
+        },
+      });
+      expect(resolved.reviewers.map((row) => row.model)).toEqual([
+        "openai/gpt-4",
+        "openai/gpt-4",
+        "openai/gpt-5.5",
+      ]);
+      expect(resolved.fixModel.model).toBe("openai/gpt-5.5");
+    });
+
+    test("a stale saved model also falls back to the session default", () => {
+      const resolved = piRows({ actionDefaults: { review: { platform: "pi", model: "gone/x" } } });
+      expect(resolved.reviewModel).toEqual({ agent: "pi", model: "openai/gpt-6.1-sol" });
+    });
+
+    test("a disconnected session default leaves the model to the session", () => {
+      const resolved = piRows(
+        { actionDefaults: { review: { platform: "pi" } } },
+        piCatalog.map((model) => (model.sessionDefault ? { ...model, connected: false } : model)),
+      );
+      expect(resolved.reviewModel).toEqual({ agent: "pi", model: "default" });
+    });
+
+    test("an unmarked catalogue (a pre-upgrade cache) never pins the first model", () => {
+      // The review's P1: a cache written before the mark existed would
+      // otherwise pin the refused `openai/gpt-4`. `default` lets the session
+      // start on Pi's saved default, or on the first model when there is none.
+      const unmarked = piCatalog.map(({ sessionDefault: _unused, ...model }) => model);
+      const resolved = piRows(
+        {
+          actionDefaults: {
+            review: { platform: "pi", reasoningEffort: "high" },
+            fixReviewIssues: { platform: "pi", model: "gone/x" },
+          },
+        },
+        unmarked,
+      );
+      expect(resolved.reviewModel).toEqual({
+        agent: "pi",
+        model: "default",
+        reasoningEffort: "high",
+      });
+      expect(resolved.fixModel).toEqual({ agent: "pi", model: "default" });
+      // A saved model the catalogue offers still wins.
+      expect(
+        piRows(
+          { actionDefaults: { review: { platform: "pi", model: "openai/gpt-5.5" } } },
+          unmarked,
+        ).reviewModel,
+      ).toEqual({ agent: "pi", model: "openai/gpt-5.5" });
+    });
+  });
+
   test("falls back to the default agent and its own default model when nothing is saved", () => {
     const resolved = rows({}, ["codex"]);
     expect(resolved).toEqual({

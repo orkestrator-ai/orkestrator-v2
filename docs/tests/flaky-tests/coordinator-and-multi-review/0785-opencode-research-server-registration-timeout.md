@@ -48,3 +48,17 @@ immediately afterwards; the next isolated rerun with the same command passed
 - Complete unchanged owner: `mise run test:logged -- --name merge-opencode-research-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` passed (exit 0, 2.6 s).
 - Evidence: `/tmp/orkestrator-test-run.BiI1L3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer logged-run summary: `/tmp/orkestrator-test-run.zPP21z/summary.json`.
 - Assessment: another aggregate-only timeout. The cause remains unconfirmed; no implementation, assertion, timeout or skip changed.
+
+
+## Desktop recovery validation — 2026-10-26
+
+`mise run test:logged -- --name recovery-repository -- mise run test` on Linux
+x64 repeated the 40-second registration timeout (40001.33 ms, two backend
+workers). The complete unchanged owner also timed out with
+`mise run test:logged -- --name unrelated-opencode-owner -- bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures`
+(40032.56 ms; zero passed, one failed; 43.0 seconds logged). Both runs killed
+one dangling fixture process. This observation is non-green in isolation and
+does not establish a new aggregate-only flake. No OpenCode implementation,
+assertion, timeout or skip changed. Evidence:
+`/tmp/orkestrator-test-run.bTab6l/unrelated-opencode-owner.log.gz` and the aggregate
+log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.

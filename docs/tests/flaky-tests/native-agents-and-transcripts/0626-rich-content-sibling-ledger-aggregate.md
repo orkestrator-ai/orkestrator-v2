@@ -10,3 +10,17 @@
 - **Owning-file rerun:** `mise run test:logged -- --name reorder-rich-revocation-owner -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 2.4 seconds logged).
 - **Evidence:** `orkestrator-test-run.U6kMZC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent failure; cause unknown. The remote reorder changes do not touch rich-content ledgers. No implementation, assertion, timeout or skip in this owner changed.
+
+
+## Desktop recovery validation — 2026-10-26
+
+`mise run test:logged -- --name recovery-repository -- mise run test` repeated
+this failure on Linux x64 with two web workers: the sibling ledger had length
+0 instead of 1 (274.56 ms). The default repository groups ran alongside Electron
+validation and other worktrees. The complete unchanged owner passed alone with
+`mise run test:logged -- --name unrelated-rich-content-owner -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`
+(exit 0, 3.3 seconds). This is a recurrence of the tracked intermittent failure;
+its cause remains unconfirmed. No rich-content implementation, assertion,
+timeout or skip changed. Aggregate evidence is in
+`/tmp/orkestrator-test-run.DpxCwj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+after completion; the outer summary is `/tmp/orkestrator-test-run.vHWLs2/summary.json`.

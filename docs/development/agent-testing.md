@@ -162,6 +162,38 @@ The second start is idempotent and reports the already-running launcher. Wait fo
 `testProject`, `electronTitle`, and `logDir`. The manifest names the mode-0600
 gateway auth file but never includes its token.
 
+### Bridge builds
+
+The backend runs from source, but it launches every local bridge from
+`bridges/<bridge>/dist/index.js`. Before it starts the backend, `dev:test`
+builds all five bridges with `turbo run build` (output in the profile's
+`logs/bridge-build.log`). Turbo restores an unchanged bridge from its cache,
+which takes a few seconds; a changed bridge, or a change to a package it
+bundles such as `packages/protocol`, rebuilds in about five more. A failed
+build stops the start. Plain `mise run dev` does not build bridges.
+
+Preparation compares Turbo input hashes before and after the build and its log
+write. If any input changed, restart `dev:test` to build again; it does not write
+a new record for that attempt. Every bridge must have a nonempty task hash in
+Turbo's plan. A failed or incomplete plan stops preparation or the suite check,
+including when the stale-build override is set: the override permits known
+mismatches, and cannot establish freshness when planning fails.
+
+The start then records each bridge's Turbo build hash and the SHA-256 of its
+`dist/index.js` in `runtime/bridge-builds.json` beside `status.json`. The
+browser, paused-interactions, Claude warm-runtime and coordinator Playwright
+configs compare that record with the checkout in a global setup and fail
+before the first test when a bridge's sources or `dist` changed since the
+profile started: the profile's bridges, some already running, would test the
+old build. Restart the profile (`dev:stop`, then `dev:test` with the same
+flags) to rebuild them, or set `ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES=1`
+to run anyway. A profile started before records existed is reported, not
+failed. The one-shot runners (`test:agent:browser:isolated`,
+`test:agent:design:isolated`, `test:agent:coordinator`) start a new profile,
+so they always build first. The older-bridge step below swaps one bundle in
+during a spec, after the check, and is unaffected.
+The Electron Playwright config starts its own app and does not use this guard.
+
 ## Sign a browser in
 
 ```bash
@@ -1551,6 +1583,11 @@ go; `--older-than <days>` also removes stopped profiles idle for that long.
 - For failed tests and typechecks, inspect the compressed artifact directory
   printed by the logged runner rather than relying on the agent/tool buffer.
 - An occupied reserved port fails startup clearly; retrying allocates fresh ports.
+- `Bridge build failed; see .../bridge-build.log` means a bridge no longer
+  compiles; fix it or run that bridge's `build` script to see the error.
+  `Profile <name> is running bridge builds that no longer match` from a
+  Playwright run means a bridge changed after the profile started; restart
+  the profile.
 - If Docker is unavailable, use the local fixture flow.
 - A missing toolchain affects nested agents, not credential-free fixture/server
   testing. Use `--credential-source <name>` when a test should expose only one

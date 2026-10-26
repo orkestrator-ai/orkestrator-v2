@@ -160,3 +160,23 @@ navigation. Validation started from `4ffb776ba` with these changes uncommitted.
   relevant, but neither it nor these reruns proves the cause of the aggregate
   ownership mismatch. No assertion, timeout, skip or preview implementation
   was changed. Static checks and the focused coordinator/storage guards passed.
+
+## Recurrence 2026-10-26 (todo 0056 validation)
+
+- **Change under test:** todo 0056 on branch
+  `todo-0056-stale-bridge-builds-f8fc1693b936` (dev:test bridge builds and a
+  Playwright global setup; no backend or preview code).
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test`
+  on a host shared with other worktrees' runs and dev profiles.
+- **Aggregate result:** `local preview service discovery on this host > two
+  environments, a restart on the reused port, and an auto-incremented port`
+  failed in the backend workspace group.
+- **Unchanged owner reruns:** `bun test --preload ../../tests/setup-node.ts ./src/core/preview-local-discovery.test.ts`
+  from `apps/backend`, three times in a row: the first failed (18 passed, one
+  failed) with `listen EADDRINUSE: address already in use 127.0.0.1:50487`
+  and `terminal exited 0`; the next two passed (19 pass, 0 fail). The case
+  alone (`-t "two environments"`) also passed.
+- **Evidence:** aggregate group logs in `orkestrator-test-run.i9ylrT/`, outer
+  log in `orkestrator-test-run.gStbzk/`, under the host temporary directory.
+- **Assessment:** the same host-port collision as the earlier observations;
+  the owner passes alone on retry. Nothing was changed to hide it.

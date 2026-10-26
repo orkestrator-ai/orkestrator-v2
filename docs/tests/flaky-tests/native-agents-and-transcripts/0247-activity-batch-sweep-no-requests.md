@@ -180,3 +180,13 @@ passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
 - **Complete unchanged owner:** `mise run test:logged -- --name activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.8 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend totals: 11,431 passed and four failed; web had one failure. Root/support, bridges and protocol passed. The aggregate exited 1 in 1099.1 seconds logged.
 - **Assessment:** recurrence of the empty-request symptom; cause unproven. No assertion, deadline or skip changed.
+
+## Dispatch-recovery rebase — 2026-10-26
+
+- **Change:** todo 0112 branch `todo-0112-review-fanout-recovery-0aecfac78013` rebased onto `a51045a4a` (review fan-out dispatch recovery, bridge `/dispatch` and status fields); no activity-sweep implementation or test changed.
+- **Original command:** `mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, load average about 8 to 9 with other worktrees active.
+- **Failure:** `activity sweep over the batch route > missing unmaps only that session; unavailable leaves every mapping uncertain` (14.89 ms): after one reconciliation the stored mappings still held the session the fake bridge answered `missing` (`provider-1`), so the batch answer was not applied.
+- **Suite counts:** backend 11,768 passed, 135 skipped and 1 failed across 703 files (480.29 s); web, root/support, bridges and the Codex protocol lockfile passed.
+- **Complete unchanged owner:** `bun test ./src/core/native-agent-service-activity-batch.test.ts` from `apps/backend` passed three times in a row (7 pass each).
+- **Evidence:** `orkestrator-test-run.oiIBIc` below the host temporary directory.
+- **Assessment:** a fourth case of the same owner failing only in the aggregate; consistent with the batch reply never reaching reconciliation. Cause unproven. No assertion, deadline or skip changed.

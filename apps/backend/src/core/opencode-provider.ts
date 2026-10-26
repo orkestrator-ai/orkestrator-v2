@@ -692,7 +692,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
         // Drop the dispatch clock so a later turn cannot inherit an abandoned stamp.
-        this.streamState.rejectTurn(sessionId, dispatchStartedAt);
+        this.streamState.rejectTurn(sessionId, dispatchStartedAt, true);
         throw new AmbiguousPromptDispatchError("OpenCode prompt dispatch outcome is unknown", {
           cause: error,
         });

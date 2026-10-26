@@ -157,6 +157,8 @@ type OpenCodeStreamSession = {
   turnFailure?: NativeAgentNotice;
   /** The request this backend last dispatched, until the next dispatch. */
   dispatchRequestId?: string;
+  /** Dispatch identity survives an idle/error event clearing the visible turn clock. */
+  dispatchStartedAt?: number;
   /**
    * The first `session.error` seen since `dispatchRequestId` was dispatched.
    *
@@ -446,6 +448,7 @@ export class OpenCodeStreamState {
   beginTurn(sessionId: string, startedAt: number, requestId?: string): void {
     const state = this.session(sessionId);
     state.turnStartedAt = startedAt;
+    state.dispatchStartedAt = startedAt;
     state.turnConfirmed = false;
     delete state.retryNotice;
     delete state.turnFailure;
@@ -490,10 +493,18 @@ export class OpenCodeStreamState {
     return state.turnStartedAt;
   }
 
-  /** Remove only the dispatch clock belonging to this rejected request. */
-  rejectTurn(sessionId: string, startedAt: number): void {
+  /** Clear this send's clock; keep error ownership only when delivery is ambiguous. */
+  rejectTurn(sessionId: string, startedAt: number, ambiguous = false): void {
     const state = this.sessions.get(sessionId);
-    if (state?.turnStartedAt === startedAt) this.endTurn(sessionId);
+    if (state?.dispatchStartedAt !== startedAt) return;
+    this.endTurn(sessionId);
+    // An ambiguous send may still materialize or report a dispatch-only error.
+    // A rejected send must not claim errors emitted after its rejection.
+    if (!ambiguous) {
+      delete state.dispatchRequestId;
+      delete state.dispatchStartedAt;
+      delete state.dispatchFailure;
+    }
   }
 
   /** Drop everything tracked for a session whose ownership was closed. */

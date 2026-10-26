@@ -1,5 +1,6 @@
 import { copyFile, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 
 /**
@@ -20,7 +21,7 @@ import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-plat
  */
 
 /** Providers whose agent binary the toolchain pins (`toolchain install --tool`). */
-const PINNED_TOOLS: ReadonlySet<string> = new Set(["claude", "codex", "opencode", "pi", "grok"]);
+const PINNED_TOOLS: ReadonlySet<string> = new Set(Object.keys(PINNED_TOOLCHAIN_VERSIONS));
 
 /** Providers whose bridge the package does not ship, with that bridge. */
 export const REPOSITORY_BRIDGES: Readonly<Record<string, string>> = Object.freeze({

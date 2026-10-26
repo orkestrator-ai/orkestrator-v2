@@ -72,11 +72,14 @@ export async function readOpenCodeTurnTerminalError(
     }
   }
   const failure = dispatch.failure;
-  if (
-    failure?.requestId === requestId &&
-    !findOpenCodeMessageId(history, requestId) &&
-    (dispatch.now ?? Date.now()) - failure.observedAt >= OPEN_CODE_DISPATCH_FAILURE_GRACE_MS
-  ) {
+  if (failure?.requestId === requestId && !findOpenCodeMessageId(history, requestId)) {
+    const remaining =
+      OPEN_CODE_DISPATCH_FAILURE_GRACE_MS - ((dispatch.now ?? Date.now()) - failure.observedAt);
+    if (remaining > 0) {
+      throw new ProviderUnavailableError("OpenCode is still resolving the prompt's attachments", {
+        retryAfterMs: remaining,
+      });
+    }
     return `OpenCode did not accept the prompt: ${failure.message}`;
   }
   throw new ProviderUnavailableError("OpenCode has not finished answering this request");

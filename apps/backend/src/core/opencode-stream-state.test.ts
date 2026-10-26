@@ -336,6 +336,60 @@ describe("OpenCodeStreamState turn clock", () => {
     expect(state.dispatchFailure("session", "request-2")).toBeUndefined();
   });
 
+  test.each([false, true])(
+    "rejected dispatch clears error ownership; ambiguous=%s retains it",
+    (ambiguous) => {
+      const state = new OpenCodeStreamState();
+      const error = (message: string) =>
+        state.apply(
+          {
+            type: "session.error",
+            properties: {
+              sessionID: "session",
+              error: { name: "UnknownError", data: { message } },
+            },
+          } as never,
+          5_000,
+        );
+      state.beginTurn("session", 1_000, "previous");
+      error("previous failure");
+      state.beginTurn("session", 2_000, "next");
+      expect(state.dispatchFailure("session", "previous")).toBeUndefined();
+      // session.error already cleared the visible clock when the send rejects.
+      error("next failure");
+      state.rejectTurn("session", 1_000);
+      expect(state.dispatchFailure("session", "next")?.message).toBe("next failure");
+      state.rejectTurn("session", 2_000, ambiguous);
+      error("late error");
+      expect(state.turnStartedAt("session")).toBeUndefined();
+      expect(state.dispatchFailure("session", "next")?.message).toBe(
+        ambiguous ? "next failure" : undefined,
+      );
+    },
+  );
+
+  test("attributes a late error to an ambiguous dispatch after its visible clock is cleared", () => {
+    const state = new OpenCodeStreamState();
+    state.beginTurn("session", 1_000, "ambiguous-request");
+    state.rejectTurn("session", 1_000, true);
+    state.apply(
+      {
+        type: "session.error",
+        properties: {
+          sessionID: "session",
+          error: { name: "UnknownError", data: { message: "Image decode failed" } },
+        },
+      } as never,
+      2_000,
+    );
+    expect(state.turnStartedAt("session")).toBeUndefined();
+    expect(state.dispatchFailure("session", "ambiguous-request")).toEqual({
+      requestId: "ambiguous-request",
+      message: "Image decode failed",
+      observedAt: 2_000,
+    });
+  });
+
   test("session.updated records the provider session model", () => {
     const state = new OpenCodeStreamState();
     state.apply({

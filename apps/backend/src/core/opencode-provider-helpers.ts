@@ -43,7 +43,6 @@ import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts"
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
-  imageMimeTypeForFilename,
   mimeTypeForFilename,
   mimeTypeForImageData,
   promptAttachmentUrl,
@@ -646,8 +645,12 @@ export function openCodeAgentFor(
  */
 export function openCodeAttachmentMime(attachment: PromptAttachment): string {
   const name = attachment.filename ?? attachment.path;
-  if (attachment.type === "image") return mimeTypeForFilename(name);
-  return imageMimeTypeForFilename(name) ?? "text/plain";
+  if (attachment.type === "file") return "text/plain";
+  // Staging derives the data URL's MIME from the bytes; its display name may
+  // still have the clipboard's original extension.
+  const inline = /^data:(image\/[^;,]+)[;,]/.exec(attachment.dataUrl ?? "");
+  if (inline) return inline[1]!;
+  return mimeTypeForFilename(name);
 }
 
 export function openCodePromptParts(

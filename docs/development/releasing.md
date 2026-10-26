@@ -96,7 +96,9 @@ nobody approves within about five minutes, it fails with
 - wait for the auth URL with a bounded poll of the output, for example
   `for i in $(seq 1 80); do grep -qE 'npmjs.com/auth|EXIT=' "$F" && break; sleep 3; done`;
 - give the URL to the user straight away, and wait for `EXIT=` with another
-  bounded poll or by ending the turn.
+  bounded poll or by ending the turn. A worker under an Orkestrator coordinator
+  sends the URL to the coordinator and ends its turn at once, because mail sent
+  mid-turn is held until the turn ends.
 
 Do not pipe input into the command (such as `sleep 900 | mise run
 release:publish`). The pipeline outlives the publish, so `EXIT=` is not written

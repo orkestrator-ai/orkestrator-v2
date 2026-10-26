@@ -204,6 +204,14 @@ The aggregate timed out at 5017.45 ms (root/support: 3381 passed, two failed). I
 - **Assessment:** confirms recurrence; no implementation, assertion, deadline or skip changed. The original aggregate remains non-green.
 - **Final root counts:** 3,381 passed, one failed and one between-test error across 161 files (255.86 s).
 
+## Resume cleanup coverage validation — 2026-10-25
+
+Original command: `mise run test:logged -- --name cleanup-repository -- mise run test`, with workspace/root/bridge/protocol worker reservations 4/1/2/1 and component browser validation running concurrently. Aggregate evidence is under the host temporary directory, `orkestrator-test-run.TabHxj/`.
+
+`disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded five seconds (5,046.19 ms), receiving null process status and producing a between-test error. Root/support reported 3,415 passed, two failed and one error across 162 files (515.96 s).
+
+The complete unchanged owner passed: `mise run test:logged -- --name cleanup-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` (exit 0, 5.4 s). This confirms a recurrence without establishing its cause. No implementation, assertion, timeout or skip changed.
+
 ## Design resume identity review — 2026-10-25
 
 - **Original command:** `mise run test:logged -- --name resume-repository -- mise run test`; standard workspace/root/bridge/protocol worker reservations 4/1/2/1, with other checkout suites sharing host capacity.

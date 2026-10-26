@@ -229,7 +229,8 @@ every backend-only host, then restart the service.
 - **The managed `claude` does not update itself.** Host processes running it get
   `CLAUDE_PINNED_RUNTIME_ENV` (`DISABLE_AUTOUPDATER=1`, with
   `FORCE_AUTOUPDATE_PLUGINS=1` so the user's plugins still update). A `claude` on
-  PATH is left alone.
+  PATH is left alone. The container image sets the same two variables
+  (`docker/Dockerfile`), so container Claude stays on `CLAUDE_CLI_VERSION`.
 
 ### Container environments
 

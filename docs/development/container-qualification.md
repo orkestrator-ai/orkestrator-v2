@@ -56,7 +56,8 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, then the benchmarks (C28), uploaded as `container-benchmarks-<platform>` |
+| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker` | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring (`container-claude-terminal-signal.spec.ts`) |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
 
 `test:logged` kills a command that prints nothing for 300 s, and Bun prints
@@ -474,10 +475,18 @@ mise exec -- bun apps/backend/scripts/container-signal-profile-sample.ts --profi
 ```
 
 The live signal tests need a development image of the checkout
-(`mise run docker:build:dev`) and are skipped without one:
+(`mise run docker:build:dev`) or the CI workflow's qualification image, and
+are skipped without one:
 
 ```bash
 ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
   bun test apps/backend/tests/claude-state-signal-docker.test.ts \
   apps/backend/tests/container-worktree-signal-docker.test.ts
 ```
+
+The Linux Engine workflow runs both tests and the exec-cost script on every
+run (`exec-cost-<platform>.json` in the benchmark artifact). The worktree
+test's `change-to-scan` line is not a clean latency: it follows a writer
+whose close rang just before, so it likely waits out part of the 2 s hint
+gap (1.3 to 1.4 s on Desktop and Linux Engine alike). Use the profile sample's
+`latencyMs` for change-to-visible.

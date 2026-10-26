@@ -1,6 +1,6 @@
 # Container state observation
 
-Checked against `main` at `a5d78cfcd` (2026-10-24).
+Checked against `main` at `930189337` (2026-10-26).
 
 The backend observes state inside containers by running `docker exec`. Both
 of the largest idle costs now have a container-side change signal with a
@@ -9,8 +9,11 @@ terminal state (`claude-state-signal=2`) is read when its hooks ring, plus a
 30 s safety read. The Files panel and diff counts (`container-worktree-signal=1`)
 are served from the last scan until an in-container inotify watcher rings,
 plus a 60 s safety scan. Both report their health in recurring diagnostics,
-and images without them keep the old timers. What remains is evidence this
-machine cannot produce: Linux Engine numbers, and a real terminal Claude turn.
+and images without them keep the old timers. Linux Engine numbers and both
+live signal tests now run in the Linux Engine CI workflow, and a real
+terminal Claude turn met both latency budgets on Docker Desktop (2026-10-26).
+What remains is one real-stack run on a Linux Engine host: the profile sample
+and the live terminal Claude spec.
 
 ## Current state
 
@@ -51,6 +54,26 @@ Cadences are in the [recurring-work inventory](../../architecture/recurring-work
 - **Fallback.** Images without `container-worktree-signal`, and lineages that
   are not confirmed or were demoted, keep the 3 s file-list bound, the 3/10 s
   tree bounds and the 15 s scan.
+- **Terminal Claude in the image (2026-10-26).** The entrypoint's
+  `~/.claude/settings.json` now records the bypass-mode consent
+  (`skipDangerousModePermissionPrompt`), and the image sets
+  `DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1`. Both were found by the
+  first real terminal turn: Claude Code 2.1.309 ignores the entrypoint's
+  `bypassPermissionsModeAccepted` in `~/.claude.json`, so every **Claude CLI**
+  tab stopped at the consent dialog (defaulting to "No, exit") on every
+  start, and it updated its pinned global install to 2.1.310 in place.
+  `tests/unit/container-claude-settings.test.ts` pins both.
+- **Linux Engine CI.** `container-live-qualification.yml` runs
+  `claude-state-signal-docker.test.ts`, `container-worktree-signal-docker.test.ts`
+  and `container-exec-cost.ts` on `ubuntu-24.04` and `ubuntu-24.04-arm`
+  (`tests/unit/ci-workflows.test.ts` fails if they leave it). The two tests
+  accept the workflow's `orkestrator-v2:qualification-*` image as well as a
+  `dev-` one.
+- **Real-stack spec.** `e2e/agent-testing/container-claude-terminal-signal.spec.ts`
+  (opt-in `ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1` on the Docker
+  fixture) runs two real turns in a **Claude CLI** tab, the second with
+  another environment selected, and asserts both budgets, a ring per edge
+  and no demotion.
 
 ### Evidence (Docker Desktop 29.7.2, Apple M5 Max, 2026-10-24)
 
@@ -72,18 +95,72 @@ Image `orkestrator-v2:dev-8540c28917b1`, built from this branch, declares
 | Real stack, fallback (watcher stopped) | idle: 4 diff scans/min; panel open: about 11 status scans and 6 tree walks a minute; change visible on the client's 5 s poll in 1.0–6.6 s (median 1.6 s); with no reader a change waits for the 15 s scan (9–11 s observed) | same, `--demote` |
 | Deterministic, 50 containers, one panel | idle execs 396 → 231 a minute; diff scans 2,080 → 500 and tree walks 40 → 10 per 10 min; every existing scenario identical to `main` | `recurring-baseline.ts`, `env50-container-c1-pr-signal` → `-signals` |
 
+### Evidence (2026-10-26)
+
+Linux Engine: GitHub-hosted `ubuntu-24.04` (Azure, Xeon Platinum 8573C, 4
+vCPU) and `ubuntu-24.04-arm`, Docker Engine 28.0.4, cgroup v2, Ubuntu 24.04.5
+with kernel 6.17.0-1022-azure. Workflow run `40249760218` on this branch's first
+commit (`cf63edec5`, before its rebase), each runner's own image built from it. The host here is the
+runner VM, so engine CPU is what dockerd, containerd and the shims spend on
+that VM.
+
+| What | x64 | arm64 | Source |
+| --- | --- | --- | --- |
+| One B18 state read, wall | 37.5 ms p50, 39.5 ms p95 | 32.4 ms p50, 34.1 ms p95 | `exec-cost-<platform>.json`, 200 execs |
+| Same read, `docker` CLI CPU | 13.6 ms p50 | 13.7 ms p50 | same |
+| Same read, engine CPU | dockerd 5.5, containerd 2.9, shim with `runc` and the command 30.4 ms | dockerd 5.9, containerd 3.4, shim 23.6 ms | same |
+| Same read, whole machine | 51.5 ms busy CPU | 46.6 ms busy CPU | same |
+| So the 1 s poll per container | about 5 % of one core (machine busy CPU per read; the CLI runs on the same machine) | about 5 % | derived |
+| Status scan / tree walk | 173 / 123 ms machine CPU, 100 / 91 ms wall p50 | 165 / 123 ms, 97 / 91 ms | same, 50 execs each |
+| Watcher on this repo's HEAD | 520 watches, set up in 373 ms, 7.5 MB RSS, 0 s CPU over 30 s idle, about 0.5 MB kernel memory | 520 watches, 352 ms, 6.9 MB, 0 s, 0.5 MB | same, `--watcher` |
+| Live Claude hooks, real image | the image's hook commands arm, confirm, report `working`/`waiting` and recover dropped rings through the host-gateway alias | same | `claude-state-signal-docker.test.ts` |
+| Live watcher, real image | arm to confirmed 451 ms; `node_modules` silent; one watcher after a new lineage; a killed `inotifywait` demotes (`watcher-lost`) | 419 ms; same | `container-worktree-signal-docker.test.ts` |
+
+The script also reports the CLI's peak RSS: 113 MB on both runners against
+30 MB on Desktop. That figure is the child's `maxRSS` as Bun reports it on
+Linux and was not checked against another tool, so it is not compared here.
+The worktree test's change-to-scan line (1.43 s on both runners) is not a
+clean latency; the same test reads 1.28–1.38 s on Desktop today
+([container-qualification.md](../../development/container-qualification.md#exec-cost-and-container-change-signals)).
+
+Inotify headroom on a real Linux desktop host (Omarchy, kernel 7.2.8, read
+only): `max_user_instances` 1024 and `max_user_watches` 524,288; the host
+user (uid 1000, the same uid as every container's `node` on a rootful
+daemon) held 70 instances, leaving room for about 950 container watchers at
+one instance each.
+
+Real terminal Claude turn, Docker Desktop 29.9.2 on Apple Silicon, isolated
+profile with the host Claude login (access-only in the container), image
+`orkestrator-v2:dev-0c3cd9a3dec9` built from this branch
+(`claude-state-signal=2,container-worktree-signal=1`), Claude Code 2.1.309.
+`container-claude-terminal-signal.spec.ts`, 3 runs × 2 turns, all passed.
+Times are host clock, sampled every 50 ms plus an invoke round trip, so they
+are upper bounds; the container clock was 15 ms ahead and corrected.
+
+| What | Foreground turn (3) | Background turn (3) | Budget |
+| --- | --- | --- | --- |
+| Enter to the backend's `working` | 134–216 ms | 102–295 ms | |
+| Enter to the sidebar showing working | 222–307 ms | 159–308 ms | ≤ 4 s |
+| Stop hook's state write to the backend's `waiting` | 103–162 ms | 96–135 ms | |
+| Stop hook's state write to the sidebar showing waiting | 257–356 ms | 207–230 ms | ≤ 3 s |
+| Rings | 2 per turn (12 for 6 turns), signal `confirmed`, `fallback` 0, no demotion | | |
+
+After those turns, `container-signal-profile-sample.ts` on the same profile
+(120 s windows): idle 2 Claude state reads, 1.5 diff scans and 0 tree walks a
+minute; Files panel open, plus 1.5 tree walks a minute; a change announced in
+507–535 ms and visible to a client reading on announcement in 520–554 ms
+(5 runs); both signals still `confirmed`, no demotion.
+
 ## Outstanding work
 
 ### Code
 
 1. ~~Measure one B18 exec on Linux Engine and the Docker Desktop daemon and
-   VM side.~~ Docker Desktop's daemon, VM and host-side backend are measured
-   (Evidence). **Still open: Linux Engine.** No Linux Engine host is
-   available to this node: the only Linux machines reachable over SSH and
-   the tailnet are the user's own servers, not test hosts. Run
-   `mise exec -- bun apps/backend/scripts/container-exec-cost.ts --image <dev image> --execs 200 --repo . --watcher`
-   on a Linux Engine host and add the numbers here. It matters only for
-   images without the signals.
+   VM side.~~ Done 2026-10-26. Docker Desktop's daemon, VM and host-side
+   backend were measured on 2026-10-24; Linux Engine x64 and arm64 now run
+   in the Linux Engine CI workflow on every run (Evidence, 2026-10-26: about
+   47–52 ms of machine CPU per read, about 5 % of a core for the 1 s poll,
+   against 9–10 % on Desktop).
 2. ~~Report Claude state signal health per container in recurring
    diagnostics.~~ Done: `ClaudeStatePollManager.status()` registered as
    `claude-state-signal`, with `fallback` counting containers on the 1 s poll
@@ -111,24 +188,31 @@ Image `orkestrator-v2:dev-8540c28917b1`, built from this branch, declares
 - With an image built from this branch, confirm on Docker Desktop and Linux
   Engine that a terminal Claude turn arms and confirms the signal, shows
   working and waiting within budget, and costs 2 state execs per container
-  per minute when idle. **Docker Desktop: done except a real `claude` turn.**
-  The built image's own hook commands, run in a container, arm, confirm and
-  report `working`/`waiting` (live test), and the real stack confirms the
-  signal at 2 reads a minute. **Still open:** a real `claude` turn in a
-  container terminal (it needs a Claude login and a UI-driven terminal tab:
-  CLI sessions run through the bridge, where the hooks deliberately do not
-  fire), the ≤ 4 s activity-indicator budget measured from that turn, and all
-  of it on Linux Engine.
+  per minute when idle. **Docker Desktop: done 2026-10-26** with real
+  `claude` turns in a **Claude CLI** tab: sidebar working within 159–308 ms
+  of Enter, waiting within 207–356 ms of the Stop hook, a ring per edge, no
+  demotion, and 2 state reads a minute idle afterwards (Evidence,
+  2026-10-26). **Linux Engine: the image's own hook commands arm, confirm and
+  report `working`/`waiting` through the host-gateway alias on x64 and
+  arm64** (CI). **Still open:** the same real-stack spec on a Linux Engine
+  host. It needs a Linux machine with Docker Engine, this checkout, its dev
+  image, Playwright's Chromium and a Claude login the profile can stage:
+  `mise run docker:build:dev`, then
+  `mise run dev:test --profile <p> --fixture --fixture-environments local,container --credential-source claude --agent-platforms claude`,
+  then
+  `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`.
 - In an isolated profile, record before and after each change: idle execs
   per container per minute and Files-panel change-to-visible. **Done on
-  Docker Desktop** (Evidence; `container-signal-profile-sample.ts` with and
-  without `--demote`). **Still open:** the background activity indicator
-  latency (≤ 4 s) and turn completion (≤ 3 s), which need the real Claude
-  turn above, and a Linux Engine run.
-- Before adopting a watcher, measure its process and memory cost per
-  container against the current walk cost. **Done on Docker Desktop**
-  (Evidence). **Still open on Linux Engine**, where `max_user_instances` is
-  shared per uid with the host user's own tools (see Constraints).
+  Docker Desktop**, including the background activity indicator (≤ 4 s) and
+  turn completion (≤ 3 s) from the real turns above (Evidence). **Still
+  open:** a Linux Engine run of
+  `container-signal-profile-sample.ts --profile <p>` (with and without
+  `--demote`) on the profile above.
+- ~~Before adopting a watcher, measure its process and memory cost per
+  container against the current walk cost.~~ Done: Docker Desktop on
+  2026-10-24, Linux Engine x64 and arm64 on 2026-10-26 (520 watches, 7 MB,
+  no idle CPU, against 123 ms of machine CPU per tree walk), plus the
+  inotify headroom on a real Linux desktop host (Evidence, 2026-10-26).
 - ~~Regenerate a deterministic reference with the recurring-work harness.~~
   Done: `origin/main` and this branch produce identical counters for every
   existing scenario; the new `env50-container-c1-pr-signals` scenario carries
@@ -261,6 +345,77 @@ Image `orkestrator-v2:dev-8540c28917b1`, built from this branch, declares
   one. An explicit invalidation overrides the failure cooldown, as a manual
   refresh does, so a dead remote is retried at most every 15 s of reverts.
 
+### Linux Engine evidence: the existing CI workflow (2026-10-26)
+
+- **Options.** (a) Add the two live signal tests and the exec-cost script to
+  `container-live-qualification.yml` and dispatch it on this branch
+  (GitHub-hosted `ubuntu-24.04` and `ubuntu-24.04-arm`). (b) Run them over
+  SSH on the user's Omarchy machine, which 0019 used for rootless runs; it
+  has rootful Engine 29.9.1 but no image with the signals and 17 GB free, so
+  it would need a 6 GB image build or transfer. (c) Leave the item open.
+- **Chosen:** (a), plus one read-only inotify reading on (b).
+- **Why.** The workflow is the repository's own Linux Engine qualification,
+  builds its own image from the branch, and now repeats the measurement
+  every week and on every change to the signal scripts. (b) would put a
+  large build on a nearly full personal machine.
+- **Pros:** repeatable, both architectures, no personal host touched beyond
+  one `/proc` read. **Cons:** a 4-vCPU cloud VM, not a physical host, and
+  Docker 28.0.4 rather than the 29.x Desktop ships; the real-stack half still
+  needs a Linux host with a display or headless browser and a Claude login.
+
+### Real terminal Claude turn: the Claude CLI tab, access-only login (2026-10-26)
+
+- **Options.** (a) A **Claude CLI** tab (the terminal button's context
+  menu), which runs `claude --dangerously-skip-permissions` in the
+  container's terminal. (b) A plain terminal with `claude` typed into it.
+  (c) `claude -p` in a terminal.
+- **Chosen:** (a), driven by Playwright against an isolated profile with
+  `--credential-source claude`.
+- **Why.** (a) is the path users take and the one whose hooks the signal
+  exists for. (c) skips the TUI and its dialogs. The container receives the
+  host login access-only (refresh tokens removed,
+  [container-lifecycle.md](../../architecture/container-lifecycle.md)), so a
+  turn cannot rotate the host's refresh token. Each run costs two one-line
+  replies.
+- **Pros:** proves hooks, ring, persistence, event and sidebar end to end,
+  foreground and background. **Cons:** spends a little subscription usage;
+  the spec answers Claude Code's one-time "make auto mode your default?"
+  offer with "No, keep bypass permissions", so a new Claude dialog can still
+  break it (it then fails, it does not pass).
+
+### Consent and updater fixed in the image, not worked around (2026-10-26)
+
+- **Options.** (a) Write `skipDangerousModePermissionPrompt: true` into the
+  entrypoint's `settings.json` and set `DISABLE_AUTOUPDATER=1` and
+  `FORCE_AUTOUPDATE_PLUGINS=1` in the image. (b) Pass the consent with
+  `--settings` on the **Claude CLI** launch command and the updater variables
+  as a per-launch prefix, as host tmux tabs do. (c) Have the spec accept the
+  consent dialog and file new todos.
+- **Chosen:** (a).
+- **Why.** The entrypoint already intends bypass mode without a dialog
+  (`defaultMode`, `bypassPermissionsModeAccepted`); Claude Code 2.1.309 only
+  reads the consent from settings. (b) would miss a `claude` typed into a
+  plain terminal and bridge-spawned CLIs. (c) would ship a dialog on every
+  container start and a CLI that leaves its pin. OpenCode's updater is
+  already disabled in the image the same way.
+- **Pros:** one place, every container path, unit-tested. **Cons:** a user
+  who wants container Claude to self-update cannot, which matches the host's
+  managed binary; whether the auto-mode offer reappears after a container
+  restart was not checked.
+
+### Latency method for the terminal turn
+
+- **Options.** (a) Host-clock polling (50 ms plus a round trip) of the
+  client projection and the sidebar marker's `data-state`, with the Stop
+  hook's own write time from the state file's mtime, corrected by a measured
+  container-clock offset. (b) Instrument the backend with timestamps. (c)
+  Time from the reply text appearing.
+- **Chosen:** (a), also recording (c) in the report.
+- **Why.** No product change, and the budgets are about what a user sees.
+  The offset (15 ms) is the tightest of five `date` reads.
+- **Pros:** end-to-end, content-free. **Cons:** upper bounds by up to one
+  poll period plus an invoke.
+
 ### Open questions answered
 
 - **Git-invisible changes (about 15 s).** With the signal they ring like any
@@ -338,15 +493,19 @@ None; see "Open questions answered" above.
 
 ## Needs verification
 
-- Linux Engine: B18 per-exec cost (latency, CLI, dockerd/containerd/shim
-  CPU), the watcher's cost against the walk cost, and both signals on a
-  Linux Engine host (`container-exec-cost.ts`,
-  `container-signal-profile-sample.ts`, the two live Docker tests).
-- A real terminal `claude` turn in a container: arming, `working`/`waiting`
-  within the ≤ 4 s activity budget and ≤ 3 s turn-completion budget, on
-  Docker Desktop and Linux Engine.
+- ~~Linux Engine: B18 per-exec cost, the watcher's cost against the walk
+  cost, and the two live Docker tests.~~ Done 2026-10-26 in CI (Evidence).
+- ~~A real terminal `claude` turn in a container on Docker Desktop.~~ Done
+  2026-10-26 (Evidence).
+- Linux Engine, real stack: `container-signal-profile-sample.ts` and
+  `container-claude-terminal-signal.spec.ts` on a Linux Engine host
+  (commands under Qualification).
 
 ## Related
+
+- [0199-idle-observation-spec-sidebar-probe.md](../transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md)
+  and [0200-dev-test-reused-profile-bind-mount.md](../cross-cutting/0200-dev-test-reused-profile-bind-mount.md)
+  (found during the 2026-10-26 qualification).
 
 - [0049-native-agent-idle-observation.md](../transcripts-and-observation/0049-native-agent-idle-observation.md) (idle
   observation of bridge sessions),

@@ -1060,7 +1060,12 @@ follower. Backend shutdown stops every follower.
 Claude started in a container terminal reports its state through the hooks the
 entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
 `working` and `Stop` writes `waiting` to `/tmp/.claude-state`. Bridge sessions
-(`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. `ClaudeStatePollManager`
+(`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. The same file sets
+bypass permissions as the default mode and records its consent
+(`skipDangerousModePermissionPrompt`), the only place current Claude Code
+reads it, so a **Claude CLI** tab opens straight to the prompt on every start;
+the image also sets `DISABLE_AUTOUPDATER=1` and `FORCE_AUTOUPDATE_PLUGINS=1`,
+so the pinned CLI never replaces itself in the container. `ClaudeStatePollManager`
 (`tmux-poll.ts`) reads the file with one `docker exec` and persists and emits
 `claude-state-<containerId>` only on change.
 

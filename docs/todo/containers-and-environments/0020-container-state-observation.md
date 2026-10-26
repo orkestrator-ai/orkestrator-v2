@@ -100,8 +100,7 @@ Image `orkestrator-v2:dev-8540c28917b1`, built from this branch, declares
 Linux Engine: GitHub-hosted `ubuntu-24.04` (Azure, Xeon Platinum 8573C, 4
 vCPU) and `ubuntu-24.04-arm`, Docker Engine 28.0.4, cgroup v2, Ubuntu 24.04.5
 with kernel 6.17.0-1022-azure. Workflow run `40249760218` on this branch's
-first commit (`cf63edec5`, before its rebase), each runner's own image built
-from it. The host here is the runner VM, so engine CPU is what dockerd,
+first commit (`cf63edec5`), each runner's own image built from it. The host here is the runner VM, so engine CPU is what dockerd,
 containerd and the shims spend on that VM.
 
 | What | x64 | arm64 | Source |

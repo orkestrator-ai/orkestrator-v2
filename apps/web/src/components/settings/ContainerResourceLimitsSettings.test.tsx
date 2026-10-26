@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { mockToastSuccess, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   builtInResourceDefault,
@@ -29,7 +30,9 @@ const capacity: DockerCapacity = {
 };
 capacity.builtInDefault = builtInResourceDefault(capacity);
 
-function install(next = capacity) {
+function install(next = capacity, unenforceable: Array<"cpus" | "memoryMiB" | "pids"> = []) {
+  mockToastWarning.mockClear();
+  mockToastSuccess.mockClear();
   let stored = { ...initialConfig, global: { ...initialConfig.global } };
   delete stored.global.containerResourceLimits;
   useConfigStore.getState().setConfig(stored);
@@ -44,7 +47,7 @@ function install(next = capacity) {
           typeof stored.global.containerResourceLimits
         >;
       else delete stored.global.containerResourceLimits;
-      return { limits: args.limits };
+      return { limits: args.limits, unenforceable };
     }
     throw new Error(`Unexpected command ${command}`);
   });
@@ -147,3 +150,30 @@ test("a custom budget this Docker cannot enforce is flagged before and when it i
   fireEvent.change(screen.getByLabelText("CPU cores"), { target: { value: "" } });
   expect(screen.queryAllByRole("alert")).toHaveLength(0);
 });
+
+for (const [axes, wording] of [
+  [["cpus"], "CPU limit, so new containers are refused while it is set. Clear it"],
+  [
+    ["memoryMiB", "pids"],
+    "memory and processes limits, so new containers are refused while it is set. Clear them",
+  ],
+] as const) {
+  test(`save uses authoritative backend warning for ${axes.join(", ")}`, async () => {
+    // Capacity advertised full support, but support changed before saving.
+    install(capacity, [...axes]);
+    render(<Settings />);
+    await screen.findByText(/On this Docker/);
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("Memory (GB)"), { target: { value: "4" } });
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
+    await waitFor(() =>
+      expect(mockToastWarning).toHaveBeenCalledWith(
+        "Resource limits saved, but Docker cannot enforce them",
+        { description: expect.stringContaining(wording) },
+      ),
+    );
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+    expect(useConfigStore.getState().config.global.containerResourceLimits?.memoryMiB).toBe(4096);
+  });
+}

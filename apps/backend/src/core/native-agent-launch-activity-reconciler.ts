@@ -37,6 +37,7 @@ import {
   nativeAgentObservationCapabilities,
   QUEUE_BUSY_OBSERVATION_MAX_AGE_MS,
   type NativeAgentObservationDemand,
+  type NativeAgentObservationTicket,
   type NativeAgentObservationStatus,
   type NativeAgentObservationView,
   type NativeAgentObservationWakeReason,
@@ -66,6 +67,8 @@ type ObservedSessionActivity = {
    * The next real observation replaces the whole record and so clears it.
    */
   stoppedMidTurn?: true;
+  /** Request that started this turn; later steering IDs do not replace it. */
+  activeRequestId?: string;
 };
 
 type PrepareDispatch = (
@@ -130,6 +133,8 @@ export class NativeAgentLaunchActivityReconciler {
    * settled, so it does so once per stop rather than on every pass.
    */
   private readonly settledStoppedEnvironments = new Set<string>();
+  /** Independent of provider generations, which resolution may legitimately re-anchor. */
+  private readonly stopEpochs = new Map<string, number>();
   private activityScan: Promise<void> | null = null;
   /** Number of the latest sweep started; demands compare against it. */
   private activityScanNumber = 0;
@@ -312,17 +317,20 @@ export class NativeAgentLaunchActivityReconciler {
    * drain queued prompts into a stopped environment and probe for a PR. No
    * completion is recorded, and the next start reads `idle` against `idle`,
    * so it fires no "finished" edge either. Views are told to re-read
-   * (`onObservationInvalidation`), and `stoppedMidTurn` keeps what happened
-   * for a run observer until the next real observation replaces it.
+   * (`onObservationInvalidation`). The transient `stoppedMidTurn` describes
+   * the last observation; request-scoped interrupt records retain the evidence
+   * for run observers across restart and subsequent dispatches.
    *
    * Reads already in flight are fenced first, so a pre-stop `working` cannot
    * land after the settle.
    */
-  settleStoppedSessions(
+  async settleStoppedSessions(
     environmentId: string,
     sessions: readonly PersistedNativeAgentSession[],
-  ): void {
+  ): Promise<void> {
+    this.stopEpochs.set(environmentId, (this.stopEpochs.get(environmentId) ?? 0) + 1);
     this.observations.replaceEnvironmentGenerations(environmentId);
+    const interruptions: Promise<unknown>[] = [];
     for (const session of sessions) {
       if (session.environmentId !== environmentId) continue;
       const observed = this.observedSessionActivity.get(session.key);
@@ -331,6 +339,19 @@ export class NativeAgentLaunchActivityReconciler {
       this.observations.forget(session.key);
       if (observed.state === "idle") continue;
       const turnWasRunning = observed.state === "waiting" || observed.readyForInput !== true;
+      if (turnWasRunning) {
+        // Older/adopted busy sessions have no acceptance edge in this process.
+        const requestId = observed.activeRequestId ?? session.dispatchedRequestIds?.at(-1);
+        if (requestId) {
+          interruptions.push(
+            this.storage.recordNativeAgentTurnInterrupt(
+              session.key,
+              session.providerSessionId,
+              requestId,
+            ),
+          );
+        }
+      }
       this.observedSessionActivity.set(session.key, {
         providerSessionId: session.providerSessionId,
         state: "idle",
@@ -347,6 +368,7 @@ export class NativeAgentLaunchActivityReconciler {
         logicalSessionKey: session.logicalSessionKey,
       });
     }
+    await Promise.all(interruptions);
   }
 
   /**
@@ -358,10 +380,12 @@ export class NativeAgentLaunchActivityReconciler {
    * bridge still records `stopped` and deliberately keeps that bridge's
    * requests (`stopEnvironmentOnce`). Once per stop; a start re-arms it.
    */
-  private settleStoppedRuntimes(
+  private async settleStoppedRuntimes(
     environments: readonly Environment[],
     sessions: readonly PersistedNativeAgentSession[],
-  ): void {
+    tickets: ReadonlyMap<string, NativeAgentObservationTicket[]>,
+  ): Promise<Set<string>> {
+    const stale = new Set<string>();
     const stopped = new Set(
       environments
         .filter(
@@ -375,10 +399,28 @@ export class NativeAgentLaunchActivityReconciler {
     }
     for (const environmentId of stopped) {
       if (this.settledStoppedEnvironments.has(environmentId)) continue;
-      this.settledStoppedEnvironments.add(environmentId);
+      const snapshot = environments.find((environment) => environment.id === environmentId)!;
+      const current = await this.storage.getEnvironment(environmentId);
+      // Re-read after all sweep waits. A start/rebuild or dispatch makes the
+      // original stopped snapshot inapplicable to the new runtime's turn.
+      if (
+        !current ||
+        current.status !== "stopped" ||
+        current.containerId !== snapshot.containerId ||
+        current.containerLifecycle?.lastRuntimeGeneration !==
+          snapshot.containerLifecycle?.lastRuntimeGeneration ||
+        !(tickets.get(environmentId) ?? []).every((ticket) =>
+          [...ticket.sequences.keys()].every((key) => this.observations.accepts(ticket, key)),
+        )
+      ) {
+        stale.add(environmentId);
+        continue;
+      }
       this.host.withdrawEnvironmentInteractions(environmentId);
-      this.settleStoppedSessions(environmentId, sessions);
+      await this.settleStoppedSessions(environmentId, sessions);
+      this.settledStoppedEnvironments.add(environmentId);
     }
+    return stale;
   }
 
   /**
@@ -469,12 +511,34 @@ export class NativeAgentLaunchActivityReconciler {
   }
 
   private async reconcileAgentActivityOnce(): Promise<void> {
+    // Include storage/coordinator waits in the stop fence, not just provider I/O.
+    const stopEpochs = new Map(this.stopEpochs);
     const [environments, sessions] = await Promise.all([
       this.storage.loadEnvironments(),
       this.storage.listNativeAgentSessions(),
     ]);
     if (this.host.isStopped()) return;
 
+    const stoppedTickets = new Map<string, NativeAgentObservationTicket[]>();
+    const stoppedIds = new Set(
+      environments
+        .filter(
+          (environment) =>
+            environment.environmentType !== "local" && environment.status === "stopped",
+        )
+        .map((environment) => environment.id),
+    );
+    for (const session of sessions) {
+      if (!stoppedIds.has(session.environmentId)) continue;
+      const tickets = stoppedTickets.get(session.environmentId) ?? [];
+      tickets.push(
+        this.observations.beginRead(
+          nativeAgentObservationGroupKey(session.environmentId, session.agent),
+          [session.key],
+        ),
+      );
+      stoppedTickets.set(session.environmentId, tickets);
+    }
     const environmentsById = new Map(
       environments.map((environment) => [environment.id, environment]),
     );
@@ -526,7 +590,11 @@ export class NativeAgentLaunchActivityReconciler {
       }
     }
     if (this.host.isStopped()) return;
-    this.settleStoppedRuntimes(environments, sessions);
+    const staleStoppedEnvironments = await this.settleStoppedRuntimes(
+      environments,
+      sessions,
+      stoppedTickets,
+    );
     // Preserve the aggregate's restart fallback until every session has a
     // known prior observation. Afterwards exact session edges own attention,
     // including completions announced before a detached shell finally exits.
@@ -550,7 +618,8 @@ export class NativeAgentLaunchActivityReconciler {
       Record<string, { state: AgentActivityState; updatedAt: string }>
     >();
     const completionCandidates = new Set<string>();
-    const failedEnvironments = new Set<string>();
+    // A stale stopped snapshot must not publish an idle environment aggregate either.
+    const failedEnvironments = new Set(staleStoppedEnvironments);
     const groups = new Map<string, PersistedNativeAgentSession[]>();
     for (const [environmentId, environmentSessions] of sessionsByEnvironment) {
       const environment = environmentsById.get(environmentId)!;
@@ -604,6 +673,9 @@ export class NativeAgentLaunchActivityReconciler {
          * pre-dispatch evidence for that session, and it is refused rather
          * than allowed to overwrite the `working` the dispatch recorded.
          */
+        const stopEpoch = stopEpochs.get(first.environmentId) ?? 0;
+        const runtimeStillCurrent = () =>
+          (this.stopEpochs.get(first.environmentId) ?? 0) === stopEpoch;
         let ticket = this.observations.beginRead(
           groupKey,
           group.map((session) => session.key),
@@ -619,7 +691,7 @@ export class NativeAgentLaunchActivityReconciler {
             contentRevision?: string;
           } = {},
         ): Promise<void> => {
-          if (!this.observations.accepts(ticket, session.key)) {
+          if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) {
             settledIdle = false;
             if (!this.contributeRetained(activityByEnvironment, session, sessionOwner)) {
               failedEnvironments.add(session.environmentId);
@@ -634,13 +706,13 @@ export class NativeAgentLaunchActivityReconciler {
               Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
               sessionOwner,
               details.readyForInput,
-              () => this.observations.accepts(ticket, session.key),
+              () => runtimeStillCurrent() && this.observations.accepts(ticket, session.key),
               details.completionPending,
               details.contentRevision,
             )
           )
             completionCandidates.add(session.environmentId);
-          if (!this.observations.accepts(ticket, session.key)) {
+          if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) {
             settledIdle = false;
             if (!this.contributeRetained(activityByEnvironment, session, sessionOwner)) {
               failedEnvironments.add(session.environmentId);
@@ -673,6 +745,10 @@ export class NativeAgentLaunchActivityReconciler {
         let provider: NativeAgentRuntimeProvider | undefined;
         try {
           provider = await this.host.observeProvider(first);
+          if (!runtimeStillCurrent()) {
+            failedEnvironments.add(first.environmentId);
+            continue;
+          }
           if (!provider) {
             // No bridge is running for this environment, so no turn can be
             // executing. That is an answer, not a failure — recording it is
@@ -704,6 +780,7 @@ export class NativeAgentLaunchActivityReconciler {
             provider,
             sessions: group,
             apply: async (session, { state: activity, observation }) => {
+              if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) return;
               if (activity === "missing") {
                 // Provider adapters may return `missing` only from an
                 // authoritative existence read. Incremental activity/status
@@ -1038,6 +1115,9 @@ export class NativeAgentLaunchActivityReconciler {
       ...(readyForInput !== undefined ? { readyForInput } : {}),
       ...(completionPending !== undefined ? { completionPending } : {}),
       ...(contentRevision !== undefined ? { contentRevision } : {}),
+      ...(state !== "idle" && readyForInput !== true && currentObservation?.activeRequestId
+        ? { activeRequestId: currentObservation.activeRequestId }
+        : {}),
     });
     const resumedForegroundTurn =
       state === "working" && currentObservation?.readyForInput === true && readyForInput !== true;

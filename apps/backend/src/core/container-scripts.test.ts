@@ -85,3 +85,40 @@ describe("container workspace setup command", () => {
     },
   );
 });
+
+test.skipIf(!hasFlock)("reruns setup after an orphan fails while holding the lock", async () => {
+  const { command, lock, dir } = await setupCommand("echo reran; exit 0");
+  const ready = path.join(dir, "orphan-ready");
+  const release = path.join(dir, "release-orphan");
+  const orphan = spawn("flock", [
+    lock,
+    "-c",
+    `touch '${ready}'; while [ ! -f '${release}' ]; do sleep 0.02; done; exit 7`,
+  ]);
+  const orphanClosed = new Promise<number | null>((resolve) => orphan.on("close", resolve));
+  try {
+    const deadline = Date.now() + 2000;
+    while (!(await fs.stat(ready).catch(() => null))) {
+      if (Date.now() > deadline) throw new Error("orphan did not acquire setup lock");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const child = spawn("bash", ["-c", command]);
+    let output = "";
+    const waiting = new Promise<void>((resolve) =>
+      child.stdout.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes(CONTAINER_WORKSPACE_SETUP_WAIT_MESSAGE)) resolve();
+      }),
+    );
+    const closed = new Promise<number | null>((resolve) => child.on("close", resolve));
+    await waiting;
+    expect(output).not.toContain("reran");
+    await fs.writeFile(release, "");
+    expect(await orphanClosed).toBe(7);
+    expect(await closed).toBe(0);
+    expect(output).toBe(`${CONTAINER_WORKSPACE_SETUP_WAIT_MESSAGE}\nreran\n`);
+  } finally {
+    await fs.writeFile(release, "");
+    await orphanClosed;
+  }
+});

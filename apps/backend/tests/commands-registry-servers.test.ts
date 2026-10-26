@@ -495,6 +495,7 @@ exit 0
     const hostAuth = path.join(hostHome, ".grok", "auth.json");
     const importedAuth = path.join(path.dirname(pidFile), "imported-auth.json");
     await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    const loginExpiry = new Date(Date.now() + 3600_000).toISOString();
     const writeHostLogin = (key: string, expired = false) =>
       fs.writeFile(
         hostAuth,
@@ -502,13 +503,14 @@ exit 0
           live: {
             key,
             refresh_token: "SENTINEL-HOST-REFRESH",
-            expires_at: new Date(Date.now() + (expired ? -3600_000 : 3600_000)).toISOString(),
+            expires_at: expired ? "2000-01-01T00:00:00Z" : loginExpiry,
           },
         }),
       );
     await writeHostLogin("first-access");
     const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
     const previousImportedAuth = process.env.FAKE_GROK_IMPORTED_AUTH;
+    const previousGrokHome = process.env.GROK_HOME;
     process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
     process.env.FAKE_GROK_IMPORTED_AUTH = importedAuth;
     const commands = createCommandRegistry();
@@ -580,6 +582,7 @@ exit 0
         // An agent-test profile's Grok login is its own snapshot in its
         // isolated HOME, not the real host's (`portableInputSpec`).
         process.env.HOME = hostHome;
+        delete process.env.GROK_HOME;
         // Concurrent starts must be serialized into one bridge process.
         const [first, second] = (await Promise.all([
           commands.get(`start_${provider}_server`)?.(
@@ -596,9 +599,10 @@ exit 0
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
         expect(second.authToken).toBe(first.authToken);
 
-        expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live).toMatchObject({
+        expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live).toEqual({
           key: "first-access",
           refresh_token: "",
+          expires_at: loginExpiry,
         });
         // Model expiry without sleeping: an expired host login cannot replace
         // the existing access-only copy, and cannot spend the host refresh token.
@@ -608,7 +612,22 @@ exit 0
           context,
         );
         expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live.key).toBe("first-access");
-        await writeHostLogin("renewed-access");
+        // CLI scenarios use GROK_HOME while HOME still points at the profile.
+        // Renewal must read that selected snapshot, including its expiry.
+        const scenarioHome = path.join(path.dirname(pidFile), "scenario-grok");
+        await fs.mkdir(scenarioHome, { recursive: true });
+        const renewedExpiry = new Date(Date.now() + 7200_000).toISOString();
+        await fs.writeFile(
+          path.join(scenarioHome, "auth.json"),
+          JSON.stringify({
+            live: {
+              key: "renewed-access",
+              refresh_token: "SENTINEL-SCENARIO-REFRESH",
+              expires_at: renewedExpiry,
+            },
+          }),
+        );
+        process.env.GROK_HOME = scenarioHome;
         const renewed = await commands.get("start_grok_server")?.(
           { containerId: environment.containerId },
           context,
@@ -617,7 +636,12 @@ exit 0
         expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live).toMatchObject({
           key: "renewed-access",
           refresh_token: "",
+          expires_at: renewedExpiry,
         });
+        expect(
+          JSON.parse(await fs.readFile(path.join(scenarioHome, "auth.json"), "utf8")).live
+            .refresh_token,
+        ).toBe("SENTINEL-SCENARIO-REFRESH");
         expect(JSON.parse(await fs.readFile(hostAuth, "utf8")).live.refresh_token).toBe(
           "SENTINEL-HOST-REFRESH",
         );
@@ -685,6 +709,8 @@ exit 0
         expect(afterStop).toContain(`rm -f /tmp/${provider}-acp-bridge-token`);
       });
     } finally {
+      if (previousGrokHome === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = previousGrokHome;
       if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
       else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
       if (previousImportedAuth === undefined) delete process.env.FAKE_GROK_IMPORTED_AUTH;

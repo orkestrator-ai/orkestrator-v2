@@ -10,6 +10,7 @@ import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";
+import { deferred } from "../recurring-test-support.js";
 import type { PublicApiHarness } from "./test-support.js";
 
 /**
@@ -231,6 +232,96 @@ describe("session.start and request-specific completion", () => {
       sessionId: started.result.sessionId,
     });
     expect(session.ok && session.result.activity).toBe("idle");
+  });
+
+  for (const followUp of [false, true]) {
+    test(`runtime interruption survives restart and idle before receipt (follow-up=${followUp})`, async () => {
+      const { harness, service, stub } = await setup();
+      const started = await startSession(harness, `stop-before-read-${followUp}`);
+      await service.reconcileAgentActivity();
+      await harness.storage.updateEnvironment("env-1", { status: "stopped" });
+      await service.environmentRuntimeStopped("env-1");
+      await harness.storage.updateEnvironment("env-1", { status: "running" });
+      stub.setStatus(async () => "idle");
+      await service.reconcileAgentActivity();
+      expect(
+        service.sessionStoppedMidTurn(
+          "env-1",
+          "claude",
+          nativeTabLogicalSessionKey("env-1", started.result.tabId),
+        ),
+      ).toBe(false);
+      if (followUp) {
+        stub.setStatus(async () => "running");
+        const sent = await harness.call(
+          "session.prompt",
+          {
+            sessionId: started.result.sessionId,
+            prompt: "a new turn",
+          },
+          { requestId: "after-runtime-stop" },
+        );
+        expect(sent.ok).toBe(true);
+      }
+      const restarted = await harness.restart();
+      const settled = await receipt(restarted, started.result.runId);
+      expect(settled.state).toBe("interrupted");
+      expect(settled.execution).toMatchObject({ state: "interrupted", evidence: "none" });
+      expect(settled.error?.code).toBe("run-interrupted");
+    });
+  }
+
+  test("a sweep with a stopped snapshot preserves a newly accepted public run", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "before-stale-stop");
+    stub.setStatus(async () => "idle");
+    await service.reconcileAgentActivity();
+    await harness.storage.updateEnvironment("env-1", {
+      environmentType: "containerized",
+      containerId: "old-runtime",
+      status: "stopped",
+    });
+    const entered = deferred<void>();
+    const released = deferred<void>();
+    const original = harness.storage.getEnvironment.bind(harness.storage);
+    const paused = spyOn(harness.storage, "getEnvironment").mockImplementationOnce(async (id) => {
+      const stopped = await original(id);
+      entered.resolve();
+      await released.promise;
+      return stopped;
+    });
+    const sweep = service.reconcileAgentActivity();
+    await entered.promise;
+    let nextRunId = "";
+    try {
+      await harness.storage.updateEnvironment("env-1", {
+        status: "running",
+        containerId: "new-runtime",
+      });
+      stub.setStatus(async () => "running");
+      const sent = await harness.call<{ runId: string }>(
+        "session.prompt",
+        {
+          sessionId: started.result.sessionId,
+          prompt: "new runtime work",
+        },
+        { requestId: "after-stale-stop" },
+      );
+      expect(sent.ok).toBe(true);
+      if (sent.ok) nextRunId = sent.result.runId;
+    } finally {
+      released.resolve();
+    }
+    await sweep;
+    paused.mockRestore();
+    expect((await receipt(harness, nextRunId)).execution?.state).toBe("running");
+    expect(
+      service.sessionTurnActivitySnapshot(
+        "env-1",
+        "claude",
+        nativeTabLogicalSessionKey("env-1", started.result.tabId),
+      ),
+    ).toBe("working");
   });
 
   test("an inherited default model stays a default the runtime may replace", async () => {

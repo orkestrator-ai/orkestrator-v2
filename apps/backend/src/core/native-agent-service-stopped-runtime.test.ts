@@ -7,8 +7,10 @@ import {
 import {
   addEnvironment,
   createProviderStub,
+  pendingInteractionSnapshot,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 import { deferred } from "./recurring-test-support.js";
 import type { StorageService } from "./storage.js";
 
@@ -181,4 +183,129 @@ describe("a stopped runtime settles its sessions' turn activity", () => {
       },
     );
   });
+});
+
+test("provider resolution pending across stop cannot re-anchor away the stop fence", async () => {
+  const entered = deferred<void>();
+  const released = deferred<void>();
+  let state: ProviderActivityState = "working";
+  const { provider } = createProviderStub("codex", { activity: async () => state });
+  const transitions: Transition[] = [];
+  await withService(
+    {
+      prefix: "ork-stop-provider-resolution-",
+      environment: container,
+      provider: async () => provider,
+      onActivityTransition: (event) => {
+        transitions.push(event);
+      },
+    },
+    async ({ storage, service }) => {
+      await adopt(storage);
+      await service.reconcileAgentActivity();
+      const observe = spyOn(
+        collaborators(service).providerRegistry,
+        "observe",
+      ).mockImplementationOnce(async () => {
+        entered.resolve();
+        await released.promise;
+        return provider;
+      });
+      const sweep = service.reconcileAgentActivity();
+      await entered.promise;
+      try {
+        await storage.updateEnvironment("env-1", { status: "stopped" });
+        await service.environmentRuntimeStopped("env-1");
+        state = "waiting";
+      } finally {
+        released.resolve();
+      }
+      await sweep;
+      expect(service.sessionActivitySnapshot("env-1", "codex", tab)).toBe("idle");
+      expect(service.sessionStoppedMidTurn("env-1", "codex", tab)).toBe(true);
+      expect(transitions.map((event) => event.state)).toEqual(["working"]);
+      observe.mockRestore();
+    },
+  );
+});
+
+test("a stopped snapshot cannot settle a newly started runtime and accepted turn", async () => {
+  let state: ProviderActivityState = "idle";
+  const { provider } = createProviderStub("codex", {
+    activity: async () => state,
+    interactions: {
+      listPendingInteractions: async () => pendingInteractionSnapshot(Date.now()),
+      resolveInteraction: async () => {
+        throw new Error("unexpected resolution");
+      },
+    },
+  });
+  await withService(
+    { prefix: "ork-stop-start-snapshot-", environment: container, provider: async () => provider },
+    async ({ storage, service }) => {
+      await adopt(storage);
+      await service.reconcileAgentActivity();
+      await storage.updateEnvironment("env-1", { status: "stopped" });
+      const entered = deferred<void>();
+      const released = deferred<void>();
+      const read = storage.getEnvironment.bind(storage);
+      const paused = spyOn(storage, "getEnvironment").mockImplementationOnce(async (id) => {
+        const snapshot = await read(id);
+        entered.resolve();
+        await released.promise;
+        return snapshot;
+      });
+      const withdraw = spyOn(service, "withdrawEnvironmentInteractions");
+      const sweep = service.reconcileAgentActivity();
+      await entered.promise;
+      try {
+        await storage.updateEnvironment("env-1", { status: "running", containerId: "container-2" });
+        await service.dispatchPrompt({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: tab,
+          prompt: "new runtime turn",
+          requestId: "new-turn",
+        });
+        state = "waiting";
+        await storage.setEnvironmentAgentActivity(
+          "env-1",
+          "working",
+          new Date().toISOString(),
+          "native-agent",
+        );
+        await service.sessionPendingInteractions({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: tab,
+        });
+      } finally {
+        released.resolve();
+      }
+      await sweep;
+      paused.mockRestore();
+      expect(withdraw).not.toHaveBeenCalled();
+      expect(
+        (await storage.getEnvironment("env-1"))?.agentActivitySources?.["native-agent"]?.state,
+      ).toBe("working");
+      expect(service.sessionTurnActivitySnapshot("env-1", "codex", tab)).toBe("working");
+      expect(service.sessionStoppedMidTurn("env-1", "codex", tab)).toBe(false);
+      expect(
+        (await storage.getNativeAgentSession(nativeAgentSessionStorageKey("env-1", "codex", tab)))
+          ?.interruptedRequestIds,
+      ).toBeUndefined();
+      expect(
+        await service.sessionPendingInteractions({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: tab,
+        }),
+      ).toHaveLength(2);
+      expect(
+        collaborators(service).launches.observedActivity(
+          nativeAgentSessionStorageKey("env-1", "codex", tab),
+        )?.activeRequestId,
+      ).toBe("new-turn");
+    },
+  );
 });

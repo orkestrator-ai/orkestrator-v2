@@ -402,6 +402,20 @@ async function runCopyStep(
 /** A copy step that failed because Docker went away, not because of the files. */
 const DAEMON_UNAVAILABLE_COPY = { ok: false, reason: "daemon-unavailable" } as const;
 
+/** Classify a failed copy before rollback, including a stream cut without daemon wording. */
+export async function replacementCopyFailure(reason: string): Promise<ContainerLifecycleError> {
+  if (reason === DAEMON_UNAVAILABLE_COPY.reason || (await dockerDaemonUnreachableNow())) {
+    return lifecycleError(
+      "daemon-unavailable",
+      "Docker stopped responding while the environment's files were being copied. The original container was kept unchanged; rebuild again once Docker is running.",
+    );
+  }
+  return lifecycleError(
+    "needs-attention",
+    `Copying the environment's files failed verification (${reason}). The original container was kept unchanged.`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Capacity
 // ---------------------------------------------------------------------------
@@ -831,20 +845,7 @@ async function replaceRuntimePreservingStateUnfenced(
         candidateStorage,
       );
       if (!copied.ok) {
-        if (
-          copied.reason === DAEMON_UNAVAILABLE_COPY.reason ||
-          // A stream cut mid-copy says so, not that the daemon is gone; ask.
-          (await dockerDaemonUnreachableNow())
-        ) {
-          throw lifecycleError(
-            "daemon-unavailable",
-            "Docker stopped responding while the environment's files were being copied. The original container was kept unchanged; rebuild again once Docker is running.",
-          );
-        }
-        throw lifecycleError(
-          "needs-attention",
-          `Copying the environment's files failed verification (${copied.reason}). The original container was kept unchanged.`,
-        );
+        throw await replacementCopyFailure(copied.reason);
       }
       files += copied.files;
       bytes += copied.bytes;

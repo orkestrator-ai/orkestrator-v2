@@ -360,6 +360,18 @@ async function evaluateRun(
     target.logicalSessionKey,
   );
 
+  // Request-scoped durable evidence survives idle observations and later turns.
+  if (!record.stopRequestedAt && session.interruptedRequestIds?.includes(target.requestId)) {
+    return settle(
+      {
+        state: "interrupted",
+        evidence: "none",
+        reason: "The turn was interrupted by a stop; changes made before the stop may remain",
+      },
+      accepted,
+    );
+  }
+
   if (!laterTurn && activity === "waiting") {
     const requests = await native
       .sessionPendingInteractions({

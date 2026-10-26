@@ -447,7 +447,7 @@ export class NativeAgentService {
   async environmentRuntimeStopped(environmentId: string): Promise<void> {
     this.withdrawEnvironmentInteractions(environmentId);
     const sessions = await this.storage.listNativeAgentSessions();
-    this.launches.settleStoppedSessions(environmentId, sessions);
+    await this.launches.settleStoppedSessions(environmentId, sessions);
   }
 
   /** Whether the session's last turn was cut off by its runtime stopping. */
@@ -3460,6 +3460,7 @@ export class NativeAgentService {
               this.launches.recordObservedActivity(durable.key, {
                 providerSessionId: durable.providerSessionId,
                 state: "working",
+                activeRequestId: input.requestId,
               });
               this.observations.recordDispatchAccepted({
                 sessionKey: durable.key,

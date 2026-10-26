@@ -55,3 +55,56 @@ Artifacts below the host temporary directory: `orkestrator-test-run.UPAvEu`
 
 No test was skipped or loosened to pass, apart from the racy assertion above,
 which this branch had itself added.
+
+## Review follow-up validation (2026-10-26)
+
+`mise run test:logged -- --name aggregate -- mise run test` repeated a firewall
+shell-fixture deadline in the root/support group (one worker):
+`container firewall policy > the root entrypoint runs the firewall itself and records the outcome per mode`
+failed at 5,003.30 ms, with `exitCode` null instead of zero. That group ran
+3,472 tests: 3,471 passed and one failed. Workspace and bridge groups ran
+concurrently using the repository's normal capacity reservations.
+
+The complete unchanged owner passed alone in 34.4 s:
+
+```sh
+mise run test:logged -- --name firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures
+```
+
+This is further recurrence evidence for the existing shell-fixture budget
+condition. The workspace run also observed the new stopped-snapshot aggregate
+assertion before its final protection was in place; it passed in the focused
+regression rerun after that fix. This implementation failure is not classified
+as a flake. The original root/support group output is retained in `orkestrator-test-run.8rxhqH/root-and-agent-support-tests.log.gz`
+under the host temporary directory. No assertion or timeout was changed.
+
+The review follow-up Docker fixture run used the checkout's rebuilt
+`orkestrator-v2:dev-328f789706d7` image and disposable `stop-races-qa` profile
+with Codex and Grok enabled and no agent credentials. It passed 13 scenarios,
+skipped three opt-in live scenarios, and failed only the known annotation
+filename expectation from [0942](0942-service-preview-rollout-0042-validation.md):
+`web-annotations-gateway.spec.ts:904` expects the unnormalized request ID,
+while the backend materializes the bounded normalized name. An earlier run
+omitted Codex from the profile and could not select that destination; correcting
+the profile exposed the existing assertion mismatch. No product assertion was
+changed for these results.
+
+The util-linux setup-lock owner passed inside a network-disabled Linux
+container on this Mac, including the new failed-orphan rerun case. The
+credential-free Grok server/staging owners passed with exact `expires_at`
+assertions for the isolated profile HOME and GROK_HOME renewal. A real Grok
+turn remains unqualified because the host login is expired; synthetic staging
+evidence does not claim authenticated provider qualification.
+
+The final complete non-iOS rerun (`mise run test:logged -- --name aggregate-final -- mise run test`)
+finished in 614.8 s. Workspace tests (including the new runtime-stop regressions),
+all bridges and the Codex protocol lockfile passed. Only root/support remained
+non-green: the same root-entrypoint firewall case timed out at 5,006.30 ms
+(3,471 passed, one failed). Artifact:
+`orkestrator-test-run.lQKOnZ/root-and-agent-support-tests.log.gz`.
+The unchanged firewall owner had passed alone as recorded above; no further
+retry or timeout change was used to present the aggregate as green.
+
+Final focused backend owners, save-warning tests, format/lint/type checks,
+flake-register validation and Linux setup-lock checks all passed. The
+disposable Docker profile and its exact-owner resources were stopped/reset.

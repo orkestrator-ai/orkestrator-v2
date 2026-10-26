@@ -315,12 +315,25 @@ function sessionFields(
   };
 }
 
+/**
+ * What a review session's report found. Older single-review records keep the
+ * accepted report only on the pipeline, linked to the session that filed it.
+ */
 function issueCountsOf(
   session: PipelineSession | undefined,
+  pipeline: BuildPipeline,
 ): PipelineReviewIssueCounts | undefined {
   if (!session) return undefined;
   if (session.reviewIssueCounts) return session.reviewIssueCounts;
-  return session.reviewReport ? pipelineReviewIssueCounts(session.reviewReport) : undefined;
+  if (session.reviewReport) return pipelineReviewIssueCounts(session.reviewReport);
+  const report = pipeline.structuredReview;
+  if (!report) return undefined;
+  const owner = pipeline.structuredReviewRequestId
+    ? pipeline.sessions.find(
+        (candidate) => candidate.structuredRequestId === pipeline.structuredReviewRequestId,
+      )
+    : [...pipeline.sessions].reverse().find((candidate) => candidate.phase === "review");
+  return owner?.sessionKey === session.sessionKey ? pipelineReviewIssueCounts(report) : undefined;
 }
 
 interface ReviewPass {
@@ -502,10 +515,17 @@ export function pipelineFlowModel(
         passKey: reviewPass.key,
         ...sessionFields(session, pipeline),
         ...(live ? { reviewer: live } : {}),
+        // Older sessions name no model; the live record or the panel's
+        // configuration for the slot still does.
+        model:
+          session.model ??
+          (live?.modelUnpinned ? undefined : live?.model) ??
+          pipelineReviewerConfigs(pipeline)[slot]?.model,
         completedAt: session.completedAt ?? live?.completedAt,
         tokenCount: session.tokenCount ?? live?.tokenCount,
         issueCounts:
-          issueCountsOf(session) ?? (live?.report && pipelineReviewIssueCounts(live.report)),
+          issueCountsOf(session, pipeline) ??
+          (live?.report && pipelineReviewIssueCounts(live.report)),
         error: live?.error ?? session.error,
         earlierAttempts: previous ? (previous.earlierAttempts ?? 0) + 1 : 0,
       };
@@ -549,7 +569,7 @@ export function pipelineFlowModel(
         placeholder: false,
         passKey: reviewPass.key,
         ...sessionFields(session, pipeline),
-        issueCounts: issueCountsOf(session),
+        issueCounts: issueCountsOf(session, pipeline),
         ...(state === "failed" && pipeline.phase === "failed" && pipeline.error
           ? { error: pipeline.error }
           : {}),
@@ -567,7 +587,7 @@ export function pipelineFlowModel(
       state,
       placeholder: false,
       ...sessionFields(session, pipeline),
-      ...(kind === "review" ? { issueCounts: issueCountsOf(session) } : {}),
+      ...(kind === "review" ? { issueCounts: issueCountsOf(session, pipeline) } : {}),
       ...(state === "failed" && pipeline.error ? { error: pipeline.error } : {}),
     };
     if (kind === "review") {

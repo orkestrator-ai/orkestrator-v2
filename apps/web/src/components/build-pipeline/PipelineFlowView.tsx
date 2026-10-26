@@ -616,7 +616,8 @@ function InspectorNotes({ node, pipeline }: { node: PipelineFlowNode; pipeline: 
       </p>,
     );
   }
-  if (node.state === "failed" && node.error) {
+  // The pipeline's own error is already in the banner above.
+  if (node.state === "failed" && node.error && node.error !== pipeline.error) {
     notes.push(
       <p key="error" className="break-words whitespace-pre-wrap text-failure">
         {node.error}

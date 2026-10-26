@@ -402,6 +402,37 @@ describe("pipelineFlowModel", () => {
     expect(model.nodes.some((node) => node.placeholder)).toBe(false);
   });
 
+  test("falls back to the configured reviewer model and the pipeline's report", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "addressing",
+        reviewers: PANEL.slice(0, 2),
+        structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+        structuredReviewRequestId: "request-1",
+        sessions: [session("build", "build", 0), reviewer(1, "rev-2", 60, { model: undefined })],
+      }),
+    );
+    expect(model.nodes.find((node) => node.title === "Reviewer 2")?.model).toBe("gpt-6.1");
+
+    const classic = pipelineFlowModel(
+      build({
+        phase: "addressing",
+        structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+        structuredReviewRequestId: "request-1",
+        sessions: [
+          session("build", "build", 0),
+          session("review", "review", 60, {
+            label: "Review Session",
+            structuredRequestId: "request-1",
+          }),
+        ],
+      }),
+    );
+    const total = TEST_STRUCTURED_REVIEW_REPORT.issues.length;
+    const counts = classic.nodes.find((node) => node.kind === "review")?.issueCounts;
+    expect(counts && counts.P0 + counts.P1 + counts.P2).toBe(total);
+  });
+
   test("narrows to one review pass with its preparation", () => {
     const model = pipelineFlowModel(
       build({

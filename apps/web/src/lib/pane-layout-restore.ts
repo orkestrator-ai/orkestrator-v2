@@ -350,7 +350,16 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         ? undefined
         : nonEmptyString(value.multiReviewTabData.reviewerId);
     if (value.multiReviewTabData.reviewerId !== undefined && !reviewerId) return null;
-    if (!workflowId || !context.hasMultiReview?.(workflowId)) return null;
+    const pipelinePass =
+      value.multiReviewTabData.pipelinePass === undefined
+        ? undefined
+        : nonEmptyString(value.multiReviewTabData.pipelinePass);
+    if (value.multiReviewTabData.pipelinePass !== undefined && !pipelinePass) return null;
+    // A pipeline's review pass reads the pipeline record, not a Multi Review.
+    const exists = pipelinePass
+      ? context.hasBuildPipeline?.(workflowId ?? "")
+      : context.hasMultiReview?.(workflowId ?? "");
+    if (!workflowId || !exists) return null;
     return {
       ...common,
       type,
@@ -358,6 +367,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         environmentId: context.environmentId,
         workflowId,
         ...(reviewerId ? { reviewerId } : {}),
+        ...(pipelinePass ? { pipelinePass } : {}),
         isLocal: context.isLocal,
       },
     };

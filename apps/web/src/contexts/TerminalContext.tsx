@@ -80,6 +80,11 @@ export interface CreateTabOptions {
   multiReviewId?: string;
   /** Reviewer transcript opened inside an existing Multi Review workflow. */
   multiReviewReviewerId?: string;
+  /**
+   * With {@link multiReviewId} naming a build pipeline: the review pass the
+   * Multi Review tab shows, out of that pipeline's record.
+   */
+  multiReviewPipelinePass?: string;
   /** Existing native provider session opened from a backend-owned workflow. */
   resumeSessionId?: string;
   /** Refuse to replace a missing resume target with a fresh empty session. */

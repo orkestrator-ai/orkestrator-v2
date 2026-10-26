@@ -65,8 +65,11 @@ export function canZoomOut(zoom: number): boolean {
 }
 
 /** The viewport keeps the graph's own height up to {@link FLOW_VIEWPORT_MAX_HEIGHT}. */
-export function flowViewportHeight(contentHeight: number): number {
-  return clamp(contentHeight, FLOW_GRAPH_MIN_HEIGHT, FLOW_VIEWPORT_MAX_HEIGHT);
+export function flowViewportHeight(
+  contentHeight: number,
+  minHeight: number = FLOW_GRAPH_MIN_HEIGHT,
+): number {
+  return clamp(contentHeight, minHeight, FLOW_VIEWPORT_MAX_HEIGHT);
 }
 
 /** The shortest the divider drags the viewport to. */

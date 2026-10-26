@@ -1,0 +1,459 @@
+import { describe, expect, test } from "bun:test";
+import {
+  REVIEW_PACKAGE_SESSION_LABEL,
+  pipelineIndependentReviewLabel,
+} from "@orkestrator/protocol/build-pipeline";
+import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import {
+  pipelineFlowModel,
+  pipelineReviewPassNodes,
+  type PipelineFlowModel,
+} from "./pipeline-flow";
+import { pipelineFlowLayout } from "./pipeline-flow-layout";
+import { build, session, validationRun } from "./pipeline-test-fixture";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
+
+const PANEL = [
+  { agent: "claude" as const, model: "opus" },
+  { agent: "codex" as const, model: "gpt-6.1" },
+  { agent: "pi" as const, model: "kimi" },
+];
+
+/** `title:state`, with a trailing `~` for a faded placeholder, column by column. */
+function line(model: PipelineFlowModel): string[][] {
+  const byId = new Map(model.nodes.map((node) => [node.id, node]));
+  return model.columns.map((column) =>
+    column.nodeIds.map((id) => {
+      const node = byId.get(id)!;
+      return `${node.title}:${node.state}${node.placeholder ? "~" : ""}`;
+    }),
+  );
+}
+
+function reviewer(slot: number, key: string, start: number, overrides = {}) {
+  return session("review", key, start, {
+    label: pipelineIndependentReviewLabel(slot),
+    ...overrides,
+  });
+}
+
+describe("pipelineFlowModel", () => {
+  test("a new pipeline shows Ticket and Setup, then every definite step faded", () => {
+    const model = pipelineFlowModel(build({ phase: "waiting-for-setup", sessions: [] }));
+    expect(line(model)).toEqual([
+      ["Ticket:complete"],
+      ["Setup:running"],
+      ["Build:not-started~"],
+      ["Review:not-started~"],
+      ["Verify:not-started~"],
+      ["Ship:not-started~"],
+      ["PR:not-started~"],
+    ]);
+    // Address, Fix and conflict resolution only appear once they start.
+    expect(model.nodes.some((node) => ["address", "fix", "conflicts"].includes(node.kind))).toBe(
+      false,
+    );
+  });
+
+  test("a fan-out pipeline shows its preparation, every reviewer and consolidation ahead", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "building",
+        reviewers: PANEL,
+        sessions: [session("build", "build", 0, { status: "running", completedAt: undefined })],
+      }),
+    );
+    expect(line(model)).toEqual([
+      ["Ticket:complete"],
+      ["Setup:complete"],
+      ["Build:running"],
+      ["Prepare:not-started~"],
+      ["Reviewer 1:not-started~", "Reviewer 2:not-started~", "Reviewer 3:not-started~"],
+      ["Consolidation:not-started~"],
+      ["Verify:not-started~"],
+      ["Ship:not-started~"],
+      ["PR:not-started~"],
+    ]);
+    const placeholderReviewer = model.nodes.find((node) => node.title === "Reviewer 2");
+    expect(placeholderReviewer).toMatchObject({ agent: "codex", model: "gpt-6.1" });
+  });
+
+  test("repeated passes run to the right as new nodes, never looping back", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "verifying",
+        iteration: 1,
+        currentSessionIndex: 6,
+        sessions: [
+          session("build", "build", 0),
+          session("review", "review", 60, { label: "Review Session" }),
+          session("address", "address", 120),
+          session("verify", "verify", 180),
+          session("fix", "fix", 240, { iteration: 1 }),
+          session("review", "review-2", 300, { iteration: 1, label: "Review Session" }),
+          session("verify", "verify-2", 360, {
+            iteration: 1,
+            status: "running",
+            completedAt: undefined,
+          }),
+        ],
+      }),
+    );
+    expect(line(model)).toEqual([
+      ["Ticket:complete"],
+      ["Setup:complete"],
+      ["Build:complete"],
+      ["Review:complete"],
+      ["Address:complete"],
+      ["Verify:complete"],
+      ["Fix:complete"],
+      ["Review 2:complete"],
+      ["Verify 2:running"],
+      ["Ship:not-started~"],
+      ["PR:not-started~"],
+    ]);
+    expect(model.columns.map((column) => column.label)).toEqual([
+      "Ticket",
+      "Setup",
+      "Build",
+      "Review",
+      "Address",
+      "Verify",
+      "Fix",
+      "Review 2",
+      "Verify 2",
+      "Ship",
+      "PR",
+    ]);
+    // Every edge runs from one column to the next one.
+    const columnOf = new Map<string, number>();
+    model.columns.forEach((column, index) =>
+      column.nodeIds.forEach((id) => columnOf.set(id, index)),
+    );
+    for (const edge of model.edges) {
+      expect(columnOf.get(edge.to)! - columnOf.get(edge.from)!).toBe(1);
+    }
+  });
+
+  test("projects the live fan-out: queue position, admission and failures", () => {
+    const reviewers: ReviewerRecord[] = [
+      {
+        id: "r1",
+        agent: "claude",
+        model: "opus",
+        status: "running",
+        sessionKey: "rev-1",
+        providerSessionId: "rev-1-session",
+      },
+      {
+        id: "r2",
+        agent: "codex",
+        model: "gpt",
+        status: "failed",
+        error: "Provider exited\nwith a trace",
+        sessionKey: "rev-2",
+        providerSessionId: "rev-2-session",
+      },
+      {
+        id: "r3",
+        agent: "pi",
+        model: "kimi",
+        status: "pending",
+        admissionState: "queued",
+        queuePosition: 1,
+      },
+    ];
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL,
+        reviewFanout: { reviewers },
+        sessions: [
+          session("build", "build", 0),
+          session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          reviewer(0, "rev-1", 120, { status: "running", completedAt: undefined }),
+          reviewer(1, "rev-2", 120),
+        ],
+        validationRun: validationRun(),
+      }),
+    );
+    expect(line(model).slice(3)).toEqual([
+      ["Prepare:complete"],
+      ["Reviewer 1:running", "Reviewer 2:failed", "Reviewer 3:not-started"],
+      ["Consolidation:not-started~"],
+      ["Verify:not-started~"],
+      ["Ship:not-started~"],
+      ["PR:not-started~"],
+    ]);
+    const prepare = model.nodes.find((node) => node.kind === "prepare")!;
+    expect(prepare.hasValidation).toBe(true);
+    const failed = model.nodes.find((node) => node.title === "Reviewer 2")!;
+    expect(failed.error).toBe("Provider exited\nwith a trace");
+    const queued = model.nodes.find((node) => node.title === "Reviewer 3")!;
+    expect(queued.reviewer?.queuePosition).toBe(1);
+    expect(queued.placeholder).toBe(false);
+    // A queued reviewer waits for admission, not input: its edge stays pending.
+    expect(model.edges.find((edge) => edge.to === queued.id)?.state).toBe("pending");
+  });
+
+  test("keeps a retired pass's reviewer outcomes and issue counts from the sessions", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "addressing",
+        reviewers: PANEL.slice(0, 2),
+        currentSessionIndex: 4,
+        sessions: [
+          session("build", "build", 0),
+          reviewer(0, "rev-1", 60, {
+            reviewerOutcome: "completed",
+            reviewIssueCounts: { P0: 1, P1: 0, P2: 2 },
+          }),
+          reviewer(1, "rev-2", 60, { reviewerOutcome: "failed", error: "Out of credit" }),
+          session("review", "consolidation", 120, {
+            label: "Consolidation",
+            reviewReport: TEST_STRUCTURED_REVIEW_REPORT,
+          }),
+          session("address", "address", 180, { status: "running", completedAt: undefined }),
+        ],
+      }),
+    );
+    const byTitle = new Map(model.nodes.map((node) => [node.title, node]));
+    expect(byTitle.get("Reviewer 1")?.issueCounts).toEqual({ P0: 1, P1: 0, P2: 2 });
+    expect(byTitle.get("Reviewer 2")).toMatchObject({ state: "failed", error: "Out of credit" });
+    expect(byTitle.get("Consolidation")?.issueCounts).toBeDefined();
+    expect(byTitle.get("Address")?.state).toBe("running");
+  });
+
+  test("a retried reviewer replaces its failed attempt in the same slot", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        reviewFanout: {
+          reviewers: [
+            { id: "r1", agent: "claude", model: "opus", status: "completed", sessionKey: "rev-1" },
+            {
+              id: "r2",
+              agent: "codex",
+              model: "gpt",
+              status: "pending",
+              admissionState: "admitting",
+            },
+          ],
+        },
+        sessions: [
+          session("build", "build", 0),
+          reviewer(0, "rev-1", 60, { reviewerOutcome: "completed" }),
+          reviewer(1, "rev-2", 60, { reviewerOutcome: "failed", error: "boom" }),
+        ],
+      }),
+    );
+    const slot = model.nodes.filter((node) => node.title === "Reviewer 2");
+    expect(slot).toHaveLength(1);
+    expect(slot[0]).toMatchObject({ state: "not-started", earlierAttempts: 1 });
+    expect(slot[0]!.reviewer?.admissionState).toBe("admitting");
+  });
+
+  test("a fan-out that failed without consolidating carries the failure on consolidation", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "failed",
+        error: "No reviewer produced a valid report",
+        failureContext: { phase: "reviewing", kind: "stage-transition" },
+        reviewers: PANEL.slice(0, 2),
+        reviewFanout: {
+          reviewers: [
+            { id: "r1", agent: "claude", model: "opus", status: "failed", sessionKey: "rev-1" },
+            { id: "r2", agent: "codex", model: "gpt", status: "failed", sessionKey: "rev-2" },
+          ],
+        },
+        sessions: [
+          session("build", "build", 0),
+          reviewer(0, "rev-1", 60),
+          reviewer(1, "rev-2", 60),
+        ],
+      }),
+    );
+    // The reviewers failed on their own records, so the stage keeps its error
+    // on the reviewers; nothing extra is invented.
+    expect(model.nodes.filter((node) => node.state === "failed").map((node) => node.title)).toEqual(
+      ["Reviewer 1", "Reviewer 2"],
+    );
+    const consolidation = model.nodes.find((node) => node.kind === "consolidation");
+    expect(consolidation?.state).toBe("not-started");
+  });
+
+  test("a stage that failed before its session existed gets a failed node of its own", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "failed",
+        error: "Could not start the verifier",
+        failureContext: { phase: "verifying", kind: "stage-transition" },
+        sessions: [
+          session("build", "build", 0),
+          session("review", "review", 60, { label: "Review Session" }),
+        ],
+      }),
+    );
+    const verify = model.nodes.find((node) => node.kind === "verify" && !node.placeholder);
+    expect(verify).toMatchObject({ state: "failed", error: "Could not start the verifier" });
+  });
+
+  test("cancelled and paused pipelines mark the step they stopped in", () => {
+    const cancelled = pipelineFlowModel(
+      build({
+        phase: "failed",
+        error: "Build cancelled",
+        currentSessionIndex: 0,
+        sessions: [session("build", "build", 0, { completedAt: undefined })],
+      }),
+    );
+    expect(cancelled.nodes.find((node) => node.kind === "build")?.state).toBe("cancelled");
+    expect(cancelled.nodes.some((node) => node.placeholder)).toBe(false);
+
+    const paused = pipelineFlowModel(
+      build({
+        phase: "paused",
+        pausedFromPhase: "building",
+        currentSessionIndex: 0,
+        sessions: [session("build", "build", 0, { completedAt: undefined })],
+      }),
+    );
+    expect(paused.nodes.find((node) => node.kind === "build")?.state).toBe("paused");
+    expect(paused.nodes.some((node) => node.placeholder)).toBe(true);
+  });
+
+  test("the PR node shows the environment's PR only once the pipeline reached Ship", () => {
+    const pullRequest = {
+      url: "https://github.com/acme/app/pull/12",
+      state: "open" as const,
+      checks: { passed: 3, total: 4, pending: 1 },
+    };
+    const early = pipelineFlowModel(
+      build({ phase: "building", sessions: [session("build", "build", 0)] }),
+      pullRequest,
+    );
+    expect(early.nodes.at(-1)).toMatchObject({
+      kind: "pr",
+      state: "not-started",
+      placeholder: true,
+    });
+
+    const shipped = pipelineFlowModel(
+      build({
+        phase: "complete",
+        currentSessionIndex: 1,
+        sessions: [session("build", "build", 0), session("pr", "pr", 60)],
+      }),
+      pullRequest,
+    );
+    expect(line(shipped)).toEqual([
+      ["Ticket:complete"],
+      ["Setup:complete"],
+      ["Build:complete"],
+      ["Ship:complete"],
+      ["PR:complete"],
+    ]);
+    const closed = pipelineFlowModel(
+      build({ phase: "complete", sessions: [session("pr", "pr", 0)] }),
+      { ...pullRequest, state: "closed" },
+    );
+    expect(closed.nodes.at(-1)?.state).toBe("cancelled");
+  });
+
+  test("conflict resolution appears after Ship only once it runs", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "resolving-conflicts",
+        currentSessionIndex: 2,
+        sessions: [
+          session("build", "build", 0),
+          session("pr", "pr", 60),
+          session("resolve-conflicts", "conflicts", 120, {
+            status: "running",
+            completedAt: undefined,
+          }),
+        ],
+      }),
+    );
+    expect(line(model).slice(3)).toEqual([
+      ["Ship:complete"],
+      ["Resolve conflicts:running"],
+      ["PR:not-started~"],
+    ]);
+  });
+
+  test("an older pipeline without the outcome fields renders from what it has", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "complete",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          session("build", "build", 0, { agent: undefined }),
+          reviewer(0, "rev-1", 60),
+          reviewer(1, "rev-2", 60, { status: "error" }),
+          session("review", "consolidation", 120, { label: "Consolidation" }),
+          session("verify", "verify", 180),
+        ],
+      }),
+    );
+    expect(line(model)[3]).toEqual(["Reviewer 1:complete", "Reviewer 2:failed"]);
+    expect(model.nodes.find((node) => node.kind === "build")?.agent).toBe("codex");
+    expect(model.nodes.some((node) => node.placeholder)).toBe(false);
+  });
+
+  test("narrows to one review pass with its preparation", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "addressing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          session("build", "build", 0),
+          session("fix", "prep", 30, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          reviewer(0, "rev-1", 60),
+          reviewer(1, "rev-2", 60),
+          session("review", "consolidation", 120, { label: "Consolidation" }),
+          session("address", "address", 180),
+        ],
+      }),
+    );
+    const passKey = model.nodes.find((node) => node.kind === "reviewer")!.passKey!;
+    expect(pipelineReviewPassNodes(model, passKey).map((node) => node.title)).toEqual([
+      "Prepare",
+      "Reviewer 1",
+      "Reviewer 2",
+      "Consolidation",
+    ]);
+  });
+});
+
+describe("pipelineFlowLayout", () => {
+  test("puts columns left to right at a fixed width and stacks a column's nodes", () => {
+    const geometry = pipelineFlowLayout({
+      width: 600,
+      columns: [
+        { key: "a", label: "A", nodes: [{ id: "a", height: 64 }] },
+        {
+          key: "b",
+          label: "B",
+          nodes: [
+            { id: "b1", height: 64 },
+            { id: "b2", height: 64 },
+          ],
+        },
+        { key: "c", label: "C", nodes: [{ id: "c", height: 64 }] },
+      ],
+    });
+    const a = geometry.rects.get("a")!;
+    const b1 = geometry.rects.get("b1")!;
+    const b2 = geometry.rects.get("b2")!;
+    const c = geometry.rects.get("c")!;
+    expect(b1.x).toBeGreaterThan(a.x + a.width);
+    expect(c.x).toBeGreaterThan(b1.x + b1.width);
+    expect(b2.y).toBeGreaterThan(b1.y + b1.height);
+    // Single nodes centre on the stack.
+    expect(a.y + a.height / 2).toBeCloseTo((b1.y + b2.y + b2.height) / 2, 0);
+    expect(geometry.width).toBeGreaterThanOrEqual(c.x + c.width);
+    expect(geometry.labels.map((label) => label.text)).toEqual(["A", "B", "C"]);
+  });
+});

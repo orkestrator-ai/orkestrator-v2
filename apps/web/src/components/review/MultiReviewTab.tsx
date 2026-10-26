@@ -33,6 +33,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
+import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
 import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
@@ -1862,6 +1863,16 @@ function MultiReviewOverviewTab({
 }
 
 export function MultiReviewTab(props: MultiReviewTabProps) {
+  if (props.data.pipelinePass) {
+    return (
+      <PipelineReviewTab
+        pipelineId={props.data.workflowId}
+        environmentId={props.data.environmentId}
+        passKey={props.data.pipelinePass}
+        isActive={props.isActive}
+      />
+    );
+  }
   if (props.data.reviewerId) {
     return (
       <MultiReviewReviewerTab

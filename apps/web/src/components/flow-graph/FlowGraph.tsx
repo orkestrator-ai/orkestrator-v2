@@ -628,6 +628,8 @@ export interface FlowGraphProps {
   fullscreenContainer?: HTMLElement | null;
   /** Hidden tabs must not consume keyboard events from another pane. */
   isActive?: boolean;
+  /** The shortest the graph's viewport sizes itself to; 460 px by default. */
+  minHeight?: number;
 }
 
 /**
@@ -658,6 +660,7 @@ export function FlowGraph({
   layoutMode,
   fullscreenContainer,
   isActive = true,
+  minHeight,
 }: FlowGraphProps) {
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
@@ -685,6 +688,7 @@ export function FlowGraph({
     measuredWidth: viewportWidth,
     content: { width: geometry.width, height: geometry.height },
     fillHeight: fullscreen ? viewportHeight : chosenHeight,
+    minHeight,
   });
   const { attachViewport } = flowViewport;
   const viewportRef = useCallback(

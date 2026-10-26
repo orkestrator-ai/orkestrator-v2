@@ -139,6 +139,11 @@ export interface MultiReviewTabData {
   workflowId: string;
   /** Opens the read-only provider transcript for one reviewer when present. */
   reviewerId?: string;
+  /**
+   * A build pipeline's review pass shown as a Multi Review: `workflowId` is
+   * then the pipeline's id, and the view reads the pipeline record.
+   */
+  pipelinePass?: string;
   isLocal?: boolean;
 }
 

@@ -75,12 +75,15 @@ export function useFlowViewport({
   content,
   layout = "graph",
   fillHeight = null,
+  minHeight,
 }: {
   viewKey: string;
   measuredWidth: number | null;
   content: FlowSize;
   layout?: "graph" | "stacked";
   fillHeight?: number | null;
+  /** The shortest the wide graph's viewport sizes itself to. */
+  minHeight?: number;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(null);
@@ -91,7 +94,7 @@ export function useFlowViewport({
     // scrolls inside it vertically.
     height: stacked
       ? Math.max(1, content.height) * FLOW_ZOOM_MAX
-      : (fillHeight ?? flowViewportHeight(content.height)),
+      : (fillHeight ?? flowViewportHeight(content.height, minHeight)),
   };
   // The remembered zoom applies only at the width it was taken at.
   const zoom =

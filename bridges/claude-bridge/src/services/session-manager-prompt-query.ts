@@ -11,11 +11,13 @@ import {
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
   claudeAsksForApproval,
+  claudeManagedSettings,
   effectiveClaudeChrome,
   claudePermissionMode,
   claudePolicyPermissionMode,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
+  resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
 import { claudeExecutionSandbox, claudeSandboxRefusal } from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
@@ -24,7 +26,6 @@ import {
   getMcpRuntimeConfig,
   mcpSourceScopeForPolicy,
 } from "./mcp-config.js";
-import { getPluginsForSdk } from "./plugin-config.js";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import {
   claudeDeniedTools,
@@ -107,7 +108,6 @@ export async function resolveQueryPlan(
     readOnly: options?.readOnly === true,
     includeLocalSettings: options?.includeLocalSettings === true,
   };
-  const includeProjectResources = policy?.projectResources !== false;
   const settingSources = claudeTurnSettingSources(session, options);
   session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
   // Load MCP servers and plugins from config files. Both resolutions read
@@ -116,12 +116,16 @@ export async function resolveQueryPlan(
   // `mcpSourceScopeForPolicy` answers `none` for it, so a user-scope stdio
   // server cannot ride in through the one channel the CLI still honours
   // when `settingSources` is empty.
-  const [{ servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision }, plugins] =
-    await Promise.all([
-      getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
-      // Installs pass only when the settings this CLI reads enable them.
-      getPluginsForSdk(cwd, includeProjectResources, settingSources),
-    ]);
+  const [
+    { servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision },
+    { plugins, coordinatorSkills },
+  ] = await Promise.all([
+    getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
+    // Installs pass only when the settings this CLI reads enable them. A
+    // coordinator also gets the user's and the project's skills, mirrored
+    // without their hooks or tool grants (`coordinator-skills.ts`).
+    resolveClaudeTurnPlugins(cwd, policy, settingSources),
+  ]);
   turn.mcpServerNames = mcpServerNames;
 
   const mcpServerCount = Object.keys(mcpServers).length;
@@ -174,6 +178,7 @@ export async function resolveQueryPlan(
         researchMcpServerNames: coordinatorResearchMcpServersFromEnv(process.env)
           .map((server) => server.name)
           .filter((name) => mcpServerNames.has(name)),
+        skillNames: coordinatorSkills,
       })
     : [
         ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
@@ -306,6 +311,7 @@ export function claudeQueryOptions(
     ultracode,
     queryEnvironment,
   } = plan;
+  const managedSettings = claudeManagedSettings(policy);
   const latestTurnHook =
     (pick: (target: ClaudeRuntimeTurn) => HookCallback): HookCallback =>
     (...args) =>
@@ -410,6 +416,9 @@ export function claudeQueryOptions(
     // hooks and MCP servers, both of which run programs this boundary is
     // supposed to exclude.
     settingSources: plan.settingSources,
+    // The policy layer: a read-only turn runs no plugin or skill hook and no
+    // skill inline shell (`claudeManagedSettings`).
+    ...(managedSettings ? { managedSettings } : {}),
     // Fast mode (priority service tier) and Ultracode are Claude Code
     // flag-layer settings, so the user can opt into each per prompt. The
     // CLI keeps neither across processes, and each turn is its own query.

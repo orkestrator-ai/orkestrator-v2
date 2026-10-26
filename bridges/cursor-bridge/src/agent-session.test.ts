@@ -789,6 +789,8 @@ describe("ensureAgent", () => {
     });
     const research = {
       ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      // No user skills here, so the skill tool is not hosted either.
+      HOME: join(tmpdir(), `cursor-research-home-${process.pid}`),
       ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
       ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
         { name: "context7", url: "https://mcp.context7.com/mcp" },
@@ -823,6 +825,45 @@ describe("ensureAgent", () => {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
       }
+    }
+  });
+
+  test("a coordinator process hosts the user's skills as a read-only tool", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        throw new Error("offline");
+      },
+    });
+    const home = join(tmpdir(), `cursor-skills-home-${process.pid}-${Date.now()}`);
+    await mkdir(join(home, ".claude", "skills", "release"), { recursive: true });
+    await writeFile(
+      join(home, ".claude", "skills", "release", "SKILL.md"),
+      "---\nname: release\ndescription: Cut a release\n---\nRun the release checklist.\n",
+    );
+    const env = { ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only", HOME: home };
+    const previous = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]));
+    Object.assign(process.env, env);
+    try {
+      const state = newSessionState();
+      state.readOnly = true;
+      await ensureAgent(state);
+      const tool = created[0]?.local?.customTools?.["orkestrator-skills__load"];
+      expect(tool?.description).toContain("- release: Cut a release");
+      // Still no settings layer, no shell and no edit.
+      expect(created[0]?.local?.settingSources).toEqual([]);
+      expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["shell", "edit"]));
+      expect(state.mcpServerNames).toEqual(["orkestrator-skills"]);
+      const loaded = (await tool!.execute({ name: "release" }, {} as never)) as {
+        content: { text: string }[];
+      };
+      expect(loaded.content[0]!.text).toContain("Run the release checklist.");
+      await detachAgent(state);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await rm(home, { recursive: true, force: true });
     }
   });
 

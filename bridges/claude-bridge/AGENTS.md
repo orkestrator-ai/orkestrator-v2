@@ -169,6 +169,23 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   whichever minified vendor file threw, with no indication of which request
   produced it.
 
+## Coordinator skills
+
+A coordinator gets the user's and the project's skills only as the mirrored
+plugins `coordinator-skills.ts` builds, never by turning on a settings source
+(see "Skills" in `docs/architecture/coordinator.md`). Keep three things true:
+
+- **A mirror carries text, not behaviour.** `KEPT_FRONTMATTER_KEYS` is an
+  allowlist and values are re-serialised; never copy a `SKILL.md` through or
+  add a key that runs, grants or forks (`hooks`, `allowed-tools`, `context`,
+  `agent`).
+- **Managed settings stay on for every read-only turn**
+  (`claudeManagedSettings`). They are what stops plugin and skill hooks and
+  skill inline shell, none of which the PreToolUse hook sees.
+- **A tool `allowed-tools` could grant is denied by capability.** A grant
+  skips `canUseTool`, so a built-in that writes, runs an unvetted shell or
+  reaches the network belongs in `CAPABILITY_TOOLS` (`read-only-policy.ts`).
+
 ## Coordinator shell allowlist
 
 `src/services/read-only-policy.ts` holds the read-only boundary for shell,

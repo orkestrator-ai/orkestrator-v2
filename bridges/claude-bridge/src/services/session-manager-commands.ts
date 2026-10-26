@@ -499,6 +499,8 @@ async function runDiscoveryProbe(
       env,
       settingSources: config.settingSources,
       ...(config.plugins.length > 0 ? { plugins: config.plugins } : {}),
+      // A probe starts the CLI, and with it every plugin's SessionStart hook.
+      ...(config.managedSettings ? { managedSettings: config.managedSettings } : {}),
       ...claudeExecutableOptions(),
     });
     const read = probe.supportedCommands();

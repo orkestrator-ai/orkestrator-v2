@@ -268,7 +268,10 @@ export function openCodeRequestOptions(
  *
  * The base rule for a coordinator is `{"*": deny}`, so without an explicit
  * allow list here the session could not even read a file — which is the one
- * thing a coordinator is for.
+ * thing a coordinator is for. `skill` loads a discovered skill's SKILL.md and
+ * lists the files beside it, and nothing more on 1.19.4: no hooks, tool grants
+ * or inline shell, so it reads what `read` already could. Running a script a
+ * skill ships still needs `bash`, which stays denied.
  */
 const OPENCODE_READ_ONLY_PERMISSIONS = Object.freeze([
   "read",
@@ -278,6 +281,7 @@ const OPENCODE_READ_ONLY_PERMISSIONS = Object.freeze([
   "todoread",
   "todowrite",
   "task",
+  "skill",
 ]);
 
 /**

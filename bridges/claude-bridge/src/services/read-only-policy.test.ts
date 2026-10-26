@@ -38,8 +38,12 @@ describe("Claude coordinator read-only policy", () => {
     expect(claudeDeniedTools(coordinatorPolicy).toSorted()).toEqual([
       "ApplyPatch",
       "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
       "MultiEdit",
       "NotebookEdit",
+      "PowerShell",
+      "RemoteTrigger",
       "WebFetch",
       "WebSearch",
       "Write",
@@ -95,7 +99,20 @@ describe("Claude coordinator read-only policy", () => {
   });
 
   test("write and network tools are denied by the hook", async () => {
-    for (const tool of ["Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch"]) {
+    // Also the tools a skill's or plugin command's `allowed-tools` could grant
+    // past `canUseTool`: a worktree is a write, PowerShell is a shell the hook
+    // cannot vet, and RemoteTrigger reaches the network.
+    for (const tool of [
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "NotebookEdit",
+      "WebFetch",
+      "EnterWorktree",
+      "ExitWorktree",
+      "PowerShell",
+      "RemoteTrigger",
+    ]) {
       const decision = await decide(tool, {});
       expect(decision?.permissionDecision).toBe("deny");
       expect(decision?.permissionDecisionReason).toContain("read-only");
@@ -331,6 +348,30 @@ describe("Claude coordinator read-only policy", () => {
     }
     // The reading form it replaces stays available.
     expect(isReadOnlyShellCommand("git diff HEAD~1").allowed).toBe(true);
+  });
+
+  test("a script shipped in a skill directory cannot be run", async () => {
+    // Coordinator skills link their supporting files from the user's and the
+    // project's skill directories, so the scripts are readable. Running one is
+    // still a shell command, judged like any other.
+    const scripts =
+      "/home/me/.claude/orkestrator/coordinator-skills/project-skills-0/skills/release";
+    for (const command of [
+      `${scripts}/scripts/tag.sh`,
+      "./scripts/tag.sh",
+      "scripts/tag.sh",
+      `bash ${scripts}/scripts/tag.sh`,
+      "sh scripts/tag.sh",
+      "zsh scripts/tag.sh",
+      "python3 scripts/release.py",
+      "node scripts/release.mjs",
+      "bun scripts/release.ts",
+      "source scripts/env.sh",
+    ]) {
+      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    expect(isReadOnlyShellCommand(`cat ${scripts}/scripts/tag.sh`).allowed).toBe(true);
   });
 
   test("an allowlisted program is still refused when its arguments write", async () => {

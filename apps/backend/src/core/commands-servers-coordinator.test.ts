@@ -239,7 +239,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await fs.mkdir(bridge, { recursive: true });
       await fs.writeFile(
         path.join(bridge, "index.js"),
-        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX }));
+        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX, userSkills: process.env.ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -337,6 +337,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
         oauthToken: "login",
+        // The skills a worker on the host account reads, never the private
+        // home's: the bridge mirrors them without hooks or tool grants.
+        userSkills: path.join(process.env.CLAUDE_CONFIG_DIR!, "skills"),
         // The host probe the qualification table used, so the bridge requires
         // the OS sandbox exactly where Claude was offered as enforced.
         commandSandbox: defaultCoordinatorHostCapabilities().claudeSandbox
@@ -494,7 +497,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
-await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ stateDir: process.env.CODEX_BRIDGE_STATE_DIR ?? null, codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ stateDir: process.env.CODEX_BRIDGE_STATE_DIR ?? null, codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, userSkills: process.env.ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -589,6 +592,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         ),
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
+        // The host's skills, as a worker reads them, never the private home's.
+        userSkills: path.join(process.env.CODEX_HOME!, "skills"),
       },
     );
     expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
@@ -964,7 +969,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX ?? null }));
+      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX ?? null, userSkills: process.env.ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR ?? null, codexUserSkills: process.env.ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR ?? null }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -998,6 +1003,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       ]),
       // Only a coordinator bridge may be told the sandbox is optional.
       ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX: "unavailable",
+      // Or where to mirror user skills from.
+      ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR: path.join(root, "inherited-skills"),
+      ORKESTRATOR_COORDINATOR_CODEX_USER_SKILLS_DIR: path.join(root, "inherited-codex-skills"),
     };
     const previous = Object.fromEntries(
       Object.keys(inherited).map((name) => [name, process.env[name]]),
@@ -1010,6 +1018,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         research: null,
         researchMcp: null,
         commandSandbox: null,
+        userSkills: null,
+        codexUserSkills: null,
       });
     } finally {
       for (const [name, value] of Object.entries(previous)) {

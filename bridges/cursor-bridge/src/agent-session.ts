@@ -40,6 +40,7 @@ export { cancelSurvivingRuns, newSessionState, SessionConflictError, useCursorAg
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
+import { COORDINATOR_SKILLS_SERVER, hostSkillCustomTools } from "./coordinator-skills.js";
 import {
   cursorMcpServers,
   cursorInlineMcpServers,
@@ -456,8 +457,13 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     await closeHosted?.();
     throw new SessionClosedError();
   }
+  // The user's and the project's skills, served by a read-only tool of the
+  // bridge's own: the SDK cannot load skills without a whole settings layer.
+  const skills = readOnly ? hostSkillCustomTools(process.env, workingDirectory) : undefined;
   const customTools =
-    hosted || research ? { ...research?.customTools, ...hosted?.customTools } : undefined;
+    hosted || research || skills
+      ? { ...skills?.customTools, ...research?.customTools, ...hosted?.customTools }
+      : undefined;
   const httpMcpServerNames = hosted ? [] : allowHttpMcp ? Object.keys(mcpServers) : [];
   state.hostedMcpClose = closeHosted;
   state.hostedMcpTools = customTools;
@@ -465,6 +471,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   state.mcpServerNames = [
     ...(hosted ? ["orkestrator"] : httpMcpServerNames),
     ...(research?.serverNames ?? []),
+    ...(skills ? [COORDINATOR_SKILLS_SERVER] : []),
   ];
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {

@@ -10,8 +10,10 @@ import {
   nativeAgentPolicyDeniesWebSearch,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
-import { realpathSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { COORDINATOR_CODEX_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
@@ -129,6 +131,116 @@ export function codexRequestUserInputConfig(
 ): Record<string, unknown> {
   if (!policy || policy.id === "pipeline") return {};
   return { "features.default_mode_request_user_input": true };
+}
+
+/**
+ * Whether a session loads the checkout's own skills.
+ *
+ * Project resources decide, except in a coordinator process: a coordinator
+ * keeps the checkout untrusted (`codexProjectTrustConfig`: no project config,
+ * hooks or MCP servers) but loads its `.agents` and `.codex` skills, so it can
+ * follow the project's own procedures. A skill there is instructions; anything
+ * it asks for runs as a command under the coordinator's permission profile,
+ * which allows no write and no network. A worker's read-only review turn is
+ * not a coordinator turn and keeps the session's setting.
+ */
+export function codexLoadsProjectSkills(
+  policy: NativeAgentExecutionPolicy | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (policy?.projectResources !== false) return true;
+  return policy.id === "coordinator-read-only" && isCoordinatorReadOnlyEnvironment(env);
+}
+
+/**
+ * Skill directories a coordinator adds through `skills/extraRoots/set`, which
+ * Codex 0.164.0 lists as `user` scope: the account's own `CODEX_HOME/skills`,
+ * which the launcher names because this process's `CODEX_HOME` is private, and
+ * the checkout's `.claude/skills`, so a project that keeps its procedures there
+ * (as this one does) is not invisible to a Codex coordinator. Empty outside a
+ * coordinator process.
+ */
+export function codexCoordinatorSkillExtraRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string | undefined = env.CWD?.trim(),
+): string[] {
+  if (!isCoordinatorReadOnlyEnvironment(env)) return [];
+  const userDir = env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV]?.trim();
+  return [
+    ...(userDir && isAbsolute(userDir) ? [userDir] : []),
+    ...(cwd && isAbsolute(cwd) ? [join(cwd, ".claude", "skills")] : []),
+  ].filter((dir) => existsSync(dir));
+}
+
+/** More read grants than any real skill set; past it the rest are not granted. */
+const MAX_SKILL_READ_GRANTS = 256;
+
+function isWithin(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
+}
+
+/**
+ * Directories outside the workspace whose files a coordinator's commands may
+ * read, so a listed user skill can be opened: the user's skill roots
+ * (`CODEX_HOME/skills` via the launcher, and `~/.agents/skills`, which Codex
+ * lists from HOME) and each skill they link to elsewhere.
+ *
+ * Only user-owned roots are followed. A link in the checkout's own skills is
+ * never granted: the checkout is untrusted, and a link there could name any
+ * directory. A linked target is granted only when it is a skill (it holds a
+ * `SKILL.md`) and is not HOME, the filesystem root, or an ancestor of either.
+ */
+export function codexCoordinatorSkillReadRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  // The HOME app-server inherits, which is where it finds `~/.agents/skills`.
+  home: string = env.HOME?.trim() || homedir(),
+): string[] {
+  const userDir = env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV]?.trim();
+  const roots = [
+    ...(userDir && isAbsolute(userDir) ? [userDir] : []),
+    join(home, ".agents", "skills"),
+  ];
+  const homeReal = (() => {
+    try {
+      return realpathSync(home);
+    } catch {
+      return home;
+    }
+  })();
+  const grants = new Set<string>();
+  const grantable = (path: string) =>
+    path !== sep && !isWithin(path, homeReal) && !isWithin(path, home);
+  for (const root of roots) {
+    let real: string;
+    try {
+      real = realpathSync(root);
+      if (!statSync(real).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (!grantable(real)) continue;
+    grants.add(real);
+    let entries: string[];
+    try {
+      entries = readdirSync(real).filter((name) => !name.startsWith("."));
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (grants.size >= MAX_SKILL_READ_GRANTS) break;
+      let target: string;
+      try {
+        target = realpathSync(join(real, entry));
+        if (!statSync(target).isDirectory() || !existsSync(join(target, "SKILL.md"))) continue;
+      } catch {
+        continue;
+      }
+      if (isWithin(real, target) || !grantable(target)) continue;
+      grants.add(target);
+    }
+  }
+  return [...grants].slice(0, MAX_SKILL_READ_GRANTS);
 }
 
 /** More skills than any real inventory; past it the thread is refused. */
@@ -362,6 +474,11 @@ export function codexAppServerConfigOverrides(
       (attachmentRoot && isAbsolute(attachmentRoot)
         ? `${JSON.stringify(attachmentRoot)} = "read", `
         : "") +
+      // The user's own skills, which the coordinator lists and must be able
+      // to open (`codexCoordinatorSkillReadRoots`). Read only, like the rest.
+      codexCoordinatorSkillReadRoots(env)
+        .map((root) => `${JSON.stringify(root)} = "read", `)
+        .join("") +
       `":workspace_roots" = { "." = "read" } }`;
     overrides[`permissions.${permissionProfile}.network.enabled`] = "false";
     // The profile above stops commands; hosted web search runs on OpenAI's
@@ -437,6 +554,9 @@ export function codexAppServerConfigOverrides(
       "plugins",
       "remote_plugin",
       "skill_mcp_dependency_install",
+      // A skill may name environment variables it needs; the coordinator
+      // neither prompts for them nor hands any over.
+      "skill_env_var_dependency_prompt",
       "tool_call_mcp_elicitation",
       "tool_suggest",
       "workspace_dependencies",

@@ -23,45 +23,97 @@ case "$max$keep" in *[!0-9]*) echo "orkestrator-log-writer: sizes must be number
 # to stop draining.
 trap '' HUP TERM
 umask 077
-# `fold` bounds a line before awk reads it: a producer that never writes a
-# newline would otherwise have awk hold its whole output in memory. It is
-# line-buffered, or a pipe would hold back the last few KiB of output — the
-# lines a failure diagnosis needs.
-#
-# mawk, the image's awk, also block-buffers a piped stdin: without
-# `-W interactive` it acts on nothing until it holds a few KiB or sees end of
-# file, so a quiet, long-lived bridge never had its log file created at all.
-# Other awks reject the option, so it is passed only where it is accepted
-# (the `+` expansion keeps an empty array legal under `set -u` in bash 3).
-awk_interactive=()
-if probe="$(LC_ALL=C awk -W interactive 'BEGIN { }' </dev/null 2>&1)" && [ -z "$probe" ]; then
-    awk_interactive=(-W interactive)
+# One Perl process, not a `stdbuf fold | awk` pipeline. Each tool in that
+# pipeline buffered a pipe its own way: mawk held its input until it had a
+# few KiB unless run with `-W interactive`, and Rust coreutils' `fold` (Ubuntu
+# 26.04) holds its output whatever `stdbuf` asks. Either way a quiet bridge's
+# lines sat in a buffer instead of the file. Here each read is written before
+# the next one; only a line still waiting for its newline is held, and never
+# more than 64 KiB of it, so a producer that never writes a newline cannot
+# grow the writer's memory. perl-base is Essential on Debian, so the image
+# always has it.
+if ! command -v perl >/dev/null 2>&1; then
+    # Unbounded, as an image without the writer is, but still draining.
+    exec cat >>"$file"
 fi
-stdbuf -oL fold -b -w 65536 | LC_ALL=C awk ${awk_interactive[@]+"${awk_interactive[@]}"} -v file="$file" -v max="$max" -v keep="$keep" '
-function shell_quote(s) { gsub(/\047/, "\047\\\047\047", s); return "\047" s "\047" }
-function rotate(   i, from, to) {
-    close(file)
-    for (i = keep - 1; i >= 1; i--) {
-        from = (i == 1) ? file : file "." (i - 1)
-        to = file "." i
-        system("mv -f " shell_quote(from) " " shell_quote(to) " 2>/dev/null")
+exec perl -e '
+use strict;
+use warnings;
+use Errno qw(EINTR);
+use Fcntl qw(O_WRONLY O_APPEND O_CREAT);
+
+my ($file, $max, $keep) = @ARGV;
+# A longer line is split here, before it is held, as `fold -b -w` did.
+my $fold = 65536;
+my $size = (-f $file ? -s _ : 0) || 0;
+my ($log, $out, $buffer) = (undef, "", "");
+
+# A failed open or write drops that output; the next write tries again.
+sub put {
+    return unless length $out;
+    if (!$log && !sysopen($log, $file, O_WRONLY | O_APPEND | O_CREAT, 0600)) {
+        undef $log;
+        $out = "";
+        return;
     }
-    if (keep == 1) system(": > " shell_quote(file))
-    size = 0
+    my $offset = 0;
+    while ($offset < length $out) {
+        my $wrote = syswrite($log, $out, length($out) - $offset, $offset);
+        if (!defined $wrote) {
+            next if $! == EINTR;
+            close $log;
+            undef $log;
+            last;
+        }
+        $offset += $wrote;
+    }
+    $out = "";
 }
-BEGIN {
-    size = 0
-    cmd = "stat -c %s " shell_quote(file) " 2>/dev/null"
-    if ((cmd | getline existing) > 0) size = existing + 0
-    close(cmd)
+
+sub rotate {
+    put();
+    close $log if $log;
+    undef $log;
+    for (my $i = $keep - 1; $i >= 1; $i--) {
+        rename($i == 1 ? $file : "$file." . ($i - 1), "$file.$i");
+    }
+    truncate($file, 0) if $keep == 1;
+    $size = 0;
 }
-{
+
+sub line {
+    my ($text) = @_;
     # One line larger than a whole file is cut, so it cannot defeat the bound.
-    if (length($0) + 1 > max) $0 = substr($0, 1, max - 32) " [line truncated]"
-    n = length($0) + 1
-    if (size > 0 && size + n > max) rotate()
-    print >> file
-    fflush(file)
-    size += n
+    $text = substr($text, 0, $max > 32 ? $max - 32 : 0) . " [line truncated]"
+        if length($text) + 1 > $max;
+    my $n = length($text) + 1;
+    rotate() if $size > 0 && $size + $n > $max;
+    $out .= "$text\n";
+    $size += $n;
 }
-'
+
+binmode STDIN;
+while (1) {
+    my $read = sysread(STDIN, $buffer, 65536, length $buffer);
+    if (!defined $read) {
+        next if $! == EINTR;
+        last;
+    }
+    last if $read == 0;
+    while (1) {
+        my $at = index($buffer, "\n");
+        if ($at >= 0 && $at <= $fold) {
+            line(substr($buffer, 0, $at));
+            substr($buffer, 0, $at + 1, "");
+        } elsif (length($buffer) > $fold) {
+            line(substr($buffer, 0, $fold));
+            substr($buffer, 0, $fold, "");
+        } else {
+            last;
+        }
+    }
+    put();
+}
+line($buffer) if length $buffer;
+put();
+' -- "$file" "$max" "$keep"

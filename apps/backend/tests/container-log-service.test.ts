@@ -198,84 +198,112 @@ describe("bounded bridge output", () => {
     expect(shell).toContain("setsid bun /opt/x/index.js > /tmp/x.log 2>&1 &");
   });
 
-  test("the writer writes a quiet producer's first line while its pipe stays open", async () => {
-    // A bridge prints a line now and then and never closes its output. Debian's
-    // mawk block-buffers a piped stdin, so without `-W interactive` no log file
-    // appeared at all until a few KiB had accumulated.
-    const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
-    const file = path.join(dir, "bridge.log");
-    const writer = Bun.spawn({
-      cmd: [
-        "bash",
-        path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh"),
-        file,
-      ],
-      stdin: "pipe",
-    });
-    try {
-      writer.stdin.write("first line\n");
-      writer.stdin.flush();
-      const deadline = Date.now() + 5_000;
-      let content = "";
-      while (Date.now() < deadline) {
-        content = (() => {
-          try {
-            return readFileSync(file, "utf8");
-          } catch {
-            return "";
-          }
-        })();
-        if (content) break;
-        await Bun.sleep(25);
-      }
-      expect(content).toBe("first line\n");
-    } finally {
-      writer.stdin.end();
-      await writer.exited;
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  const WRITER = path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh");
 
-  test("the writer stays bounded on output without a single newline", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
-    try {
-      const file = path.join(dir, "bridge.log");
-      const result = Bun.spawnSync({
-        cmd: [
-          "bash",
-          path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh"),
-          file,
-          "32768",
-          "2",
-        ],
-        stdin: Buffer.alloc(3 * 1024 * 1024, "n"),
-      });
+  function withWriterDir(run: (dir: string, file: string) => void | Promise<void>) {
+    return async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
+      try {
+        await run(dir, path.join(dir, "bridge.log"));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+  }
+
+  function runWriter(file: string, input: string | Buffer, ...sizes: string[]) {
+    return Bun.spawnSync({
+      cmd: ["bash", WRITER, file, ...sizes],
+      stdin: typeof input === "string" ? Buffer.from(input) : input,
+    });
+  }
+
+  async function waitForContent(file: string, expected: string): Promise<string> {
+    // Well inside the test's own timeout, so a miss fails on the content.
+    const deadline = Date.now() + 3_000;
+    let content = "";
+    while (Date.now() < deadline) {
+      try {
+        content = readFileSync(file, "utf8");
+      } catch {
+        content = "";
+      }
+      if (content === expected) break;
+      await Bun.sleep(25);
+    }
+    return content;
+  }
+
+  test(
+    "the writer writes each line while its producer's pipe stays open",
+    withWriterDir(async (_dir, file) => {
+      // A bridge prints a line now and then and never closes its output. A
+      // writer built from pipe tools lost this to their buffering: Debian's
+      // mawk held its input without `-W interactive`, and Rust coreutils'
+      // `fold` (Ubuntu 26.04) held its output whatever `stdbuf` asked.
+      const writer = Bun.spawn({ cmd: ["bash", WRITER, file], stdin: "pipe" });
+      try {
+        writer.stdin.write("first line\n");
+        writer.stdin.flush();
+        expect(await waitForContent(file, "first line\n")).toBe("first line\n");
+        // A line that arrives in pieces is written once its newline does.
+        writer.stdin.write("second ");
+        writer.stdin.flush();
+        await Bun.sleep(100);
+        expect(readFileSync(file, "utf8")).toBe("first line\n");
+        writer.stdin.write("line\n");
+        writer.stdin.flush();
+        expect(await waitForContent(file, "first line\nsecond line\n")).toBe(
+          "first line\nsecond line\n",
+        );
+      } finally {
+        writer.stdin.end();
+        await writer.exited;
+      }
+    }),
+    10_000,
+  );
+
+  test(
+    "the writer ends an unterminated last line and appends to an existing file",
+    withWriterDir((_dir, file) => {
+      expect(runWriter(file, "one\ntwo").exitCode).toBe(0);
+      expect(runWriter(file, "three\n").exitCode).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("one\ntwo\nthree\n");
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }),
+  );
+
+  test(
+    "the writer stays bounded on output without a single newline",
+    withWriterDir((dir, file) => {
+      const result = runWriter(file, Buffer.alloc(3 * 1024 * 1024, "n"), "32768", "2");
       expect(result.exitCode).toBe(0);
       for (const name of readdirSync(dir)) {
         expect(statSync(path.join(dir, name)).size).toBeLessThanOrEqual(32768);
       }
       expect(readdirSync(dir).sort()).toEqual(["bridge.log", "bridge.log.1"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    }),
+  );
 
-  test("the writer rotates by size, keeps N files and cuts oversize lines", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
-    try {
-      const file = path.join(dir, "bridge.log");
+  test(
+    "the writer splits a line at 64 KiB before cutting it to the file size",
+    withWriterDir((_dir, file) => {
+      const exact = "a".repeat(65536);
+      const long = "b".repeat(65536 + 10);
+      expect(runWriter(file, `${exact}\n${long}\n`, "1048576").exitCode).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe(
+        `${exact}\n${"b".repeat(65536)}\n${"b".repeat(10)}\n`,
+      );
+    }),
+  );
+
+  test(
+    "the writer rotates by size, keeps N files and cuts oversize lines",
+    withWriterDir((dir, file) => {
       const lines = Array.from({ length: 4_000 }, (_, index) => `line ${index} ${"y".repeat(50)}`);
       lines.splice(10, 0, "z".repeat(50_000));
-      const result = Bun.spawnSync({
-        cmd: [
-          "bash",
-          path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh"),
-          file,
-          "32768",
-          "3",
-        ],
-        stdin: Buffer.from(lines.join("\n") + "\n"),
-      });
+      const result = runWriter(file, lines.join("\n") + "\n", "32768", "3");
       expect(result.exitCode).toBe(0);
       const files = readdirSync(dir).sort();
       expect(files).toEqual(["bridge.log", "bridge.log.1", "bridge.log.2"]);
@@ -284,10 +312,39 @@ describe("bounded bridge output", () => {
         expect(statSync(path.join(dir, name)).mode & 0o777).toBe(0o600);
       }
       expect(readFileSync(file, "utf8").trim().split("\n").at(-1)).toContain("line 3999");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    }),
+  );
+
+  test(
+    "the writer cuts a line larger than a whole file and marks the cut",
+    withWriterDir((_dir, file) => {
+      expect(runWriter(file, `${"z".repeat(200)}\nafter\n`, "100").exitCode).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe(`${"z".repeat(68)} [line truncated]\nafter\n`);
+    }),
+  );
+
+  test(
+    "the writer counts an existing file towards its size and keeps one file in place",
+    withWriterDir((dir, file) => {
+      expect(runWriter(file, `${"x".repeat(90)}\n`, "100", "1").exitCode).toBe(0);
+      expect(runWriter(file, "next line\n", "100", "1").exitCode).toBe(0);
+      expect(readdirSync(dir)).toEqual(["bridge.log"]);
+      expect(readFileSync(file, "utf8")).toBe("next line\n");
+    }),
+  );
+
+  test(
+    "the writer drains its input to the end when it cannot write the file",
+    withWriterDir((dir) => {
+      // A producer writing into a closed pipe would die of SIGPIPE.
+      const result = runWriter(
+        path.join(dir, "missing", "bridge.log"),
+        Buffer.alloc(1024 * 1024, "line\n"),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(readdirSync(dir)).toEqual([]);
+    }),
+  );
 });
 
 describe("bounded log tails", () => {

@@ -225,6 +225,9 @@ case "$1" in
       *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
         printf 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
         exit 0 ;;
+      # A host without a Codex login (CI) first drops any imported container
+      # login; there is none to drop.
+      *"delete login.tokens"*) exit 0 ;;
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
@@ -2154,6 +2157,9 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"cat /tmp/codex-bridge-token"*) exit 0 ;;
+      # A host without a Codex login (CI) first drops any imported container
+      # login; there is none to drop.
+      *"delete login.tokens"*) exit 0 ;;
     esac
     exit 9 ;;
 esac

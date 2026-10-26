@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   CheckCircle2,
   ExternalLink,
@@ -19,7 +20,11 @@ import type { PipelinePullRequest } from "./pipeline-flow";
  */
 export function usePipelinePullRequest(environmentId: string | null): PipelinePullRequest | null {
   const { prUrl, prState, checkSummary } = usePullRequest({ environmentId });
-  return prUrl ? { url: prUrl, state: prState, checks: checkSummary } : null;
+  // Stable while nothing changed, so the graph model is not rebuilt per render.
+  return useMemo(
+    () => (prUrl ? { url: prUrl, state: prState, checks: checkSummary } : null),
+    [prUrl, prState, checkSummary],
+  );
 }
 
 export type PipelineCheckState = "passing" | "failing" | "pending";

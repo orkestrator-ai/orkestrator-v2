@@ -2386,6 +2386,54 @@ describe("HTTP bridge provider", () => {
     ]);
   });
 
+  test("a restart notice about an earlier request is not the watched request's outcome", async () => {
+    const body = { current: {} as Record<string, unknown> };
+    const { provider } = httpProvider(() => Response.json(body.current), codexConnection);
+    body.current = {
+      status: "error",
+      error: "Codex restarted before this turn finished.",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    };
+
+    // The interrupted request itself, and a caller watching no request, see it.
+    await expect(readProviderStatus(provider, "session-1", "original")).resolves.toEqual({
+      status: "error",
+      error: "Codex restarted before this turn finished.",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    });
+    expect((await readProviderStatus(provider, "session-1")).interruption).toBe("restart");
+    // The continuation that replaced it has not started yet.
+    await expect(readProviderStatus(provider, "session-1", "continuation")).resolves.toEqual({
+      status: "idle",
+      turnSettled: false,
+    });
+    // Without a detail the bridge's notice arrives as data, and reads the same.
+    body.current = { status: "error", interruption: "restart", interruptedRequestId: "original" };
+    await expect(readProviderStatus(provider, "session-1", "continuation")).resolves.toEqual({
+      status: "idle",
+      turnSettled: false,
+    });
+    // A bridge that predates the field: the notice is taken at face value.
+    body.current = { status: "error", error: "restarted", interruption: "restart" };
+    expect((await readProviderStatus(provider, "session-1", "continuation")).status).toBe("error");
+    // An unbounded or non-string id names nothing.
+    for (const interruptedRequestId of ["x".repeat(513), 42, ""]) {
+      body.current = {
+        status: "error",
+        error: "restarted",
+        interruption: "restart",
+        interruptedRequestId,
+      };
+      expect(await readProviderStatus(provider, "session-1", "continuation")).toEqual({
+        status: "error",
+        error: "restarted",
+        interruption: "restart",
+      });
+    }
+  });
+
   test("ignores an interruption the backend does not know, or one without a failure", async () => {
     const body = { current: {} as Record<string, unknown> };
     const { provider } = httpProvider(() => Response.json(body.current), codexConnection);

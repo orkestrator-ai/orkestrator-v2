@@ -89,6 +89,14 @@ export interface ProviderSessionObservation {
    * one; an unknown value is dropped, so that turn fails as before.
    */
   interruption?: ProviderTurnInterruption;
+  /**
+   * The request id of the turn `interruption` cut short, when the provider
+   * knows it. Session status is per session, not per request: until the next
+   * turn starts, the notice still describes the earlier one. A bridge that
+   * predates this field leaves it unset, and the notice is then taken to be
+   * about whichever request the caller is watching, as before.
+   */
+  interruptedRequestId?: string;
 }
 
 /** A provider-caused stop of a turn the same session can continue. */
@@ -190,18 +198,63 @@ export class ProviderSessionFailedError extends Error {
   readonly agent: ProviderAgent;
   readonly detail: string;
   readonly interruption?: ProviderTurnInterruption;
+  /** See {@link ProviderSessionObservation.interruptedRequestId}. */
+  readonly interruptedRequestId?: string;
 
   constructor(
     agent: ProviderAgent,
     detail: string,
-    options: { interruption?: ProviderTurnInterruption } = {},
+    options: { interruption?: ProviderTurnInterruption; interruptedRequestId?: string } = {},
   ) {
     super(`The ${agent} session failed: ${detail}`);
     this.name = "ProviderSessionFailedError";
     this.agent = agent;
     this.detail = detail;
     if (options.interruption) this.interruption = options.interruption;
+    if (options.interruption && options.interruptedRequestId) {
+      this.interruptedRequestId = options.interruptedRequestId;
+    }
   }
+}
+
+/**
+ * Whether a restart notice is about an earlier request than `requestId`.
+ *
+ * Bridges clear the notice when the next turn starts, so a notice naming
+ * another request means `requestId`'s own turn has not started yet: a
+ * continuation accepted a moment ago, or one still in transit. Without a named
+ * request there is nothing to compare, and the notice is taken at face value.
+ */
+function interruptionSuperseded(
+  observation: Pick<ProviderSessionObservation, "status" | "interruption" | "interruptedRequestId">,
+  requestId: string | undefined,
+): boolean {
+  return (
+    requestId !== undefined &&
+    observation.status === "error" &&
+    observation.interruption !== undefined &&
+    observation.interruptedRequestId !== undefined &&
+    observation.interruptedRequestId !== requestId
+  );
+}
+
+/**
+ * The superseded notice read as what it says about `requestId`: its turn has
+ * not settled. Idle rather than error, so no caller fails or continues the
+ * request on another turn's outcome; `turnSettled: false` makes every workflow
+ * owner wait for the turn instead of reading its result.
+ */
+function supersededInterruption(
+  observation: ProviderSessionObservation,
+): ProviderSessionObservation {
+  const superseded: ProviderSessionObservation = {
+    ...observation,
+    status: "idle",
+    turnSettled: false,
+  };
+  delete superseded.interruption;
+  delete superseded.interruptedRequestId;
+  return superseded;
 }
 
 export async function readProviderStatus(
@@ -213,6 +266,7 @@ export async function readProviderStatus(
     const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
       : { status: await provider.status(sessionId) };
+    if (interruptionSuperseded(observation, requestId)) return supersededInterruption(observation);
     if (
       requestId &&
       observation.status === "idle" &&
@@ -231,12 +285,17 @@ export async function readProviderStatus(
     return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
+      const failed: ProviderSessionObservation = {
+        status: "error",
+        ...(error.interruption ? { interruption: error.interruption } : {}),
+        ...(error.interruptedRequestId ? { interruptedRequestId: error.interruptedRequestId } : {}),
+      };
+      if (interruptionSuperseded(failed, requestId)) return supersededInterruption(failed);
       const settled = requestId ? await provider.settleTurn?.(sessionId, requestId) : undefined;
       return {
-        status: "error",
+        ...failed,
         ...(settled !== undefined ? { turnSettled: settled } : {}),
         error: error.detail,
-        ...(error.interruption ? { interruption: error.interruption } : {}),
       };
     }
     throw error;

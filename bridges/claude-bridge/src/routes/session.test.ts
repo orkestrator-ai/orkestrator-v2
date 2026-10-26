@@ -3277,6 +3277,7 @@ describe("persisted session routes", () => {
         status: "error" as "error" | "idle",
         error: "Claude restarted before this turn finished",
         interruption: "restart" as const,
+        interruptedRequestId: "cut-short",
         createdAt: new Date("2026-01-01"),
         lastActivity: new Date("2026-01-01"),
       };
@@ -3286,11 +3287,14 @@ describe("persisted session routes", () => {
         status: "error",
         error: "Claude restarted before this turn finished",
         interruption: "restart",
+        interruptedRequestId: "cut-short",
       });
 
       // A stale field on a session that is no longer failed explains nothing.
       restored.status = "idle";
-      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty("interruption");
+      const idle = await jsonBody(await app.request("/session/s-1"));
+      expect(idle).not.toHaveProperty("interruption");
+      expect(idle).not.toHaveProperty("interruptedRequestId");
       mockGetSession.mockImplementation(defaultGetSession);
     });
 

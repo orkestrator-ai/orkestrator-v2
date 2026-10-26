@@ -286,6 +286,41 @@ admission, isolation), `multi-review-service-efficiency.test.ts` and
 scale and cost work is in
 [0027-multi-review-scale-and-cost.md](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
 
+## Dispatch recovery
+
+Each reviewer's prompt goes out at most once per request id: `prepared` →
+durable `dispatching` → `send` → `sent`, with the send the next fallible step
+after the durable write. Two rules keep a recovered record honest
+(`review-fanout.ts`):
+
+- **`dispatching` is written only by the reviewer's own commit.** Every save
+  serializes the whole panel, so the runner applies `dispatching` inside that
+  reviewer's turn in the serialized commit queue (and reverts it if the write
+  fails). A peer's earlier save can no longer make durable a request whose own
+  commit, and so whose send, then never happened.
+- **A recovered `dispatching` request is promoted only on proof.** The next
+  owner asks the provider's dispatch journal (`dispatchStatus`). `dispatched`,
+  or a result for this exact request id (the tool-transport slot, or a
+  structured result naming the request), moves it to `sent`. `lost` (the
+  provider restored the id without an outcome and refuses it for good) fails
+  the reviewer at once. Anything else parks it, and the idle-poll bound fails
+  it closed. It is never re-sent under a new id, and not under the same id
+  either: no bridge can yet prove an id never reached it
+  ([0223](../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md)).
+
+A restart notice names the request it cut short (`interruptedRequestId`, see
+[agent engines](agent-engines.md)), so a continuation that has been journaled
+but not yet started is not failed as a second restart. The Multi Review
+preparation, consolidation and Fix steps and Build Pipeline consolidation park
+an unconfirmed `dispatching` request the same way; they have one writer per
+request, so the first rule does not arise there.
+
+`review-fanout-interleaving.test.ts` checks both rules over seeded
+interleavings of commits, provider calls, cancellation, fence loss and backend
+restarts. Without a crash, a durable `dispatching` request that no send was
+ever attempted for fails the seed, and the fake provider starts half of all
+continuations late, so the status read still shows the restart they continue.
+
 ## Panel value measurements
 
 Three content-free measurements show what each reviewer adds and whether the

@@ -355,6 +355,13 @@ interface Turn {
   remainingRunning: number;
   outcome: TurnOutcome;
   finished: boolean;
+  /**
+   * False between the bridge journaling the request and the turn starting.
+   * Status in that window still describes the previous turn, as it does on
+   * the real bridges, which clear a restart notice only when the next turn
+   * starts.
+   */
+  started: boolean;
 }
 
 interface FakeSession {
@@ -422,10 +429,16 @@ export interface ReviewerLedger {
   acceptedKinds: PromptKind[];
   /**
    * Status reads answered while one of its sends was still in transit, so
-   * the answer described the previous turn. Only a takeover allows this: one
-   * owner's reviewer task awaits its own send before it reads status.
+   * the answer described the previous turn. The recovery gate makes this
+   * unreachable: a recovered `dispatching` request is observed only once the
+   * provider confirms it.
    */
   staleObservations: number;
+  /**
+   * Status reads answered after a request was journaled but before its turn
+   * started, so the answer described the previous turn (0112, item 2).
+   */
+  lateStartReads: number;
 }
 
 export interface InterleavingResult {
@@ -458,6 +471,11 @@ const FLUSH_ROUNDS = 64;
 
 export class InterleavingWorld {
   private readonly rng: SeededRandom;
+  /**
+   * Its own stream, so modelling late turn starts leaves every other draw,
+   * and so every seed's interleaving, as it was without them.
+   */
+  private readonly startRng: SeededRandom;
   private readonly plans = new Map<string, ReviewerPlan>();
   private readonly ledgers = new Map<string, ReviewerLedger>();
   private readonly sessions = new Map<string, FakeSession>();
@@ -495,6 +513,7 @@ export class InterleavingWorld {
 
   constructor(private readonly scenario: Scenario) {
     this.rng = new SeededRandom(scenario.seed ^ 0x5bd1e995);
+    this.startRng = new SeededRandom(scenario.seed ^ 0x27d4eb2f);
     this.limits = reviewFanoutConcurrency(scenario.concurrency);
     for (const plan of scenario.reviewers) {
       this.plans.set(plan.id, plan);
@@ -509,6 +528,7 @@ export class InterleavingWorld {
         unsentDispatches: [],
         acceptedKinds: [],
         staleObservations: 0,
+        lateStartReads: 0,
       });
     }
     this.committed = {
@@ -836,6 +856,9 @@ export class InterleavingWorld {
       remainingRunning: plan.runningPolls,
       outcome,
       finished: false,
+      // A continuation follows a restart notice, which is what a late start
+      // can be mistaken for.
+      started: kind !== "continuation" || this.startRng.chance(0.5),
     });
   }
 
@@ -876,18 +899,26 @@ export class InterleavingWorld {
   private observe(sessionId: string) {
     const session = this.session(sessionId);
     const plan = this.plans.get(session.reviewerId)!;
-    const turn = session.turns.at(-1);
+    const ledger = this.ledgers.get(session.reviewerId)!;
+    let turn = session.turns.at(-1);
     if (session.inTransit.size > 0) {
-      const ledger = this.ledgers.get(session.reviewerId)!;
       ledger.staleObservations += 1;
-      // See the restart `test.todo`: what the runner makes of it is a bug.
+      // The answer belongs to an earlier turn; nothing about it is this
+      // reviewer's own outcome.
       ledger.tainted = true;
     }
     if (turn && session.unreachableLeft > 0) {
       session.unreachableLeft -= 1;
       throw new ProviderUnreachableError(`${plan.agent} bridge is not reachable`);
     }
-    if (turn && !turn.finished) {
+    if (turn && !turn.started) {
+      // Journaled, not started: this read still sees the previous turn, and
+      // the next one sees this turn running.
+      turn.started = true;
+      ledger.lateStartReads += 1;
+      turn = session.turns.at(-2);
+      if (!turn?.finished) return { status: "idle" as const };
+    } else if (turn && !turn.finished) {
       if (turn.remainingRunning > 0) {
         turn.remainingRunning -= 1;
         return { status: "running" as const };
@@ -898,8 +929,11 @@ export class InterleavingWorld {
       throw new ProviderSessionFailedError(plan.agent, "usage limit reached");
     }
     if (turn?.outcome === "restart") {
+      // As the Claude and Codex bridges report it: naming the request whose
+      // turn the restart cut short.
       throw new ProviderSessionFailedError(plan.agent, RESTARTED, {
         interruption: "restart",
+        interruptedRequestId: turn.requestId,
       });
     }
     return { status: "idle" as const };
@@ -1074,8 +1108,7 @@ export class InterleavingWorld {
         if (owner !== this.current) {
           // "A lost fence still propagates": a pass that ran into the fence
           // should not report an outcome to an owner that no longer holds it.
-          // Counted, not a violation, while the `test.todo` documents a path
-          // that breaks it.
+          // Counted, so the regression test for the fixed path can assert it.
           this.fencedPassesResolved += 1;
           return;
         }
@@ -1255,13 +1288,23 @@ export class InterleavingWorld {
       }
     }
     const finalReviewers = this.current.reviewers;
-    for (const ledger of this.ledgers.values()) {
+    for (const [reviewerId, ledger] of this.ledgers) {
       ledger.unsentDispatches = ledger.durableDispatches.filter((requestId) => {
         const attempts = ledger.sendAttempts.get(requestId);
         return !attempts || attempts.calls === attempts.refused;
       });
-      // What follows depends on provider reconciliation the fake does not
-      // model; see the `test.todo` in the test file.
+      // Without a crash, the reviewer's own commit is followed by its send
+      // before anything else can happen, so a durable `dispatching` nobody
+      // sent was written by a peer's save (0112).
+      if (!this.fired.includes("crash")) {
+        for (const requestId of ledger.unsentDispatches) {
+          if (!ledger.sendAttempts.has(requestId)) {
+            this.violate(`${reviewerId} held a durable dispatching its own commit never wrote`);
+          }
+        }
+      }
+      // The provider cannot prove such a request never arrived, so it parks
+      // and fails closed: either outcome is allowed.
       if (ledger.unsentDispatches.length > 0) ledger.tainted = true;
     }
     await this.restartOverSettledState();

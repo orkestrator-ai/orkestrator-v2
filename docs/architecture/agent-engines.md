@@ -1099,6 +1099,16 @@ session, under a fresh request id and result slot
     `sdk-compatibility.test.ts`). A non-zero exit is not a restart, because it
     is as likely a launch or sign-in fault.
 
+  Both bridges also name the request the restart cut short
+  (`interruptedRequestId`): Codex from its dispatch journal record for the
+  interrupted turn, Claude from the request id the `turnInFlight` mark (or the
+  killed turn) carries. Status is per session, so until the continuation's
+  turn starts the notice still describes the earlier request; given the
+  watched request id, `readProviderStatus` reads a notice that names another
+  request as "this request's turn has not settled" (`idle`,
+  `turnSettled: false`) instead of a failure. A bridge or mark that predates
+  the field names nothing, and the notice is taken at face value.
+
   The other bridges report none yet, so their cut-short turns fail as before.
   A step or reviewer whose bridge is unreachable keeps its state and
   reconnects on the next pass, so a bridge that died and came back is read

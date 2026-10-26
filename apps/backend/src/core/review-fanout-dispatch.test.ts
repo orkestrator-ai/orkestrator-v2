@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
@@ -32,6 +33,7 @@ function harness(
   const sends: Array<{ sessionId: string; options: Record<string, unknown> }> = [];
   const attached: Array<{ sessionId: string; options?: Record<string, unknown> }> = [];
   const saves: ReviewerRecord[] = [];
+  const abandoned: string[] = [];
   const provider = {
     async createSession() {
       return "unused";
@@ -76,7 +78,9 @@ function harness(
       return "Inspect the immutable review package";
     },
     async resolveUnattendedInteractions() {},
-    async abandonSession() {},
+    async abandonSession(_reviewer, sessionId) {
+      abandoned.push(sessionId);
+    },
     progress: new MultiReviewProgressTracker(),
   };
   return {
@@ -86,6 +90,7 @@ function harness(
     sends,
     attached,
     saves,
+    abandoned,
     policyReads: () => policyReads,
     rejectPolicy(value: boolean) {
       rejectPolicy = value;
@@ -181,7 +186,7 @@ describe("review fan-out dispatch preparation", () => {
 });
 
 describe("recovered reviewer dispatch", () => {
-  test.each(["unknown", "lost", "throws", "unsupported"] as const)(
+  test.each(["unknown", "throws", "unsupported"] as const)(
     "parks %s acceptance without spending another turn",
     async (acceptance) => {
       const h = harness("build");
@@ -213,6 +218,68 @@ describe("recovered reviewer dispatch", () => {
       expect(h.sends).toHaveLength(0);
     },
   );
+
+  test("a lost request fails at once without spending another turn", async () => {
+    const h = harness("build");
+    h.reviewer.dispatchState = "dispatching";
+    h.provider.dispatchStatus = async () => "lost";
+    h.provider.structured = async () => null;
+    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+    expect(h.reviewer).toMatchObject({
+      status: "failed",
+      requestId: "review-request",
+      dispatchState: "dispatching",
+    });
+    expect(h.reviewer.error).toContain("lost in a provider restart");
+    expect(h.abandoned).toEqual(["review-session"]);
+    expect(h.sends).toHaveLength(0);
+  });
+
+  test.each(["unknown", "lost"] as const)(
+    "a structured result for the exact request proves a %s dispatch ran",
+    async (acceptance) => {
+      const h = harness("build");
+      h.reviewer.dispatchState = "dispatching";
+      h.provider.dispatchStatus = async () => acceptance;
+      let resultRequest = "an-earlier-request";
+      h.provider.structured = async <T>() =>
+        ({
+          ok: true,
+          provider: "opencode",
+          requestId: resultRequest,
+          value: {},
+        }) as StructuredOutputResult<T>;
+      h.provider.status = async () => "running";
+      const runner = new ReviewFanoutRunner(h.host);
+      // Another request's result proves nothing about this one.
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer.status).toBe(acceptance === "lost" ? "failed" : "running");
+      if (acceptance === "lost") return;
+      expect(h.reviewer.dispatchState).toBe("dispatching");
+
+      resultRequest = "review-request";
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
+      expect(h.sends).toHaveLength(0);
+    },
+  );
+
+  test("a submitted tool result proves a dispatch the provider retired", async () => {
+    const h = harness("build");
+    h.reviewer.dispatchState = "dispatching";
+    h.reviewer.resultTransport = "tool-v1";
+    h.provider.dispatchStatus = async () => "lost";
+    const read: string[] = [];
+    h.host.readResult = async <T>(requestId: string) => {
+      read.push(requestId);
+      return { ok: true, requestId, value: {} } as T;
+    };
+    h.provider.status = async () => "running";
+    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+    expect(read[0]).toBe("review-request");
+    expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
+    expect(h.sends).toHaveLength(0);
+  });
 
   test("acceptance promotes the same request and clears the uncertainty poll budget", async () => {
     const h = harness("build");

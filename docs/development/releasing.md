@@ -86,6 +86,23 @@ desktop apps update to the same release. The step is skipped when the version
 is already on npm. Pass `mise run release:publish -- --skip-npm` to leave npm
 alone.
 
+`bun publish` asks for npm web authentication on every publish, even when
+`npm whoami` succeeds. It prints an `https://www.npmjs.com/auth/cli/...` URL
+and polls until someone approves it in a browser. It does not need a TTY. If
+nobody approves within about five minutes, it fails with
+`404 Not Found: .../-/v1/done` and nothing is published. An agent should:
+
+- start `mise run release:publish 2>&1; echo "EXIT=$?"` as a background task;
+- wait for the auth URL with a bounded poll of the output, for example
+  `for i in $(seq 1 80); do grep -qE 'npmjs.com/auth|EXIT=' "$F" && break; sleep 3; done`;
+- give the URL to the user straight away, and wait for `EXIT=` with another
+  bounded poll or by ending the turn.
+
+Do not pipe input into the command (such as `sleep 900 | mise run
+release:publish`). The pipeline outlives the publish, so `EXIT=` is not written
+until the input command ends. An unbounded foreground `until grep ...` loop
+then blocks the agent's turn until the tool timeout.
+
 After publishing a Stable release, check the register in
 [version-compatibility.md](../architecture/version-compatibility.md#register)
 for compatibility paths whose removal condition the moving floor has now met,

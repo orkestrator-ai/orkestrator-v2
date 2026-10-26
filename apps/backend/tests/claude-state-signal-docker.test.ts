@@ -15,14 +15,15 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures.js";
 
 // Build this checkout with `mise run docker:build:dev`; never use `latest`.
+// The Linux Engine workflow passes its per-run qualification image.
 const image = process.env.ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE;
 const dockerTest = image ? test : test.skip;
 
 dockerTest(
   "real container hooks reach the production signal route and recover dropped rings",
   async () => {
-    if (!image || !image.startsWith("orkestrator-v2:dev-"))
-      throw new Error("Use this checkout's development image");
+    if (!image || !/^orkestrator-v2:(dev|qualification)-/.test(image))
+      throw new Error("Use this checkout's development or qualification image");
     const dir = await mkdtemp(join(tmpdir(), "ork-state-signal-docker-"));
     const storage = new StorageService(dir);
     await storage.init();

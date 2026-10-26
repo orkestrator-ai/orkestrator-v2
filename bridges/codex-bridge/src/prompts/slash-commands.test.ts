@@ -10,6 +10,8 @@ import {
   resolveConversationMode,
   summarizePromptTemplate,
   wrapPromptForConversationMode,
+  stripPlanModePreamble,
+  PLAN_MODE_PREAMBLE,
 } from "./slash-commands.js";
 import {
   expandTemplateArguments,
@@ -84,6 +86,24 @@ describe("steer parsing and prompt shaping", () => {
     const planned = wrapPromptForConversationMode("Plan it", "plan");
     expect(planned).toContain("<system-reminder>");
     expect(planned).toEndWith("\n\nPlan it");
+  });
+
+  test("strips only the exact plan-mode preamble it wrote", () => {
+    for (const prompt of ["Plan it", "", "<system-reminder>mine</system-reminder>\n\nPlan it"]) {
+      expect(stripPlanModePreamble(wrapPromptForConversationMode(prompt, "plan"))).toBe(prompt);
+    }
+    // The rollout text is trimmed, which drops the separator of an empty prompt.
+    expect(stripPlanModePreamble(PLAN_MODE_PREAMBLE)).toBe("");
+    // A user's own reminder, a near copy of the preamble, or the preamble
+    // anywhere but the start, all stay exactly as written.
+    const kept = [
+      "<system-reminder>You are in Orkestrator plan mode.</system-reminder>\n\nPlan it",
+      PLAN_MODE_PREAMBLE.replace("read-only", "read only") + "\n\nPlan it",
+      `Look at this:\n${PLAN_MODE_PREAMBLE}\n\nPlan it`,
+      ` ${PLAN_MODE_PREAMBLE}\n\nPlan it`,
+      `${PLAN_MODE_PREAMBLE}Plan it`,
+    ];
+    for (const text of kept) expect(stripPlanModePreamble(text)).toBe(text);
   });
 
   test("builds bare text or ordered text-and-image user input", () => {

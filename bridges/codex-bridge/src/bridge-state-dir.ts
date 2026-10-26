@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 /**
  * Where the bridge keeps its conversation bookkeeping: the records that tie a
  * bridge session to its thread, dispatch journals, session titles, change
- * evidence and command changes.
+ * evidence, command changes and typed prompts.
  *
  * Normally `$CODEX_HOME/orkestrator-bridge`. On an added Codex account the
  * backend sets `CODEX_BRIDGE_STATE_DIR` to the host login's directory, because

@@ -38,6 +38,8 @@ import {
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import { overlayCommandChanges, readCommandChanges } from "../sessions/command-changes.js";
+import { readTypedPrompts, typedPromptFor } from "../sessions/typed-prompts.js";
+import { stripPlanModePreamble } from "../prompts/slash-commands.js";
 import { cellOutputText, codeModeCellOutcome } from "../sessions/refused-cell-tail.js";
 import {
   codeModeMcpCalleeKey,
@@ -896,10 +898,17 @@ function isSyntheticPersistedUserText(text: string): boolean {
  * bounded `<attached-files source="orkestrator">` marker into the prompt text
  * for exactly this reason, and that marker is what rebuilds the attachment
  * rows. An unqualified block is text the user wrote and is left alone.
+ *
+ * A user message shows what the live row showed: the plan-mode preamble the
+ * bridge wrapped it in is stripped exactly, and `typedPrompt`, given the
+ * joined text as sent, answers the typed form of a prompt the bridge rewrote
+ * (a command or a recovered-context turn). Without an answer, the sent text
+ * is shown, which is all a thread from another client has.
  */
 export function extractPersistedMessageContent(
   content: unknown,
   role: MessageRole,
+  options: { typedPrompt?: (sentText: string) => string | undefined } = {},
 ): { text: string; attachments: NormalizedPart[] } | null {
   if (!Array.isArray(content)) {
     return null;
@@ -935,8 +944,15 @@ export function extractPersistedMessageContent(
 
   const { text, parts } =
     role === "user"
-      ? extractAttachmentTags(stripCoordinatorContext(joined))
+      ? extractAttachmentTags(stripCoordinatorContext(stripPlanModePreamble(joined)))
       : { text: joined, parts: [] as NormalizedPart[] };
+
+  // The live row's own text, already without the coordinator context. It is
+  // what the user saw when they sent it, so no tag in it drops the message.
+  const typed = role === "user" ? options.typedPrompt?.(joined) : undefined;
+  if (typed !== undefined) {
+    return typed || parts.length > 0 ? { text: typed, attachments: parts } : null;
+  }
 
   // An attachment-only prompt has no text left after stripping, but it is still
   // a message the user sent.
@@ -1332,6 +1348,9 @@ async function replayPersistedRollout(
     if (!indexed) return null;
   }
 
+  // What the user typed for the turns whose prompt this bridge rewrote; the
+  // rollout holds only what was sent.
+  const typedPrompts = await readTypedPrompts(getCodexHomeDir(), threadId);
   const isCollaborationRecord = createCollaborationRecordFilter();
   const collaborationRecords: TranscriptRecord[] = [];
   /**
@@ -1730,7 +1749,9 @@ async function replayPersistedRollout(
         : null;
     if (!role) return;
 
-    const persisted = extractPersistedMessageContent(payload.content, role);
+    const persisted = extractPersistedMessageContent(payload.content, role, {
+      typedPrompt: (sentText) => typedPromptFor(typedPrompts, currentTurnId, sentText),
+    });
     if (!persisted) return;
     const { text, attachments } = persisted;
 

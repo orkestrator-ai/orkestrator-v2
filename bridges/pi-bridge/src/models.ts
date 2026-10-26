@@ -23,6 +23,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentModel, NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
 import { CATALOG_TIMEOUT_MS, MAX_MODEL_ID_BYTES, MAX_MODELS } from "./config.js";
 import { modelRuntime } from "./runtime.js";
@@ -306,7 +307,8 @@ export interface ThinkingLevelDefaults {
  * selection is a routine state (a provider signed out, a catalogue moved on),
  * and callers fall back rather than failing the session that was merely
  * opened. The fallback is the first of `preferredModelIds` a signed-in
- * provider serves, then the first available model.
+ * provider serves, then {@link lastResortModelId}: the first available model,
+ * or for a ChatGPT login the newest model that login runs.
  */
 export async function resolveModel(
   modelId: string | undefined,
@@ -327,15 +329,78 @@ export async function resolveModel(
     CATALOG_TIMEOUT_MS,
     "Pi model availability read timed out",
   ).catch(() => []);
-  const preferred = firstPreferred(
-    preferredModelIds,
-    available.map((model) => composeModelId(model.provider, model.id)),
-  );
+  const availableIds = available.map((model) => composeModelId(model.provider, model.id));
+  const chosen =
+    firstPreferred(preferredModelIds, availableIds) ?? lastResortModelId(runtime, availableIds);
   const match =
-    preferred === undefined
+    chosen === undefined
       ? undefined
-      : available.find((model) => composeModelId(model.provider, model.id) === preferred);
+      : available.find((model) => composeModelId(model.provider, model.id) === chosen);
   return (match ?? available[0]) as Model<Api> | undefined;
+}
+
+/**
+ * The provider whose built-in catalogue is pi-ai's list of the models the
+ * ChatGPT backend serves.
+ *
+ * `openai-codex` talks to that backend directly, so pi-ai lists only what a
+ * ChatGPT account can run there, and regenerates the list with every release.
+ */
+const CHATGPT_BACKEND_PROVIDER = "openai-codex";
+
+/**
+ * Providers a "Sign in with ChatGPT" login can sit under: `openai` itself
+ * since Pi 1.2.0, and the legacy `openai-codex`.
+ */
+const CHATGPT_LOGIN_PROVIDERS: ReadonlySet<string> = new Set(["openai", CHATGPT_BACKEND_PROVIDER]);
+
+/**
+ * The models a ChatGPT subscription login on `providerId` should start on,
+ * best first, or none when the provider is not signed in that way.
+ *
+ * Under `openai`, a ChatGPT login lists the whole OpenAI catalogue, starting
+ * with `gpt-4`, and the ChatGPT backend refuses many of those ("not supported
+ * when using Codex with a ChatGPT account"). Pi's own fallback table names
+ * `openai/gpt-5.5`, which it refuses too, and the table is not exported. The
+ * backend's catalogue is the one list Pi ships of what such a login runs, so
+ * the candidates are its ids under `providerId`. It is ordered by id, which
+ * puts the newest family last, so the candidates run newest first.
+ */
+export function chatGptLoginModelIds(
+  runtime: Pick<ModelRuntime, "getModels" | "isUsingSubscription">,
+  providerId: string,
+): string[] {
+  if (!CHATGPT_LOGIN_PROVIDERS.has(providerId) || !runtime.isUsingSubscription(providerId)) {
+    return [];
+  }
+  return runtime
+    .getModels(CHATGPT_BACKEND_PROVIDER)
+    .map((model) => composeModelId(providerId, model.id))
+    .reverse();
+}
+
+/**
+ * Where a session starts when no selection and no preferred id is offered:
+ * the catalogue's first model, unless a ChatGPT subscription login serves it.
+ *
+ * Then it is the newest model that login is known to run and the catalogue
+ * offers. Any other provider keeps the first model, so this changes only the
+ * case where the first model is one the login refuses. Best-effort: a runtime
+ * that cannot answer leaves the first model.
+ */
+function lastResortModelId(
+  runtime: Pick<ModelRuntime, "getModels" | "isUsingSubscription">,
+  availableIds: readonly string[],
+): string | undefined {
+  const first = availableIds[0];
+  if (first === undefined) return undefined;
+  try {
+    return (
+      firstPreferred(chatGptLoginModelIds(runtime, modelProviderId(first)), availableIds) ?? first
+    );
+  } catch {
+    return first;
+  }
 }
 
 /**
@@ -391,7 +456,7 @@ function isThinkingLevel(value: string | undefined): value is ModelThinkingLevel
  * the user chose it, the catalogue read may have been partial, and the runtime
  * is the authority on whether the pair is valid. With no selection, the
  * composer opens on the first of `preferredModelIds` the catalogue offers,
- * else on its first model.
+ * else on {@link lastResortModelId}.
  */
 export async function hydrateComposer(
   composer: NativeAgentComposerState,
@@ -399,13 +464,11 @@ export async function hydrateComposer(
   preferredModelIds: readonly string[] = [],
 ): Promise<NativeAgentComposerState> {
   const models = await listModels(defaults);
+  const modelIds = models.map((model) => model.id);
   const selectedModelId =
     composer.selectedModelId ??
-    firstPreferred(
-      preferredModelIds,
-      models.map((model) => model.id),
-    ) ??
-    models[0]?.id;
+    firstPreferred(preferredModelIds, modelIds) ??
+    (await lastResortCatalogueModelId(modelIds));
   const selected = models.find((model) => model.id === selectedModelId);
   return {
     ...composer,
@@ -414,6 +477,15 @@ export async function hydrateComposer(
     selectedReasoningId: composer.selectedReasoningId ?? selected?.defaultReasoningId ?? undefined,
     fastModeAvailable: false,
   };
+}
+
+/** {@link lastResortModelId} for a catalogue read without the runtime at hand. */
+async function lastResortCatalogueModelId(
+  modelIds: readonly string[],
+): Promise<string | undefined> {
+  if (modelIds.length === 0) return undefined;
+  const runtime = await modelRuntime().catch(() => undefined);
+  return runtime ? lastResortModelId(runtime, modelIds) : modelIds[0];
 }
 
 function boundId(value: string): string {

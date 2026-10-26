@@ -34,8 +34,13 @@ rather than a name, and "signed in" is one answer per provider.
   provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
   catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
   straight to the first model: a login can refuse models its provider lists,
-  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
-  and under the legacy `openai-codex`). Project
+  and a ChatGPT login under `openai` (Pi 1.2.0 and later) refuses the first
+  one. So when the first model belongs to a ChatGPT subscription login
+  (`openai` with OAuth, or the legacy `openai-codex`), `lastResortModelId` in
+  `models.ts` starts on the newest model of pi-ai's ChatGPT-backend catalogue
+  (the `openai-codex` provider's built-in list) that the login offers. That
+  list is Pi's data, not ours; `models.test.ts` pins the premise against the
+  real SDK, so recheck it on every Pi bump. Project
   settings count only when the session trusts the project.
 - Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
   `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the

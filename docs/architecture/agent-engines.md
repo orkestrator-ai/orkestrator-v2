@@ -910,9 +910,12 @@ user's own credentials, so:
   `defaultModel` in `settings.json`, what `/model` writes) when a signed-in
   provider serves it, the way `pi` itself starts, and only then on the
   catalogue's first model. A login can refuse a model its provider lists, so
-  the first model is a last resort. An agent-test profile also receives the
-  host's saved default, which it uses when its own settings name no default
-  that a signed-in provider serves.
+  the first model is a last resort, and a ChatGPT subscription login (under
+  `openai`, or the legacy `openai-codex`) whose catalogue starts the list
+  starts instead on the newest model in pi-ai's ChatGPT-backend catalogue
+  (`chatGptLoginModelIds` in `bridges/pi-bridge/src/models.ts`). An
+  agent-test profile also receives the host's saved default, which it uses
+  when its own settings name no default that a signed-in provider serves.
 - **"Signed in" is per provider.** `GET /global/auth` reports each provider's
   status; there is no single account. Sign-in itself is not served: Pi's login
   is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no

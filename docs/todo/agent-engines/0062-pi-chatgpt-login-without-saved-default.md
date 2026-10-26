@@ -1,56 +1,145 @@
 # Pi on a ChatGPT login with no saved default starts on a refused model
 
-Checked against `main` at `459d2944` (2026-10-23).
+Checked against `main` at `930189337` (2026-10-26), Pi SDK and CLI 1.4.0.
 
 Split out of the open question left by
 [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md).
 A Pi tab with no explicit model starts on Pi's saved default, then on
-`PI_BRIDGE_DEFAULT_MODEL`, then on the catalogue's first model
-(`defaultModelIds` in `bridges/pi-bridge/src/agent-session.ts`). A user who
-signed in to Pi with ChatGPT and never saved a default reaches that last
-step. There the first model is one the login refuses, so the tab's first
-prompt fails before the model answers.
+`PI_BRIDGE_DEFAULT_MODEL`, then on a last resort (`defaultModelIds` in
+`bridges/pi-bridge/src/agent-session.ts`, `lastResortModelId` in
+`bridges/pi-bridge/src/models.ts`). A user who signed in to Pi with ChatGPT
+and never saved a default reaches that last step. Until 2026-10-26 it was the
+catalogue's first model, which that login refuses, so the tab's first prompt
+failed before the model answered. The code fix is in. What is left is a live
+run on an `openai` ChatGPT login, which this host does not have.
 
 ## Current state
 
-- In Pi 1.2.0, "Sign in with ChatGPT" is an OAuth login on the `openai`
-  provider itself (`openaiProvider` in `@earendil-works/pi-ai`), stored under
-  `openai` in `auth.json`. The older `openai-codex` provider is still there,
-  and pi-ai now labels it "(legacy)".
-- With that login, the `openai` catalogue lists the whole OpenAI chat
-  catalogue (it hides only classifier models), starting with `gpt-4`. The
-  ChatGPT backend refuses several of them with `The '<model>' model is not
-  supported when using Codex with a ChatGPT account`. Seen live on
-  2026-10-23: `gpt-4` and `gpt-5.5` were refused, and `gpt-6.1-sol` ran
+- In Pi 1.2.0 and later, "Sign in with ChatGPT" is an OAuth login on the
+  `openai` provider itself (`openaiProvider` in `@earendil-works/pi-ai`),
+  stored under `openai` in `auth.json`, with `isSubscription: true`. Its
+  tokens go to `api.openai.com` with the `chatgpt.tokens.use.direct` scope.
+  The older `openai-codex` provider is still there, labelled "(legacy)"; it
+  talks to `chatgpt.com/backend-api` and has its own OAuth client.
+- With an `openai` ChatGPT login, the catalogue lists the whole OpenAI chat
+  catalogue (only classifier models are hidden), starting with `gpt-4`.
+  Confirmed against the pinned 1.4.0 SDK on 2026-10-26 (offline, fake
+  credential): 42 models, `openai/gpt-4` first,
+  `isUsingSubscription("openai")` true. The ChatGPT backend refuses several of
+  them with `The '<model>' model is not supported when using Codex with a
+  ChatGPT account`. Seen live on 2026-10-23: `gpt-4` and `gpt-5.5` were
+  refused, and `gpt-6.1-sol` ran
   ([0054](../cross-cutting/0054-agent-test-pi-default-model.md), runs 1–3).
-  A legacy `openai-codex` login lists `gpt-5.3-codex-spark` first and
-  refuses that too.
+- A legacy `openai-codex` login no longer starts on a refused model. Pi 1.4.0
+  dropped `gpt-5.3-codex-spark` from that catalogue, which now lists
+  `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`,
+  `gpt-6-sol` and `gpt-6.1-sol`. The pi-ai generator sorts it by id, so the
+  newest family comes last.
 - Pi's own fallback table (`defaultModelPerProvider` in pi-coding-agent's
-  `model-resolver.js`) names `gpt-5.5` for `openai` and `gpt-6.1-sol` for
-  `openai-codex`. The table is not exported from the package, so the bridge
-  cannot reuse it (0054, decision 3).
-- Workarounds today: pick a model in the tab's picker, or save one with
+  `dist/core/model-resolver.js`, still not exported in 1.4.0; the package's
+  `exports` map has only `.` and `./rpc-entry`) names `gpt-5.5` for `openai`
+  and `gpt-6.1-sol` for `openai-codex`. `findInitialModel` walks the table in
+  key order, and `openai` comes before `openai-codex`. So following Pi
+  upstream would not fix an `openai` ChatGPT login: Pi's own pick for it is a
+  model it refuses.
+- **Fixed (2026-10-26): the last resort skips the refused first model.**
+  `lastResortModelId` (`bridges/pi-bridge/src/models.ts`) replaces "the first
+  available model" in both `resolveModel` (the SDK attach and
+  `applyComposerToSession`) and `hydrateComposer` (create, resume, retried
+  hydration). When the first model belongs to a ChatGPT subscription login,
+  meaning `openai` with an OAuth subscription credential or the legacy
+  `openai-codex` (`chatGptLoginModelIds`), the session starts on the newest
+  id of pi-ai's ChatGPT-backend catalogue (the `openai-codex` provider's
+  built-in list, read through `ModelRuntime.getModels`) that the login's
+  provider offers. On Pi 1.4.0 that is `openai/gpt-6.1-sol` (or
+  `openai-codex/gpt-6.1-sol`). Every other case keeps the first model: an
+  API key on `openai`, any other provider first in the catalogue, a catalogue
+  that offers none of the backend's ids, or a runtime that cannot answer.
+  An explicit selection, Pi's saved default and `PI_BRIDGE_DEFAULT_MODEL`
+  still come first, even when they name a model the login refuses.
+- Evidence:
+  - `bridges/pi-bridge/src/models.test.ts` § "ChatGPT login fallback" (fake
+    runtime): an `openai` ChatGPT catalogue starting `gpt-4, gpt-5.5` opens
+    on `openai/gpt-6.1-sol` from `hydrateComposer` and `resolveModel`, with
+    no preference and with a signed-out one. It takes the next newest when
+    the newest is missing. An explicit selection and a saved default (even
+    the refused `openai/gpt-5.5`) win. An API key keeps `openai/gpt-4`.
+    Another provider first is kept. A catalogue with none of the backend's
+    ids, and a runtime whose `isUsingSubscription` throws, keep the first
+    model. A provider no ChatGPT login uses gets no candidates.
+  - Same file, § "ChatGPT login fallback against the pinned SDK": a real
+    1.4.0 `ModelRuntime` over a temporary `auth.json` (fake tokens that never
+    expire, no network). An `openai` OAuth login's catalogue starts on
+    `openai/gpt-4` (the premise) and opens on `openai/gpt-6.1-sol`, from both
+    `hydrateComposer` and `resolveModel`. Every backend id is in the `openai`
+    catalogue that login lists. A legacy `openai-codex` login opens on
+    `openai-codex/gpt-6.1-sol`. An `openai` API key keeps `openai/gpt-4`.
+  - `bridges/pi-bridge/src/agent-session-default-model.test.ts`
+    "constructs a ChatGPT login's session with no saved default on a model it
+    runs": a real SDK session built by `ensureSession` attaches on
+    `openai/gpt-6.1-sol` and carries it to `dispatchPrompt`.
+  - Mutation check: making `lastResortModelId` return the first model fails
+    four of the new tests (both fake-runtime selection tests and both real
+    SDK ChatGPT tests).
+  - Live, 2026-10-26, this host's legacy `openai-codex` ChatGPT login, in a
+    temporary `HOME` and `PI_CODING_AGENT_DIR` holding a copy of that one
+    credential with its refresh token replaced (so nothing could rotate the
+    host's token; the access token had 22 h left). The host's `auth.json`
+    and `settings.json` hashes matched before and after every run.
+    - The pinned `pi` (`bun …/pi-coding-agent/dist/cli.js -p --mode json
+      --no-session`) with no `--model` and no saved default answered "OK" on
+      `openai-codex/gpt-6.1-sol`. `--model openai-codex/gpt-5.6-luna` and
+      `--model openai-codex/gpt-6-sol` answered "OK".
+      `--model openai-codex/gpt-5.5` failed with `Codex error: The 'gpt-5.5'
+      model is not supported when using Codex with a ChatGPT account.`
+    - The bridge's own code in process (`createSession`, `ensureSession`,
+      `dispatchPrompt` from `bridges/pi-bridge/src`) on the same temporary
+      directory with no saved default: the catalogue's first model was
+      `openai-codex/gpt-5.6-luna`, the composer and the attached session
+      chose `openai-codex/gpt-6.1-sol`, and the turn ended idle with the
+      answer "OK" from `openai-codex/gpt-6.1-sol`.
+- Workarounds, still valid: pick a model in the tab's picker, or save one with
   `/model` in `pi`, which the bridge then honours.
 
 ## Outstanding work
 
 ### Code
 
-1. **Start a ChatGPT-backed Pi login on a model it runs** when no default is
-   saved. Candidates, none chosen yet:
-   - (a) Ask Pi upstream to export `defaultModelPerProvider` or
-     `findInitialModel`, or to order or filter a subscription login's
-     catalogue to the models it accepts. The bridge would then follow Pi.
-   - (b) After a turn fails with the "not supported when using Codex with a
-     ChatGPT account" error, steer the picker away from that model. This
-     needs a recognisable error, not message matching.
-   - (c) Keep a small bridge-side preference per subscription provider. It
-     drifts from Pi on every release, which is why 0054 rejected it.
+1. ~~**Start a ChatGPT-backed Pi login on a model it runs** when no default
+   is saved.~~ Done 2026-10-26: neither (a), (b) nor (c) as listed, but a
+   fourth option, (d), using Pi's own ChatGPT-backend catalogue. See Current
+   state and decision 1.
 
 ### Qualification
 
-- A fresh agent-test profile whose host has a ChatGPT `openai` login and no
-  saved default should answer its first Pi prompt with no model override.
+- **A fresh agent-test profile whose host has a ChatGPT `openai` login and no
+  saved default should answer its first Pi prompt with no model override.**
+  Still open. This host's Pi login on 2026-10-26 is the legacy
+  `openai-codex` (plus an `opencode-go` API key), not an `openai` ChatGPT
+  login, and its `settings.json` saves `openai-codex/gpt-5.5`, so an
+  agent-test profile here would start on that saved default (carried as
+  `PI_BRIDGE_DEFAULT_MODEL`), not on the fallback. The user's `~/.pi` must not
+  be changed for a test. The `openai` login uses a different OAuth client and
+  token scope from the legacy one, so the legacy token cannot stand in for
+  it. To close this:
+  1. In a disposable directory, run the pinned `pi` with
+     `HOME=<tmp> PI_CODING_AGENT_DIR=<tmp>/agent` and `/login` → OpenAI →
+     "Sign in with ChatGPT". Save no default.
+  2. From `bridges/pi-bridge`, with the same `HOME` and
+     `PI_CODING_AGENT_DIR`, `PI_AGENT_DIR=<tmp>/agent`,
+     `PI_SESSION_DIR=<tmp>/sessions` and no `PI_BRIDGE_DEFAULT_MODEL`, run a
+     script that calls `createSession`, `ensureSession` and `dispatchPrompt`
+     (the 2026-10-26 legacy check above). Expect the catalogue's first model
+     `openai/gpt-4`, a selected and attached `openai/gpt-6.1-sol`, and an
+     answer.
+  3. For the agent-test path itself, on a host whose own `~/.pi` already has
+     an `openai` ChatGPT login and no saved default, run
+     `mise run test:agent:coordinator --credential-source pi` (rebuild the
+     bridges first; see
+     [0056](../cross-cutting/0056-agent-test-stale-bridge-builds.md)) and
+     record that the Pi session files show `openai/gpt-6.1-sol`. If no such
+     host exists, the bridge-level run in step 2 is the closest evidence;
+     record it and close this item with that caveat.
 
 ## Constraints and rationale
 
@@ -58,20 +147,100 @@ prompt fails before the model answers.
   about the last fallback.
 - Never write the user's `~/.pi` settings to choose a model for them.
 
+## Assumptions and decisions
+
+1. **Use Pi's ChatGPT-backend catalogue for a ChatGPT login's last resort.**
+   - Options: (a) wait for Pi upstream to export `defaultModelPerProvider` or
+     `findInitialModel`, or to filter a subscription login's catalogue;
+     (b) after a turn fails with "not supported when using Codex with a
+     ChatGPT account", steer the picker away from that model; (c) keep a
+     bridge-side preferred model per subscription provider; (d) when the
+     first model belongs to a ChatGPT subscription login, start on the newest
+     model of the `openai-codex` provider's built-in catalogue that the login
+     offers.
+   - Choice: (d).
+   - Why: (a) does not fix the case at all. Pi 1.4.0's own table names
+     `openai/gpt-5.5` for this login, which the backend refuses, and the
+     table is still not exported. (b) still fails the first prompt, the error
+     arrives only as provider text (no structured code), and it needs a
+     second turn. (c) drifts from Pi on every release, which is why 0054
+     rejected it. pi-ai's `openai-codex` catalogue is the one list Pi ships of
+     models the ChatGPT backend serves, and the generator refreshes it each
+     release, so (d) follows Pi's data without copying any model id.
+   - Pros: the first prompt runs on a fresh ChatGPT login. No model id is
+     hard-coded in the bridge, only two provider ids. Nothing changes for an
+     API key, for other providers, or when anything names a model. The
+     pinned-SDK tests fail on a bump that breaks the premise.
+   - Cons: it relies on the legacy provider's catalogue staying in pi-ai and
+     staying a subset of the `openai` one. If pi-ai drops `openai-codex`, the
+     fallback quietly reverts to the first model (the SDK test then fails).
+     The two provider ids are hard-coded.
+2. **"Newest" is the last id in the backend catalogue.**
+   - Options: (a) reverse catalogue order; (b) Pi's own
+     `defaultModelPerProvider["openai-codex"]`, imported from the SDK's
+     internal `dist/core/model-resolver.js` by file URL, which the exports map
+     otherwise blocks; (c) a heuristic such as the largest context window.
+   - Choice: (a).
+   - Why: pi-ai sorts the catalogue by id, so the newest version family sorts
+     last, and on 1.4.0 the result equals Pi's own pick for the legacy login
+     (`gpt-6.1-sol`), which ran live on both logins. (b) depends on a private
+     file path. (c) has no basis in Pi.
+   - Pros: no private import; one rule for both login kinds.
+   - Cons: within a family, alphabetical order picks a tier by name
+     (`gpt-5.6-terra` over `gpt-5.6-sol`) and a suffixed variant
+     (`-mini`) would sort after its base. The upgrade runbook now asks for a
+     recheck of the pick on every Pi bump.
+3. **Only when the catalogue's first model is the ChatGPT login's.** If
+   another provider's model comes first, that model is kept. It is what the
+   bridge chose before, and nothing says that provider refuses it. This keeps
+   the change to the one failing case; the cost is that a user signed in to
+   two providers may not start on the ChatGPT model, which is fine.
+4. **A refused saved default is not overridden.** The constraint says a saved
+   default keeps winning, and Pi's `pi` starts on it too. This host's own
+   saved default (`openai-codex/gpt-5.5`) is refused live, and it was not
+   changed; the user can fix it with `/model`. Filtering refused models out
+   of the picker was also rejected: an explicit selection must keep working,
+   and the only list of accepted models is the one used here.
+5. **Unknown login state degrades to the old behaviour.** A runtime that
+   cannot answer `isUsingSubscription` or `getModels` (test fakes, or a
+   future SDK change) leaves the first model rather than throwing on the
+   request path.
+6. **Live checks used a copy of the legacy credential with its refresh token
+   replaced,** in a temporary `HOME`. A refresh in a copy would rotate the
+   host's refresh token and sign the host's `pi` out; with the token replaced
+   a refresh could only fail. Only the access token was used (22 h left), and
+   the host files' hashes were checked unchanged after each run.
+7. **The terminal `pi` question is answered from code for `openai`, live for
+   the legacy login.** See Needs verification.
+
 ## Open questions
 
-- Which of (a)–(c)? (a) is cleanest, but it depends on Pi's release cadence.
+- None. Which of (a)–(c) was chosen: none; (d), decision 1.
 
 ## Needs verification
 
 - Whether `pi` in a terminal, on the same fresh login, also starts on
-  `gpt-5.5` and fails the same way. Its table says so; this was not run.
+  `gpt-5.5` and fails the same way. Partly answered 2026-10-26; the `openai`
+  half still needs the qualification run's login:
+  - For an `openai` ChatGPT login: yes by code. `findInitialModel` step 3
+    walks `defaultModelPerProvider` in key order, reaches `openai: "gpt-5.5"`
+    before `openai-codex`, finds it in the catalogue, and starts there. The
+    backend refused `openai/gpt-5.5` live on 2026-10-23 (0054 run 2). Not
+    run in a terminal: no `openai` ChatGPT login on this host. The
+    qualification run above can confirm it in passing (`pi -p` with no
+    `--model` in the same disposable directory).
+  - For a legacy `openai-codex` login: no. Live on 2026-10-26, `pi` with no
+    default started on `openai-codex/gpt-6.1-sol` and answered.
 
 ## Related
 
 - [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md)
 - [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)
+- [0172-multi-review-defaults-ignore-pi-saved-model.md](../coordinator-and-multi-review/0172-multi-review-defaults-ignore-pi-saved-model.md)
+  (a Multi Review row resolves an unset Pi model to the catalogue's first
+  model in the backend, before the bridge's fallback can apply)
 - [credentials-and-models.md](../../development/credentials-and-models.md) § Pi, Default model
+- [upgrade-agents.md](../../development/upgrade-agents.md) § Pi, step 6
 
 ## Replaces
 

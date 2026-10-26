@@ -13,6 +13,8 @@ import {
   type CommandHandoverDeps,
 } from "../electron/command-handover.js";
 
+import type { PreviewPartitionRetention } from "../electron/preview-partition-retention";
+
 const ids: Record<string, BackendId> = {
   local: "bk_mbp3" as BackendId,
   mini: "bk_mini" as BackendId,
@@ -141,17 +143,24 @@ describe("making another machine the command node", () => {
 
   test("nothing happens when the target already is the command node", async () => {
     const { calls, deps: handover } = deps({ current: "local" });
+    const handoverNodes = mock(async () => undefined);
+    const retention = { handoverNodes } as unknown as PreviewPartitionRetention;
     expect(await previewCommandHandover(handover, "local")).toEqual({
       kind: "already-command-node",
     });
     expect(
-      await handOverCommandNode(handover, {
-        targetConnectionId: "local",
-        connectionIds: [],
-        includeSelf: true,
-      }),
+      await handOverCommandNode(
+        handover,
+        {
+          targetConnectionId: "local",
+          connectionIds: [],
+          includeSelf: true,
+        },
+        retention,
+      ),
     ).toBeNull();
     expect(calls.some((entry) => entry.command === "hand_over_command")).toBe(false);
+    expect(handoverNodes).not.toHaveBeenCalled();
   });
 });
 

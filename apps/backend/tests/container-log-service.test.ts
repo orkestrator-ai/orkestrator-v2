@@ -198,6 +198,44 @@ describe("bounded bridge output", () => {
     expect(shell).toContain("setsid bun /opt/x/index.js > /tmp/x.log 2>&1 &");
   });
 
+  test("the writer writes a quiet producer's first line while its pipe stays open", async () => {
+    // A bridge prints a line now and then and never closes its output. Debian's
+    // mawk block-buffers a piped stdin, so without `-W interactive` no log file
+    // appeared at all until a few KiB had accumulated.
+    const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
+    const file = path.join(dir, "bridge.log");
+    const writer = Bun.spawn({
+      cmd: [
+        "bash",
+        path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh"),
+        file,
+      ],
+      stdin: "pipe",
+    });
+    try {
+      writer.stdin.write("first line\n");
+      writer.stdin.flush();
+      const deadline = Date.now() + 5_000;
+      let content = "";
+      while (Date.now() < deadline) {
+        content = (() => {
+          try {
+            return readFileSync(file, "utf8");
+          } catch {
+            return "";
+          }
+        })();
+        if (content) break;
+        await Bun.sleep(25);
+      }
+      expect(content).toBe("first line\n");
+    } finally {
+      writer.stdin.end();
+      await writer.exited;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the writer stays bounded on output without a single newline", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
     try {

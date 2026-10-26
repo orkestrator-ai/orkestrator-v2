@@ -5,6 +5,13 @@ import path from "node:path";
 import process from "node:process";
 
 import { parseEnvironmentBranchNamespace } from "../apps/backend/src/core/commands-agent-support";
+import {
+  ENVIRONMENT_CLEANUP_LEDGER_STORE,
+  ENVIRONMENT_CLEANUP_STEPS,
+  isEnvironmentCleanupExhausted,
+  MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
+  parseEnvironmentCleanupLedger,
+} from "../apps/backend/src/core/environment-cleanup-ledger";
 import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
 import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
@@ -119,6 +126,107 @@ function isAncestorOfMain(repository: string, ref: string): boolean {
   return ["refs/remotes/origin/main", "refs/heads/main"].some(
     (base) => run("git", ["-C", repository, "merge-base", "--is-ancestor", ref, base]).status === 0,
   );
+}
+
+/**
+ * Electron's `persist:` partitions for previews in a desktop profile: one per
+ * service (cleared by `PreviewPartitionRetention` once the service, its
+ * environment, node or connection is gone) and the shared legacy ones (one
+ * per window slot and connection, never cleared while the connection lives).
+ */
+export function previewPartitionRows(dataDir: string): ReportRow[] {
+  const partitions = path.join(dataDir, "Partitions");
+  const named = (prefix: string) =>
+    childDirectories(partitions).filter((directory) => path.basename(directory).startsWith(prefix));
+  let pending: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(path.join(dataDir, "preview-partitions-pending.json"), "utf8"),
+    );
+    if (Array.isArray(parsed)) pending = parsed.filter((name) => typeof name === "string");
+  } catch {
+    // No cleared partitions are waiting for the next start.
+  }
+  const service = named("orkestrator-preview-svc-");
+  const clearedService = service.filter((directory) => pending.includes(path.basename(directory)));
+  const shared = named("orkestrator-browser-previews-");
+  const clearedShared = shared.filter((directory) => pending.includes(path.basename(directory)));
+  return [
+    {
+      location: `${partitions}/orkestrator-preview-svc-*`,
+      bytes: diskUsage(service),
+      orphaned: `${clearedService.length} of ${service.length} cleared (${formatBytes(
+        diskUsage(clearedService),
+      )})`,
+      owner: "desktop (PreviewPartitionRetention)",
+      cleanup: "cleared when the service, node or connection goes; removed at the next start",
+    },
+    {
+      location: `${partitions}/orkestrator-browser-previews-*`,
+      bytes: diskUsage(shared),
+      orphaned: `${clearedShared.length} of ${shared.length} cleared (${formatBytes(
+        diskUsage(clearedShared),
+      )})`,
+      owner: "desktop (legacy URL tabs)",
+      cleanup: "only when the connection is forgotten; no retention window yet",
+    },
+  ];
+}
+
+/** Environment ids named in the cleanup column before the rest are counted. */
+const MAX_LISTED_CLEANUP_ENTRIES = 3;
+
+/**
+ * Deletions whose cleanup the reconciler has stopped retrying, read from the
+ * ledger store with the ledger's own parser and attempt cap. An entry whose
+ * environment record still exists belongs to interrupted-deletion recovery,
+ * not the reconciler, so it is not counted. `lastError` is stored redacted
+ * (a step and an error code), so it is shown as it is.
+ */
+export function environmentCleanupLedgerRow(
+  dataDir: string,
+  liveEnvironmentIds: ReadonlySet<string>,
+): ReportRow {
+  const entries = parseEnvironmentCleanupLedger(
+    readStorageDatabaseStore(dataDir, ENVIRONMENT_CLEANUP_LEDGER_STORE),
+  )
+    .filter((entry) => !liveEnvironmentIds.has(entry.environmentId))
+    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+  const exhausted = entries.filter(isEnvironmentCleanupExhausted);
+  const retrying = entries.length - exhausted.length;
+  let orphaned = `${exhausted.length} stopped retrying, ${retrying} retrying`;
+  let cleanup = "retried automatically with backoff";
+  if (exhausted.length > 0) {
+    const pending = ENVIRONMENT_CLEANUP_STEPS.map((step) => {
+      const count = exhausted.filter((entry) => entry.pending.includes(step)).length;
+      return count > 0 ? `${step} ${count}` : "";
+    }).filter(Boolean);
+    const errors = [
+      ...new Set(exhausted.map((entry) => entry.lastError).filter((error) => error !== null)),
+    ];
+    orphaned += ` (pending: ${pending.join(", ") || "none"}`;
+    if (errors.length > 0) {
+      orphaned += `; last errors: ${errors.slice(0, MAX_LISTED_CLEANUP_ENTRIES).join(", ")}`;
+      if (errors.length > MAX_LISTED_CLEANUP_ENTRIES) {
+        orphaned += ` +${errors.length - MAX_LISTED_CLEANUP_ENTRIES} more`;
+      }
+    }
+    orphaned += ")";
+    const listed = exhausted
+      .slice(0, MAX_LISTED_CLEANUP_ENTRIES)
+      .map((entry) => entry.environmentId);
+    const more = exhausted.length - listed.length;
+    cleanup = `remove what the deletion of ${listed.join(", ")}${
+      more > 0 ? ` (+${more} more)` : ""
+    } left behind by hand; see docs/development/disk-usage.md`;
+  }
+  return {
+    location: `${dataDir} environment cleanup ledger`,
+    bytes: null,
+    orphaned,
+    owner: `Orkestrator (stops after ${MAX_ENVIRONMENT_CLEANUP_ATTEMPTS} attempts)`,
+    cleanup,
+  };
 }
 
 export type ReportContext = {
@@ -305,6 +413,9 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
       cleanup: "mise prune",
     });
   }
+
+  rows.push(environmentCleanupLedgerRow(context.dataDir, new Set(environmentIds)));
+  rows.push(...previewPartitionRows(context.dataDir));
 
   const tempLeftovers = childDirectories(context.tmpDir).filter((directory) =>
     path.basename(directory).startsWith("orkestrator-"),

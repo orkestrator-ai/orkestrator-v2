@@ -11,6 +11,9 @@ import {
   nowIso,
   randomUUID,
 } from "./storage-shared.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -73,8 +76,6 @@ type GitHubCompletionComment = shared.GitHubCompletionComment;
 type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
-
-import { StorageNative } from "./storage-native.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -173,25 +174,31 @@ export function isFrozenPromptQueueMessage(message: unknown): boolean {
   return isRecord(message) && isRecord(message.origin) && isNonBlankString(message.origin.kind);
 }
 
-export abstract class StoragePrompts extends StorageNative {
+export class PromptsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
   async getPromptQueue(queueKey: string): Promise<PersistedPromptQueue | null> {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return (await this.loadPromptQueues())[queueKey] ?? null;
+    return (await this.repos.nativeAgentSessions.loadPromptQueues())[queueKey] ?? null;
   }
 
   async listPromptQueues(environmentId: string): Promise<PersistedPromptQueue[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
-    return Object.values(await this.loadPromptQueues()).filter(
+    return Object.values(await this.repos.nativeAgentSessions.loadPromptQueues()).filter(
       (queue) => queue.environmentId === environmentId,
     );
   }
 
   async listAllPromptQueues(): Promise<PersistedPromptQueue[]> {
-    return Object.values(await this.loadPromptQueues());
+    return Object.values(await this.repos.nativeAgentSessions.loadPromptQueues());
   }
 
   /**
@@ -211,9 +218,12 @@ export abstract class StoragePrompts extends StorageNative {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    return this.enqueuePromptQueueMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Agent mail");
-      const queue = (await this.loadPromptQueues())[queueKey];
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Agent mail",
+      );
+      const queue = (await this.repos.nativeAgentSessions.loadPromptQueues())[queueKey];
       if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
         return { empty: false };
       }
@@ -242,14 +252,17 @@ export abstract class StoragePrompts extends StorageNative {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    this.validatePromptQueueMessages(messages);
+    this.repos.nativeAgentSessions.validatePromptQueueMessages(messages);
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Prompt queue expected revision must be a non-negative integer");
     }
 
-    return this.enqueuePromptQueueMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Prompt queue",
+      );
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
@@ -257,7 +270,13 @@ export abstract class StoragePrompts extends StorageNative {
       if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("Prompt queue revision conflict");
       }
-      return this.savePromptQueueMutation(queues, queueKey, environmentId, messages, previous);
+      return this.repos.nativeAgentSessions.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        messages,
+        previous,
+      );
     });
   }
 
@@ -280,11 +299,14 @@ export abstract class StoragePrompts extends StorageNative {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    this.validatePromptQueueMessage(message);
+    this.repos.nativeAgentSessions.validatePromptQueueMessage(message);
 
-    return this.enqueuePromptQueueMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Prompt queue",
+      );
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
@@ -297,7 +319,7 @@ export abstract class StoragePrompts extends StorageNative {
       ) {
         return previous;
       }
-      return this.savePromptQueueMutation(
+      return this.repos.nativeAgentSessions.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -340,16 +362,19 @@ export abstract class StoragePrompts extends StorageNative {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    this.validatePromptQueueMessage(message);
+    this.repos.nativeAgentSessions.validatePromptQueueMessage(message);
     const messageId = message.id as string;
     const expected = fingerprint ?? canonicalPromptQueueMessageFingerprint(message);
     if (!isNonBlankString(expected)) {
       throw new Error("Prompt queue message fingerprint must not be blank");
     }
 
-    return this.enqueuePromptQueueMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Prompt queue",
+      );
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
@@ -394,7 +419,7 @@ export abstract class StoragePrompts extends StorageNative {
       // is no longer allowed (for example, a read-only session left Plan).
       if (!allowNewMessage) throw new Error(PROMPT_QUEUE_NEW_PUBLICATION_REFUSED);
 
-      const queue = await this.savePromptQueueMutation(
+      const queue = await this.repos.nativeAgentSessions.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -406,7 +431,7 @@ export abstract class StoragePrompts extends StorageNative {
   }
 
   /** The native session a `${agent}\0${logicalSessionKey}` queue drains into. */
-  protected async promptQueueNativeSession(
+  private async promptQueueNativeSession(
     queueKey: string,
     environmentId: string,
   ): Promise<PersistedNativeAgentSession | null> {
@@ -424,7 +449,7 @@ export abstract class StoragePrompts extends StorageNative {
       .update("\0")
       .update(logicalSessionKey)
       .digest("hex");
-    const session = await this.getNativeAgentSession(key);
+    const session = await this.repos.nativeAgentSessions.getNativeAgentSession(key);
     if (!session || session.environmentId !== environmentId) return null;
     return session;
   }
@@ -444,9 +469,12 @@ export abstract class StoragePrompts extends StorageNative {
       throw new Error("Prompt queue message ID must not be blank");
     }
 
-    return this.enqueuePromptQueueMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Prompt queue",
+      );
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return { removed: null, queue: null };
       if (previous.environmentId !== environmentId) {
@@ -458,7 +486,7 @@ export abstract class StoragePrompts extends StorageNative {
       if (index < 0) return { removed: null, queue: previous };
       const messages = [...previous.messages];
       const [removed] = messages.splice(index, 1);
-      const queue = await this.savePromptQueueMutation(
+      const queue = await this.repos.nativeAgentSessions.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -488,9 +516,12 @@ export abstract class StoragePrompts extends StorageNative {
       throw new Error("Prompt queue move direction must be up or down");
     }
 
-    return this.enqueuePromptQueueMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Prompt queue",
+      );
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return null;
       if (previous.environmentId !== environmentId) {
@@ -505,7 +536,13 @@ export abstract class StoragePrompts extends StorageNative {
       }
       const messages = [...previous.messages];
       [messages[index], messages[target]] = [messages[target], messages[index]];
-      return this.savePromptQueueMutation(queues, queueKey, environmentId, messages, previous);
+      return this.repos.nativeAgentSessions.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        messages,
+        previous,
+      );
     });
   }
 
@@ -515,8 +552,8 @@ export abstract class StoragePrompts extends StorageNative {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return null;
       if (previous.dispatchError) return null;
@@ -539,8 +576,8 @@ export abstract class StoragePrompts extends StorageNative {
         revision: previous.revision + 1,
       };
       queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", previous.environmentId);
+      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+      this.context.changes.announce("prompt-queue", previous.environmentId);
       return inFlight;
     });
   }
@@ -549,8 +586,8 @@ export abstract class StoragePrompts extends StorageNative {
     queueKey: string,
     requestId: string,
   ): Promise<PersistedPromptQueue | null> {
-    return this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
         return previous ?? null;
@@ -562,8 +599,8 @@ export abstract class StoragePrompts extends StorageNative {
         revision: previous.revision + 1,
       };
       queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", previous.environmentId);
+      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+      this.context.changes.announce("prompt-queue", previous.environmentId);
       return saved;
     });
   }
@@ -588,7 +625,7 @@ export abstract class StoragePrompts extends StorageNative {
     return this.markPromptQueueDispatchBoundary(queueKey, requestId, "submittedAt");
   }
 
-  protected markPromptQueueDispatchBoundary(
+  private markPromptQueueDispatchBoundary(
     queueKey: string,
     requestId: string,
     field: "submittingAt" | "submittedAt",
@@ -596,8 +633,8 @@ export abstract class StoragePrompts extends StorageNative {
     if (!isNonBlankString(queueKey) || !isNonBlankString(requestId)) {
       throw new Error("Prompt queue dispatch identity must not be blank");
     }
-    return this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
         return previous ?? null;
@@ -616,8 +653,8 @@ export abstract class StoragePrompts extends StorageNative {
         revision: previous.revision + 1,
       };
       queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", previous.environmentId);
+      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+      this.context.changes.announce("prompt-queue", previous.environmentId);
       return saved;
     });
   }
@@ -631,8 +668,8 @@ export abstract class StoragePrompts extends StorageNative {
     if (!isNonBlankString(queueKey) || !isNonBlankString(requestId) || !isNonBlankString(message)) {
       throw new Error("Prompt queue failure identity must not be blank");
     }
-    return this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
         return previous ?? null;
@@ -660,8 +697,8 @@ export abstract class StoragePrompts extends StorageNative {
         revision: previous.revision + 1,
       };
       queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", previous.environmentId);
+      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+      this.context.changes.announce("prompt-queue", previous.environmentId);
       return saved;
     });
   }
@@ -670,8 +707,8 @@ export abstract class StoragePrompts extends StorageNative {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.dispatchError) return previous ?? null;
       const { dispatchError: _dispatchError, ...withoutError } = previous;
@@ -681,13 +718,13 @@ export abstract class StoragePrompts extends StorageNative {
         revision: previous.revision + 1,
       };
       queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", previous.environmentId);
+      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+      this.context.changes.announce("prompt-queue", previous.environmentId);
       return saved;
     });
   }
 
-  protected promptQueueMessageFingerprint(message: unknown): string {
+  promptQueueMessageFingerprint(message: unknown): string {
     return promptQueueMessageFingerprint(message);
   }
 
@@ -695,24 +732,24 @@ export abstract class StoragePrompts extends StorageNative {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
-    return this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
+    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const removedKeys = Object.values(queues)
         .filter((queue) => queue.environmentId === environmentId)
         .map((queue) => queue.queueKey);
       if (removedKeys.length > 0) {
         for (const key of removedKeys) delete queues[key];
-        await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-        this.announce("prompt-queue", environmentId);
+        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+        this.context.changes.announce("prompt-queue", environmentId);
       }
-      this.schedulePromptQueueClaimRecovery(queues);
+      this.repos.nativeAgentSessions.schedulePromptQueueClaimRecovery(queues);
 
       // Queued prompts carry user-authored text and pasted attachments, and
       // rotating the primary file leaves them readable in its backups. Always
       // scrub, even when the current primary has no matching record: a prior
       // failed delete may have removed the primary while leaving a backup.
-      await this.scrubSensitiveJsonBackups(
-        this.promptQueuesFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.promptQueuesFile(),
         (storedKey, queue) =>
           isPersistedPromptQueue(queue, storedKey) && queue.environmentId !== environmentId,
       );
@@ -720,11 +757,15 @@ export abstract class StoragePrompts extends StorageNative {
     });
   }
 
-  protected enqueueComposeDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.composeDraftsFile(), "compose draft storage", operation);
+  enqueueComposeDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.files.composeDraftsFile(),
+      "compose draft storage",
+      operation,
+    );
   }
 
-  protected validComposeDrafts(stored: unknown): Record<string, PersistedComposeDraft> {
+  validComposeDrafts(stored: unknown): Record<string, PersistedComposeDraft> {
     if (!isRecord(stored)) return {};
     return Object.fromEntries(
       Object.entries(stored).filter(([storedKey, draft]) =>
@@ -733,8 +774,8 @@ export abstract class StoragePrompts extends StorageNative {
     ) as Record<string, PersistedComposeDraft>;
   }
 
-  protected async loadComposeDrafts(): Promise<Record<string, PersistedComposeDraft>> {
-    const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
+  async loadComposeDrafts(): Promise<Record<string, PersistedComposeDraft>> {
+    const stored = await this.context.loadJson<unknown>(this.files.composeDraftsFile(), () => ({}));
     return this.validComposeDrafts(stored);
   }
 }

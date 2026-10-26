@@ -98,7 +98,10 @@ The client configuration lives in `ORKESTRATOR_CLI_CONFIG_DIR`, else
 `~/Library/Application Support/orkestrator-cli` (macOS): `connections.json`
 (0600), `credentials/` (0600 files in a 0700 directory), `receipts/`. A config
 file writable by others or a credential file readable by others is refused.
-There is no project-local configuration, so cloning a repository cannot select
+`mise run smoke:cli` checks the platform default from the packed install: with
+a disposable `HOME` and no override, `connection add` creates the directory
+0700 and `connections.json` 0600 there, and a group-writable file is refused
+(exit 4, `connection-not-configured`). There is no project-local configuration, so cloning a repository cannot select
 a backend or hand a worker an operator credential. `add` contacts the backend
 and pins its installation ID unless `--no-check`. URLs with embedded
 credentials are refused; plain `http` is accepted only for loopback and
@@ -127,12 +130,12 @@ The envelope (`PublicSuccessEnvelope` / `PublicErrorEnvelope`):
 | 0 | Requested condition satisfied | |
 | 1 | Operation failed | `operation-failed`, `setup-failed`, `run-failed`, `run-cancelled`, `run-interrupted`, `exec-failed`, `store-capacity` |
 | 2 | Invalid input | `invalid-input`, `input-too-large`, `empty-input`, `unknown-command` |
-| 3 | Target absent, ambiguous or expired | `not-found`, `ambiguous-target`, `history-expired` |
-| 4 | Connection or authentication | `connection-failed`, `auth-failed`, `identity-mismatch`, `profile-unavailable`, `transport-uncertain` |
+| 3 | Target absent, ambiguous or expired | `not-found`, `ambiguous-target`, `history-expired`, `node-not-found` |
+| 4 | Connection or authentication | `connection-failed`, `auth-failed`, `identity-mismatch`, `profile-unavailable`, `transport-uncertain`, `node-unavailable` |
 | 5 | Observer deadline | `deadline-exceeded` |
 | 6 | Interaction required | `interaction-required` |
-| 7 | Unknown dispatch or outcome | `dispatch-unknown`, `run-unknown` |
-| 8 | Conflict or unsupported | `request-conflict`, `revision-conflict`, `namespace-expired`, `busy`, `not-ready`, `not-empty`, `capability-unavailable`, `backend-incompatible` |
+| 7 | Unknown dispatch or outcome | `dispatch-unknown`, `run-unknown`, `node-outcome-unknown` |
+| 8 | Conflict or unsupported | `request-conflict`, `revision-conflict`, `namespace-expired`, `busy`, `not-ready`, `not-empty`, `capability-unavailable`, `backend-incompatible`, `node-unsupported` |
 | 130 / 143 | Observation stopped by SIGINT / SIGTERM (`observation-interrupted`) | |
 
 An HTTP 200 carrying a rejected or unknown outcome is never a success. Errors
@@ -179,6 +182,13 @@ not advertise at its version before sending it.
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
+| `review launch ENV [--reviewer A=M[@E]]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation | provider |
+| `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
+| `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
+| `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
+| `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
+| `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion | provider, external |
+| `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
 | `attention [--follow --jsonl]` | `attention.list` | pending interactions of sessions observed waiting, the caller's settled runs, finished setups | read |
 | `ticket list/get` | `ticket.list/get` | Kanban storage | read |
 | `ticket create/update/comment` | `ticket.create/update/comment` | Kanban storage; the operation ID is the store's request key | metadata |
@@ -222,6 +232,46 @@ Control MCP's `describe_action` reports as each action's CLI equivalent.
 (`packages/protocol/src/public-api-wait.ts`), as Control MCP's `run_status`
 does.
 
+## Leaf nodes (`--node`)
+
+Connected to a command node ([command-nodes.md](command-nodes.md)), every
+command can run on one of the leaf nodes it controls: pass the global
+`--node NODE_ID` (IDs from `orkestrator node list`). The CLI sends the same
+`public_action` request with `node` set; the command node forwards it over its
+node link and the leaf runs it, admits its request key and keeps its receipt,
+exactly as if the CLI were connected to the leaf. `run get --node …` and
+`--wait` follow the operation there. The envelope's `backend` stays the
+command node (so the identity check holds) and `node` names the leaf that
+answered.
+
+- **Before anything is routed** the CLI checks that the connected backend
+  advertises `features.nodeRouting`; an older backend would ignore `node` and
+  run the action on itself, so the CLI refuses with `backend-incompatible`.
+- **`--node all`** runs `project list`, `environment list` or `attention` on
+  this node and every node it controls. Every item carries `nodeId` and
+  `nodeName`, `nodes` reports each node (its total, its `nextCursor` or
+  attention `cursor`, or its error), and a node that did not answer is a
+  warning, not a failure. Cursors are per node: page or follow one node with
+  its `--node`. `environment list --project` takes one node. Mutations name
+  one node. Attention applies `--limit` per node; the combined page may contain
+  more items than that limit. Human attention lines name their owning node,
+  and partial-read warnings are retained in both human and JSON output.
+- **Codes.** `node-not-found` (3): no such node here. `node-unavailable` (4):
+  registered but disabled or not connected; nothing was sent.
+  `node-unsupported` (8): the leaf's Orkestrator is too old to take public
+  actions from its command node, or this node is itself a leaf (its own
+  registry is suspended). `node-outcome-unknown` (7): the link lost the leaf's
+  answer to a mutation; it was not resent, and repeating the identical request
+  with the same `--request-id` replays the leaf's outcome. A leaf's own errors
+  come back unchanged.
+- **Authority.** The CLI is the operator on the command node and on its
+  leaves (the same user holds both gateway tokens). A Control MCP credential's
+  calls are relayed with their own authority instead (see
+  [control-mcp.md](control-mcp.md#leaf-nodes)).
+- **Not copied for a leaf launch:** files a leaf project lacks are not seeded
+  from the command node's project root for `environment launch --node`, as the
+  portal's New Environment does; the leaf's own project files apply.
+
 Paths passed to project commands are on the **backend** host. Prompt, patch,
 stdin, attachment and credential files are read on the machine running the
 client.
@@ -230,9 +280,11 @@ client.
 
 Every mutation carries a request key. `--request-id KEY` sets it; otherwise the
 client generates one. Before the request leaves the process the client writes a
-private local receipt (action, key, namespace, installation, intent digest — no
+private local receipt (action, key, namespace, installation, target node, intent digest — no
 payload). A local receipt records intent, not acceptance, and is never
-resubmitted automatically. `orkestrator run receipts` lists them.
+resubmitted automatically. The cache and request-key lookup are scoped to the
+selected node. Recovery commands and receipt hints retain `--node`.
+`orkestrator run receipts` lists them.
 
 In the backend the key is scoped by authority, action, target scope and
 request ID, and bound to a SHA-256 fingerprint of the canonical intent. The
@@ -415,7 +467,9 @@ never replaced.
   name and bytes inside the request: at most 8 files and 256 KiB in total, so
   that they fit the 1 MiB request with the prompt. Images (PNG, JPEG, GIF,
   WebP by signature) are sent as images, anything else as files; a provider
-  that cannot take one kind refuses (`capability-unavailable`). The backend
+  that cannot take one kind refuses (`capability-unavailable`). OpenCode gets
+  a file as a `text/plain` file part, which it reads with its Read tool
+  (binary content arrives as a read failure the agent sees). The backend
   writes them, after admission and before dispatch, to
   `.orkestrator/prompt-attachments/<operation ID>/` in the environment
   workspace (the directory the composer stages into) and attaches those
@@ -431,6 +485,11 @@ never replaced.
   exactly one initial prompt under the stable request ID
   `initial-prompt:<environment>:startup-agent`. Setup failure leaves the prompt
   unsent (`partial`, `dispatch: not-sent`). Never follow it with `session start`.
+- `session start` without `--model` uses the configured
+  default as a default: it is reported as the resolved model, but the
+  runtime may replace it when this login cannot serve it (the shipped Codex
+  `gpt-5.4` on a ChatGPT login), exactly as a launch from the app does. Only a
+  model named with `--model` is pinned.
 - Responses mean **submitted**. The receipt's `dispatch` is
   `accepted | rejected | unknown`; `execution` is
   `pending | running | waiting-for-input | completed | failed | cancelled | interrupted | unknown | unsupported`.
@@ -447,7 +506,18 @@ later steering input does not end a turn while the session is busy. Missing
 evidence stays `unknown`. A provider whose status reads idle after a failed
 turn (OpenCode keeps the error on the request's last assistant message) is
 asked for that request's terminal error before an idle turn counts as
-completed; an unreadable answer is retried, never settled as success.
+completed; an unreadable answer is retried, never settled as success. A turn
+the environment's stop cut off (it was last seen working or waiting when the
+runtime stopped, and no outcome was recorded) settles `interrupted` with
+evidence `none`: its bridge is gone, so no outcome can be read, and changes
+made before the stop may remain. The stopped session itself reads `idle`.
+
+OpenCode can also accept a prompt (`promptAsync` returns 204) and then drop it
+while building its parts, reporting only a `session.error` and storing no
+message. A request whose history holds nothing, two seconds or more after such
+an error that the provider's event stream saw following its dispatch, settles
+`failed` with "OpenCode did not accept the prompt: <reason>". Without that
+event (a stream gap, or a backend restart in between) it stays `unknown`.
 
 | Provider | Completion | Evidence (packaged CLI, file assertion + follow-up) |
 | --- | --- | --- |
@@ -571,7 +641,18 @@ worktree roots, argv-only driver, owned cleanup, private manifest under
 `client-exit`, `exec`, `wrong-profile`, `project-cascade` (a started and a
 stopped environment deleted by `project remove --cascade`; checkout and origin
 kept) and `project-init` (local only: no remote, a local environment starts
-from the repository's own `main`). `live-session` also lists the session's
+from the repository's own `main`). The container matrix adds
+`foreign-owner`: a container and two volumes (one mounted, one unmounted)
+carrying every label of the scenario's environment except its owner
+(`orkestrator-owner`) sit beside it while `environment start`, `exec`, `list`,
+`stop` and `delete` run, and must
+stay exactly as created (state, start time, labels), with the command run in
+the environment's own container. Cleanup verifies that all decoy resources
+are absent and reports Docker failures in `cleanupErrors`. `live-session`
+records the model each session reports in force (`session config get`) on
+its `session start`
+manifest entry, beside the pinned model or `null` for the provider default.
+`live-session` also lists the session's
 commands, checks that an unknown and a changed command are refused, runs a
 selected command (Claude's built-in `/context`), and sends `--literal`,
 `--attach` and an `--enqueue` prompt behind a running turn. Options: `--scenario NAME` (repeat),
@@ -618,9 +699,11 @@ opt-in. The published package ships only the Claude and Codex bridges (OpenCode 
 For a live Pi, Cursor or Grok run the harness gives that backend its own
 `--resource-root`: the packaged Claude and Codex bridges plus the provider's
 worktree-built bridge (`prepareProviderRuntime` in
-`packages/cli/scenarios/provider-runtime.ts`), with the provider enabled and,
-for Grok, the pinned binary installed into the scenario data directory. Those
-providers are not yet live-qualified (see
+`packages/cli/scenarios/provider-runtime.ts`), with the provider enabled.
+Every live run with a pinned binary (Claude, Codex, OpenCode, Pi, Grok) first
+installs it into the scenario data directory with `toolchain install --tool`,
+because an agent-test backend never falls back to `PATH`. Pi, Cursor and Grok
+are not yet live-qualified (see
 [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md)).
 Which test proves each scenario class is listed in
 [cli-testing.md](../development/cli-testing.md#coverage-by-layer).
@@ -646,15 +729,17 @@ Which test proves each scenario class is listed in
   see [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md).
 - Container lifecycle and exec are qualified on Linux Docker and macOS Docker
   Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
-  live Claude, Codex and OpenCode container passes. Remaining gaps include Pi,
-  Cursor and Grok live runs, macOS packed install/config permissions/profile
-  discovery, and a foreign-owner Docker decoy through the CLI; see the
+  live Claude, Codex and OpenCode container passes. The 2026-10-25 evidence
+  completes macOS packed install/config permissions/profile discovery and the
+  foreign-owner Docker decoy through the CLI. Pi, Cursor and Grok live runs
+  and live token-cost measurement remain open; see the
   [qualification evidence and remaining work](../todo/cli-and-slash-commands/0014-cli-qualification.md).
 - Browser-checked in `e2e/agent-testing/cli-ui.spec.ts`: CLI-made project,
   environment and settings changes reach an open and a reloaded renderer;
-  with a live Claude profile, a CLI-started question rehydrates in an
-  inactive, reloaded renderer and the UI's answer completes the CLI's run.
-  Other providers' question cards were not browser-checked.
+  with live Claude and OpenCode profiles, CLI-started questions and approvals
+  rehydrate in an inactive, reloaded renderer and the UI's answer or approval
+  completes the CLI's run. Codex raised neither card in host build mode;
+  Pi, Cursor and Grok card checks await credentials (see the qualification record).
 - To withdraw one action, remove its handler from
   [`registry.ts`](../../apps/backend/src/core/public-api/registry.ts):
   capabilities stop advertising it and clients refuse it before submitting,

@@ -39,7 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import * as backend from "@/lib/backend";
-import { resolveBrowserAddress } from "@/lib/browser-address";
+import { displayUrlFromNativePreview, resolveBrowserAddress } from "@/lib/browser-address";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import {
   attachBrowserPreview,
@@ -69,7 +69,15 @@ import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForService } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
-import { errorMessage, useAddressBarShortcut, useBlockingOverlay } from "./browser-tab-hooks";
+import {
+  BROWSER_ADDRESS_FORM_CLASS,
+  BROWSER_ADDRESS_INPUT_CLASS,
+  BROWSER_TOOLBAR_ACTIONS_CLASS,
+  BROWSER_TOOLBAR_CLASS,
+  errorMessage,
+  useAddressBarShortcut,
+  useBlockingOverlay,
+} from "./browser-tab-hooks";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
 import { PreviewServicePicker, ReadinessDot } from "./PreviewServicePicker";
@@ -329,14 +337,37 @@ function ServicePreview({
       if (state.service && !isCurrentService(state.service, serviceRef)) return;
       setNativeState(state);
       if (state.transport) setTransport(state.transport);
-      const navigation = state.service?.navigation;
+      const navigation = state.service?.navigation ?? state.navigation;
+      if (
+        navigation !== undefined &&
+        viewNavigation.current !== undefined &&
+        navigation < viewNavigation.current
+      )
+        return;
       if (navigation !== undefined) viewNavigation.current = navigation;
-      if (state.service && state.service.path !== routeRef.current.path) {
-        setRoute({ path: state.service.path, basis: navigation });
-        persistPath(state.service.path);
+      let nextPath = state.service?.path;
+      if (!state.service && mode === "compatibility" && service?.endpoint.hostPort) {
+        const display = `http://localhost:${service.endpoint.hostPort}${routeRef.current.path}`;
+        const current = displayUrlFromNativePreview(state.url, display);
+        if (current) {
+          const parsed = new URL(current);
+          // Only a route belonging to this service's compatibility socket.
+          if (parsed.port === String(service.endpoint.hostPort))
+            nextPath = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        }
+      }
+      if (nextPath !== undefined && nextPath !== routeRef.current.path) {
+        setRoute({ path: nextPath, basis: navigation });
+        persistPath(nextPath);
+      } else if (
+        nextPath !== undefined &&
+        routeRef.current.basis === undefined &&
+        navigation !== undefined
+      ) {
+        setRoute({ path: nextPath, basis: navigation });
       }
     },
-    [persistPath, serviceRef, setRoute, tabId],
+    [mode, persistPath, service, serviceRef, setRoute, tabId],
   );
 
   useEffect(() => {
@@ -405,7 +436,13 @@ function ServicePreview({
                 bounds,
                 visible,
               })
-            : attachBrowserPreview({ tabId, url: compatibilityUrl!.iframeUrl, bounds, visible });
+            : attachBrowserPreview({
+                tabId,
+                url: compatibilityUrl!.iframeUrl,
+                ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
+                bounds,
+                visible,
+              });
         void attach
           .then((state) => {
             if (disposed) return;
@@ -635,7 +672,7 @@ function ServicePreview({
         !isActive && "hidden",
       )}
     >
-      <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5 @md/browser:flex-nowrap">
+      <div className={BROWSER_TOOLBAR_CLASS}>
         <Button
           type="button"
           variant="ghost"
@@ -685,7 +722,7 @@ function ServicePreview({
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
         <form
-          className="flex w-full min-w-0 basis-full items-center @md/browser:w-auto @md/browser:basis-0 @md/browser:flex-1"
+          className={BROWSER_ADDRESS_FORM_CLASS}
           onSubmit={(event) => void submitAddress(event)}
         >
           <div
@@ -709,7 +746,7 @@ function ServicePreview({
               ref={addressInputRef}
               value={address}
               onChange={(event) => setAddress(event.target.value)}
-              className="h-full min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground"
+              className={BROWSER_ADDRESS_INPUT_CLASS}
               aria-label="Browser address"
               aria-invalid={Boolean(attachError)}
               placeholder="/path"
@@ -725,117 +762,121 @@ function ServicePreview({
             Go
           </Button>
         </form>
-        <AnnotationsButton annotations={annotations} />
-        {nativeBrowserPreview && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            aria-label="Open preview DevTools"
-            disabled={!canNavigate}
-            onClick={() =>
-              void openBrowserPreviewDevTools(tabId)
-                .then(applyNativeState)
-                .catch(() => undefined)
-            }
-          >
-            <Code2 className="h-4 w-4" />
-          </Button>
-        )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+        <div className={BROWSER_TOOLBAR_ACTIONS_CLASS}>
+          <AnnotationsButton annotations={annotations} />
+          {nativeBrowserPreview && (
             <Button
-              ref={optionsTriggerRef}
               type="button"
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0"
-              aria-label="Preview options"
+              aria-label="Open preview DevTools"
+              disabled={!canNavigate}
+              onClick={() =>
+                void openBrowserPreviewDevTools(tabId)
+                  .then(applyNativeState)
+                  .catch(() => undefined)
+              }
             >
-              <MoreHorizontal className="h-4 w-4" />
+              <Code2 className="h-4 w-4" />
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60">
-            <DropdownMenuItem
-              disabled={!capabilities?.surfaces.browserTopLevel.available}
-              onSelect={openExternally}
-              className="gap-2"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open externally
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!service}
-              onSelect={() => {
-                void navigator.clipboard
-                  .writeText(displayUrl)
-                  .then(() => toast.success("Copied the application address"));
-              }}
-              className="gap-2"
-            >
-              <Link2 className="h-3.5 w-3.5" />
-              Copy application address
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!service || !capabilities?.surfaces.browserTopLevel.available}
-              onSelect={() => {
-                if (!service) return;
-                void backend
-                  .getPreviewPublicOrigin(service.definition.serviceId)
-                  .then(({ origin }) => {
-                    if (!origin) throw new Error("This service is not published.");
-                    return navigator.clipboard.writeText(`${origin}${path}`);
-                  })
-                  .then(() =>
-                    toast.success("Copied the preview link", {
-                      description:
-                        "It is private to your tailnet. Anyone opening it must also sign in through Orkestrator; copying it grants no access.",
-                    }),
-                  )
-                  .catch((error: unknown) =>
-                    toast.error("Could not copy the preview link", {
-                      description: errorMessage(error),
-                    }),
-                  );
-              }}
-              className="gap-2"
-            >
-              <Link2 className="h-3.5 w-3.5" />
-              Copy preview link
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={!service}
-              onSelect={() => {
-                dialogOpenerRef.current = optionsTriggerRef.current;
-                setDialog("edit");
-              }}
-              className="gap-2"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              Edit service…
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!nativeBrowserPreview || mode !== "desktop-tunnel"}
-              onSelect={() => {
-                void resetBrowserPreviewServiceSiteData(serviceTarget)
-                  .then(() =>
-                    toast.success("Site data cleared", {
-                      description: "This service may ask you to sign in again.",
-                    }),
-                  )
-                  .catch((error: unknown) =>
-                    toast.error("Could not clear site data", { description: errorMessage(error) }),
-                  );
-              }}
-              className="gap-2"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Reset this site's data
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                ref={optionsTriggerRef}
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                aria-label="Preview options"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuItem
+                disabled={!capabilities?.surfaces.browserTopLevel.available}
+                onSelect={openExternally}
+                className="gap-2"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open externally
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!service}
+                onSelect={() => {
+                  void navigator.clipboard
+                    .writeText(displayUrl)
+                    .then(() => toast.success("Copied the application address"));
+                }}
+                className="gap-2"
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Copy application address
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!service || !capabilities?.surfaces.browserTopLevel.available}
+                onSelect={() => {
+                  if (!service) return;
+                  void backend
+                    .getPreviewPublicOrigin(service.definition.serviceId)
+                    .then(({ origin }) => {
+                      if (!origin) throw new Error("This service is not published.");
+                      return navigator.clipboard.writeText(`${origin}${path}`);
+                    })
+                    .then(() =>
+                      toast.success("Copied the preview link", {
+                        description:
+                          "It is private to your tailnet. Anyone opening it must also sign in through Orkestrator; copying it grants no access.",
+                      }),
+                    )
+                    .catch((error: unknown) =>
+                      toast.error("Could not copy the preview link", {
+                        description: errorMessage(error),
+                      }),
+                    );
+                }}
+                className="gap-2"
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Copy preview link
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={!service}
+                onSelect={() => {
+                  dialogOpenerRef.current = optionsTriggerRef.current;
+                  setDialog("edit");
+                }}
+                className="gap-2"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Edit service…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!nativeBrowserPreview || mode !== "desktop-tunnel"}
+                onSelect={() => {
+                  void resetBrowserPreviewServiceSiteData(serviceTarget)
+                    .then(() =>
+                      toast.success("Site data cleared", {
+                        description: "This service may ask you to sign in again.",
+                      }),
+                    )
+                    .catch((error: unknown) =>
+                      toast.error("Could not clear site data", {
+                        description: errorMessage(error),
+                      }),
+                    );
+                }}
+                className="gap-2"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reset this site's data
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <PreviewDiagnostics

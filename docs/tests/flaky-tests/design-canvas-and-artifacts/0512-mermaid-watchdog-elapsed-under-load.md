@@ -124,6 +124,16 @@ The complete unchanged owner also failed: `mise run test:logged -- --name cleanu
 
 This observation establishes no new pass-alone confirmation or cause. The aggregate and owner remain non-green; no Mermaid implementation, assertion, timeout or skip changed.
 
+## Failing-tests fix validation — 2026-10-25
+
+The aggregate `mise run test` measured 7,090 ms against `< 5000 ms` while another
+worktree ran its complete suite. Three loaded complete-owner reruns also
+exceeded the bound (5,571, 5,452 and 7,021 ms at load 3.4–13.1); the owner
+passed alone earlier the same day at load 2.8 (30.7 s). Evidence and the
+co-occurring boundary-test case are in
+[0841](0841-mermaid-boundary-render-deadline-under-load.md). The watchdog
+implementation, assertion, deadline and skip were unchanged.
+
 ## Recurrence 2026-10-25 (scheduled jobs)
 
 `mermaid rendering > enforces source bytes, edges and SVG limits at and over the boundary` returned `render_timeout` (5000 ms parse/layout watchdog) instead of `package_size_exceeded` in the scheduled-jobs `mise run test` aggregate (8084 ms). The complete unchanged 13-test owner passed alone (`bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts`).
@@ -140,3 +150,12 @@ Recurred after rebasing onto main `eda21487` (8347.60 ms aggregate); the unchang
 - **Complete unchanged owner:** `mise run test:logged -- --name mermaid-watchdog-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed, exit 0 in 42.9 seconds.
 - **Evidence:** `orkestrator-test-run.iEyQ7i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** another intermittent elapsed-time failure, confirmed by the unchanged owner's isolated pass. No artifact implementation, assertion, timeout or skip changed.
+
+## Storage repository review fixes — 2026-10-25
+
+- **Command:** `mise run test:logged -- --name storage-review-suite -- mise run test`, after rebasing the storage repository branch onto `origin/main` (`17929e3cb`). The backend used two isolated workers alongside another worktree's validation.
+- **Failure:** the unchanged watchdog owner measured 5437 ms against `< 5000 ms` at `mermaid-render.test.ts:216` (5693.93 ms test duration).
+- **Complete unchanged owner:** `mise run test:logged -- --name storage-review-mermaid-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed, exit 0 in 37.8 seconds.
+- **Evidence:** `orkestrator-test-run.JKSeJM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.JPh9BC/storage-review-suite.log.gz` under the host temporary directory after aggregate finalization.
+- **Aggregate result:** exit 1 after 996.8 seconds. Backend: 11,597 passed, 89 skipped, one failed across 689 files (940.58 seconds). Every other workspace package, root/agent-support, bridge suite and protocol regeneration passed.
+- **Assessment:** recurrence confirmed by the complete unchanged owner's isolated pass. No Mermaid implementation, assertion, timeout or skip changed. The storage regression tests and `mise run check`, including the agent-testing e2e typecheck, passed separately.

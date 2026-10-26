@@ -9,6 +9,8 @@
 export interface PluginConfig {
   type: "local";
   path: string;
+  /** The `installed_plugins.json` id an install is recorded under. */
+  installedId?: string;
 }
 
 /**

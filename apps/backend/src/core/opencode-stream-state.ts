@@ -14,6 +14,11 @@ import {
 } from "./agent-provider-runtime.js";
 import { openCodeSessionModelRef } from "./opencode-model-catalog.js";
 import {
+  openCodeRevertMarker,
+  sameOpenCodeRevertMarker,
+  type OpenCodeRevertMarker,
+} from "./opencode-revert.js";
+import {
   createOpenCodeUsageLedger,
   openCodeContextUsage,
   openCodeContextUsageFromLedger,
@@ -142,6 +147,23 @@ type OpenCodeStreamSession = {
   revised?: RecentlyRevisedRows;
   /** Monotonic count of inbound session events, including events seen while dirty. */
   eventVersion: number;
+  /**
+   * OpenCode's pending revert (`Session.revert`), which the transcript hides;
+   * see `opencode-revert.ts`. Kept apart from the messages because OpenCode
+   * keeps the reverted ones until the next prompt.
+   */
+  revert?: OpenCodeRevertMarker;
+  /**
+   * Whether `revert` reflects OpenCode as of the last `session.updated`,
+   * action result or session read. A stream gap can hide the update that
+   * changed it, so it then waits for a read.
+   */
+  revertKnown: boolean;
+  /**
+   * Moves with every source of `revert`, so a session read that a newer
+   * update overtook does not install its older marker.
+   */
+  revertVersion: number;
   notices: NativeAgentNotice[];
   /**
    * Notices derived from `session.status` rather than from the transcript.
@@ -155,6 +177,20 @@ type OpenCodeStreamSession = {
    */
   retryNotice?: NativeAgentNotice;
   turnFailure?: NativeAgentNotice;
+  /** The request this backend last dispatched, until the next dispatch. */
+  dispatchRequestId?: string;
+  /** Dispatch identity survives an idle/error event clearing the visible turn clock. */
+  dispatchStartedAt?: number;
+  /**
+   * The first `session.error` seen since `dispatchRequestId` was dispatched.
+   *
+   * `promptAsync` accepts a prompt before OpenCode resolves its parts, so a
+   * part OpenCode cannot build (an attachment it fails to decode) is reported
+   * only by this event, and no message for the request is ever stored. The
+   * turn outcome read uses it when the transcript holds nothing for the
+   * request; an error during a turn that did become a message is ignored there.
+   */
+  dispatchFailure?: OpenCodeDispatchFailure;
   revision: number;
   /** Exact after snapshots/structural changes; a safe upper bound after deltas. */
   transcriptBytes?: number;
@@ -174,6 +210,18 @@ type OpenCodeStreamSession = {
    */
   usageLedger: OpenCodeUsageLedger;
 };
+
+export type OpenCodeDispatchFailure = {
+  requestId: string;
+  message: string;
+  observedAt: number;
+};
+
+/** An OpenCode error message without the stack frames it often carries. */
+function withoutStackFrames(message: string): string {
+  const lines = message.split("\n").filter((line) => !/^\s+at\s/.test(line));
+  return lines.join("\n").trim() || message;
+}
 
 export type OpenCodeStreamEffect = {
   reconnect?: boolean;
@@ -235,6 +283,8 @@ export class OpenCodeStreamState {
       messagesFromStart: false,
       historyEpoch: this.nextHistoryEpoch(),
       eventVersion: 0,
+      revertKnown: false,
+      revertVersion: 0,
       notices: [],
       revision: 0,
       usageLedger: createOpenCodeUsageLedger(),
@@ -298,6 +348,49 @@ export class OpenCodeStreamState {
   /** The epoch older-history page cursors for this session belong to. */
   historyEpoch(sessionId: string): string {
     return `opencode:${this.epochScope}:${this.session(sessionId).historyEpoch}`;
+  }
+
+  /** The pending revert last observed, known or retained across a gap. */
+  revertMarker(sessionId: string): OpenCodeRevertMarker | undefined {
+    return this.sessions.get(sessionId)?.revert;
+  }
+
+  /** Whether the revert marker is current, or must be read from the session. */
+  revertMarkerKnown(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.revertKnown === true;
+  }
+
+  /** Pass to `observeRevert` to discard a session read an update overtook. */
+  revertVersion(sessionId: string): number {
+    return this.session(sessionId).revertVersion;
+  }
+
+  /**
+   * Install OpenCode's revert marker from a session read or an action result.
+   *
+   * A change rewrites the transcript under readers' feet, as a removal does:
+   * the revision moves so a cached snapshot is not served, and the history
+   * epoch moves so paged history and page cursors named under the old marker
+   * expire instead of keeping rows it hid (or hiding rows it no longer
+   * covers). Returns false when `expectedVersion` was overtaken.
+   */
+  observeRevert(
+    sessionId: string,
+    marker: OpenCodeRevertMarker | undefined,
+    expectedVersion?: number,
+  ): boolean {
+    const state = this.session(sessionId);
+    if (expectedVersion !== undefined && state.revertVersion !== expectedVersion) return false;
+    this.setRevert(state, marker);
+    return true;
+  }
+
+  /** Forget the marker's freshness, so the next transcript read asks OpenCode. */
+  invalidateRevert(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.revertKnown = false;
+    state.revertVersion += 1;
   }
 
   /** Revision-note sequence, including changes outside the cached window. */
@@ -419,12 +512,22 @@ export class OpenCodeStreamState {
   }
 
   /** Record dispatch before a renderer has to observe the turn. */
-  beginTurn(sessionId: string, startedAt: number): void {
+  beginTurn(sessionId: string, startedAt: number, requestId?: string): void {
     const state = this.session(sessionId);
     state.turnStartedAt = startedAt;
+    state.dispatchStartedAt = startedAt;
     state.turnConfirmed = false;
     delete state.retryNotice;
     delete state.turnFailure;
+    delete state.dispatchFailure;
+    if (requestId) state.dispatchRequestId = requestId;
+    else delete state.dispatchRequestId;
+  }
+
+  /** The `session.error` OpenCode reported after dispatching `requestId`, if any. */
+  dispatchFailure(sessionId: string, requestId: string): OpenCodeDispatchFailure | undefined {
+    const failure = this.sessions.get(sessionId)?.dispatchFailure;
+    return failure?.requestId === requestId ? { ...failure } : undefined;
   }
 
   /** The authoritative turn clock, if one has been established. */
@@ -457,10 +560,18 @@ export class OpenCodeStreamState {
     return state.turnStartedAt;
   }
 
-  /** Remove only the dispatch clock belonging to this rejected request. */
-  rejectTurn(sessionId: string, startedAt: number): void {
+  /** Clear this send's clock; keep error ownership only when delivery is ambiguous. */
+  rejectTurn(sessionId: string, startedAt: number, ambiguous = false): void {
     const state = this.sessions.get(sessionId);
-    if (state?.turnStartedAt === startedAt) this.endTurn(sessionId);
+    if (state?.dispatchStartedAt !== startedAt) return;
+    this.endTurn(sessionId);
+    // An ambiguous send may still materialize or report a dispatch-only error.
+    // A rejected send must not claim errors emitted after its rejection.
+    if (!ambiguous) {
+      delete state.dispatchRequestId;
+      delete state.dispatchStartedAt;
+      delete state.dispatchFailure;
+    }
   }
 
   /** Drop everything tracked for a session whose ownership was closed. */
@@ -502,6 +613,9 @@ export class OpenCodeStreamState {
     for (const state of this.sessions.values()) {
       state.messagesCurrent = false;
       state.gapBaseline ??= baselineOf(state.messages);
+      // The update that changed the marker may be inside the gap.
+      state.revertKnown = false;
+      state.revertVersion += 1;
       this.bumpEventVersion(state);
       this.bump(state);
     }
@@ -603,6 +717,9 @@ export class OpenCodeStreamState {
       if (Array.isArray(info?.permission) && serializedByteLength(info.permission) <= 64 * 1024) {
         state.permission = info.permission;
       }
+      // Every update carries the whole merged Session, and a cleared revert
+      // is published without the field, so its absence clears the marker.
+      if (info) this.setRevert(state, openCodeRevertMarker(info));
       this.bump(state);
       return { sessionId };
     }
@@ -638,6 +755,13 @@ export class OpenCodeStreamState {
         nonEmptyString(error?.message) ??
         nonEmptyString(error?.name) ??
         "OpenCode session failed";
+      if (state.dispatchRequestId && !state.dispatchFailure) {
+        state.dispatchFailure = {
+          requestId: state.dispatchRequestId,
+          message: withoutStackFrames(message).slice(0, 2_000),
+          observedAt,
+        };
+      }
       state.notices = [{ kind: "error", message: message.slice(0, 2_000) }];
       this.bump(state);
       return { sessionId };
@@ -864,6 +988,16 @@ export class OpenCodeStreamState {
       if (this.messageIndex(messages, messageId) < 0) return;
     }
     (state.revised ??= new RecentlyRevisedRows()).note(messageId);
+  }
+
+  private setRevert(state: OpenCodeStreamSession, marker: OpenCodeRevertMarker | undefined): void {
+    state.revertKnown = true;
+    state.revertVersion += 1;
+    if (sameOpenCodeRevertMarker(state.revert, marker)) return;
+    if (marker) state.revert = marker;
+    else delete state.revert;
+    state.historyEpoch = this.nextHistoryEpoch();
+    this.bump(state);
   }
 
   private nextHistoryEpoch(): number {

@@ -91,7 +91,8 @@ live(
       expect(JSON.parse(before)[2].length).toBeGreaterThan(0);
       expect(after).toBe(before);
     } finally {
-      if (volumes.length) await docker(["volume", "rm", ...volumes]);
+      // One per call (see container-live-cleanup.ts).
+      for (const volume of volumes) await docker(["volume", "rm", volume]);
     }
   },
   180_000,

@@ -125,7 +125,9 @@ export function createCapabilitiesHandler(
       return {};
     },
     async run(_input, context) {
-      const namespaces = await context.command.storage.publicOperationNamespaces(context.now());
+      const namespaces = await context.command.storage.publicOperations.publicOperationNamespaces(
+        context.now(),
+      );
       const available = availableActions();
       const actions: PublicCapabilities["actions"] = {};
       for (const name of Object.keys(PUBLIC_ACTIONS) as PublicActionName[]) {

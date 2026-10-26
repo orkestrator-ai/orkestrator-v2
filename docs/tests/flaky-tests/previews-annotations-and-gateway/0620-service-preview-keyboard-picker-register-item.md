@@ -73,3 +73,14 @@ e2e/agent-testing/service-preview-electron.spec.ts --workers=1` passed the
 complete unchanged owner in 62.6 s after source edits stopped. Original evidence:
 `orkestrator-test-run.NWWiZg/handover-electron.log.gz` under the host temporary
 directory. No preview implementation, assertion, timeout or skip changed.
+
+## Service preview rollout (0042) — 2026-10-25
+
+No recurrence: the keyboard test passed in all 7 runs where it ran on branch
+`todo-0042-service-preview-rollout-f64ae24ade8a` (5 single-spec runs and 2
+full `test:agent:electron` suites, load 21 to 80). The three throttling
+switches the fix added (`--disable-backgrounding-occluded-windows`,
+`--disable-background-timer-throttling`, `--disable-renderer-backgrounding`)
+now live in `ELECTRON_TEST_SWITCHES` (`e2e/agent-testing/electron-launch-switches.ts`),
+so every Electron spec launches with them. Left open for one more loaded
+observation window before resolving.

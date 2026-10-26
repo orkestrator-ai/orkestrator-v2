@@ -75,3 +75,26 @@ export function resolveBrowserAddress(value: string): BrowserAddress {
   }
   return { displayUrl, iframeUrl };
 }
+
+const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
+export function displayUrlFromNativePreview(
+  previewUrl: string,
+  currentDisplayUrl: string,
+): string | null {
+  if (!previewUrl) return null;
+  try {
+    const preview = new URL(previewUrl);
+    const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(preview.pathname);
+    if (!gatewayMatch) return preview.protocol === "http:" ? preview.toString() : null;
+
+    const display = new URL(currentDisplayUrl);
+    const displayPort = display.port || "80";
+    if (gatewayMatch[1] !== displayPort) return null;
+    display.pathname = gatewayMatch[2] ?? "/";
+    display.search = preview.search;
+    display.hash = preview.hash;
+    return display.toString();
+  } catch {
+    return null;
+  }
+}

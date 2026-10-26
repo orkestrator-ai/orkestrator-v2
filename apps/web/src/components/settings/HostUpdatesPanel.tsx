@@ -33,7 +33,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
-import { HostDependencySettings } from "./HostDependencySettings";
+import { HostDependencySettings, type OutdatedEnvironment } from "./HostDependencySettings";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -51,7 +51,7 @@ function useSecondsUntil(at: string | null): number | null {
   return Math.max(0, Math.ceil((Date.parse(at) - now) / 1000));
 }
 
-/** "2 agents working · 1 pipeline · 3 terminals", or that nothing is running. */
+/** "2 agents working · 1 build pipeline · 3 open terminals", or that nothing is running. */
 export function describeRestartImpact(impact: HostRestartImpact): string {
   const parts: string[] = [];
   const plural = (count: number, one: string, many = `${one}s`) =>
@@ -62,7 +62,20 @@ export function describeRestartImpact(impact: HostRestartImpact): string {
   if (impact.unknownAgents)
     parts.push(`${plural(impact.unknownAgents, "agent")} with unknown activity`);
   if (impact.activePipelines) parts.push(plural(impact.activePipelines, "build pipeline"));
-  if (impact.terminals) parts.push(plural(impact.terminals, "open terminal"));
+  if (impact.containerTerminals === undefined) {
+    // An older backend counts container terminals in with the host's.
+    if (impact.terminals) parts.push(plural(impact.terminals, "open terminal"));
+  } else {
+    const containerTerminals = Math.min(impact.containerTerminals, impact.terminals);
+    const hostTerminals = impact.terminals - containerTerminals;
+    if (hostTerminals) parts.push(plural(hostTerminals, "host terminal"));
+    if (containerTerminals)
+      parts.push(
+        `${plural(containerTerminals, "container terminal")} (${
+          containerTerminals === 1 ? "its shell keeps" : "their shells keep"
+        } running)`,
+      );
+  }
   return parts.length > 0 ? parts.join(" · ") : "Nothing is running on the host right now.";
 }
 
@@ -153,11 +166,13 @@ export function HostUpdatesPanel({
   snapshot,
   error,
   accept,
+  onRebuildEnvironment,
 }: {
   client: HostMaintenanceClient;
   snapshot: HostMaintenanceSnapshot | null;
   error: string | null;
   accept: (snapshot: HostMaintenanceSnapshot) => void;
+  onRebuildEnvironment?: (environment: OutdatedEnvironment) => void;
 }) {
   const [checking, setChecking] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -348,7 +363,12 @@ export function HostUpdatesPanel({
         </div>
       </section>
 
-      <HostDependencySettings client={client} snapshot={snapshot} accept={accept} />
+      <HostDependencySettings
+        client={client}
+        snapshot={snapshot}
+        accept={accept}
+        onRebuildEnvironment={onRebuildEnvironment}
+      />
 
       <AlertDialog open={confirming} onOpenChange={(open) => !installing && setConfirming(open)}>
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>

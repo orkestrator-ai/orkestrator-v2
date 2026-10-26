@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import * as portalTransport from "@/lib/portal/portal-transport";
 import type { Environment } from "@/types";
+import type { PersistedPaneLayout } from "@/types/paneLayout";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 
 // Each of the modules stubbed below has its own test file. Snapshot the real
@@ -2523,6 +2524,204 @@ describe("pane-layout binding", () => {
 
     expect(getPaneLayout).toHaveBeenCalledTimes(1);
   });
+});
+
+/**
+ * Code item 9 of the service preview rollout: a pane-layout echo of an older
+ * local save must never re-apply that save's `browserData.url` over a newer
+ * local one, and another client's save must reach an open, hydrated renderer.
+ * These drive the production write path (`apply_pane_layout_intent`) and the
+ * change-feed refresh together against one fake backend record.
+ */
+describe("pane-layout echo ordering", () => {
+  function gate() {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { opened, open };
+  }
+
+  function browserTab(url: string) {
+    return { id: "browser-1", type: "browser" as const, browserData: { url } };
+  }
+
+  function tabUrl(): string | undefined {
+    return usePaneLayoutStore.getState().getPane("default", "env-1")?.tabs[0]?.browserData?.url;
+  }
+
+  /** A fake backend record: intents merge like the backend and bump the revision. */
+  async function startFakeBackend(initialUrl: string) {
+    const backend = await import("@/lib/backend");
+    const { startPaneLayoutPersistence, createPersistedPaneLayoutInput } =
+      await import("./pane-layout-persistence");
+    const { mergePersistedPaneLayouts } = await import("@orkestrator/protocol/pane-layout-merge");
+
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", browserTab(initialUrl), "env-1");
+    const hydrated = {
+      ...usePaneLayoutStore.getState().environments.get("env-1")!,
+      backendRevision: 4,
+    };
+    let record: PersistedPaneLayout = {
+      ...createPersistedPaneLayoutInput(hydrated),
+      environmentId: "env-1",
+      updatedAt: "2026-10-25T00:00:00.000Z",
+      revision: 4,
+    };
+    const intentGates: Array<ReturnType<typeof gate> | null> = [];
+    const applyIntent = spyOn(backend, "applyPaneLayoutIntent").mockImplementation(
+      async (_environmentId, base, desired) => {
+        const current = {
+          version: record.version,
+          containerId: record.containerId,
+          activePaneId: record.activePaneId,
+          root: record.root,
+        };
+        record = {
+          ...mergePersistedPaneLayouts(base, desired, current as typeof desired),
+          environmentId: "env-1",
+          updatedAt: "2026-10-25T00:00:00.000Z",
+          revision: record.revision + 1,
+        };
+        const saved = structuredClone(record);
+        await intentGates[applyIntent.mock.calls.length - 1]?.opened;
+        return saved;
+      },
+    );
+    const readGates: Array<ReturnType<typeof gate> | null> = [];
+    const getPaneLayout = mock(async (_environmentId: string) => {
+      // The read observes the record when it is served; only its answer is late.
+      const snapshot = structuredClone(record);
+      await readGates[getPaneLayout.mock.calls.length - 1]?.opened;
+      return snapshot;
+    });
+
+    const stopPersistence = startPaneLayoutPersistence({
+      hydrateDependencies: async () => undefined,
+    });
+    detach?.();
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    paneStore.beginHydration("env-1");
+    usePaneLayoutStore.getState().finishHydration("env-1", hydrated);
+
+    const urls: Array<string | undefined> = [];
+    const unsubscribe = usePaneLayoutStore.subscribe(() => {
+      const url = tabUrl();
+      if (urls.at(-1) !== url) urls.push(url);
+    });
+    return {
+      intentGates,
+      readGates,
+      applyIntent,
+      getPaneLayout,
+      urls,
+      record: () => record,
+      setRecord: (next: PersistedPaneLayout) => {
+        record = next;
+      },
+      stop: () => {
+        unsubscribe();
+        stopPersistence();
+        applyIntent.mockRestore();
+      },
+    };
+  }
+
+  for (const echoArrives of ["after the newer save settles", "while the newer save is in flight"]) {
+    test(`an older local save's echo of a plain URL tab is ignored ${echoArrives}`, async () => {
+      const fake = await startFakeBackend("http://localhost:3000/");
+      try {
+        const gateA = gate();
+        const gateB = gate();
+        const echo = gate();
+        fake.intentGates.push(gateA, echoArrives === "after the newer save settles" ? null : gateB);
+        fake.readGates.push(echo);
+
+        usePaneLayoutStore
+          .getState()
+          .updateTabBrowserUrl("browser-1", "http://localhost:3000/a", "env-1");
+        await waitForState(() => fake.applyIntent.mock.calls.length === 1, "save A");
+        // Save A is durable (revision 5); its announcement's read is slow.
+        dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
+        await waitForState(() => fake.getPaneLayout.mock.calls.length === 1, "echo read");
+
+        usePaneLayoutStore
+          .getState()
+          .updateTabBrowserUrl("browser-1", "http://localhost:3000/b", "env-1");
+        gateA.open();
+        await waitForState(() => fake.applyIntent.mock.calls.length === 2, "save B");
+        expect(fake.record().revision).toBe(6);
+
+        if (echoArrives === "after the newer save settles") {
+          await waitForState(
+            () => usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision === 6,
+            "save B installed",
+          );
+          echo.open();
+          await tick();
+        } else {
+          echo.open();
+          await tick();
+          gateB.open();
+          // The declined echo is re-read once the write chain is idle.
+          await waitForState(() => fake.getPaneLayout.mock.calls.length === 2, "re-read");
+          await tick();
+        }
+
+        expect(tabUrl()).toBe("http://localhost:3000/b");
+        expect(fake.urls).toEqual(["http://localhost:3000/a", "http://localhost:3000/b"]);
+
+        // The newer announcement then converges on the same URL.
+        dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 6 });
+        await tick();
+        expect(tabUrl()).toBe("http://localhost:3000/b");
+        expect(fake.urls.at(-1)).toBe("http://localhost:3000/b");
+        expect(fake.urls.filter((url) => url === "http://localhost:3000/a")).toHaveLength(1);
+      } finally {
+        fake.stop();
+      }
+    });
+  }
+
+  for (const client of ["a browser client", "an Electron window"]) {
+    test(`another client's save with a different tab set reaches ${client} that already hydrated`, async () => {
+      const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+      if (client === "an Electron window") {
+        // Electron windows keep their own pane selection while adopting structure.
+        Object.defineProperty(window, "orkestrator", {
+          configurable: true,
+          value: { isolatedViewState: true },
+        });
+      }
+      const fake = await startFakeBackend("http://localhost:3000/");
+      try {
+        // `save_pane_layout` from another client: a full replacement at revision 5.
+        const next = structuredClone(fake.record());
+        (next.root as { tabs: unknown[] }).tabs = [
+          browserTab("http://localhost:3000/"),
+          { id: "browser-2", type: "browser", browserData: { url: "http://localhost:4000/" } },
+        ];
+        fake.setRecord({ ...next, revision: 5 });
+        dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
+        await waitForState(
+          () => usePaneLayoutStore.getState().getPane("default", "env-1")?.tabs.length === 2,
+          "the external tab set",
+        );
+        expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision).toBe(5);
+        // Adopting it wrote nothing back.
+        expect(fake.applyIntent).not.toHaveBeenCalled();
+      } finally {
+        fake.stop();
+        if (client === "an Electron window") {
+          if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+          else Reflect.deleteProperty(window, "orkestrator");
+        }
+      }
+    });
+  }
 });
 
 describe("authoritative resync", () => {

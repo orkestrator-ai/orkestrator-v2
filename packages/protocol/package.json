@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.30.0-beta",
+  "version": "2.32.0-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -53,6 +53,7 @@
     "./portal-layout": "./src/portal-layout.ts",
     "./coordinator-web-research": "./src/coordinator-web-research.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
+    "./node/claude-linux-sandbox": "./src/node/claude-linux-sandbox.ts",
     "./node/claude-plugin-set": "./src/node/claude-plugin-set.ts",
     "./node/cursor-plan-usage": "./src/node/cursor-plan-usage.ts",
     "./diff-stats": "./src/diff-stats.ts",

@@ -194,12 +194,14 @@ export async function stopEnvironmentExecWorkers(
   options: { requireStopped?: boolean } = {},
 ): Promise<void> {
   // Partial storage adapters (compatibility fixtures) have no operation store.
-  if (typeof context.storage.listActivePublicOperations !== "function") return;
+  if (typeof context.storage.publicOperations?.listActivePublicOperations !== "function") return;
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) return;
-  let active: Awaited<ReturnType<typeof context.storage.listActivePublicOperations>>;
+  let active: Awaited<
+    ReturnType<typeof context.storage.publicOperations.listActivePublicOperations>
+  >;
   try {
-    active = (await context.storage.listActivePublicOperations()).filter(
+    active = (await context.storage.publicOperations.listActivePublicOperations()).filter(
       (record) =>
         record.action === "environment.exec" && record.resources.environmentId === environmentId,
     );
@@ -222,7 +224,7 @@ export async function stopEnvironmentExecWorkers(
         if (options.requireStopped) throw new Error("Exec worker is still running");
         continue;
       }
-      await context.storage.updatePublicOperation(record.operationId, (current) =>
+      await context.storage.publicOperations.updatePublicOperation(record.operationId, (current) =>
         ["admitted", "running", "unknown"].includes(current.state)
           ? { ...current, ...patch, completedAt: new Date().toISOString() }
           : null,

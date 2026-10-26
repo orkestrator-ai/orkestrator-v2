@@ -1,14 +1,17 @@
 # Environment and disk cleanup
 
-Checked against `main` at `31d0fb06` (2026-10-17).
+Checked against `main` at `31d0fb06` (2026-10-17); items 1–3 worked on
+2026-10-26 against `main` at `93018933`.
 
 Deleting an environment, the startup reconciler and the pre-ledger sweeps
 remove only state Orkestrator can prove it owns, and dev tooling and tests
 must not grow disk without bound. The code shipped in #856 (deletion ledger,
 branch policy, reconciler) and #879 (dev profile pruning, test isolation,
 pre-ledger sweeps, `disk:report`). The real-stack evidence was recorded on
-2026-10-17 (below). What remains is a few test temporary directories that still
-leak, and a way to see cleanup that has stopped retrying.
+2026-10-17 (below). On 2026-10-26 the test temporary-directory leaks were fixed,
+`disk:report` gained a row for cleanup that has stopped retrying, and
+`dev:reset` now removes a profile's macOS Keychain item. What remains is a live
+macOS run of that last change.
 
 ## Current state
 
@@ -28,9 +31,11 @@ leak, and a way to see cleanup that has stopped retrying.
 - `reconcileEnvironmentCleanup` (`environment-cleanup-reconciler.ts`) retries
   pending steps through the environment lifecycle queue, with
   `environmentCleanupRetryDelayMs` backing off from 1 minute, doubling, to
-  6 hours. After `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS` (8) an entry is kept for
-  inspection and logged once per process with `console.warn`. Nothing in the
-  UI, diagnostics or `disk:report` shows it.
+  6 hours. After `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS` (8, now defined with
+  `isEnvironmentCleanupExhausted` in `environment-cleanup-ledger.ts`) an entry
+  is kept for inspection and logged once per process with `console.warn`.
+  Since 2026-10-26 `disk:report` shows it (`environment cleanup ledger` row);
+  the UI and recurring diagnostics do not.
 - Sweeps for state whose owner is provable without a ledger:
   - `sweepOrphanedEnvironmentState`: bridge state directories.
   - `sweepOrphanedDesignCanvases`: design canvases. It loads the owner set
@@ -44,8 +49,9 @@ leak, and a way to see cleanup that has stopped retrying.
   Per-project branch sweep times and cursors live in the store
   `environment-cleanup-sweeps`. `runStartupEnvironmentCleanup` starts it all.
 - Dev tooling: `apps/desktop/scripts/dev/profile-cleanup.ts` (`removeProfile`,
-  `pruneProfiles`, the build-cache warning at `BUILD_CACHE_WARNING_BYTES`,
-  25 GB), the `dev:prune` task and orphan pruning at `dev`/`dev:test` start.
+  `pruneProfiles`, `removeProfileKeychainItem`, the build-cache warning at
+  `BUILD_CACHE_WARNING_BYTES`, 25 GB), the `dev:prune` task and orphan pruning
+  at `dev`/`dev:test` start.
 - Tests: `tests/temp-sweep.ts` (`createOwnedTempDir`, `sweepStaleTempDirs`)
   names directories `<prefix><pid>-<random>`. It is used by
   `tests/isolate-git-config.ts`, `tests/isolate-worktree-dir.ts` and
@@ -68,38 +74,139 @@ leak, and a way to see cleanup that has stopped retrying.
 
 ### Code
 
-1. Fix the remaining test temporary-directory leaks, at source or by opting
-   the prefix into `tests/temp-sweep.ts`:
+1. ~~Fix the remaining test temporary-directory leaks~~ Done 2026-10-26, all
+   at source rather than through `tests/temp-sweep.ts`:
    - `pi-http-mcp-` and `pi-http-rotate-` in `bridges/pi-bridge/src/http.test.ts`:
-     an inline `mkdtemp` passed as `agentDir` and never removed.
-   - `ork-journal-gc-` in `bridges/codex-bridge/src/sessions/dispatch-journal.test.ts`
-     ("old terminal records are dropped"): created with `mkdtempSync` but
-     not added to the file's `temporaryDirs`, so its `afterEach` misses it.
-   - `ork-watch-` in `apps/backend/tests/worktree-watcher.test.ts` ("observes
-     a real file write"): the watcher is closed, the directory is not removed.
-   - `cursor-bridge-sdk-test-<pid>` (`bridgeStateRoot`) in
-     `bridges/cursor-bridge/src/agent-session.test.ts`: `afterAll` restores
-     the overrides but leaves the directory.
+     created through a file-level `ownedTempDirectory`, removed in `afterAll`
+     after the server shuts down (the MCP agent directory outlives the test
+     body).
+   - `ork-journal-gc-` in `bridges/codex-bridge/src/sessions/dispatch-journal.test.ts`:
+     created through `journalHome`, which registers it in `temporaryDirs`.
+   - `ork-watch-` in `apps/backend/tests/worktree-watcher.test.ts`: removed by
+     a cleanup registered before the watcher's, so it runs after the close.
+   - `ork-gitpaths-` in the same file (found by this pass, not listed before):
+     its cleanup was `void fs.rm(...)` in the file's last test, so the process
+     could exit first. The file's `afterEach` now awaits each cleanup.
+   - `cursor-bridge-sdk-test-<pid>` in `bridges/cursor-bridge/src/agent-session.test.ts`:
+     `afterAll` now removes `bridgeStateRoot`.
+   - `recurring-live-ab-cli-` (found by the full-suite sweep): every CLI
+     runner in `scripts/recurring-live-ab.ts` made a config directory nothing
+     removed, both in `tests/unit/recurring-live-ab-runner.test.ts` and in
+     real A/B runs. `runArm` now creates one lazily, passes it to both runners
+     and removes it after the profile cleanup; a new test checks it.
 
-   These are already removed on the normal path: `ork-runtime-`,
-   `ork-preview-*`, `orkestrator-state-sync-` and `orkestrator-activity-boot-`.
+   Evidence: the four files run with `TMPDIR` set to an empty directory left
+   it empty; with the test changes reverted the same runs left exactly
+   `cursor-bridge-sdk-test-*`, `ork-gitpaths-*`, `ork-journal-gc-*`,
+   `ork-watch-*`, `pi-http-mcp-*` and `pi-http-rotate-*`; the A/B runner file
+   left two `recurring-live-ab-cli-*` before its fix and none after. The
+   full-suite sweep is recorded under
+   [Full-suite temp sweep](#full-suite-temp-sweep-2026-10-26).
+   `ork-preview-*` and `orkestrator-activity-boot-` are removed on the
+   normal path. `ork-runtime-` and `orkestrator-state-sync-` were believed to
+   be, but the direct sweep below left several of each; they and every other
+   leak that sweep found are in
+   [0247](0247-test-temp-dir-leaks-from-full-sweep.md).
    `orkestrator-test-run.*` is kept for 7 days on purpose by
    `scripts/test-all.ts`, because it holds failure logs.
-2. Optional: surface permanently failing cleanup. Add a diagnostics entry or a
-   `disk:report` row for ledger entries at the attempt cap (count, pending
-   steps, redacted `lastError`), using the ledger's own predicates.
+2. ~~Optional: surface permanently failing cleanup.~~ Done 2026-10-26 as a
+   `disk:report` row (decision 2). `environment-cleanup-ledger.ts` now owns
+   `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS`, `isEnvironmentCleanupExhausted` and
+   `parseEnvironmentCleanupLedger` (the reconciler imports the first two and
+   re-exports the cap). `environmentCleanupLedgerRow` in
+   `scripts/disk-report.ts` reads the store read-only and reports
+   `<n> stopped retrying, <m> retrying`, then for stopped entries the pending
+   step counts, up to three distinct redacted `lastError` values and up to
+   three environment ids. Entries whose environment record still exists are
+   skipped, as the reconciler skips them. Evidence: `tests/unit/disk-report.test.ts`
+   seeds the real SQLite ledger through `EnvironmentCleanupLedger` (cap,
+   cap + 1, cap − 1 and a live environment) and checks the row, the
+   overflow text and that no path leaks into it, and runs the script itself
+   against a seeded `HOME`/`XDG_CONFIG_HOME`; `environment-cleanup-ledger.test.ts`
+   covers the predicate and parser. A real `mise run disk:report` on this
+   Linux host (omarchy-hp) against a seeded throwaway data directory printed
+   `1 stopped retrying, 1 retrying (pending: worktree 1, branch 1; last errors: worktree: EACCES)`.
 3. Remove a profile's `safeStorage` Keychain item when `dev:reset` removes the
-   profile. Electron stores the key as the generic password
-   `<electronTitle> Safe Storage` in the login Keychain, and nothing deletes
-   it. On 2026-10-17 the run host had 292 such items. Agent-test profiles on
-   macOS no longer create one (`use-mock-keychain`, see
+   profile. **Code done 2026-10-26; live macOS run owed.** Electron stores the
+   key as the generic password `<app name> Safe Storage`, account
+   `<app name>` (`ElectronBrowserMainParts::PostCreateMainMessageLoop`), and
+   a profile's app name is its `electronTitle`. On 2026-10-17 the run host had
+   292 such items. Agent-test profiles on macOS no longer create one
+   (`use-mock-keychain`, see
    [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) evidence log), but
-   `development` profiles still do. Delete only the reset profile's own item
-   (`security delete-generic-password -s "<title> Safe Storage"`).
+   `development` profiles still do.
+
+   Built: `removeProfileKeychainItem` (`apps/desktop/scripts/dev/profile-cleanup.ts`)
+   runs `security delete-generic-password -s "<title> Safe Storage" -a "<title>"`
+   until it exits 44 (not found), at most 8 times, each call bounded to 15 s
+   so a locked Keychain's unlock dialog cannot stall unattended start-up
+   pruning. `removeProfile` calls it
+   only after the profile state is removed, so `dev:reset`, `dev:prune` and
+   start-up pruning all use it, and a failed reset keeps the key. It runs only
+   on macOS, only when the profile's `electronTitle` equals
+   `runtimeProfileElectronTitle(id)` (new in `electron/runtime-profile.ts`), so
+   an edited `profile.json` can never delete the production app's key, and
+   only when the profile is the platform's own development root's profile of
+   that id. The item is named by title alone, so a same-id profile under
+   another root (a test harness, a temporary root) would otherwise delete the
+   real profile's key; `keychainRoots` lets tests name their own root. Any
+   other `security` failure becomes a warning (`dev:reset` prints it,
+   `dev:prune` appends it to the outcome) and does not fail the removal. Unit
+   tests in `profile-cleanup.test.ts` cover deletion of every copy and no
+   other item, ordering after state removal, no call when removal fails, no
+   call off macOS, refusal of a foreign title, refusal of a same-id profile
+   under another root, a locked Keychain, and the prune outcome. The suite's command runner now records `security` calls, so
+   no test can reach a host Keychain.
+
+   Still owed (needs a macOS host; omarchy-hp is Linux): start a development
+   profile, for example
+   `mise run dev:test --profile qa-keychain-0023 --fixture --no-agent-credentials`
+   (main awaits `safeStorage` before its first window, which creates the
+   item; sign in with `mise run dev:login` if it does not), stop it with
+   `mise run dev:stop --profile qa-keychain-0023`, and confirm `security find-generic-password -s "Orkestrator AI — DEV [qa-keychain-0023] Safe Storage"`
+   finds it. Then run `mise run dev:reset --profile qa-keychain-0023`, check
+   the output says `Removed 1 login Keychain item(s).`, that the same
+   `find-generic-password` now exits 44, and that
+   `security find-generic-password -s "Orkestrator AI Safe Storage"` (the
+   production item, if present) is unchanged. Record the macOS version,
+   Electron version and output here.
 
 ### Qualification
 
-None outstanding. The results are below.
+Only the macOS Keychain run in item 3. The 2026-10-17 results are below.
+
+## Full-suite temp sweep (2026-10-26)
+
+`TMPDIR=/tmp/ork0023-full-tmp mise run test:logged -- --name full-test -- mise run test`
+on omarchy-hp (Linux x86_64) at `d0de935d`, with the private directory empty
+beforehand. Afterwards it held only:
+
+| Left behind | Verdict |
+| --- | --- |
+| `orkestrator-test-run.*` | Intended: failure logs kept 7 days by `scripts/test-all.ts`. |
+| `orkestrator-test-scheduler-v1-<uid>`, `orkestrator-test-timings.*`, `playwright-transform-cache-<uid>`, `jiti` | Intended: the test scheduler's state and timing history, and tool caches, reused by the next run. |
+| `recurring-live-ab-cli-*` (2) | Leak, fixed in item 1. |
+| `policy-cli-*` | Only when the live OpenCode research test times out: the test is abandoned before `withPolicyCliFixture`'s `finally` runs. Recorded in flake [0785](../../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md) rather than fixed here, since the cause is the hang. |
+
+That sweep covers the root and agent-support group only. Turbo runs the
+workspace and bridge groups in strict environment mode and does not pass
+`TMPDIR` through, so those tests wrote to `/tmp` (an aggregate failure in
+`commands-project-creation.test.ts` named `/tmp/ork-project-create-*`, which
+that file creates through `os.tmpdir()`). The four workspace and bridge files
+in item 1 were swept one by one instead. A complete sweep of those groups
+would run each package's own script outside Turbo with a private `TMPDIR`,
+for example `TMPDIR=<empty dir> bun run --cwd apps/backend test:workspace`,
+and the same for each bridge's `test:bridge`. The suite itself did not pass;
+its failures are in flake
+[1010](../../tests/flaky-tests/aggregate-validation-runs/1010-environment-disk-cleanup-0023-validation.md).
+
+That direct sweep was then run: all five bridges' `test:bridge` and the
+backend's `test:workspace` with an empty private `TMPDIR`. The bridges
+passed; the backend had 11,721 passed, 142 skipped and 2 failed (flake 0785,
+and a test that reads the host's `XDG_STATE_HOME`). It left about twenty
+directories under fifteen test-owned prefixes. They are new work and are
+inventoried, with owners, in
+[0247](0247-test-temp-dir-leaks-from-full-sweep.md).
 
 ## Qualification results (2026-10-17)
 
@@ -231,9 +338,84 @@ here must keep these invariants:
 
 ## Needs verification
 
-- Which writers still produce `<name>.json.<pid>.tmp` in the data directory
-  since #969 moved most stores to SQLite. The temp-file sweep may now only
-  clear pre-SQLite leftovers.
+- ~~Which writers still produce `<name>.json.<pid>.tmp` in the data directory
+  since #969 moved most stores to SQLite.~~ Checked 2026-10-26 against
+  `93018933`: no backend store writes one at the top of the data directory any
+  more (`github-ranges-cache.ts` writes `github-ranges.txt.<pid>.tmp`, which
+  the pattern does not match, and the others write into subdirectories). The
+  desktop main process still does, because Electron's `userData` is the same
+  directory: `preview-partitions-pending.json` (`preview-partition-retention.ts`),
+  `preview-ports.json` (`preview-port-hints.ts`), and `agent-platforms.json`
+  and `config.json` (`agent-platform-selection.ts`). So
+  `sweepAbandonedTempFiles` still covers live writers and stays.
+
+## Assumptions and decisions
+
+Decisions made on 2026-10-26 while working through the file.
+
+1. **Fixing the leaks at source or through `tests/temp-sweep.ts` (item 1).**
+   Options: (a) remove each directory in its own test file; (b) rename the
+   prefixes to `<prefix><pid>-<random>` and let `sweepStaleTempDirs` collect
+   them at the next run. Chose (a). Pros: nothing is left even for a run that
+   is never followed by another; each fix is a line or two in the owning
+   file; no sweep list to maintain. Cons: a test that crashes mid-run still
+   leaks, which (b) would eventually catch; no existing file used (b) for
+   these prefixes, so there was nothing to reuse.
+2. **Where to surface permanently failing cleanup (item 2).** Options: (a) a
+   `disk:report` row; (b) a section in the recurring-work diagnostics
+   (`get_recurring_work_diagnostics`, `/api/metrics`); (c) a UI notice in
+   Settings > Disk usage, needing a new backend command and renderer work.
+   Chose (a). Pros: `disk:report` is already the operator's view of what
+   cleanup left behind, is read-only and can name environment ids and the
+   redacted error; it reads the store with the ledger's own parser and
+   predicate, so the two cannot drift. Cons: a user who never runs
+   `disk:report` still sees only the log line. (b) was rejected because those
+   diagnostics are documented as content-free and I/O-free (they would need a
+   cached count published by the reconciler and could carry no ids or
+   errors); (c) is a new feature for a rare state (Low file), better taken up
+   with the open question on retrying exhausted entries.
+3. **Counting entries whose environment still exists (item 2).** Options:
+   count every entry at the cap, or skip those whose environment record still
+   exists. Chose to skip them, matching the reconciler, which leaves those to
+   interrupted-deletion recovery. Pros: the row means exactly "the reconciler
+   gave up". Cons: an exhausted entry for a live environment is not shown
+   until the environment is deleted.
+4. **Which removals delete the Keychain item (item 3).** Options: only
+   `dev:reset`, or every profile removal (`removeProfile`, which `dev:reset`,
+   `dev:prune` and start-up orphan pruning share). Chose every removal. Pros:
+   a pruned profile leaves the same item a reset one does; one code path.
+   Cons: pruning can now touch the login Keychain, bounded to the pruned
+   profile's own item.
+5. **How narrowly to match the item (item 3).** Options: (a) by service only
+   (`-s`); (b) by service and account (`-s` and `-a`); (c) also check the
+   profile's title against the one `dev:test` derives from its id; (d) also
+   require the profile to be the default development root's profile of that
+   id. Chose (b), (c) and (d). Electron sets both names from the app name, so
+   (b) still matches every item Electron created; (c) means an edited
+   `profile.json` naming `Orkestrator AI` cannot delete the production key;
+   (d), added in self-review, stops a same-id profile under a test or
+   temporary root from deleting the real profile's key, since the item is
+   named by title alone. Cons: a profile created under an older title format,
+   or under a non-default root, keeps its item (it says so in a warning).
+6. **When to delete it, and what a failure does (item 3).** Chose: after the
+   profile state is removed, and a failure is a warning, not an error. Pros:
+   a reset that fails earlier keeps both the encrypted data and its key; a
+   locked or denied Keychain does not make an otherwise complete reset look
+   failed. Cons: a warning can be missed; the item then stays until removed
+   in Keychain Access.
+7. **Leaks the sweep found beyond item 1's list.** Options: fix them all
+   here; or record them in a new file. Chose a new file,
+   [0247](0247-test-temp-dir-leaks-from-full-sweep.md), as `docs/README.md`
+   requires (an existing file takes no new todos). The one found in the
+   root group's aggregate sweep (`recurring-live-ab-cli-*`) was fixed here
+   because it was the only leak that sweep showed. Pros: item 1 stays the
+   list it named; the fifteen backend and bridge prefixes each need their
+   own owner check. Cons: the suite still leaks until 0247 is done.
+8. **Linux secret stores (outside this file's scope).** On Linux Electron
+   keeps the key in the Secret Service or KWallet when one is available.
+   Whether development profiles leave items there was not checked: doing so
+   means reading this host's keyring, which the run's rules leave alone.
+   Recorded here only; open a new todo if a Linux run shows leftovers.
 
 ## Related
 

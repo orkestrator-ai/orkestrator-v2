@@ -157,6 +157,34 @@ No owning implementation, assertion, deadline or skip was changed.
 - **Evidence:** `orkestrator-test-run.Sh2roc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the existing aggregate timeout, confirmed intermittent by the unchanged owner's isolated pass. No history code, assertion, timeout or skip changed.
 
+## CLI qualification review validation — 2026-10-25
+
+- **Original command:** `mise run test:logged -- --name cli-review-repository -- mise run test`
+  on `todo-0014-cli-qualification-060fd6539163`, review fixes committed as
+  `2c04e0b1b`, Bun 1.4.4 on macOS arm64. Workspace/root/bridge/protocol
+  reservations were 4/1/2/1 slots; the backend used two isolated workers.
+  Other worktrees were validating concurrently; observed host load averages
+  after the failure were 27.78/41.35/43.48.
+- **Failure:** `terminal history > pages fixed history backwards and rejects a cursor for another history`
+  in `apps/backend/src/core/terminal-history.test.ts` timed out after
+  5001.99 ms against the 5000 ms deadline. Its late work then expected
+  `row-1250` from an undefined page row at line 280, producing the one
+  between-tests error.
+- **Unchanged complete owner rerun:**
+  `mise run test:logged -- --name cli-review-terminal-history-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`
+  passed, exit 0, 7.0 seconds.
+- **Evidence:** `orkestrator-test-run.ghZqRk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and outer `orkestrator-test-run.xNm4oB/cli-review-repository.log.gz` below
+  the platform temporary directory.
+- **Completed aggregate:** backend 11433 passed, 89 skipped, one failed and
+  one between-tests error across 11523 tests in 680 files (620.12 seconds).
+  All other workspace packages and the root/support, bridge and protocol
+  groups passed. The logged aggregate exited 1 after 1228.6 seconds, including
+  host-capacity queue waits.
+- **Assessment:** recurrence of the existing intermittent aggregate deadline.
+  Shared-host contention remains a hypothesis. No terminal-history code,
+  assertions, deadlines or skips changed; the aggregate failure is retained.
+
 ## Live provider review validation — 2026-10-25
 
 The two-worker backend aggregate repeated this failure at `2238f5ec4`. The
@@ -165,3 +193,29 @@ text, durations, commands, suite counts and retained evidence are recorded in
 [0887](../aggregate-validation-runs/0887-live-provider-review-validation.md).
 No implementation, assertion, deadline or skip changed; the original aggregate
 remains failed.
+
+## Storage facade size validation — 2026-10-26
+
+`mise run test` on `todo-0163-storage-facade-size-a8e92b2563c1` (head
+`7e64cd377`, todo 0163: storage area fields and the agent mail split; no
+terminal-history code changed) failed this case at the five-second deadline
+(5001.62 ms) in the backend workspace aggregate: 11768 passed, 97 skipped, 1
+failed across 11866 tests in 703 files. The same case also timed out once in a
+direct `bun test src tests --parallel=8` run on the branch. The unchanged
+complete owner passed alone both times
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`:
+25 passed, 7.4 s). Evidence:
+`orkestrator-test-run.m0KWc5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the platform temporary directory. No implementation, assertion,
+deadline or skip changed; the aggregate failure is retained.
+
+## Recurrence on 2026-10-26 (todo 0035 validation)
+
+`mise run test:logged -- --name full-test -- mise run test` on branch
+`todo-0035-mobile-layout-gaps-49509c5f9933` (head `aaea46d6a`, renderer-only
+changes), at host load averages of 38 to 44 on 18 cores, failed this case after
+5235.50 ms, along with [0962](../coordinator-and-multi-review/0962-diff-stats-in-flight-baseline-aggregate-timeout.md) and one other known case. The
+unchanged owner passed alone with
+`mise run test:logged -- --name backend-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts ./src/core/looped-review-scheduling.test.ts ./src/core/feature-planning-scheduling.test.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures`
+(exit 0, 23.6 s). Evidence: `orkestrator-test-run.xIhDQt/` below the host
+temporary directory. No assertion, timeout or skip changed.

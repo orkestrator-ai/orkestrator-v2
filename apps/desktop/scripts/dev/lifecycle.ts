@@ -37,6 +37,7 @@ import {
   removeProfile,
 } from "./profile-cleanup.js";
 import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
+import { prepareProfileBridgeBuilds, type TurboRunner } from "./bridge-builds.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -493,6 +494,7 @@ export async function startDevelopment(
   dependencies: ElectronCompilationDependencies & {
     roots?: RuntimeProfileRoots;
     prune?: typeof pruneProfiles;
+    turbo?: TurboRunner;
   } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
@@ -553,6 +555,19 @@ export async function startDevelopment(
 
   try {
     await compileElectronForDevelopment(profile.logDir, dependencies);
+    if (flavor === "agent-test") {
+      // The backend runs from source but launches each bridge from its
+      // `dist`; build them now so a profile never tests the build before a
+      // bridge change. The record lets the live suites notice a later one.
+      const logPath = path.join(profile.logDir, "bridge-build.log");
+      await prepareProfileBridgeBuilds({
+        repositoryRoot,
+        statusPath,
+        logPath,
+        writeLog: (text) => createBoundedLogWriter(logPath).write(text),
+        ...(dependencies.turbo ? { run: dependencies.turbo } : {}),
+      });
+    }
 
     if (args.fixtureEnvironments.includes("container")) {
       const inspected = spawnSync("docker", ["image", "inspect", profile.dockerImage], {
@@ -862,8 +877,12 @@ export async function resetProfile(args: DevArguments): Promise<number> {
   const kept = removal.branchesKept.length
     ? ` Kept unmerged branch(es): ${removal.branchesKept.join(", ")}.`
     : "";
+  const keychain = removal.keychainItemsRemoved
+    ? ` Removed ${removal.keychainItemsRemoved} login Keychain item(s).`
+    : "";
   console.log(
-    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s), ${removal.volumesRemoved} volume(s), ${removal.networksRemoved} network(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}`,
+    `Reset profile ${profile.id}: removed ${removal.containersRemoved} exact-owner Docker container(s), ${removal.volumesRemoved} volume(s), ${removal.networksRemoved} network(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}${kept}${keychain}`,
   );
+  if (removal.keychainWarning) console.warn(removal.keychainWarning);
   return 0;
 }

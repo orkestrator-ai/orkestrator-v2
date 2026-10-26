@@ -10,6 +10,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `entrypoint.sh`         | Container entrypoint                                     |
 | `workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
 | `init-firewall.sh`      | Network firewall rules applied at startup                |
+| `orkestrator-egress-gateway.sh` | Entrypoint of a restricted runtime's egress gateway |
 | `update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
@@ -70,13 +71,27 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly three things: the image entrypoint
+  passwordless sudo for exactly two things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
-  policy once, root-owned, before dropping to `node`),
-  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
-  (the latter only when the recorded mode is `full`). The container boundary,
-  not a reusable root shell, is what isolates an agent. Runtime allowlist
-  edits use `docker exec --user root /usr/local/bin/update-firewall.sh`.
+  policy once, root-owned, runs the firewall step as root and only then drops
+  to `node`) and `/usr/local/bin/run-root-setup.sh` (only when the recorded
+  mode is `full`). There is no grant for `init-firewall.sh`. The container
+  boundary, not a reusable root shell, is what isolates an agent. Runtime
+  allowlist edits use `docker exec --user root /usr/local/bin/update-firewall.sh`
+  in the container that owns the network namespace: the runtime's egress
+  gateway when it has one.
+- `/usr/local/bin/orkestrator-egress-gateway` is the entrypoint of a restricted
+  runtime's egress gateway: the same image, run as root with `NET_ADMIN` and a
+  tmpfs `/run`, records the policy (`network-policy-entrypoint.sh
+  --record-only`), applies the unchanged `init-firewall.sh` and idles. The
+  runtime joins its namespace with `NET_RAW` dropped, preventing packet sockets
+  from bypassing OUTPUT filtering. Before admitting a workload, the gateway
+  snapshots trusted resolver and host-service addresses on its private filesystem;
+  all firewall lookups and updates use those snapshots across restarts, since
+  Docker's shared network files can be modified by workload root. The runtime's root
+  entrypoint then only verifies that the gateway rejects an unlisted
+  destination (`egress-unverified` / `egress-gateway-unavailable` boot
+  failures otherwise).
 
 ## Playwright
 
@@ -126,14 +141,19 @@ on Apple Silicon.
 ## Network isolation
 
 Containers in `restricted` mode (the default) reach only an allowlist; anything
-else is rejected outright. `full` mode skips the firewall entirely.
+else is rejected outright. `full` mode skips the firewall entirely. A
+restricted runtime from a current image is enforced from outside by its egress
+gateway (root `AGENTS.md` "Network Isolation"); the scripts below run in
+whichever container owns the network namespace.
 
 - GitHub's own ranges are always resolved from `api.github.com/meta` at startup.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
-  re-adds Codex's, Cursor's, Grok's and Pi's hosts only when those platforms
-  are enabled). Codex requires `chatgpt.com` and `auth.openai.com`. Pi's
+  re-adds Codex's, Cursor's, OpenCode's, Grok's and Pi's hosts only when
+  those platforms are enabled). Codex requires `chatgpt.com` and
+  `auth.openai.com`; OpenCode requires `opencode.ai` for its own Zen and Go
+  providers. Pi's
   list is necessarily partial: it fronts the user's own model providers, so a
   self-hosted endpoint or a regional mirror is a host only the user knows and
   belongs in `allowedDomains` rather than being guessed at.

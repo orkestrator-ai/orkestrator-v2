@@ -295,6 +295,21 @@ describe("HTTP bridge command transport", () => {
     await expect(failure).rejects.toBeInstanceOf(PromptRejectedError);
     await expect(failure).rejects.toThrow(/^\/review is no longer available\.$/);
   });
+
+  test("a bridge refusing a turn its host cannot sandbox keeps the bridge's reason", async () => {
+    const reason =
+      "Claude's command sandbox cannot run commands on this host: bubblewrap starts, but AppArmor's bwrap-userns-restrict profile strips capabilities from the user namespace the Claude CLI nests inside it.";
+    const { provider } = httpProvider(
+      () => Response.json({ error: reason, kind: "sandbox-unavailable" }, { status: 422 }),
+      claudeConnection,
+    );
+    const failure = await provider
+      .send("session-1", "hi", { requestId: "r-1" })
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(PromptRejectedError);
+    // Not "claude rejected the prompt (HTTP 422): …".
+    expect((failure as Error).message).toBe(reason);
+  });
 });
 
 /*

@@ -114,7 +114,7 @@ platforms than Claude and Codex.
   through the launcher. How to run it is in
   [agent-testing.md](../../development/agent-testing.md#automated-checks).
 - **Storage.** `multi-reviews` is a SQLite `record` store (`STORE_LAYOUTS` in
-  `storage-stores.ts`), one row per workflow. `StorageReviews`
+  `storage-stores.ts`), one row per workflow. `ReviewsRepository`
   (`storage-reviews.ts`) reads and writes one row at a time (`loadStoreRow`,
   `updateStoreRow`); only launch, listing and the environment sweep read every
   workflow. Writers serialize on the store's mutation lease, and each save

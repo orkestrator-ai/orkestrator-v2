@@ -15,6 +15,8 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { restartRuntime, startRuntime } from "./container-live-start";
+import { removeLabelledResources } from "./container-live-cleanup";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -48,17 +50,9 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!ENABLED) return;
   for (const server of servers) server.stop(true);
-  const ids = (await docker(["ps", "-aq", "--filter", `label=orkestrator-owner=${owner}`]))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  const networks = (
-    await docker(["network", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
+  expect(leftovers).toEqual([]);
   // Removing containers takes several seconds on a loaded host; the default
   // hook timeout would abandon the cleanup part-way and leak the networks.
 }, 180_000);
@@ -118,6 +112,11 @@ async function probe(containerId: string, url: string): Promise<number> {
   return Number(out.split("\n").at(-1));
 }
 
+/** Where the policy says the runtime's firewall runs. */
+function policy0(policy: { enforcement?: string }): string | undefined {
+  return policy.enforcement;
+}
+
 /** Left the container: reached, or dropped further on by the host. */
 const LEFT_CONTAINER = [0, 28];
 
@@ -145,7 +144,7 @@ describe("C22 environment networks and narrow host access", () => {
         imageId: resolved.imageId,
         runtimeGeneration: 1,
       });
-      await docker(["start", siblingId]);
+      await startRuntime(siblingId);
       await waitForContainerBoot(siblingId);
       await docker([
         "exec",
@@ -169,17 +168,26 @@ describe("C22 environment networks and narrow host access", () => {
         runtimeGeneration: 1,
       });
       await context.storage.updateEnvironment(restricted.id, { containerId, status: "running" });
-      await docker(["start", containerId]);
+      await startRuntime(containerId);
       await waitForContainerBoot(containerId);
+      // The namespace owner: the egress gateway on a gateway image.
+      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const firewall = await networkOwnerContainer(containerId);
 
       // Each environment has its own labelled network; neither is the default bridge.
       const networks = await docker([
         "inspect",
         "-f",
         "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}",
-        containerId,
+        firewall,
       ]);
       expect(networks).toBe(environmentNetworkName(owner, restricted.id));
+      if (firewall !== containerId) {
+        expect(policy0(await environmentNetworkPolicy(restricted.id, context))).toBe("gateway");
+        expect(
+          await docker(["exec", containerId, "awk", "/^CapEff/ { print $2 }", "/proc/self/status"]),
+        ).toBe("0000000000000000");
+      }
 
       const policy = await environmentNetworkPolicy(restricted.id, context);
       expect(policy.policyVersion).toBe(3);
@@ -248,7 +256,7 @@ describe("C22 environment networks and narrow host access", () => {
         "-e",
         'Bun.serve({ hostname: "0.0.0.0", port: 4096, fetch: () => new Response("ingress-ok") })',
       ]);
-      const published = await docker(["port", containerId, "4096/tcp"]);
+      const published = await docker(["port", firewall, "4096/tcp"]);
       const hostPort = published.split("\n")[0]!.split(":").at(-1)!;
       let ingress = "";
       for (let attempt = 0; attempt < 20 && ingress !== "ingress-ok"; attempt += 1) {
@@ -273,11 +281,11 @@ describe("C22 environment networks and narrow host access", () => {
         await probe(containerId, `http://host.docker.internal:${otherPort}/`),
       );
       expect(await probe(containerId, `http://host.docker.internal:${servicePort}/`)).toBe(7);
-      expect(
-        await docker(["exec", containerId, "cat", "/etc/orkestrator/host-service-ports"]),
-      ).toBe(String(otherPort));
+      expect(await docker(["exec", firewall, "cat", "/etc/orkestrator/host-service-ports"])).toBe(
+        String(otherPort),
+      );
       // ...and survives a restart of the container.
-      await docker(["restart", "-t", "5", containerId]);
+      await restartRuntime(containerId);
       await waitForContainerBoot(containerId);
       expect(LEFT_CONTAINER).toContain(
         await probe(containerId, `http://host.docker.internal:${otherPort}/`),
@@ -286,7 +294,9 @@ describe("C22 environment networks and narrow host access", () => {
 
       // The network is removed only once nothing is attached.
       expect(await removeEnvironmentNetwork(context, restricted.id)).toBe("in-use");
-      await docker(["rm", "-f", containerId]);
+      // The runtime goes with its gateway, which held the network.
+      const { removeRuntimeContainer } = await import("../src/core/egress-gateway");
+      await removeRuntimeContainer(containerId, owner);
       expect(await removeEnvironmentNetwork(context, restricted.id)).toBe("removed");
       expect(await removeEnvironmentNetwork(context, restricted.id)).toBe("absent");
     },
@@ -320,7 +330,7 @@ describe("C24 resource budgets are enforced and reported as applied", () => {
         runtimeGeneration: 1,
       });
       await context.storage.updateEnvironment(limited.id, { containerId, status: "running" });
-      await docker(["start", containerId]);
+      await startRuntime(containerId);
       await waitForContainerBoot(containerId);
 
       const policy = await environmentResourcePolicy(limited.id, context);
@@ -417,7 +427,7 @@ describe("C24 one environment at its CPU limit leaves another usable", () => {
           containerId: id,
           status: "running",
         });
-        await docker(["start", id]);
+        await startRuntime(id);
         await waitForContainerBoot(id);
       }
       const [busyId, quietId] = ids as [string, string];
@@ -451,7 +461,7 @@ describe("C24 one environment at its CPU limit leaves another usable", () => {
       expect(busySample?.cpuCores).not.toBeNull();
       // Held to its one-core budget (with sampling slack), not eight cores.
       expect(busySample!.cpuCores!).toBeLessThan(1.3);
-      await docker(["rm", "-f", ...ids]);
+      for (const id of ids) await docker(["rm", "-f", id]);
     },
     LIVE_TIMEOUT_MS,
   );
@@ -486,7 +496,7 @@ describe("C26 bounded logs", () => {
           containerId,
         ]),
       ).toBe('local {"max-file":"3","max-size":"10m"}');
-      await docker(["start", containerId]);
+      await startRuntime(containerId);
       await waitForContainerBoot(containerId);
 
       // A chatty process through the same launch the bridges use: ~40 MB of

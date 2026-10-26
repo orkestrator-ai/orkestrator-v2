@@ -10,17 +10,18 @@ afterEach(() => {
 /** One measured row with controllable reflow and native scroll movement. */
 function harness() {
   let top = 4400;
+  let height = 5000;
   let rowTop = 2000;
   let width = 800;
   const scroller = document.createElement("div");
   Object.defineProperties(scroller, {
-    scrollHeight: { get: () => 5000 },
+    scrollHeight: { get: () => height },
     clientHeight: { get: () => 600 },
     clientWidth: { get: () => width },
     scrollTop: {
       get: () => top,
       set: (value: number) => {
-        top = Math.max(0, Math.min(4400, value));
+        top = Math.max(0, Math.min(height - 600, value));
       },
     },
   });
@@ -50,6 +51,9 @@ function harness() {
       top = value;
       scroller.dispatchEvent(new Event("scroll"));
     },
+    grow(delta: number) {
+      height += delta;
+    },
     changeHeightAbove(delta: number) {
       rowTop += delta;
     },
@@ -65,6 +69,133 @@ async function frames(count = 5) {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
 }
+
+/** Advance operation frames explicitly, without allowing native convergence. */
+function controlledFrames() {
+  const originalRequest = globalThis.requestAnimationFrame;
+  const originalCancel = globalThis.cancelAnimationFrame;
+  const pending = new Map<number, FrameRequestCallback>();
+  let id = 0;
+  globalThis.requestAnimationFrame = (callback) => {
+    pending.set(++id, callback);
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (frame) => {
+    pending.delete(frame);
+  };
+  disposals.push(() => {
+    globalThis.requestAnimationFrame = originalRequest;
+    globalThis.cancelAnimationFrame = originalCancel;
+    expect(pending.size).toBe(0);
+  });
+  return () => {
+    const due = Array.from(pending.entries());
+    for (const [frame, callback] of due) {
+      if (!pending.delete(frame)) continue;
+      callback(performance.now());
+    }
+  };
+}
+
+describe("transcript at-bottom UI state", () => {
+  test("a bare scroll away exposes return-to-latest without growth or classified input", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+    view.scrollTo(2000);
+    expect(view.controller.wantsFollow).toBe(false);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+    expect(view.controller.isAtBottomRef.current).toBe(false);
+    view.controller.notifyLayout("resize"); // The button changes the dock's height.
+    frame();
+    expect(view.scroller.scrollTop).toBe(2000);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+    expect(view.controller.diagnostics().writes).toBe(0);
+  });
+
+  test("growth stays at-bottom until its frame pin, then bare movement exposes the control", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    view.grow(120);
+    view.controller.reportAtBottom(false);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+    expect(view.scroller.scrollTop).toBe(4400);
+    view.controller.notifyLayout("resize");
+    frame();
+    expect(view.scroller.scrollTop).toBe(4520);
+    view.scrollTo(4520); // Deliver the pin's native scroll event.
+    expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+    view.scrollTo(2000);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+  });
+
+  test("bare size compensation during growth keeps follow intent", () => {
+    controlledFrames();
+    const view = harness();
+    view.grow(120);
+    view.scrollTo(4390);
+    expect(view.controller.wantsFollow).toBe(true);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+  });
+
+  test("a shrinking end preserves follow for compensation but releases a real departure", () => {
+    controlledFrames();
+    const view = harness();
+    view.grow(-120);
+    view.scrollTo(4280);
+    expect(view.controller.wantsFollow).toBe(true);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+    view.grow(-120);
+    view.scrollTo(2000);
+    expect(view.controller.wantsFollow).toBe(false);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+  });
+
+  for (const retirement of ["pause", "cancel", "supersede", "inactive", "converge"] as const) {
+    test(`latest arrival survives growth only until ${retirement}`, () => {
+      const frame = controlledFrames();
+      const view = harness();
+      view.scrollTo(2000);
+      // Keep automatic follow disabled even after retirement, isolating the
+      // operation's arrived latch from the separate follow override.
+      view.controller.setFollowPause("expanded-artifact", true);
+      expect(view.controller.navigateToLatest("smooth")).toBe(true);
+      expect(view.controller.getSnapshot().followAllowed).toBe(false);
+      expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+      frame(); // Issue smooth motion; the handle mock does not move the viewport.
+      expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+      view.scrollTo(4400); // Measured arrival, before convergence.
+      expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+      expect(view.controller.currentOwner).toBe("latest");
+      if (retirement === "converge") {
+        frame(); // Consume the arrival scroll's measurement invalidation.
+        frame();
+        frame();
+        expect(view.controller.currentOwner).toBeNull();
+        expect(view.controller.diagnostics().lastOutcome).toBe("converged");
+        view.scrollTo(2000);
+      } else {
+        view.grow(120);
+        view.controller.reportAtBottom(false);
+        expect(view.controller.getSnapshot().followAllowed).toBe(false);
+        expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+        expect(view.controller.isAtBottomRef.current).toBe(true);
+        expect(view.controller.currentOwner).toBe("latest");
+        if (retirement === "pause") view.controller.setFollowPause("selection", true);
+        if (retirement === "cancel") {
+          view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+        }
+        if (retirement === "supersede") {
+          view.controller.navigateTo({ kind: "row", index: 5, key: "k5" }, "find");
+        }
+        if (retirement === "inactive") view.controller.setActive(false);
+      }
+      expect(view.controller.getSnapshot().isAtBottom).toBe(false);
+      expect(view.controller.isAtBottomRef.current).toBe(false);
+      expect(view.controller.currentOwner).toBe(retirement === "supersede" ? "find" : null);
+    });
+  }
+});
 
 describe("transcript reading ownership", () => {
   test("one departure scroll captures a settled anchor and restores it across a width reflow", async () => {

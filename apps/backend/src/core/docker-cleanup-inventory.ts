@@ -6,6 +6,7 @@ import {
 } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { removeRuntimeContainer } from "./egress-gateway.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { containerIdMatches } from "./commands-review.js";
 import type { CommandContext } from "./commands-context.js";
@@ -381,11 +382,9 @@ export async function removeCleanupCandidates(
     try {
       // Without -f Docker refuses a container that started after the recheck,
       // which is exactly the race this must not win.
-      await runCommand(
-        "docker",
-        ["rm", ...(options.includeRunning ? ["-f"] : []), candidate.containerId],
-        { timeoutMs: 60_000 },
-      );
+      await removeRuntimeContainer(candidate.containerId, owner, runCommand, {
+        force: options.includeRunning === true,
+      });
       record({ containerId: candidate.containerId, outcome: "removed" }, candidate.sizeBytes);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

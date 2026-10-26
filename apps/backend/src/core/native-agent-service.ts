@@ -438,6 +438,28 @@ export class NativeAgentService {
   }
 
   /**
+   * An environment's runtime stopped with its bridges: withdraw their parked
+   * requests and settle the sessions' turn activity
+   * (`NativeAgentLaunchActivityReconciler.settleStoppedSessions`). Called by
+   * every path that stops a runtime itself; the activity sweep catches
+   * container runtimes that stopped some other way.
+   */
+  async environmentRuntimeStopped(environmentId: string): Promise<void> {
+    this.withdrawEnvironmentInteractions(environmentId);
+    const sessions = await this.storage.listNativeAgentSessions();
+    await this.launches.settleStoppedSessions(environmentId, sessions);
+  }
+
+  /** Whether the session's last turn was cut off by its runtime stopping. */
+  sessionStoppedMidTurn(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): boolean {
+    return this.launches.sessionStoppedMidTurn(environmentId, agent, logicalSessionKey);
+  }
+
+  /**
    * Operational kill switch. Existing adopted sessions keep reconciling so a
    * request already observed is not stranded; no new session is adopted.
    */
@@ -559,6 +581,8 @@ export class NativeAgentService {
       trackScan: (task) => this.trackScan(task),
       recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds) =>
         this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
+      withdrawEnvironmentInteractions: (environmentId) =>
+        this.withdrawEnvironmentInteractions(environmentId),
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchPromptWithPreparation: (input, prepare) =>
         this.dispatchPromptInternal(input, prepare),
@@ -629,9 +653,13 @@ export class NativeAgentService {
     // life of a bridge connection, so a settings edit would otherwise not
     // reach the model catalogue until the environment restarted.
     const loadConfig = () => this.storage.loadConfig();
+    const guidance = this.options.signInGuidance;
+    const signInGuidance = guidance
+      ? { signInGuidance: (agent: string) => guidance(environmentId, agent) }
+      : {};
     return typeof this.storage.getDataDir === "function"
-      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig }
-      : { environmentId, loadConfig };
+      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...signInGuidance }
+      : { environmentId, loadConfig, ...signInGuidance };
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */
@@ -652,7 +680,7 @@ export class NativeAgentService {
     if (coordinator.status === "ready") {
       const staged: PromptAttachment[] = [];
       for (const image of assertValidPromptImages(images)) {
-        const path = await this.storage.writeCoordinatorAttachment(
+        const path = await this.storage.coordinators.writeCoordinatorAttachment(
           coordinator.coordinatorId,
           coordinator.conversationId,
           image.filename,
@@ -1675,7 +1703,7 @@ export class NativeAgentService {
           ? "retired"
           : undefined;
       }
-      if (status !== "dispatched") return undefined;
+      if (status !== "dispatched" && status !== "pending") return undefined;
       return (await this.storage.confirmNativeAgentDispatch(key, requestId))
         ? "confirmed"
         : undefined;
@@ -2922,7 +2950,7 @@ export class NativeAgentService {
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
-  ): Promise<void> {
+  ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
     if (status !== "idle" && status !== "error") return;
@@ -2938,7 +2966,10 @@ export class NativeAgentService {
         try {
           failure =
             (await provider.turnTerminalError(session.providerSessionId, requestId)) ?? undefined;
-        } catch {
+        } catch (error) {
+          if (error instanceof ProviderUnavailableError && error.retryAfterMs !== undefined) {
+            return error.retryAfterMs;
+          }
           // Unreadable: leave the outcome for an observer rather than
           // recording a success nobody proved.
           return;
@@ -3432,6 +3463,7 @@ export class NativeAgentService {
               this.launches.recordObservedActivity(durable.key, {
                 providerSessionId: durable.providerSessionId,
                 state: "working",
+                activeRequestId: input.requestId,
               });
               this.observations.recordDispatchAccepted({
                 sessionKey: durable.key,
@@ -3484,7 +3516,7 @@ export class NativeAgentService {
           const coordinatorId = input.owner.coordinatorId;
           const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
           if (conversationId) {
-            await this.storage
+            await this.storage.coordinators
               .mutateCoordinatorWorkspace(input.owner.projectId, (workspace) =>
                 workspace && workspace.id === coordinatorId
                   ? {

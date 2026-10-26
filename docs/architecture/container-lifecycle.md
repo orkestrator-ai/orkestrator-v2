@@ -225,9 +225,14 @@ start, so a record or marker from an earlier boot can never release work.
   error. Account startup may invalidate the Codex marker with a pre-readiness
   `docker exec`; this is deliberately best-effort, with failures caught and
   logged so they cannot preempt the readiness result.
-- A boot that fails closed usually exits before the next poll, so the failure
-  reads `container-exited`; the exact code stays in the container's last
-  boot record and its log.
+- A boot that fails closed usually exits before the next poll. Once the
+  container has stopped, the backend reads its final boot record with
+  `docker cp` (which needs no running process) and reports that record's code
+  (`firewall-missing`, `firewall-failed`, …). PID 1 is gone, so the record
+  counts only if its `updatedAt` is not before the run's `State.StartedAt`; a
+  record an earlier start left, or none, reads `container-exited`. A restart
+  during launch can read `entrypoint-failed`: the held entrypoint records its
+  own exit on SIGTERM.
 
 Qualified live by `container-live-readiness.test.ts`: missing firewall
 script, DNS and bootstrap failure, an unwritable status directory, a torn
@@ -245,6 +250,18 @@ new runtime generation invalidates the completion; persistent storage keeps it
 until the workspace generation changes. Setup interrupted by a backend exit is
 fenced as failed and requires an explicit retry; repository commands are never
 rerun automatically.
+
+Setup runs `workspace-setup.sh` under `flock
+/tmp/orkestrator-workspace-setup.lock`. If the setup terminal's host process
+dies, that run carries on inside the container and keeps the lock; the
+backend reports the setup failed and reruns nothing (C10). An explicit retry
+then waits for it rather than starting setup a second time or stopping it
+part-way, and says so first ("An earlier setup run is still running in this
+container … Waiting for it to finish instead of starting setup a second
+time."; `CONTAINER_WORKSPACE_SETUP_COMMAND`). When the earlier run succeeded,
+the script then reports "Workspace already set up" and the retry completes;
+its output went to the terminal that closed. When it failed, the retry runs
+setup itself.
 
 ## Stop and drain
 
@@ -265,16 +282,32 @@ and uncertain operations reconciled on the next start.
 A stop never approves a pending approval. The drain signals the bridge and the
 provider process that raised the request, so nothing is left that could act on
 it (Claude's bridge has no shutdown handler of its own and simply exits). Once
-the stop commits, `withdrawEnvironmentInteractions` drops the environment's
-outstanding requests from every cached session projection in a new announced
-revision, fenced so a refresh that read them before the stop cannot commit
-them back. The public CLI (`session get`, `session interactions`) and the
-coordinator's `get_tab_state` read that projection, so they no longer report a
-dead request as pending. A local stop withdraws only when every bridge
-terminated. Stops that do not go through `stopEnvironmentOnce` (a container
-that dies on its own, recovery copies, replacement) still keep the last
-snapshot until the session reattaches. Qualified live for Claude (C11,
-`e2e/agent-testing/container-approval-stop.spec.ts`).
+the stop commits, `NativeAgentService.environmentRuntimeStopped` does two
+things. It drops the environment's outstanding requests from every cached
+session projection in a new announced revision
+(`withdrawEnvironmentInteractions`), fenced so a refresh that read them before
+the stop cannot commit them back. The public CLI (`session get`,
+`session interactions`) and the coordinator's `get_tab_state` read that
+projection, so they no longer report a dead request as pending. And it settles
+each session's last observed turn activity to `idle`
+(`settleStoppedSessions`), fencing activity reads still in flight: the sweep
+skips environments that are not ready, so a session last seen `waiting` used
+to stay `waiting` while stopped, and `session send` and a move refused it as
+busy. The settle is quiet. No activity transition is announced and no
+completion recorded, because a turn cut off by a stop did not finish:
+announcing one would report a worker as done to its coordinator, drain queued
+prompts into the stopped environment and probe for a PR. The next start reads
+`idle` against `idle`, so it fires no "finished" edge either. A run whose turn
+was cut off settles `interrupted` (evidence `none`) instead of waiting for an
+outcome no bridge can report.
+
+A local stop settles only when every bridge terminated. The quiesce before a
+rebuild or a recovery-copy restore does the same as an explicit stop, and the
+activity sweep catches a container runtime that stopped any other way (found
+exited by lifecycle reconciliation): once per stop, for container
+environments whose status is `stopped`. Qualified live for Claude (C11,
+`e2e/agent-testing/container-approval-stop.spec.ts`); the activity settle is
+covered by `native-agent-service-stopped-runtime.test.ts`.
 
 A stop also clears the renderer's local panes for that environment, together
 with its hydration state. It releases only local views: no native or tmux tab
@@ -419,7 +452,17 @@ an empty candidate commit. When the helper side of a copy dies, the
 producer's remaining output is discarded so both processes settle, rather
 than leaving the rebuild holding its queue and copy slot. Both were found by
 the live rebuild-fault suite (C15), which also covers a kill just before and
-just after the commit write.
+just after the commit write. A step that failed because either side reached
+no daemon is reported as `daemon-unavailable` ("Docker stopped responding
+while the environment's files were being copied"), not as files that failed
+verification. A step that failed without saying so asks the daemon directly
+(a bounded `docker version`), because a `docker cp` cut off mid-stream
+reports its broken stream rather than the outage. Any other failure still
+reads `needs-attention: … failed verification (<reason>)`. The wording is classified in one place
+(`docker-cli-errors.ts`) for the copy steps, operation failure codes and the
+availability check, and the image manifest probe applies the same strict
+"could not find the file" rule, so a daemon lost between the probe's create
+and its copy reads as unavailable (not cached) rather than as a legacy image.
 
 Capacity: the estimate is the source's writable-layer size (`docker ps
 --size`) or the measured source volumes, plus 10% and 512 MiB headroom, checked
@@ -476,6 +519,7 @@ one any more.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
+| `ORKESTRATOR_EGRESS=in-container` | Egress gateway rollout cap, not a legacy path | A gateway-capable image's restricted runtime keeps its firewall inside, with `NET_ADMIN`, where a root terminal can change it | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)). Remove once the gateway has been qualified on Linux Engine and rootless |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -588,7 +632,7 @@ Staged per provider (`portableInputSpec`):
 
 | Provider | Mount | Staged |
 | --- | --- | --- |
-| Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
+| Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `settings.json` filtered to its boolean `enabledPlugins` (no hooks, permissions or environment; withheld when it names no plugin), which the entrypoint merges into the container's own `settings.json` so the bridge and the CLI honour the host's plugin enablement, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
 | OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The automated live data-contract suite runs authenticated active console accounts with and without these host files (`scripts/qualify-opencode-seeded-data.sh`) |
 | Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
 | Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`; `~/.config/grok` |
@@ -626,13 +670,35 @@ image. Backend code that needs to know checks
   `login-withheld`). GitHub Copilot (both) and Meta (Pi) reuse their refresh
   token rather than rotate it and are kept whole. All four are re-read from
   the host before every start. Grok's, OpenCode's and Pi's are also pushed
-  before every bridge start, including a reused bridge; OpenCode and Pi merge
+  before every bridge start, including a reused bridge, and whenever the
+  host's file changes: `ContainerLoginFileWatcher` polls each file's inode,
+  size and mtime every minute and pushes a changed one to every running
+  container that may receive it, through the same bridge-operation queue and
+  revocation fences (the writer-lease holder only). Pi and OpenCode re-read the
+  file per request, so a running session picks a renewal up; whether Grok's
+  agent re-reads it mid-session is not known. OpenCode and Pi merge
   the host's providers into the container's file, keeping a login made inside
   the container, and a host file of expired logins still blanks any refresh
   token the container holds for those providers. The entrypoint blanks the
   refresh tokens again in the container's own copy; for OpenCode and Pi only
   for providers the mounted host file holds as rotating OAuth, so a login
   made inside the container survives a restart.
+- A host sign-out reaches the container. When the host has no Codex or Grok
+  login at all (no `auth.json`, or one holding no login), the container's
+  imported copy is removed: Codex at the next bridge start or terminal open
+  (an idle bridge is stopped so it restarts without it), Grok at the next
+  push. An imported login is recognised by its blank refresh token; a login
+  made inside the container keeps its refresh token until the next restart and
+  is kept, as is an API key. A host login that has only expired leaves the copy
+  alone, since it has lapsed too. A container that used an added account
+  already had its copy removed by the account switch path.
+- When a container's host-imported Codex or Grok login lapses, the tab's
+  sign-in message (readiness `authentication-required`) is replaced by
+  guidance to renew the login on the host (or the added Codex account in
+  Settings) and restart the environment (`containerSignInGuidance`), because
+  a sign-in inside the container lasts only until the next restart. A
+  container whose credentials for that provider are revoked keeps the bridge's
+  own message.
 - Claude's `.credentials.json` is access-only the same way
   (`restrictClaudeCredentialsSnapshot`): `claudeAiOauth` and every `mcpOAuth`
   entry lose `refreshToken` (the key is removed, because Claude Code treats an
@@ -643,10 +709,19 @@ image. Backend code that needs to know checks
   every start and account switch, and a new push before every Claude bridge
   start. With nothing usable to push, the container's own copy has its refresh
   tokens stripped in place. The entrypoint strips a copy it takes from the
-  `/claude-config` mount. The access token lasts about eight hours, so the
+  `/claude-config` mount. A push merges rather than replaces
+  (`buildMergeContainerClaudeCredentialCommand`): an `mcpOAuth` login the
+  container made itself, holding a refresh token that is not one the host was
+  seen to hold for that server (the push carries SHA-256 digests of the host's
+  current and recently rotated MCP refresh tokens, never the tokens), is kept,
+  so signing in to an MCP server inside the container lasts. A copy of a host
+  token gives way to the host's access-only entry. The fallback strip with
+  nothing usable to push, and the removal on an account sign-out, still take
+  such a login too. The access token lasts about eight hours, so the
   backend's `ContainerClaudeLoginKeeper` re-reads the active login every five
-  minutes and pushes it into each running container whose copy differs; the
-  container CLI notices the new file by its mtime. Just before the token
+  minutes, once per pass whatever the number of containers, and pushes it into
+  each running container whose copy differs; the container CLI notices the new
+  file by its mtime. Just before the token
   expires the keeper has the host's own CLI refresh it
   (`refreshHostClaudeLogin`: a `-p` request for a model no catalogue knows,
   with settings, tools, MCP and session persistence off), so the refresh runs
@@ -796,6 +871,83 @@ The network is removed by the deletion ledger's `network` step after the
 environment's containers (never while one is attached), and reviewed cleanup
 offers networks of environments that no longer exist.
 
+### Egress gateway (`egress-gateway=1`)
+
+A restricted runtime whose image declares `egress-gateway=1` (and gets
+network policy 2 or later) has its firewall enforced from outside it
+(`egress-gateway.ts`). A companion container, `<runtime name>-egress`, owns
+the network namespace, and the runtime joins it (`--network
+container:<gateway id>`) with no added capability, so nothing in the runtime,
+`orkroot` terminals included, can change the rules. Before this, the
+firewall ran inside the runtime, which needed `NET_ADMIN`; that remains for
+older images and under the `ORKESTRATOR_EGRESS=in-container` rollout cap.
+The network status reports `enforcement` (`gateway`, `container`, `none`)
+and the Network section says whether a root terminal can change the rules.
+
+- **The gateway.** The same image (already local, with the same firewall
+  scripts), run as root with `NET_ADMIN`, `--init`, a tmpfs `/run`, 128 MiB
+  and 128 PIDs where the daemon enforces them, and the bounded log driver,
+  through `/usr/local/bin/orkestrator-egress-gateway`: it records the policy
+  (`network-policy-entrypoint.sh --record-only`), runs the unchanged
+  `init-firewall.sh` (which starts the refresher) and idles. A failed or
+  missing firewall leaves it running with `DROP` policies and a `failed`
+  report. It holds everything that belongs to a namespace: the environment
+  network, `net.ipv6.conf.all.disable_ipv6=1`, the published ports, the
+  Linux Engine `host.docker.internal` alias (the runtime shares its
+  `/etc/hosts` and `resolv.conf`), the GitHub seed and the policy
+  environment. It carries the owner label, role `egress-gateway`,
+  `orkestrator-egress-environment` and `orkestrator-egress-workload` (the
+  runtime's name), and neither the app label nor `environment-id`, so no
+  listing of runtimes (cleanup review, usage, recovery copies, operation
+  reconciliation) mistakes it for one. The runtime carries
+  `orkestrator-egress-gateway` and `ORKESTRATOR_EGRESS=gateway`, which its
+  root entrypoint records once with the rest of the policy.
+- **Namespace owner.** Published ports, the firewall report, live edits,
+  `--host-ports` and the network endpoint belong to the gateway.
+  `container-network-owner.ts` resolves a runtime's owner from its
+  immutable network mode (cached), and `getHostPort`, the network status,
+  `applyEnvironmentAllowedDomains`, `ensureContainerHostServicePorts`, the
+  Linux host alias repair and the preview resolver read through it.
+- **Creation.** The gateway is created first, the runtime referencing it by
+  id; a runtime create that certainly failed removes the gateway, an
+  ambiguous one keeps it for reconciliation. A same-named gateway left by an
+  interrupted attempt is replaced only when it is ours, for the same runtime,
+  and that runtime does not exist.
+- **Start.** `prepareEgressGatewayForStart` (in
+  `startContainerWithAgentAccounts` and before a rebuild candidate's start)
+  starts a stopped gateway and waits until its firewall reports `applied`;
+  the tmpfs `/run` means an earlier boot's report cannot be read. A `failed`
+  report, a gateway that stops, or 180 s without a report refuses the start
+  (`not-ready`), and a missing gateway is `needs-attention` (rebuild). Docker
+  itself refuses to start a runtime whose gateway is not running ("cannot
+  join network namespace of a non running container"). A runtime still
+  running in the namespace of a gateway that restarted since (its interface
+  is gone, so it has only loopback and fails closed) is stopped and started
+  again. Runtimes have no restart policy, so after a daemon restart Docker
+  starts neither; the backend's start path keeps the order.
+- **Boot verification.** The runtime's root entrypoint does not run the
+  firewall; it connects to TEST-NET-1 (`192.0.2.1:443`) and requires the
+  gateway's `icmp-admin-prohibited` rejection ("No route to host"). A
+  timeout or success is `egress-unverified`, no route at all is
+  `egress-gateway-unavailable`; both fail the boot.
+- **Stop and removal.** `stopRuntimeContainer` stops the runtime, then its
+  gateway, which frees fixed host ports for a rebuild candidate's gateway.
+  `removeRuntimeContainer` removes a runtime and then its gateway (verified
+  by owner and role) everywhere a runtime is removed: recreate, rollback,
+  operation reconciliation, recovery copies, reviewed cleanup and an
+  unpersisted create. The deletion ledger's `container` step also removes
+  every gateway labelled for the environment before the `network` step, and
+  startup removes gateways older than ten minutes whose runtime no longer
+  exists (`sweepOrphanEgressGateways`). A recovery copy keeps its stopped
+  gateway, so restoring it starts it the normal way.
+
+The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
+gone: every image now runs the firewall step from the root entrypoint before
+privileges drop, and an in-container runtime gets `NET_ADMIN` only for that
+firewall. `no-new-privileges` stays off: the image's entrypoint is `sudo
+network-policy-entrypoint.sh` as `node`, which it would break, and starting
+runtimes as root instead would make every `docker exec` default to root.
+
 ## Agent tools reachability (`container-host-reachability.ts`)
 
 Container agents reach the backend's agent tools server (workflow results,
@@ -843,7 +995,12 @@ rebuilt, so an existing container keeps what it was created with until it is
 rebuilt or updated on purpose; its resources panel shows the difference.
 Settings writes the global budget only through `set_container_resource_limits`
 (`setContainerResourceLimits`); `null` removes it and restores the built-in
-default. The older `global.containerResources` slider value was never
+default. A budget naming an axis this daemon cannot enforce
+(`unenforceableAxes`) is still saved, since the default may be meant for
+another daemon and an unreachable Docker must not block Settings, but the
+command answers with that axis in `unenforceable`, and Settings warns while
+the field is edited and again when it is saved: every create refuses such a
+budget (below). The older `global.containerResources` slider value was never
 applied and is no longer shown or read.
 
 ### Built-in default
@@ -936,7 +1093,14 @@ the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer
 <file>'`, otherwise the plain redirect. The writer owns the open file, so
 rotation cannot lose writes behind a still-writing process; it only writes a
 local file and drains its input to end of file, so it never blocks or
-SIGPIPEs its producer.
+SIGPIPEs its producer. Each line is written as it arrives: the image's awk is
+mawk, which block-buffers a piped stdin unless run with `-W interactive`, so
+until 2026-10-26 a quiet, long-lived bridge (most print nothing until a turn
+runs with debug logging on) had no log file at all and the last few KiB of a
+noisy one, the lines a failure diagnosis needs, were held back. The writer
+passes the option only to an awk that accepts it silently (BSD awk rejects
+it, gawk warns and ignores it), and an image built before then keeps the old
+behaviour until it is rebuilt.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,
@@ -951,7 +1115,12 @@ follower. Backend shutdown stops every follower.
 Claude started in a container terminal reports its state through the hooks the
 entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
 `working` and `Stop` writes `waiting` to `/tmp/.claude-state`. Bridge sessions
-(`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. `ClaudeStatePollManager`
+(`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. The same file sets
+bypass permissions as the default mode and records its consent
+(`skipDangerousModePermissionPrompt`), the only place current Claude Code
+reads it, so a **Claude CLI** tab opens straight to the prompt on every start;
+the image also sets `DISABLE_AUTOUPDATER=1` and `FORCE_AUTOUPDATE_PLUGINS=1`,
+so the pinned CLI never replaces itself in the container. `ClaudeStatePollManager`
 (`tmux-poll.ts`) reads the file with one `docker exec` and persists and emits
 `claude-state-<containerId>` only on change.
 

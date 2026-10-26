@@ -201,7 +201,8 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:browser`, or `mise run test:agent:browser:isolated` for
   real-stack flows), the design canvas (`mise run test:agent:design:isolated`),
   Electron main/preload/IPC (`mise run test:agent:electron`), Docker lifecycle
-  (`mise run test:agent:docker`), the published CLI
+  (`mise run test:agent:docker`), service preview origins, forwarding and
+  fixtures (`mise run test:preview:browser`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
 
@@ -613,11 +614,15 @@ rather than a name, and "signed in" is one answer per provider.
 - A session with no explicit model starts on Pi's saved default
   (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
   provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
-  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
-  straight to the first model: a login can refuse models its provider lists,
-  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
-  and under the legacy `openai-codex`). Project settings count only when the
-  session trusts the project.
+  last resort from `lastResortModelId` in `models.ts` (`defaultModelIds` in
+  `agent-session.ts` supplies the preferences). The last resort is the
+  catalogue's first model, except when its provider uses a ChatGPT subscription
+  login (`openai` with OAuth since Pi 1.2.0, or legacy `openai-codex`). Then
+  it is the newest model in pi-ai's ChatGPT-backend catalogue (the
+  `openai-codex` provider's built-in list) that the login offers: the login
+  can refuse other models its provider lists. `models.test.ts` pins this
+  premise against the real SDK; recheck it on every Pi bump. Project settings
+  count only when the session trusts the project.
 - Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
   `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
   developer's saved default or writes `auth.json`/`models-store.json` into
@@ -838,6 +843,11 @@ When touching any of them:
   `/transcript/detail` and `/transcript/page`, all built from one per-bridge
   read source via `bridge-transcript-routes`. Detail/page answer an unknown
   session 200 `missing`/`expired`, never 404; absent `version` stays v1.
+  The summary route's 404 must mean the session does not exist: load a
+  persisted session that is not resident before answering, as `/messages`
+  does (Claude materializes it). Older Claude bridges did not, which is why
+  the backend's `/messages` fallback stays until the support window passes
+  them ([version-compatibility.md](docs/architecture/version-compatibility.md#register)).
 
 ### Native slash commands
 
@@ -919,9 +929,10 @@ names at all. Three invariants keep it honest:
 - **Assume no sandbox behind it.** The SDK sandbox lets a command write its
   working directory, which for a coordinator is the user's checkout, so
   `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
-  the sandbox cannot start at all (Windows, Linux without bubblewrap and
-  socat; the launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`)
-  this allowlist is the whole boundary. A command it admits must neither write
+  the sandbox cannot run commands at all (Windows; Linux without bubblewrap
+  and socat, or whose bubblewrap cannot nest the CLI's user namespace; the
+  launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`) it is left
+  off and this allowlist is the whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
   `git ls-remote` are refused rather than left to the sandbox.
 
@@ -948,6 +959,7 @@ views stay sandboxed.
 | `docker/entrypoint.sh`         | Container entrypoint                                     |
 | `docker/workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
 | `docker/init-firewall.sh`      | Network firewall rules applied at startup                |
+| `docker/orkestrator-egress-gateway.sh` | Entrypoint of a restricted runtime's egress gateway |
 | `docker/update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `docker/runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `docker/git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
@@ -1012,13 +1024,23 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly three things: the image entrypoint
+  passwordless sudo for exactly two things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
-  policy once, root-owned, before dropping to `node`),
-  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
-  (the latter only when the recorded mode is `full`). The container boundary,
-  not a reusable root shell, is what isolates an agent. Runtime allowlist edits use
-  `docker exec --user root /usr/local/bin/update-firewall.sh`.
+  policy once, root-owned, runs the firewall step as root and only then drops
+  to `node`) and `/usr/local/bin/run-root-setup.sh` (only when the recorded
+  mode is `full`). There is no grant for `init-firewall.sh`. The container
+  boundary, not a reusable root shell, is what isolates an agent. Runtime
+  allowlist edits use `docker exec --user root /usr/local/bin/update-firewall.sh`
+  in the container that owns the network namespace: the runtime's egress
+  gateway when it has one.
+- `/usr/local/bin/orkestrator-egress-gateway` is the entrypoint of a restricted
+  runtime's egress gateway: the same image, run as root with `NET_ADMIN` and a
+  tmpfs `/run`, records the policy (`network-policy-entrypoint.sh
+  --record-only`), applies the unchanged `init-firewall.sh` and idles. The
+  runtime joins its namespace with no added capability; the runtime's root
+  entrypoint then only verifies that the gateway rejects an unlisted
+  destination (`egress-unverified` / `egress-gateway-unavailable` boot
+  failures otherwise).
 
 ### Playwright
 
@@ -1092,7 +1114,8 @@ else is rejected outright. `full` mode skips the firewall entirely.
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
   re-adds Codex's (`chatgpt.com`, `auth.openai.com`, for ChatGPT sign-in),
-  Cursor's, Grok's and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
+  Cursor's, OpenCode's (`opencode.ai`, its own Zen and Go providers), Grok's
+  and Pi's hosts only when those platforms are enabled). Pi's list is necessarily partial: it fronts the user's own model
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
@@ -1142,10 +1165,17 @@ else is rejected outright. `full` mode skips the firewall entirely.
   for the next boot. Keep that state in
   root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
 - The firewall limits destinations. It does not stop data leaving through an
-  allowed service. A root terminal (`orkroot`) has `NET_ADMIN` in restricted
-  mode too and can change the firewall; restricted mode constrains agents and
-  `node` terminals, not a user who opens a root shell. Full-mode containers
-  are not given `NET_ADMIN`.
+  allowed service. Where it runs depends on the image. A restricted runtime
+  from an image with `egress-gateway=1` (and network policy 2 or later) joins
+  the namespace of its own egress gateway, a small companion container that
+  holds `NET_ADMIN`, the environment network, the published ports and the
+  firewall (`apps/backend/src/core/egress-gateway.ts`); the runtime gets no
+  capability, so nothing in it, a root terminal included, can change the
+  rules. Older runtimes, and any created with `ORKESTRATOR_EGRESS=in-container`
+  (a rollout cap), keep the firewall inside the runtime with `NET_ADMIN`,
+  where a root terminal (`orkroot`) can change it. Full-mode containers get
+  neither `NET_ADMIN` nor a gateway. Do not describe a runtime with an
+  in-container firewall as unable to change it.
 
 ## Configuration Storage
 
@@ -1163,12 +1193,18 @@ Files:
 Storage rules:
 - Never hold a SQLite transaction across an `await`; `bun:sqlite` blocks the
   event loop while it waits for a lock. Use `updateStore` (or `updateStoreRow`
-  for one row) for a synchronous read-modify-write, `serializeMutation` (a
-  lease) for one that awaits, and `atomically` to commit several stores
-  together. Under a per-key lease, write only that key's row.
+  for one row) for a synchronous read-modify-write, `serialize` (a lease,
+  usually through the owning repository's `enqueue*Mutation`) for one that
+  awaits, and `atomically` to commit several stores together. Under a per-key
+  lease, write only that key's row.
 - Give each store one kind of writer: `saveJson`/`saveSensitiveJson`/
   `deleteStore` awaited inside the store's lease, or `updateStore`/
   `updateStoreRow`, never both. `storage-writer-guards.test.ts` enforces it.
+- `StorageService` is a facade over per-store repositories sharing one
+  `StorageContext`; add store code to the owning repository and expose it
+  through that repository's area type (`KanbanStorage`, a `Pick` reached as
+  `storage.kanban`) or, for repositories without one yet, a forwarder on the
+  facade, never a base class (`docs/architecture/storage.md`, "Code layout").
 - An older record shape is upgraded once by a migration
   (`storage-record-upgrades.ts`), not by a reader on every load.
 - Tests seed and inspect stores through `storage-test-support.ts`, never by
@@ -1453,11 +1489,13 @@ that a missed event can be recovered.
   or installed dependencies require stopping and starting the profile again.
 - Backend business-logic changes generally require a restart because the
   supervised backend is not a Vite module.
-- Bridge changes need a rebuild first: a profile runs local bridges from
-  `bridges/<name>/dist/index.js`, and `dev:test` bundles only Electron. Run
-  that bridge's `build` script (for example
-  `bun run --cwd bridges/codex-bridge build`), then restart the profile, or
-  the run silently exercises the old bridge.
+- Bridge changes need a profile restart: a profile runs local bridges from
+  `bridges/<name>/dist/index.js`, which `dev:test` builds (through Turbo) only
+  when it starts. The browser and coordinator agent-testing Playwright configs
+  (including the browser-derived Claude warm and paused-interactions configs)
+  refuse to run against a profile whose bridge sources or `dist` changed since
+  then; restart it with `dev:stop` and `dev:test`. The Electron config does not
+  use this freshness guard.
 - Use `dev:reset` only when the scenario requires pristine persisted state. A
   normal implementation loop should preserve the profile so reload and
   rehydration behavior remain testable.

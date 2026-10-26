@@ -5,38 +5,47 @@ import path from "node:path";
 import { createEnvironment, StorageService, type ResourceChange } from "./storage.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
 import type { StorageDatabase } from "./storage-database.js";
-import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
+import {
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  storageInternals,
+} from "./storage-test-support.js";
 
+/** Drives the store primitives of a running service's `StorageContext`. */
 class ProbeStorage extends StorageService {
+  private get primitives() {
+    return storageInternals(this).context;
+  }
   db(): StorageDatabase {
-    return this.database;
+    return this.primitives.database;
   }
   atomic<T>(operation: () => Promise<T>): Promise<T> {
-    return this.atomically(operation);
+    return this.primitives.atomically(operation);
   }
   save(file: string, value: unknown): Promise<void> {
-    return this.saveJson(this.file(file), value);
+    return this.primitives.saveJson(this.primitives.file(file), value);
   }
   sensitive(file: string, value: unknown): Promise<void> {
-    return this.saveSensitiveJson(this.file(file), value);
+    return this.primitives.saveSensitiveJson(this.primitives.file(file), value);
   }
   load<T>(file: string, fallback: () => T): Promise<T> {
-    return this.loadJson(this.file(file), fallback);
+    return this.primitives.loadJson(this.primitives.file(file), fallback);
   }
   remove(file: string): Promise<void> {
-    return this.deleteStore(this.file(file));
+    return this.primitives.deleteStore(this.primitives.file(file));
   }
   update<V, T>(file: string, fallback: () => V, mutate: (value: V) => T): T {
-    return this.updateStore(this.file(file), fallback, mutate);
+    return this.primitives.updateStore(this.primitives.file(file), fallback, mutate);
   }
   scrub(): void {
-    this.scrubDeletedDatabaseContent();
+    this.primitives.scrubDeletedDatabaseContent();
   }
   shout(id: string): void {
-    this.announce("kanban", id);
+    this.primitives.changes.announce("kanban", id);
   }
   serialize<T>(target: string, operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.file(target), "probe storage", operation, {
+    return this.primitives.serialize(this.primitives.file(target), "probe storage", operation, {
       acquireTimeoutMs: 2_000,
     });
   }
@@ -287,7 +296,7 @@ describe("atomically", () => {
   });
 });
 
-describe("serializeMutation", () => {
+describe("StorageContext.serialize", () => {
   test("excludes two backends sharing a data directory", async () => {
     const { storage: first, dataDir } = await storage();
     const { storage: second } = await storage(dataDir);
@@ -336,24 +345,24 @@ describe("Linear auth mutations", () => {
       () => new Promise<void>((resolve) => (release = resolve)),
     );
     await pause();
-    const saving = second.saveLinearAuth("SECOND-KEY");
+    const saving = second.kanban.saveLinearAuth("SECOND-KEY");
     await pause();
-    expect(await first.getLinearAuth()).toBeNull();
+    expect(await first.kanban.getLinearAuth()).toBeNull();
     release();
     await Promise.all([held, saving]);
-    expect((await first.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
+    expect((await first.kanban.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
 
     held = first.serialize(
       "linear-auth.json",
       () => new Promise<void>((resolve) => (release = resolve)),
     );
     await pause();
-    const clearing = second.clearLinearAuth();
+    const clearing = second.kanban.clearLinearAuth();
     await pause();
-    expect((await first.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
+    expect((await first.kanban.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
     release();
     await Promise.all([held, clearing]);
-    expect(await first.getLinearAuth()).toBeNull();
+    expect(await first.kanban.getLinearAuth()).toBeNull();
   });
 
   test("run after a failed mutation releases the lease", async () => {
@@ -371,16 +380,16 @@ describe("Linear auth mutations", () => {
       (error: Error) => error.message,
     );
     await pause();
-    const saving = first.saveLinearAuth("QUEUED-KEY");
+    const saving = first.kanban.saveLinearAuth("QUEUED-KEY");
     await pause();
-    expect(await second.getLinearAuth()).toBeNull();
+    expect(await second.kanban.getLinearAuth()).toBeNull();
     fail(new Error("holder failed"));
     expect(await failed).toBe("holder failed");
     await saving;
-    expect((await second.getLinearAuth())?.apiKey).toBe("QUEUED-KEY");
+    expect((await second.kanban.getLinearAuth())?.apiKey).toBe("QUEUED-KEY");
     // The other backend can take the lease again.
-    await second.clearLinearAuth();
-    expect(await first.getLinearAuth()).toBeNull();
+    await second.kanban.clearLinearAuth();
+    expect(await first.kanban.getLinearAuth()).toBeNull();
   });
 });
 

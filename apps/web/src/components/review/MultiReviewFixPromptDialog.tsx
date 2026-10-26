@@ -1,3 +1,4 @@
+import { sessionDefaultModel } from "@orkestrator/protocol/model-id";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
@@ -163,7 +164,7 @@ export function MultiReviewFixPromptDialog({
               selectedModelId={selection.model}
               selectedModelLabel={selectedModel?.name ?? selection.model}
               onPlatformChange={(agent) => {
-                const nextModel = modelsForAgent(catalog, agent)[0];
+                const nextModel = sessionDefaultModel(modelsForAgent(catalog, agent));
                 if (nextModel) selectModel(agent, nextModel.id);
               }}
               onModelChange={(model) => selectModel(selection.agent, model)}

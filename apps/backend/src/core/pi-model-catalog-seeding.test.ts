@@ -184,6 +184,21 @@ describe("discoverHostPiModelCatalog", () => {
     expect(runtime.localServers.process("pi:catalog-seed:1")).toBeUndefined();
   });
 
+  test("keeps the bridge's session-default mark and drops anything but true", async () => {
+    stubBridgeSpawn(async (spawned) =>
+      listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", [
+        { id: "openai/gpt-4", label: "GPT-4", sessionDefault: "yes" },
+        { id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol", sessionDefault: true },
+      ]),
+    );
+
+    const models = await discoverHostPiModelCatalog(context());
+
+    expect(models.map((model) => [model.id, model.sessionDefault])).toEqual([
+      ["openai/gpt-4", undefined],
+      ["openai/gpt-6.1-sol", true],
+    ]);
+  });
   test("hands the probe a scrubbed environment and its own process group", async () => {
     process.env.PI_BRIDGE_STATE_DIR = "/leaked/state";
     process.env.PI_SESSION_DIR = "/leaked/sessions";

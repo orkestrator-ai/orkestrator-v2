@@ -100,6 +100,14 @@ import {
 } from "./container-network.js";
 import { githubRangesSeed } from "./github-ranges-cache.js";
 import {
+  DOCKER_LABEL_EGRESS_GATEWAY,
+  EGRESS_OVERRIDE_ENV,
+  createEgressGateway,
+  egressEnforcement,
+  egressGatewayName,
+  removeRuntimeContainer,
+} from "./egress-gateway.js";
+import {
   dockerAdmissionCapacity,
   logDriverArguments,
   refuseUnenforceableLimits,
@@ -109,6 +117,8 @@ import {
 } from "./container-resources.js";
 import {
   defaultInputSourceRoots,
+  grokStagingConfig,
+  grokStagingHome,
   stagePortableInputs,
   stagedInputMountArguments,
 } from "./portable-inputs.js";
@@ -240,10 +250,30 @@ export async function createDockerContainer(
   const resourceLimits = resolveResourceLimits(environment, config.global, capacity).limits;
   refuseUnenforceableLimits(resourceLimits, capacity, "Nothing was created.");
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
+  const runtimeName = dockerContainerRuntimeName(dockerOwner, environment.id, runtimeGeneration);
+  const imageCapabilitySet = identity.imageId
+    ? await imageCapabilities(identity.imageId, context)
+    : null;
+  const networkPolicy = identity.imageId
+    ? containerNetworkPolicy(
+        imageCapabilitySet?.["network-policy"] ?? 0,
+        process.env.ORKESTRATOR_NETWORK_POLICY,
+      )
+    : 1;
+  // Where the firewall runs: in an egress gateway that owns the namespace
+  // (the workload gets no capability), in the workload itself (NET_ADMIN), or
+  // nowhere in full mode.
+  const enforcement = egressEnforcement({
+    networkMode: environment.networkAccessMode === "full" ? "full" : "restricted",
+    networkPolicy,
+    imageGatewayVersion: imageCapabilitySet?.["egress-gateway"] ?? 0,
+    override: process.env[EGRESS_OVERRIDE_ENV],
+  });
+  const addHostGatewayAlias = shouldAddDockerHostGatewayAlias(process.platform, topology.kind);
   const args = [
     "create",
     "--name",
-    dockerContainerRuntimeName(dockerOwner, environment.id, runtimeGeneration),
+    runtimeName,
     "--label",
     `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
     "--label",
@@ -270,9 +300,12 @@ export async function createDockerContainer(
     (await imageCapabilities(identity.imageId, context))?.["graceful-shutdown"]
       ? ["--init"]
       : []),
-    // The firewall needs NET_ADMIN; full access never runs it, so a full-mode
-    // container is not handed the capability.
-    ...(environment.networkAccessMode === "full" ? [] : ["--cap-add", "NET_ADMIN"]),
+    // An in-container firewall needs NET_ADMIN. Full access never runs one,
+    // and with an egress gateway the gateway holds the capability instead, so
+    // nothing in the workload, root included, can change its rules.
+    ...(enforcement === "container" ? ["--cap-add", "NET_ADMIN"] : []),
+    // Packet sockets bypass namespace OUTPUT filtering, even without NET_ADMIN.
+    ...(enforcement === "gateway" ? ["--cap-drop", "NET_RAW"] : []),
     // The image ships Chromium for Playwright, and Chromium puts its renderer
     // shared memory in /dev/shm. Docker's 64MB default is far below what a real
     // page needs, and the failure mode is a renderer crash mid-run ("Target
@@ -305,7 +338,9 @@ export async function createDockerContainer(
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
     // shadows Docker Desktop's working DNS address with the VM bridge gateway.
-    ...(shouldAddDockerHostGatewayAlias(process.platform, topology.kind)
+    // A gateway owns /etc/hosts for the namespace it shares, so it gets the
+    // alias instead (Docker refuses one on a joined namespace).
+    ...(addHostGatewayAlias && enforcement !== "gateway"
       ? ["--add-host", "host.docker.internal:host-gateway"]
       : []),
     ...(identity.storage?.format === "volume-v1"
@@ -361,12 +396,7 @@ export async function createDockerContainer(
   }
   const opencodeModel = config.global.agentSettings?.platforms?.opencode?.model;
   if (opencodeModel) args.push("-e", `OPENCODE_MODEL=${opencodeModel}`);
-  const networkPolicy = identity.imageId
-    ? containerNetworkPolicy(
-        (await imageCapabilities(identity.imageId, context))?.["network-policy"] ?? 0,
-        process.env.ORKESTRATOR_NETWORK_POLICY,
-      )
-    : 1;
+  let allowedDomainsValue = "";
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
   } else {
@@ -374,15 +404,9 @@ export async function createDockerContainer(
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
     const domains = containerAllowedDomains(environment, config, networkPolicy);
-    const explicitNone = Boolean(
-      identity.imageId && (await imageCapabilities(identity.imageId, context))?.["network-refresh"],
-    );
-    args.push(
-      "-e",
-      "NETWORK_MODE=restricted",
-      "-e",
-      `ALLOWED_DOMAINS=${allowedDomainsArgument(domains, explicitNone)}`,
-    );
+    const explicitNone = Boolean(identity.imageId && imageCapabilitySet?.["network-refresh"]);
+    allowedDomainsValue = allowedDomainsArgument(domains, explicitNone);
+    args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${allowedDomainsValue}`);
   }
 
   const bindIfExists = async (source: string, target: string, readonly = true) => {
@@ -454,11 +478,15 @@ export async function createDockerContainer(
     // Grok writes session databases during startup, so its host directory cannot
     // replace the writable container home. Mount portable inputs separately;
     // entrypoint.sh copies a bounded allowlist.
+    // An agent-test run's Grok login is its own restricted copy, as for
+    // staged inputs (`grokStagingHome`).
     if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
-      const grokHome =
-        context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
-      await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
-      await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
+      const grokRoots = defaultInputSourceRoots(
+        context.runtimeFlavor,
+        AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+      );
+      await bindIfExists(grokStagingHome(grokRoots), "/grok-home");
+      await bindIfExists(grokStagingConfig(grokRoots), "/grok-config");
     }
     // Pi has no vendor account: its credentials are the user's own provider keys
     // in `~/.pi/agent/auth.json`, alongside the model cache and settings. The
@@ -509,14 +537,20 @@ export async function createDockerContainer(
     await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
   }
 
-  const publishStart = args.length;
-  args.push(...publishedPortArguments(environment.portMappings ?? [], repoConfig.entryPort));
-  args.push("-p", `127.0.0.1::${OPENCODE_SERVER_PORT}/tcp`);
-  args.push("-p", `127.0.0.1::${CLAUDE_BRIDGE_PORT}/tcp`);
-  args.push("-p", `127.0.0.1::${CODEX_BRIDGE_PORT}/tcp`);
-  args.push("-p", `127.0.0.1::${CURSOR_BRIDGE_PORT}/tcp`);
-  args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
-  args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
+  const publishArgs = [
+    ...publishedPortArguments(environment.portMappings ?? [], repoConfig.entryPort),
+    ...[
+      OPENCODE_SERVER_PORT,
+      CLAUDE_BRIDGE_PORT,
+      CODEX_BRIDGE_PORT,
+      CURSOR_BRIDGE_PORT,
+      GROK_ACP_BRIDGE_PORT,
+      PI_BRIDGE_PORT,
+    ].flatMap((port) => ["-p", `127.0.0.1::${port}/tcp`]),
+  ];
+  // The namespace owner publishes: the gateway when there is one.
+  if (enforcement !== "gateway") args.push(...publishArgs);
+  let gatewayId: string | null = null;
   // Network policy 2: the environment's own network, IPv6 disabled, and a
   // firewall that allows the host only on the backend's service port and
   // inbound connections only on the published ports. Never the shared
@@ -531,25 +565,58 @@ export async function createDockerContainer(
       environment.networkAccessMode === "full"
         ? null
         : await githubRangesSeed(context.storage.getDataDir());
-    if (githubSeed) {
+    const policyEnvironment = {
+      ORKESTRATOR_NETWORK_POLICY: String(networkPolicy),
+      ORKESTRATOR_HOST_SERVICE_PORTS: servicePort ? String(servicePort) : "",
+      ORKESTRATOR_INGRESS_PORTS: ingressPorts(publishArgs).join(","),
+    };
+    if (enforcement === "gateway") {
+      // The gateway owns the namespace: network, IPv6 setting, published
+      // ports, host alias and the firewall with its GitHub seed. It is
+      // created first; the workload references it by id.
+      const gatewayName = egressGatewayName(runtimeName);
+      gatewayId = await createEgressGateway({
+        name: gatewayName,
+        workloadName: runtimeName,
+        environmentId: environment.id,
+        owner: dockerOwner,
+        image: identity.imageId ?? context.dockerImage ?? DOCKER_IMAGE,
+        network,
+        publishArguments: publishArgs,
+        addHostGateway: addHostGatewayAlias,
+        githubSeed,
+        policyEnvironment: {
+          NETWORK_MODE: "restricted",
+          ALLOWED_DOMAINS: allowedDomainsValue,
+          ...policyEnvironment,
+        },
+        limits: {
+          memory: capacity.support.memoryLimit === true,
+          pids: capacity.support.pidsLimit === true,
+        },
+        logArguments: logDriverArguments(capacity.logDrivers),
+      });
       args.push(
-        "--mount",
-        `type=bind,src=${githubSeed},dst=/etc/orkestrator-seed/github-ranges,readonly`,
+        "--network",
+        `container:${gatewayId}`,
+        "--label",
+        `${DOCKER_LABEL_EGRESS_GATEWAY}=${gatewayName}`,
+        "-e",
+        "ORKESTRATOR_EGRESS=gateway",
       );
+    } else {
+      if (githubSeed) {
+        args.push(
+          "--mount",
+          `type=bind,src=${githubSeed},dst=/etc/orkestrator-seed/github-ranges,readonly`,
+        );
+      }
+      args.push("--network", network, "--sysctl", "net.ipv6.conf.all.disable_ipv6=1");
     }
     args.push(
-      "--network",
-      network,
-      "--sysctl",
-      "net.ipv6.conf.all.disable_ipv6=1",
       "--label",
       `${DOCKER_LABEL_NETWORK_POLICY}=${networkPolicy}`,
-      "-e",
-      `ORKESTRATOR_NETWORK_POLICY=${networkPolicy}`,
-      "-e",
-      `ORKESTRATOR_HOST_SERVICE_PORTS=${servicePort ? String(servicePort) : ""}`,
-      "-e",
-      `ORKESTRATOR_INGRESS_PORTS=${ingressPorts(args.slice(publishStart)).join(",")}`,
+      ...Object.entries(policyEnvironment).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
     );
   }
   args.push(identity.imageId ?? context.dockerImage ?? DOCKER_IMAGE);
@@ -564,7 +631,20 @@ export async function createDockerContainer(
     containerId = stdout.trim();
   } catch (error) {
     context.runtime.containerStates.invalidate();
-    if (!identity.operationId) throw error;
+    // A gateway whose workload was certainly not created is removed now; one
+    // that may still gain its workload stays for reconciliation or the
+    // orphan sweep.
+    const removeGateway = async () => {
+      if (gatewayId) {
+        await runCommand("docker", ["rm", "-f", gatewayId], { timeoutMs: 60_000 }).catch(
+          () => undefined,
+        );
+      }
+    };
+    if (!identity.operationId) {
+      await removeGateway();
+      throw error;
+    }
     // A timeout or dropped connection does not say whether Docker created the
     // container. Resolve it by exact label identity before reporting failure,
     // so a retry never creates a second container behind the first.
@@ -572,6 +652,7 @@ export async function createDockerContainer(
     if (search.kind === "one") {
       containerId = search.containerId;
     } else if (search.kind === "none") {
+      await removeGateway();
       throw error;
     } else if (search.kind === "many") {
       throw new ContainerLifecycleError(
@@ -601,9 +682,7 @@ export async function createDockerContainer(
       );
     }
   } catch (error) {
-    await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 }).catch(
-      () => undefined,
-    );
+    await removeRuntimeContainer(containerId, dockerOwner).catch(() => undefined);
     throw error;
   } finally {
     await rm(seedRoot, { recursive: true, force: true });

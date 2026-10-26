@@ -33,6 +33,7 @@ export interface TurnStartupSnapshot {
   readonly abortController: SessionState["abortController"];
   readonly error: SessionState["error"];
   readonly interruption: SessionState["interruption"];
+  readonly interruptedRequestId: SessionState["interruptedRequestId"];
   readonly lastActivity: SessionState["lastActivity"];
   readonly persistedMessagesLoaded: SessionState["persistedMessagesLoaded"];
   readonly structuredOutput: SessionState["structuredOutput"];
@@ -50,6 +51,7 @@ export function captureTurnStartup(session: SessionState): TurnStartupSnapshot {
     abortController: session.abortController,
     error: session.error,
     interruption: session.interruption,
+    interruptedRequestId: session.interruptedRequestId,
     lastActivity: session.lastActivity,
     persistedMessagesLoaded: session.persistedMessagesLoaded,
     structuredOutput: session.structuredOutput,

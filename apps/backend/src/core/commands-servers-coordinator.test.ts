@@ -44,6 +44,7 @@ describe("Coordinator Codex server", () => {
   let checkout: string;
   let managedBin: string;
   let storage: StorageService;
+  let previousBridgeStateDir: string | undefined;
   let previousCodexHome: string | undefined;
   let previousClaudeConfigDir: string | undefined;
   let cleanupContext: CommandContext | null = null;
@@ -81,6 +82,8 @@ describe("Coordinator Codex server", () => {
       ...config.global,
       agentSettings: { ...config.global.agentSettings, defaultAgent: "codex" },
     });
+    previousBridgeStateDir = process.env.CODEX_BRIDGE_STATE_DIR;
+    process.env.CODEX_BRIDGE_STATE_DIR = path.join(root, "inherited-host-state");
     previousCodexHome = process.env.CODEX_HOME;
     const sourceHome = path.join(root, "source-codex-home");
     await fs.mkdir(sourceHome);
@@ -115,6 +118,8 @@ describe("Coordinator Codex server", () => {
     }
     restoreHostCredentialRead?.();
     restoreHostCredentialRead = undefined;
+    if (previousBridgeStateDir === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+    else process.env.CODEX_BRIDGE_STATE_DIR = previousBridgeStateDir;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -325,7 +330,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         policy: "coordinator-read-only",
         // Attachments are staged outside the checkout, so the bridge is told
         // the one directory besides the workspace it may read them from.
-        attachmentRoot: storage.coordinatorAttachmentDirectory(
+        attachmentRoot: storage.coordinators.coordinatorAttachmentDirectory(
           snapshot.workspace.id,
           conversation.id,
         ),
@@ -349,13 +354,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           : {}),
       });
       const attachmentRootStats = await fs.stat(
-        storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
+        storage.coordinators.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
       );
       expect(attachmentRootStats.isDirectory()).toBe(true);
       expect(attachmentRootStats.mode & 0o777).toBe(0o700);
       // The conversation's bridge identity is stored in the neutral fields, not
       // Codex's, so the reaper can find a Claude coordinator child too.
-      expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+      expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
         conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
       });
       // A renewed login must retain busy work, then replace an idle bridge and
@@ -489,7 +494,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
-await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ stateDir: process.env.CODEX_BRIDGE_STATE_DIR ?? null, codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -573,11 +578,12 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         // Codex re-execs argv[0] inside its macOS sandbox helper, so the
         // bridge is handed the activation link's canonical target: the same
         // directory the deny-by-default permission profile allowlists below.
+        stateDir: null,
         codexPath: path.join(root, "bin", "codex"),
         policy: "coordinator-read-only",
         permissionProfile: `coordinator-${conversation.id}`,
         readableRuntimeRoot: path.join(root, "bin"),
-        attachmentRoot: storage.coordinatorAttachmentDirectory(
+        attachmentRoot: storage.coordinators.coordinatorAttachmentDirectory(
           snapshot.workspace.id,
           conversation.id,
         ),
@@ -585,16 +591,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpToken: "scoped-token",
       },
     );
-    expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+    expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
       lifecycleState: "ready",
       conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
     });
 
     const addedId = "11111111-2222-4333-8444-555555555555";
-    const addedHome = path.join(storage.agentAccountsDirectory(), "codex", addedId);
+    const addedHome = path.join(storage.agentAccounts.agentAccountsDirectory(), "codex", addedId);
     await fs.mkdir(addedHome, { recursive: true });
     await fs.writeFile(path.join(addedHome, "auth.json"), codexAuth("replacement"));
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: {
         ...store,
         accounts: [
@@ -621,11 +627,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     cleanupRuntimeId = null;
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const current = (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!;
+      const current = (await storage.coordinators.getCoordinatorWorkspace(project.id))!
+        .conversations[0]!;
       if (current.bridgePort === undefined && current.bridgePid === undefined) break;
       await Bun.sleep(10);
     }
-    const stopped = (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!;
+    const stopped = (await storage.coordinators.getCoordinatorWorkspace(project.id))!
+      .conversations[0]!;
     expect(stopped.bridgePort).toBeUndefined();
     expect(stopped.bridgePid).toBeUndefined();
   });
@@ -690,7 +698,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       "before becoming healthy",
     );
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
-    expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+    expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
       lifecycleState: "error",
       lastStartupError: expect.stringContaining("before becoming healthy"),
     });
@@ -905,10 +913,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     cleanupRuntimeId = environment.id;
     const first = await startLocalServerUnlocked(environment.id, context, "codex");
     const accountId = "11111111-2222-4333-8444-555555555555";
-    const home = path.join(storage.agentAccountsDirectory(), "codex", accountId);
+    const home = path.join(storage.agentAccounts.agentAccountsDirectory(), "codex", accountId);
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(path.join(home, "auth.json"), '{"account":"selected"}');
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: {
         ...store,
         accounts: [

@@ -3,7 +3,7 @@ import {
   isTerminalFeaturePlanningPhase,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
-import type { StorageService } from "./storage.js";
+import type { KanbanStorage } from "./storage.js";
 import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
 
 /**
@@ -47,7 +47,7 @@ export function featurePlanningTarget(record: FeaturePlanningRecord): string | u
  * validation is skipped (the service cannot advance it) without hiding others.
  */
 export async function discoverFeaturePlanning(
-  storage: Pick<StorageService, "listAllFeaturePlans">,
+  storage: Pick<KanbanStorage, "listAllFeaturePlans">,
 ): Promise<WorkflowDiscoveryResult<FeaturePlanningObligation>> {
   const plans = await storage.listAllFeaturePlans();
   const entries: WorkflowDiscoveryResult<FeaturePlanningObligation>["entries"] = [];

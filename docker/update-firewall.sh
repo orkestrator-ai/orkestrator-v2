@@ -226,7 +226,7 @@ set_host_ports() {
     gateway=$(ip route | awk '/^default/ { print $3; exit }')
     [ -n "$gateway" ] || { echo -e "${RED}ERROR: no default route${NC}" >&2; exit 1; }
     local addresses
-    addresses=$( { echo "$gateway"; getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1}'; } | sort -u)
+    addresses=$( { echo "$gateway"; ork_host_addresses; } | sort -u)
     iptables -N ORK_HOST_SERVICES_NEXT 2>/dev/null || iptables -F ORK_HOST_SERVICES_NEXT
     local port address
     IFS=',' read -ra PORTS <<< "$ports_csv"

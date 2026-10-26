@@ -38,6 +38,8 @@ import { openRegistryWriter, type RegistryWriter } from "../src/core/registry-wr
 import { StorageService } from "../src/core/storage";
 import { readStoredValue } from "../src/core/storage-test-support";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
+import { removeLabelledResources } from "./container-live-cleanup";
+import { startRuntime } from "./container-live-start";
 import {
   QUALIFICATION_PROJECT,
   durableLifecycleContext,
@@ -105,32 +107,11 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!ENABLED) return;
   for (const proxy of proxies) await proxy.close();
-  const leftovers: string[] = [];
-  for (const dataDir of dataDirs) {
-    const filter = `label=orkestrator-owner=${dockerOwnerNamespace(dataDir)}`;
-    // One resource per call: a multi-argument removal intermittently answered
-    // "404 page not found" on Docker Desktop 4.95 under load.
-    for (const [list, remove] of [
-      [
-        ["ps", "-aq", "--filter", filter],
-        ["rm", "-f"],
-      ],
-      [
-        ["volume", "ls", "-q", "--filter", filter],
-        ["volume", "rm"],
-      ],
-      [
-        ["network", "ls", "-q", "--filter", filter],
-        ["network", "rm"],
-      ],
-    ] as const) {
-      for (const id of await dockerList([...list]).catch(() => [])) {
-        await docker([...remove, id]).catch(() => undefined);
-      }
-      leftovers.push(...(await dockerList([...list]).catch(() => [`unlisted ${list[0]}`])));
-    }
-    await fs.rm(dataDir, { recursive: true, force: true });
-  }
+  const leftovers = await removeLabelledResources(
+    docker,
+    dataDirs.map((dataDir) => `label=orkestrator-owner=${dockerOwnerNamespace(dataDir)}`),
+  );
+  for (const dataDir of dataDirs) await fs.rm(dataDir, { recursive: true, force: true });
   expect(leftovers).toEqual([]);
 }, 300_000);
 
@@ -187,7 +168,7 @@ async function createLegacyEnvironment(label: string, bigFileMiB = 0): Promise<L
     imageId: resolved.imageId,
     runtimeGeneration: 1,
   });
-  await docker(["start", containerId]);
+  await startRuntime(containerId);
   await waitForContainerBoot(containerId);
   await storage.updateEnvironment(environment.id, {
     containerId,
@@ -332,7 +313,8 @@ async function expectDisconnectRetainedOriginal(
   originalSetId: string | undefined,
   error: Error | undefined,
 ) {
-  expect(error?.message).toStartWith("ContainerLifecycleError:");
+  // Named as the outage it is, not as files that failed verification.
+  expect(error?.message).toStartWith("ContainerLifecycleError:daemon-unavailable:");
   let environment = await env.storage.getEnvironment(env.environmentId);
   let record = lifecycleOf(environment);
   expect(record.operation).toBeUndefined();
@@ -341,8 +323,7 @@ async function expectDisconnectRetainedOriginal(
   expect(record.runtime?.containerId).toBe(originalId);
   expect(record.storage.storageSetId).toBe(originalSetId);
   const outcome = record.outcomes.at(-1);
-  expect(outcome).toMatchObject({ status: "failed" });
-  expect(outcome?.failureCode).toBeDefined();
+  expect(outcome).toMatchObject({ status: "failed", failureCode: "daemon-unavailable" });
   const failed = (record.retainedStorage ?? []).filter((set) => set.reason === "failed-candidate");
   expect(failed).toEqual([
     expect.objectContaining({ operationId: outcome!.operationId, reason: "failed-candidate" }),
@@ -426,7 +407,7 @@ describe("C15 daemon disconnect during the copy keeps the original authoritative
         "legacy-layer",
       );
 
-      await docker(["start", env.containerId]);
+      await startRuntime(env.containerId);
       await waitForContainerBoot(env.containerId);
       expect(await workspaceFingerprint(env.containerId, true)).toBe(before);
       await env.close();
@@ -441,7 +422,7 @@ describe("C15 daemon disconnect during the copy keeps the original authoritative
       const migrated = await rebuild(env, env.containerId);
       expect(migrated.error).toBeUndefined();
       const sourceId = migrated.outcome!.containerId;
-      await docker(["start", sourceId]);
+      await startRuntime(sourceId);
       await waitForContainerBoot(sourceId);
       const before = await workspaceFingerprint(sourceId, true);
       const stateBefore = await exec(sourceId, STATE_SNAPSHOT);
@@ -486,7 +467,7 @@ describe("C15 daemon disconnect during the copy keeps the original authoritative
         result.error,
       );
 
-      await docker(["start", sourceId]);
+      await startRuntime(sourceId);
       await waitForContainerBoot(sourceId);
       expect(await workspaceFingerprint(sourceId, true)).toBe(before);
       expect(await exec(sourceId, STATE_SNAPSHOT)).toBe(stateBefore);
@@ -519,7 +500,7 @@ describe("C15 daemon disconnect during the copy keeps the original authoritative
       expect(outcome).toBeUndefined();
       expect(seen).not.toContain("verified");
       await expectDisconnectRetainedOriginal(env, proxy, env.containerId, undefined, error);
-      await docker(["start", env.containerId]);
+      await startRuntime(env.containerId);
       await waitForContainerBoot(env.containerId);
       expect(await workspaceFingerprint(env.containerId, false)).toBe(before);
       await env.close();
@@ -595,7 +576,7 @@ async function runKillScenario(pauseAt: KillDriverConfig["pauseAt"]) {
   const migrated = await rebuild(env, env.containerId);
   expect(migrated.error).toBeUndefined();
   const sourceId = migrated.outcome!.containerId;
-  await docker(["start", sourceId]);
+  await startRuntime(sourceId);
   await waitForContainerBoot(sourceId);
   const before = await workspaceFingerprint(sourceId, false);
   const stateBefore = await exec(sourceId, STATE_SNAPSHOT);
@@ -705,7 +686,7 @@ async function runKillScenario(pauseAt: KillDriverConfig["pauseAt"]) {
     // A second pass finds nothing more to do.
     expect(await reconcileContainerOperations(context)).toEqual([]);
 
-    await docker(["start", authoritative]);
+    await startRuntime(authoritative);
     await waitForContainerBoot(authoritative);
     expect(await workspaceFingerprint(authoritative, false)).toBe(before);
     expect(await exec(authoritative, STATE_SNAPSHOT)).toBe(stateBefore);
@@ -713,7 +694,7 @@ async function runKillScenario(pauseAt: KillDriverConfig["pauseAt"]) {
     if (pauseAt === "after-commit") {
       // The recovery copy is intact too.
       await docker(["stop", "-t", "5", authoritative]);
-      await docker(["start", sourceId]);
+      await startRuntime(sourceId);
       await waitForContainerBoot(sourceId);
       expect(await workspaceFingerprint(sourceId, false)).toBe(before);
       await docker(["stop", "-t", "5", sourceId]);

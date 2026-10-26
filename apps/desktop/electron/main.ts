@@ -21,7 +21,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
-import { prepareAppImageInstall, registerBackendShutdown } from "./backend-lifecycle.js";
+import {
+  BACKEND_EXIT_WAIT_MS,
+  prepareAppImageInstall,
+  registerBackendShutdown,
+} from "./backend-lifecycle.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -80,6 +84,7 @@ import { connectionPreviewBackend } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
 import {
+  nodePartitionKey,
   PreviewPartitionRetention,
   previewPartitionsInUse,
 } from "./preview-partition-retention.js";
@@ -122,13 +127,19 @@ import {
   readRemoteRelaunchMarker,
   writeRemoteRelaunchMarker,
 } from "./remote-relaunch.js";
+import { relaunchApplication } from "./relaunch.js";
+import { showRestartPrompt } from "./restart-prompt.js";
 import {
   applyWindowTitle,
   focusWindowById,
   projectMenuWindows,
   resolveFocusedWindowContext,
 } from "./window-menu.js";
-import { chromiumSwitchesForRuntime, runtimeProfileFromEnvironment } from "./runtime-profile.js";
+import {
+  chromiumSwitchesForRuntime,
+  previewRetentionTimingForRuntime,
+  runtimeProfileFromEnvironment,
+} from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
   registerApplicationLoggingShutdown,
@@ -298,10 +309,28 @@ const windowAllClosedQuit = registerWindowAllClosedQuit({
   platform: process.platform,
   alwaysQuit: runtimeFlavor === "agent-test",
 });
+// Every relaunch goes through here: an AppImage restarts from its image file,
+// never from the temporary mount that disappears when this process exits.
+const relaunchingApp = {
+  relaunch: () => relaunchApplication(app),
+  quit: () => app.quit(),
+};
 const quitReopen = registerQuitReopenRelaunch({
   app,
   allowRelaunch: runtimeFlavor !== "agent-test",
+  relaunch: relaunchingApp.relaunch,
 });
+const showNonBlockingError = (title: string, detail: string): void => {
+  void showRestartPrompt({
+    title,
+    detail,
+    showMessageBox: (options) => dialog.showMessageBox(options),
+    restart: () => {
+      quitReopen.scheduleRelaunch();
+      app.quit();
+    },
+  });
+};
 let startupComplete = false;
 let autoUpdate: AutoUpdateController | null = null;
 let hostUpdates: HostUpdateExecutor | null = null;
@@ -457,6 +486,13 @@ function previewRetention(): PreviewPartitionRetention {
   return previewPartitionRetention;
 }
 
+/** A node's preview partitions stay while a command node this device uses lists it. */
+function rememberPreviewNode(nodeId: string, commandConnectionId: string): void {
+  void previewRetention()
+    .rememberNode(nodePartitionKey(nodeId), connectionPartitionKey(commandConnectionId))
+    .catch(() => console.warn("[Previews] Failed to record a preview node."));
+}
+
 /** A realm's native views follow it in its window; see `realmChildViewClass`. */
 type RealmViewOwner = { contents: Electron.WebContents; ViewCtor: typeof WebContentsView };
 
@@ -491,10 +527,22 @@ function createWindowBrowserPreviews(
     onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
     logger: console,
   });
-  previewRetention().schedule(connectionPartitionKey(partitionKey), previewTransport, {
-    delayMs: 60_000,
-    intervalMs: 30 * 60_000,
-  });
+  // A window on a command node also reconciles the nodes reached through it.
+  const retentionSource = realm
+    ? previewTransport
+    : {
+        listServices: () => previewTransport.listServices(),
+        listNodes: () => previewBackend.invoke<unknown>("list_nodes", {}),
+        get closed() {
+          return previewTransport.closed;
+        },
+      };
+  // Agent-test profiles may shorten the passes; every other flavor ignores that.
+  previewRetention().schedule(
+    connectionPartitionKey(partitionKey),
+    retentionSource,
+    previewRetentionTimingForRuntime(runtimeFlavor),
+  );
   const transport: BrowserPreviewServiceTransport = {
     acquire: (target, holderId) => previewTransport.acquire(target, holderId),
     release: (serviceKey, holderId) => previewTransport.release(serviceKey, holderId),
@@ -858,6 +906,7 @@ function createWorkspaceViews(): WorkspaceViews {
                 (realm) => realm.scope === updated.scope,
               );
               if (!context?.realm) return; // Initial open precedes registration.
+              rememberPreviewNode(updated.target!.nodeId, parent.previewConnectionId);
               const owner: RealmViewOwner = {
                 contents: context.contents,
                 ViewCtor: realmChildViewClass(WebContentsView, context.realm.layout),
@@ -909,6 +958,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     ViewCtor: realmChildViewClass(WebContentsView, record.layout),
   };
   const connectionId = connectionManager.getConnectionId(record.scope);
+  rememberPreviewNode(binding.target.nodeId, parent.previewConnectionId);
   // Preview site data stays with the node, as it would for a direct connection.
   const previews = createWindowBrowserPreviews(
     parent.window,
@@ -1046,7 +1096,7 @@ function registerIpc(): void {
       previewCommandHandover(commandHandoverDeps(event), targetConnectionId),
     handOverCommandNode: async (input, event) => {
       const deps = commandHandoverDeps(event);
-      const result = await handOverCommandNode(deps, input);
+      const result = await handOverCommandNode(deps, input, previewRetention());
       // The window follows the new command node.
       if (input.targetConnectionId !== deps.currentConnectionId) {
         const context = contextForEvent(event);
@@ -1293,13 +1343,14 @@ async function startApplication(): Promise<void> {
         publishConnectionLists();
         // Shortly after a remote-requested update, relaunch instead of a modal
         // nobody may answer, so the remote client gets its backend back.
-        if (recoverRemoteBackendFailure(dataDir, app)) {
+        if (recoverRemoteBackendFailure(dataDir, relaunchingApp)) {
           console.error(
             `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
           );
           return;
         }
-        dialog.showErrorBox(
+        console.error(`[Desktop] Local backend exited unexpectedly: ${error.message}`);
+        showNonBlockingError(
           `${productName} backend stopped`,
           `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
         );
@@ -1394,7 +1445,7 @@ async function startApplication(): Promise<void> {
   startupComplete = true;
   if (localStartError) {
     emitToConnection("local", "local-backend-unavailable", { message: localStartError.message });
-    dialog.showErrorBox(
+    showNonBlockingError(
       `${productName} local backend did not start`,
       `${localStartError.message}\n\nYour saved remote machines are still available. Restart the application to retry Local.`,
     );
@@ -1451,7 +1502,7 @@ if (isPrimaryInstance) {
         isQuitting: quitReopen.isQuitting,
         recover: () =>
           runtimeFlavor !== "agent-test" &&
-          recoverRemoteBackendFailure(app.getPath("userData"), app),
+          recoverRemoteBackendFailure(app.getPath("userData"), relaunchingApp),
         error,
         report: (failure) => {
           console.error("[Desktop] Startup failed:", failure);
@@ -1469,9 +1520,13 @@ if (isPrimaryInstance) {
   );
 }
 
-registerBackendShutdown(app, backendProcess);
+const backendShutdown = registerBackendShutdown(app, backendProcess);
 // The loopback handoff page only exists while a sign-in is pending.
 app.on("will-quit", () => {
   void previewExternalHandoff.close().catch(() => undefined);
 });
-registerApplicationLoggingShutdown(app, applicationLogging);
+// The backend's drain is logged through this process: flush after it.
+registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
+  settled: backendShutdown.stopped,
+  timeoutMs: BACKEND_EXIT_WAIT_MS,
+});

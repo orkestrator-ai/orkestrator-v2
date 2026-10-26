@@ -44,12 +44,16 @@ export function registerBackendShutdown(
   app: Pick<Electron.App, "on" | "quit">,
   backendProcess: Pick<BackendProcess, "stop">,
   timeoutMs = BACKEND_EXIT_WAIT_MS,
-): void {
+): { stopped(): Promise<void> } {
   let stopped: Promise<void> | null = null;
   app.on("before-quit", () => {
-    stopped ??= backendProcess.stop();
+    if (!stopped) {
+      console.info("[Desktop] Quitting; stopping the Local backend");
+      stopped = backendProcess.stop();
+    }
   });
   registerWillQuitHold(app, () => stopped ?? Promise.resolve(), timeoutMs);
+  return { stopped: () => stopped ?? Promise.resolve() };
 }
 
 /** AppImageUpdater spawns before app.quit: drain and unlock before allowing that spawn. */

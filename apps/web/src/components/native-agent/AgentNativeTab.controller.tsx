@@ -208,13 +208,20 @@ import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
-import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
+import { isClaudeAuthenticationFailureMessage, isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
 /** How long a send made before the first session-state read may wait for it. */
 const HELD_SUBMIT_TIMEOUT_MS = 15_000;
+/**
+ * How often a visible Codex tab locked for sign-in asks again. Codex's lock
+ * clears only on an account read, and app-server does not notice a login
+ * made outside it (`codex login` in a terminal) until the bridge reads the
+ * stored login.
+ */
+const CODEX_SIGNED_OUT_REREAD_MS = 10_000;
 const HELD_SUBMIT_CONVERSATION_CHANGED =
   "The conversation changed, so nothing was sent. Your message is still in the composer.";
 
@@ -961,16 +968,44 @@ export function SharedNativeAgentController({
   );
 
   const composer = projection?.composer;
-  const codexAuthNotice =
-    platform === "codex"
-      ? projection?.notices?.find(
-          (notice) =>
-            notice.kind === "auth" &&
-            (notice.state === "needs-auth" ||
-              notice.state === "expired" ||
-              notice.state === "signed-out"),
-        )
+  const signInAuthNotice = projection?.notices?.find(
+    (notice) =>
+      notice.kind === "auth" &&
+      (notice.state === "needs-auth" ||
+        notice.state === "expired" ||
+        notice.state === "signed-out"),
+  );
+  const codexAuthNotice = platform === "codex" ? signInAuthNotice : undefined;
+  // A Claude login that stops working mid-turn ends the turn with an ordinary
+  // reply ("Failed to authenticate. API Error: 401 …"), not a terminal error
+  // row, so the transcript offers no sign-in of its own. The backend's `auth`
+  // notice is the structured signal for it and clears once a model answers, so
+  // it pins the card. It never locks the composer. A terminal auth error row
+  // after the last prompt already carries the card.
+  const lastUserIndex = normalizedMessages.findLastIndex((message) => message.role === "user");
+  const claudeAuthNotice =
+    platform === "claude" &&
+    !normalizedMessages
+      .slice(lastUserIndex + 1)
+      .some((message) => isClaudeAuthenticationFailureMessage(message))
+      ? signInAuthNotice
       : undefined;
+  // When this notice was first seen, for the same reason as `authRequiredSince`
+  // below: the card resumes only a sign-in that finished after the failure.
+  const claudeAuthNoticeKey = claudeAuthNotice
+    ? (claudeAuthNotice.occurrenceId ?? claudeAuthNotice.message)
+    : null;
+  const [claudeAuthNoticeSeen, setClaudeAuthNoticeSeen] = useState<{
+    key: string;
+    at: string;
+  } | null>(null);
+  if (claudeAuthNoticeKey !== (claudeAuthNoticeSeen?.key ?? null)) {
+    setClaudeAuthNoticeSeen(
+      claudeAuthNoticeKey === null
+        ? null
+        : () => ({ key: claudeAuthNoticeKey, at: new Date().toISOString() }),
+    );
+  }
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required"
       ? projection.readiness
@@ -1028,6 +1063,10 @@ export function SharedNativeAgentController({
         );
         if (pending)
           timer = setTimeout(() => void read(), Math.min(2_000, pending.expiresAt - Date.now()));
+        // A stored login can recover before its thread notice disappears.
+        // Keep reconciling until the projection releases the auth lock.
+        else if (platform === "codex" && isActive)
+          timer = setTimeout(() => void read(), CODEX_SIGNED_OUT_REREAD_MS);
         // A signed-in account's hint is about signing out.
         const hint = status.state === "signed-in" ? undefined : status.signIn.hint;
         setSignInStatus({
@@ -1047,7 +1086,15 @@ export function SharedNativeAgentController({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [signInReadNeeded, authReadKey, authReadAttempt, data.environmentId, platform, sessionKey]);
+  }, [
+    signInReadNeeded,
+    authReadKey,
+    authReadAttempt,
+    data.environmentId,
+    platform,
+    sessionKey,
+    isActive,
+  ]);
   const currentSignInStatus = readinessSignIn
     ? {
         key: authReadKey,
@@ -2656,16 +2703,25 @@ export function SharedNativeAgentController({
     ) : null,
     // Claude signs in again through the backend's `claude auth login`, which
     // its card drives; the generic banner's routes do not reach it. One card,
-    // whichever of the readiness or Claude's own reply asked for it.
-    platform === "claude" && (authenticationRequired || claudeNotLoggedInNotice !== null) ? (
+    // whichever of the readiness, Claude's own reply or a turn-time auth notice
+    // asked for it.
+    platform === "claude" &&
+    (authenticationRequired ||
+      claudeNotLoggedInNotice !== null ||
+      claudeAuthNotice !== undefined) ? (
       <ClaudeAuthRecoveryCard
         key="claude-not-logged-in"
         placement="pinned"
-        error={claudeNotLoggedInNotice ?? authenticationReadiness?.message ?? ""}
+        error={
+          claudeNotLoggedInNotice ??
+          authenticationReadiness?.message ??
+          claudeAuthNotice?.message ??
+          ""
+        }
         failureAt={
           claudeNotLoggedInNotice !== null
             ? latestAssistantMessage?.createdAt
-            : (authRequiredSince ?? undefined)
+            : (authRequiredSince ?? claudeAuthNoticeSeen?.at ?? undefined)
         }
         containerId={data.containerId}
       />

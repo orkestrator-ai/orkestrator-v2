@@ -14,6 +14,7 @@ import {
   type PublicActionResponse,
   type PublicReceipt,
 } from "@orkestrator/protocol/public-api";
+import type { PublicNodeList } from "@orkestrator/protocol/public-api-resources";
 import {
   classifyReceiptForWait,
   nextPublicWaitDelay,
@@ -40,10 +41,21 @@ export interface ControlMcpCaller {
   credential: ControlMcpCredentialPolicy & { label: string };
   profile: ControlMcpProfile;
   authority: PublicAuthority;
-  /** Raw registry access for composed reads of the legacy operator tools. */
+  /** Raw registry access on this node; every public action enters here. */
   invoke: ControlMcpInvoker;
+  /**
+   * Raw registry reads of the legacy operator tools on the targeted node
+   * (`invoke_on_node`); omitted: `invoke`. Never used for public actions.
+   */
+  readInvoke?: ControlMcpInvoker;
   confirmTokens: ConfirmTokens;
   messagingEnabled: boolean;
+  /**
+   * The node every public action of this call runs on (`request.node`), a
+   * nodeId from node.list or `all` for an aggregate read; omitted: this node.
+   * Set per tool call with `onNode`.
+   */
+  nodeId?: string;
   /** Test hooks. */
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -51,6 +63,39 @@ export interface ControlMcpCaller {
 
 export function allowed(caller: ControlMcpCaller, action: PublicActionName): boolean {
   return controlMcpActionAllowed(caller.credential, action);
+}
+
+/** The same caller, acting on one node (omitted or empty: this node). */
+export function onNode(caller: ControlMcpCaller, nodeId: string | undefined): ControlMcpCaller {
+  const { nodeId: _nodeId, readInvoke: _readInvoke, ...rest } = caller;
+  return nodeId ? { ...rest, nodeId } : rest;
+}
+
+/** Confirmation is bound to the node too: a token for one node never runs on another. */
+function confirmedInput(caller: ControlMcpCaller, input: Record<string, unknown>) {
+  return caller.nodeId ? { input, nodeId: caller.nodeId } : input;
+}
+
+/** " on <node name>" for a confirmation naming another node, or "". */
+async function nodeSuffix(caller: ControlMcpCaller): Promise<string> {
+  if (!caller.nodeId) return "";
+  const response = await caller.invoke<PublicActionResponse<PublicNodeList>>(
+    PUBLIC_ACTION_COMMAND,
+    withPublicAuthority(
+      {
+        schemaVersion: PUBLIC_API_SCHEMA_VERSION,
+        action: "node.list",
+        actionVersion: PUBLIC_ACTIONS["node.list"].version,
+        input: {},
+      },
+      caller.authority,
+    ),
+  );
+  const node = response.ok
+    ? response.result.items.find((item) => item.nodeId === caller.nodeId)
+    : undefined;
+  if (node?.self) return "";
+  return ` on ${node?.name ?? `node ${caller.nodeId}`}`;
 }
 
 /** One `public_action` dispatch under the caller's authority, with no checks of its own. */
@@ -69,6 +114,7 @@ export async function dispatchAs<T = unknown>(
         actionVersion: PUBLIC_ACTIONS[action].version,
         input,
         ...(requestId !== undefined ? { request: { requestId } } : {}),
+        ...(caller.nodeId ? { node: caller.nodeId } : {}),
       },
       caller.authority,
     ),
@@ -152,6 +198,10 @@ async function confirmationFor(
       const argv = Array.isArray(input.argv) ? input.argv.map(String).join(" ") : "a command";
       return `This runs \`${short(argv, 120)}\` in ${await environmentName(caller, input.environmentId)}.`;
     }
+    case "pr.create":
+      return `This starts an agent that commits, pushes and opens a pull request from ${await environmentName(caller, input.environmentId)}${typeof input.targetBranch === "string" ? ` against ${short(input.targetBranch, 100)}` : ""}.`;
+    case "pr.resolve":
+      return `This starts an agent that merges ${typeof input.targetBranch === "string" ? short(input.targetBranch, 100) : "the target branch"} into ${await environmentName(caller, input.environmentId)}, resolves conflicts and pushes.`;
     case "project.create":
       return `This creates a private GitHub repository at ${short(String(input.path ?? "a new path"), 200)} and pushes to it.`;
     case "project.remove":
@@ -161,6 +211,14 @@ async function confirmationFor(
     default:
       return `This runs ${action}: ${PUBLIC_ACTIONS[action].summary}`;
   }
+}
+
+/** "This deletes environment x and its worktree on Studio." */
+function withNodeName(description: string, suffix: string): string {
+  if (!suffix) return description;
+  return description.endsWith(".")
+    ? `${description.slice(0, -1)}${suffix}.`
+    : `${description}${suffix}`;
 }
 
 /**
@@ -198,17 +256,19 @@ export async function runPublicAction(
   if (!mutation && requestId !== undefined) {
     return adapterError(action, "invalid-input", "Read actions do not take a requestId");
   }
-  const description = await confirmationFor(caller, action, input);
+  const base = await confirmationFor(caller, action, input);
+  const description = base ? withNodeName(base, await nodeSuffix(caller)) : null;
   if (description) {
+    const bound = confirmedInput(caller, input);
     const check = caller.confirmTokens.check(
       confirmToken,
       caller.credential.id,
       action,
-      input,
+      bound,
       requestId,
     );
     if (check !== "valid") {
-      const issued = caller.confirmTokens.issue(caller.credential.id, action, input, requestId);
+      const issued = caller.confirmTokens.issue(caller.credential.id, action, bound, requestId);
       const why =
         check === "missing"
           ? "Confirm before this runs."

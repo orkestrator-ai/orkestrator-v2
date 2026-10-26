@@ -4,7 +4,14 @@ import { processAlive, signalProcess, waitForStopped, withCleanup } from "../pro
 
 /** Snapshot exact owned descendants before quitting, while parent links still exist. */
 export function electronProcessTree(app: Pick<ElectronApplication, "process">): number[] {
-  const root = app.process().pid;
+  let root: number | undefined;
+  try {
+    root = app.process().pid;
+  } catch {
+    // Playwright disposes the handle once Electron has exited (a caller that
+    // quit it first, as the service-preview spec's relaunch does): nothing to own.
+    return [];
+  }
   if (!root) return [];
   const processes = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
   if (processes.status !== 0) throw new Error("Could not enumerate Electron descendants");

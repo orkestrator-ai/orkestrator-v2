@@ -120,3 +120,36 @@ export async function finishFamilyExchange(
     coordinatorLiveBudgets().family,
   );
 }
+
+/** Dispatch a build turn and wait for two idle reads with an empty prompt queue. */
+export async function coordinatorTurn(
+  watch: ReturnType<typeof createDelegationWatch>,
+  coordinator: DelegationCoordinator,
+  label: string,
+  prompt: string,
+): Promise<{ phases: string[]; rowsBefore: number; endedAt: number }> {
+  const before = await watch.observe();
+  const rowsBefore = watch.projection()?.messages.length ?? 0;
+  await coordinator.invoke("dispatch_native_agent_intent", {
+    ...coordinator.identity,
+    prompt,
+    requestId: randomUUID(),
+    mode: "build",
+  });
+  const phases = [before.coordinatorPhase];
+  let sawActive = false;
+  let idleReads = 0;
+  const end = await watch.until(label, (observation) => {
+    phases.push(observation.coordinatorPhase);
+    if (observation.coordinatorPhase === "error") {
+      throw new Error(
+        `the ${coordinator.identity.agent} coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
+      );
+    }
+    if (observation.coordinatorPhase !== "idle") sawActive = true;
+    idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
+    const grew = (watch.projection()?.messages.length ?? 0) > rowsBefore;
+    return idleReads >= 2 && (sawActive || grew) && observation.queueLength === 0;
+  });
+  return { phases, rowsBefore, endedAt: end.at };
+}

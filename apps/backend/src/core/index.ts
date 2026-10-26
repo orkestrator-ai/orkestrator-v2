@@ -33,6 +33,7 @@ import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
 import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
+import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
@@ -46,6 +47,8 @@ import {
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
+import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
+import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
 import {
@@ -113,6 +116,7 @@ import { applyGhChannel, fetchReleasePins } from "./host-maintenance-tasks.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
+  controlMcpPortOverride,
   type ControlMcpInfo,
   type ControlMcpSettings,
 } from "./control-mcp-server.js";
@@ -219,6 +223,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
+  private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -420,9 +425,8 @@ export class OrkestratorBackend {
     this.controlMcp =
       options.controlMcp ??
       new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed in the application, ephemeral in the test runner so concurrently
-        // executing backend fixtures cannot contend for the user-facing port.
-        port: process.env.NODE_ENV === "test" ? 0 : undefined,
+        // Fixed in the application; ephemeral for tests and agent-test backends.
+        port: controlMcpPortOverride(options.runtimeFlavor, process.env),
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
@@ -540,12 +544,12 @@ export class OrkestratorBackend {
       emit: (event, payload) => options.emit(event, payload),
       local: { invoke: (command, args = {}) => this.invoke(command, args) },
       summaries: {
-        load: () => storage.loadNodeSummariesCache(),
-        save: (value) => storage.saveNodeSummariesCache(value),
+        load: () => storage.nodes.loadNodeSummariesCache(),
+        save: (value) => storage.nodes.saveNodeSummariesCache(value),
       },
       outcomes: {
-        load: () => storage.loadNodeOutcomes(),
-        save: (value) => storage.saveNodeOutcomes(value),
+        load: () => storage.nodes.loadNodeOutcomes(),
+        save: (value) => storage.nodes.saveNodeOutcomes(value),
       },
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
     });
@@ -616,6 +620,8 @@ export class OrkestratorBackend {
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        signInGuidance: (environmentId, agent) =>
+          containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
@@ -884,7 +890,7 @@ export class OrkestratorBackend {
         if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
           return true;
       }
-      const workspace = await storage.getCoordinatorWorkspace(projectId);
+      const workspace = await storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
       for (const conversation of workspace.conversations) {
         if (conversation.closedAt || !conversation.agent) continue;
@@ -1286,6 +1292,11 @@ export class OrkestratorBackend {
       // Probe containers are never started; one left by an interrupted
       // manifest read is removed in the background.
       void cleanupStaleManifestProbes(this.context).catch(() => undefined);
+      // Egress gateways whose runtime is gone (removed by hand, or by an
+      // interrupted removal) are removed in the background too.
+      void sweepOrphanEgressGateways(dockerOwnerNamespace(this.context.storage.getDataDir())).catch(
+        () => undefined,
+      );
     }
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
@@ -1328,6 +1339,9 @@ export class OrkestratorBackend {
     setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
     setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
     keeper.start();
+    // Grok, OpenCode and Pi logins: pushed again whenever the host's file changes.
+    this.containerLoginFileWatcher ??= new ContainerLoginFileWatcher(this.context);
+    this.containerLoginFileWatcher.start();
     setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
@@ -1336,7 +1350,7 @@ export class OrkestratorBackend {
       loadEnvironments: async (): Promise<Environment[]> => {
         const [environments, workspaces] = await Promise.all([
           this.context.storage.loadEnvironments(),
-          this.context.storage.listCoordinatorWorkspaces(),
+          this.context.storage.coordinators.listCoordinatorWorkspaces(),
         ]);
         const coordinatorRuntimes = workspaces.flatMap((workspace) =>
           workspace.conversations.flatMap((conversation): Environment[] =>
@@ -1372,23 +1386,26 @@ export class OrkestratorBackend {
         if (!coordinatorId || !conversationId) {
           return this.context.storage.updateEnvironment(environmentId, fields);
         }
-        const workspace = await this.context.storage.getCoordinatorWorkspaceById(coordinatorId);
+        const workspace =
+          await this.context.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
         if (!workspace) return null;
-        return this.context.storage.mutateCoordinatorWorkspace(workspace.projectId, (current) =>
-          current && current.id === coordinatorId
-            ? {
-                ...current,
-                conversations: current.conversations.map((conversation) =>
-                  conversation.id === conversationId
-                    ? {
-                        ...conversation,
-                        ...coordinatorBridgeIdentityFromEnvironment(conversation.agent, fields),
-                      }
-                    : conversation,
-                ),
-                updatedAt: new Date().toISOString(),
-              }
-            : current,
+        return this.context.storage.coordinators.mutateCoordinatorWorkspace(
+          workspace.projectId,
+          (current) =>
+            current && current.id === coordinatorId
+              ? {
+                  ...current,
+                  conversations: current.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? {
+                          ...conversation,
+                          ...coordinatorBridgeIdentityFromEnvironment(conversation.agent, fields),
+                        }
+                      : conversation,
+                  ),
+                  updatedAt: new Date().toISOString(),
+                }
+              : current,
         );
       },
     };
@@ -1859,7 +1876,7 @@ export class OrkestratorBackend {
       invoke: (command, args) => this.invoke(command, args ?? {}),
       storage: {
         sendAgentMail: (sender, input) => storage.sendAgentMail(sender, input),
-        getCoordinatorWorkspace: (projectId) => storage.getCoordinatorWorkspace(projectId),
+        coordinators: storage.coordinators,
       },
       publicHandlers: () => handlers,
       ...(controlMcp.callCoordinatorTool &&
@@ -1935,8 +1952,8 @@ export class OrkestratorBackend {
   }> {
     const storage = this.context.storage;
     const [identity, profile] = await Promise.all([
-      storage.getPreviewBackendIdentity(),
-      storage.getBackendProfile(),
+      storage.previewServices.getPreviewBackendIdentity(),
+      storage.previewServices.getBackendProfile(),
     ]);
     return {
       installationId: identity.instanceId,
@@ -2025,6 +2042,8 @@ export class OrkestratorBackend {
     this.hostSuspendDetector = null;
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
+    this.containerLoginFileWatcher?.stop();
+    this.containerLoginFileWatcher = null;
     setHostClaudeLoginRefresher(undefined);
     setLocalClaudeLoginRefresher(undefined);
     setLocalCodexLoginRefresher(undefined);

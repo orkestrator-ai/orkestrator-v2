@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { networkOwnerContainer } from "./container-network-owner.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { allowlistForNetworkPolicy } from "@orkestrator/protocol/network-allowlist";
@@ -413,10 +414,19 @@ export async function environmentNetworkPolicy(
       environmentNetworkName(dockerOwnerNamespace(context.storage.getDataDir()), environmentId),
     );
   }
+  // The firewall reports from the namespace owner: the egress gateway when
+  // the runtime has one.
+  const firewallContainer = await networkOwnerContainer(environment.containerId);
+  result.enforcement =
+    environment.networkAccessMode === "full"
+      ? "none"
+      : firewallContainer === environment.containerId
+        ? "container"
+        : "gateway";
   try {
     const { stdout } = await runCommand(
       "docker",
-      ["exec", environment.containerId, "sh", "-c", FIREWALL_STATUS_READ],
+      ["exec", firewallContainer, "sh", "-c", FIREWALL_STATUS_READ],
       { timeoutMs: 10_000 },
     );
     result.effective = parseFirewallStatus(stdout);
@@ -493,7 +503,7 @@ async function applyAllowedDomainsNow(
         "exec",
         "--user",
         "root",
-        environment.containerId,
+        await networkOwnerContainer(environment.containerId),
         "/usr/local/bin/update-firewall.sh",
         "--set-domains",
         allowedDomainsArgument(domains, true),

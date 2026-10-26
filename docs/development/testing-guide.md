@@ -122,6 +122,28 @@ credentials, or isolated application profile. The server is owned and stopped
 by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
 Authenticated renderer flows still use isolated profiles as described below.
 
+### Other browser engines
+
+The component suite runs in Chromium. For a qualification run in Safari's engine,
+set `ORKESTRATOR_E2E_BROWSER=webkit` (or `firefox`). The `mobile-chromium` and
+`desktop-chromium` project names still name the viewport profile:
+
+```bash
+ORKESTRATOR_E2E_BROWSER=webkit mise run test:logged -- --name browser-webkit -- \
+  bunx playwright test --config e2e/playwright.config.ts \
+  e2e/PaneBreakpoint.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts
+```
+
+The Chrome-only native datalist spec is skipped on alternate engines, as are
+CDP touch-input cases. Engine checks use `browserName`, independently of the
+viewport project name.
+
+Playwright's WebKit has no `moveBefore`, so it exercises the stable-host
+`appendChild` fallback natively. It runs on the host, so it does not stand in
+for iOS Safari on a device or simulator. Install it with
+`mise exec -- bunx playwright install webkit`. Assertions on Electron-only CSS
+such as `-webkit-app-region` only run under Chromium.
+
 ### Native browser controls
 
 `e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
@@ -178,6 +200,23 @@ use temporary homes, fake credentials, and no external model service. macOS uses
 an enclosing `sandbox-exec` profile to deny only the nested sandbox launch; Linux
 removes sandbox dependencies from the child's PATH. Working sandbox dependencies
 are required for the escape and network cases.
+
+CI also runs `conformance-apparmor-live.test.ts` twice on the same Ubuntu
+runner, before and after its existing AppArmor remediation. The opt-in
+`ORKESTRATOR_CLAUDE_APPARMOR_PHASE` must be `restricted` or `remediated`;
+missing opt-in skips the test, but an unexpected host/probe result fails it.
+Set `ORKESTRATOR_POLICY_CLAUDE_PATH` to the pinned native executable (its
+version is checked and every query uses that path). The restricted phase
+requires the real nested namespace refusal, a `provider-configured` backend
+tier, the CLI's `apply-seccomp` failure, successful hook-only reads, a hook
+write refusal, and an HTTP 422 provider-sandbox prompt refusal before dispatch.
+The remediated phase requires `enforced`, a successful sandboxed read and
+provider write control, and a coordinator sandbox write refusal without the
+hook. These use the scripted local endpoint and temporary homes, with no
+external model calls. `ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE` selects the output
+directory for `restricted.json` and `remediated.json`; CI uploads both with
+OS, kernel, revision, pinned CLI version and assertion outcomes. Remediation
+belongs only on a disposable runner; the test never changes host policy.
 
 OpenCode and Grok conformance read actual fixture project configuration using
 the pinned CLI's `debug config` and `inspect --json`. They discover the managed
@@ -321,6 +360,31 @@ mise run test:logged -- --name codex-bridge-example -- \
   --parallel=1 --only-failures
 ```
 
+### Opt-in Pi ChatGPT default-model check
+
+`bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts` sends one real
+provider prompt through `createSession`, `ensureSession` and `dispatchPrompt`,
+with no saved default, host fallback or model override. It requires a current
+`openai` ChatGPT OAuth credential; a legacy `openai-codex` credential cannot
+substitute. The test is skipped in normal suites. To opt in:
+
+```bash
+ORKESTRATOR_PI_CHATGPT_LIVE=1 \
+  mise run test:logged -- --name pi-chatgpt-live -- \
+  bun test ./bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts \
+  --preload ./tests/setup-node.ts \
+  --preload ./bridges/pi-bridge/src/testing/test-isolation.ts \
+  --parallel=1 --only-failures
+```
+
+By default it reads `~/.pi/agent/auth.json`. Set
+`ORKESTRATOR_PI_CHATGPT_AUTH_FILE` to use a disposable login's auth file.
+Only the `openai` credential is copied into a temporary agent directory; the
+refresh token is replaced so the test cannot rotate the source credential.
+The access token must have at least ten minutes remaining. The test checks
+the selected model and an error-free provider answer, then removes its
+temporary home, settings and sessions. It does not read or change host settings.
+
 ### Opt-in preview checks
 
 Service preview checks that need Docker, a pinned framework, or a real
@@ -348,8 +412,11 @@ The preview suite uses a browser-local loopback proxy, throwaway certificates
 and fresh contexts; it changes neither system DNS nor the trust store. Chromium
 pins the test leaf. Firefox and WebKit bypass certificate validation only in
 those contexts. WebKit engine coverage does **not** qualify shipping Safari or
-iOS. The suite covers sibling reads/frames, visible links, hostile workers and
-same-service iframe returns through a synthetic external identity provider.
+iOS. The suite covers sibling reads/frames, visible links, hostile workers,
+same-service iframe returns through a synthetic external identity provider,
+`srcset`, source maps, SPA deep links and history, IndexedDB,
+BroadcastChannel, Cache and worker isolation, frame and popup handling, and
+an IPv6-only (`::1`) service.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 
@@ -437,7 +504,8 @@ the full matrix is a separate task:
 
 ```bash
 # Credential-free: read-only, local-lifecycle, retry-and-retention,
-# setup-failure, client-exit, exec, wrong-profile
+# setup-failure, client-exit, exec, wrong-profile, project-cascade,
+# project-init (container runs add foreign-owner and drop the local-only ones)
 mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
 
 # One scenario, keeping its root for inspection on failure
@@ -455,17 +523,23 @@ mise run test:cli:scenarios -- --environment-type container \
 ```
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
-(CLI changes seen by an open and a reloaded renderer). Its live question test
-needs a profile started with Claude credentials:
+(CLI changes seen by an open and a reloaded renderer). Its live question and
+approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`
+(default `claude`; `ORKESTRATOR_AGENT_TEST_LIVE_CLI_MODEL` pins a model) and
+need a profile started with that provider's credentials. The approval test
+sets the environment's execution policy to ask (a host session otherwise
+auto-approves):
 
 ```bash
-mise run dev:test --profile qa-cli-live --fixture --credential-source claude --agent-platforms claude
+mise run dev:test --profile qa-cli-live --fixture --credential-source opencode --agent-platforms opencode
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-cli-live ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 \
+  ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT=opencode \
   mise run test:agent:browser -- e2e/agent-testing/cli-ui.spec.ts
 mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-live
 ```
 
-The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
+The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
+reported model — no prompts or tokens) is written to
 `output/cli-scenarios/<run>/manifest.json`. Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
@@ -1124,6 +1198,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
+| Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |
 
 For real-stack flows, artifact handling, authentication, and safe profile

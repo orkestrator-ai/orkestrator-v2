@@ -47,8 +47,23 @@ export function projectLines(project: PublicProjectSummary): string[] {
   ]);
 }
 
-export function projectRows(projects: PublicProjectSummary[]): string[] {
+/** The NODE column of an aggregate (`--node all`) list, when its items carry one. */
+function withNodeColumn<T extends object>(
+  items: T[],
+  headers: string[],
+  rows: string[][],
+): string[] {
+  const names = items.map((item) => (item as { nodeName?: unknown }).nodeName);
+  if (!names.some((name) => typeof name === "string")) return table(headers, rows);
   return table(
+    ["NODE", ...headers],
+    rows.map((row, index) => [String(names[index] ?? ""), ...row]),
+  );
+}
+
+export function projectRows(projects: PublicProjectSummary[]): string[] {
+  return withNodeColumn(
+    projects,
     ["ID", "NAME", "ENVS", "PATH"],
     projects.map((project) => [
       project.id,
@@ -78,7 +93,8 @@ export function environmentLines(environment: PublicEnvironmentSummary): string[
 }
 
 export function environmentRows(environments: PublicEnvironmentSummary[]): string[] {
-  return table(
+  return withNodeColumn(
+    environments,
     ["ID", "NAME", "TYPE", "STATUS", "READY"],
     environments.map((environment) => [
       environment.id,

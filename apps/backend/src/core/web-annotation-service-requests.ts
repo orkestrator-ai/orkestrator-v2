@@ -642,7 +642,7 @@ export class WebAnnotationRequests {
       }
       const annotations: WebAnnotation[] = [];
       for (const selection of candidate.compiled.selections) {
-        const annotation = tx.manifest.annotations[selection.annotationId];
+        const annotation = tx.edit("annotations", selection.annotationId);
         if (!annotation || annotation.state === "deleted") throw notFound("Annotation");
         if (annotation.archivedAt) throw archivedError(annotation.continuationId);
         if (annotation.contentRevision !== selection.contentRevision) {
@@ -659,9 +659,7 @@ export class WebAnnotationRequests {
       }
       // Settle the replaced request in this same commit, releasing its
       // reservations before the new request takes them.
-      const replaced = candidate.retargetOf
-        ? tx.manifest.requests[candidate.retargetOf]
-        : undefined;
+      const replaced = candidate.retargetOf ? tx.edit("requests", candidate.retargetOf) : undefined;
       if (replaced) {
         if (isWebAnnotationRequestActive(replaced.state)) {
           if (replaced.dispatchConfirmedAt !== null) {
@@ -741,7 +739,7 @@ export class WebAnnotationRequests {
       tx.manifest.requests[request.id] = request;
       for (const attachment of request.attachments) {
         const asset = tx.manifest.assets[attachment.assetId];
-        if (asset) asset.orphanedAt = null;
+        if (asset && asset.orphanedAt !== null) tx.edit("assets", asset.id)!.orphanedAt = null;
       }
       for (const annotation of annotations) {
         annotation.requestIds.push(request.id);
@@ -789,7 +787,7 @@ export class WebAnnotationRequests {
     if (current.dispatchConfirmedAt !== null) throw refuse("it reached its agent");
     if (current.state === "prepared") {
       await store.mutate((tx) => {
-        const request = tx.manifest.requests[requestId];
+        const request = tx.edit("requests", requestId);
         if (!request || request.cancelRequestedAt) return;
         tx.markEssential();
         request.cancelRequestedAt = tx.now;
@@ -900,7 +898,7 @@ export class WebAnnotationRequests {
       }
       const byAsset = new Map(materialized.map((attachment) => [attachment.assetId, attachment]));
       await store.mutate((tx) => {
-        const current = tx.manifest.requests[requestId];
+        const current = tx.edit("requests", requestId);
         if (!current || current.state !== "prepared") return;
         tx.markEssential();
         let changed = false;
@@ -955,7 +953,7 @@ export class WebAnnotationRequests {
       return;
     }
     await store.mutate((tx) => {
-      const current = tx.manifest.requests[requestId];
+      const current = tx.edit("requests", requestId);
       if (!current) return;
       tx.markEssential();
       if (!current.queueReceiptAt) current.queueReceiptAt = tx.now;
@@ -983,10 +981,12 @@ export class WebAnnotationRequests {
    */
   applyStateInTx(
     tx: WebAnnotationTransaction,
-    request: WebAnnotationRequest,
+    target: WebAnnotationRequest,
     update: StateUpdate,
   ): boolean {
-    if (!isWebAnnotationRequestActive(request.state)) return false;
+    if (!isWebAnnotationRequestActive(target.state)) return false;
+    // Committed rows are frozen: change this transaction's editable copy.
+    const request = tx.edit("requests", target.id) ?? target;
     let changed = false;
     const previous = request.state;
     const set = <K extends keyof WebAnnotationRequest>(key: K, value: WebAnnotationRequest[K]) => {
@@ -1072,7 +1072,8 @@ export class WebAnnotationRequests {
     request.revision++;
     request.updatedAt = tx.now;
     for (const selection of request.selections) {
-      const annotation = tx.manifest.annotations[selection.annotationId];
+      if (!terminal && previous === request.state) break;
+      const annotation = tx.edit("annotations", selection.annotationId);
       if (!annotation) continue;
       if (terminal) {
         if (annotation.activeRequestId === request.id) annotation.activeRequestId = null;
@@ -1084,7 +1085,7 @@ export class WebAnnotationRequests {
           force: true,
         });
       }
-      if (terminal || previous !== request.state) this.threads.bumpMetadata(tx, annotation);
+      this.threads.bumpMetadata(tx, annotation);
     }
     tx.markEssential();
     tx.touch({ requestIds: [request.id] });
@@ -1192,7 +1193,7 @@ export class WebAnnotationRequests {
       return { request: { ...request }, outcome: "not-cancellable", refusal: "not-active" };
     }
     await store.mutate((tx) => {
-      const current = tx.manifest.requests[requestId];
+      const current = tx.edit("requests", requestId);
       if (!current || current.cancelRequestedAt) return;
       tx.markEssential();
       current.cancelRequestedAt = tx.now;
@@ -1309,7 +1310,7 @@ export class WebAnnotationRequests {
         request.response?.messageId !== excerpt.messageId);
     if (excerptChanged || anchorChanged) {
       await store.mutate((tx) => {
-        const current = tx.manifest.requests[requestId];
+        const current = tx.edit("requests", requestId);
         if (!current) return;
         tx.markEssential();
         if (anchorChanged) {
@@ -1326,7 +1327,7 @@ export class WebAnnotationRequests {
         tx.touch({ requestIds: [requestId] });
         if (!first || !excerptChanged || !excerpt) return;
         for (const selection of current.selections) {
-          const annotation = tx.manifest.annotations[selection.annotationId];
+          const annotation = tx.edit("annotations", selection.annotationId);
           if (!annotation || annotation.state === "deleted") continue;
           this.threads.appendEntry(tx, annotation, {
             provenance: "agent-reference",

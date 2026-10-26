@@ -45,6 +45,8 @@ import {
   validateConfigReviewInstruction,
   validateGlobalReviewInstruction,
 } from "./storage-shared.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -107,8 +109,6 @@ type GitHubCompletionComment = shared.GitHubCompletionComment;
 type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
-
-import { StorageProjects } from "./storage-projects.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -175,7 +175,16 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export abstract class StorageConfig extends StorageProjects {
+export class ConfigRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+  ) {}
+
+  enqueueConfigMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.configFile(), "configuration storage", operation);
+  }
+
   /**
    * The settings of the command node this node follows while it is a leaf
    * (see `@orkestrator/protocol/controller-settings`). Set by the backend;
@@ -194,10 +203,10 @@ export abstract class StorageConfig extends StorageProjects {
 
   /** The command node's settings changed: everything that reads config re-reads it. */
   announceInheritedSettingsChanged(): void {
-    this.announce("config", "app");
+    this.context.changes.announce("config", "app");
   }
 
-  protected withInheritedSettings(config: AppConfig): AppConfig {
+  private withInheritedSettings(config: AppConfig): AppConfig {
     const inherited = this.inheritedGlobalSettings?.() ?? null;
     if (!inherited) return config;
     const values = { ...config.global } as unknown as Record<string, unknown>;
@@ -250,16 +259,22 @@ export abstract class StorageConfig extends StorageProjects {
 
   /** This node's own persisted config, without anything inherited from a command node. */
   async loadOwnConfig(): Promise<AppConfig> {
-    const configExists = await fs.access(this.configFile()).then(
+    const configExists = await fs.access(this.files.configFile()).then(
       () => true,
       () => false,
     );
-    const config = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
+    const config = await this.context.loadJsonCached<AppConfig>(
+      this.files.configFile(),
+      defaultConfig,
+    );
     const normalized = normalizePersistedConfig(config);
     if (configExists) {
       return normalized;
     }
-    const sidecar = await this.loadJson<unknown>(this.agentPlatformsFile(), () => null);
+    const sidecar = await this.context.loadJson<unknown>(
+      this.files.agentPlatformsFile(),
+      () => null,
+    );
     if (!sidecar || !isRecord(sidecar)) return normalized;
     const enabledAgentPlatforms = normalizeAgentPlatforms(sidecar.enabled, []);
     return enabledAgentPlatforms.length === 0
@@ -285,17 +300,20 @@ export abstract class StorageConfig extends StorageProjects {
    * reads. Re-read under the same cross-process lock used by every config
    * writer so a stale migration snapshot cannot revert a settings save.
    */
-  protected async migrateConfigSchema(): Promise<void> {
+  async migrateConfigSchema(): Promise<void> {
     await this.enqueueConfigMutation(async () => {
-      const configExists = await fs.access(this.configFile()).then(
+      const configExists = await fs.access(this.files.configFile()).then(
         () => true,
         () => false,
       );
       if (!configExists) return;
-      const current = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
+      const current = await this.context.loadJsonCached<AppConfig>(
+        this.files.configFile(),
+        defaultConfig,
+      );
       const normalized = normalizePersistedConfig(current);
       if (normalized === current) return;
-      await this.saveSensitiveJson(this.configFile(), normalized);
+      await this.context.saveSensitiveJson(this.files.configFile(), normalized);
     });
   }
 
@@ -324,28 +342,20 @@ export abstract class StorageConfig extends StorageProjects {
             },
           }
         : { ...validated, global: ownGlobal };
-      await this.saveSensitiveJson(this.configFile(), next);
+      await this.context.saveSensitiveJson(this.files.configFile(), next);
     });
-    this.announce("config", "app");
+    this.context.changes.announce("config", "app");
   }
 
   async getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
-    const persisted = await this.loadJson<unknown>(this.agentModelCatalogFile(), () => null);
+    const persisted = await this.context.loadJson<unknown>(
+      this.files.agentModelCatalogFile(),
+      () => null,
+    );
     return parsePersistedAgentModelCatalogCache(persisted);
   }
 
-  async cacheAgentModelCatalog(
-    agent: "claude",
-    models: ClaudeModelCatalogEntry[],
-  ): Promise<AgentModelCatalogCache>;
-  async cacheAgentModelCatalog(
-    agent: "codex",
-    models: CodexModelCatalogEntry[],
-  ): Promise<AgentModelCatalogCache>;
-  async cacheAgentModelCatalog(
-    agent: "cursor" | "grok" | "pi",
-    models: AgentModel[],
-  ): Promise<AgentModelCatalogCache>;
+  /** `StorageService`'s overloads pair each agent with its model type. */
   async cacheAgentModelCatalog(
     agent: "claude" | "codex" | "cursor" | "grok" | "pi",
     models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[] | AgentModel[],
@@ -360,8 +370,8 @@ export abstract class StorageConfig extends StorageProjects {
       throw new Error(`${agent} model catalogue must contain at least one valid model.`);
     }
 
-    return this.serializeMutation(
-      this.agentModelCatalogFile(),
+    return this.context.serialize(
+      this.files.agentModelCatalogFile(),
       "Agent model catalogue storage",
       async () => {
         const current = await this.getAgentModelCatalogCache();
@@ -376,7 +386,7 @@ export abstract class StorageConfig extends StorageProjects {
             models: normalizedModels,
           },
         };
-        await this.saveJson(this.agentModelCatalogFile(), next);
+        await this.context.saveJson(this.files.agentModelCatalogFile(), next);
         return next;
       },
     );
@@ -384,7 +394,10 @@ export abstract class StorageConfig extends StorageProjects {
 
   async getOpenCodeModelCatalog(projectId: string): Promise<OpenCodeModelCatalogSnapshot | null> {
     const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
-    const store = await this.loadJson<unknown>(this.openCodeModelCatalogFile(), () => null);
+    const store = await this.context.loadJson<unknown>(
+      this.files.openCodeModelCatalogFile(),
+      () => null,
+    );
     return parseOpenCodeModelCatalogStore(store)[normalizedProjectId] ?? null;
   }
 
@@ -409,11 +422,14 @@ export abstract class StorageConfig extends StorageProjects {
       .update(JSON.stringify(normalizedModels))
       .digest("hex");
 
-    return this.serializeMutation(
-      this.openCodeModelCatalogFile(),
+    return this.context.serialize(
+      this.files.openCodeModelCatalogFile(),
       "OpenCode model catalogue storage",
       async () => {
-        const persisted = await this.loadJson<unknown>(this.openCodeModelCatalogFile(), () => null);
+        const persisted = await this.context.loadJson<unknown>(
+          this.files.openCodeModelCatalogFile(),
+          () => null,
+        );
         const catalogs = parseOpenCodeModelCatalogStore(persisted);
         const current = catalogs[normalizedProjectId];
         const connectivityChanged =
@@ -444,7 +460,7 @@ export abstract class StorageConfig extends StorageProjects {
           catalogs,
           ...(legacyUnscoped === undefined ? {} : { legacyUnscoped }),
         };
-        await this.saveJson(this.openCodeModelCatalogFile(), store);
+        await this.context.saveJson(this.files.openCodeModelCatalogFile(), store);
         return snapshot;
       },
     );
@@ -467,9 +483,9 @@ export abstract class StorageConfig extends StorageProjects {
     await this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       config.desktopConnections = validated;
-      await this.saveSensitiveJson(this.configFile(), config);
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
     });
-    this.announce("config", "app");
+    this.context.changes.announce("config", "app");
   }
 
   async getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
@@ -484,8 +500,8 @@ export abstract class StorageConfig extends StorageProjects {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -516,8 +532,8 @@ export abstract class StorageConfig extends StorageProjects {
             }
           : {}),
       };
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -535,8 +551,8 @@ export abstract class StorageConfig extends StorageProjects {
         ...current,
         ...updates,
       };
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -684,8 +700,8 @@ export abstract class StorageConfig extends StorageProjects {
               : {}),
           }
         : ownGlobal;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -702,8 +718,8 @@ export abstract class StorageConfig extends StorageProjects {
       };
       if (Object.keys(next).length > 0) config.global.worktreeLocations = next;
       else delete config.global.worktreeLocations;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -715,8 +731,8 @@ export abstract class StorageConfig extends StorageProjects {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       config.global = { ...config.global, mcpManagement: settings };
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -730,8 +746,8 @@ export abstract class StorageConfig extends StorageProjects {
         ...config.global,
         notificationSounds,
       };
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -749,8 +765,8 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadOwnConfig();
       if (limits) config.global.containerResourceLimits = limits;
       else delete config.global.containerResourceLimits;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -761,8 +777,8 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadOwnConfig();
       if (dismissed) config.global.githubCliReminderDismissed = true;
       else delete config.global.githubCliReminderDismissed;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -772,8 +788,8 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadOwnConfig();
       if (token === null) delete config.global.githubToken;
       else config.global.githubToken = token;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -783,8 +799,8 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.cursorApiKey;
       else config.global.cursorApiKey = apiKey;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -794,8 +810,8 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.anthropicApiKey;
       else config.global.anthropicApiKey = apiKey;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }
@@ -805,8 +821,8 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.openCodeZenApiKey;
       else config.global.openCodeZenApiKey = apiKey;
-      await this.saveSensitiveJson(this.configFile(), config);
-      this.announce("config", "app");
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);
     });
   }

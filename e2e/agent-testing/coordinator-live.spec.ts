@@ -2,7 +2,10 @@
  * Live coordinator scenarios against a real `dev:test --fixture` profile, one
  * case per platform and scenario on the live suite's lists: `read-only` (the
  * boundary), `async` and `family` (real workers and their mail, see
- * `coordinator-live-delegation.ts`).
+ * `coordinator-live-delegation.ts`), `status` (a Multi Review's and a held
+ * worker's status wakes, see `coordinator-live-status.ts`) and `peer`. Every
+ * scenario with mail also judges each echoed carrier through the renderer's
+ * tile parser (`coordinator-mail-tiles.ts`).
  *
  * Opt-in only: each case runs a real coordinator turn on the host's
  * credentials, so every case is skipped unless
@@ -35,10 +38,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  AGENT_INTERACTION_CONTRACT_VERSION,
-  type AgentInteractionKind,
-} from "@orkestrator/protocol/agent-interactions";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -47,6 +46,8 @@ import {
   type CoordinatorConversation,
   type CoordinatorSnapshot,
 } from "@orkestrator/protocol/coordinator";
+import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { NativeAgentAuthState } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
@@ -58,7 +59,6 @@ import {
   coordinatorLivePlatformsFromEnv,
   coordinatorLiveScenariosFromEnv,
   coordinatorLiveSummaryFile,
-  createTurnWatch,
   describeDigestChanges,
   evaluateReadOnlyConversation,
   fixtureTreeDigest,
@@ -103,8 +103,12 @@ import {
   createDelegationWatch,
   removeLaunchedEnvironments,
   runCoordinatorCleanup,
+  settleCoordinatorTurn,
 } from "../../apps/desktop/scripts/dev/coordinator-live-observer";
+import { runStatusScenario } from "../../apps/desktop/scripts/dev/coordinator-live-status-orchestration";
+import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
+  coordinatorTurn,
   deliverAsyncReport,
   finishFamilyExchange,
 } from "../../apps/desktop/scripts/dev/coordinator-live-orchestration";
@@ -129,11 +133,6 @@ const LIVE = process.env[COORDINATOR_LIVE_OPT_IN_ENV] === "1";
 const budgets = coordinatorLiveBudgets();
 const TURN_TIMEOUT_MS = budgets.turn;
 const POLL_INTERVAL_MS = 2_000;
-/**
- * A live turn prints nothing for minutes. `test:logged` kills a command after
- * five minutes without output, so the wait reports progress well inside that.
- */
-const HEARTBEAT_MS = 60_000;
 const CANARY_FILE = "coordinator-live-canary.txt";
 
 function profileStatus(): Status {
@@ -197,56 +196,19 @@ async function openProfile(page: Page) {
 /**
  * Wait for the coordinator's turn to end, answering nothing on its behalf.
  *
- * See {@link createTurnWatch}: a pending approval or question has escaped the
+ * See {@link settleCoordinatorTurn}: a pending approval or question has escaped the
  * coordinator policy. It is denied (or cancelled) here so the turn stays safe
  * and bounded, and recorded so the verdict fails.
  */
-async function settleTurn(
+const settleTurn = (
   invoke: Invoke,
   identity: SessionIdentity,
   summary: CoordinatorLivePlatformSummary,
-): Promise<{ projection: Projection; escaped: AgentInteractionKind[] }> {
-  const started = Date.now();
-  const deadline = started + TURN_TIMEOUT_MS;
-  let nextHeartbeat = started + HEARTBEAT_MS;
-  const watch = createTurnWatch();
-  for (;;) {
-    const projection = await invoke<Projection | null>("get_native_agent_projection", {
-      ...identity,
-      messageLimit: 200,
-    });
-    const { settled, answers } = watch.observe(projection);
-    for (const answer of answers) {
-      await invoke("resolve_native_agent_interaction", {
-        ...identity,
-        interactionId: answer.interactionId,
-        resolution: {
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          ...answer,
-          resolvedAt: Date.now(),
-        },
-      }).catch(() => undefined);
-    }
-    if (answers.length > 0) summary.escapedInteractions = watch.escapedInteractions();
-    if (projection && settled) {
-      return { projection, escaped: watch.escapedInteractions() };
-    }
-    const phase = projection?.turn.phase ?? "idle";
-    const now = Date.now();
-    if (now >= deadline) {
-      throw new Error(
-        `the ${identity.agent} coordinator turn did not finish within ${TURN_TIMEOUT_MS / 1_000}s (phase ${phase})`,
-      );
-    }
-    if (now >= nextHeartbeat) {
-      console.log(
-        `[coordinator-live] ${identity.agent}: turn ${phase} for ${Math.round((now - started) / 1_000)}s, ${transcriptToolCalls(projection?.messages ?? []).length} tool calls so far`,
-      );
-      nextHeartbeat = now + HEARTBEAT_MS;
-    }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-}
+) =>
+  settleCoordinatorTurn(invoke, identity, summary, {
+    timeoutMs: TURN_TIMEOUT_MS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
 
 async function writeSummary(summary: CoordinatorLivePlatformSummary): Promise<void> {
   const file = coordinatorLiveSummaryFile(
@@ -544,37 +506,6 @@ function recordChecks(
  * for two reads after it was seen working or added a row, with nothing left
  * in its prompt queue.
  */
-async function coordinatorTurn(
-  watch: ReturnType<typeof createDelegationWatch>,
-  coordinator: CoordinatorCase,
-  label: string,
-  prompt: string,
-): Promise<{ phases: string[]; rowsBefore: number; endedAt: number }> {
-  const before = await watch.observe();
-  const rowsBefore = watch.projection()?.messages.length ?? 0;
-  await coordinator.invoke("dispatch_native_agent_intent", {
-    ...coordinator.identity,
-    prompt,
-    requestId: randomUUID(),
-    mode: "build",
-  });
-  const phases = [before.coordinatorPhase];
-  let sawActive = false;
-  let idleReads = 0;
-  const end = await watch.until(label, (observation) => {
-    phases.push(observation.coordinatorPhase);
-    if (observation.coordinatorPhase === "error") {
-      throw new Error(
-        `the ${coordinator.identity.agent} coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
-      );
-    }
-    if (observation.coordinatorPhase !== "idle") sawActive = true;
-    idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-    const grew = (watch.projection()?.messages.length ?? 0) > rowsBefore;
-    return idleReads >= 2 && (sawActive || grew) && observation.queueLength === 0;
-  });
-  return { phases, rowsBefore, endedAt: end.at };
-}
 
 function mailCountsObserved(
   mail: readonly DelegationMailMessage[],
@@ -590,6 +521,32 @@ function mailCountsObserved(
     // -1 records an unverified count; nearby timestamps cannot prove batching.
     coordinatorCarriers: carrierCount(toCoordinator, transcriptUserTexts(messages)) ?? -1,
     ...coordinatorWaitCounts(transcriptToolCalls(messages)),
+  };
+}
+
+/** The coordinator transcript's mail tiles, judged against what was injected into it. */
+function coordinatorTiles(
+  mail: readonly DelegationMailMessage[],
+  coordinatorEnvironmentId: string,
+  messages: readonly CoordinatorTranscriptMessage[],
+  requireBatched: boolean,
+) {
+  return evaluateMailTiles({
+    messages,
+    delivered: mail.filter(
+      (message) =>
+        message.toEnvironmentId === coordinatorEnvironmentId && message.placement === "injected",
+    ),
+    requireBatched,
+  });
+}
+
+function tileCounts(observed: ReturnType<typeof evaluateMailTiles>["observed"]) {
+  return {
+    carrierRows: observed.carrierRows,
+    tileRows: observed.tileRows,
+    batchedTileRows: observed.batchedRows,
+    tiles: observed.tiles,
   };
 }
 
@@ -715,11 +672,13 @@ async function asyncCase(input: {
     escapedInteractions: watch.escaped(),
     workerInteractions: watch.workerEscaped(),
   });
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, true);
   const calls = transcriptToolCalls(messages);
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   summary.turn = { phase: projection?.turn.phase ?? "idle" };
-  const failures = recordChecks(summary, checks, {
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
     ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
     workers: watch.workers.length,
     observations: watch.observations.length,
   });
@@ -804,14 +763,100 @@ async function familyCase(input: {
       harnessPrompts: 1,
     }),
   ];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   summary.turn = { phase: projection?.turn.phase ?? "idle" };
-  const failures = recordChecks(summary, checks, {
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
     ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
     workers: watch.workers.length,
     observations: watch.observations.length,
   });
   expect(failures, `${platform}: the worker-mail family scenario`).toEqual([]);
+}
+
+async function statusCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const qualifyPiDefault =
+    coordinator.identity.agent === "pi" &&
+    process.env.ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT === "1";
+  let expectedPiModel: string | undefined;
+  if (qualifyPiDefault) {
+    // Read the real bridge catalogue before launching; do not seed a model in
+    // Orkestrator or edit Pi settings to make this qualification pass.
+    await coordinator.invoke("refresh_host_agent_model_catalog", { agent: "pi" });
+    const models = await coordinator.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+      environmentId: coordinator.identity.environmentId,
+    });
+    const pi = models.filter((model) => model.platform === "pi");
+    expectedPiModel = pi.find((model) => model.sessionDefault)?.id;
+    expect(pi[0]?.id, "qualify the ChatGPT-refused first catalogue model").toMatch(
+      /^openai(?:-codex)?\/gpt-4$/,
+    );
+    expect(
+      expectedPiModel,
+      "the host must have a saved Pi default beyond the first row",
+    ).toBeTruthy();
+    expect(expectedPiModel).not.toBe(pi[0]?.id);
+    const config = await coordinator.invoke<{
+      global: { agentSettings?: { platforms?: { pi?: { model?: string } } } };
+    }>("get_config");
+    expect(
+      config.global.agentSettings?.platforms?.pi?.model,
+      "Orkestrator must leave Pi's model unset",
+    ).toBeUndefined();
+  }
+  const { checks, watch, holdsApproval, waiterEnvironmentId, probe } =
+    await runStatusScenario(input);
+  if (qualifyPiDefault) {
+    const workflows = await coordinator.invoke<MultiReviewWorkflow[]>(
+      "list_multi_review_workflows",
+      {
+        environmentId: probe.revieweeEnvironmentId,
+      },
+    );
+    const workflow = workflows[0];
+    const rows = workflow ? [...workflow.reviewers, workflow.reviewModel, workflow.fixModel] : [];
+    checks.push({
+      name: "pi-saved-default-rows",
+      passed:
+        rows.length >= 4 &&
+        rows.every((row) => row?.agent === "pi" && row.model === expectedPiModel),
+      detail: `${rows.length} rows checked against the live Pi session default`,
+    });
+    checks.push({
+      name: "pi-saved-default-completed",
+      passed:
+        !!workflow &&
+        workflow.reviewers.every((row) => row.status === "completed") &&
+        !!workflow.consolidatedReport &&
+        (workflow.phase === "completed" ||
+          (workflow.phase === "interactive" &&
+            workflow.addressPromptPending !== true &&
+            workflow.fixSession?.status === "idle")),
+    });
+  }
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const platform = coordinator.identity.agent;
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const mail = await watch.mailWithBodies();
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    approvalWaitApplies: holdsApproval ? 1 : 0,
+    heldInteractions: holdsApproval ? watch.held(waiterEnvironmentId).length : 0,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the status-wake scenario`).toEqual([]);
 }
 
 /**
@@ -842,9 +887,30 @@ async function peerCase(input: {
   const calls = Object.values(transcripts).flatMap((messages) => transcriptToolCalls(messages));
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   if (escaped.length > 0) summary.escapedInteractions = escaped;
-  const failures = recordChecks(summary, checks, {
+  // Each peer's own transcript shows the mail it received.
+  const tiles = Object.entries(transcripts).map(([environmentId, messages], index) =>
+    evaluateMailTiles({
+      messages,
+      delivered: mail.filter(
+        (message) => message.toEnvironmentId === environmentId && message.placement === "injected",
+      ),
+      prefix: `peer-${index + 1}-tiles`,
+    }),
+  );
+  const failures = recordChecks(summary, [...checks, ...tiles.flatMap((item) => item.checks)], {
     peerMessages: mail.filter((message) => message.route === "peer").length,
     ...coordinatorWaitCounts(calls),
+    ...tileCounts(
+      tiles.reduce(
+        (total, item) => ({
+          carrierRows: total.carrierRows + item.observed.carrierRows,
+          tileRows: total.tileRows + item.observed.tileRows,
+          batchedRows: total.batchedRows + item.observed.batchedRows,
+          tiles: total.tiles + item.observed.tiles,
+        }),
+        { carrierRows: 0, tileRows: 0, batchedRows: 0, tiles: 0 },
+      ),
+    ),
     observations: observations.length,
   });
   expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
@@ -930,6 +996,26 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await familyCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("status")) {
+      test(`status wakes on ${platform}: a coordinator-launched Multi Review wakes it when ready and when its fix finishes, and a delegated worker held on an approval wakes it once`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.status);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "status", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await statusCase({ coordinator, summary, cleanup });
         });
       });
     }

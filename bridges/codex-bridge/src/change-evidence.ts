@@ -23,7 +23,8 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { codexBridgeStateDir, codexLoginBridgeDir } from "./bridge-state-dir.js";
 import type {
   ExecutionOccurrence,
   ProviderChangeCapabilities,
@@ -43,6 +44,7 @@ import type { EngineItem, EngineTurnStatus } from "./engine/types.js";
 import { parseRawApplyPatchChanges } from "./messages/apply-patch.js";
 import { suppliedFileChange } from "./messages/file-change-diff.js";
 import { commandDidNotRun } from "./sessions/command-changes.js";
+import { migrateCodexChangeEvidence } from "./change-evidence-migration.js";
 
 export type CaptureExecutor = "container-worker" | "host-worker";
 
@@ -430,7 +432,7 @@ function suppliedMovePath(change: FileUpdateChange): string | undefined {
  */
 export function codexChangeEvidenceDir(codexHome: string, cwd: string): string {
   const cwdHash = createHash("sha256").update(cwd).digest("hex").slice(0, 16);
-  return join(codexHome, "orkestrator-bridge", "change-evidence", cwdHash);
+  return join(codexBridgeStateDir(codexHome), "change-evidence", cwdHash);
 }
 
 /** The process's spool and adapter, persisted under the bridge state dir. */
@@ -439,10 +441,13 @@ export function createCodexChangeEvidence(options: {
   cwd: string;
   executor?: CaptureExecutor;
 }): CodexChangeEvidence {
+  const directory = codexChangeEvidenceDir(options.codexHome, options.cwd);
+  migrateCodexChangeEvidence(
+    join(codexLoginBridgeDir(options.codexHome), "change-evidence", basename(directory)),
+    directory,
+  );
   return new CodexChangeEvidence({
-    spool: new ChangeEvidenceSpool({
-      directory: codexChangeEvidenceDir(options.codexHome, options.cwd),
-    }),
+    spool: new ChangeEvidenceSpool({ directory }),
     executor: options.executor ?? detectCaptureExecutor(),
   });
 }

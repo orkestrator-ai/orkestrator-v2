@@ -44,6 +44,7 @@ export async function readRestartImpact(context: CommandContext): Promise<HostRe
     unknownAgents,
     activePipelines,
     terminals: context.runtime.terminals.processCount(),
+    containerTerminals: context.runtime.terminals.containerProcessCount(),
     hostServers: context.runtime.localServers.processCount(),
     measuredAt: new Date().toISOString(),
   };

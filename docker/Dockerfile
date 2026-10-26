@@ -200,6 +200,10 @@ ARG PI_CLI_VERSION=1.4.0
 # platform-native binary via optional dependencies.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
 ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
+# Keep the pinned CLI on its pin, as CLAUDE_PINNED_RUNTIME_ENV does on the
+# host: otherwise terminal Claude updates the global install in place and the
+# container runs a version the manifest does not declare. Plugins still update.
+ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
 
 # Install OpenCode from the same pinned, digest-verified release artifacts as
 # the packaged desktop toolchain.
@@ -407,16 +411,19 @@ RUN test "$(/usr/local/bin/bun --version)" = "1.4.4" \
 
 # Copy and set up firewall scripts
 COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh /usr/local/bin/
+COPY docker/orkestrator-egress-gateway.sh /usr/local/bin/orkestrator-egress-gateway
 COPY docker/firewall-domains.sh /usr/local/lib/orkestrator/firewall-domains.sh
 COPY docker/default-allowed-domains /usr/local/lib/orkestrator/default-allowed-domains
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh && \
+# The root entrypoint runs the firewall before privileges drop, so node's
+# only grants are that entrypoint (which records the policy once) and the
+# full-mode root setup. An egress gateway runs the same image as root.
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh /usr/local/bin/orkestrator-egress-gateway && \
   chown -R root:root /usr/local/lib/orkestrator && chmod 0755 /usr/local/lib/orkestrator && \
   chmod 0644 /usr/local/lib/orkestrator/firewall-domains.sh /usr/local/lib/orkestrator/default-allowed-domains && \
   printf '%s\n' \
-    'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS"' \
+    'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS ORKESTRATOR_EGRESS"' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/network-policy-entrypoint.sh *' \
-    'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/run-root-setup.sh *' \
     > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall

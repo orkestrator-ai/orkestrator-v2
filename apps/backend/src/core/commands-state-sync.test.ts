@@ -28,7 +28,7 @@ import {
 } from "./commands-registry-projects.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
-import { seedUnreadableStore } from "./storage-test-support.js";
+import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -201,7 +201,7 @@ describe("scoped resource snapshot commands", () => {
     await withCommands(async (invoke, storage) => {
       // A single snapshot larger than the per-entry cap is deferred rather
       // than returned, so the client falls back to an individual read.
-      await storage.saveProjectNotes("proj-1", "x".repeat(3 * 1024 * 1024));
+      await storage.kanban.saveProjectNotes("proj-1", "x".repeat(3 * 1024 * 1024));
       const batch = (await invoke("get_scoped_resource_snapshots", {
         changes: [{ resource: "project-notes", id: "proj-1", revision: 1 }],
       })) as { entries: Array<Record<string, unknown>> };
@@ -5682,8 +5682,8 @@ describe("build pipeline commands", () => {
 
     await withCommands(
       async (invoke, storage) => {
-        const task = await storage.addKanbanTask("proj-1", "Build task", "");
-        await storage.updateKanbanTask(task.id, {
+        const task = await storage.kanban.addKanbanTask("proj-1", "Build task", "");
+        await storage.kanban.updateKanbanTask(task.id, {
           environmentId: "e1",
           buildPipelineId: "pipeline-linked",
           prUrl: "https://github.com/acme/repo/pull/7",
@@ -5699,8 +5699,8 @@ describe("build pipeline commands", () => {
           taskId: "another-task",
         });
 
-        const updateKanbanTask = storage.updateKanbanTask.bind(storage);
-        const updateSpy = spyOn(storage, "updateKanbanTask").mockImplementation(
+        const updateKanbanTask = storage.kanban.updateKanbanTask.bind(storage.kanban);
+        const updateSpy = spyOn(storage.kanban, "updateKanbanTask").mockImplementation(
           async (taskId, updates, expectedProjectId) => {
             operations.push(`update:${taskId}`);
             return updateKanbanTask(taskId, updates, expectedProjectId);
@@ -5740,8 +5740,8 @@ describe("build pipeline commands", () => {
 
   test("falls back to storage deletion when the build-pipeline supervisor is unavailable", async () => {
     await withCommands(async (invoke, storage) => {
-      const task = await storage.addKanbanTask("proj-1", "Stored build task", "");
-      await storage.updateKanbanTask(task.id, {
+      const task = await storage.kanban.addKanbanTask("proj-1", "Stored build task", "");
+      await storage.kanban.updateKanbanTask(task.id, {
         buildPipelineId: "pipeline-stored",
       });
       await storage.saveBuildPipeline("pipeline-stored", "proj-1", "e1", 1, {
@@ -5756,8 +5756,8 @@ describe("build pipeline commands", () => {
           await deleteBuildPipeline(pipelineId);
         },
       );
-      const updateKanbanTask = storage.updateKanbanTask.bind(storage);
-      spyOn(storage, "updateKanbanTask").mockImplementation(
+      const updateKanbanTask = storage.kanban.updateKanbanTask.bind(storage.kanban);
+      spyOn(storage.kanban, "updateKanbanTask").mockImplementation(
         async (taskId, updates, expectedProjectId) => {
           operations.push(`update:${taskId}`);
           return updateKanbanTask(taskId, updates, expectedProjectId);
@@ -6181,9 +6181,12 @@ describe("pr monitor commands", () => {
           prState: "open",
           hasMergeConflicts: true,
         });
-        const loadEnvironments = storage.loadEnvironments.bind(storage);
+        // Every read of the environment store, through the facade or from
+        // another repository, reaches the projects repository.
+        const projects = storageInternals(storage).repos.projects;
+        const loadEnvironments = projects.loadEnvironments.bind(projects);
         let calls = 0;
-        const loadSpy = spyOn(storage, "loadEnvironments").mockImplementation(async () => {
+        const loadSpy = spyOn(projects, "loadEnvironments").mockImplementation(async () => {
           calls += 1;
           if (calls === 2) throw new Error("temporary storage read failure");
           return loadEnvironments();
@@ -6495,8 +6498,8 @@ describe("pr monitor commands", () => {
 
   test("production task lookup resolves direct and build-pipeline environment links", async () => {
     await withCommands(async (_invoke, storage) => {
-      const direct = await storage.addKanbanTask("proj-1", "Direct", "");
-      await storage.updateKanbanTask(direct.id, {
+      const direct = await storage.kanban.addKanbanTask("proj-1", "Direct", "");
+      await storage.kanban.updateKanbanTask(direct.id, {
         environmentId: "e1",
         prUrl: "https://github.com/acme/repo/pull/7",
         prState: "open",
@@ -6509,8 +6512,8 @@ describe("pr monitor commands", () => {
         prState: "open",
       });
 
-      await storage.updateKanbanTask(direct.id, { environmentId: undefined });
-      const pipelineTask = await storage.addKanbanTask("proj-1", "Pipeline", "");
+      await storage.kanban.updateKanbanTask(direct.id, { environmentId: undefined });
+      const pipelineTask = await storage.kanban.addKanbanTask("proj-1", "Pipeline", "");
       await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
         taskId: pipelineTask.id,
         source: { type: "kanban" },
@@ -6520,7 +6523,7 @@ describe("pr monitor commands", () => {
         taskId: pipelineTask.id,
         status: "backlog",
       });
-      await storage.deleteKanbanTask(pipelineTask.id);
+      await storage.kanban.deleteKanbanTask(pipelineTask.id);
       await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
         taskId: pipelineTask.id,
         status: null,

@@ -139,7 +139,8 @@ export async function startGitHubCliLogin(
   let handle: AgentAccountLoginHandle;
   try {
     const shim = await ensureBrowserShim(
-      options.shimDirectory ?? path.join(context.storage.agentAccountsDirectory(), ".login-shim"),
+      options.shimDirectory ??
+        path.join(context.storage.agentAccounts.agentAccountsDirectory(), ".login-shim"),
     );
     handle = await beginAgentAccountLogin("github", gitHubCliLoginCommand(shim), {
       spawnImpl: options.spawnImpl,

@@ -33,46 +33,22 @@ const SKIPPED_DIRECTORIES = new Set([
 ]);
 
 /**
- * Layered `extends` chains that predate this guard. Each one is a single class
+ * Layered `extends` chains that predate this guard. Each one was a single class
  * that `refactor(core): split large modules` (#417) cut into files by size, held
- * together by `abstract` forward declarations. They are being taken apart into
- * collaborators, and this list must only ever shrink.
+ * together by `abstract` forward declarations, and each has since been taken
+ * apart into collaborators. The list is empty and must stay empty; it is kept
+ * so a chain a long-lived branch still carries fails here as new.
  *
- * Entries are pinned exactly, base first. A chain that gains a layer fails as
- * new; a chain that loses one fails as stale, so whoever shortens it updates the
- * entry in the same change.
- *
- * Coordination: plan 01 (storage) removes its own entry below when its chain is
- * gone. Plan 02 (native agent service) already removed its chain and entry; a
- * branch that still carries that entry drops it on rebase rather than restoring
- * it. Plan 03 (claude-bridge `sendPrompt`) splits
- * one function, not a class chain, so it has no entry. Plan 04 removed the
- * gateway, Codex runtime, build pipeline and web annotation chains.
+ * Entries were pinned exactly, base first. A chain that gains a layer fails as
+ * new; a chain that loses one fails as stale. The last entry, the
+ * `StorageService` chain, went with
+ * `docs/todo/backend-structure/0009-storage-service-repositories.md`: the
+ * service is now a facade over per-store repositories sharing one
+ * `StorageContext`. A branch that still carries that entry drops it on rebase
+ * rather than restoring it.
  */
-const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; reason: string }> = [
-  {
-    classes: [
-      "StorageBase",
-      "StorageProjects",
-      "StorageConfig",
-      "StorageSessions",
-      "StorageReviews",
-      "StorageNative",
-      "StoragePrompts",
-      "StorageBuildPipelines",
-      "StorageDrafts",
-      "StorageAgentMail",
-      "StorageKanban",
-      "StoragePreviewServices",
-      "StorageNodes",
-      "StoragePublicOperations",
-      "StorageService",
-    ],
-    plan: "docs/todo/backend-structure/0009-storage-service-repositories.md",
-    reason:
-      "StorageService split by size into 15 layers; the todo replaces it with per-store repositories over a shared StorageContext.",
-  },
-];
+const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; reason: string }> =
+  [];
 
 /**
  * Deliberate one-level inheritance between project classes: a specialised

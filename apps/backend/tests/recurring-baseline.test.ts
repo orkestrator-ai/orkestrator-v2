@@ -181,10 +181,10 @@ describe("driven workflow supervision baseline (step 08)", () => {
       try {
         await storage.init();
         for (let index = 0; index < history; index += 1)
-          await storage.createFeaturePlan("project-1");
-        const plan = await storage.createFeaturePlan("project-1");
+          await storage.kanban.createFeaturePlan("project-1");
+        const plan = await storage.kanban.createFeaturePlan("project-1");
         const timestamp = new Date().toISOString();
-        await storage.startFeaturePlanning({
+        await storage.kanban.startFeaturePlanning({
           version: 1,
           operationId: "operation-1",
           featureId: plan.id,
@@ -204,7 +204,9 @@ describe("driven workflow supervision baseline (step 08)", () => {
         // A foreign write makes the plan cache stale before each pass. Otherwise
         // a whole-store regression could fetch zero bytes from a warm cache.
         for (let pass = 0; pass < 2; pass += 1) {
-          const updated = await writer.updateFeaturePlan(plan.id, { title: `fixture-${pass}` });
+          const updated = await writer.kanban.updateFeaturePlan(plan.id, {
+            title: `fixture-${pass}`,
+          });
           recurringWorkMetrics.reset();
           await recurringWorkMetrics.observe("feature-planning-tick", () =>
             service.advanceNow(plan.id),

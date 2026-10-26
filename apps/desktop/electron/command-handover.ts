@@ -11,6 +11,9 @@ import type {
 import { COMMAND_HANDOVER_PREVIEW_CHANGED } from "@orkestrator/protocol/command-nodes";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 
+import { connectionPartitionKey } from "./desktop-window-lifecycle.js";
+import { nodePartitionKey, type PreviewPartitionRetention } from "./preview-partition-retention.js";
+
 /**
  * Making another machine the command node from a desktop window.
  *
@@ -148,6 +151,7 @@ export async function previewCommandHandover(
 export async function handOverCommandNode(
   deps: CommandHandoverDeps,
   input: CommandHandoverInput,
+  retention?: PreviewPartitionRetention,
 ): Promise<CommandHandoverResult | null> {
   const nodeId = targetNodeId(deps, input.targetConnectionId);
   const source = await commandSource(deps);
@@ -227,12 +231,23 @@ export async function handOverCommandNode(
       });
       addedTarget = true;
     }
-    return await deps.invokeOn<CommandHandoverResult>(source, "hand_over_command", {
-      nodeId,
-      includeSelf: input.includeSelf,
-      entries,
-      ...(input.nodeIds ? { nodeIds: input.nodeIds } : {}),
-    });
+    const handover = () =>
+      deps.invokeOn<CommandHandoverResult>(source, "hand_over_command", {
+        nodeId,
+        includeSelf: input.includeSelf,
+        entries,
+        ...(input.nodeIds ? { nodeIds: input.nodeIds } : {}),
+      });
+    return await (retention
+      ? retention.handoverNodes(
+          connectionPartitionKey(source),
+          connectionPartitionKey(input.targetConnectionId),
+          // With no selection the backend moves its current fleet, which can
+          // include nodes admitted since the preflight registry read.
+          input.nodeIds ? [nodeId, ...input.nodeIds].map(nodePartitionKey) : undefined,
+          handover,
+        )
+      : handover());
   } catch (error) {
     if (addedTarget) {
       // A pending/committed backend handover removes the target itself. Only

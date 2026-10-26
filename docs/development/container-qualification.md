@@ -18,7 +18,11 @@ the platforms and providers still waiting for evidence are in
   qualification image.
 - Every resource a suite creates carries a per-run label and an owner label
   derived from a private temporary data directory; `afterAll` removes exactly
-  those resources. Never prune, globally or by owner.
+  those resources, one per call, and fails if any is left
+  (`removeLabelledResources` in `apps/backend/tests/container-live-cleanup.ts`).
+  Docker Desktop 4.95 intermittently answered a multi-argument `docker rm -f`
+  or `docker volume rm` under load with `404 page not found`, which a single
+  call that ignored errors leaked silently. Never prune, globally or by owner.
 - Synthetic file, network and lifecycle scenarios need no credentials.
   Provider runs use only an authorized agent-test profile's credential
   sources, and one provider's success never qualifies another.
@@ -40,9 +44,9 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Unit and integration | `mise run test` | Every scenario without a live suite below, against a fake `docker` |
 | Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
-| Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26 |
-| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 |
-| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch), C10, C22 host-service reply, C23 re-run |
+| Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
+| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Set `ORKESTRATOR_EGRESS=in-container` for the in-container firewall |
+| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; pinned to the in-container firewall), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
@@ -56,8 +60,9 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, then the benchmarks (C28), uploaded as `container-benchmarks-<platform>` |
-| Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
+| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker` | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring (`container-claude-terminal-signal.spec.ts`) |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
+| Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
 
 `test:logged` kills a command that prints nothing for 300 s, and Bun prints
 a test's output only when the test finishes, so run the readiness and
@@ -99,8 +104,62 @@ what it created.
 namespace and runs the working tree's `init-firewall.sh` with `NET_ADMIN`,
 joins a workload to it with no added capability, and checks policy 3
 egress, root tampering, live edits, published and host-service ports, and
-restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
-not create this topology yet.
+restarts of either side: exit 0 pass, 1 fail, 2 setup error. It predates the
+backend's gateway (`egress-gateway.ts`) and records the policy itself rather
+than using the image's `orkestrator-egress-gateway` entrypoint; the live suites
+exercise the production path.
+
+Live tests start runtimes through `tests/container-live-start.ts`
+(`startRuntime`): Docker refuses a runtime whose egress gateway is not
+running, so a bare `docker start` of a restricted runtime fails on a gateway
+image.
+
+## Egress gateway on Docker Desktop (2026-10-25)
+
+The backend's egress gateway (todo 0018 item 1), on Docker Desktop 4.96.3
+(Engine 29.9.2, linux/arm64), with a qualification image built from the
+branch (`orkestrator-v2:q0018-egress`, capabilities including
+`egress-gateway=1`). Every resource used a private owner label and was
+removed afterwards.
+
+- Live firewall suite: passed with the gateway (C23 edits, revocation,
+  refresh, restart durability; the policy 3 tuple test with a peer on the
+  gateway's network) and again with `ORKESTRATOR_EGRESS=in-container`. On the
+  gateway `node`'s `CapEff` in the runtime was `0000000000000000` and root had
+  no `NET_ADMIN`; `iptables -P OUTPUT
+  ACCEPT`, `iptables -F` and `ipset flush allowed-domains` as `orkroot` in the
+  runtime all failed and an unlisted domain stayed blocked; `sudo -n
+  init-firewall.sh` as `node` was refused; the runtime's boot recorded
+  `gateway`; the network status reported `enforcement: gateway`; a port the
+  runtime listened on answered the host through the gateway's published
+  port. After `docker restart` of the gateway the running runtime lost the
+  network (fail closed), `prepareEgressGatewayForStart` answered
+  `restarted-gateway`, and after its restart the allowlist held again.
+- Live network suite (C22): a restricted runtime behind its gateway reached
+  only the backend service port, was rejected by its full-mode sibling, by
+  the network gateway address and by a sibling's published port, kept IPv6
+  disabled, accepted ingress through the gateway, followed a host-service
+  port change across a restart, and freed its network once the runtime and
+  gateway were removed. C24 and C26 (full mode) unchanged.
+- Live readiness suite: eight scenarios passed in one run (the in-container
+  fault injections pinned to `in-container`); the C22 host-service reply,
+  whose test had started the runtime with a bare `docker start`, passed once
+  it started it through its gateway. A gateway image without
+  `init-firewall.sh` refused the start with `not-ready` ("egress gateway
+  could not apply"), the runtime never started (`StartedAt` zero), and the
+  gateway reported `failed` with `-P OUTPUT DROP`. A bare `docker start` of a
+  runtime whose gateway was stopped was refused by Docker itself ("cannot
+  join network namespace of a non running container").
+- Live replacement: a restricted legacy runtime with a fixed host port
+  migrated to volumes behind a new gateway; the source and its gateway were
+  kept stopped as the recovery copy, the new runtime bound the same fixed
+  host port through its own gateway (`node`'s `CapEff` 0) with identical files, and
+  removing the copy removed its gateway. The whole replacement and
+  rebuild-fault suites passed in the same run (571 s).
+- Not covered: Linux Engine (the `container-live-qualification.yml` workflow
+  runs these suites on `ubuntu-24.04` and `ubuntu-24.04-arm` for a pull
+  request that changes them), rootless, IPv6-enabled daemons, a Docker daemon
+  restart, and DNS rotation beyond the refresh the firewall suite runs.
 
 ## Rootless Linux host (2026-10-25)
 
@@ -420,10 +479,18 @@ mise exec -- bun apps/backend/scripts/container-signal-profile-sample.ts --profi
 ```
 
 The live signal tests need a development image of the checkout
-(`mise run docker:build:dev`) and are skipped without one:
+(`mise run docker:build:dev`) or the CI workflow's qualification image, and
+are skipped without one:
 
 ```bash
 ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
   bun test apps/backend/tests/claude-state-signal-docker.test.ts \
   apps/backend/tests/container-worktree-signal-docker.test.ts
 ```
+
+The Linux Engine workflow runs both tests and the exec-cost script on every
+run (`exec-cost-<platform>.json` in the benchmark artifact). The worktree
+test's `change-to-scan` line is not a clean latency: it follows a writer
+whose close rang just before, so it likely waits out part of the 2 s hint
+gap (1.3 to 1.4 s on Desktop and Linux Engine alike). Use the profile sample's
+`latencyMs` for change-to-visible.

@@ -26,7 +26,7 @@ export function registerKanbanCommands(
   const { conditionalManifestSnapshot } = dependencies;
   register("get_kanban_tasks", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "kanban", () =>
-      storage.getKanbanTasks(asString(args.projectId, "projectId")),
+      storage.kanban.getKanbanTasks(asString(args.projectId, "projectId")),
     ),
   );
   register(
@@ -44,8 +44,8 @@ export function registerKanbanCommands(
         asString(description, "description"),
       ] as const;
       return Object.keys(initial).length > 0
-        ? storage.addKanbanTask(...required, initial)
-        : storage.addKanbanTask(...required);
+        ? storage.kanban.addKanbanTask(...required, initial)
+        : storage.kanban.addKanbanTask(...required);
     },
   );
   register(
@@ -65,7 +65,7 @@ export function registerKanbanCommands(
       },
       { storage },
     ) =>
-      storage.updateKanbanTask(asString(taskId, "taskId"), {
+      storage.kanban.updateKanbanTask(asString(taskId, "taskId"), {
         ...(typeof title === "string" ? { title } : {}),
         ...(typeof description === "string" ? { description } : {}),
         ...(typeof acceptanceCriteria === "string" ? { acceptanceCriteria } : {}),
@@ -80,66 +80,72 @@ export function registerKanbanCommands(
       }),
   );
   register("delete_kanban_task", ({ taskId }, { storage }) =>
-    storage.deleteKanbanTask(asString(taskId, "taskId")),
+    storage.kanban.deleteKanbanTask(asString(taskId, "taskId")),
   );
   register("add_kanban_comment", ({ taskId, text, projectId, requestId }, { storage }) => {
     const parsedRequestId = asOptionalMutationRequestId(requestId);
     const required = [asString(taskId, "taskId"), asString(text, "text")] as const;
     if (projectId === undefined && parsedRequestId === undefined) {
-      return storage.addKanbanComment(...required);
+      return storage.kanban.addKanbanComment(...required);
     }
-    return storage.addKanbanComment(
+    return storage.kanban.addKanbanComment(
       ...required,
       projectId === undefined ? undefined : asString(projectId, "projectId"),
       parsedRequestId,
     );
   });
   register("delete_kanban_comment", ({ taskId, commentId }, { storage }) =>
-    storage.deleteKanbanComment(asString(taskId, "taskId"), asString(commentId, "commentId")),
+    storage.kanban.deleteKanbanComment(
+      asString(taskId, "taskId"),
+      asString(commentId, "commentId"),
+    ),
   );
   register("add_kanban_image", ({ taskId, filename, data }, { storage }) =>
-    storage.addKanbanImage(
+    storage.kanban.addKanbanImage(
       asString(taskId, "taskId"),
       asString(filename, "filename"),
       asString(data, "data"),
     ),
   );
   register("delete_kanban_image", ({ taskId, imageId }, { storage }) =>
-    storage.deleteKanbanImage(asString(taskId, "taskId"), asString(imageId, "imageId")),
+    storage.kanban.deleteKanbanImage(asString(taskId, "taskId"), asString(imageId, "imageId")),
   );
   register("get_kanban_image_data", ({ imageId }, { storage }) =>
-    storage.getKanbanImageData(asString(imageId, "imageId")),
+    storage.kanban.getKanbanImageData(asString(imageId, "imageId")),
   );
   register("get_project_notes", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "project-notes", () =>
-      storage.getProjectNotes(asString(args.projectId, "projectId")),
+      storage.kanban.getProjectNotes(asString(args.projectId, "projectId")),
     ),
   );
   register("save_project_notes", ({ projectId, content }, { storage }) =>
-    storage.saveProjectNotes(asString(projectId, "projectId"), asString(content, "content")),
+    storage.kanban.saveProjectNotes(asString(projectId, "projectId"), asString(content, "content")),
   );
   register("get_feature_plans", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "feature-plan", () =>
-      storage.getFeaturePlans(asString(args.projectId, "projectId")),
+      storage.kanban.getFeaturePlans(asString(args.projectId, "projectId")),
     ),
   );
   register("create_feature_plan", ({ projectId }, { storage }) =>
-    storage.createFeaturePlan(asString(projectId, "projectId")),
+    storage.kanban.createFeaturePlan(asString(projectId, "projectId")),
   );
   register("update_feature_plan", (args, { storage }) => {
     assertOnlyKeys(args, ["featureId", "updates"], "arguments");
-    return storage.updateFeaturePlan(
+    return storage.kanban.updateFeaturePlan(
       asNonBlankString(args.featureId, "featureId"),
       asFeaturePlanUpdates(args.updates),
     );
   });
   register("claim_feature_plan_build", ({ featureId, taskId }, { storage }) =>
-    storage.claimFeaturePlanBuild(asString(featureId, "featureId"), asString(taskId, "taskId")),
+    storage.kanban.claimFeaturePlanBuild(
+      asString(featureId, "featureId"),
+      asString(taskId, "taskId"),
+    ),
   );
   register(
     "append_feature_plan_message",
     ({ featureId, role, content, stateApplication, modelId }, { storage }) =>
-      storage.appendFeaturePlanMessage(
+      storage.kanban.appendFeaturePlanMessage(
         asString(featureId, "featureId"),
         asFeaturePlanRole(role),
         asString(content, "content"),
@@ -150,7 +156,7 @@ export function registerKanbanCommands(
   register(
     "append_feature_story_message",
     ({ featureId, storyId, role, content, stateApplication, modelId }, { storage }) =>
-      storage.appendFeatureStoryMessage(
+      storage.kanban.appendFeatureStoryMessage(
         asString(featureId, "featureId"),
         asString(storyId, "storyId"),
         asFeaturePlanRole(role),

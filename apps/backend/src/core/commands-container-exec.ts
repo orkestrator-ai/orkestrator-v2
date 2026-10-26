@@ -1,4 +1,5 @@
 import { runCommand } from "./shell.js";
+import { networkOwnerContainer } from "./container-network-owner.js";
 import type { EnvironmentStatus } from "./models.js";
 
 /**
@@ -65,11 +66,11 @@ export async function getHostPort(
   protocol = "tcp",
 ): Promise<number | null> {
   try {
-    const { stdout } = await runCommand(
-      "docker",
-      ["port", containerId, `${containerPort}/${protocol}`],
-      { timeoutMs: 10_000 },
-    );
+    // A runtime behind an egress gateway publishes through the gateway.
+    const owner = await networkOwnerContainer(containerId);
+    const { stdout } = await runCommand("docker", ["port", owner, `${containerPort}/${protocol}`], {
+      timeoutMs: 10_000,
+    });
     const line = stdout.split("\n").find(Boolean);
     if (!line) return null;
     const rawPort = line.split(":").at(-1);

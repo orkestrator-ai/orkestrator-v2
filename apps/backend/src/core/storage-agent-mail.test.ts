@@ -16,7 +16,12 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { STORAGE_DATABASE_FILE } from "./storage-database.js";
-import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
+import {
+  readStoredValue,
+  seedStore,
+  storageFilesContain,
+  storageInternals,
+} from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 /** The persisted agent-mail store, as far as these tests edit it. */
@@ -220,7 +225,7 @@ describe("StorageService agent mail", () => {
           body: "hello",
         },
       );
-      storage.loadPaneLayoutsForReconciliation = async () => {
+      storageInternals(storage).repos.sessions.loadPaneLayoutsForReconciliation = async () => {
         throw new Error("read path touched pane layouts");
       };
       await expect(storage.getAgentMailSummary()).resolves.toBeDefined();
@@ -241,8 +246,9 @@ describe("StorageService agent mail", () => {
     const { storage, dataDir } = await fixture();
     try {
       let synchronizations = 0;
-      const synchronize = storage.synchronizeAgentMailboxes.bind(storage);
-      storage.synchronizeAgentMailboxes = async () => {
+      const mail = storageInternals(storage).repos.agentMailboxes;
+      const synchronize = mail.synchronizeAgentMailboxes.bind(mail);
+      mail.synchronizeAgentMailboxes = async () => {
         synchronizations += 1;
         await synchronize();
       };
@@ -307,7 +313,7 @@ describe("StorageService agent mail", () => {
     const { storage, dataDir } = await fixture();
     try {
       const now = new Date(0).toISOString();
-      await storage.mutateCoordinatorWorkspace("p1", () => ({
+      await storage.coordinators.mutateCoordinatorWorkspace("p1", () => ({
         version: COORDINATOR_WORKSPACE_VERSION,
         id: "coordinator-1",
         projectId: "p1",
@@ -331,14 +337,13 @@ describe("StorageService agent mail", () => {
       }));
       await storage.synchronizeAgentMailboxes();
       let synchronizations = 0;
-      storage.synchronizeAgentMailboxes = async () => {
+      const mail = storageInternals(storage).repos.agentMailboxes;
+      mail.synchronizeAgentMailboxes = async () => {
         synchronizations += 1;
       };
-      await (
-        storage as unknown as {
-          ensureAgentMailDirectoryFresh: (environmentIds: string[]) => Promise<void>;
-        }
-      ).ensureAgentMailDirectoryFresh([coordinatorRuntimeId("coordinator-1", "conversation-1")]);
+      await mail.ensureAgentMailDirectoryFresh([
+        coordinatorRuntimeId("coordinator-1", "conversation-1"),
+      ]);
       expect(synchronizations).toBe(0);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
@@ -660,7 +665,7 @@ describe("StorageService agent mail", () => {
           trigger === "policy" ? "e2" : coordinatorRuntimeId("coordinator-1", "conversation-1");
         const tabId = trigger === "policy" ? "agent" : "coordinator-tab";
         if (trigger === "assignment") {
-          await storage.mutateCoordinatorWorkspace("p1", () => ({
+          await storage.coordinators.mutateCoordinatorWorkspace("p1", () => ({
             version: COORDINATOR_WORKSPACE_VERSION,
             id: "coordinator-1",
             projectId: "p1",
@@ -699,7 +704,7 @@ describe("StorageService agent mail", () => {
         if (trigger === "assignment") {
           // Assignment supplies the capability, but the conversation is closed
           // before any promotion is allowed to run.
-          await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+          await storage.coordinators.mutateCoordinatorWorkspace("p1", (workspace) => ({
             ...workspace!,
             conversations: workspace!.conversations.map((conversation) => ({
               ...conversation,
@@ -707,7 +712,7 @@ describe("StorageService agent mail", () => {
             })),
           }));
           await storage.synchronizeAgentMailboxes();
-          await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+          await storage.coordinators.mutateCoordinatorWorkspace("p1", (workspace) => ({
             ...workspace!,
             conversations: workspace!.conversations.map((conversation) => ({
               ...conversation,
@@ -733,7 +738,7 @@ describe("StorageService agent mail", () => {
         );
         expect(await storage.listPendingAgentMailInjects()).toEqual([]);
         if (trigger === "assignment") {
-          await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+          await storage.coordinators.mutateCoordinatorWorkspace("p1", (workspace) => ({
             ...workspace!,
             conversations: workspace!.conversations.map((conversation) => ({
               ...conversation,
@@ -907,7 +912,7 @@ describe("StorageService agent mail", () => {
     const { storage, dataDir } = await fixture();
     try {
       const now = new Date(0).toISOString();
-      await storage.mutateCoordinatorWorkspace("p1", () => ({
+      await storage.coordinators.mutateCoordinatorWorkspace("p1", () => ({
         version: COORDINATOR_WORKSPACE_VERSION,
         id: "coordinator-1",
         projectId: "p1",
@@ -1452,7 +1457,7 @@ describe("StorageService agent mail", () => {
       // No `agent`: a coordinator conversation has none until its first prompt,
       // and a mailbox with no agent cannot be injected into, so mail that
       // arrives meanwhile is filed as `stored`.
-      await storage.mutateCoordinatorWorkspace("p1", () => ({
+      await storage.coordinators.mutateCoordinatorWorkspace("p1", () => ({
         version: COORDINATOR_WORKSPACE_VERSION,
         id: "coordinator-1",
         projectId: "p1",
@@ -1514,7 +1519,7 @@ describe("StorageService agent mail", () => {
         0,
       );
 
-      await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace("p1", (workspace) => ({
         ...workspace!,
         conversations: workspace!.conversations.map((conversation) => ({
           ...conversation,
@@ -1651,7 +1656,7 @@ describe("StorageService agent mail routes", () => {
   async function coordinatorFixture(options: { closeCreator?: boolean } = {}) {
     const { storage, dataDir } = await peerFixture();
     const now = new Date(0).toISOString();
-    await storage.mutateCoordinatorWorkspace("p1", () => ({
+    await storage.coordinators.mutateCoordinatorWorkspace("p1", () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       id: "coordinator-1",
       projectId: "p1",
@@ -1672,7 +1677,7 @@ describe("StorageService agent mail routes", () => {
       createdAt: now,
       updatedAt: now,
     }));
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "launch-e1",
       projectId: "p1",
       coordinatorId: "coordinator-1",
@@ -1685,7 +1690,7 @@ describe("StorageService agent mail routes", () => {
       createdAt: now,
     });
     // A delegation to an existing environment does not make it a worker.
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "delegate-e2",
       projectId: "p1",
       coordinatorId: "coordinator-1",
@@ -1888,7 +1893,7 @@ describe("StorageService agent mail routes", () => {
   test("with no main open, coordinator mail waits for the resolver to start one", async () => {
     const { storage, dataDir } = await coordinatorFixture();
     try {
-      await storage.mutateCoordinatorWorkspace("p1", (current) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace("p1", (current) => ({
         ...current!,
         conversations: current!.conversations.map((item) => ({
           ...item,
@@ -2078,7 +2083,7 @@ describe("StorageService agent mail routes", () => {
           ...config.global,
           agentMessaging: { ...config.global.agentMessaging!, autonomousWakeBudget: 4 },
         });
-        if (!side) await storage.openCoordinatorDelegation("launch-e1", "agent");
+        if (!side) await storage.coordinators.openCoordinatorDelegation("launch-e1", "agent");
         const main = coordinatorSender("conversation-1");
         const other = side ? coordinatorSender("conversation-2") : tab("e1");
         for (let index = 0; index < 6; index += 1) {

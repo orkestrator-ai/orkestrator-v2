@@ -10,7 +10,7 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
-import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail.js";
+import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail-injects.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import { exportStoresAsLegacyJson, readStoredValue, seedStore } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
@@ -142,7 +142,7 @@ describe("AgentMailService", () => {
           let native: NativeAgentService | undefined;
           try {
             await storage.updateProject("project", { localPath: dataDir });
-            await storage.mutateCoordinatorWorkspace("project", () => ({
+            await storage.coordinators.mutateCoordinatorWorkspace("project", () => ({
               version: COORDINATOR_WORKSPACE_VERSION,
               id: "coordinator-1",
               projectId: "project",
@@ -428,7 +428,7 @@ describe("AgentMailService", () => {
     const { storage, dataDir } = await fixture();
     const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
     const now = new Date(0).toISOString();
-    await storage.mutateCoordinatorWorkspace("project", () => ({
+    await storage.coordinators.mutateCoordinatorWorkspace("project", () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       id: "coordinator-1",
       projectId: "project",
@@ -451,7 +451,7 @@ describe("AgentMailService", () => {
       updatedAt: now,
     }));
     await storage.synchronizeAgentMailboxes();
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "delegation-1",
       coordinatorId: "coordinator-1",
       projectId: "project",
@@ -461,7 +461,7 @@ describe("AgentMailService", () => {
       requestId: "launch-worker",
       createdAt: now,
     });
-    await storage.openCoordinatorDelegation("delegation-1", "agent", now);
+    await storage.coordinators.openCoordinatorDelegation("delegation-1", "agent", now);
 
     const dispatches: Array<Record<string, unknown>> = [];
     const service = new AgentMailService(
@@ -495,7 +495,7 @@ describe("AgentMailService", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(dispatches).toHaveLength(0);
 
-      await storage.closeCoordinatorDelegation("delegation-1", "completed");
+      await storage.coordinators.closeCoordinatorDelegation("delegation-1", "completed");
       await storage.releaseDelegationHeldAgentMail(
         "delegation-1",
         runtimeId,
@@ -1007,7 +1007,7 @@ describe("AgentMailService", () => {
     let dispatches = 0;
     try {
       const now = new Date(0).toISOString();
-      await storage.mutateCoordinatorWorkspace("project", () => ({
+      await storage.coordinators.mutateCoordinatorWorkspace("project", () => ({
         version: COORDINATOR_WORKSPACE_VERSION,
         id: "coordinator-1",
         projectId: "project",

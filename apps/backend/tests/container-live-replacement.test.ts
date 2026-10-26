@@ -19,6 +19,8 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { startRuntime } from "./container-live-start";
+import { removeLabelledResources } from "./container-live-cleanup";
 import {
   STATE_SNAPSHOT,
   WORKSPACE_SNAPSHOT,
@@ -49,25 +51,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ENABLED) return;
-  const ids = (await docker(["ps", "-aq", "--filter", `label=orkestrator-owner=${owner}`]))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  const volumes = (
-    await docker(["volume", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
-  // Environment networks are labelled with the same private owner.
-  const networks = (
-    await docker(["network", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  // Containers, volumes and environment networks all carry the private owner.
+  const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
-}, 120_000);
+  expect(leftovers).toEqual([]);
+}, 180_000);
 
 function replacementContext(environment: Environment) {
   const fixture = memoryLifecycleContext([environment], dataDir);
@@ -96,12 +84,13 @@ function replacementContext(environment: Environment) {
   return fixture;
 }
 
-async function createLegacyEnvironment(name: string) {
+async function createLegacyEnvironment(name: string, overrides: Partial<Environment> = {}) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
   const { resolveDockerImage } = await import("../src/core/docker-image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}-${name}`,
     networkAccessMode: "full",
+    ...overrides,
   });
   const fixture = replacementContext(environment);
   const resolved = await resolveDockerImage(IMAGE);
@@ -111,7 +100,7 @@ async function createLegacyEnvironment(name: string) {
     imageId: resolved.imageId,
     runtimeGeneration: 1,
   });
-  await docker(["start", containerId]);
+  await startRuntime(containerId);
   await waitForContainerBoot(containerId);
   await fixture.context.storage.updateEnvironment(environment.id, {
     containerId,
@@ -177,7 +166,7 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
         "exited",
       );
 
-      await docker(["start", outcome!.containerId]);
+      await startRuntime(outcome!.containerId);
       await waitForContainerBoot(outcome!.containerId);
       expect(await exec(outcome!.containerId, WORKSPACE_SNAPSHOT)).toBe(before);
       const state = await exec(outcome!.containerId, STATE_SNAPSHOT);
@@ -208,6 +197,62 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
   );
 });
 
+describe("C14 restricted rebuild behind an egress gateway", () => {
+  live(
+    "the candidate gets its own gateway on the fixed host port the source's gateway released",
+    async () => {
+      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { egressGatewayOf, removeRuntimeContainer } =
+        await import("../src/core/egress-gateway");
+      const { getHostPort } = await import("../src/core/commands-container-exec");
+      const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+      const fixedPort = probe.port;
+      probe.stop(true);
+      const { fixture, environmentId, containerId } = await createLegacyEnvironment("c14g", {
+        networkAccessMode: "restricted",
+        portMappings: [{ containerPort: 3000, hostPort: fixedPort, protocol: "tcp" }],
+      });
+      const sourceGateway = await egressGatewayOf(containerId);
+      if (!sourceGateway) throw new Error("the qualification image has no egress gateway");
+      expect(await getHostPort(containerId, 3000)).toBe(fixedPort);
+      const before = await exec(containerId, WORKSPACE_SNAPSHOT);
+
+      const outcome = await replaceRuntimePreservingState(
+        { environmentId, expectedContainerId: containerId },
+        fixture.context,
+      );
+      expect(outcome?.kind).toBe("migrate");
+      const candidateGateway = await egressGatewayOf(outcome!.containerId);
+      expect(candidateGateway).toBeTruthy();
+      expect(candidateGateway).not.toBe(sourceGateway);
+      // The source and its gateway are kept stopped as the recovery copy.
+      for (const id of [containerId, sourceGateway]) {
+        expect(await docker(["inspect", "--format", "{{.State.Status}}", id])).toBe("exited");
+      }
+
+      // The new runtime binds the same fixed port through its own gateway,
+      // holds no capability, and keeps the files.
+      await startRuntime(outcome!.containerId);
+      await waitForContainerBoot(outcome!.containerId);
+      expect(await getHostPort(outcome!.containerId, 3000)).toBe(fixedPort);
+      expect(
+        await exec(outcome!.containerId, "awk '/^CapEff/ { print $2 }' /proc/self/status"),
+      ).toBe("0000000000000000");
+      expect(await exec(outcome!.containerId, WORKSPACE_SNAPSHOT)).toBe(before);
+
+      // Discarding the copy takes its gateway with it.
+      await removeRuntimeContainer(containerId, owner);
+      expect(
+        await runCommand("docker", ["inspect", sourceGateway], { timeoutMs: 30_000 }).then(
+          () => "present",
+          () => "absent",
+        ),
+      ).toBe("absent");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
 describe("C14 volume rebuild copies the storage set before replacing the runtime", () => {
   live(
     "rebuilds a volume-backed runtime and retains the previous storage set",
@@ -218,7 +263,7 @@ describe("C14 volume rebuild copies the storage set before replacing the runtime
         { environmentId, expectedContainerId: containerId },
         fixture.context,
       );
-      await docker(["start", migrated!.containerId]);
+      await startRuntime(migrated!.containerId);
       await waitForContainerBoot(migrated!.containerId);
       const stateBefore = await exec(migrated!.containerId, STATE_SNAPSHOT);
       const databasesBefore = await sqliteSnapshot(migrated!.containerId, true);
@@ -242,7 +287,7 @@ describe("C14 volume rebuild copies the storage set before replacing the runtime
           reason: "rebuild-source",
         }),
       ]);
-      await docker(["start", rebuilt!.containerId]);
+      await startRuntime(rebuilt!.containerId);
       await waitForContainerBoot(rebuilt!.containerId);
       expect(await exec(rebuilt!.containerId, WORKSPACE_SNAPSHOT)).toBe(before);
       expect(await exec(rebuilt!.containerId, STATE_SNAPSHOT)).toBe(stateBefore);
@@ -314,7 +359,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
         await docker(["volume", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]),
       ).toBe("");
       // The original restarts with its files.
-      await docker(["start", containerId]);
+      await startRuntime(containerId);
       await waitForContainerBoot(containerId);
       expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(before);
     },
@@ -346,7 +391,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
       expect(
         await docker(["volume", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]),
       ).toBe("");
-      await docker(["start", containerId]);
+      await startRuntime(containerId);
       await waitForContainerBoot(containerId);
       expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(before);
     },
@@ -396,7 +441,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
         expect(
           await docker(["volume", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]),
         ).toBe("");
-        await docker(["start", containerId]);
+        await startRuntime(containerId);
         await waitForContainerBoot(containerId);
         expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(before);
       }
@@ -434,7 +479,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
         const record = lifecycleOf(await fixture.context.storage.getEnvironment(environmentId));
         expect(record.runtime?.containerId).toBe(containerId);
         expect(record.operation).toBeUndefined();
-        await docker(["start", containerId]).catch(() => undefined);
+        await startRuntime(containerId).catch(() => undefined);
         await waitForContainerBoot(containerId);
         expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(before);
       } finally {
@@ -476,7 +521,7 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
         { environmentId, expectedContainerId: containerId },
         fixture.context,
       );
-      await docker(["start", migrated!.containerId]);
+      await startRuntime(migrated!.containerId);
       await waitForContainerBoot(migrated!.containerId);
       await exec(migrated!.containerId, "printf 'newer\\n' > /workspace/newer.txt");
       await docker(["stop", "-t", "5", migrated!.containerId]);
@@ -502,7 +547,7 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
       // The swapped-back runtime (generation 1) takes a new generation, so a
       // handle bound to generation 1 before the migration is refused.
       expect(lifecycleOf(environment).runtime?.runtimeGeneration).toBe(3);
-      await docker(["start", containerId]);
+      await startRuntime(containerId);
       await waitForContainerBoot(containerId);
       expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(legacySnapshot);
       expect(await exec(containerId, "test -e /workspace/newer.txt && echo yes || echo no")).toBe(
@@ -526,7 +571,7 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
       environment = await fixture.context.storage.getEnvironment(environmentId);
       expect(environment?.containerId).toBe(migrated!.containerId);
       expect(lifecycleOf(environment).runtime?.runtimeGeneration).toBe(4);
-      await docker(["start", migrated!.containerId]);
+      await startRuntime(migrated!.containerId);
       await waitForContainerBoot(migrated!.containerId);
       expect(await exec(migrated!.containerId, "cat /workspace/newer.txt")).toBe("newer");
       await docker(["stop", "-t", "5", migrated!.containerId]);

@@ -76,7 +76,7 @@ existing Codex and Claude Code setups kept working unchanged.
 | Profile | Tools listed | Default capabilities | Text in results |
 | --- | --- | --- | --- |
 | `voice` | the 8 voice core tools and the 4 gateway tools | all but `projects`, `settings`, `environments.destructive`, `exec` | a short speakable `say` sentence, the IDs the next call needs, a `next` hint; at most 2 KB |
-| `full` | the 18 original tools, the voice core, the gateway, and one direct tool per allowed public action | every capability except `host` | compact JSON |
+| `full` | the operator tools (the 18 original tools, `list_nodes`, the Multi Review tools, `create_pr` and `resolve_conflicts`), the voice core, the gateway, and one direct tool per allowed public action | every capability except `host` | compact JSON |
 | `read-only` | the same shape as `full`, reads only | every capability except `host`; every mutation is refused | compact JSON |
 | `custom` | the same shape as `full` | an explicit list | compact JSON |
 
@@ -97,12 +97,16 @@ listener. Treat every token like a password: a `full` credential can create
 environments, launch jobs, read transcripts, and update tickets. Managed
 development profiles request an ephemeral loopback port so they can run
 alongside an installed Orkestrator instance; the selected URL is published in
-the profile's readiness and descriptor data.
+the profile's readiness and descriptor data. Any `--runtime-flavor agent-test`
+backend (test fixtures, qualification services, headless backends an agent
+starts) defaults to an ephemeral port as well unless
+`ORKESTRATOR_CONTROL_MCP_PORT` is set, so a forgotten one cannot hold the
+installed app's port.
 
-With the full profile the default credential lists 93 tools, eight of them
-the `schedule.*` direct tools (measured 2026-10-25; 82 tools and about 76 KB of
-`tools/list` on 2026-10-24); clients that defer or search tool
-definitions handle that well. A client that loads every tool up front is
+With the full profile the default credential lists the leaf-node, review and
+PR tools alongside eight `schedule.*` direct tools; clients that defer or
+search tool definitions handle that well. The voice list stays within its 8,000-byte
+budget (12 tools, about 7.6 KB). A client that loads every tool up front is
 better served by a `voice` or `custom` credential.
 
 ## Tool tiers
@@ -160,7 +164,8 @@ beside its schema in `PUBLIC_ACTION_INPUTS`:
   (`capability-unavailable`): deleting environments is a separate destructive
   grant that `projects` must not imply, so only the operator's own CLI
   cascades.
-- `voice` (voice profile only): `environment.stop`, `environment.exec`, and
+- `voice` (voice profile only): `environment.stop`, `environment.exec`,
+  `pr.create` and `pr.resolve` (both push to the remote), and
   `session.interaction.resolve` when it approves a command or file change
   (`answer` or `approve-for-session` on any interaction but a question).
   Denials, cancels and question answers run directly.
@@ -195,11 +200,14 @@ reconciler always runs as the operator.
 Everything the public CLI can do except `host.*`, subject to its credential:
 projects, environments, settings, agent sessions, interactions, transcripts,
 changes, runs, exec, Kanban tickets (`ticket.*`), agent mail (`mail.*`),
-scheduled jobs (`schedule.*`) and the attention feed (`attention.list`).
-A schedule a credential creates runs as that credential: the action is
-re-checked against its current capabilities at every fire, a revoked
-credential pauses it, and a credential sees only its own schedules; see
-[scheduled-jobs.md](scheduled-jobs.md#authority). The original tools remain:
+scheduled jobs (`schedule.*`), the attention feed (`attention.list`), Multi
+Review (`review.*`), the Create PR and Resolve Conflicts tabs (`pr.create`,
+`pr.resolve`), and all of it on the leaf nodes of a command node
+([Leaf nodes](#leaf-nodes)). A schedule a credential creates runs as that
+credential: the action is re-checked against its current capabilities at
+every fire, a revoked credential pauses it, and a credential sees only its
+own schedules; see [scheduled-jobs.md](scheduled-jobs.md#authority). The
+original tools remain:
 
 - See projects, environments, tabs, tab state, and bounded transcripts.
 - Create and update Kanban tickets and add comments.
@@ -208,6 +216,25 @@ credential pauses it, and a credential sees only its own schedules; see
 - Send a new prompt to an existing native-agent tab.
 - Discover durable agent mailboxes with `list_mailboxes`.
 - Send an inbox-only external message to one mailbox with `send_message`.
+
+Operator credentials also get, under the names a coordinator already uses:
+
+- `list_nodes` (`node.list`): this machine and the leaf nodes it controls.
+- `launch_multi_review` (and `start_multi_review`, the same action for an
+  operator), `list_multi_reviews`, `get_multi_review`, `open_multi_review`,
+  `open_multi_review_fix`, `address_multi_review`, `cancel_multi_review`
+  (`review.*`): the Multi Review button and its follow-up actions. A launch
+  uses the saved reviewers, models, branch, instruction, Auto-fix and Auto-PR
+  for whatever is omitted, reuses an active review, and creates its root tab.
+  A review whose tab could not open is a `partial` operation with its
+  recovery text.
+- `create_pr` and `resolve_conflicts` (`pr.create`, `pr.resolve`): the action
+  bar's Create PR and Resolve Conflicts buttons. Each opens the same agent tab
+  (the shared prompt, the `PR` or `Resolve` title, the `pr` or `resolve` action
+  default) through `session.start`'s job path, so it is a run with a receipt
+  that `run_status` follows. `create_pr` is refused while the environment has a
+  PR and starts PR monitoring; `resolve_conflicts` refreshes the PR when it
+  finishes. Neither merges.
 
 ### Operator tools over public actions
 
@@ -265,6 +292,69 @@ Control-MCP messages are always classified as external and are never injected
 into an agent turn. The destination's user can inspect and acknowledge them in
 the global inbox. `send_message` requires a stable `requestId`; retrying the
 same request with different content is rejected.
+
+## Leaf nodes
+
+Connected to a command node ([command-nodes.md](command-nodes.md)), an
+operator credential acts on every leaf node it controls with the same tools,
+results and codes as on the command node itself. The CLI's `--node` is the
+same mechanism ([public-cli.md](public-cli.md#leaf-nodes---node)).
+
+- **Discovery.** `list_nodes` (or `node_list`, `run_action node.list`) names
+  this node and each leaf: availability, link state, version, and whether it
+  can take public actions (`publicActions`, with a `reason` when not). It never
+  returns routes, addresses or credentials. A node in leaf mode lists only
+  itself and `controlledBy`. It needs `discovery`, like `project.list`.
+- **Targeting.** Every direct tool except `node_list`, `run_action`,
+  `run_status`, every voice core tool, and every original tool takes an
+  optional `nodeId`; omitted means this node. Public actions carry it as
+  `request.node`; the original tools' registry reads (`get_launch_options`,
+  `list_environments`, `get_environment`, `list_tabs`, `list_agents`,
+  `get_tab_state`, `get_tab_transcript`) go through `invoke_on_node` after the
+  node is checked against `node.list`. Session handles, environment and
+  project IDs are the leaf's own; results from a leaf carry `nodeId` and `node`
+  (the public envelope's `node` field).
+- **Aggregates.** `nodeId: "all"` on `project_list`, `environment_list`,
+  `attention_list`, `list_projects`, `list_environments`, `overview` and
+  `resolve_target` reads this node and every node it controls. Each item is
+  tagged with `nodeId` and `nodeName`; `nodes` reports each node's total,
+  cursor or error. List adapters retain healthy results and unavailable-node details;
+  composed voice summaries and target resolution report an error when a machine
+  could not be read. List helpers drain each node's pages independently. Attention
+  applies `limit` per node and returns every fetched item, so its cursors cannot
+  advance past an omitted event. Cursors
+  are per node, and a `projectId` names one node's project, so both refuse
+  `all`. `resolve_target` with `all` reports ambiguity across machines rather
+  than picking one, and returns the match's `nodeId` in `ids`.
+- **Security.** The listener stays loopback-only, and every check runs on the
+  command node before anything crosses the link: the credential's profile and
+  capabilities (`controlMcpActionAllowed`), the request-key rule and
+  confirmation. A confirmation names the node ("… on Studio") and its token is
+  bound to it: a token issued for one node is refused (`mismatch`) on another.
+  The leaf still enforces its own rules.
+- **Authority across the hop.** The command node sends the request with
+  `relayedAuthority: {controllerId, authority}`. The leaf accepts it only for a
+  command node attached to it, from a caller holding its gateway token (who
+  could act as the operator anyway, so the claim can only narrow), and
+  records the operation under
+  `node:<commandNodeId>/control-mcp:<credentialId>`, so a credential's request
+  keys, receipts (`run.get`, `run.*`) and attention items on the leaf are its
+  own, and operator-only rules (`project.remove --cascade`) stay operator-only
+  there. The CLI and the app remain the operator on both.
+- **Idempotency.** The leaf admits the `requestId`; the command node keeps no
+  copy. Retrying the identical call with the same `requestId` replays the
+  leaf's receipt, and reusing it for a different intent is
+  `request-conflict` there.
+- **Codes.** `node-not-found` (exit 3), `node-unavailable` (4: disabled or not
+  connected; nothing was sent), `node-unsupported` (8: the leaf predates
+  `public-action-relay` in its hello, so nothing is sent to it rather than run
+  as the operator; or this node is itself a leaf), and `node-outcome-unknown`
+  (7: the link lost a mutation's answer; it is recorded in the node outcome
+  ledger, never resent, and the same `requestId` learns its outcome). Tools
+  over public actions return them in the envelope; the original tools' routed
+  registry reads report them as errors whose text starts with the code.
+- **Coordinators** keep their own project-scoped `nodeId` tools
+  ([command-nodes.md](command-nodes.md#one-tool-family-every-node)).
 
 ## Agent mailbox credential boundary
 

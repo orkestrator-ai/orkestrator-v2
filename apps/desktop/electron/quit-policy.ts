@@ -53,6 +53,8 @@ export function registerQuitReopenRelaunch(options: {
   app: Pick<Electron.App, "on" | "relaunch">;
   /** Agent-test launchers supervise one process; never spawn a replacement. */
   allowRelaunch: boolean;
+  /** Replaces `app.relaunch()`; an AppImage must restart from its image file. */
+  relaunch?: () => void;
 }): {
   isQuitting(): boolean;
   scheduleRelaunch(): void;
@@ -63,7 +65,8 @@ export function registerQuitReopenRelaunch(options: {
   const scheduleRelaunch = (): void => {
     if (relaunchScheduled) return;
     relaunchScheduled = true;
-    options.app.relaunch();
+    if (options.relaunch) options.relaunch();
+    else options.app.relaunch();
   };
   options.app.on("before-quit", () => {
     quitting = true;

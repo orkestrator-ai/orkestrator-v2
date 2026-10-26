@@ -44,6 +44,7 @@ import type {
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
 import { CommandFailedError, commandExists, runCommand } from "./shell.js";
+import { stopRuntimeContainer } from "./egress-gateway.js";
 import {
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
@@ -52,6 +53,7 @@ import {
   DOCKER_LABEL_ENVIRONMENT_NAME,
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
+import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { createEnvironment } from "./storage.js";
 import {
@@ -101,14 +103,7 @@ export function dockerUnavailableReason(error: unknown): DockerUnavailableReason
   ) {
     return "permission-denied";
   }
-  if (
-    /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect|failed to connect to the docker api|connect: no such file or directory/i.test(
-      message,
-    )
-  ) {
-    return "daemon-unavailable";
-  }
-  return "unknown";
+  return isDockerDaemonUnreachable(message) ? "daemon-unavailable" : "unknown";
 }
 
 export async function checkDockerAvailability(
@@ -266,7 +261,7 @@ export function registerDockerCommands(
       await stopEnvironmentTask(assigned.id, context, () => undefined);
       return;
     }
-    await runCommand("docker", ["stop", id], { timeoutMs: 60_000 });
+    await stopRuntimeContainer(id);
   });
   register("docker_remove_container", async ({ containerId }, context) => {
     // A supplied id is not a request to discard an environment's workspace.

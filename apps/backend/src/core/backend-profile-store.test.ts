@@ -45,11 +45,11 @@ describe("backend profile store", () => {
   test("creates the profile once on first read and returns it unchanged afterwards", async () => {
     const dataDir = await createDataDir();
     const storage = await openStorage(dataDir);
-    const { instanceId } = await storage.getPreviewBackendIdentity();
+    const { instanceId } = await storage.previewServices.getPreviewBackendIdentity();
 
     const [first, concurrent] = await Promise.all([
-      storage.getBackendProfile(),
-      storage.getBackendProfile(),
+      storage.previewServices.getBackendProfile(),
+      storage.previewServices.getBackendProfile(),
     ]);
     expect(concurrent).toEqual(first);
     expect(parseBackendProfile(first)).toEqual(first);
@@ -60,8 +60,8 @@ describe("backend profile store", () => {
 
     // Another process on the same data directory reads the persisted record.
     const other = await openStorage(dataDir);
-    expect(await other.getBackendProfile()).toEqual(first);
-    expect(await storage.getBackendProfile()).toEqual(first);
+    expect(await other.previewServices.getBackendProfile()).toEqual(first);
+    expect(await storage.previewServices.getBackendProfile()).toEqual(first);
     expect(readStoredValue(dataDir, "backend-profile.json")).toMatchObject({
       version: 1,
       revision: 1,
@@ -81,9 +81,9 @@ describe("backend profile store", () => {
 
   test("compare-and-swap increments the revision and persists the edit", async () => {
     const storage = await openStorage(await createDataDir());
-    const initial = await storage.getBackendProfile();
+    const initial = await storage.previewServices.getBackendProfile();
 
-    const renamed = await storage.updateBackendProfile({
+    const renamed = await storage.previewServices.updateBackendProfile({
       expectedRevision: initial.revision,
       displayName: "  Build   box ",
     });
@@ -93,42 +93,51 @@ describe("backend profile store", () => {
       colorToken: initial.colorToken,
     });
 
-    const recoloured = await storage.updateBackendProfile({
+    const recoloured = await storage.previewServices.updateBackendProfile({
       expectedRevision: 2,
       colorToken: initial.colorToken === "teal" ? "rose" : "teal",
     });
     expect(recoloured.revision).toBe(3);
     expect(recoloured.displayName).toBe("Build box");
-    expect(await storage.getBackendProfile()).toEqual(recoloured);
+    expect(await storage.previewServices.getBackendProfile()).toEqual(recoloured);
   });
 
   test("a stale expected revision conflicts and overwrites nothing", async () => {
     const storage = await openStorage(await createDataDir());
-    const initial = await storage.getBackendProfile();
-    const current = await storage.updateBackendProfile({
+    const initial = await storage.previewServices.getBackendProfile();
+    const current = await storage.previewServices.updateBackendProfile({
       expectedRevision: initial.revision,
       displayName: "First",
     });
 
-    const error = await storage
+    const error = await storage.previewServices
       .updateBackendProfile({ expectedRevision: initial.revision, displayName: "Second" })
       .catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(BackendProfileConflictError);
     expect((error as Error).message.startsWith(BACKEND_PROFILE_CONFLICT_CODE)).toBe(true);
     expect((error as BackendProfileConflictError).current).toEqual(current);
-    expect(await storage.getBackendProfile()).toEqual(current);
+    expect(await storage.previewServices.getBackendProfile()).toEqual(current);
   });
 
   test("CL-04: concurrent edits with one expected revision admit exactly one", async () => {
     const dataDir = await createDataDir();
     const first = await openStorage(dataDir);
     const second = await openStorage(dataDir);
-    const initial = await first.getBackendProfile();
+    const initial = await first.previewServices.getBackendProfile();
 
     const attempts = await Promise.allSettled([
-      first.updateBackendProfile({ expectedRevision: initial.revision, colorToken: "violet" }),
-      second.updateBackendProfile({ expectedRevision: initial.revision, colorToken: "amber" }),
-      first.updateBackendProfile({ expectedRevision: initial.revision, displayName: "Third" }),
+      first.previewServices.updateBackendProfile({
+        expectedRevision: initial.revision,
+        colorToken: "violet",
+      }),
+      second.previewServices.updateBackendProfile({
+        expectedRevision: initial.revision,
+        colorToken: "amber",
+      }),
+      first.previewServices.updateBackendProfile({
+        expectedRevision: initial.revision,
+        displayName: "Third",
+      }),
     ]);
     const succeeded = attempts.filter(
       (attempt): attempt is PromiseFulfilledResult<BackendProfile> =>
@@ -146,12 +155,12 @@ describe("backend profile store", () => {
     }
     const winner = succeeded[0]!.value;
     expect(winner.revision).toBe(initial.revision + 1);
-    expect(await second.getBackendProfile()).toEqual(winner);
+    expect(await second.previewServices.getBackendProfile()).toEqual(winner);
   });
 
   test("rejects unsupported colours, bad names and unknown fields without writing", async () => {
     const storage = await openStorage(await createDataDir());
-    const initial = await storage.getBackendProfile();
+    const initial = await storage.previewServices.getBackendProfile();
     const invalid: unknown[] = [
       { expectedRevision: 1, colorToken: "#ff0000" },
       { expectedRevision: 1, colorToken: "red; background: url(x)" },
@@ -163,9 +172,9 @@ describe("backend profile store", () => {
       { expectedRevision: 1, displayName: "Name", css: "color: red" },
     ];
     for (const update of invalid) {
-      await expect(storage.updateBackendProfile(update as never)).rejects.toThrow();
+      await expect(storage.previewServices.updateBackendProfile(update as never)).rejects.toThrow();
     }
-    expect(await storage.getBackendProfile()).toEqual(initial);
+    expect(await storage.previewServices.getBackendProfile()).toEqual(initial);
   });
 
   test("replaces an invalid stored record past its revision", async () => {
@@ -178,10 +187,10 @@ describe("backend profile store", () => {
       updatedAt: "",
     });
     const storage = await openStorage(dataDir);
-    const restored = await storage.getBackendProfile();
+    const restored = await storage.previewServices.getBackendProfile();
     expect(restored.revision).toBe(5);
     expect(restored.colorToken).toBe(
-      defaultMachineColor((await storage.getPreviewBackendIdentity()).instanceId),
+      defaultMachineColor((await storage.previewServices.getPreviewBackendIdentity()).instanceId),
     );
   });
 
@@ -195,7 +204,7 @@ describe("backend profile store", () => {
       updatedAt: "2026-10-21T00:00:00.000Z",
     });
     const storage = await openStorage(dataDir);
-    expect(await storage.getBackendProfile()).toMatchObject({
+    expect(await storage.previewServices.getBackendProfile()).toMatchObject({
       revision: 2,
       colorToken: "ultraviolet",
     });

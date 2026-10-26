@@ -22,7 +22,7 @@
  * Scenario ids refer to the matrix in
  * docs/development/container-qualification.md.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,7 @@ import {
 import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error-text";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { removeLabelledResources } from "./container-live-cleanup";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -52,6 +53,21 @@ type Scenario = { root: string; dataDir: string; owner: string };
 const scenarios: Scenario[] = [];
 const derivedImages: string[] = [];
 const cleanups: Array<() => Promise<void> | void> = [];
+
+const savedEgress = process.env.ORKESTRATOR_EGRESS;
+afterEach(() => {
+  if (savedEgress === undefined) delete process.env.ORKESTRATOR_EGRESS;
+  else process.env.ORKESTRATOR_EGRESS = savedEgress;
+});
+
+/**
+ * Keeps this scenario's firewall inside the runtime (the rollout cap). Its
+ * faults are injected into the runtime's own firewall step, which a runtime
+ * behind an egress gateway does not have; the gateway's are tested apart.
+ */
+function pinInContainerFirewall(): void {
+  process.env.ORKESTRATOR_EGRESS = "in-container";
+}
 
 async function docker(args: string[], timeoutMs = 120_000): Promise<string> {
   return (await runCommand("docker", args, { timeoutMs })).stdout.trim();
@@ -378,46 +394,17 @@ afterAll(async () => {
     `label=${RUN_LABEL}`,
     ...scenarios.map((s) => `label=orkestrator-owner=${s.owner}`),
   ];
-  const ids = new Set<string>();
-  for (const filter of filters) {
-    for (const id of (await docker(["ps", "-aq", "--filter", filter]).catch(() => "")).split(
-      "\n",
-    )) {
-      if (id) ids.add(id);
-    }
-  }
-  if (ids.size > 0) await docker(["rm", "-f", ...ids], 300_000).catch(() => undefined);
-  for (const scene of scenarios) {
-    const volumes = (
-      await docker([
-        "volume",
-        "ls",
-        "-q",
-        "--filter",
-        `label=orkestrator-owner=${scene.owner}`,
-      ]).catch(() => "")
-    )
-      .split("\n")
-      .filter(Boolean);
-    if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
-  }
-  const networks = new Set<string>();
-  for (const filter of filters) {
-    for (const id of (await docker(["network", "ls", "-q", "--filter", filter]).catch(() => ""))
-      .split("\n")
-      .filter(Boolean)) {
-      networks.add(id);
-    }
-  }
-  if (networks.size > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  const leftovers = await removeLabelledResources(docker, filters);
   for (const tag of derivedImages) await docker(["image", "rm", tag]).catch(() => undefined);
   for (const scene of scenarios) await fs.rm(scene.root, { recursive: true, force: true });
+  expect(leftovers).toEqual([]);
 }, 600_000);
 
 describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a missing firewall script fails a restricted boot before setup or agent launch",
     async () => {
+      pinInContainerFirewall();
       const image = await deriveImage("no-firewall", [
         "USER root",
         "RUN rm /usr/local/bin/init-firewall.sh",
@@ -431,11 +418,11 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
         (failure: unknown) => failure,
       );
       // The entrypoint records the specific code and exits; the backend
-      // surfaces it when it reads the record before the container stops,
-      // otherwise the exit itself.
+      // surfaces it whether it reads the record before the container stops
+      // or, with `docker cp`, from the stopped container.
       expectRefusedLaunch(fixture, environment.id, error, {
         reason: "failed",
-        failureCodes: ["firewall-missing", "container-exited"],
+        failureCodes: ["firewall-missing"],
       });
       const containerId = fixture.environments.get(environment.id)!.containerId!;
       expect(await waitForExit(containerId)).not.toBe(0);
@@ -454,8 +441,46 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   );
 
   live(
+    "C09/readiness: a gateway that cannot apply its firewall refuses the start before the runtime boots",
+    async () => {
+      const image = await deriveImage("no-firewall", [
+        "USER root",
+        "RUN rm /usr/local/bin/init-firewall.sh",
+        "USER node",
+      ]);
+      const scene = await scenario({});
+      const environment = launchingEnvironment(`env-${RUN}-nofw-gw`);
+      const fixture = readinessContext(scene, environment, { image });
+      const error = await startEnvironment(environment.id, fixture.context).then(
+        () => null,
+        (failure: unknown) => failure,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("ContainerLifecycleError:not-ready");
+      expect((error as Error).message).toContain("egress gateway could not apply");
+      expect(fixture.launches).toHaveLength(0);
+      // The runtime never started: it was never in an unenforced namespace.
+      const containerId = fixture.environments.get(environment.id)!.containerId!;
+      expect(await docker(["inspect", "-f", "{{.State.StartedAt}}", containerId])).toStartWith(
+        "0001-01-01",
+      );
+      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const gateway = await networkOwnerContainer(containerId);
+      expect(gateway).not.toBe(containerId);
+      expect(
+        await docker(["exec", gateway, "cat", "/run/orkestrator-firewall/firewall.json"]),
+      ).toContain('"state":"failed"');
+      expect(await docker(["exec", gateway, "iptables", "-S", "OUTPUT"])).toStartWith(
+        "-P OUTPUT DROP",
+      );
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
     "C09/readiness: a DNS-broken network fails the firewall bootstrap closed, never network-ready",
     async () => {
+      pinInContainerFirewall();
       const { NETWORK_ROLE, environmentNetworkName } =
         await import("../src/core/container-network");
       const scene = await scenario({});
@@ -556,7 +581,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
       const error = await outcome;
       expectRefusedLaunch(fixture, environment.id, error, {
         reason: "failed",
-        failureCodes: ["firewall-failed", "container-exited"],
+        failureCodes: ["firewall-failed"],
       });
       expect(await waitForExit(containerId)).not.toBe(0);
       expect(await finalBootRecord(scene, containerId)).toMatchObject({
@@ -613,6 +638,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: an interrupted status write never releases readiness and times out typed",
     async () => {
+      pinInContainerFirewall();
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-torn`);
       const fixture = readinessContext(scene, environment, { image: await heldBootImage() });
@@ -678,6 +704,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a container restart during launch never releases the previous boot",
     async () => {
+      pinInContainerFirewall();
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-restart`);
       const fixture = readinessContext(scene, environment, { image: await heldBootImage() });
@@ -697,9 +724,11 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
         // The backend saw the container stopped: a typed, retryable refusal
         // with nothing dispatched. The retry is explicit.
         branch = "refused-then-retried";
+        // The restart's SIGTERM makes the held entrypoint record its exit,
+        // which the stopped container's final record then reports.
         expectRefusedLaunch(fixture, environment.id, error, {
           reason: "failed",
-          failureCodes: ["container-exited"],
+          failureCodes: ["container-exited", "entrypoint-failed"],
         });
         ({ error } = await startEnvironment(environment.id, fixture.context).then(
           () => ({ error: null as unknown }),
@@ -745,6 +774,7 @@ describe("C23/readiness firewall failure after boot", () => {
   live(
     "C23/readiness: a firewall re-run that loses DNS fails closed with no allow-all interval",
     async () => {
+      pinInContainerFirewall();
       const { createDockerContainer } = await import("../src/core/commands-containers");
       const { resolveDockerImage } = await import("../src/core/docker-image");
       const { environmentNetworkPolicy } = await import("../src/core/container-network");
@@ -799,8 +829,8 @@ describe("C23/readiness firewall failure after boot", () => {
 
       // DNS goes to a resolver inside the container that never answers (Docker
       // Desktop answers DNS sent to any outside address itself, so only a
-      // loopback resolver can be made silent), then the workload re-runs the
-      // firewall through its one sudo grant.
+      // loopback resolver can be made silent), then the firewall is re-run as
+      // root (node has no grant for it; the root entrypoint runs it at boot).
       await docker([
         "exec",
         "-d",
@@ -832,12 +862,12 @@ describe("C23/readiness firewall failure after boot", () => {
       await docker([
         "exec",
         "-d",
-        "-u",
-        "node",
+        "--user",
+        "root",
         containerId,
         "sh",
         "-c",
-        "sudo /usr/local/bin/init-firewall.sh > /tmp/rerun.log 2>&1; echo $? > /tmp/rerun.rc",
+        "/usr/local/bin/init-firewall.sh > /tmp/rerun.log 2>&1; echo $? > /tmp/rerun.rc",
       ]);
       const samples: string[] = [];
       let rc = "";
@@ -1011,6 +1041,10 @@ describe("C22 live host-service reply", () => {
         imageId: resolved.imageId,
         runtimeGeneration: 1,
       });
+      // As the backend starts it: the egress gateway (whose firewall holds the
+      // host-service rule) first. Docker refuses the runtime before that.
+      const { prepareEgressGatewayForStart } = await import("../src/core/egress-gateway");
+      await prepareEgressGatewayForStart(containerId);
       await docker(["start", containerId]);
       await waitForContainerBoot(containerId);
 

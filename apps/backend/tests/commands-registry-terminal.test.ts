@@ -2521,11 +2521,13 @@ printf '["exists","missing"]'
     const { context } = createContext(environment, { dataDir });
     const accountId = "11111111-2222-4333-8444-555555555555";
     const accountHome = path.join(dataDir, "agent-accounts", "codex", accountId);
-    context.storage.loadAgentAccounts = mock(async (): Promise<AgentAccountStore> => ({
-      version: 1,
-      accounts: [{ id: accountId, platform: "codex", label: "Work", createdAt: "2026-09-28" }],
-      active: { codex: accountId },
-    }));
+    context.storage.agentAccounts.loadAgentAccounts = mock(
+      async (): Promise<AgentAccountStore> => ({
+        version: 1,
+        accounts: [{ id: accountId, platform: "codex", label: "Work", createdAt: "2026-09-28" }],
+        active: { codex: accountId },
+      }),
+    );
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "inherited-host-key";
     try {
@@ -3767,11 +3769,13 @@ test("a terminal suspended in account preparation cannot spawn after move cleanu
   );
   const gate = createDeferred<void>();
   const entered = createDeferred<void>();
-  const accounts = spyOn(context.storage, "loadAgentAccounts").mockImplementation(async () => {
-    entered.resolve();
-    await gate.promise;
-    return { version: 1, accounts: [], active: {} };
-  });
+  const accounts = spyOn(context.storage.agentAccounts, "loadAgentAccounts").mockImplementation(
+    async () => {
+      entered.resolve();
+      await gate.promise;
+      return { version: 1, accounts: [], active: {} };
+    },
+  );
   const count = ptyProcesses.length;
   const starting = Promise.resolve(
     commands.get("start_local_terminal_session")!({ sessionId }, context),

@@ -587,7 +587,7 @@ export function registerProjectCommands(
       // deliberately refuses a conversation with no provider yet.
       const coordinatorId = coordinatorIdFromRuntimeId(id);
       const workspace = coordinatorId
-        ? await storage.getCoordinatorWorkspaceById(coordinatorId)
+        ? await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId)
         : null;
       if (
         coordinator.status === "unavailable" &&
@@ -1096,8 +1096,8 @@ export async function cleanupProjectForRemoval(
   // The coordinator's schedules go with the project; others aimed at it pause.
   context.scheduledJobs?.projectRemoved(id);
   const coordinator =
-    typeof storage.getCoordinatorWorkspace === "function"
-      ? await storage.getCoordinatorWorkspace(id)
+    typeof storage.coordinators?.getCoordinatorWorkspace === "function"
+      ? await storage.coordinators.getCoordinatorWorkspace(id)
       : undefined;
   if (coordinator) {
     context.controlMcp?.revokeCoordinatorCredentials(coordinator.id);

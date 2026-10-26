@@ -1,7 +1,7 @@
 # Design canvas times out in the parallel browser suite
 
 - **ID:** 0174
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-09-28
 - **Test:** `canvas edits, script isolation, missed events, conflict and reload`
 - **File:** `e2e/DesignCanvas.spec.ts:16`
@@ -273,3 +273,8 @@ unthrottled file passed 6 of 6 at the default deadline (7.2–11.7 s). The
 suite's and were not chased. A quiet nine-worker `mise run test:browser` run
 to confirm no recurrence is listed in
 [0036](../../../todo/design-canvas/0036-design-canvas-qualification.md).
+
+
+## Shared Codex state review fixes — 2026-10-26
+
+Reopened for a recurrence after the 2026-10-25 fix. Both viewport cases reached their deadlines in the nine-worker component browser suite on `74841142b`; the mobile case was waiting for the replacement iframe element's `display: inline-block`. The complete unchanged owner passed both viewport cases with one worker in 60.6 s: `ORKESTRATOR_E2E_PORT=62459 mise run test:logged -- --name codex-auth-owner-designcanvas -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/codex-auth-owner-designcanvas`. This does not establish that the earlier Apply styles race returned; the new stall's cause remains unknown. The original command and broader results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md). No implementation, assertion, timeout or skip changed in this owner.

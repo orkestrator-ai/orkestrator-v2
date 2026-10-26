@@ -87,6 +87,41 @@ function previewState(overrides: Partial<BrowserPreviewState> = {}): BrowserPrev
   };
 }
 
+/**
+ * The narrow-pane toolbar contract, asserted by class because happy-dom cannot
+ * measure (keep in step with `ServiceBrowserTab.test.tsx`). One row only from
+ * `@2xl` (672 px). Below it, so at the 519 px pane of an 800×600 window, the
+ * buttons share the first row and the address form takes a full-width second
+ * row. On one row the address keeps at least min(10rem, 60%).
+ */
+function expectBrowserToolbarLayout(toolbar: HTMLElement) {
+  const classes = (element: Element | null | undefined) => element?.className.split(/\s+/) ?? [];
+  const input = toolbar.querySelector('input[aria-label="Browser address"]');
+  const form = input?.closest("form");
+  const actions = form?.nextElementSibling;
+  expect(classes(toolbar)).toEqual(
+    expect.arrayContaining(["flex-wrap", "@2xl/browser:flex-nowrap"]),
+  );
+  expect(toolbar.className).not.toMatch(/@(md|lg|xl)\/browser:flex-nowrap/);
+  expect(form?.parentElement).toBe(toolbar);
+  expect(classes(form)).toEqual(
+    expect.arrayContaining([
+      "order-last",
+      "w-full",
+      "basis-full",
+      "@2xl/browser:order-none",
+      "@2xl/browser:basis-0",
+      "@2xl/browser:flex-1",
+    ]),
+  );
+  expect(classes(input)).toEqual(expect.arrayContaining(["min-w-[min(10rem,60%)]", "flex-1"]));
+  expect(classes(input)).not.toContain("min-w-0");
+  // Everything after the form is one right-aligned group on the button row.
+  expect(actions?.nextElementSibling ?? null).toBeNull();
+  expect(classes(actions)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0"]));
+  expect(actions?.querySelector('button[aria-label^="Annotations"]')).not.toBeNull();
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -223,22 +258,18 @@ describe("BrowserTab", () => {
     expect(container.querySelector("iframe") === null).toBe(true);
   });
 
-  test("reflows its toolbar against the pane width and clamps horizontal overflow", () => {
+  test("wraps its address onto its own row in narrow panes and clamps horizontal overflow", () => {
     const { container } = render(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
     const root = container.firstElementChild as HTMLElement;
     const toolbar = root.firstElementChild as HTMLElement;
-    const form = screen.getByRole("textbox", { name: "Browser address" }).closest("form");
     const backendLabel = screen.getByText("Backend");
 
     expect(root.className).toContain("@container/browser");
     expect(root.className).toContain("overflow-hidden");
-    expect(toolbar.className).toContain("flex-wrap");
-    expect(toolbar.className).toContain("@md/browser:flex-nowrap");
-    expect(form?.className).toContain("basis-full");
-    expect(form?.className).toContain("@md/browser:flex-1");
+    expectBrowserToolbarLayout(toolbar);
     expect(backendLabel?.className).toContain("@lg/browser:flex");
   });
 
@@ -1568,6 +1599,90 @@ describe("BrowserTab", () => {
     for (const call of native.browserPreview.attach.mock.calls) {
       expect((call[0] as { url: string }).url).toBe(history[1]!);
     }
+  });
+
+  // Main loads an attach's URL only when it was chosen against the view's
+  // latest navigation, so every re-attach must carry the navigation its URL
+  // came from: the view's for a URL the view reported, the latest seen for one
+  // chosen here or elsewhere, and never a later one paired with an older URL.
+  test("sends each native re-attach with the navigation its URL was chosen against", async () => {
+    const pendingBack = deferred<BrowserPreviewState>();
+    // Main replies with the view's current navigation count.
+    let navigation = 1;
+    const native = installNativePreview({
+      attach: mock(async (input: { url: string }) =>
+        previewState({ url: input.url, navigation, canGoBack: true }),
+      ),
+      goBack: mock(() => pendingBack.promise),
+    });
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const lastAttach = () =>
+      native.browserPreview.attach.mock.calls.at(-1)?.[0] as
+        | { url: string; navigationBasis?: number }
+        | undefined;
+    // The first attach has seen no navigation yet; its result gives the first basis.
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    expect(native.browserPreview.attach.mock.calls[0]?.[0]).not.toHaveProperty("navigationBasis");
+    native.emitState(previewState({ url: "http://localhost:3000/", navigation: 1 }));
+
+    // A link: the view's URL with the view's navigation.
+    navigation = 2;
+    native.emitState(
+      previewState({ url: "http://localhost:3000/next", navigation: 2, canGoBack: true }),
+    );
+    await waitFor(() =>
+      expect(lastAttach()).toEqual(
+        expect.objectContaining({ url: "http://localhost:3000/next", navigationBasis: 2 }),
+      ),
+    );
+
+    // Back: its reply already counts the move but still shows the link's URL.
+    // A re-attach in between keeps the link's basis, so main sees it as stale.
+    navigation = 3;
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    pendingBack.resolve(
+      previewState({
+        url: "http://localhost:3000/next",
+        loading: true,
+        navigation: 3,
+        canGoBack: true,
+      }),
+    );
+    await waitFor(() => expect(native.browserPreview.goBack).toHaveBeenCalled());
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    await waitFor(() =>
+      expect(lastAttach()).toEqual(
+        expect.objectContaining({ url: "http://localhost:3000/next", navigationBasis: 2 }),
+      ),
+    );
+    navigation = 4;
+    native.emitState(
+      previewState({ url: "http://localhost:3000/", navigation: 4, canGoForward: true }),
+    );
+    await waitFor(() =>
+      expect(lastAttach()).toEqual(
+        expect.objectContaining({ url: "http://localhost:3000/", navigationBasis: 4 }),
+      ),
+    );
+
+    // An address typed here is chosen against the latest navigation seen.
+    const address = screen.getByLabelText("Browser address") as HTMLInputElement;
+    fireEvent.change(address, { target: { value: "localhost:3000/typed" } });
+    fireEvent.submit(address.closest("form")!);
+    await waitFor(() =>
+      expect(lastAttach()).toEqual(
+        expect.objectContaining({ url: "http://localhost:3000/typed", navigationBasis: 4 }),
+      ),
+    );
   });
 
   test("advances the native cursor once per Back click even while an RPC is in flight", async () => {

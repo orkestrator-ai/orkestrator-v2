@@ -24,6 +24,8 @@ export interface LocalReceipt {
   version: 1;
   installationId: string;
   connection: string;
+  /** Target leaf; omitted receipts belong to the connected installation. */
+  node?: string;
   action: PublicActionName;
   requestId: string;
   namespace: string;
@@ -36,8 +38,10 @@ export interface LocalReceipt {
   resources?: PublicReceipt["resources"];
 }
 
-function receiptKey(action: string, requestId: string): string {
-  return createHash("sha256").update(action).update("\0").update(requestId).digest("hex");
+function receiptKey(action: string, requestId: string, node?: string): string {
+  const hash = createHash("sha256").update(action).update("\0").update(requestId);
+  if (node) hash.update("\0node:").update(node);
+  return hash.digest("hex");
 }
 
 function safeSegment(value: string): string {
@@ -53,23 +57,24 @@ export class LocalReceiptStore {
     return path.join(this.root, safeSegment(installationId));
   }
 
-  private file(installationId: string, action: string, requestId: string): string {
-    return path.join(this.directory(installationId), `${receiptKey(action, requestId)}.json`);
+  private file(installationId: string, action: string, requestId: string, node?: string): string {
+    return path.join(this.directory(installationId), `${receiptKey(action, requestId, node)}.json`);
   }
 
   async find(
     installationId: string,
     action: string,
     requestId: string,
+    node?: string,
   ): Promise<LocalReceipt | null> {
-    return this.readFile(this.file(installationId, action, requestId));
+    return this.readFile(this.file(installationId, action, requestId, node));
   }
 
   async save(receipt: LocalReceipt): Promise<void> {
     const text = `${JSON.stringify(receipt)}\n`;
     if (Buffer.byteLength(text) > MAX_RECEIPT_BYTES) return;
     await writePrivateFile(
-      this.file(receipt.installationId, receipt.action, receipt.requestId),
+      this.file(receipt.installationId, receipt.action, receipt.requestId, receipt.node),
       text,
     );
     await this.prune(receipt.installationId);
@@ -111,6 +116,7 @@ export class LocalReceiptStore {
       if (
         value.version !== 1 ||
         typeof value.installationId !== "string" ||
+        (value.node !== undefined && typeof value.node !== "string") ||
         typeof value.action !== "string" ||
         !isPublicRequestId(value.requestId) ||
         !isPublicNamespace(value.namespace) ||

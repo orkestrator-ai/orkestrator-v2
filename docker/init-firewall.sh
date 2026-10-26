@@ -139,7 +139,7 @@ while read -r resolver; do
     [ -n "$resolver" ] || continue
     iptables -A OUTPUT -p udp -d "$resolver" --dport 53 -j ACCEPT
     iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 -j ACCEPT
-done < <(awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf)
+done < <(awk '$1 == "nameserver" { print $2 }' "$ORK_RESOLV_CONF")
 
 # On a user-defined network the nameserver is Docker's embedded resolver,
 # which forwards to its upstream servers from inside this namespace. Docker
@@ -149,7 +149,7 @@ while read -r upstream; do
     [[ "$upstream" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || continue
     iptables -A OUTPUT -p udp -d "$upstream" --dport 53 -j ACCEPT
     iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 -j ACCEPT
-done < <(sed -n 's/^# ExtServers: \[\(.*\)\]$/\1/p' /etc/resolv.conf | tr ' ' '\n')
+done < <(sed -n 's/^# ExtServers: \[\(.*\)\]$/\1/p' "$ORK_RESOLV_CONF" | tr ' ' '\n')
 
 # Create ipset with CIDR and per-entry expiry support
 ork_create_set allowed-domains
@@ -161,7 +161,7 @@ BOOTSTRAP_PORT=""
 if [ "$ORK_TUPLES" = 1 ]; then BOOTSTRAP_PORT=",$ORK_DEFAULT_PORT"; fi
 while read -r ip; do
     [ -n "$ip" ] && ipset add -exist allowed-domains "$ip$BOOTSTRAP_PORT" timeout 0
-done < <(dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/')
+done < <(ork_dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/')
 if [ "$ORK_TUPLES" = 1 ]; then
     iptables -A OUTPUT -m set --match-set allowed-domains dst,dst -j ACCEPT
 else
@@ -179,9 +179,15 @@ GITHUB_CACHE="$ORK_GITHUB_CACHE"
 GITHUB_SOURCE=""
 
 fetch_github_ranges() {
-    local gh_ranges tmp
+    local gh_ranges tmp address
+    local resolve_args=()
+    if [ -d "$ORK_POLICY_DIR/trusted-network" ]; then
+        address=$(ork_dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
+        [ -n "$address" ] || return 1
+        resolve_args=(--resolve "api.github.com:443:$address")
+    fi
     echo "Fetching GitHub IP ranges..."
-    gh_ranges=$(curl -fsS --max-time 20 https://api.github.com/meta) || return 1
+    gh_ranges=$(curl -fsS --max-time 20 "${resolve_args[@]}" https://api.github.com/meta) || return 1
     [ -n "$gh_ranges" ] || return 1
     if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
         echo "ERROR: GitHub API response missing required fields"
@@ -252,7 +258,7 @@ if [ "$NETWORK_POLICY" = "2" ] || [ "$NETWORK_POLICY" = "3" ]; then
     HOST_ADDRESSES="$HOST_IP"
     while read -r address; do
         [ -n "$address" ] && HOST_ADDRESSES="$HOST_ADDRESSES"$'\n'"$address"
-    done < <(getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1}' | sort -u)
+    done < <(ork_host_addresses | sort -u)
     OLDIFS="$IFS"; IFS=','; read -ra SERVICE_PORTS <<< "$HOST_SERVICE_PORTS"; IFS="$OLDIFS"
     for address in $(printf '%s\n' "$HOST_ADDRESSES" | sort -u); do
         for port in "${SERVICE_PORTS[@]}"; do

@@ -13,6 +13,7 @@ import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js"
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import type { PublicApiHarness } from "./test-support.js";
+import { storageInternals } from "../storage-test-support.js";
 
 /**
  * The CLI command surface added after the first release: selected slash
@@ -492,7 +493,9 @@ describe("prompt attachments", () => {
     expect(await fs.readFile(path.join(directory, "02-notes.txt"), "utf8")).toBe("hello\n");
     expect(attachments[0]!.path).toBe(path.join(directory, "01-shot.png"));
     // The operation record holds no file content.
-    const stored = JSON.stringify(await harness.storage.getPublicOperation(response.result.runId));
+    const stored = JSON.stringify(
+      await harness.storage.publicOperations.getPublicOperation(response.result.runId),
+    );
     expect(stored).not.toContain(PNG);
     // Different bytes under the same key conflict.
     const conflict = await harness.call(
@@ -607,7 +610,7 @@ describe("attachment restart checkpoints", () => {
         const sent = stub.sends.length;
         const pending = harness.call(action, input, { requestId: "staging" });
         await staging;
-        const record = (await harness.storage.listActivePublicOperations()).find(
+        const record = (await harness.storage.publicOperations.listActivePublicOperations()).find(
           (entry) => entry.requestId === "staging",
         )!;
         expect(record).toMatchObject({
@@ -729,24 +732,23 @@ describe("queued attachment persistence and restart evidence", () => {
       if (evidence === "parked" || evidence === "evicted") {
         const sessionKey = nativeAgentSessionStorageKey("env-1", "claude", logical);
         const session = (await harness.storage.getNativeAgentSession(sessionKey))!;
-        await (
-          harness.storage as unknown as {
-            saveNativeAgentSession(key: string, value: typeof session): Promise<void>;
-          }
-        ).saveNativeAgentSession(sessionKey, {
-          ...session,
-          ...(evidence === "parked"
-            ? {
-                pendingDispatch: {
-                  requestId: id,
-                  prompt: "later",
-                  createdAt: new Date().toISOString(),
-                },
-              }
-            : { dispatchedRequestIds: ["later-request"] }),
-        });
+        await storageInternals(harness.storage).repos.nativeAgentSessions.saveNativeAgentSession(
+          sessionKey,
+          {
+            ...session,
+            ...(evidence === "parked"
+              ? {
+                  pendingDispatch: {
+                    requestId: id,
+                    prompt: "later",
+                    createdAt: new Date().toISOString(),
+                  },
+                }
+              : { dispatchedRequestIds: ["later-request"] }),
+          },
+        );
       }
-      await harness.storage.updatePublicOperation(id, (record) => ({
+      await harness.storage.publicOperations.updatePublicOperation(id, (record) => ({
         ...record,
         stage: evidence === "evicted" ? "executing" : "queueing",
         dispatch: evidence === "evicted" ? { state: "accepted" } : undefined,

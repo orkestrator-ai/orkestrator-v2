@@ -123,7 +123,7 @@ export async function submitForWait<T>(
     const namespace = error instanceof CliError ? error.details?.namespace : undefined;
     if (
       !(error instanceof CliError) ||
-      error.code !== "transport-uncertain" ||
+      !["transport-uncertain", "node-outcome-unknown"].includes(error.code) ||
       typeof requestId !== "string" ||
       typeof namespace !== "string"
     )

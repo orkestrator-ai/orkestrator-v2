@@ -1,3 +1,4 @@
+import { withRelayController } from "../public-api/relay-context.js";
 import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { BACKEND_HELLO_PATH, CLIENT_API_VERSION } from "@orkestrator/protocol/backend-profile";
 import {
@@ -30,6 +31,9 @@ export class MemoryNodeStorage implements NodeServiceStorage {
   attachments: NodeAttachments = emptyNodeAttachments();
   controllerSettings: ControllerSettingsStore = emptyControllerSettingsStore();
   writes = { registry: 0, attachments: 0 };
+  /** One object stands in for both stores, so a test can patch either here. */
+  readonly nodes = this;
+  readonly previewServices = this;
 
   constructor(
     readonly instanceId: string,
@@ -85,8 +89,8 @@ export class MemoryNodeStorage implements NodeServiceStorage {
     return this.profile;
   }
 
-  async getPreviewBackendIdentity(): Promise<{ instanceId: string }> {
-    return { instanceId: this.instanceId };
+  async getPreviewBackendIdentity(): Promise<{ instanceId: string; created: boolean }> {
+    return { instanceId: this.instanceId, created: false };
   }
 }
 
@@ -123,6 +127,8 @@ export interface TestNode {
   received: Array<{ command: string; controller: string | null }>;
   /** Simulate an older backend: no hello at all. */
   legacy: boolean;
+  /** Advertise `public-action-relay` (false: a leaf from before node routing). */
+  publicActionRelay: boolean;
   /** Answer the hello with a different identity (a route that reaches another machine). */
   impersonate?: string;
   online: boolean;
@@ -192,7 +198,11 @@ export class TestNodeNetwork {
       if (!handler && !extra) return json(500, { error: `Unknown command: ${body.command}` });
       try {
         const result = extra
-          ? await extra(body.args ?? {})
+          ? await extra(
+              body.command === "public_action" && controller
+                ? withRelayController(body.args ?? {}, controller)
+                : (body.args ?? {}),
+            )
           : await handler!(body.args ?? {}, {
               nodes: node.service,
               nodePortal: node.portal,
@@ -248,6 +258,7 @@ export class TestNodeNetwork {
       events,
       received: [],
       legacy: false,
+      publicActionRelay: true,
       online: true,
       portal,
       commands: new Map(),
@@ -289,7 +300,12 @@ export class TestNodeNetwork {
       generation: "generation-1",
       appVersion: "9.9.9-test",
       clientApi: { minVersion: 1, maxVersion: CLIENT_API_VERSION },
-      capabilities: { "backend-profile": 1, "summary-reads": 1, "node-attachment": 1 },
+      capabilities: {
+        "backend-profile": 1,
+        "summary-reads": 1,
+        "node-attachment": 1,
+        ...(node.publicActionRelay ? { "public-action-relay": 1 } : {}),
+      },
       profile: node.storage.profile,
       endpointRole: "client",
       nodeMode: node.service.mode(),

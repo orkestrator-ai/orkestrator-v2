@@ -40,7 +40,7 @@ matrix with evidence for every row are in
 - **Inherited settings** (`nodes/node-controller-settings.ts`). The command
   node sends its inheritable settings with `sync_controller_settings` on
   every link connection and config change; the leaf keeps one copy per
-  controller (`controller-settings.json`) and `StorageConfig.loadConfig`
+  controller (`controller-settings.json`) and `ConfigRepository.loadConfig`
   lays the most recently changed one over the leaf's own config. Writers use
   `loadOwnConfig`. See [Settings](../architecture/command-nodes.md#settings).
 

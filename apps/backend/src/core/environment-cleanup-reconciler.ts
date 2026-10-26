@@ -17,6 +17,7 @@ import {
   ENVIRONMENT_CLEANUP_STEPS,
   environmentCleanupLedger,
   environmentCleanupSweepState,
+  isEnvironmentCleanupExhausted,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
 import {
@@ -36,8 +37,7 @@ import type { Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { pathExists, runCommand } from "./shell.js";
 
-/** After this many passes an entry is kept for inspection but no longer retried. */
-export const MAX_ENVIRONMENT_CLEANUP_ATTEMPTS = 8;
+export { MAX_ENVIRONMENT_CLEANUP_ATTEMPTS } from "./environment-cleanup-ledger.js";
 const RETRY_BASE_MS = 60_000;
 const RETRY_MAX_MS = 6 * 60 * 60_000;
 /**
@@ -89,7 +89,7 @@ export async function reconcileEnvironmentCleanup(
   let nextDueAt: number | null = null;
   for (const entry of entries) {
     if (liveIds.has(entry.environmentId)) continue;
-    if (entry.attempts >= MAX_ENVIRONMENT_CLEANUP_ATTEMPTS) {
+    if (isEnvironmentCleanupExhausted(entry)) {
       if (!exhaustedWarnings.has(entry.environmentId)) {
         exhaustedWarnings.add(entry.environmentId);
         console.warn(
@@ -126,7 +126,7 @@ export async function reconcileEnvironmentCleanup(
       );
     }
     const remaining = await ledger.get(entry.environmentId);
-    if (remaining && remaining.attempts < MAX_ENVIRONMENT_CLEANUP_ATTEMPTS) {
+    if (remaining && !isEnvironmentCleanupExhausted(remaining)) {
       const due = retryDueAt(remaining);
       nextDueAt = nextDueAt === null ? due : Math.min(nextDueAt, due);
     }
@@ -141,8 +141,8 @@ async function stateOwnerKeys(context: CommandContext): Promise<Set<string>> {
   }
   // Coordinator conversations run the same bridges under a runtime id, so
   // their state lives in the same roots and must count as owned.
-  if (typeof context.storage.listCoordinatorWorkspaces === "function") {
-    for (const workspace of await context.storage.listCoordinatorWorkspaces()) {
+  if (typeof context.storage.coordinators?.listCoordinatorWorkspaces === "function") {
+    for (const workspace of await context.storage.coordinators.listCoordinatorWorkspaces()) {
       try {
         owners.add(environmentStateKey(coordinatorRuntimeId(workspace.id)));
         for (const conversation of workspace.conversations ?? []) {

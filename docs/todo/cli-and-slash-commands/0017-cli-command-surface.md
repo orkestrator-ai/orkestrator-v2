@@ -104,7 +104,9 @@ auto-start.
    go with the workspace. Provider attachment support is checked first.
    Evidence: unit tests (staging, paths, conflict on changed bytes, refusals,
    no content in the record) and live Claude (the agent quoted the attached
-   file).
+   file). Live OpenCode too since 2026-10-26, local and container, after
+   [0166](0166-opencode-prompt-attachment-never-dispatched.md) fixed the
+   file part's MIME type.
 4. **Project cascade removal.** Done. `project.remove` with `cascade: true`
    (operator authority only) deletes the environments reviewed at admission one
    by one through `delete_environment`, records a bounded per-environment result
@@ -325,6 +327,8 @@ intent; the `public-cli.md` header already linked this file and 0014.
 
 - [0014-cli-qualification.md](0014-cli-qualification.md) for provider and platform
   evidence.
+- [0166-opencode-prompt-attachment-never-dispatched.md](0166-opencode-prompt-attachment-never-dispatched.md):
+  `--attach` with a text file is lost on OpenCode (found 2026-10-25).
 - [0016-slash-command-catalogue.md](0016-slash-command-catalogue.md) for the catalogue
   `session commands` reads.
 - [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md) for

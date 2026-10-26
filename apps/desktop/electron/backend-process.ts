@@ -42,6 +42,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "BUN_INSTALL",
   "CI",
   "COLORTERM",
+  // Cursor's producer trim threshold (`bridges/cursor-bridge/src/config.ts`).
+  // Local bridges inherit the backend's environment, so this lets an isolated
+  // profile reach the bound in a short qualification run. A size, never a
+  // credential.
+  "CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES",
   // Where the Docker daemon is, not who may talk to it. Stripping these sends
   // every `docker` call to the built-in default context, which is wrong for
   // Colima, Rancher Desktop, rootless Podman, a remote daemon, and Docker
@@ -640,6 +645,7 @@ export class BackendHttpClient {
 
 export class BackendProcess {
   private child: ChildProcess | null = null;
+  private childClosed: Promise<void> | null = null;
   private client: BackendHttpClient | null = null;
   private info: GatewayStartInfo | null = null;
   private starting: Promise<BackendHttpClient> | null = null;
@@ -791,6 +797,9 @@ export class BackendProcess {
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
+    // `exit` can precede the last stdout/stderr lines. Keep the drain wait
+    // even after childFailure clears the process state on exit.
+    this.childClosed = new Promise((resolve) => child.once("close", () => resolve()));
     // Line-oriented: production logging tees `console`, so a chunk boundary
     // must not become a log-entry boundary or double-prefix a single diagnostic.
     if (child.stderr) {
@@ -888,7 +897,7 @@ export class BackendProcess {
     return this.child?.pid;
   }
 
-  /** Sends SIGTERM; resolves once the backend has finished its drain and exited. */
+  /** Sends SIGTERM; resolves after exit and delivery of the final stdio lines. */
   stop(): Promise<void> {
     const child = this.child;
     this.client?.stopListening();
@@ -896,15 +905,13 @@ export class BackendProcess {
     this.child = null;
     this.info = null;
     if (!child?.pid || child.exitCode !== null || child.signalCode !== null) {
-      return Promise.resolve();
+      return this.childClosed ?? Promise.resolve();
     }
-    const exited = new Promise<void>((resolve) => {
-      child.once("exit", () => resolve());
-      child.once("error", () => resolve());
-    });
+    const closed =
+      this.childClosed ?? new Promise<void>((resolve) => child.once("close", () => resolve()));
     child.kill("SIGTERM");
     const force = setTimeout(() => child.kill("SIGKILL"), 20_000);
     force.unref();
-    return exited.finally(() => clearTimeout(force));
+    return closed.finally(() => clearTimeout(force));
   }
 }

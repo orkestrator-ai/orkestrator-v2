@@ -107,6 +107,8 @@ export interface WebAnnotationServiceOptions {
   /** Advertise agent result tools (the tools server must also be wired). */
   resultTools?: boolean;
   syncDirectories?: boolean;
+  /** See `WebAnnotationStorageOptions.verifyRowPlans` (on under `bun test`). */
+  verifyRowPlans?: boolean;
   generation?: string;
   /** Rollout switch; defaults to `enabled`. Read on every capabilities call. */
   rolloutMode?: () => WebAnnotationRolloutMode;
@@ -154,6 +156,7 @@ export class WebAnnotationContext {
       clock: options.clock,
       faults: options.faults,
       syncDirectories: options.syncDirectories,
+      verifyRowPlans: options.verifyRowPlans,
       observeCommit: (observation) => this.metrics.observeCommit(observation),
       onCommit: (commit) => {
         const hint = this.ring.record(

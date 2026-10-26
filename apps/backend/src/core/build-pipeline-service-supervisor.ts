@@ -172,7 +172,7 @@ export class BuildPipelineSupervisor {
         reviewInstruction: async () =>
           (await this.ctx.storage.loadConfig()).global.reviewInstruction,
         reviewContext: async (pipeline) => {
-          const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
+          const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
           return buildPipelineReviewPackageContext(pipeline, notes).context;
         },
         verifyReviewPackage: (pipeline, reviewPackage) =>
@@ -963,7 +963,7 @@ export class BuildPipelineSupervisor {
     const preparation = parseReviewPreparationResult(result.value);
     const packageId = buildPipelineReviewPackageId(pipeline);
     const round = pipeline.iteration + 1;
-    const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
+    const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const boundedContext = buildPipelineReviewPackageContext(pipeline, notes);
     const generated = await this.ctx.invoke<unknown>("generate_looped_review_package", {
       environmentId: pipeline.environmentId,
@@ -1002,7 +1002,7 @@ export class BuildPipelineSupervisor {
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
     const round = pipeline.iteration + 1;
-    const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
+    const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const sealingStarted = Date.now();
     const generated = await this.ctx.invoke<unknown>("generate_looped_review_package", {
       environmentId: pipeline.environmentId,
@@ -1861,7 +1861,7 @@ export class BuildPipelineSupervisor {
     schema?: JsonSchema;
     images: BuildPipeline["taskSnapshot"]["images"];
   }> {
-    const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
+    const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const config = await this.ctx.storage.loadConfig();
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const target = repository.prBaseBranch || "main";

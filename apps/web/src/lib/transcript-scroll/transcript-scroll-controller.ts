@@ -167,12 +167,20 @@ interface Operation {
   partDelta: number;
   smoothIssued: boolean;
   smoothHeight: number;
+  /** A latest journey has reached the end at least once. */
+  arrived: boolean;
   correctedFrame: number;
   frame: number | null;
 }
 
 export interface ScrollViewState {
-  /** At the true end (UI affordances: the return-to-latest button). */
+  /**
+   * At the true end, or kept there by following or a latest journey that has
+   * reached it (UI affordances: the return-to-latest button). Growth reaches
+   * a follower a moment before its pin, so geometry alone flickers while
+   * content streams. Idle upward movement away without end growth releases
+   * follow even without classified input.
+   */
   isAtBottom: boolean;
   /** Literal `false` reaches the virtualizer's follow prop otherwise. */
   followAllowed: boolean;
@@ -237,8 +245,10 @@ export class TranscriptScrollController {
   private detachScroller: (() => void) | null = null;
   private op: Operation | null = null;
   private frameId = 0;
+  /** Geometry only: whether the viewport is within a pixel of the true end. */
   private atBottom = true;
   private lastObservedTop = 0;
+  private lastObservedEnd = 0;
   private userScrollUntil = 0;
   /** When the reader last gave input that will scroll this transcript. */
   private lastInputAt = Number.NEGATIVE_INFINITY;
@@ -289,6 +299,7 @@ export class TranscriptScrollController {
     );
     this.budget = options.budget ?? DEFAULT_OPERATION_BUDGET;
     this.snapshot = this.computeSnapshot();
+    this.isAtBottomRef.current = this.snapshot.isAtBottom;
   }
 
   // ------------------------------------------------------------------ state
@@ -392,9 +403,18 @@ export class TranscriptScrollController {
 
   private computeSnapshot(): ScrollViewState {
     const target = this.op?.target;
+    const following = followAllowed(this.state);
     return {
-      isAtBottom: this.atBottom,
-      followAllowed: followAllowed(this.state),
+      // A follower is pinned to the end on every resize delivery, and a
+      // latest journey that has reached it is converging there. Between a
+      // commit and that pin (a scroll event reading the new height first, or
+      // the virtualizer reporting growth beyond its band) the geometry is
+      // briefly short of the end; reporting that flashes the return-to-latest
+      // button, and the native dock reserves the button's height below the
+      // transcript, so each flash also pushed the transcript up and back.
+      isAtBottom:
+        this.atBottom || following || (this.op?.target.kind === "latest" && this.op.arrived),
+      followAllowed: following,
       mode: viewportMode(this.state),
       targetKey: target?.kind === "row" ? (target.key ?? null) : null,
     };
@@ -412,12 +432,12 @@ export class TranscriptScrollController {
       return;
     }
     this.snapshot = next;
+    this.isAtBottomRef.current = next.isAtBottom;
     for (const listener of Array.from(this.listeners)) listener();
   }
 
   private setAtBottom(atBottom: boolean): void {
-    this.isAtBottomRef.current = atBottom;
-    if (this.atBottom === atBottom) return;
+    if (atBottom && this.op?.target.kind === "latest") this.op.arrived = true;
     this.atBottom = atBottom;
     this.publish();
   }
@@ -459,6 +479,7 @@ export class TranscriptScrollController {
     }
     if (!element) return;
     this.lastObservedTop = element.scrollTop;
+    this.lastObservedEnd = readScrollMetrics(element).maxScrollTop;
     const detach = this.listen(element);
     Object.defineProperty(element, SCROLL_DIAGNOSTICS_PROPERTY, {
       configurable: true,
@@ -822,6 +843,7 @@ export class TranscriptScrollController {
       partDelta: 0,
       smoothIssued: false,
       smoothHeight: 0,
+      arrived: target.kind === "latest" && this.atBottom,
       correctedFrame: -1,
       frame: null,
     };
@@ -1127,6 +1149,7 @@ export class TranscriptScrollController {
     const heightStable = metrics.scrollHeight === op.lastScrollHeight;
     op.lastScrollHeight = metrics.scrollHeight;
     if (metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX) {
+      this.setAtBottom(true);
       if (phase === "frame") {
         op.stableFrames = heightStable && !op.measuredSinceFrame ? op.stableFrames + 1 : 0;
         op.measuredSinceFrame = false;
@@ -1164,7 +1187,9 @@ export class TranscriptScrollController {
   private handleScroll(el: HTMLElement): void {
     const metrics = readScrollMetrics(el);
     const previous = this.lastObservedTop;
+    const previousEnd = this.lastObservedEnd;
     this.lastObservedTop = metrics.scrollTop;
+    this.lastObservedEnd = metrics.maxScrollTop;
     this.setAtBottom(metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX);
     this.scheduleAnchorCapture();
     const written = this.adapter.lastWrittenTop;
@@ -1191,7 +1216,24 @@ export class TranscriptScrollController {
       this.lastInputAt = t;
     }
     const armed = t < this.userScrollUntil;
-    if (!armed && !this.pointerHeld && !this.touchActive) return;
+    if (!armed && !this.pointerHeld && !this.touchActive) {
+      // Browser find, focus navigation and assistive technology can move an
+      // idle viewport without a classified input event. Upward movement that
+      // increases the gap without end growth is a departure too. Comparing
+      // gaps also excludes shrinking-content compensation at the end.
+      // Release follow before the affordance resizes the dock and pins again.
+      if (
+        metrics.maxScrollTop <= previousEnd &&
+        metrics.scrollTop < previous - POINTER_SCROLL_UP_TOLERANCE_PX &&
+        metrics.distanceFromEnd >= STICK_RELEASE_DISTANCE_PX &&
+        metrics.distanceFromEnd >
+          Math.max(0, previousEnd - previous) + POINTER_SCROLL_UP_TOLERANCE_PX
+      ) {
+        this.dispatch({ type: "user-departed" }, "cancelled");
+        this.scheduleAnchorCapture();
+      }
+      return;
+    }
     if (armed || this.touchActive) {
       this.userScrollUntil = Math.max(this.userScrollUntil, t + MOMENTUM_CHAIN_MS);
     }

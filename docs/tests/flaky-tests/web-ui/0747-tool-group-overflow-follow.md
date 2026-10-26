@@ -57,3 +57,11 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
 - **Disposition:** open.
 - **Evidence:** three recurrences (two-worker, nine-worker, and two-worker on 2026-10-25), each with `scrollTop` 704 instead of zero and a passing one-worker owner rerun. The resume-cleanup recurrence above also failed in the unchanged one-worker owner, so this case does not always pass in isolation. The test is now at `ToolGroupFold.spec.ts:442` after #1227. [0825](../aggregate-validation-runs/0825-dependency-upgrades-0032-validation.md) also reported a painted-gap failure at `ToolGroupFold.spec.ts:79` in the same file.
 - **Next step:** record the group's follow state and inner `scrollTop` on each frame during the append, so the next failure shows whether follow was lost or never set.
+
+
+## Hidden-resume review recurrence — 2026-10-26
+
+- **Failure:** Desktop `a waiting group that fits its cap follows appended calls as it starts overflowing` retained inner scrollTop 704 instead of zero at five seconds.
+- **Complete unchanged owner:** `mise run test:logged -- --name tool-group-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/resume-tool-group-owner` passed (100.3 s logged).
+- **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
+- **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.

@@ -461,9 +461,32 @@ export function registerApplicationLoggingShutdown(
   app: ApplicationLoggingQuitHost,
   logging: InstalledApplicationLogging | null,
   timeoutMs = LOG_SHUTDOWN_FLUSH_MS,
+  /**
+   * Output that must reach the log first, bounded by its own timeout: the
+   * desktop's backend logs its drain through this process, and holds run in
+   * parallel, so closing the log at once dropped exactly how the quit ended.
+   */
+  pending?: { settled: () => Promise<unknown>; timeoutMs: number },
 ): void {
   if (!logging) return;
-  registerWillQuitHold(app, () => logging.stop(), timeoutMs);
+  registerWillQuitHold(
+    app,
+    async () => {
+      if (pending) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          pending.settled().catch(() => undefined),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, pending.timeoutMs);
+            timer.unref?.();
+          }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
+      await logging.stop();
+    },
+    timeoutMs + (pending?.timeoutMs ?? 0),
+  );
 }
 
 /**

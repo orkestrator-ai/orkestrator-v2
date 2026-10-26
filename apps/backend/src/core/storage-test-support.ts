@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
 import { databaseStoreForPath, openBackendDatabase } from "./storage-stores.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageRepositories } from "./storage-repositories.js";
+import type { StorageService } from "./storage.js";
 
 /**
  * Test helpers for the backend database. Stores are named by the data-dir
@@ -165,4 +168,21 @@ export function exportStoresAsLegacyJson(
     const edited = edit(file, structuredClone(value));
     writeLegacyStore(targetDir, file, edited === undefined ? value : edited);
   }
+}
+
+/**
+ * The context and repositories behind a `StorageService`, for tests that drive
+ * a store primitive or a repository helper the facade does not expose. The one
+ * place tests reach past the facade; production code never does.
+ */
+export function storageInternals(storage: StorageService): {
+  context: StorageContext;
+  repos: StorageRepositories;
+} {
+  return storage as unknown as { context: StorageContext; repos: StorageRepositories };
+}
+
+/** The open database of a running `StorageService`. */
+export function storageDatabase(storage: StorageService): StorageDatabase {
+  return storageInternals(storage).context.database;
 }

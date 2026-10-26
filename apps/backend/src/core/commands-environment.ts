@@ -49,6 +49,7 @@ import {
   runContainerOperation,
 } from "./container-lifecycle-service.js";
 import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
+import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
 import { applyEnvironmentAllowedDomains } from "./container-network.js";
 import {
   assertRecoveryCapacity,
@@ -74,6 +75,8 @@ import {
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { pathExists, runCommand } from "./shell.js";
+import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
+import { networkOwnerContainer } from "./container-network-owner.js";
 import { shutdownClaudeStatePolling } from "./tmux.js";
 import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
@@ -1436,9 +1439,10 @@ async function startContainerRuntimeAdmitted(
       // Created but never committed. Removing it keeps the deterministic name
       // free; if Docker refuses, the operation label lets reconciliation adopt
       // it instead of creating another.
-      await runCommand("docker", ["rm", "-f", unpersistedContainerId], {
-        timeoutMs: 60_000,
-      }).catch(() => undefined);
+      await removeRuntimeContainer(
+        unpersistedContainerId,
+        dockerOwnerNamespace(context.storage.getDataDir()),
+      ).catch(() => undefined);
     }
     await completeContainerOperation(context, environment.id, operationId, "failed", {
       failureCode: operationFailureCode(error),
@@ -1744,7 +1748,8 @@ export async function stopEnvironmentOnce(
           phase: "stopping",
           ...(drain ? { details: { signalled: drain.signalled, remaining: drain.remaining } } : {}),
         });
-        await runCommand("docker", ["stop", containerId], { timeoutMs: 60_000 });
+        // The runtime, then its egress gateway (which frees published ports).
+        await stopRuntimeContainer(containerId);
         // A forced stop is recorded as such, never as a graceful drain: either
         // Docker had to SIGKILL PID 1, or workload the drain could not stop
         // was killed by the container going down.
@@ -1764,8 +1769,9 @@ export async function stopEnvironmentOnce(
       { source: currentRuntimeIdentity(environment, context) },
     );
     if ("replayed" in outcome) return;
-    // The bridges died with the container, and their parked requests with them.
-    context.nativeAgents?.withdrawEnvironmentInteractions(environment.id);
+    // The bridges died with the container, and their turns and parked
+    // requests with them.
+    await settleStoppedRuntimeAgents(environment.id, context);
     shutdownClaudeStatePolling(containerId);
     context.runtime.diffStats.invalidatePendingSync();
     context.runtime.diffStats.service.pause(environment.id);
@@ -1793,7 +1799,7 @@ export async function stopEnvironmentOnce(
   });
   // A bridge that refused to terminate may still hold a live request.
   if (stopError) throw stopError;
-  context.nativeAgents?.withdrawEnvironmentInteractions(environment.id);
+  await settleStoppedRuntimeAgents(environment.id, context);
 }
 
 export function stopEnvironmentTask(
@@ -1838,9 +1844,13 @@ export function discardedRuntimeSetupUpdates(): Partial<Environment> {
  * deterministic container name possibly still reserved, so the caller must keep
  * the reference rather than advancing to a create that would collide with it.
  */
-export async function removeContainerConfirmingAbsence(containerId: string): Promise<void> {
+export async function removeContainerConfirmingAbsence(
+  containerId: string,
+  owner: string,
+): Promise<void> {
   try {
-    await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 });
+    // Its egress gateway, if any, goes with it.
+    await removeRuntimeContainer(containerId, owner);
   } catch (error) {
     if (isMissingDockerObjectError(error)) return;
     throw error;
@@ -2015,7 +2025,10 @@ async function recreateEnvironmentOnceUnfenced(
     return startEnvironmentOnce(environment.id, context, schedulePendingRename);
   }
   try {
-    await removeContainerConfirmingAbsence(containerId);
+    await removeContainerConfirmingAbsence(
+      containerId,
+      dockerOwnerNamespace(context.storage.getDataDir()),
+    );
   } catch (error) {
     // The old name may still be reserved by the daemon, and the container may
     // hold the only copy of the user's work. Keep the reference and surface
@@ -2359,7 +2372,9 @@ export async function ensureContainerAgentToolsHost(
       "inspect",
       "--format",
       "{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}",
-      containerId,
+      // A runtime that joined its egress gateway's namespace has no network
+      // endpoint of its own; /etc/hosts is the gateway's, shared.
+      await networkOwnerContainer(containerId),
     ],
     { timeoutMs: 10_000, signal },
   );
@@ -2431,11 +2446,14 @@ export async function ensureContainerHostServicePorts(
   signal?: AbortSignal,
 ): Promise<void> {
   if (!servicePort) return;
+  // The recorded policy and the firewall belong to the namespace owner: the
+  // egress gateway when the runtime has one.
+  const firewallContainer = await networkOwnerContainer(containerId);
   const current = await runCommand(
     "docker",
     [
       "exec",
-      containerId,
+      firewallContainer,
       "sh",
       "-c",
       "[ -f /etc/orkestrator/network-policy ] && cat /etc/orkestrator/network-policy /etc/orkestrator/host-service-ports || true",
@@ -2453,7 +2471,7 @@ export async function ensureContainerHostServicePorts(
       "exec",
       "--user",
       "root",
-      containerId,
+      firewallContainer,
       "/usr/local/bin/update-firewall.sh",
       "--host-ports",
       String(servicePort),

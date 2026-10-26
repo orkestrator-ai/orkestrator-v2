@@ -166,6 +166,14 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
         applying={applying}
         outcome={outcome}
       />
+      {effective?.mode === "restricted" && policy.enforcement === "gateway" ? (
+        <div>
+          Enforced by the environment&apos;s egress gateway, outside the container: nothing in it, a
+          root terminal included, can change these rules.
+        </div>
+      ) : effective?.mode === "restricted" && policy.enforcement === "container" ? (
+        <div>Enforced inside the container, so a root terminal can change these rules.</div>
+      ) : null}
       {policy.network ? (
         <div>
           Network {policy.network.name}

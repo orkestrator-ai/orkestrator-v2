@@ -3,6 +3,7 @@ import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/nati
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { StorageService, isPersistedNativeAgentSession } from "./storage.js";
+import { storageInternals } from "./storage-test-support.js";
 
 const identity = {
   environmentId: "env-1",
@@ -163,7 +164,7 @@ describe("durable queue-to-steer handoff", () => {
 
   test("interruption after queue reservation but before the receipt restores safely", async () => {
     await fixture(async ({ service, storage, perform }) => {
-      const internal = storage as unknown as {
+      const internal = storageInternals(storage).repos.nativeAgentSessions as unknown as {
         saveNativeAgentSession: (...args: unknown[]) => Promise<void>;
       };
       const write = spyOn(internal, "saveNativeAgentSession").mockRejectedValueOnce(
@@ -188,7 +189,7 @@ describe("durable queue-to-steer handoff", () => {
       await fixture(async ({ service, storage, perform, setResponse }) => {
         setResponse({ outcome: "unknown" });
         await service.steerQueuedPrompt({ ...identity, messageId: item.id });
-        const internal = storage as unknown as {
+        const internal = storageInternals(storage).repos.nativeAgentSessions as unknown as {
           settlePromptQueueSteerSource: (...args: unknown[]) => Promise<void>;
         };
         const write = spyOn(internal, "settlePromptQueueSteerSource").mockRejectedValueOnce(

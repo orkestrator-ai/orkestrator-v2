@@ -1,3 +1,4 @@
+import { relayController } from "./relay-context.js";
 import {
   isPublicActionName,
   isPublicNamespace,
@@ -17,12 +18,14 @@ import {
   intentFingerprint,
   isActiveRecord,
   isPublicAuthority,
+  relayedAuthority,
   requestKey,
   toReceipt,
   type PublicAuthority,
   type PublicOperationRecord,
 } from "./operation-ledger.js";
-import { ensureReconciler } from "./reconciler.js";
+import { dispatchToNode, parseRelayedAuthorityClaim } from "./node-targets.js";
+import { ensureReconciler, reconcileOperation } from "./reconciler.js";
 import type {
   ExecuteOutcome,
   MutationActionHandler,
@@ -55,6 +58,13 @@ function withBackend(
   context: PublicActionContext,
 ): PublicActionResponse {
   return { ...response, backend: backendIdentity(context) };
+}
+
+function withBackendIdentity(
+  response: PublicActionResponse,
+  backend: { installationId: string; generation: string },
+): PublicActionResponse {
+  return { ...response, backend };
 }
 
 function errorResponse(
@@ -274,7 +284,7 @@ export function operationHandle(
     operationId: record.operationId,
     current: () => current,
     async update(patch: OperationPatch) {
-      const next = await context.command.storage.updatePublicOperation(
+      const next = await context.command.storage.publicOperations.updatePublicOperation(
         record.operationId,
         (stored) => ({
           ...stored,
@@ -333,7 +343,7 @@ async function runMutation(
 
   // Fast path: an earlier admission of this key answers without re-validating
   // a target that may since have changed (e.g. a deleted environment).
-  const existing = await storage.findPublicOperationByKey(key);
+  const existing = await storage.publicOperations.findPublicOperationByKey(key);
   if (existing) {
     if (existing.fingerprint !== fingerprint) {
       throw new PublicActionError(
@@ -343,24 +353,24 @@ async function runMutation(
       );
     }
     if (existing.state !== "admitted" || existing.generation === context.generation) {
-      return replayResponse(existing);
+      return replayResponse(await reconcileOperation(existing, context));
     }
     // Prepare before changing ownership. A failed prepare leaves the old
     // generation visible to reconciliation and later same-key retries.
     const prepared = await handler.prepare(parsed.value, context);
-    const claimed = await storage.claimStalePublicOperation(
+    const claimed = await storage.publicOperations.claimStalePublicOperation(
       existing.operationId,
       context.generation,
     );
     if (!claimed) {
-      const latest = await storage.getPublicOperation(existing.operationId);
+      const latest = await storage.publicOperations.getPublicOperation(existing.operationId);
       return replayResponse(latest.status === "found" ? latest.record : existing);
     }
     return execute(handler, prepared, claimed, context, false);
   }
 
   const prepared = await handler.prepare(parsed.value, context);
-  const { record, replayed } = await storage.admitPublicOperation({
+  const { record, replayed } = await storage.publicOperations.admitPublicOperation({
     authority: context.authority,
     action: handler.action,
     scope: parsed.scope,
@@ -418,19 +428,44 @@ export function registerPublicActionCommand(
   table: PublicHandlerTable,
 ): void {
   register("public_action", async (args, command) => {
-    const identity = await command.storage.getPreviewBackendIdentity();
+    const identity = await command.storage.previewServices.getPreviewBackendIdentity();
     const backend = {
       installationId: identity.instanceId,
       generation: command.storage.getResourceGeneration(),
     };
-    const authority = authorityOf(args);
+    let authority = authorityOf(args);
     // Backend-owned completion and restart recovery of admitted work, which
     // belongs to no single caller and so always runs as the operator.
     ensureReconciler(createPublicActionContext(command, dependencies, backend));
-    return dispatchPublicAction(
-      table,
-      args,
-      createPublicActionContext(command, dependencies, backend, authority),
-    );
+    const actionName = typeof args.action === "string" ? args.action.slice(0, 100) : "unknown";
+    // A command node routing for one of its Control MCP credentials: the
+    // operations are that credential's own here, never the operator's.
+    if (args.relayedAuthority !== undefined) {
+      try {
+        if (authority !== "operator") {
+          throw new PublicActionError("invalid-input", "relayedAuthority is invalid");
+        }
+        const claim = parseRelayedAuthorityClaim(
+          args.relayedAuthority,
+          command,
+          relayController(args),
+        );
+        if (claim) authority = relayedAuthority(claim.controllerId, claim.authority);
+      } catch (error) {
+        return withBackendIdentity(errorResponse(actionName, error), backend);
+      }
+    }
+    const { relayedAuthority: _relayed, ...request } = args;
+    const local = (raw: Record<string, unknown>) =>
+      dispatchPublicAction(
+        table,
+        raw,
+        createPublicActionContext(command, dependencies, backend, authority),
+      );
+    if (request.node !== undefined) {
+      const response = await dispatchToNode({ raw: request, command, authority, backend, local });
+      return withBackendIdentity(response, backend);
+    }
+    return local(request);
   });
 }

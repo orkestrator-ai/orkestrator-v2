@@ -183,7 +183,7 @@ export class ProjectGitService {
   }
 
   private async operationState(projectId: string, state: Operation): Promise<void> {
-    await this.storage.mutateCoordinatorWorkspace(projectId, (workspace) =>
+    await this.storage.coordinators.mutateCoordinatorWorkspace(projectId, (workspace) =>
       workspace
         ? {
             ...workspace,
@@ -522,7 +522,7 @@ export class ProjectGitService {
       if (updates) await this.storage.updateEnvironment(environment.id, updates);
     }
     let persisted = status;
-    await this.storage.mutateCoordinatorWorkspace(projectId, (workspace) => {
+    await this.storage.coordinators.mutateCoordinatorWorkspace(projectId, (workspace) => {
       if (!workspace) return null;
       const previous = workspace.repositoryStatus;
       if (previous) {
@@ -564,7 +564,7 @@ export class ProjectGitService {
   async status(projectId: string): Promise<ProjectGitStatus> {
     const root = await this.root(projectId);
     return this.serialize(root, async () => {
-      const workspace = await this.storage.getCoordinatorWorkspace(projectId);
+      const workspace = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       try {
         return await this.persist(
           projectId,
@@ -594,7 +594,7 @@ export class ProjectGitService {
         const before = await this.readStatus(
           projectId,
           root,
-          (await this.storage.getCoordinatorWorkspace(projectId))?.repositoryStatus,
+          (await this.storage.coordinators.getCoordinatorWorkspace(projectId))?.repositoryStatus,
         );
         await this.persist(projectId, before);
         if (
@@ -811,7 +811,7 @@ export class ProjectGitService {
         const before = await this.readStatus(
           projectId,
           root,
-          (await this.storage.getCoordinatorWorkspace(projectId))?.repositoryStatus,
+          (await this.storage.coordinators.getCoordinatorWorkspace(projectId))?.repositoryStatus,
         );
         const dirty = before.trackedChanges > 0 || before.untrackedChanges > 0;
         const discardableDirty = isDiscardableDirty(before);
@@ -874,7 +874,7 @@ export class ProjectGitService {
       const before = await this.readStatus(
         projectId,
         root,
-        (await this.storage.getCoordinatorWorkspace(projectId))?.repositoryStatus,
+        (await this.storage.coordinators.getCoordinatorWorkspace(projectId))?.repositoryStatus,
       );
       await this.persist(projectId, before);
       if (!isDiscardableDirty(before)) {

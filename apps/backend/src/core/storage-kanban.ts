@@ -75,7 +75,8 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { StorageAgentMail } from "./storage-agent-mail.ts";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
 
 function stableKanbanId(namespace: string, requestId: string): string {
   const hex = createHash("sha256").update(namespace).update("\0").update(requestId).digest("hex");
@@ -147,15 +148,20 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export class StorageKanban extends StorageAgentMail {
+export class KanbanRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+  ) {}
+
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
     // Indexed by project: reads one board without parsing every project's.
-    const tasks = this.loadStoreRowsByOwner<KanbanTask>(this.kanbanFile(), projectId);
+    const tasks = this.context.loadStoreRowsByOwner<KanbanTask>(this.files.kanbanFile(), projectId);
     return tasks.filter((task) => task.projectId === projectId);
   }
 
   async getKanbanTask(taskId: string): Promise<KanbanTask | null> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+    const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
     return tasks.find((task) => task.id === taskId) ?? null;
   }
 
@@ -165,16 +171,16 @@ export class StorageKanban extends StorageAgentMail {
    * directory. Background PR reconciliation and foreground edits otherwise
    * risk saving independent stale snapshots over each other.
    */
-  protected enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.kanbanFile(), "Kanban storage", operation);
+  private enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.kanbanFile(), "Kanban storage", operation);
   }
 
-  protected async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
+  private async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
     await Promise.all(
       imageIds.map(async (imageId) => {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
-            await fs.rm(this.kanbanImageFile(imageId), { force: true });
+            await fs.rm(this.files.kanbanImageFile(imageId), { force: true });
             return;
           } catch {
             if (attempt === 1) {
@@ -205,7 +211,7 @@ export class StorageKanban extends StorageAgentMail {
       throw new Error("Kanban task status is invalid");
     }
     return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const id = initial.requestId
         ? stableKanbanId(`ticket:${projectId}`, initial.requestId)
         : randomUUID();
@@ -248,8 +254,8 @@ export class StorageKanban extends StorageAgentMail {
           : {}),
       };
       tasks.push(task);
-      await this.saveJson(this.kanbanFile(), tasks);
-      this.announce("kanban", projectId);
+      await this.context.saveJson(this.files.kanbanFile(), tasks);
+      this.context.changes.announce("kanban", projectId);
       return task;
     });
   }
@@ -268,7 +274,7 @@ export class StorageKanban extends StorageAgentMail {
     requestId: string,
   ): Promise<KanbanTask | null> {
     const id = stableKanbanId(`ticket:${projectId}`, requestId);
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+    const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
     return tasks.find((task) => task.id === id && task.projectId === projectId) ?? null;
   }
 
@@ -287,7 +293,7 @@ export class StorageKanban extends StorageAgentMail {
       throw new Error("Kanban task pull request state is invalid");
     }
     return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
@@ -309,22 +315,22 @@ export class StorageKanban extends StorageAgentMail {
               .map((candidate) => candidate.order),
           ) + 1;
       }
-      await this.saveJson(this.kanbanFile(), tasks);
-      this.announce("kanban", task.projectId);
+      await this.context.saveJson(this.files.kanbanFile(), tasks);
+      this.context.changes.announce("kanban", task.projectId);
       return task;
     });
   }
 
   async deleteKanbanTask(taskId: string): Promise<void> {
     await this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-      await this.saveJson(
-        this.kanbanFile(),
+      await this.context.saveJson(
+        this.files.kanbanFile(),
         tasks.filter((candidate) => candidate.id !== taskId),
       );
-      this.announce("kanban", task.projectId);
+      this.context.changes.announce("kanban", task.projectId);
       await this.removeKanbanImageFilesBestEffort(task.images.map((image) => image.id));
     });
   }
@@ -336,7 +342,7 @@ export class StorageKanban extends StorageAgentMail {
     requestId?: string,
   ): Promise<KanbanTask> {
     return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
@@ -350,20 +356,20 @@ export class StorageKanban extends StorageAgentMail {
         return task;
       }
       task.comments.push({ id, text, createdAt: nowIso() });
-      await this.saveJson(this.kanbanFile(), tasks);
-      this.announce("kanban", task.projectId);
+      await this.context.saveJson(this.files.kanbanFile(), tasks);
+      this.context.changes.announce("kanban", task.projectId);
       return task;
     });
   }
 
   async deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
     return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
       task.comments = task.comments.filter((comment) => comment.id !== commentId);
-      await this.saveJson(this.kanbanFile(), tasks);
-      this.announce("kanban", task.projectId);
+      await this.context.saveJson(this.files.kanbanFile(), tasks);
+      this.context.changes.announce("kanban", task.projectId);
       return task;
     });
   }
@@ -396,7 +402,7 @@ export class StorageKanban extends StorageAgentMail {
     normalized = false,
   ): Promise<{ task: KanbanTask; image: KanbanImage }> {
     return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
@@ -410,24 +416,24 @@ export class StorageKanban extends StorageAgentMail {
       }
       const rawBytes = Buffer.from(data, "base64");
       const webpBytes = normalized ? rawBytes : await resizeKanbanImage(rawBytes);
-      await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
+      await fs.mkdir(this.files.kanbanImagesDir(), { recursive: true });
       const image: KanbanImage = { id: imageId, filename, createdAt: nowIso() };
-      await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
+      await fs.writeFile(this.files.kanbanImageFile(image.id), webpBytes);
       task.images.push(image);
       try {
-        await this.saveJson(this.kanbanFile(), tasks);
+        await this.context.saveJson(this.files.kanbanFile(), tasks);
       } catch (error) {
-        await fs.rm(this.kanbanImageFile(image.id), { force: true });
+        await fs.rm(this.files.kanbanImageFile(image.id), { force: true });
         throw error;
       }
-      this.announce("kanban", task.projectId);
+      this.context.changes.announce("kanban", task.projectId);
       return { task, image };
     });
   }
 
   async deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
     return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
       if (!isCanonicalUuid(imageId)) {
@@ -437,8 +443,8 @@ export class StorageKanban extends StorageAgentMail {
         throw new Error(`Kanban image not found on task: ${imageId}`);
       }
       task.images = task.images.filter((image) => image.id !== imageId);
-      await this.saveJson(this.kanbanFile(), tasks);
-      this.announce("kanban", task.projectId);
+      await this.context.saveJson(this.files.kanbanFile(), tasks);
+      this.context.changes.announce("kanban", task.projectId);
       await this.removeKanbanImageFilesBestEffort([imageId]);
       return task;
     });
@@ -449,14 +455,17 @@ export class StorageKanban extends StorageAgentMail {
       throw new Error("Kanban image ID is invalid");
     }
     // A blob file, not a store: a file read, so storage budgets count stores only.
-    const image = await fs.readFile(this.kanbanImageFile(imageId));
+    const image = await fs.readFile(this.files.kanbanImageFile(imageId));
     recurringWorkMetrics.work("file-read");
     recurringWorkMetrics.bytes(image.length);
     return image.toString("base64");
   }
 
   async getProjectNotes(projectId: string): Promise<ProjectNotes> {
-    const notes = await this.loadJson<ProjectNotes[]>(this.projectNotesFile(), () => []);
+    const notes = await this.context.loadJson<ProjectNotes[]>(
+      this.files.projectNotesFile(),
+      () => [],
+    );
     return (
       notes.find((note) => note.projectId === projectId) ?? {
         projectId,
@@ -467,8 +476,8 @@ export class StorageKanban extends StorageAgentMail {
   }
 
   async saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
-    const note = this.updateStore(
-      this.projectNotesFile(),
+    const note = this.context.updateStore(
+      this.files.projectNotesFile(),
       (): ProjectNotes[] => [],
       (notes) => {
         let existing = notes.find((candidate) => candidate.projectId === projectId);
@@ -482,12 +491,15 @@ export class StorageKanban extends StorageAgentMail {
         return existing;
       },
     );
-    this.announce("project-notes", projectId);
+    this.context.changes.announce("project-notes", projectId);
     return note;
   }
 
   async getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const plans = await this.context.loadJson<FeaturePlan[]>(
+      this.files.featurePlansFile(),
+      () => [],
+    );
     return plans.filter((plan) => plan.projectId === projectId).sort((a, b) => a.order - b.order);
   }
 
@@ -496,12 +508,16 @@ export class StorageKanban extends StorageAgentMail {
   // refinement happening at the same time, possibly in two backends) cannot
   // clobber each other via stale read-modify-write races. The mutator runs
   // against the freshly loaded array; if it throws, nothing is saved.
-  protected async mutateFeaturePlans<T>(
+  private async mutateFeaturePlans<T>(
     mutator: (plans: FeaturePlan[]) => T,
     affectedProjectId: (result: T) => string,
   ): Promise<T> {
-    const result = this.updateStore(this.featurePlansFile(), (): FeaturePlan[] => [], mutator);
-    this.announce("feature-plan", affectedProjectId(result));
+    const result = this.context.updateStore(
+      this.files.featurePlansFile(),
+      (): FeaturePlan[] => [],
+      mutator,
+    );
+    this.context.changes.announce("feature-plan", affectedProjectId(result));
     return result;
   }
 
@@ -658,7 +674,7 @@ export class StorageKanban extends StorageAgentMail {
 
   /** Every plan across every project, for backend sweeps that are not project-scoped. */
   async listAllFeaturePlans(): Promise<FeaturePlan[]> {
-    return await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    return await this.context.loadJson<FeaturePlan[]>(this.files.featurePlansFile(), () => []);
   }
 
   /**
@@ -666,7 +682,7 @@ export class StorageKanban extends StorageAgentMail {
    * on every pass, so it must cost one plan however many the store retains.
    */
   async getFeaturePlan(featureId: string): Promise<FeaturePlan | null> {
-    const stored = this.loadStoreRow(this.featurePlansFile(), featureId);
+    const stored = this.context.loadStoreRow(this.files.featurePlansFile(), featureId);
     return typeof stored === "object" && stored !== null && (stored as FeaturePlan).id === featureId
       ? (stored as FeaturePlan)
       : null;
@@ -680,7 +696,10 @@ export class StorageKanban extends StorageAgentMail {
    * amount of ticking will move.
    */
   async listActiveFeaturePlanning(): Promise<FeaturePlanningRecord[]> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const plans = await this.context.loadJson<FeaturePlan[]>(
+      this.files.featurePlansFile(),
+      () => [],
+    );
     const active: FeaturePlanningRecord[] = [];
     for (const plan of plans) {
       const record = plan.planning;
@@ -773,7 +792,10 @@ export class StorageKanban extends StorageAgentMail {
   }
 
   async getLinearAuth(): Promise<LinearAuth | null> {
-    const auth = await this.loadJson<LinearAuth | null>(this.linearAuthFile(), () => null);
+    const auth = await this.context.loadJson<LinearAuth | null>(
+      this.files.linearAuthFile(),
+      () => null,
+    );
     return auth?.apiKey ? auth : null;
   }
 
@@ -783,23 +805,27 @@ export class StorageKanban extends StorageAgentMail {
       connectedAt: nowIso(),
       viewer,
     };
-    await this.enqueueLinearAuthMutation(() => this.saveSensitiveJson(this.linearAuthFile(), auth));
+    await this.enqueueLinearAuthMutation(() =>
+      this.context.saveSensitiveJson(this.files.linearAuthFile(), auth),
+    );
     return auth;
   }
 
   async clearLinearAuth(): Promise<void> {
-    await this.enqueueLinearAuthMutation(() => this.deleteStore(this.linearAuthFile()));
+    await this.enqueueLinearAuthMutation(() =>
+      this.context.deleteStore(this.files.linearAuthFile()),
+    );
   }
 
   // Saves and clears take the store's lease, like every other whole-value
   // write (storage-writer-guards.test.ts).
   private enqueueLinearAuthMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.linearAuthFile(), "Linear auth storage", operation);
+    return this.context.serialize(this.files.linearAuthFile(), "Linear auth storage", operation);
   }
 
   async getLinearCompletionComment(pipelineId: string): Promise<LinearCompletionComment | null> {
-    const comments = await this.loadJson<LinearCompletionComment[]>(
-      this.linearCompletionCommentsFile(),
+    const comments = await this.context.loadJson<LinearCompletionComment[]>(
+      this.files.linearCompletionCommentsFile(),
       () => [],
     );
     return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
@@ -812,8 +838,8 @@ export class StorageKanban extends StorageAgentMail {
       ...record,
       updatedAt: record.updatedAt ?? nowIso(),
     };
-    this.updateStore(
-      this.linearCompletionCommentsFile(),
+    this.context.updateStore(
+      this.files.linearCompletionCommentsFile(),
       (): LinearCompletionComment[] => [],
       (comments) => {
         const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
@@ -825,8 +851,8 @@ export class StorageKanban extends StorageAgentMail {
   }
 
   async getGitHubCompletionComment(pipelineId: string): Promise<GitHubCompletionComment | null> {
-    const comments = await this.loadJson<GitHubCompletionComment[]>(
-      this.githubCompletionCommentsFile(),
+    const comments = await this.context.loadJson<GitHubCompletionComment[]>(
+      this.files.githubCompletionCommentsFile(),
       () => [],
     );
     return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
@@ -841,8 +867,8 @@ export class StorageKanban extends StorageAgentMail {
     operation: () => Promise<T>,
   ): Promise<T> {
     if (!pipelineId.trim()) throw new Error("GitHub completion pipeline ID is required");
-    const release = await this.acquireMutationLock(
-      this.githubCompletionCommentLockTarget(pipelineId),
+    const release = await this.context.acquireLease(
+      this.files.githubCompletionCommentLockTarget(pipelineId),
       "GitHub completion comment posting",
     );
     try {
@@ -859,8 +885,8 @@ export class StorageKanban extends StorageAgentMail {
       ...record,
       updatedAt: record.updatedAt ?? nowIso(),
     };
-    this.updateStore(
-      this.githubCompletionCommentsFile(),
+    this.context.updateStore(
+      this.files.githubCompletionCommentsFile(),
       (): GitHubCompletionComment[] => [],
       (comments) => {
         const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
@@ -870,21 +896,49 @@ export class StorageKanban extends StorageAgentMail {
     );
     return nextRecord;
   }
-
-  async setAllEnvironmentStatusesForContainer(
-    containerId: string,
-    status: EnvironmentStatus,
-  ): Promise<void> {
-    return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      let changed = false;
-      for (const environment of environments) {
-        if (environment.containerId === containerId) {
-          environment.status = status;
-          changed = true;
-        }
-      }
-      if (changed) await this.saveEnvironments(environments);
-    });
-  }
 }
+
+/**
+ * Kanban tasks, feature plans, project notes, the Linear sign-in and PR completion comments: what callers reach as `storage.kanban`.
+ *
+ * Every name here is an entry point `storage-writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type KanbanStorage = Pick<
+  KanbanRepository,
+  | "getKanbanTasks"
+  | "getKanbanTask"
+  | "addKanbanTask"
+  | "findKanbanTaskByRequestId"
+  | "updateKanbanTask"
+  | "deleteKanbanTask"
+  | "addKanbanComment"
+  | "deleteKanbanComment"
+  | "addKanbanImage"
+  | "addNormalizedKanbanImageForRequest"
+  | "deleteKanbanImage"
+  | "getKanbanImageData"
+  | "getProjectNotes"
+  | "saveProjectNotes"
+  | "getFeaturePlans"
+  | "createFeaturePlan"
+  | "updateFeaturePlan"
+  | "claimFeaturePlanBuild"
+  | "appendFeaturePlanMessage"
+  | "appendFeatureStoryMessage"
+  | "listAllFeaturePlans"
+  | "getFeaturePlan"
+  | "listActiveFeaturePlanning"
+  | "startFeaturePlanning"
+  | "mutateFeaturePlanning"
+  | "clearFeaturePlanning"
+  | "getLinearAuth"
+  | "saveLinearAuth"
+  | "clearLinearAuth"
+  | "getLinearCompletionComment"
+  | "saveLinearCompletionComment"
+  | "getGitHubCompletionComment"
+  | "withGitHubCompletionCommentLock"
+  | "saveGitHubCompletionComment"
+>;

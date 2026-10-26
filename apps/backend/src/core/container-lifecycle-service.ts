@@ -24,8 +24,10 @@ import {
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_RUNTIME_GENERATION,
 } from "./constants.js";
+import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { removeRuntimeContainer } from "./egress-gateway.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { removeStorageVolumes } from "./container-storage.js";
@@ -431,14 +433,7 @@ export function operationFailureCode(error: unknown): ContainerOperationRecord["
   const parsed = parseContainerLifecycleError(error);
   if (parsed) return parsed.code;
   const message = error instanceof Error ? error.message : String(error);
-  if (
-    /cannot connect to the docker daemon|error during connect|is the docker daemon running/i.test(
-      message,
-    )
-  ) {
-    return "daemon-unavailable";
-  }
-  return "unknown";
+  return isDockerDaemonUnreachable(message) ? "daemon-unavailable" : "unknown";
 }
 
 /**
@@ -804,7 +799,9 @@ export async function reconcileContainerOperation(
           ? search.containerIds
           : [];
     for (const id of candidates) {
-      await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 }).catch(() => undefined);
+      await removeRuntimeContainer(id, dockerOwnerNamespace(context.storage.getDataDir())).catch(
+        () => undefined,
+      );
     }
     const kept = operation.candidateStorage
       ? await removeStorageVolumes(context, environment.id, operation.candidateStorage)

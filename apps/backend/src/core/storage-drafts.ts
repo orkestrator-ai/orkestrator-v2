@@ -81,7 +81,9 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { StorageBuildPipelines } from "./storage-build-pipelines.ts";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -148,10 +150,16 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export abstract class StorageDrafts extends StorageBuildPipelines {
+export class DraftsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
   async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
-    return (await this.loadComposeDrafts())[draftKey] ?? null;
+    return (await this.repos.prompts.loadComposeDrafts())[draftKey] ?? null;
   }
 
   async listComposeDrafts(
@@ -164,7 +172,7 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     if (!isNonBlankString(ownerId)) {
       throw new Error("Compose draft owner ID must not be blank");
     }
-    return Object.values(await this.loadComposeDrafts()).filter(
+    return Object.values(await this.repos.prompts.loadComposeDrafts()).filter(
       (draft) => draft.ownerType === ownerType && draft.ownerId === ownerId,
     );
   }
@@ -196,21 +204,25 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       throw new Error("Compose draft exceeds the 32 MB limit");
     }
 
-    return this.enqueueComposeDraftMutation(async () => {
+    return this.repos.prompts.enqueueComposeDraftMutation(async () => {
       if (ownerType === "environment") {
-        await this.assertEnvironmentAcceptsBackgroundState(ownerId, "Compose draft");
+        await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+          ownerId,
+          "Compose draft",
+        );
         const coordinatorId = coordinatorIdFromRuntimeId(ownerId);
         const conversationId = coordinatorConversationIdFromRuntimeId(ownerId);
         if (coordinatorId && conversationId) {
-          const workspace = await this.getCoordinatorWorkspaceById(coordinatorId);
+          const workspace =
+            await this.repos.coordinators.getCoordinatorWorkspaceById(coordinatorId);
           const conversation = workspace?.conversations.find((item) => item.id === conversationId);
           if (!conversation || conversation.closedAt)
             throw new Error("Compose draft conversation is closed");
         }
-      } else if (!(await this.getProject(ownerId))) {
+      } else if (!(await this.repos.projects.getProject(ownerId))) {
         throw new Error(`Compose draft project not found: ${ownerId}`);
       }
-      const drafts = await this.loadComposeDrafts();
+      const drafts = await this.repos.prompts.loadComposeDrafts();
       const previous = drafts[draftKey];
       if (previous && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)) {
         throw new Error("Compose draft belongs to another owner");
@@ -228,8 +240,8 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         revision: (previous?.revision ?? 0) + 1,
       };
       drafts[draftKey] = saved;
-      await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
-      this.announce("compose-draft", ownerId);
+      await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
+      this.context.changes.announce("compose-draft", ownerId);
       return saved;
     });
   }
@@ -239,9 +251,12 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Compose draft expected revision must be a non-negative integer");
     }
-    await this.enqueueComposeDraftMutation(async () => {
-      const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
-      const drafts = this.validComposeDrafts(stored);
+    await this.repos.prompts.enqueueComposeDraftMutation(async () => {
+      const stored = await this.context.loadJson<unknown>(
+        this.files.composeDraftsFile(),
+        () => ({}),
+      );
+      const drafts = this.repos.prompts.validComposeDrafts(stored);
       const previous = drafts[draftKey];
       if (previous && expectedRevision !== undefined && previous.revision !== expectedRevision) {
         throw new Error("Compose draft revision conflict");
@@ -249,16 +264,16 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
       if (hasStoredKey) {
         delete drafts[draftKey];
-        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+        await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
       }
       if (previous) {
-        this.announce("compose-draft", previous.ownerId);
+        this.context.changes.announce("compose-draft", previous.ownerId);
       }
       // Always scrub backups, including when the primary no longer contains
       // the key. A prior interrupted delete may have committed the primary
       // write without sanitizing the retained copies.
-      await this.scrubSensitiveJsonBackups(
-        this.composeDraftsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.composeDraftsFile(),
         (storedKey, draft) => storedKey !== draftKey && isPersistedComposeDraft(draft, storedKey),
       );
     });
@@ -268,18 +283,18 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Compose draft environment ID must not be blank");
     }
-    await this.enqueueComposeDraftMutation(async () => {
-      const drafts = await this.loadComposeDrafts();
+    await this.repos.prompts.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.repos.prompts.loadComposeDrafts();
       const keys = Object.values(drafts)
         .filter((draft) => draft.ownerType === "environment" && draft.ownerId === environmentId)
         .map((draft) => draft.draftKey);
       for (const key of keys) delete drafts[key];
       if (keys.length > 0) {
-        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
-        this.announce("compose-draft", environmentId);
+        await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
+        this.context.changes.announce("compose-draft", environmentId);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.composeDraftsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.composeDraftsFile(),
         (storedKey, draft) =>
           isPersistedComposeDraft(draft, storedKey) &&
           (draft.ownerType !== "environment" || draft.ownerId !== environmentId),
@@ -291,18 +306,18 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     if (!isNonBlankString(projectId)) {
       throw new Error("Compose draft project ID must not be blank");
     }
-    await this.enqueueComposeDraftMutation(async () => {
-      const drafts = await this.loadComposeDrafts();
+    await this.repos.prompts.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.repos.prompts.loadComposeDrafts();
       const keys = Object.values(drafts)
         .filter((draft) => draft.ownerType === "project" && draft.ownerId === projectId)
         .map((draft) => draft.draftKey);
       for (const key of keys) delete drafts[key];
       if (keys.length > 0) {
-        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
-        this.announce("compose-draft", projectId);
+        await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
+        this.context.changes.announce("compose-draft", projectId);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.composeDraftsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.composeDraftsFile(),
         (storedKey, draft) =>
           isPersistedComposeDraft(draft, storedKey) &&
           (draft.ownerType !== "project" || draft.ownerId !== projectId),
@@ -310,19 +325,19 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     });
   }
 
-  protected enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.fileDraftsFile(), "file draft storage", operation);
+  private enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.fileDraftsFile(), "file draft storage", operation);
   }
 
-  protected validFileDrafts(stored: unknown): Record<string, PersistedFileDraft> {
+  private validFileDrafts(stored: unknown): Record<string, PersistedFileDraft> {
     if (!isRecord(stored)) return {};
     return Object.fromEntries(
       Object.entries(stored).filter(([storedKey, draft]) => isPersistedFileDraft(draft, storedKey)),
     ) as Record<string, PersistedFileDraft>;
   }
 
-  protected async loadFileDrafts(): Promise<Record<string, PersistedFileDraft>> {
-    const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
+  private async loadFileDrafts(): Promise<Record<string, PersistedFileDraft>> {
+    const stored = await this.context.loadJson<unknown>(this.files.fileDraftsFile(), () => ({}));
     return this.validFileDrafts(stored);
   }
 
@@ -351,7 +366,10 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     if (size > 32 * 1024 * 1024) throw new Error("File draft exceeds the 32 MB limit");
 
     return this.enqueueFileDraftMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "File draft");
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "File draft",
+      );
       const drafts = await this.loadFileDrafts();
       const previous = drafts[draftKey];
       if (
@@ -373,8 +391,8 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         revision: (previous?.revision ?? 0) + 1,
       };
       drafts[draftKey] = saved;
-      await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
-      this.announce("file-draft", environmentId);
+      await this.context.saveSensitiveJson(this.files.fileDraftsFile(), drafts);
+      this.context.changes.announce("file-draft", environmentId);
       return saved;
     });
   }
@@ -385,7 +403,7 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       throw new Error("File draft expected revision must be a non-negative integer");
     }
     await this.enqueueFileDraftMutation(async () => {
-      const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
+      const stored = await this.context.loadJson<unknown>(this.files.fileDraftsFile(), () => ({}));
       const drafts = this.validFileDrafts(stored);
       const previous = drafts[draftKey];
       if (previous && expectedRevision !== undefined && previous.revision !== expectedRevision) {
@@ -394,13 +412,13 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
       if (hasStoredKey) {
         delete drafts[draftKey];
-        await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+        await this.context.saveSensitiveJson(this.files.fileDraftsFile(), drafts);
       }
       if (previous) {
-        this.announce("file-draft", previous.environmentId);
+        this.context.changes.announce("file-draft", previous.environmentId);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.fileDraftsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.fileDraftsFile(),
         (storedKey, draft) => storedKey !== draftKey && isPersistedFileDraft(draft, storedKey),
       );
     });
@@ -417,27 +435,31 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         .map((draft) => draft.draftKey);
       for (const key of keys) delete drafts[key];
       if (keys.length > 0) {
-        await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
-        this.announce("file-draft", environmentId);
+        await this.context.saveSensitiveJson(this.files.fileDraftsFile(), drafts);
+        this.context.changes.announce("file-draft", environmentId);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.fileDraftsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.fileDraftsFile(),
         (storedKey, draft) =>
           isPersistedFileDraft(draft, storedKey) && draft.environmentId !== environmentId,
       );
     });
   }
 
-  protected enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.serializeMutation(this.agentHandoffsFile(), "agent handoff storage", operation);
+  private enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.files.agentHandoffsFile(),
+      "agent handoff storage",
+      operation,
+    );
   }
 
-  protected async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
-    const stored = await this.loadJson<unknown>(this.agentHandoffsFile(), () => ({}));
+  private async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
+    const stored = await this.context.loadJson<unknown>(this.files.agentHandoffsFile(), () => ({}));
     return isRecord(stored) ? stored : {};
   }
 
-  protected async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
+  private async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
     const stored = await this.loadAgentHandoffEntries();
     return Object.fromEntries(
       Object.entries(stored).filter(([storedId, handoff]) =>
@@ -483,7 +505,10 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     }
 
     return this.enqueueAgentHandoffMutation(async () => {
-      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Agent handoff");
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Agent handoff",
+      );
       const handoffs = await this.loadAgentHandoffs();
       const previous = handoffs[handoffId];
       if (previous) {
@@ -502,7 +527,7 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         createdAt: nowIso(),
       };
       handoffs[handoffId] = saved;
-      await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      await this.context.saveSensitiveJson(this.files.agentHandoffsFile(), handoffs);
       return saved;
     });
   }
@@ -539,11 +564,11 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       // an idempotent retry still needs to replace it. Do not *create* one — a
       // client deleting a stale reference on an installation that never used
       // the feature should leave no trace.
-      if (await this.storeExists(this.agentHandoffsFile())) {
-        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      if (await this.context.storeExists(this.files.agentHandoffsFile())) {
+        await this.context.saveSensitiveJson(this.files.agentHandoffsFile(), handoffs);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.agentHandoffsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.agentHandoffsFile(),
         (storedId) => storedId !== handoffId,
       );
       return existed;
@@ -579,9 +604,9 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       const retained = Object.fromEntries(
         Object.entries(stored).filter(([storedId, handoff]) => !isOrphan(storedId, handoff)),
       );
-      await this.saveSensitiveJson(this.agentHandoffsFile(), retained);
-      await this.scrubSensitiveJsonBackups(
-        this.agentHandoffsFile(),
+      await this.context.saveSensitiveJson(this.files.agentHandoffsFile(), retained);
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.agentHandoffsFile(),
         (storedId, handoff) => !isOrphan(storedId, handoff),
       );
       return removedIds;
@@ -605,11 +630,11 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       );
       // Rewrite even if no valid record matched. Invalid entries cannot be
       // proven free of content from the environment being deleted.
-      if (await this.storeExists(this.agentHandoffsFile())) {
-        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      if (await this.context.storeExists(this.files.agentHandoffsFile())) {
+        await this.context.saveSensitiveJson(this.files.agentHandoffsFile(), handoffs);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.agentHandoffsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.agentHandoffsFile(),
         (storedId, handoff) =>
           isPersistedAgentHandoff(handoff, storedId) && handoff.environmentId !== environmentId,
       );
@@ -621,9 +646,9 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Pane layout expected revision must be a non-negative integer");
     }
-    return this.enqueuePaneLayoutMutation(async () => {
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+    return this.repos.sessions.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const currentRevision = layouts[environmentId]?.revision ?? 0;
@@ -632,18 +657,21 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       }
       if (!(environmentId in layouts)) return;
       delete layouts[environmentId];
-      await this.saveJson(this.paneLayoutsFile(), layouts);
-      this.announce("pane-layout", environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts);
+      this.context.changes.announce("pane-layout", environmentId);
     });
   }
 
   async getSession(sessionId: string): Promise<Session | null> {
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
+    const sessions = await this.context.loadJson<Session[]>(this.files.sessionsFile(), () => []);
     return sessions.find((session) => session.id === sessionId) ?? null;
   }
 
   async getSessionsByEnvironment(environmentId: string): Promise<Session[]> {
-    const sessions = this.loadStoreRowsByOwner<Session>(this.sessionsFile(), environmentId);
+    const sessions = this.context.loadStoreRowsByOwner<Session>(
+      this.files.sessionsFile(),
+      environmentId,
+    );
     return sessions
       .filter((session) => session.environmentId === environmentId)
       .sort((a, b) => a.order - b.order);
@@ -653,8 +681,8 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   // (`updateStore`), so concurrent tab creates, renames and reorders — in this
   // or another backend — cannot overwrite each other's read-modify-write.
   async updateSession(sessionId: string, updates: Partial<Session>): Promise<Session> {
-    const session = this.updateStore(
-      this.sessionsFile(),
+    const session = this.context.updateStore(
+      this.files.sessionsFile(),
       (): Session[] => [],
       (sessions) => {
         const found = sessions.find((candidate) => candidate.id === sessionId);
@@ -663,13 +691,13 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         return found;
       },
     );
-    this.announce("session", session.environmentId);
+    this.context.changes.announce("session", session.environmentId);
     return session;
   }
 
   async removeSession(sessionId: string): Promise<void> {
-    const removed = this.updateStore(
-      this.sessionsFile(),
+    const removed = this.context.updateStore(
+      this.files.sessionsFile(),
       (): Session[] => [],
       (sessions) => {
         const index = sessions.findIndex((session) => session.id === sessionId);
@@ -678,12 +706,12 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       },
     );
     await this.deleteSessionBuffer(sessionId);
-    if (removed) this.announce("session", removed.environmentId);
+    if (removed) this.context.changes.announce("session", removed.environmentId);
   }
 
   async removeSessionsByEnvironment(environmentId: string): Promise<string[]> {
-    const removed = this.updateStore(
-      this.sessionsFile(),
+    const removed = this.context.updateStore(
+      this.files.sessionsFile(),
       (): Session[] => [],
       (sessions) => {
         const ids = sessions
@@ -696,13 +724,13 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
       },
     );
     await Promise.all(removed.map((sessionId) => this.deleteSessionBuffer(sessionId)));
-    if (removed.length > 0) this.announce("session", environmentId);
+    if (removed.length > 0) this.context.changes.announce("session", environmentId);
     return removed;
   }
 
   async disconnectEnvironmentSessions(environmentId: string): Promise<Session[]> {
-    const updated = this.updateStore(
-      this.sessionsFile(),
+    const updated = this.context.updateStore(
+      this.files.sessionsFile(),
       (): Session[] => [],
       (sessions) => {
         const changed: Session[] = [];
@@ -715,13 +743,13 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         return changed;
       },
     );
-    if (updated.length > 0) this.announce("session", environmentId);
+    if (updated.length > 0) this.context.changes.announce("session", environmentId);
     return updated;
   }
 
   async reorderSessions(environmentId: string, sessionIds: string[]): Promise<Session[]> {
-    this.updateStore(
-      this.sessionsFile(),
+    this.context.updateStore(
+      this.files.sessionsFile(),
       (): Session[] => [],
       (sessions) => {
         const provided = new Set(sessionIds);
@@ -738,21 +766,21 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
         }
       },
     );
-    this.announce("session", environmentId);
+    this.context.changes.announce("session", environmentId);
     return this.getSessionsByEnvironment(environmentId);
   }
 
   async saveSessionBuffer(sessionId: string, buffer: string): Promise<void> {
-    await fs.mkdir(this.buffersDir(), { recursive: true });
+    await fs.mkdir(this.files.buffersDir(), { recursive: true });
     const maxBufferSize = 500 * 1024;
     if (Buffer.byteLength(buffer, "utf8") > maxBufferSize) {
       throw new Error("Serialized terminal buffer exceeds the 500 KiB limit");
     }
-    await fs.writeFile(this.bufferFile(sessionId), buffer);
+    await fs.writeFile(this.files.bufferFile(sessionId), buffer);
   }
 
   async loadSessionBuffer(sessionId: string): Promise<string | null> {
-    const filePath = this.bufferFile(sessionId);
+    const filePath = this.files.bufferFile(sessionId);
     if (!(await exists(filePath))) return null;
     // A blob file, not a store: a file read, so storage budgets count stores only.
     const buffer = await fs.readFile(filePath, "utf8");
@@ -762,18 +790,18 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   }
 
   async deleteSessionBuffer(sessionId: string): Promise<void> {
-    await fs.rm(this.bufferFile(sessionId), { force: true });
+    await fs.rm(this.files.bufferFile(sessionId), { force: true });
   }
 
   async cleanupOrphanedBuffers(): Promise<string[]> {
-    if (!(await exists(this.buffersDir()))) return [];
-    const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
+    if (!(await exists(this.files.buffersDir()))) return [];
+    const sessions = await this.context.loadJson<Session[]>(this.files.sessionsFile(), () => []);
     const liveBufferFiles = new Set(sessions.map((session) => `${session.id}.txt`));
     const deleted: string[] = [];
-    for (const entry of await fs.readdir(this.buffersDir())) {
+    for (const entry of await fs.readdir(this.files.buffersDir())) {
       const sessionId = path.basename(entry, path.extname(entry));
       if (!liveBufferFiles.has(entry)) {
-        await fs.rm(path.join(this.buffersDir(), entry), { force: true });
+        await fs.rm(path.join(this.files.buffersDir(), entry), { force: true });
         deleted.push(sessionId);
       }
     }

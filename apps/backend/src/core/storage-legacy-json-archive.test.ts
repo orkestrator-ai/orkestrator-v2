@@ -11,11 +11,11 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { createEnvironment, StorageService } from "./storage.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
-import { seedUnreadableStore } from "./storage-test-support.js";
+import { seedUnreadableStore, storageDatabase } from "./storage-test-support.js";
 
 class ArchiveProbe extends StorageService {
   committed(store: string): unknown {
-    return this.database.readStore(store)?.value;
+    return storageDatabase(this).readStore(store)?.value;
   }
 }
 
@@ -125,11 +125,11 @@ describe("retired JSON archive", () => {
 
     await storage.saveComposeDraft("draft", "environment", environment.id, { text: "edited" });
     await storage.saveComposeDraft("added", "environment", environment.id, { text: "new" });
-    await storage.mutateCoordinatorWorkspace("project-1", (current) => ({
+    await storage.coordinators.mutateCoordinatorWorkspace("project-1", (current) => ({
       ...current!,
       lifecycleState: "paused",
     }));
-    await storage.saveLinearAuth("lin-current");
+    await storage.kanban.saveLinearAuth("lin-current");
 
     expect(await archiveFiles(archive)).toEqual(before);
   });
@@ -161,14 +161,14 @@ describe("retired JSON archive", () => {
     });
 
     // Edits that remove nothing first: the deletes below must not write them.
-    await storage.mutateCoordinatorWorkspace("project-2", (current) => ({
+    await storage.coordinators.mutateCoordinatorWorkspace("project-2", (current) => ({
       ...current!,
       lifecycleState: "paused",
     }));
     await storage.saveComposeDraft("other", "environment", environment.id, { text: "edited" });
 
-    await storage.mutateCoordinatorWorkspace("project-1", () => null);
-    await storage.mutateCoordinatorWorkspace("project-2", (current) => ({
+    await storage.coordinators.mutateCoordinatorWorkspace("project-1", () => null);
+    await storage.coordinators.mutateCoordinatorWorkspace("project-2", (current) => ({
       ...current!,
       conversations: current!.conversations.filter((item) => item.id !== "closed"),
     }));
@@ -217,9 +217,9 @@ describe("retired JSON archive", () => {
         return originalRename(from, to);
       });
       try {
-        await expect(storage.mutateCoordinatorWorkspace("project-1", () => null)).rejects.toThrow(
-          "archive rename failed",
-        );
+        await expect(
+          storage.coordinators.mutateCoordinatorWorkspace("project-1", () => null),
+        ).rejects.toThrow("archive rename failed");
         expect(
           (storage.committed("coordinators") as typeof coordinators).workspaces["project-1"],
         ).toBeUndefined();
@@ -231,9 +231,9 @@ describe("retired JSON archive", () => {
       }
       if (recovery === "same mutation") {
         // The workspace is already gone: the retried mutation does no write.
-        await storage.mutateCoordinatorWorkspace("project-1", () => null);
+        await storage.coordinators.mutateCoordinatorWorkspace("project-1", () => null);
       } else if (recovery === "unrelated save") {
-        await storage.saveLinearAuth("new-key");
+        await storage.kanban.saveLinearAuth("new-key");
       } else {
         storage.close();
         const reopened = new ArchiveProbe(storage.getDataDir());
@@ -245,7 +245,7 @@ describe("retired JSON archive", () => {
         expect(copy).toContain("project-2");
       }
       // Subsequent ordinary saves must not bring archived content back.
-      await storage.saveLinearAuth("another-key");
+      await storage.kanban.saveLinearAuth("another-key");
       expect(Object.values(await archiveFiles(archive)).join("")).not.toContain("RETRY-SECRET");
     },
   );
@@ -258,7 +258,7 @@ describe("retired JSON archive", () => {
       return original(file, options);
     });
     try {
-      await expect(storage.clearLinearAuth()).rejects.toThrow("archive removal failed");
+      await expect(storage.kanban.clearLinearAuth()).rejects.toThrow("archive removal failed");
       expect(storage.committed("linear-auth")).toBeUndefined();
     } finally {
       remove.mockRestore();
@@ -322,7 +322,7 @@ describe("retired JSON archive", () => {
           ? [{ title: "INCOMPATIBLE-SECRET" }]
           : { ...coordinators, workspaces: [{ title: "INCOMPATIBLE-SECRET" }] };
       await fs.writeFile(path.join(archive, "coordinators.json.bak.1"), JSON.stringify(malformed));
-      await storage.mutateCoordinatorWorkspace("project-1", () => null);
+      await storage.coordinators.mutateCoordinatorWorkspace("project-1", () => null);
       for (const copy of Object.values(await archiveFiles(archive)))
         expect(copy).not.toContain("INCOMPATIBLE-SECRET");
     },
@@ -403,7 +403,7 @@ describe("retired JSON archive", () => {
     });
     const draftCopy = await fs.readFile(path.join(archive, "compose-drafts.json"), "utf8");
 
-    await storage.clearLinearAuth();
+    await storage.kanban.clearLinearAuth();
 
     expect((await fs.readdir(archive)).filter((name) => name.startsWith("linear-auth"))).toEqual(
       [],

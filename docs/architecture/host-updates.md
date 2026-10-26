@@ -16,6 +16,9 @@ From there it can:
 
 Real-release qualification is still open in
 [0033-remote-host-upgrades.md](../todo/cross-cutting/0033-remote-host-upgrades.md).
+`scripts/qualify-standalone-service.ts` automates the standalone part. Run it
+only in a disposable VM, container or user account: it installs real service
+units, and it refuses to start when it finds another Orkestrator on the host.
 
 ## Who does what
 
@@ -35,7 +38,11 @@ Real-release qualification is still open in
 - **A detailed read adds live readings.** `host.status`, and
   `get_host_maintenance { detail: true }`, add:
   - the restart impact: working and waiting agents, unfinished pipelines,
-    terminals and host servers
+    terminals and host servers. `containerTerminals` counts the terminals
+    whose shell runs in a container (`docker exec`): that shell keeps running
+    there, but the backend's attachment ends and the tab opens a new shell
+    when the backend is back. The rest are host shells, which end. Backends
+    before this field send only `terminals`; clients then show one count
   - each tool's pin, its source (`managed`, `path` or `missing`) and its
     managed version
   - the container image, and the environments still on an older one
@@ -223,6 +230,11 @@ the service:
    file's path. A backend that is not ready in time does not fail the
    install; the command points at the log instead.
 
+A service for a second data directory on a computer that already runs
+Orkestrator gets its own unit, but it still shares the user's HOME and binds
+the default Control MCP port (34122) whenever that port is free. See
+[0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md).
+
 `service status` reports:
 - the unit, and whether it is running
 - the current and previous releases
@@ -285,7 +297,13 @@ which shows:
 - the confirmation, with the restart impact and the wait-until-idle choice;
 - the tools table, with the next release's pins and Repair;
 - the `gh` channel switch;
-- the image, with its outdated environments and Pull.
+- the image, with its outdated environments and Pull. Each outdated
+  environment has **Rebuild…**, which closes Settings and opens that
+  environment's settings on its Container section, on the machine it runs on
+  (`openMachineWorkspace` with the `environment-rebuild` dialog). There the
+  user runs Rebuild (keep work), which checks preservation and space for that
+  environment. There is deliberately no bulk rebuild. A node older than this
+  dialog ignores it and only selects the environment.
 
 Commands for the command node go over the portal channel; commands for a
 registered node go through it with `invoke_on_node`, so a client can update

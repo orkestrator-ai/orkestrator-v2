@@ -31,6 +31,16 @@ operation owns it) or **inactive**.
   starts it. Only the reader leaving the end (their own movement, one pixel
   is enough), arriving at it (their own movement), or asking for the latest
   message changes it. Virtuoso's `atBottomStateChange` updates the UI only.
+- The UI's `isAtBottom` (the "Scroll down" button, the pinned refresh
+  shimmer) is the geometry, or following that may run, or a latest journey
+  that has reached the end. Growth reaches a follower a moment before its
+  pin, so geometry alone flickered false while content streamed; the native
+  dock reserves its own height (button included) below the transcript, so
+  each flicker pushed the transcript up and snapped it back
+  (`NativeFollowStability.spec.ts`). Idle upward movement away without end
+  growth releases follow even without classified input (browser find,
+  focus navigation, assistive technology), so the control remains available
+  after the dock lays out again.
 - Every navigation (latest, find, message link, history, restore, row) is one
   operation with a generation. Starting one retires the previous one at every
   layer: its frames, the library's pending work (`cancelPendingNavigation`)

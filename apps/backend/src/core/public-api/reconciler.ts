@@ -214,7 +214,7 @@ export async function reconcileOperation(
       fromPreviousGeneration(record, context) &&
       context.now() - Date.parse(record.createdAt) > STALE_ADMISSION_MS
     ) {
-      const updated = await context.command.storage.updatePublicOperation(
+      const updated = await context.command.storage.publicOperations.updatePublicOperation(
         record.operationId,
         (current) =>
           current.state === "admitted"
@@ -243,7 +243,7 @@ export async function reconcileOperation(
     return record;
   }
   if (!patch) return record;
-  const updated = await context.command.storage.updatePublicOperation(
+  const updated = await context.command.storage.publicOperations.updatePublicOperation(
     record.operationId,
     (current) => {
       if (!["admitted", "running", "unknown"].includes(current.state)) return null;
@@ -330,7 +330,7 @@ export class PublicOperationReconciler {
 
   async pass(environments: Set<string> | null = null): Promise<void> {
     const context = this.context;
-    const active = await context.command.storage.listActivePublicOperations();
+    const active = await context.command.storage.publicOperations.listActivePublicOperations();
     for (const record of active) {
       if (
         environments &&
@@ -342,7 +342,7 @@ export class PublicOperationReconciler {
     }
     if (context.now() - this.lastCollection > 60 * 60 * 1000) {
       this.lastCollection = context.now();
-      await context.command.storage.collectPublicOperations(context.now());
+      await context.command.storage.publicOperations.collectPublicOperations(context.now());
     }
   }
 }

@@ -18,3 +18,11 @@ captured code and credentialed requests against the `probe=` and `session=`
 targets in the install page's query. It answers with a `#hostile-report`
 page listing what it saw and what each attempt returned
 (`e2e/preview/private-origin.spec.ts`).
+
+`/` and `/app/*` serve the same page, so client-side routes and deep links
+reload. Its `<img srcset>` candidates `/assets/small.png` (2 px) and
+`/assets/large.png` (4 px) are real PNGs. `/assets/mapped.js` ends with
+`//# sourceMappingURL=mapped.js.map`; the map is served as
+`application/json` with its SHA-256 in `x-sha256`. `previewFixturePng()`,
+`previewFixtureMappedScript()` and `previewFixtureSourceMap()` export the
+exact bytes for assertions.

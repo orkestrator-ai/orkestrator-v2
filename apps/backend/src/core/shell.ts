@@ -383,6 +383,47 @@ export function spawnCommand(
   });
 }
 
+/**
+ * Runs `"$@"` until it exits, this backend closes the wrapper's stdin, or the
+ * wrapper is signalled. The backend never writes to that pipe, so EOF means the
+ * backend is gone: a SIGKILL skips every shutdown path, and a follower that
+ * only ever reads (`docker events`) would otherwise run forever as an orphan.
+ *
+ * An asynchronous list's stdin is /dev/null in a non-interactive shell, so the
+ * pipe is kept on fd 3 for the watcher.
+ */
+export const PARENT_BOUND_SCRIPT = [
+  "exec 3<&0",
+  '"$@" </dev/null 3<&- &',
+  "c=$!",
+  "trap 'kill \"$c\" 2>/dev/null' HUP INT TERM",
+  '( while read -r _; do :; done; kill "$c" 2>/dev/null ) <&3 &',
+  "w=$!",
+  "exec 3<&-",
+  'wait "$c"',
+  "s=$?",
+  'kill "$w" 2>/dev/null',
+  'exit "$s"',
+].join("\n");
+
+/**
+ * A long-running follower that cannot outlive the backend (POSIX hosts). Its
+ * stdout and stderr are the command's; `kill()` stops the command too.
+ */
+export function spawnParentBoundCommand(
+  command: string,
+  args: string[] = [],
+): ChildProcessWithoutNullStreams {
+  if (process.platform === "win32") return spawnCommand(command, args);
+  return spawnCommand("/bin/sh", [
+    "-c",
+    PARENT_BOUND_SCRIPT,
+    "orkestrator-follower",
+    command,
+    ...args,
+  ]);
+}
+
 export async function commandExists(command: string): Promise<boolean> {
   const lookupCommand = process.platform === "win32" ? "where" : "which";
   try {

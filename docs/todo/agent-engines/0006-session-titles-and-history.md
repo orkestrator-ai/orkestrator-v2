@@ -26,7 +26,8 @@ archived agents) are not adopted.
   - Claude: fork at a message with `forkSession(upToMessageId)`
     (`session-manager-persistence.ts`). Only `rewindFiles` is offered, not
     message rewind.
-  - OpenCode: undo/redo through `session.revert` / `unrevert`.
+  - OpenCode: undo/redo through `session.revert` / `unrevert`; the transcript
+    hides a pending revert until the next prompt commits it (0175).
   - Grok: no rewind or fork on ACP v1.
 - Titles:
   - The backend projection title (`native-agent-transcript-projection.ts`) uses

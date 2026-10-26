@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { storageInternals } from "./storage-test-support.js";
 
 async function withStoragePair<T>(
   run: (first: StorageService, second: StorageService, dataDir: string) => Promise<T>,
@@ -22,11 +23,20 @@ describe("StorageService Kanban mutation serialization", () => {
   test("validates initial status and appends direct creations to each project column", async () => {
     await withStoragePair(async (storage) => {
       await expect(
-        storage.addKanbanTask("project-1", "Invalid", "", { status: "invalid" as never }),
+        storage.kanban.addKanbanTask("project-1", "Invalid", "", { status: "invalid" as never }),
       ).rejects.toThrow("status is invalid");
 
-      const implicitDefault = await storage.addKanbanTask("project-1", "Implicit default", "");
-      const explicitDefault = await storage.addKanbanTask("project-1", "Explicit default", "", {});
+      const implicitDefault = await storage.kanban.addKanbanTask(
+        "project-1",
+        "Implicit default",
+        "",
+      );
+      const explicitDefault = await storage.kanban.addKanbanTask(
+        "project-1",
+        "Explicit default",
+        "",
+        {},
+      );
       expect(implicitDefault).toMatchObject({
         acceptanceCriteria: "",
         status: "backlog",
@@ -39,17 +49,19 @@ describe("StorageService Kanban mutation serialization", () => {
       });
 
       for (const status of ["in-progress", "review", "done"] as const) {
-        const first = await storage.addKanbanTask("project-1", `${status} first`, "", {
+        const first = await storage.kanban.addKanbanTask("project-1", `${status} first`, "", {
           acceptanceCriteria: `${status} criteria`,
           status,
         });
-        const otherProject = await storage.addKanbanTask(
+        const otherProject = await storage.kanban.addKanbanTask(
           "project-2",
           `${status} other project`,
           "",
           { status },
         );
-        const second = await storage.addKanbanTask("project-1", `${status} second`, "", { status });
+        const second = await storage.kanban.addKanbanTask("project-1", `${status} second`, "", {
+          status,
+        });
         expect(first).toMatchObject({
           acceptanceCriteria: `${status} criteria`,
           status,
@@ -65,11 +77,11 @@ describe("StorageService Kanban mutation serialization", () => {
     await withStoragePair(async (first, second) => {
       await Promise.all(
         Array.from({ length: 12 }, (_, index) =>
-          (index % 2 === 0 ? first : second).addKanbanTask("project-1", `Task ${index}`, ""),
+          (index % 2 === 0 ? first : second).kanban.addKanbanTask("project-1", `Task ${index}`, ""),
         ),
       );
 
-      const tasks = await first.getKanbanTasks("project-1");
+      const tasks = await first.kanban.getKanbanTasks("project-1");
       expect(tasks).toHaveLength(12);
       expect(new Set(tasks.map((task) => task.title)).size).toBe(12);
       expect(new Set(tasks.map((task) => task.order))).toEqual(
@@ -81,41 +93,46 @@ describe("StorageService Kanban mutation serialization", () => {
   test("converges concurrent ticket and comment retries on one durable append", async () => {
     await withStoragePair(async (first, second) => {
       const [created, retried] = await Promise.all([
-        first.addKanbanTask("project-1", "Idempotent", "Details", {
+        first.kanban.addKanbanTask("project-1", "Idempotent", "Details", {
           acceptanceCriteria: "One record",
           requestId: "ticket-request-1",
         }),
-        second.addKanbanTask("project-1", "Idempotent", "Details", {
+        second.kanban.addKanbanTask("project-1", "Idempotent", "Details", {
           acceptanceCriteria: "One record",
           requestId: "ticket-request-1",
         }),
       ]);
       expect(retried.id).toBe(created.id);
-      expect(await first.getKanbanTasks("project-1")).toHaveLength(1);
+      expect(await first.kanban.getKanbanTasks("project-1")).toHaveLength(1);
 
       const [firstComment, secondComment] = await Promise.all([
-        first.addKanbanComment(created.id, "Exactly once", "project-1", "comment-request-1"),
-        second.addKanbanComment(created.id, "Exactly once", "project-1", "comment-request-1"),
+        first.kanban.addKanbanComment(created.id, "Exactly once", "project-1", "comment-request-1"),
+        second.kanban.addKanbanComment(
+          created.id,
+          "Exactly once",
+          "project-1",
+          "comment-request-1",
+        ),
       ]);
       expect(firstComment.comments).toHaveLength(1);
       expect(secondComment.comments).toHaveLength(1);
 
       await expect(
-        first.addKanbanTask("project-1", "Changed", "Details", {
+        first.kanban.addKanbanTask("project-1", "Changed", "Details", {
           requestId: "ticket-request-1",
         }),
       ).rejects.toThrow("requestId was already used");
       await expect(
-        second.addKanbanComment(created.id, "Changed", "project-1", "comment-request-1"),
+        second.kanban.addKanbanComment(created.id, "Changed", "project-1", "comment-request-1"),
       ).rejects.toThrow("requestId was already used");
     });
   });
 
   test("rejects a deterministic image id reused with a different filename", async () => {
     await withStoragePair(async (storage) => {
-      const task = await storage.addKanbanTask("project-1", "Image request", "");
+      const task = await storage.kanban.addKanbanTask("project-1", "Image request", "");
       const webp = Buffer.from("RIFF0000WEBP", "latin1").toString("base64");
-      const first = await storage.addNormalizedKanbanImageForRequest(
+      const first = await storage.kanban.addNormalizedKanbanImageForRequest(
         task.id,
         "before.png",
         webp,
@@ -123,23 +140,28 @@ describe("StorageService Kanban mutation serialization", () => {
       );
 
       await expect(
-        storage.addNormalizedKanbanImageForRequest(task.id, "after.png", webp, "image-request-1"),
+        storage.kanban.addNormalizedKanbanImageForRequest(
+          task.id,
+          "after.png",
+          webp,
+          "image-request-1",
+        ),
       ).rejects.toThrow("requestId was already used with a different filename");
-      expect((await storage.getKanbanTasks("project-1"))[0]!.images).toEqual([first.image]);
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.images).toEqual([first.image]);
     });
   });
 
   test("preserves concurrent updates and comments on the same task", async () => {
     await withStoragePair(async (first, second) => {
-      const task = await first.addKanbanTask("project-1", "Initial", "Initial");
+      const task = await first.kanban.addKanbanTask("project-1", "Initial", "Initial");
       await Promise.all([
-        first.updateKanbanTask(task.id, { title: "Updated title" }),
-        second.updateKanbanTask(task.id, { description: "Updated description" }),
-        first.addKanbanComment(task.id, "first"),
-        second.addKanbanComment(task.id, "second"),
+        first.kanban.updateKanbanTask(task.id, { title: "Updated title" }),
+        second.kanban.updateKanbanTask(task.id, { description: "Updated description" }),
+        first.kanban.addKanbanComment(task.id, "first"),
+        second.kanban.addKanbanComment(task.id, "second"),
       ]);
 
-      const saved = (await second.getKanbanTasks("project-1"))[0]!;
+      const saved = (await second.kanban.getKanbanTasks("project-1"))[0]!;
       expect(saved).toMatchObject({
         title: "Updated title",
         description: "Updated description",
@@ -152,29 +174,29 @@ describe("StorageService Kanban mutation serialization", () => {
 
   test("continues processing after a queued mutation fails", async () => {
     await withStoragePair(async (first) => {
-      await expect(first.updateKanbanTask("missing", { title: "never" })).rejects.toThrow(
+      await expect(first.kanban.updateKanbanTask("missing", { title: "never" })).rejects.toThrow(
         "Kanban task not found",
       );
 
-      const task = await first.addKanbanTask("project-1", "Recovered", "");
-      expect((await first.getKanbanTasks("project-1")).map((candidate) => candidate.id)).toEqual([
-        task.id,
-      ]);
+      const task = await first.kanban.addKanbanTask("project-1", "Recovered", "");
+      expect(
+        (await first.kanban.getKanbanTasks("project-1")).map((candidate) => candidate.id),
+      ).toEqual([task.id]);
     });
   });
 
   test("checks project ownership inside update and comment mutations", async () => {
     await withStoragePair(async (storage) => {
-      const task = await storage.addKanbanTask("project-1", "Scoped", "");
+      const task = await storage.kanban.addKanbanTask("project-1", "Scoped", "");
 
       await expect(
-        storage.updateKanbanTask(task.id, { title: "Cross-project update" }, "project-2"),
+        storage.kanban.updateKanbanTask(task.id, { title: "Cross-project update" }, "project-2"),
       ).rejects.toThrow("Kanban task not found");
       await expect(
-        storage.addKanbanComment(task.id, "Cross-project comment", "project-2"),
+        storage.kanban.addKanbanComment(task.id, "Cross-project comment", "project-2"),
       ).rejects.toThrow("Kanban task not found");
 
-      expect((await storage.getKanbanTasks("project-1"))[0]).toMatchObject({
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]).toMatchObject({
         title: "Scoped",
         comments: [],
       });
@@ -183,20 +205,20 @@ describe("StorageService Kanban mutation serialization", () => {
 
   test("rejects invalid task and pull request states without corrupting storage", async () => {
     await withStoragePair(async (storage) => {
-      const task = await storage.addKanbanTask("project-1", "Valid", "");
+      const task = await storage.kanban.addKanbanTask("project-1", "Valid", "");
 
       await expect(
-        storage.updateKanbanTask(task.id, {
+        storage.kanban.updateKanbanTask(task.id, {
           status: "invalid" as never,
         }),
       ).rejects.toThrow("status is invalid");
       await expect(
-        storage.updateKanbanTask(task.id, {
+        storage.kanban.updateKanbanTask(task.id, {
           prState: "invalid" as never,
         }),
       ).rejects.toThrow("pull request state is invalid");
 
-      expect((await storage.getKanbanTasks("project-1"))[0]).toMatchObject({
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]).toMatchObject({
         id: task.id,
         status: "backlog",
       });
@@ -209,36 +231,38 @@ describe("StorageService Kanban mutation serialization", () => {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">' +
           '<rect width="1" height="1"/></svg>',
       ).toString("base64");
-      const imageTask = await storage.addKanbanTask("project-1", "Image", "");
-      const taskToDelete = await storage.addKanbanTask("project-1", "Task", "");
-      const withImage = await storage.addKanbanImage(imageTask.id, "image.svg", validImageBase64);
-      const withTaskImage = await storage.addKanbanImage(
+      const imageTask = await storage.kanban.addKanbanTask("project-1", "Image", "");
+      const taskToDelete = await storage.kanban.addKanbanTask("project-1", "Task", "");
+      const withImage = await storage.kanban.addKanbanImage(
+        imageTask.id,
+        "image.svg",
+        validImageBase64,
+      );
+      const withTaskImage = await storage.kanban.addKanbanImage(
         taskToDelete.id,
         "task-image.svg",
         validImageBase64,
       );
       const imageId = withImage.images[0]!.id;
       const taskImageId = withTaskImage.images[0]!.id;
-      const internals = storage as unknown as {
-        saveJson(filePath: string, value: unknown): Promise<void>;
-      };
-      const originalSaveJson = internals.saveJson.bind(storage);
+      const internals = storageInternals(storage).context;
+      const originalSaveJson = internals.saveJson.bind(internals);
 
       internals.saveJson = async () => {
         throw new Error("injected Kanban save failure");
       };
       try {
-        await expect(storage.deleteKanbanImage(imageTask.id, imageId)).rejects.toThrow(
+        await expect(storage.kanban.deleteKanbanImage(imageTask.id, imageId)).rejects.toThrow(
           "injected Kanban save failure",
         );
-        await expect(storage.deleteKanbanTask(taskToDelete.id)).rejects.toThrow(
+        await expect(storage.kanban.deleteKanbanTask(taskToDelete.id)).rejects.toThrow(
           "injected Kanban save failure",
         );
       } finally {
         internals.saveJson = originalSaveJson;
       }
 
-      const tasks = await storage.getKanbanTasks("project-1");
+      const tasks = await storage.kanban.getKanbanTasks("project-1");
       expect(tasks.find((task) => task.id === imageTask.id)?.images).toContainEqual(
         expect.objectContaining({ id: imageId }),
       );
@@ -260,8 +284,8 @@ describe("StorageService Kanban mutation serialization", () => {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">' +
           '<rect width="1" height="1"/></svg>',
       ).toString("base64");
-      const task = await storage.addKanbanTask("project-1", "Image", "");
-      const withImage = await storage.addKanbanImage(task.id, "image.svg", validImageBase64);
+      const task = await storage.kanban.addKanbanTask("project-1", "Image", "");
+      const withImage = await storage.kanban.addKanbanImage(task.id, "image.svg", validImageBase64);
       const imageId = withImage.images[0]!.id;
       const imagePath = path.join(dataDir, "kanban-images", `${imageId}.webp`);
       const originalRm = fs.rm;
@@ -280,7 +304,7 @@ describe("StorageService Kanban mutation serialization", () => {
       };
 
       try {
-        await expect(storage.deleteKanbanImage(task.id, imageId)).resolves.toMatchObject({
+        await expect(storage.kanban.deleteKanbanImage(task.id, imageId)).resolves.toMatchObject({
           images: [],
         });
       } finally {
@@ -290,7 +314,7 @@ describe("StorageService Kanban mutation serialization", () => {
 
       expect(cleanupAttempts).toBe(2);
       expect(warnings).toBe(1);
-      expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
+      expect((await storage.kanban.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
       expect((await fs.stat(imagePath)).isFile()).toBe(true);
     });
   });
@@ -301,32 +325,39 @@ describe("StorageService Kanban mutation serialization", () => {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">' +
           '<rect width="1" height="1"/></svg>',
       ).toString("base64");
-      const owner = await storage.addKanbanTask("project-1", "Owner", "");
-      const other = await storage.addKanbanTask("project-1", "Other", "");
-      const withImage = await storage.addKanbanImage(owner.id, "image.svg", validImageBase64);
+      const owner = await storage.kanban.addKanbanTask("project-1", "Owner", "");
+      const other = await storage.kanban.addKanbanTask("project-1", "Other", "");
+      const withImage = await storage.kanban.addKanbanImage(
+        owner.id,
+        "image.svg",
+        validImageBase64,
+      );
       const imageId = withImage.images[0]!.id;
       const imagePath = path.join(dataDir, "kanban-images", `${imageId}.webp`);
       const outsidePath = path.join(dataDir, "outside.webp");
       await fs.writeFile(outsidePath, "sentinel");
 
-      await expect(storage.deleteKanbanImage(other.id, imageId)).rejects.toThrow(
+      await expect(storage.kanban.deleteKanbanImage(other.id, imageId)).rejects.toThrow(
         "not found on task",
       );
-      await expect(storage.deleteKanbanImage(owner.id, "../outside")).rejects.toThrow(
+      await expect(storage.kanban.deleteKanbanImage(owner.id, "../outside")).rejects.toThrow(
         "image ID is invalid",
       );
-      await expect(storage.getKanbanImageData("../outside")).rejects.toThrow("image ID is invalid");
-      await expect(storage.getKanbanImageData("/tmp/outside")).rejects.toThrow(
+      await expect(storage.kanban.getKanbanImageData("../outside")).rejects.toThrow(
+        "image ID is invalid",
+      );
+      await expect(storage.kanban.getKanbanImageData("/tmp/outside")).rejects.toThrow(
         "image ID is invalid",
       );
 
       expect((await fs.stat(imagePath)).isFile()).toBe(true);
       expect(await fs.readFile(outsidePath, "utf8")).toBe("sentinel");
       expect(
-        (await storage.getKanbanTasks("project-1")).find((task) => task.id === owner.id)?.images,
+        (await storage.kanban.getKanbanTasks("project-1")).find((task) => task.id === owner.id)
+          ?.images,
       ).toContainEqual(expect.objectContaining({ id: imageId }));
 
-      const storedTasks = await storage.getKanbanTasks("project-1");
+      const storedTasks = await storage.kanban.getKanbanTasks("project-1");
       storedTasks
         .find((task) => task.id === owner.id)!
         .images.push({
@@ -338,7 +369,7 @@ describe("StorageService Kanban mutation serialization", () => {
       const originalWarn = console.warn;
       console.warn = () => undefined;
       try {
-        await storage.deleteKanbanTask(owner.id);
+        await storage.kanban.deleteKanbanTask(owner.id);
       } finally {
         console.warn = originalWarn;
       }
@@ -352,18 +383,18 @@ describe("StorageService Kanban mutation serialization", () => {
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">' +
           '<rect width="1" height="1"/></svg>',
       ).toString("base64");
-      const task = await first.addKanbanTask("project-1", "Concurrent", "");
-      const withComment = await first.addKanbanComment(task.id, "remove me");
-      const withImage = await first.addKanbanImage(task.id, "remove.svg", validImageBase64);
+      const task = await first.kanban.addKanbanTask("project-1", "Concurrent", "");
+      const withComment = await first.kanban.addKanbanComment(task.id, "remove me");
+      const withImage = await first.kanban.addKanbanImage(task.id, "remove.svg", validImageBase64);
       const commentId = withComment.comments[0]!.id;
       const imageId = withImage.images[0]!.id;
 
       await Promise.all([
-        first.deleteKanbanComment(task.id, commentId),
-        second.deleteKanbanImage(task.id, imageId),
+        first.kanban.deleteKanbanComment(task.id, commentId),
+        second.kanban.deleteKanbanImage(task.id, imageId),
       ]);
 
-      const saved = (await first.getKanbanTasks("project-1"))[0]!;
+      const saved = (await first.kanban.getKanbanTasks("project-1"))[0]!;
       expect(saved.comments).toEqual([]);
       expect(saved.images).toEqual([]);
     });

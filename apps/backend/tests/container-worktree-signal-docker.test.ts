@@ -12,14 +12,15 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures.js";
 
 // Build this checkout with `mise run docker:build:dev`; never use `latest`.
+// The Linux Engine workflow passes its per-run qualification image.
 const image = process.env.ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE;
 const dockerTest = image ? test : test.skip;
 
 dockerTest(
   "a real container's worktree watcher arms, rings on change, and falls back when it dies",
   async () => {
-    if (!image || !image.startsWith("orkestrator-v2:dev-"))
-      throw new Error("Use this checkout's development image");
+    if (!image || !/^orkestrator-v2:(dev|qualification)-/.test(image))
+      throw new Error("Use this checkout's development or qualification image");
     const dir = await mkdtemp(join(tmpdir(), "ork-worktree-signal-docker-"));
     const storage = new StorageService(dir);
     await storage.init();

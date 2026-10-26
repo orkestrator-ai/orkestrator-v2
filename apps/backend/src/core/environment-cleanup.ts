@@ -15,6 +15,7 @@ import {
 } from "./environment-cleanup-ledger.js";
 import { environmentStateDirectories } from "./environment-state-paths.js";
 import { removeEnvironmentNetwork } from "./container-network.js";
+import { removeEnvironmentEgressGateways } from "./egress-gateway.js";
 import type { Environment, Project } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { removeConfinedDirectory } from "./path-safety.js";
@@ -166,6 +167,14 @@ async function cleanupContainer(
       if (!isMissingDockerObjectError(error)) throw error;
     }
   }
+  // Every egress gateway of the environment, found by its own labels: a
+  // runtime removed by an earlier attempt no longer names its gateway. They
+  // hold the environment network, which the network step removes next.
+  await removeEnvironmentEgressGateways(
+    entry.environmentId,
+    dockerOwnerNamespace(context.storage.getDataDir()),
+    run,
+  );
 }
 
 /** Every earlier runtime the environment keeps as a recovery copy. */

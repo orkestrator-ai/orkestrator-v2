@@ -64,3 +64,17 @@ The full Electron suite repeated the five-second Workstation title deadline at `
 - **Complete unchanged owner:** `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-electron-main-owner mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1` retained the same nickname deadline: two passed, one skipped and one failed (165.4 s logged; 163.7 s Playwright execution).
 - **Evidence:** host temporary artifacts `orkestrator-test-run.zGyXkd/merge-electron.log.gz` and `orkestrator-test-run.bzBeMP/merge-electron-main-owner.log.gz`.
 - **Assessment:** no new complete-owner pass or cause was established. No implementation, assertion, timeout or skip changed.
+
+## Service preview rollout (0042) — 2026-10-25
+
+The first full Electron suite on branch `todo-0042-service-preview-rollout-f64ae24ade8a`
+(`ORKESTRATOR_AGENT_TEST_RUN_ID=svc0042-suite-1 mise run test:agent:electron`,
+load 43 to 60) repeated the five-second `Workstation` poll at
+`electron-main.spec.ts:575`: 31 passed, 3 failed, 5 skipped or not run,
+583.5 s. The first owner rerun (`svc0042-owner-electron-main`) failed it again
+together with a 30-second first-window timeout (see 0157); the second
+(`svc0042-owner2-electron-main`, `bunx playwright test --config
+e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts`) passed
+the unchanged owner: 3 passed, 1 skipped, 40.4 s. The second full suite
+(`svc0042-suite-2`) passed 38, skipped 1, failed 0. The branch changes no
+connection or title code. Evidence: `output/agent-testing/svc0042-*/electron/results.json`.

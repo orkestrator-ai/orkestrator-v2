@@ -66,7 +66,7 @@ async function requireTicket(
   ticketId: string,
 ): Promise<KanbanTask> {
   await requireProject(context, projectId);
-  const task = (await context.command.storage.getKanbanTasks(projectId)).find(
+  const task = (await context.command.storage.kanban.getKanbanTasks(projectId)).find(
     (candidate) => candidate.id === ticketId,
   );
   if (!task) throw new PublicActionError("not-found", `Ticket not found in project: ${ticketId}`);
@@ -102,7 +102,7 @@ const ticketList: ReadActionHandler<{
   },
   async run(input, context) {
     await requireProject(context, input.projectId);
-    const tickets = (await context.command.storage.getKanbanTasks(input.projectId))
+    const tickets = (await context.command.storage.kanban.getKanbanTasks(input.projectId))
       .filter((task) => !input.status || task.status === input.status)
       .map(publicTicketSummary);
     return { result: paginate(tickets, input) };
@@ -150,7 +150,7 @@ const ticketCreate: MutationActionHandler<CreateInput> = {
     return {
       resources: { projectId: input.projectId },
       async execute(operation) {
-        const task = await context.command.storage.addKanbanTask(
+        const task = await context.command.storage.kanban.addKanbanTask(
           input.projectId,
           input.title,
           input.description,
@@ -204,7 +204,7 @@ const ticketUpdate: MutationActionHandler<UpdateInput> = {
     return {
       resources: { projectId: input.projectId },
       async execute() {
-        const task = await context.command.storage.updateKanbanTask(
+        const task = await context.command.storage.kanban.updateKanbanTask(
           input.ticketId,
           input.set,
           input.projectId,
@@ -243,7 +243,7 @@ const ticketComment: MutationActionHandler<{
     return {
       resources: { projectId: input.projectId },
       async execute(operation) {
-        const task = await context.command.storage.addKanbanComment(
+        const task = await context.command.storage.kanban.addKanbanComment(
           input.ticketId,
           input.text,
           input.projectId,

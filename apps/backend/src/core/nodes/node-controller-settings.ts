@@ -8,7 +8,7 @@ import {
 } from "@orkestrator/protocol/controller-settings";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 
-import type { NodeStoreMutation } from "../storage-nodes.js";
+import type { NodesStorage } from "../storage-nodes.js";
 
 /**
  * Leaf side of inherited settings: the copy each attached command node sent,
@@ -18,10 +18,7 @@ import type { NodeStoreMutation } from "../storage-nodes.js";
  */
 
 export interface ControllerSettingsStorage {
-  getControllerSettings(): Promise<ControllerSettingsStore>;
-  mutateControllerSettings<T>(
-    mutate: (current: ControllerSettingsStore) => NodeStoreMutation<ControllerSettingsStore, T>,
-  ): Promise<T>;
+  nodes: Pick<NodesStorage, "getControllerSettings" | "mutateControllerSettings">;
 }
 
 export interface LeafControllerSettingsOptions {
@@ -47,7 +44,7 @@ export class LeafControllerSettings {
   constructor(private readonly options: LeafControllerSettingsOptions) {}
 
   async start(): Promise<void> {
-    this.store = await this.options.storage.getControllerSettings();
+    this.store = await this.options.storage.nodes.getControllerSettings();
   }
 
   /** `sync_controller_settings` from an attached command node. */
@@ -64,7 +61,7 @@ export class LeafControllerSettings {
     const settings = parseInheritedGlobalSettings(args.settings);
     const before = this.source();
     const changedAt = new Date(this.options.now()).toISOString();
-    const changed = await this.options.storage.mutateControllerSettings((current) => {
+    const changed = await this.options.storage.nodes.mutateControllerSettings((current) => {
       const existing = current.entries.find((entry) => entry.controllerId === controllerId);
       if (existing && isDeepStrictEqual(existing.settings, settings)) {
         return { next: null, result: { value: current, changed: false } };
@@ -101,7 +98,7 @@ export class LeafControllerSettings {
       entries: this.store.entries.filter((entry) => entry.controllerId !== controllerId),
     };
     if (hadEntry) this.options.onChange();
-    const removed = await this.options.storage.mutateControllerSettings((current) => {
+    const removed = await this.options.storage.nodes.mutateControllerSettings((current) => {
       const entries = current.entries.filter((entry) => entry.controllerId !== controllerId);
       if (entries.length === current.entries.length) {
         return { next: null, result: { value: current, removed: false } };

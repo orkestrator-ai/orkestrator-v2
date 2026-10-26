@@ -7,6 +7,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { FullscreenSettingsLayout } from "@/components/settings/FullscreenSettingsLayout";
 import {
   MOBILE_TOOLS_TRIGGER_LABEL,
   MOBILE_TOOLS_TRIGGER_SELECTOR,
@@ -443,6 +444,45 @@ describe("MobileAppShellLayout", () => {
     } finally {
       dialogControl.remove();
     }
+  });
+
+  test("returns focus to its trigger past the focus trap of the dialog that closes", async () => {
+    // The real fullscreen settings layer, standing in for `AppDialogHost`: its
+    // trap would pull focus back if the trigger took it before the layer unmounted.
+    function RequestedSettings() {
+      const request = useAppDialogStore((state) => state.request);
+      const close = useAppDialogStore((state) => state.close);
+      return (
+        <FullscreenSettingsLayout
+          open={request !== null}
+          onOpenChange={(open) => {
+            if (!open) close();
+          }}
+          title="Environment Settings"
+          menuItems={[{ id: "general", label: "General", icon: null }]}
+        >
+          {() => <button type="button">Inside settings</button>}
+        </FullscreenSettingsLayout>
+      );
+    }
+    const { container } = renderLayout(
+      { children: <RequestedSettings /> },
+      { keepInitialDrawerOpen: true },
+    );
+    const menuButton = getTitleBarSidebarTrigger(container);
+
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ kind: "environment-settings", environmentId: "environment-1" });
+    });
+    const settings = await screen.findByRole("dialog", { name: "Environment Settings" });
+    await waitFor(() => expect(settings.contains(document.activeElement)).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+    expectDomAbsent(screen.queryByRole("dialog", { name: "Environment Settings" }));
+    expect(document.activeElement).toBe(menuButton);
   });
 
   test("leaves focus to a dialog requested while the drawer is closed", () => {

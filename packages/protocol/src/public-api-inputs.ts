@@ -244,6 +244,36 @@ const agentSelection: Record<string, PublicJsonSchema> = {
   mode: conversationMode,
 };
 
+/** Agent fields of a button action (PR, Resolve): every one optional. */
+const actionAgentSelection: Record<string, PublicJsonSchema> = {
+  agent: {
+    ...agentSelection.agent!,
+    description: "Agent platform. Omitted: the configured default for this action.",
+  },
+  model: agentSelection.model!,
+  reasoning: agentSelection.reasoning!,
+  fastMode: agentSelection.fastMode!,
+};
+
+const workflowId = id("Multi Review workflow ID, from review.list or a review.launch receipt.");
+
+/** One Multi Review model row. */
+const reviewSelection: PublicJsonSchema = {
+  type: "object",
+  properties: {
+    agent: { type: "string", enum: AGENT_PLATFORMS, description: "Agent platform." },
+    model: { type: "string", minLength: 1, maxLength: 512, description: "Model ID." },
+    reasoningEffort: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      description: "Reasoning level.",
+    },
+  },
+  required: ["agent", "model"],
+  additionalProperties: false,
+};
+
 const createEnvironmentFields: Record<string, PublicJsonSchema> = {
   projectId,
   type: environmentType,
@@ -1173,6 +1203,131 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [{ sessionId: EXAMPLE_SESSION_ID }, { sessionId: EXAMPLE_SESSION_ID, limit: 10 }],
     },
+    "review.launch": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema(
+        {
+          environmentId,
+          reviewers: {
+            type: "array",
+            minItems: 1,
+            maxItems: 32,
+            description:
+              "Reviewer rows. Omitted: the saved Multi Review reviewers. Set only when the user asks for specific reviewers.",
+            items: reviewSelection,
+          },
+          reviewModel: {
+            ...reviewSelection,
+            description: "Preparation and consolidation model. Omitted: the saved one.",
+          },
+          fixModel: { ...reviewSelection, description: "Fix model. Omitted: the saved one." },
+          autoFix: {
+            type: "boolean",
+            description:
+              "Start the Fix session when consolidation reports findings. Omitted: the saved Auto-fix setting (on when autoPr is true).",
+          },
+          autoPr: {
+            type: "boolean",
+            description:
+              "Open the pull request once the Fix finishes (or straight after a clean consolidation). Never merges. Omitted: the saved Auto-PR setting.",
+          },
+          targetBranch: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description: "Branch to review against. Omitted: the project's PR base branch.",
+          },
+          reviewInstruction: {
+            type: "string",
+            maxLength: 100_000,
+            description: "Review instruction. Omitted: the saved one; empty: none.",
+          },
+        },
+        ["environmentId"],
+      ),
+      examples: [
+        { environmentId: "env-1" },
+        { environmentId: "env-1", autoFix: true, autoPr: true },
+      ],
+    },
+    "review.list": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema({ environmentId }, ["environmentId"]),
+      examples: [{ environmentId: "env-1" }],
+    },
+    "review.get": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema({ workflowId }, ["workflowId"]),
+      examples: [{ workflowId: "review-1" }],
+    },
+    "review.open": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema(
+        {
+          workflowId,
+          surface: {
+            type: "string",
+            enum: ["root", "fix"],
+            description: "root (default): the review tab; fix: its Fix session tab.",
+          },
+        },
+        ["workflowId"],
+      ),
+      examples: [{ workflowId: "review-1" }, { workflowId: "review-1", surface: "fix" }],
+    },
+    "review.address": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema({ workflowId }, ["workflowId"]),
+      examples: [{ workflowId: "review-1" }],
+    },
+    "review.cancel": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema({ workflowId }, ["workflowId"]),
+      examples: [{ workflowId: "review-1" }],
+    },
+    "pr.create": {
+      capability: "sessions.control",
+      confirmation: "voice",
+      input: schema(
+        {
+          environmentId,
+          targetBranch: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description: "Base branch of the pull request. Omitted: the project's PR base branch.",
+          },
+          ...actionAgentSelection,
+        },
+        ["environmentId"],
+      ),
+      examples: [{ environmentId: "env-1" }, { environmentId: "env-1", targetBranch: "develop" }],
+    },
+    "pr.resolve": {
+      capability: "sessions.control",
+      confirmation: "voice",
+      input: schema(
+        {
+          environmentId,
+          targetBranch: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description:
+              "Branch to merge in. Omitted: the environment's PR base branch, else the project's.",
+          },
+          ...actionAgentSelection,
+        },
+        ["environmentId"],
+      ),
+      examples: [{ environmentId: "env-1" }],
+    },
     "attention.list": {
       capability: "sessions.read",
       confirmation: "never",
@@ -1303,6 +1458,12 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["toEnvironmentId", "toTabId", "body"],
       ),
       examples: [{ toEnvironmentId: "env-1", toTabId: "startup-agent", body: "Rebase on main." }],
+    },
+    "node.list": {
+      capability: "discovery",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
     },
     "schedule.list": {
       capability: "schedules",

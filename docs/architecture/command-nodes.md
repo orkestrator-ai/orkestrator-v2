@@ -160,7 +160,7 @@ to everything it runs, on every machine it controls.
   preferences) to each leaf when the link connects and whenever its config
   changes (`sync_controller_settings`, never routable through a workspace
   grant or `invoke_on_node`). The leaf lays them over its own config
-  (`StorageConfig.loadConfig`), so a launch on the leaf that falls back to
+  (`ConfigRepository.loadConfig`), so a launch on the leaf that falls back to
   defaults — a coordinator's `launch_environment` with a `nodeId` and no
   model, a build or review step — uses the command node's.
 - **The leaf's own settings are kept underneath** (`loadOwnConfig`) and come
@@ -553,6 +553,11 @@ remain and use the same paths.
   controller commands that reuse the button and local-coordinator logic
   with the node's own defaults and model catalogue
   (`commands-registry-controller-workflows.ts`).
+- **Operator clients too.** An external Control MCP client and the
+  `orkestrator` CLI reach the same leaves through public actions with a
+  `nodeId` (`--node`), routed by the command node with the caller's
+  authority relayed to the leaf; see
+  [control-mcp.md](control-mcp.md#leaf-nodes).
 - **Delegations and wakes behave as locally.** Mail across the node link is
   same-project coordinator mail (see
   [agent-messaging.md](agent-messaging.md#node-mail)): it wakes the worker,

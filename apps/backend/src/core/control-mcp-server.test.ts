@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   ControlMcpServer,
+  controlMcpPortOverride,
   readControlMcpDescriptor,
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
@@ -218,7 +219,9 @@ describe("Orkestrator control MCP server", () => {
         });
         const main = await world.main();
         const worker = await world.addEnvironment("review");
-        const workspace = (await world.storage.getCoordinatorWorkspace(world.projectId))!;
+        const workspace = (await world.storage.coordinators.getCoordinatorWorkspace(
+          world.projectId,
+        ))!;
         const conversation = workspace.conversations.find(
           (item) => item.id === main.conversationId,
         )!;
@@ -245,7 +248,7 @@ describe("Orkestrator control MCP server", () => {
               1,
               snapshot,
             );
-          await world.storage.saveCoordinatorWorkflowAssociation({
+          await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
             id: `a-${id}`,
             projectId: world.projectId,
             coordinatorId: world.coordinatorId,
@@ -3052,5 +3055,24 @@ describe("Orkestrator control MCP server", () => {
           command === "get_native_agent_model_catalog" && args.environmentId === "env-home",
       ),
     ).toBe(false);
+  });
+});
+
+describe("controlMcpPortOverride", () => {
+  test("only the installed app's backends take the fixed port", () => {
+    const app = { NODE_ENV: "production" };
+    expect(controlMcpPortOverride("production", app)).toBeUndefined();
+    expect(controlMcpPortOverride(undefined, app)).toBeUndefined();
+    expect(controlMcpPortOverride("development", app)).toBeUndefined();
+    // A qualification service or headless agent-test backend left running
+    // must never hold the port the desktop needs.
+    expect(controlMcpPortOverride("agent-test", app)).toBe(0);
+    expect(controlMcpPortOverride("production", { NODE_ENV: "test" })).toBe(0);
+  });
+
+  test("an explicit port still applies to an agent-test backend", () => {
+    const env = { NODE_ENV: "production", ORKESTRATOR_CONTROL_MCP_PORT: "45000" };
+    expect(controlMcpPortOverride("agent-test", env)).toBeUndefined();
+    expect(controlMcpPortOverride("agent-test", { ORKESTRATOR_CONTROL_MCP_PORT: " " })).toBe(0);
   });
 });

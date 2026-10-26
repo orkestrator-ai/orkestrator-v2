@@ -65,11 +65,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   // The portal sidebar's cross-machine order, shared by every client of this node.
   register("get_portal_layout", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return context.storage.getPortalLayout();
+    return context.storage.nodes.getPortalLayout();
   });
 
   register("update_portal_layout", async (args, context) => {
-    const layout = await context.storage.updatePortalLayout(parsePortalLayoutUpdate(args));
+    const layout = await context.storage.nodes.updatePortalLayout(parsePortalLayoutUpdate(args));
     context.emit(PORTAL_LAYOUT_CHANGED_EVENT, layout);
     return layout;
   });

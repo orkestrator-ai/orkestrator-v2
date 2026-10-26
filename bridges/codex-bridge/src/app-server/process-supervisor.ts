@@ -44,7 +44,11 @@ import {
 import { JsonlRpcClient, SerialQueue, type RpcMetricsSnapshot } from "./jsonl-rpc-client.js";
 import { createRecorderFromEnv, type NotificationRecorder } from "./notification-recorder.js";
 import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
-import { fingerprintRuntimeEnvironment, refreshRuntimeEnvironment } from "../runtime-env.js";
+import {
+  fingerprintRuntimeEnvironment,
+  refreshRuntimeEnvironment,
+  runtimeEnvironmentSnapshot,
+} from "../runtime-env.js";
 import type { EngineGeneration, EngineState } from "../engine/types.js";
 
 /**
@@ -546,7 +550,7 @@ export class AppServerSupervisor {
     const child = spawnFn(this.options.codexPath, args, {
       cwd: this.options.cwd,
       env: {
-        ...process.env,
+        ...runtimeEnvironmentSnapshot(),
         CODEX_HOME: this.options.codexHome,
         // Structured stderr so supervisor logs stay parseable.
         LOG_FORMAT: "json",
@@ -1329,7 +1333,7 @@ function runPs(args: string[]): Promise<string> {
       args,
       {
         maxBuffer: 1024 * 1024,
-        env: { ...process.env, LC_ALL: "C", LANG: "C", TZ: process.env.TZ },
+        env: { ...runtimeEnvironmentSnapshot(), LC_ALL: "C", LANG: "C", TZ: process.env.TZ },
       },
       (error, stdout) => {
         if (error) reject(error);

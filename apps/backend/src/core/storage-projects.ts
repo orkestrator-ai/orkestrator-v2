@@ -103,10 +103,13 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
-import { StorageBase } from "./storage-base.ts";
 import type { WorktreeMoveRecord } from "./models.js";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folders";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 
 /**
  * Writes a folder assignment onto a project record.
@@ -286,9 +289,62 @@ export class ControlRequestConflictError extends Error {
   }
 }
 
-export abstract class StorageProjects extends StorageBase {
+export class ProjectsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  enqueueEnvironmentMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.environmentsFile(), "environment storage", operation);
+  }
+
+  /** Serializes every project-store read-modify-write across processes. */
+  enqueueProjectMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.projectsFile(), "project storage", operation);
+  }
+
+  /**
+   * Reserves one canonical local path for the complete repository creation
+   * transaction. The hashed lease name avoids putting user paths in storage
+   * or logs while still coordinating backend processes that share dataDir.
+   *
+   * The default acquire timeout covers one critical section: scratch creation
+   * spans `git init`, a commit, `gh repo create` and a push (310s), and a path
+   * key may be held across a 600s clone. Callers that nest a path-key wait
+   * inside a Git-URL lock must pass a larger `acquireTimeoutMs` so a waiter
+   * can outlast that composed hold. The stale threshold must survive a holder
+   * whose event loop stalls — otherwise two backends enter and one rolls back
+   * the other's work.
+   */
+  private static readonly PROJECT_CREATION_LOCK_STALE_MS = 90_000;
+
+  private static readonly PROJECT_CREATION_LOCK_TIMEOUT_MS = 660_000;
+
+  async withProjectCreationLock<T>(
+    canonicalProjectPath: string,
+    operation: () => Promise<T>,
+    options?: { acquireTimeoutMs?: number },
+  ): Promise<T> {
+    const key = createHash("sha256").update(canonicalProjectPath).digest("hex");
+    return this.context.serialize(
+      this.context.file(path.join("project-creation-locks", key)),
+      "project creation",
+      operation,
+      {
+        staleMs: ProjectsRepository.PROJECT_CREATION_LOCK_STALE_MS,
+        acquireTimeoutMs:
+          options?.acquireTimeoutMs ?? ProjectsRepository.PROJECT_CREATION_LOCK_TIMEOUT_MS,
+      },
+    );
+  }
+
   async loadProjects(): Promise<Project[]> {
-    const projects = await this.loadJsonCached<Project[]>(this.projectsFile(), () => []);
+    const projects = await this.context.loadJsonCached<Project[]>(
+      this.files.projectsFile(),
+      () => [],
+    );
     return projects.sort((a, b) => a.order - b.order);
   }
 
@@ -311,10 +367,10 @@ export abstract class StorageProjects extends StorageBase {
 
       project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
       projects.push(project);
-      await this.saveJson(this.projectsFile(), projects);
+      await this.context.saveJson(this.files.projectsFile(), projects);
       return project;
     });
-    this.announce("project", project.id);
+    this.context.changes.announce("project", project.id);
     return added;
   }
 
@@ -323,10 +379,10 @@ export abstract class StorageProjects extends StorageBase {
       const projects = await this.loadProjects();
       const filtered = projects.filter((project) => project.id !== projectId);
       if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
-      await this.saveJson(this.projectsFile(), filtered);
+      await this.context.saveJson(this.files.projectsFile(), filtered);
     });
-    await this.deleteComposeDraftsByProject(projectId);
-    this.announce("project", projectId, undefined, undefined, true);
+    await this.repos.drafts.deleteComposeDraftsByProject(projectId);
+    this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 
   async getProject(projectId: string): Promise<Project | null> {
@@ -356,10 +412,10 @@ export abstract class StorageProjects extends StorageBase {
       if (typeof updates.name === "string") project.name = updates.name;
       if ("localPath" in updates) project.localPath = updates.localPath ?? null;
       if ("folder" in updates) applyProjectFolder(project, updates.folder);
-      await this.saveJson(this.projectsFile(), projects);
+      await this.context.saveJson(this.files.projectsFile(), projects);
       return project;
     });
-    this.announce("project", projectId);
+    this.context.changes.announce("project", projectId);
     return project;
   }
 
@@ -402,16 +458,16 @@ export abstract class StorageProjects extends StorageBase {
         if (!provided.has(project.id)) project.order = order++;
       }
 
-      await this.saveJson(this.projectsFile(), projects);
+      await this.context.saveJson(this.files.projectsFile(), projects);
       return projects.sort((a, b) => a.order - b.order);
     });
-    for (const project of projects) this.announce("project", project.id);
+    for (const project of projects) this.context.changes.announce("project", project.id);
     return projects;
   }
 
   /** Destructive reconciliation needs a complete owner set, never a fallback. */
   async loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
-    const snapshot = this.loadStoreStrict<unknown>(this.environmentsFile());
+    const snapshot = this.context.loadStoreStrict<unknown>(this.files.environmentsFile());
     if (!snapshot || !Array.isArray(snapshot.value)) {
       throw new Error("Environment store is missing or invalid; cleanup refused");
     }
@@ -426,8 +482,8 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   async loadEnvironments(): Promise<Environment[]> {
-    const environments = await this.loadJsonCached<Environment[]>(
-      this.environmentsFile(),
+    const environments = await this.context.loadJsonCached<Environment[]>(
+      this.files.environmentsFile(),
       () => [],
     );
     // One-release migration for records written before setupPhase existed.
@@ -454,13 +510,13 @@ export abstract class StorageProjects extends StorageBase {
     return environments.sort((a, b) => a.order - b.order);
   }
 
-  protected async saveEnvironments(
+  async saveEnvironments(
     environments: Environment[],
     options: { backup?: boolean } = {},
   ): Promise<void> {
     // Launch attachments can contain full base64 image payloads. Treat the
     // complete environment store and every rotated backup as sensitive.
-    await this.saveSensitiveJson(this.environmentsFile(), environments, options);
+    await this.context.saveSensitiveJson(this.files.environmentsFile(), environments, options);
   }
 
   /**
@@ -468,11 +524,11 @@ export abstract class StorageProjects extends StorageBase {
    * unrecoverable after the environment write that removed them committed.
    * Runs while the environment mutation lock is held.
    */
-  protected async scrubEnvironmentBackups(
+  private async scrubEnvironmentBackups(
     environmentId: string,
     removeEnvironment: boolean,
   ): Promise<void> {
-    this.scrubLegacyArchive("environments", (value) => {
+    this.context.scrubLegacyArchive("environments", (value) => {
       if (!Array.isArray(value)) throw new Error("Unattributable environment archive");
       return value
         .filter((entry) => !removeEnvironment || !isRecord(entry) || entry.id !== environmentId)
@@ -483,7 +539,7 @@ export abstract class StorageProjects extends StorageBase {
           return next;
         });
     });
-    this.scrubDeletedDatabaseContent();
+    this.context.scrubDeletedDatabaseContent();
   }
 
   async getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
@@ -499,13 +555,16 @@ export abstract class StorageProjects extends StorageBase {
     );
   }
 
-  protected projectRemovalFencesFile(): string {
-    return this.file("project-removal-fences.json");
+  private projectRemovalFencesFile(): string {
+    return this.context.file("project-removal-fences.json");
   }
 
   /** Projects whose removal was admitted; read under the environment lock. */
-  protected async loadProjectRemovalFences(): Promise<Record<string, string>> {
-    const value = await this.loadJsonCached<unknown>(this.projectRemovalFencesFile(), () => ({}));
+  private async loadProjectRemovalFences(): Promise<Record<string, string>> {
+    const value = await this.context.loadJsonCached<unknown>(
+      this.projectRemovalFencesFile(),
+      () => ({}),
+    );
     if (!isRecord(value)) return {};
     const fences: Record<string, string> = {};
     for (const [projectId, requestedAt] of Object.entries(value)) {
@@ -536,7 +595,7 @@ export abstract class StorageProjects extends StorageBase {
       const entries = Object.entries(fences)
         .sort(([, a], [, b]) => a.localeCompare(b))
         .slice(-MAX_PROJECT_REMOVAL_FENCES);
-      await this.saveJson(this.projectRemovalFencesFile(), Object.fromEntries(entries));
+      await this.context.saveJson(this.projectRemovalFencesFile(), Object.fromEntries(entries));
     });
   }
 
@@ -546,7 +605,7 @@ export abstract class StorageProjects extends StorageBase {
       const fences = await this.loadProjectRemovalFences();
       if (!fences[projectId]) return;
       delete fences[projectId];
-      await this.saveJson(this.projectRemovalFencesFile(), fences);
+      await this.context.saveJson(this.projectRemovalFencesFile(), fences);
     });
   }
 
@@ -584,7 +643,7 @@ export abstract class StorageProjects extends StorageBase {
         ) + 1;
       environments.push(environment);
       await this.saveEnvironments(environments);
-      this.announce("environment", environment.id, environment.projectId);
+      this.context.changes.announce("environment", environment.id, environment.projectId);
       return environment;
     });
   }
@@ -604,7 +663,13 @@ export abstract class StorageProjects extends StorageBase {
       }
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
-      this.announce("environment", environmentId, removed?.projectId, undefined, true);
+      this.context.changes.announce(
+        "environment",
+        environmentId,
+        removed?.projectId,
+        undefined,
+        true,
+      );
     });
   }
 
@@ -993,7 +1058,7 @@ export abstract class StorageProjects extends StorageBase {
       if ("initialPromptAttachments" in updates) {
         await this.scrubEnvironmentBackups(environmentId, false);
       }
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1025,7 +1090,7 @@ export abstract class StorageProjects extends StorageBase {
         [intent.tabId]: intent,
       };
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1066,7 +1131,7 @@ export abstract class StorageProjects extends StorageBase {
       delete intents[tabId];
       environment.tabTeardownIntents = Object.keys(intents).length > 0 ? intents : undefined;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1099,7 +1164,7 @@ export abstract class StorageProjects extends StorageBase {
         Number.isFinite(previous) && previous >= now ? previous + 1 : now,
       ).toISOString();
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return {
         environment,
         armedAt: environment.prRecheckAfterAgentCompletionArmedAt,
@@ -1120,7 +1185,7 @@ export abstract class StorageProjects extends StorageBase {
 
       environment.prRecheckAfterAgentCompletionArmedAt = undefined;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1152,7 +1217,7 @@ export abstract class StorageProjects extends StorageBase {
       }
       environment.startupAgentSession = undefined;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1180,7 +1245,7 @@ export abstract class StorageProjects extends StorageBase {
       // Activity timestamps churn constantly and are reconstructed from live
       // observation anyway; rotating five backups for each refresh is waste.
       await this.saveEnvironments(environments, { backup: false });
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1332,7 +1397,7 @@ export abstract class StorageProjects extends StorageBase {
       // the returned record from this call's response, so it does not need
       // the broadcast; genuine state transitions still announce below.
       if (agentActivityStructureFingerprint(environment) !== structureBefore) {
-        this.announce("environment", environmentId, environment.projectId);
+        this.context.changes.announce("environment", environmentId, environment.projectId);
       }
       return environment;
     });
@@ -1377,7 +1442,7 @@ export abstract class StorageProjects extends StorageBase {
       if (changed.length === 0) return changed;
       await this.saveEnvironments(environments, { backup: false });
       for (const environmentId of changed) {
-        this.announce(
+        this.context.changes.announce(
           "environment",
           environmentId,
           environments.find((environment) => environment.id === environmentId)?.projectId,
@@ -1416,7 +1481,7 @@ export abstract class StorageProjects extends StorageBase {
       if (changed.length === 0) return changed;
       await this.saveEnvironments(environments, { backup: false });
       for (const environmentId of changed) {
-        this.announce(
+        this.context.changes.announce(
           "environment",
           environmentId,
           environments.find((environment) => environment.id === environmentId)?.projectId,
@@ -1452,7 +1517,7 @@ export abstract class StorageProjects extends StorageBase {
       environment.hasUnreadWork = true;
       environment.unreadReason = "terminal_finished";
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1499,7 +1564,7 @@ export abstract class StorageProjects extends StorageBase {
       environment.hasUnreadWork = true;
       environment.unreadReason = reason;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1553,7 +1618,7 @@ export abstract class StorageProjects extends StorageBase {
       environment.hasUnreadWork = true;
       environment.unreadReason = "agent_question";
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return { environment, recorded: true };
     });
   }
@@ -1588,7 +1653,7 @@ export abstract class StorageProjects extends StorageBase {
       if (unread) environment.unreadReason = "marked_unread";
       else delete environment.unreadReason;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId, environment.projectId);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -1615,9 +1680,26 @@ export abstract class StorageProjects extends StorageBase {
         .filter((environment) => environment.projectId === projectId)
         .sort((a, b) => a.order - b.order);
       for (const environment of reordered) {
-        this.announce("environment", environment.id, environment.projectId);
+        this.context.changes.announce("environment", environment.id, environment.projectId);
       }
       return reordered;
+    });
+  }
+
+  async setAllEnvironmentStatusesForContainer(
+    containerId: string,
+    status: EnvironmentStatus,
+  ): Promise<void> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      let changed = false;
+      for (const environment of environments) {
+        if (environment.containerId === containerId) {
+          environment.status = status;
+          changed = true;
+        }
+      }
+      if (changed) await this.saveEnvironments(environments);
     });
   }
 }

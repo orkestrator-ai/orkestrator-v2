@@ -17,7 +17,13 @@ BOOT_STATUS_DIR=/run/orkestrator
 BOOT_STATUS_FILE="$BOOT_STATUS_DIR/boot-status.json"
 rm -f /tmp/.environment-ready /tmp/.entrypoint-complete "$BOOT_STATUS_FILE"
 mkdir -p "$BOOT_STATUS_DIR/processes"
-BOOT_ID="$(cat /proc/sys/kernel/random/uuid)"
+# The root entrypoint opened this boot's record before its firewall step;
+# keep its id so the record names one boot throughout.
+case "${ORKESTRATOR_BOOT_ID:-}" in
+    ????????-????-????-????-????????????) BOOT_ID="$ORKESTRATOR_BOOT_ID" ;;
+    *) BOOT_ID="$(cat /proc/sys/kernel/random/uuid)" ;;
+esac
+unset ORKESTRATOR_BOOT_ID
 BOOT_PID1_START="$(awk '{print $22}' /proc/1/stat)"
 BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
@@ -610,27 +616,49 @@ copy_agent_directory_entries() {
 
 log_progress "=== Claude Code Environment Initializing ==="
 
-# Initialize the firewall through the one exact privileged command granted to
-# node. The script reads the root-owned policy written before privileges drop.
-# In restricted mode a missing firewall is as fatal as a failed one: the
-# container must never report ready with an open network.
+# The root entrypoint (network-policy-entrypoint.sh) ran the firewall step
+# before privileges dropped and recorded its outcome root-owned; node has no
+# sudo grant for the firewall. In restricted mode a missing, failed or
+# unverified firewall is fatal: the container must never report ready with an
+# open network. With an egress gateway the firewall runs outside this
+# container, and the root entrypoint only verified that it is enforced here.
 network_mode=""
 IFS= read -r network_mode < /etc/orkestrator/network-mode 2>/dev/null || true
-if [ -x /usr/local/bin/init-firewall.sh ]; then
-    log_progress "Initializing network firewall..."
-    if ! sudo /usr/local/bin/init-firewall.sh; then
+firewall_boot=""
+IFS= read -r firewall_boot < /run/orkestrator-network/firewall-boot 2>/dev/null || true
+log_progress "Initializing network firewall..."
+case "$firewall_boot" in
+    applied|full) ;;
+    gateway)
+        log_progress "Network firewall enforced by the environment's egress gateway"
+        ;;
+    full-failed)
+        log_progress "Warning: Firewall initialization failed in full-network mode"
+        ;;
+    gateway-unverified)
+        BOOT_FAILURE_CODE=egress-unverified
+        log_progress "ERROR: The egress gateway's firewall is not enforced in this container"
+        exit 1
+        ;;
+    gateway-unavailable)
+        BOOT_FAILURE_CODE=egress-gateway-unavailable
+        log_progress "ERROR: The environment's egress gateway is not running"
+        exit 1
+        ;;
+    missing)
+        BOOT_FAILURE_CODE=firewall-missing
+        log_progress "ERROR: Restricted network requested but the firewall is not installed"
+        exit 1
+        ;;
+    *)
         if [ "${network_mode:-}" != "full" ]; then
             BOOT_FAILURE_CODE=firewall-failed
             log_progress "ERROR: Restricted-network firewall initialization failed"
             exit 1
         fi
         log_progress "Warning: Firewall initialization failed in full-network mode"
-    fi
-elif [ "${network_mode:-}" != "full" ]; then
-    BOOT_FAILURE_CODE=firewall-missing
-    log_progress "ERROR: Restricted network requested but the firewall is not installed"
-    exit 1
-fi
+        ;;
+esac
 write_boot_status network-ready
 
 # Set up Claude Code configuration
@@ -649,9 +677,10 @@ if [ -d /claude-config ]; then
     # Allowlist the portable inputs instead.
     #
     # settings.json is deliberately absent: this script overwrites it below with
-    # the container's own bypass-permissions settings, so copying it was work
-    # that was immediately discarded. .credentials.json is handled by the
-    # dedicated credential block that follows, which also chmods it.
+    # the container's own bypass-permissions settings, and merges in only the
+    # host's plugin enablement (staged filtered to `enabledPlugins`).
+    # .credentials.json is handled by the dedicated credential block that
+    # follows, which also chmods it.
     log_progress "  Copying essential config files..."
 
     for file in \
@@ -744,8 +773,13 @@ chmod 700 "$HOME/.claude"
 # load these user settings too, and a zero-turn probe fires UserPromptSubmit
 # without a matching Stop, so they must not write the state file.
 # env section sets BASH_MAX_OUTPUT_LENGTH to increase output limit for code reviews
+# skipDangerousModePermissionPrompt records the bypass-mode consent where
+# current Claude Code reads it (2.1.309 ignores ~/.claude.json's legacy
+# bypassPermissionsModeAccepted); without it terminal Claude stops at the
+# consent dialog on every container start, because this file is rewritten.
 cat > "$HOME/.claude/settings.json" << 'EOF'
 {
+  "skipDangerousModePermissionPrompt": true,
   "permissions": {
     "allow": [],
     "deny": [],
@@ -770,6 +804,28 @@ cat > "$HOME/.claude/settings.json" << 'EOF'
 EOF
 chmod 600 "$HOME/.claude/settings.json"
 log_progress "Created ~/.claude/settings.json with bypass permissions"
+
+# Claude Code's plugin enablement from the host's user settings. The backend
+# stages nothing else of that file (`claudeContainerPluginSettings`), and only
+# boolean `enabledPlugins` entries are taken here. The Claude bridge passes an
+# installed plugin only when these enable its `<name>@<marketplace>` id, and
+# the CLI reads the same keys, so a plugin turned off in Claude Code on the
+# host stays off in this container.
+if [ -f /claude-config/settings.json ] && [ ! -L /claude-config/settings.json ]; then
+    CLAUDE_SETTINGS_MERGED="$(mktemp)"
+    if jq --slurpfile host /claude-config/settings.json \
+        '($host[0].enabledPlugins // null) as $plugins
+         | if ($plugins | type) == "object"
+           then .enabledPlugins = ($plugins | with_entries(select(.value | type == "boolean")))
+           else . end' \
+        "$HOME/.claude/settings.json" > "$CLAUDE_SETTINGS_MERGED" 2>/dev/null; then
+        cat "$CLAUDE_SETTINGS_MERGED" > "$HOME/.claude/settings.json"
+        log_progress "Copied Claude plugin enablement from host settings"
+    else
+        echo "Host Claude plugin enablement could not be read; installed plugins stay off" >&2
+    fi
+    rm -f "$CLAUDE_SETTINGS_MERGED"
+fi
 
 # Copy and filter ~/.claude.json if mounted
 # Remove githubRepoPaths and projects as they contain host-specific paths

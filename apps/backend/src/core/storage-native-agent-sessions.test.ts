@@ -26,6 +26,7 @@ import {
   storageFilesContain,
   writeLegacyStore,
 } from "./storage-test-support.js";
+import { NativeAgentSessionsRepository } from "./storage-native.js";
 
 const SESSIONS_STORE = "native-agent-sessions.json";
 const JOURNAL_STORE = "agent-interaction-resolution-journal.json";
@@ -687,11 +688,7 @@ describe("StorageService native agent sessions", () => {
     // sessions. The worst legitimate holder is a cold ACP session create — four
     // 30s attempts plus 1.75s of backoff — so a waiter budgeted for a JSON write
     // would fail against a perfectly healthy holder.
-    const budget = (
-      StorageService as unknown as {
-        NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS: number;
-      }
-    ).NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS;
+    const budget = NativeAgentSessionsRepository.NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS;
     expect(budget).toBeGreaterThan(4 * 30_000 + 1_750);
   });
 

@@ -103,7 +103,7 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
     grok: { state: "signed-in", source: "x".repeat(120) },
   });
   expect(result.machines.map((machine) => [machine.name, machine.state])).toEqual([
-    [(await storage.getBackendProfile()).displayName, "ok"],
+    [(await storage.previewServices.getBackendProfile()).displayName, "ok"],
     ["MBP3", "ok"],
     ["VPS", "unavailable"],
     ["Slow", "unavailable"],
@@ -229,13 +229,13 @@ test("keeps a preferred login per platform on the machine asking and reports it"
     codex: "me@example.com",
   });
   // Nothing switches because of it.
-  expect((await storage.loadAgentAccounts()).active).toEqual({});
+  expect((await storage.agentAccounts.loadAgentAccounts()).active).toEqual({});
 
   await expect(setPreferredAgentIdentity(ctx, "claude", "not an email")).rejects.toThrow(
     "valid email",
   );
   expect(await setPreferredAgentIdentity(ctx, "claude", null)).toEqual({ codex: "me@example.com" });
   await setPreferredAgentIdentity(ctx, "codex", null);
-  expect(await storage.loadAgentAccounts()).not.toHaveProperty("preferred");
+  expect(await storage.agentAccounts.loadAgentAccounts()).not.toHaveProperty("preferred");
   expect((await listMachineAgentAccounts(ctx, { readSignIns })).preferred).toBeUndefined();
 });

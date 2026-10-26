@@ -235,6 +235,7 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-support.test.ts");
     expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-safety.test.ts");
     expect(rootGroup.args).toContain("./e2e/agent-testing/idle-observation-live-support.test.ts");
+    expect(rootGroup.args).toContain("./e2e/agent-testing/coordinator-mail-tiles.test.ts");
     expect(rootGroup.args).toContain("./scripts/opencode-live-compatibility-probe.test.ts");
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
@@ -330,6 +331,17 @@ describe("scripts/test-all.ts", () => {
       expect(invocation.env.CURSOR_BRIDGE_DEBUG).toBeUndefined();
     }
     expect(dependencies.env.ORKESTRATOR_BRIDGE_DEBUG).toBe("1");
+  });
+
+  test("removes an ambient NODE_ENV so every Bun test group defaults to test", async () => {
+    const { dependencies, invocations } = createDependencies({
+      environment: { NODE_ENV: "production" },
+    });
+
+    await runAllTests(dependencies);
+    expect(invocations.length).toBeGreaterThan(0);
+    for (const invocation of invocations) expect(invocation.env.NODE_ENV).toBeUndefined();
+    expect(dependencies.env.NODE_ENV).toBe("production");
   });
 
   test("worker plan bounds aggregate Bun workers across every active package task", () => {

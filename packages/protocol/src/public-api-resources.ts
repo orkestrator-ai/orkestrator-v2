@@ -689,6 +689,76 @@ export interface PublicAttentionPage {
 }
 
 // ---------------------------------------------------------------------------
+// Nodes
+
+/** One node as `node.list` reports it. Never a route, address or credential. */
+export interface PublicNodeSummary {
+  nodeId: string;
+  name: string;
+  /** The node the caller is connected to. */
+  self: boolean;
+  /** Registered and enabled on this command node (always true for `self`). */
+  enabled: boolean;
+  /** Connected now, so actions sent to it run. Always true for `self`. */
+  available: boolean;
+  /** `self`, or the link state (`connected`, `connecting`, `offline`, …). */
+  state: string;
+  /** The node's own mode as it last reported it. */
+  mode: "standalone" | "command" | "leaf" | null;
+  /** The node's Orkestrator version, when connected. */
+  version: string | null;
+  /** Public actions can be routed to it (`request.node`). */
+  publicActions: boolean;
+  /** Why `publicActions` is false, when it is. */
+  reason?: string;
+  lastConnectedAt?: string;
+}
+
+export interface PublicNodeList {
+  /** This node first, then the nodes it controls in registry order. */
+  items: PublicNodeSummary[];
+  total: number;
+  /** This node's mode. A leaf's own registry is suspended and not listed. */
+  mode: "standalone" | "command" | "leaf";
+  /** In leaf mode, the command nodes controlling this node. */
+  controlledBy: { nodeId: string; name: string }[];
+}
+
+/** How one node answered an aggregate (`node: "all"`) read. */
+export interface PublicNodeReadResult {
+  nodeId: string;
+  name: string;
+  self: boolean;
+  ok: boolean;
+  /** Items that node holds in total (pages) or counted (attention). */
+  total?: number;
+  /** That node's next page: pass it with that node's `nodeId`. */
+  nextCursor?: string;
+  /** That node's attention cursor: pass it with that node's `nodeId`. */
+  cursor?: string;
+  error?: { code: string; message: string };
+}
+
+/** Every item of an aggregate read names the node that owns it. */
+export type PublicNodeTagged<T> = T & { nodeId: string; nodeName: string };
+
+/** Result of `project.list` or `environment.list` with `node: "all"`. */
+export interface PublicAggregatePage<T> {
+  items: PublicNodeTagged<T>[];
+  /** Sum of every answering node's total. */
+  total: number;
+  nodes: PublicNodeReadResult[];
+}
+
+/** Result of `attention.list` with `node: "all"`. Cursors are per node. */
+export interface PublicAggregateAttentionPage {
+  items: PublicNodeTagged<PublicAttentionItem>[];
+  more: number;
+  counts: { interactions: number; runs: number; setups: number };
+  nodes: PublicNodeReadResult[];
+}
+
+// ---------------------------------------------------------------------------
 // Tickets
 
 export interface PublicTicketSummary {

@@ -22,7 +22,10 @@ import { dispatchPrompt } from "./prompt.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
 import { clientSessionKeys, sessionCreations, sessions } from "./state.js";
 
-function installRuntimeWithModels(available: Model<Api>[]): void {
+function installRuntimeWithModels(
+  available: Model<Api>[],
+  chatGpt?: { subscription: string; backend: Model<Api>[] },
+): void {
   setModelRuntimeFactoryForTests(
     async () =>
       ({
@@ -32,6 +35,9 @@ function installRuntimeWithModels(available: Model<Api>[]): void {
         getAvailable: async () => available,
         getProvider: () => undefined,
         getModel: () => undefined,
+        getModels: (provider: string) =>
+          provider === "openai-codex" ? (chatGpt?.backend ?? []) : [],
+        isUsingSubscription: (provider: string) => provider === chatGpt?.subscription,
         refresh: async () => undefined,
       }) as unknown as ModelRuntime,
   );
@@ -278,6 +284,36 @@ describe("default model", () => {
         await handle.completion;
         expect(promptedModel).toBe(preferred);
         expect(state.status).toBe("idle");
+      } finally {
+        prompt.mockRestore();
+      }
+    } finally {
+      await detachSession(state);
+    }
+  });
+
+  test("constructs a ChatGPT login's session with no saved default on a model it runs", async () => {
+    const runs = model("openai", "gpt-6.1-sol");
+    installRuntimeWithModels([model("openai", "gpt-4"), model("openai", "gpt-5.5"), runs], {
+      subscription: "openai",
+      backend: [model("openai-codex", "gpt-6.1-sol")],
+    });
+    const state = newSessionState();
+    try {
+      const attached = await ensureSession(state);
+      expect(attached.model).toBe(runs);
+      expect(state.composer.selectedModelId).toBe("openai/gpt-6.1-sol");
+      let promptedModel: Model<Api> | undefined;
+      const prompt = spyOn(attached, "prompt").mockImplementation(async (_text, options) => {
+        promptedModel = attached.model;
+        options?.preflightResult?.("started");
+      });
+      try {
+        state.status = "running";
+        state.promptSequence = 1;
+        const handle = await dispatchPrompt(state, attached, { prompt: "hello", images: [] });
+        await handle.completion;
+        expect(promptedModel).toBe(runs);
       } finally {
         prompt.mockRestore();
       }

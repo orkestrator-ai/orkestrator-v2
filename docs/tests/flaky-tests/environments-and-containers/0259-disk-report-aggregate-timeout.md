@@ -221,3 +221,11 @@ The complete unchanged owner passed: `mise run test:logged -- --name cleanup-dis
 - **Assessment:** known intermittent recurrence under shared host load; no disk-report code, assertion, timeout or skip changed. The aggregate failure remains reported.
 
 - **Final aggregate result for this recurrence:** incomplete after the outer 30-minute watchdog stopped the remaining backend run; workspace capacity wait was 876.2 s. Inner failure logs were compressed after cancellation rather than by normal aggregate finalization.
+
+## 0050 item 3 validation — 2026-10-26
+
+- **Original command:** `env -u PORT mise run test` on branch `todo-0050-transcript-history-9f95ba1af36f` (`930189337` plus the change), node mbp3, standard group reservations, heavily loaded host.
+- **Failure:** the isolated-checkout report exceeded the five-second deadline (5,020.68 ms), null subprocess status at `tests/unit/disk-report.test.ts:54`, reported as an error between tests. Root/support: 3,469 passed, 3 failed across 166 files (328.95 s).
+- **Complete unchanged owner:** `env -u PORT mise run test:logged -- --name disk-report -- bun test ./tests/unit/disk-report.test.ts` passed (1.9 s).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.ZrjtAX`.
+- **Assessment:** known recurrence under shared host load; the branch does not touch disk reporting. No assertion, deadline or skip changed.

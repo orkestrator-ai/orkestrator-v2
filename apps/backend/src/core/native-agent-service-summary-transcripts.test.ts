@@ -282,6 +282,58 @@ describe("summary transcripts", () => {
     );
   });
 
+  // Pins why joined sync-v1 paging is not an older-bridge path (0050 item 3):
+  // the renderer's "mint a cursor" step (`loadEarlierMessages` in
+  // `useNativeAgentSession.ts`) asks the sync-v1 projection, which only mints
+  // v1 cursors, so a provider that pages directly still pages through it.
+  test("a pageable provider's sync-v1 projection still mints a joined v1 cursor", async () => {
+    const history = {
+      messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub: summaryStub } = summaryProvider(history);
+    const interactiveSnapshot = mock(async () => ({
+      status: "idle" as const,
+      messages: history.messages,
+    }));
+    const provider = {
+      ...summaryStub.provider,
+      interactiveSnapshot,
+    } as typeof summaryStub.provider;
+    await withService(
+      { prefix: "orkestrator-summary-joined-", provider: async () => provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const cursor = update.historyCursor;
+        expect(cursor).toBeDefined();
+        expect(JSON.parse(Buffer.from(cursor!, "base64url").toString("utf8")).v).toBe(1);
+        // The joined refresh read the whole transcript to mint it.
+        expect(interactiveSnapshot).toHaveBeenCalledTimes(1);
+        const before =
+          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
+        const page = await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: cursor!,
+          limit: 60,
+        });
+        expect(page.messages.length).toBeGreaterThan(0);
+        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count).toBe(
+          before + 1,
+        );
+        expect(summaryStub.transcriptPage).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   test("a direct cursor is refused for another session and after its epoch rotates", async () => {
     const history = {
       messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),

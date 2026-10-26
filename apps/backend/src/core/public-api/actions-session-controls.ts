@@ -93,14 +93,16 @@ async function activeRunFor(
   session: ResolvedSession,
 ): Promise<PublicOperationRecord | null> {
   const dispatched = session.record?.dispatchedRequestIds ?? [];
-  const active = await context.command.storage.listActivePublicOperations();
+  const active = await context.command.storage.publicOperations.listActivePublicOperations();
   return (
     active
       .filter(
         (record) =>
           (record.action === "session.start" ||
             record.action === "session.prompt" ||
-            record.action === "session.command") &&
+            record.action === "session.command" ||
+            record.action === "pr.create" ||
+            record.action === "pr.resolve") &&
           record.resources.sessionId === session.sessionId &&
           !!record.resources.dispatchRequestId &&
           dispatched.includes(record.resources.dispatchRequestId),
@@ -151,10 +153,12 @@ const sessionStop: MutationActionHandler<TargetInput> = {
         const run = expected ?? (await activeRunFor(context, session));
         if (run) {
           // The run settles as cancelled (not completed) once its turn ends.
-          await context.command.storage.updatePublicOperation(run.operationId, (current) =>
-            current.stopRequestedAt
-              ? null
-              : { ...current, stopRequestedAt: new Date(context.now()).toISOString() },
+          await context.command.storage.publicOperations.updatePublicOperation(
+            run.operationId,
+            (current) =>
+              current.stopRequestedAt
+                ? null
+                : { ...current, stopRequestedAt: new Date(context.now()).toISOString() },
           );
           await operation.update({
             resources: { dispatchRequestId: run.resources.dispatchRequestId },

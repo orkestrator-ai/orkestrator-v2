@@ -121,3 +121,11 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 - **Assessment:** another intermittent recurrence of the existing cleanup/publication
   ordering symptom. Account implementation, assertions, timeouts and skips
   remain unchanged; the root cause is still unproved.
+
+## Claude Linux sandbox probe (todo 0145) — 2026-10-26
+
+- **Command:** `mise run test`, macOS, Bun 1.4.4, on branch `todo-0145-claude-linux-sandbox-39a58b878dd6` (no account change), with other worktrees active.
+- **Failure:** the duplicate-login assertion at `apps/backend/src/core/agent-accounts.test.ts:835` observed a second account directory after rejecting the duplicate (131.30 ms).
+- **Unchanged owner:** `bun test --cwd apps/backend ./src/core/agent-accounts.test.ts` passed the complete file three times in a row (39 pass, 0 fail each).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IZmPu4` (the run's failure artifacts).
+- **Assessment:** the same intermittent symptom. No account implementation, assertion, timeout or skip changed.

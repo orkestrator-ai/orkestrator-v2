@@ -330,3 +330,116 @@ test("family gate requires a held follow-up to a busy worker and waits for quiet
     expect(watch.observations.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+test("a held worker's approval stays pending until it is released, then is denied once", async () => {
+  const resolved: Array<{ environmentId: unknown; interactionId: unknown; action: unknown }> = [];
+  let interactions = [
+    { id: "approval-1", kind: "command-approval", state: "pending", createdAt: 1, sessionId: "s" },
+  ];
+  const invoke: DelegationCoordinator["invoke"] = async <T>(
+    command: string,
+    args: Record<string, unknown> = {},
+  ) => {
+    let value: unknown = null;
+    if (command === "get_agent_mail_mailbox") value = { messages: [] };
+    else if (command === "get_project_coordinator")
+      value = {
+        workflows: ["held", "other"].map((resourceId) => ({
+          kind: "environment",
+          conversationId: "conversation",
+          resourceId,
+        })),
+      };
+    else if (command === "get_native_agent_projection")
+      value = {
+        ...projection(args.environmentId === "coordinator" ? "idle" : "waiting"),
+        interactions: args.environmentId === "coordinator" ? [] : interactions,
+      };
+    else if (command === "get_prompt_queue") value = { messages: [] };
+    else if (command === "get_environments") value = [];
+    else if (command === "resolve_native_agent_interaction") {
+      const resolution = args.resolution as { action: unknown };
+      resolved.push({
+        environmentId: args.environmentId,
+        interactionId: args.interactionId,
+        action: resolution.action,
+      });
+    } else throw new Error(`Unexpected command ${command}`);
+    return value as T;
+  };
+  const watch = createDelegationWatch(invoke, coordinator(invoke), summary(), 0, {
+    holdWorkerInteractions: (environmentId) => environmentId === "held",
+  });
+  await watch.observe();
+  await watch.observe();
+  // The other worker's approval is denied at once and recorded as escaped;
+  // the held worker's is only recorded.
+  expect(resolved).toEqual([
+    { environmentId: "other", interactionId: "approval-1", action: "deny" },
+  ]);
+  expect(watch.workerEscaped()).toEqual(["command-approval"]);
+  expect(watch.held("held")).toEqual([
+    { kind: "command-approval", createdAt: 1, seenAt: expect.any(Number) },
+  ]);
+  await watch.release("held");
+  await watch.release("held");
+  expect(resolved.slice(1)).toEqual([
+    { environmentId: "held", interactionId: "approval-1", action: "deny" },
+  ]);
+  expect(watch.held("held")[0]?.releasedAt).toEqual(expect.any(Number));
+  interactions = [];
+  await watch.observe();
+  expect(watch.held("held")).toHaveLength(1);
+});
+
+test("failed held resolution surfaces and retries while successful releases are preserved", async () => {
+  const attempts: string[] = [];
+  const pending = new Set(["retry", "success"]);
+  const { owner } = fixture();
+  const original = owner.invoke;
+  const invoke: DelegationCoordinator["invoke"] = async <T>(command: string, args = {}) => {
+    const request = args as Record<string, unknown>;
+    if (command === "get_native_agent_projection" && request.environmentId === "reporter") {
+      return {
+        ...projection("waiting"),
+        interactions: [...pending].map((id) => ({
+          id,
+          kind: "command-approval",
+          state: "pending",
+          sessionId: "s",
+          createdAt: 123,
+        })),
+      } as T;
+    }
+    if (command === "resolve_native_agent_interaction") {
+      const id = String(request.interactionId);
+      attempts.push(id);
+      if (id === "retry" && attempts.filter((item) => item === id).length === 1) {
+        throw new Error("transient resolution failure");
+      }
+      pending.delete(id);
+      return null as T;
+    }
+    return original<T>(command, request);
+  };
+  const watch = createDelegationWatch(invoke, coordinator(invoke), summary(), 0, {
+    holdWorkerInteractions: () => true,
+  });
+  await watch.observe();
+  await expect(watch.release("reporter")).rejects.toThrow("Held interaction release failed");
+  expect(pending).toEqual(new Set(["retry"]));
+  expect(watch.held("reporter")[0]).toEqual({
+    kind: "command-approval",
+    createdAt: 123,
+    seenAt: expect.any(Number),
+  });
+  const succeededAt = watch.held("reporter")[1]?.releasedAt;
+  expect(succeededAt).toEqual(expect.any(Number));
+  await watch.observe();
+  await watch.release("reporter");
+  await watch.release("reporter");
+  expect(attempts).toEqual(["retry", "success", "retry"]);
+  expect(pending.size).toBe(0);
+  expect(watch.held("reporter")[0]?.releasedAt).toEqual(expect.any(Number));
+  expect(watch.held("reporter")[1]?.releasedAt).toBe(succeededAt);
+});

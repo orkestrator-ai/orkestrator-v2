@@ -14,9 +14,14 @@ import { MAX_TABS_PER_ENVIRONMENT, PANE_LAYOUT_VERSION } from "@orkestrator/prot
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
-import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { readStoredValue, seedStore, seedUnreadableStore } from "./storage-test-support.js";
+import {
+  readStoredValue,
+  seedStore,
+  seedUnreadableStore,
+  storageDatabase,
+  storageInternals,
+} from "./storage-test-support.js";
 
 async function withTemporaryStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -29,11 +34,6 @@ async function withTemporaryStorage<T>(
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
-}
-
-/** The service's own database connection, for injecting failures. */
-function databaseOf(storage: StorageService): StorageDatabase {
-  return (storage as unknown as { database: StorageDatabase }).database;
 }
 
 // The default model ids here are the backend source of truth used whenever a
@@ -2614,7 +2614,7 @@ describe("pane layout intent persistence", () => {
       const environment = createEnvironment("project-1", { environmentType: "local" });
       environment.id = "env-layout-write-recovery";
       await storage.addEnvironment(environment);
-      const database = databaseOf(storage);
+      const database = storageDatabase(storage);
       const writeStore = database.writeStoreInTransaction.bind(database);
       let failNext = true;
       const spy = spyOn(database, "writeStoreInTransaction").mockImplementation(
@@ -3298,7 +3298,7 @@ describe("hot store read caching", () => {
     await withTemporaryStorage(async (storage) => {
       const stored = await storage.addEnvironment(createEnvironment("project-1"));
 
-      const database = databaseOf(storage);
+      const database = storageDatabase(storage);
       const readStore = database.readStore.bind(database);
       const readSpy = spyOn(database, "readStore").mockImplementation((store) => {
         if (store === "environments") throw new Error("SQLITE_IOERR: disk I/O error");
@@ -3534,11 +3534,11 @@ describe("environment completion and unread state", () => {
 describe("Kanban point reads", () => {
   test("returns one task by id and null when it is absent", async () => {
     await withTemporaryStorage(async (storage) => {
-      const task = await storage.addKanbanTask("project-1", "Build", "Details");
-      await storage.addKanbanTask("project-2", "Other", "Other details");
+      const task = await storage.kanban.addKanbanTask("project-1", "Build", "Details");
+      await storage.kanban.addKanbanTask("project-2", "Other", "Other details");
 
-      await expect(storage.getKanbanTask(task.id)).resolves.toEqual(task);
-      await expect(storage.getKanbanTask("missing-task")).resolves.toBeNull();
+      await expect(storage.kanban.getKanbanTask(task.id)).resolves.toEqual(task);
+      await expect(storage.kanban.getKanbanTask("missing-task")).resolves.toBeNull();
     });
   });
 });
@@ -3824,10 +3824,8 @@ describe("OpenCode model catalogue cache", () => {
 
   test("recovers the mutation queue after a failed write", async () => {
     await withTemporaryStorage(async (storage) => {
-      const internals = storage as unknown as {
-        saveJson: (filePath: string, value: unknown) => Promise<void>;
-      };
-      const saveJson = internals.saveJson.bind(storage);
+      const internals = storageInternals(storage).context;
+      const saveJson = internals.saveJson.bind(internals);
       let failNext = true;
       internals.saveJson = async (filePath, value) => {
         if (failNext) {
@@ -3946,6 +3944,8 @@ describe("host agent model catalogue cache", () => {
           supportsMode: false,
           contextWindow: 400_000,
           supportsImageInput: false,
+          // Where a Pi tab with no model starts; launch defaults read it (0172).
+          sessionDefault: true,
         },
       ];
 
@@ -4183,10 +4183,8 @@ describe("host agent model catalogue cache", () => {
 
   test("recovers the mutation queue after a failed write", async () => {
     await withTemporaryStorage(async (storage) => {
-      const internals = storage as unknown as {
-        saveJson: (filePath: string, value: unknown) => Promise<void>;
-      };
-      const saveJson = internals.saveJson.bind(storage);
+      const internals = storageInternals(storage).context;
+      const saveJson = internals.saveJson.bind(internals);
       let failNext = true;
       internals.saveJson = async (filePath, value) => {
         if (failNext) {

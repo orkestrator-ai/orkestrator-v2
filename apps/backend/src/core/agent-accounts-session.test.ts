@@ -23,7 +23,7 @@ beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "ork-session-account-")));
   storage = new StorageService(path.join(root, "data"));
   await storage.init();
-  await storage.mutateAgentAccounts((store) => ({
+  await storage.agentAccounts.mutateAgentAccounts((store) => ({
     store: {
       ...store,
       accounts: [

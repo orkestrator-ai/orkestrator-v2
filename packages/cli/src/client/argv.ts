@@ -1,4 +1,4 @@
-import { parsePublicDuration } from "@orkestrator/protocol/public-api";
+import { isPublicNodeTarget, parsePublicDuration } from "@orkestrator/protocol/public-api";
 import { CliError } from "./errors.js";
 import type { CommandSpec, GlobalOptions, OptionSpec, ParsedCommand } from "./spec.js";
 
@@ -25,6 +25,13 @@ export const GLOBAL_OPTIONS: readonly OptionSpec[] = [
     kind: "string",
     valueName: "NAME",
     description: "Use a running isolated development profile (`mise run dev:test`).",
+  },
+  {
+    name: "node",
+    kind: "string",
+    valueName: "NODE_ID|all",
+    description:
+      "Run on a leaf node the connected command node controls (`node list`); `all` for project list, environment list and attention across nodes.",
   },
   { name: "json", kind: "boolean", description: "Print exactly one JSON envelope on stdout." },
   {
@@ -279,6 +286,12 @@ export function parseInvocation(tree: CommandTree, argv: readonly string[]): Par
     global.connection = globalState.values.connection;
   }
   if (typeof globalState.values.profile === "string") global.profile = globalState.values.profile;
+  if (typeof globalState.values.node === "string") {
+    if (!isPublicNodeTarget(globalState.values.node)) {
+      throw new CliError("invalid-input", "--node expects a node ID from `node list`, or all");
+    }
+    global.node = globalState.values.node;
+  }
   if (global.connection && global.profile) {
     throw new CliError(
       "invalid-input",

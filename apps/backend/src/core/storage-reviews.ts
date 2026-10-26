@@ -13,6 +13,9 @@ import {
   nowIso,
   randomUUID,
 } from "./storage-shared.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -75,8 +78,6 @@ type GitHubCompletionComment = shared.GitHubCompletionComment;
 type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
-
-import { StorageSessions } from "./storage-sessions.ts";
 
 type ControllerClaim = { granted: boolean; token: string; expiresAt: string };
 
@@ -166,18 +167,40 @@ function holdsControllerLease(
  * environment check, and the active-workflow check and environment sweeps
  * scan every row. Each write commits only its own row (`updateStoreRow`), so
  * no other workflow is re-serialized. Reads and fence checks take no lease
- * (see {@link StorageReviews.validateMultiReviewController}).
+ * (see {@link ReviewsRepository.validateMultiReviewController}).
  */
-export abstract class StorageReviews extends StorageSessions {
+export class ReviewsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  private enqueueLoopedReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.files.loopedReviewsFile(),
+      "looped review workflow storage",
+      operation,
+    );
+  }
+
+  private enqueueMultiReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.files.multiReviewsFile(),
+      "multi review workflow storage",
+      operation,
+    );
+  }
+
   /** One committed workflow; `null` when absent, unreadable or invalid. */
   private loadLoopedReviewWorkflow(workflowId: string): PersistedLoopedReviewWorkflow | null {
-    const stored = this.loadStoreRow(this.loopedReviewsFile(), workflowId);
+    const stored = this.context.loadStoreRow(this.files.loopedReviewsFile(), workflowId);
     return isPersistedLoopedReviewWorkflow(stored, workflowId) ? stored : null;
   }
 
   /** One committed workflow; `null` when absent, unreadable or invalid. */
   private loadMultiReviewWorkflow(workflowId: string): PersistedMultiReviewWorkflow | null {
-    const stored = this.loadStoreRow(this.multiReviewsFile(), workflowId);
+    const stored = this.context.loadStoreRow(this.files.multiReviewsFile(), workflowId);
     return isPersistedMultiReviewWorkflow(stored, workflowId) ? stored : null;
   }
 
@@ -192,8 +215,8 @@ export abstract class StorageReviews extends StorageSessions {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Looped review environment ID must not be blank");
     }
-    const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
-      this.loopedReviewsFile(),
+    const workflows = await this.context.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      this.files.loopedReviewsFile(),
       () => ({}),
     );
     return Object.entries(workflows)
@@ -208,8 +231,8 @@ export abstract class StorageReviews extends StorageSessions {
 
   /** Backend supervisors must restore work even when no renderer is mounted. */
   async listAllLoopedReviewWorkflows(): Promise<PersistedLoopedReviewWorkflow[]> {
-    const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
-      this.loopedReviewsFile(),
+    const workflows = await this.context.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      this.files.loopedReviewsFile(),
       () => ({}),
     );
     return Object.entries(workflows)
@@ -272,13 +295,13 @@ export abstract class StorageReviews extends StorageSessions {
     }
 
     return this.enqueueLoopedReviewMutation(async () => {
-      if (!(await this.getEnvironment(environmentId))) {
+      if (!(await this.repos.projects.getEnvironment(environmentId))) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
       // The checks run inside the row's own transaction, against the record
       // being replaced; an invalid stored record reads as absent.
-      const saved = this.updateStoreRow<PersistedLoopedReviewWorkflow>(
-        this.loopedReviewsFile(),
+      const saved = this.context.updateStoreRow<PersistedLoopedReviewWorkflow>(
+        this.files.loopedReviewsFile(),
         workflowId,
         (current) => {
           const previous = isPersistedLoopedReviewWorkflow(current, workflowId)
@@ -320,7 +343,7 @@ export abstract class StorageReviews extends StorageSessions {
           return { result: next, value: next };
         },
       );
-      this.announce("looped-review", workflowId);
+      this.context.changes.announce("looped-review", workflowId);
       return saved;
     });
   }
@@ -337,56 +360,60 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Looped review controller lease is invalid");
     }
     return this.enqueueLoopedReviewMutation(async () =>
-      this.updateStoreRow<ControllerClaim>(this.loopedReviewsFile(), workflowId, (current) => {
-        if (!isPersistedLoopedReviewWorkflow(current, workflowId)) {
-          throw new Error(`Looped review workflow not found: ${workflowId}`);
-        }
-        const workflow = current;
-        const now = Date.now();
-        const currentExpiry = workflow.controllerLease
-          ? Date.parse(workflow.controllerLease.expiresAt)
-          : 0;
-        if (
-          workflow.controllerLease &&
-          workflow.controllerLease.ownerId !== ownerId &&
-          currentExpiry > now
-        ) {
+      this.context.updateStoreRow<ControllerClaim>(
+        this.files.loopedReviewsFile(),
+        workflowId,
+        (current) => {
+          if (!isPersistedLoopedReviewWorkflow(current, workflowId)) {
+            throw new Error(`Looped review workflow not found: ${workflowId}`);
+          }
+          const workflow = current;
+          const now = Date.now();
+          const currentExpiry = workflow.controllerLease
+            ? Date.parse(workflow.controllerLease.expiresAt)
+            : 0;
+          if (
+            workflow.controllerLease &&
+            workflow.controllerLease.ownerId !== ownerId &&
+            currentExpiry > now
+          ) {
+            return {
+              result: { granted: false, token: "", expiresAt: workflow.controllerLease.expiresAt },
+            };
+          }
+          const heldLease =
+            workflow.controllerLease?.ownerId === ownerId &&
+            currentExpiry > now &&
+            isNonBlankString(workflow.controllerLease.token)
+              ? workflow.controllerLease
+              : null;
+          // Re-granting an unexpired lease to its own holder is the overwhelmingly
+          // common path: every advance claims before it reads, and the poll runs
+          // once a second for every non-terminal workflow — including ones merely
+          // paused or failed. A write here would rewrite this workflow's row, whose
+          // snapshot legitimately holds complete diffs and file contents, and move
+          // the store revision clients watch. Only pay for the write once the
+          // lease is actually close to expiring.
+          if (heldLease && currentExpiry - now >= leaseMs / 2) {
+            return {
+              result: { granted: true, token: heldLease.token, expiresAt: heldLease.expiresAt },
+            };
+          }
+          const token = heldLease ? heldLease.token : randomUUID();
+          const expiresAt = new Date(now + leaseMs).toISOString();
           return {
-            result: { granted: false, token: "", expiresAt: workflow.controllerLease.expiresAt },
+            result: { granted: true, token, expiresAt },
+            value: { ...workflow, controllerLease: { ownerId, token, expiresAt } },
           };
-        }
-        const heldLease =
-          workflow.controllerLease?.ownerId === ownerId &&
-          currentExpiry > now &&
-          isNonBlankString(workflow.controllerLease.token)
-            ? workflow.controllerLease
-            : null;
-        // Re-granting an unexpired lease to its own holder is the overwhelmingly
-        // common path: every advance claims before it reads, and the poll runs
-        // once a second for every non-terminal workflow — including ones merely
-        // paused or failed. A write here would rewrite this workflow's row, whose
-        // snapshot legitimately holds complete diffs and file contents, and move
-        // the store revision clients watch. Only pay for the write once the
-        // lease is actually close to expiring.
-        if (heldLease && currentExpiry - now >= leaseMs / 2) {
-          return {
-            result: { granted: true, token: heldLease.token, expiresAt: heldLease.expiresAt },
-          };
-        }
-        const token = heldLease ? heldLease.token : randomUUID();
-        const expiresAt = new Date(now + leaseMs).toISOString();
-        return {
-          result: { granted: true, token, expiresAt },
-          value: { ...workflow, controllerLease: { ownerId, token, expiresAt } },
-        };
-      }),
+        },
+      ),
     );
   }
 
   /**
    * Whether `ownerId` still holds the controller lease under `token`. Reads
    * one row and takes no lease, like
-   * {@link StorageReviews.validateMultiReviewController}.
+   * {@link ReviewsRepository.validateMultiReviewController}.
    */
   async validateLoopedReviewController(
     workflowId: string,
@@ -409,7 +436,7 @@ export abstract class StorageReviews extends StorageSessions {
       return;
     }
     await this.enqueueLoopedReviewMutation(async () => {
-      this.updateStoreRow(this.loopedReviewsFile(), workflowId, (current) => {
+      this.context.updateStoreRow(this.files.loopedReviewsFile(), workflowId, (current) => {
         if (
           !isPersistedLoopedReviewWorkflow(current, workflowId) ||
           current.controllerLease?.ownerId !== ownerId ||
@@ -428,15 +455,19 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Looped review workflow ID must not be blank");
     }
     await this.enqueueLoopedReviewMutation(async () => {
-      const deleted = this.updateStoreRow(this.loopedReviewsFile(), workflowId, (current) =>
-        isPersistedLoopedReviewWorkflow(current, workflowId)
-          ? { result: true, delete: true }
-          : { result: false },
+      const deleted = this.context.updateStoreRow(
+        this.files.loopedReviewsFile(),
+        workflowId,
+        (current) =>
+          isPersistedLoopedReviewWorkflow(current, workflowId)
+            ? { result: true, delete: true }
+            : { result: false },
       );
-      if (deleted) this.announce("looped-review", workflowId, undefined, undefined, true);
+      if (deleted)
+        this.context.changes.announce("looped-review", workflowId, undefined, undefined, true);
       // A previous attempt may have committed the delete before its scrub failed.
-      await this.scrubSensitiveJsonBackups(
-        this.loopedReviewsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.loopedReviewsFile(),
         (storedId) => storedId !== workflowId,
       );
     });
@@ -447,8 +478,8 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Looped review environment ID must not be blank");
     }
     await this.enqueueLoopedReviewMutation(async () => {
-      const storedWorkflows = await this.loadJson<Record<string, unknown>>(
-        this.loopedReviewsFile(),
+      const storedWorkflows = await this.context.loadJson<Record<string, unknown>>(
+        this.files.loopedReviewsFile(),
         () => ({}),
       );
       // Attributed by the stored environment field alone, so a record this
@@ -458,18 +489,18 @@ export abstract class StorageReviews extends StorageSessions {
         .map(([storedId]) => storedId);
       if (removedIds.length === 0) return;
       for (const removedId of removedIds) {
-        this.updateStoreRow(this.loopedReviewsFile(), removedId, () => ({
+        this.context.updateStoreRow(this.files.loopedReviewsFile(), removedId, () => ({
           result: undefined,
           delete: true,
         }));
-        this.announce("looped-review", removedId, undefined, undefined, true);
+        this.context.changes.announce("looped-review", removedId, undefined, undefined, true);
       }
 
       // Scrub the retired JSON archive, and the WAL and free pages, before
       // releasing the mutation lease so environment deletion removes all
       // persisted review evidence.
-      await this.scrubSensitiveJsonBackups(
-        this.loopedReviewsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.loopedReviewsFile(),
         (storedId, workflow) =>
           isPersistedLoopedReviewWorkflow(workflow, storedId) &&
           workflow.environmentId !== environmentId,
@@ -486,8 +517,8 @@ export abstract class StorageReviews extends StorageSessions {
   async listMultiReviewWorkflows(environmentId: string): Promise<PersistedMultiReviewWorkflow[]> {
     if (!isNonBlankString(environmentId))
       throw new Error("Multi review environment ID must not be blank");
-    const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-      this.multiReviewsFile(),
+    const workflows = await this.context.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+      this.files.multiReviewsFile(),
       () => ({}),
     );
     return Object.entries(workflows)
@@ -500,8 +531,8 @@ export abstract class StorageReviews extends StorageSessions {
   }
 
   async listAllMultiReviewWorkflows(): Promise<PersistedMultiReviewWorkflow[]> {
-    const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-      this.multiReviewsFile(),
+    const workflows = await this.context.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+      this.files.multiReviewsFile(),
       () => ({}),
     );
     return Object.entries(workflows)
@@ -532,14 +563,14 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Multi review snapshot exceeds the 32 MB limit");
     }
     return this.enqueueMultiReviewMutation(async () => {
-      if (!(await this.getEnvironment(environmentId)))
+      if (!(await this.repos.projects.getEnvironment(environmentId)))
         throw new Error(`Environment not found: ${environmentId}`);
       // The fence and revision are checked inside the row's own transaction,
       // against the record being replaced. This is the authoritative fence: a
       // controller that lost its lease can never commit, whatever its last
       // fence check answered.
-      const saved = this.updateStoreRow<PersistedMultiReviewWorkflow>(
-        this.multiReviewsFile(),
+      const saved = this.context.updateStoreRow<PersistedMultiReviewWorkflow>(
+        this.files.multiReviewsFile(),
         workflowId,
         (current) => {
           const previous = isPersistedMultiReviewWorkflow(current, workflowId)
@@ -573,7 +604,7 @@ export abstract class StorageReviews extends StorageSessions {
           return { result: next, value: next };
         },
       );
-      this.announce("multi-review", workflowId);
+      this.context.changes.announce("multi-review", workflowId);
       return saved;
     });
   }
@@ -601,13 +632,13 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Multi review snapshot exceeds the 32 MB limit");
     }
     return this.enqueueMultiReviewMutation(async () => {
-      if (!(await this.getEnvironment(environmentId))) {
+      if (!(await this.repos.projects.getEnvironment(environmentId))) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
       // Launch is the one Multi Review path that must see every workflow; the
       // lease keeps the scan and the insert one critical section.
-      const stored = await this.loadJson<Record<string, unknown>>(
-        this.multiReviewsFile(),
+      const stored = await this.context.loadJson<Record<string, unknown>>(
+        this.files.multiReviewsFile(),
         () => ({}),
       );
       if (isPersistedMultiReviewWorkflow(stored[workflowId], workflowId))
@@ -628,11 +659,11 @@ export abstract class StorageReviews extends StorageSessions {
         updatedAt: nowIso(),
         revision: 1,
       };
-      this.updateStoreRow(this.multiReviewsFile(), workflowId, () => ({
+      this.context.updateStoreRow(this.files.multiReviewsFile(), workflowId, () => ({
         result: undefined,
         value: saved,
       }));
-      this.announce("multi-review", workflowId);
+      this.context.changes.announce("multi-review", workflowId);
       return saved;
     });
   }
@@ -652,30 +683,34 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Multi review controller lease is invalid");
     }
     return this.enqueueMultiReviewMutation(async () =>
-      this.updateStoreRow<ControllerClaim>(this.multiReviewsFile(), workflowId, (current) => {
-        if (!isPersistedMultiReviewWorkflow(current, workflowId)) {
-          throw new Error(`Multi review workflow not found: ${workflowId}`);
-        }
-        const lease = current.controllerLease;
-        const now = Date.now();
-        const expiry = lease ? Date.parse(lease.expiresAt) : 0;
-        if (lease && lease.ownerId !== ownerId && expiry > now) {
-          return { result: { granted: false, token: "", expiresAt: lease.expiresAt } };
-        }
-        const held = lease?.ownerId === ownerId && expiry > now ? lease : undefined;
-        // A held lease is only rewritten once half of it has run: a lease-only
-        // write changes no workflow content but still moves the store revision
-        // that clients watch.
-        if (held && expiry - now >= leaseMs / 2) {
-          return { result: { granted: true, token: held.token, expiresAt: held.expiresAt } };
-        }
-        const token = held?.token ?? randomUUID();
-        const expiresAt = new Date(now + leaseMs).toISOString();
-        return {
-          result: { granted: true, token, expiresAt },
-          value: { ...current, controllerLease: { ownerId, token, expiresAt } },
-        };
-      }),
+      this.context.updateStoreRow<ControllerClaim>(
+        this.files.multiReviewsFile(),
+        workflowId,
+        (current) => {
+          if (!isPersistedMultiReviewWorkflow(current, workflowId)) {
+            throw new Error(`Multi review workflow not found: ${workflowId}`);
+          }
+          const lease = current.controllerLease;
+          const now = Date.now();
+          const expiry = lease ? Date.parse(lease.expiresAt) : 0;
+          if (lease && lease.ownerId !== ownerId && expiry > now) {
+            return { result: { granted: false, token: "", expiresAt: lease.expiresAt } };
+          }
+          const held = lease?.ownerId === ownerId && expiry > now ? lease : undefined;
+          // A held lease is only rewritten once half of it has run: a lease-only
+          // write changes no workflow content but still moves the store revision
+          // that clients watch.
+          if (held && expiry - now >= leaseMs / 2) {
+            return { result: { granted: true, token: held.token, expiresAt: held.expiresAt } };
+          }
+          const token = held?.token ?? randomUUID();
+          const expiresAt = new Date(now + leaseMs).toISOString();
+          return {
+            result: { granted: true, token, expiresAt },
+            value: { ...current, controllerLease: { ownerId, token, expiresAt } },
+          };
+        },
+      ),
     );
   }
 
@@ -689,7 +724,7 @@ export abstract class StorageReviews extends StorageSessions {
    * made every check two SQLite write transactions queued behind every other
    * Multi Review mutation. Authority stays with the commit, which re-checks
    * the fence and revision inside its own transaction
-   * ({@link StorageReviews.saveMultiReviewWorkflow}). A SQLite read sees only
+   * ({@link ReviewsRepository.saveMultiReviewWorkflow}). A SQLite read sees only
    * committed state, and another controller can take over only an expired
    * lease, which this check already rejects, so racing a takeover answers as
    * a serialized read would. A check no longer waits behind this process's
@@ -713,7 +748,7 @@ export abstract class StorageReviews extends StorageSessions {
     token: string,
   ): Promise<void> {
     await this.enqueueMultiReviewMutation(async () => {
-      this.updateStoreRow(this.multiReviewsFile(), workflowId, (current) => {
+      this.context.updateStoreRow(this.files.multiReviewsFile(), workflowId, (current) => {
         if (
           !isPersistedMultiReviewWorkflow(current, workflowId) ||
           current.controllerLease?.ownerId !== ownerId ||
@@ -729,13 +764,16 @@ export abstract class StorageReviews extends StorageSessions {
 
   async deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
     await this.enqueueMultiReviewMutation(async () => {
-      const deleted = this.updateStoreRow(this.multiReviewsFile(), workflowId, (current) =>
-        current === undefined ? { result: false } : { result: true, delete: true },
+      const deleted = this.context.updateStoreRow(
+        this.files.multiReviewsFile(),
+        workflowId,
+        (current) => (current === undefined ? { result: false } : { result: true, delete: true }),
       );
-      if (deleted) this.announce("multi-review", workflowId, undefined, undefined, true);
+      if (deleted)
+        this.context.changes.announce("multi-review", workflowId, undefined, undefined, true);
       // A previous attempt may have committed the delete before its scrub failed.
-      await this.scrubSensitiveJsonBackups(
-        this.multiReviewsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.multiReviewsFile(),
         (storedId) => storedId !== workflowId,
       );
     });
@@ -743,8 +781,8 @@ export abstract class StorageReviews extends StorageSessions {
 
   async deleteMultiReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
     await this.enqueueMultiReviewMutation(async () => {
-      const stored = await this.loadJson<Record<string, unknown>>(
-        this.multiReviewsFile(),
+      const stored = await this.context.loadJson<Record<string, unknown>>(
+        this.files.multiReviewsFile(),
         () => ({}),
       );
       // Attributed by the stored environment field alone, so a record this
@@ -754,25 +792,28 @@ export abstract class StorageReviews extends StorageSessions {
         .map(([id]) => id);
       if (removed.length === 0) return;
       for (const id of removed) {
-        this.updateStoreRow(this.multiReviewsFile(), id, () => ({
+        this.context.updateStoreRow(this.files.multiReviewsFile(), id, () => ({
           result: undefined,
           delete: true,
         }));
-        this.announce("multi-review", id, undefined, undefined, true);
+        this.context.changes.announce("multi-review", id, undefined, undefined, true);
       }
-      await this.scrubSensitiveJsonBackups(
-        this.multiReviewsFile(),
+      await this.context.scrubSensitiveJsonBackups(
+        this.files.multiReviewsFile(),
         (id, workflow) =>
           isPersistedMultiReviewWorkflow(workflow, id) && workflow.environmentId !== environmentId,
       );
     });
   }
 
-  protected async loadAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
-    const stored = await this.loadJson<unknown>(this.agentInteractionJournalFile(), () => ({
-      version: AGENT_INTERACTION_JOURNAL_VERSION,
-      entries: [],
-    }));
+  async loadAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
+    const stored = await this.context.loadJson<unknown>(
+      this.files.agentInteractionJournalFile(),
+      () => ({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [],
+      }),
+    );
     if (!isAgentInteractionResolutionJournal(stored)) {
       throw new Error("Stored agent interaction resolution journal is invalid");
     }

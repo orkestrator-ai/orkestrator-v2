@@ -16,7 +16,7 @@ export const nodeIdField = z
   .max(200)
   .optional()
   .describe(
-    "Coordinators only: a nodeId from list_nodes, to act on that node's copy of this project. Omit for this node.",
+    "A nodeId from list_nodes: act on that machine (for a coordinator, on that node's copy of this project). Omit for this machine.",
   );
 
 export type JsonRecord = Record<string, unknown>;
@@ -134,3 +134,8 @@ export function readAnnotations() {
     openWorldHint: false,
   };
 }
+
+/** `nodeId` of a list that can also span every machine. */
+export const listNodeIdField = nodeIdField.describe(
+  "A nodeId from list_nodes: list that machine. all: this machine and every node it controls, each item tagged with its nodeId. Omit for this machine.",
+);

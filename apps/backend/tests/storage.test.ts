@@ -25,7 +25,7 @@ import {
   storageFilesContain,
 } from "../src/core/storage-test-support";
 import { openBackendDatabase } from "../src/core/storage-stores";
-import type { StorageDatabase } from "../src/core/storage-database";
+import { storageDatabase } from "../src/core/storage-test-support.js";
 
 const resizeKanbanImageToBuffer = mock(async () => Buffer.from("webp-bytes"));
 const transparentPngBase64 =
@@ -2317,19 +2317,21 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const task = await storage.addKanbanTask("project-1", "Build", "Initial");
-    const updated = await storage.updateKanbanTask(task.id, { title: "Build it" });
+    const task = await storage.kanban.addKanbanTask("project-1", "Build", "Initial");
+    const updated = await storage.kanban.updateKanbanTask(task.id, { title: "Build it" });
     expect(updated.title).toBe("Build it");
-    const commented = await storage.addKanbanComment(task.id, "Looks good");
+    const commented = await storage.kanban.addKanbanComment(task.id, "Looks good");
     const commentId = commented.comments[0]?.id;
     expect(commentId).toBeTruthy();
-    expect((await storage.deleteKanbanComment(task.id, commentId!)).comments).toEqual([]);
-    await expect(storage.addKanbanComment("missing", "x")).rejects.toThrow("Kanban task not found");
-    await expect(storage.deleteKanbanComment(task.id, "missing")).resolves.toMatchObject({
+    expect((await storage.kanban.deleteKanbanComment(task.id, commentId!)).comments).toEqual([]);
+    await expect(storage.kanban.addKanbanComment("missing", "x")).rejects.toThrow(
+      "Kanban task not found",
+    );
+    await expect(storage.kanban.deleteKanbanComment(task.id, "missing")).resolves.toMatchObject({
       comments: [],
     });
-    await storage.deleteKanbanTask(task.id);
-    await expect(storage.updateKanbanTask(task.id, { title: "x" })).rejects.toThrow(
+    await storage.kanban.deleteKanbanTask(task.id);
+    await expect(storage.kanban.updateKanbanTask(task.id, { title: "x" })).rejects.toThrow(
       "Kanban task not found",
     );
   });
@@ -2339,17 +2341,17 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({
+    await expect(storage.kanban.getProjectNotes("project-1")).resolves.toMatchObject({
       projectId: "project-1",
       content: "",
     });
 
-    const first = await storage.saveProjectNotes("project-1", "initial notes");
+    const first = await storage.kanban.saveProjectNotes("project-1", "initial notes");
     expect(first).toMatchObject({ projectId: "project-1", content: "initial notes" });
 
-    const second = await storage.saveProjectNotes("project-1", "updated notes");
+    const second = await storage.kanban.saveProjectNotes("project-1", "updated notes");
     expect(second).toMatchObject({ projectId: "project-1", content: "updated notes" });
-    await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({
+    await expect(storage.kanban.getProjectNotes("project-1")).resolves.toMatchObject({
       content: "updated notes",
     });
   });
@@ -2359,7 +2361,7 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const feature = await storage.createFeaturePlan("project-1");
+    const feature = await storage.kanban.createFeaturePlan("project-1");
     expect(feature).toMatchObject({
       projectId: "project-1",
       title: "new feature",
@@ -2370,7 +2372,7 @@ describe("Electron StorageService", () => {
       content: "Tell me about the new feature",
     });
 
-    const withUserMessage = await storage.appendFeaturePlanMessage(
+    const withUserMessage = await storage.kanban.appendFeaturePlanMessage(
       feature.id,
       "user",
       "Users can save filters.",
@@ -2383,7 +2385,7 @@ describe("Electron StorageService", () => {
     });
 
     const storyId = "story-1";
-    await storage.updateFeaturePlan(feature.id, {
+    await storage.kanban.updateFeaturePlan(feature.id, {
       status: "stories",
       summary: "Users can save and reuse filtered views.",
       stories: [
@@ -2399,7 +2401,7 @@ describe("Electron StorageService", () => {
       ],
     });
 
-    const withStoryChat = await storage.appendFeatureStoryMessage(
+    const withStoryChat = await storage.kanban.appendFeatureStoryMessage(
       feature.id,
       storyId,
       "assistant",
@@ -2418,7 +2420,7 @@ describe("Electron StorageService", () => {
 
     const reloaded = new StorageService(dataDir);
     await reloaded.init();
-    await expect(reloaded.getFeaturePlans("project-1")).resolves.toEqual([
+    await expect(reloaded.kanban.getFeaturePlans("project-1")).resolves.toEqual([
       expect.objectContaining({
         id: feature.id,
         status: "stories",
@@ -2454,10 +2456,10 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const feature = await storage.createFeaturePlan("project-1");
+    const feature = await storage.kanban.createFeaturePlan("project-1");
 
     // id and projectId must not be overwritable through updates.
-    const updated = await storage.updateFeaturePlan(feature.id, {
+    const updated = await storage.kanban.updateFeaturePlan(feature.id, {
       title: "renamed",
       id: "hacked-id",
       projectId: "other-project",
@@ -2466,18 +2468,18 @@ describe("Electron StorageService", () => {
     expect(updated.projectId).toBe("project-1");
     expect(updated.title).toBe("renamed");
 
-    await expect(storage.updateFeaturePlan("missing", { title: "x" })).rejects.toThrow(
+    await expect(storage.kanban.updateFeaturePlan("missing", { title: "x" })).rejects.toThrow(
       /not found/i,
     );
-    await expect(storage.appendFeaturePlanMessage("missing", "user", "hi")).rejects.toThrow(
+    await expect(storage.kanban.appendFeaturePlanMessage("missing", "user", "hi")).rejects.toThrow(
       /not found/i,
     );
     await expect(
-      storage.appendFeatureStoryMessage(feature.id, "missing-story", "user", "hi"),
+      storage.kanban.appendFeatureStoryMessage(feature.id, "missing-story", "user", "hi"),
     ).rejects.toThrow(/not found/i);
 
     // A failed mutation must not corrupt the persisted plan.
-    await expect(storage.getFeaturePlans("project-1")).resolves.toEqual([
+    await expect(storage.kanban.getFeaturePlans("project-1")).resolves.toEqual([
       expect.objectContaining({ id: feature.id, projectId: "project-1", title: "renamed" }),
     ]);
   });
@@ -2487,8 +2489,8 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const feature = await storage.createFeaturePlan("project-1");
-    await storage.updateFeaturePlan(feature.id, {
+    const feature = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.updateFeaturePlan(feature.id, {
       stories: [
         {
           id: "story-1",
@@ -2506,11 +2508,11 @@ describe("Electron StorageService", () => {
     // read-modify-write both would clobber each other; the mutation queue must
     // preserve both.
     await Promise.all([
-      storage.appendFeaturePlanMessage(feature.id, "user", "feature note"),
-      storage.appendFeatureStoryMessage(feature.id, "story-1", "user", "story note"),
+      storage.kanban.appendFeaturePlanMessage(feature.id, "user", "feature note"),
+      storage.kanban.appendFeatureStoryMessage(feature.id, "story-1", "user", "story note"),
     ]);
 
-    const [reloaded] = await storage.getFeaturePlans("project-1");
+    const [reloaded] = await storage.kanban.getFeaturePlans("project-1");
     expect(reloaded?.messages.some((message) => message.content === "feature note")).toBe(true);
     expect(reloaded?.stories[0]?.messages.some((message) => message.content === "story note")).toBe(
       true,
@@ -2522,9 +2524,9 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    await expect(storage.getLinearAuth()).resolves.toBeNull();
+    await expect(storage.kanban.getLinearAuth()).resolves.toBeNull();
 
-    const auth = await storage.saveLinearAuth("lin_api_secret", {
+    const auth = await storage.kanban.saveLinearAuth("lin_api_secret", {
       id: "viewer-1",
       name: "Ada",
       email: "ada@example.com",
@@ -2533,7 +2535,7 @@ describe("Electron StorageService", () => {
       apiKey: "lin_api_secret",
       viewer: { id: "viewer-1", name: "Ada" },
     });
-    await expect(storage.getLinearAuth()).resolves.toMatchObject({
+    await expect(storage.kanban.getLinearAuth()).resolves.toMatchObject({
       apiKey: "lin_api_secret",
       viewer: { email: "ada@example.com" },
     });
@@ -2543,7 +2545,7 @@ describe("Electron StorageService", () => {
       apiKey: "lin_api_secret",
     });
 
-    await storage.saveLinearAuth("lin_api_reconnected", {
+    await storage.kanban.saveLinearAuth("lin_api_reconnected", {
       id: "viewer-2",
       name: "Grace",
     });
@@ -2555,7 +2557,7 @@ describe("Electron StorageService", () => {
       [],
     );
 
-    const posted = await storage.saveLinearCompletionComment({
+    const posted = await storage.kanban.saveLinearCompletionComment({
       pipelineId: "pipeline-1",
       issueId: "issue-1",
       status: "posted",
@@ -2567,12 +2569,12 @@ describe("Electron StorageService", () => {
       status: "posted",
       commentId: "comment-1",
     });
-    await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
+    await expect(storage.kanban.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
       issueId: "issue-1",
       commentId: "comment-1",
     });
 
-    const failed = await storage.saveLinearCompletionComment({
+    const failed = await storage.kanban.saveLinearCompletionComment({
       pipelineId: "pipeline-1",
       issueId: "issue-1",
       status: "failed",
@@ -2583,13 +2585,13 @@ describe("Electron StorageService", () => {
       status: "failed",
       error: "Linear API unavailable",
     });
-    await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
+    await expect(storage.kanban.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
       status: "failed",
       error: "Linear API unavailable",
     });
 
-    await storage.clearLinearAuth();
-    await expect(storage.getLinearAuth()).resolves.toBeNull();
+    await storage.kanban.clearLinearAuth();
+    await expect(storage.kanban.getLinearAuth()).resolves.toBeNull();
   });
 
   test("persists GitHub completion comment outcomes by pipeline", async () => {
@@ -2597,8 +2599,8 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toBeNull();
-    await storage.saveGitHubCompletionComment({
+    await expect(storage.kanban.getGitHubCompletionComment("pipeline-github")).resolves.toBeNull();
+    await storage.kanban.saveGitHubCompletionComment({
       pipelineId: "pipeline-github",
       repositoryOwner: "acme",
       repositoryName: "widget",
@@ -2608,7 +2610,9 @@ describe("Electron StorageService", () => {
       postedAt: "2026-07-24T12:00:00.000Z",
     });
 
-    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toMatchObject({
+    await expect(
+      storage.kanban.getGitHubCompletionComment("pipeline-github"),
+    ).resolves.toMatchObject({
       repositoryOwner: "acme",
       repositoryName: "widget",
       issueNumber: 42,
@@ -2616,7 +2620,7 @@ describe("Electron StorageService", () => {
       commentId: "9001",
     });
 
-    await storage.saveGitHubCompletionComment({
+    await storage.kanban.saveGitHubCompletionComment({
       pipelineId: "pipeline-github",
       repositoryOwner: "acme",
       repositoryName: "widget",
@@ -2624,7 +2628,9 @@ describe("Electron StorageService", () => {
       status: "failed",
       error: "GitHub API unavailable",
     });
-    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toMatchObject({
+    await expect(
+      storage.kanban.getGitHubCompletionComment("pipeline-github"),
+    ).resolves.toMatchObject({
       status: "failed",
       error: "GitHub API unavailable",
     });
@@ -2640,7 +2646,7 @@ describe("Electron StorageService", () => {
     await Promise.all(
       Array.from({ length: 20 }, (_, index) => {
         const storage = index % 2 === 0 ? first : second;
-        return storage.saveGitHubCompletionComment({
+        return storage.kanban.saveGitHubCompletionComment({
           pipelineId: `pipeline-${index}`,
           repositoryOwner: "acme",
           repositoryName: "widget",
@@ -2659,11 +2665,11 @@ describe("Electron StorageService", () => {
     )!;
     expect(records).toHaveLength(20);
     expect(new Set(records.map((record) => record.pipelineId)).size).toBe(20);
-    await expect(first.getGitHubCompletionComment("pipeline-0")).resolves.toMatchObject({
+    await expect(first.kanban.getGitHubCompletionComment("pipeline-0")).resolves.toMatchObject({
       status: "failed",
       error: "failure-0",
     });
-    await expect(second.getGitHubCompletionComment("pipeline-19")).resolves.toMatchObject({
+    await expect(second.kanban.getGitHubCompletionComment("pipeline-19")).resolves.toMatchObject({
       status: "posted",
       commentId: "9019",
     });
@@ -2686,7 +2692,7 @@ describe("Electron StorageService", () => {
     });
     const order: string[] = [];
 
-    const firstRun = first.withGitHubCompletionCommentLock("pipeline-shared", async () => {
+    const firstRun = first.kanban.withGitHubCompletionCommentLock("pipeline-shared", async () => {
       order.push("first-start");
       markFirstEntered();
       await firstGate;
@@ -2694,7 +2700,7 @@ describe("Electron StorageService", () => {
     });
     await firstEntered;
 
-    const secondRun = second.withGitHubCompletionCommentLock("pipeline-shared", async () => {
+    const secondRun = second.kanban.withGitHubCompletionCommentLock("pipeline-shared", async () => {
       order.push("second-start");
       order.push("second-end");
     });
@@ -2717,7 +2723,7 @@ describe("Electron StorageService", () => {
     expect(leaseHeld(dataDir, lease)).toBe(true);
 
     await expect(
-      storage.withGitHubCompletionCommentLock(pipelineId, async () => "recovered"),
+      storage.kanban.withGitHubCompletionCommentLock(pipelineId, async () => "recovered"),
     ).resolves.toBe("recovered");
     expect(leaseHeld(dataDir, lease)).toBe(false);
   });
@@ -2727,9 +2733,9 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
     seedUnreadableStore(dataDir, "github-completion-comments.json");
-    await expect(storage.getGitHubCompletionComment("missing")).resolves.toBeNull();
+    await expect(storage.kanban.getGitHubCompletionComment("missing")).resolves.toBeNull();
 
-    await storage.saveGitHubCompletionComment({
+    await storage.kanban.saveGitHubCompletionComment({
       pipelineId: "pipeline-recovered",
       repositoryOwner: "acme",
       repositoryName: "widget",
@@ -2737,7 +2743,7 @@ describe("Electron StorageService", () => {
       status: "failed",
       error: "first attempt failed",
     });
-    await storage.saveGitHubCompletionComment({
+    await storage.kanban.saveGitHubCompletionComment({
       pipelineId: "pipeline-recovered",
       repositoryOwner: "acme",
       repositoryName: "widget",
@@ -2748,7 +2754,9 @@ describe("Electron StorageService", () => {
     });
 
     // The first write replaced the unreadable store; the latest outcome wins.
-    await expect(storage.getGitHubCompletionComment("pipeline-recovered")).resolves.toMatchObject({
+    await expect(
+      storage.kanban.getGitHubCompletionComment("pipeline-recovered"),
+    ).resolves.toMatchObject({
       status: "posted",
       commentId: "9001",
     });
@@ -2758,25 +2766,29 @@ describe("Electron StorageService", () => {
 
     // A store that becomes unreadable later still reads leniently as absent.
     seedUnreadableStore(dataDir, "github-completion-comments.json", "{truncated");
-    await expect(storage.getGitHubCompletionComment("pipeline-recovered")).resolves.toBeNull();
+    await expect(
+      storage.kanban.getGitHubCompletionComment("pipeline-recovered"),
+    ).resolves.toBeNull();
   });
 
   test("leaves no trace of a Linear secret when its write fails", async () => {
     const dataDir = await createTempDir("ork-storage-linear-failed-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const database = (storage as unknown as { database: StorageDatabase }).database;
+    const database = storageDatabase(storage);
     const writeStore = spyOn(database, "writeStoreInTransaction").mockImplementationOnce(() => {
       throw new Error("disk full");
     });
 
     try {
-      await expect(storage.saveLinearAuth("lin_api_failed_secret")).rejects.toThrow("disk full");
+      await expect(storage.kanban.saveLinearAuth("lin_api_failed_secret")).rejects.toThrow(
+        "disk full",
+      );
     } finally {
       writeStore.mockRestore();
     }
 
-    await expect(storage.getLinearAuth()).resolves.toBeNull();
+    await expect(storage.kanban.getLinearAuth()).resolves.toBeNull();
     expect(hasStore(dataDir, "linear-auth.json")).toBe(false);
     expect(storageFilesContain(dataDir, "lin_api_failed_secret")).toBe(false);
     expect((await fs.readdir(dataDir)).filter((file) => file.includes("linear-auth"))).toEqual([]);
@@ -2787,31 +2799,35 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const task = await storage.addKanbanTask("project-1", "Build thing", "Details");
-    const withImage = await storage.addKanbanImage(task.id, "pixel.png", transparentPngBase64);
+    const task = await storage.kanban.addKanbanTask("project-1", "Build thing", "Details");
+    const withImage = await storage.kanban.addKanbanImage(
+      task.id,
+      "pixel.png",
+      transparentPngBase64,
+    );
     const image = withImage.images[0];
     expect(image).toMatchObject({ filename: "pixel.png" });
 
-    const encodedWebp = await storage.getKanbanImageData(image!.id);
+    const encodedWebp = await storage.kanban.getKanbanImageData(image!.id);
     expect(encodedWebp.length).toBeGreaterThan(0);
 
-    const withoutImage = await storage.deleteKanbanImage(task.id, image!.id);
+    const withoutImage = await storage.kanban.deleteKanbanImage(task.id, image!.id);
     expect(withoutImage.images).toHaveLength(0);
-    await expect(storage.getKanbanImageData(image!.id)).rejects.toThrow();
+    await expect(storage.kanban.getKanbanImageData(image!.id)).rejects.toThrow();
   });
 
   test("does not persist kanban image metadata when resizing fails", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-resize-failed-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const task = await storage.addKanbanTask("project-1", "Build thing", "Details");
+    const task = await storage.kanban.addKanbanTask("project-1", "Build thing", "Details");
     resizeKanbanImageToBuffer.mockRejectedValueOnce(new Error("image resize failed"));
 
     await expect(
-      storage.addKanbanImage(task.id, "pixel.png", transparentPngBase64),
+      storage.kanban.addKanbanImage(task.id, "pixel.png", transparentPngBase64),
     ).rejects.toThrow("image resize failed");
 
-    expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
+    expect((await storage.kanban.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
     await expect(fs.readdir(path.join(dataDir, "kanban-images"))).rejects.toThrow();
   });
 

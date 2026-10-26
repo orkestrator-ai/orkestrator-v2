@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { spawnCommand } from "./shell.js";
+import { spawnParentBoundCommand } from "./shell.js";
 
 /**
  * Out-of-memory kills of this installation's containers, from Docker's event
@@ -18,7 +18,7 @@ const MAX_TRACKED = 256;
 const RESTART_MIN_MS = 1_000;
 const RESTART_MAX_MS = 60_000;
 
-type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnCommand>;
+type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnParentBoundCommand>;
 
 export interface OomCount {
   count: number;
@@ -27,7 +27,7 @@ export interface OomCount {
 
 export class OomEventWatcher {
   private readonly counts = new Map<string, OomCount>();
-  private child: ReturnType<typeof spawnCommand> | null = null;
+  private child: ReturnType<typeof spawnParentBoundCommand> | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private restartDelay = RESTART_MIN_MS;
   private stopped = false;
@@ -39,7 +39,9 @@ export class OomEventWatcher {
 
   constructor(
     private readonly owner: string,
-    private readonly spawn: Spawn = spawnCommand,
+    // Parent-bound: a backend killed without its shutdown path would otherwise
+    // leave the follower running forever, since it only writes on an OOM.
+    private readonly spawn: Spawn = spawnParentBoundCommand,
   ) {}
 
   start(): void {
@@ -103,7 +105,7 @@ export class OomEventWatcher {
     }
   }
 
-  private exited(child: ReturnType<typeof spawnCommand>): void {
+  private exited(child: ReturnType<typeof spawnParentBoundCommand>): void {
     if (this.child !== child) return;
     this.child = null;
     // Unknown until the follower is back; it then replays the gap.

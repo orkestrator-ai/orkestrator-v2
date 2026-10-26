@@ -20,6 +20,9 @@ import {
   selectedTabIsSetupHandoffSource,
   suppressLateSetupTabAdditions,
 } from "./storage-shared.js";
+import type { StorageContext } from "./storage-context.js";
+import type { StorageFiles } from "./storage-files.js";
+import type { StorageRepositories } from "./storage-repositories.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -82,8 +85,6 @@ type GitHubCompletionComment = shared.GitHubCompletionComment;
 type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
-
-import { StorageConfig } from "./storage-config.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -150,7 +151,17 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export abstract class StorageSessions extends StorageConfig {
+export class SessionsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  enqueuePaneLayoutMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.paneLayoutsFile(), "pane layout storage", operation);
+  }
+
   private usageHistoryStoreInstance: UsageHistoryStore | null = null;
 
   /**
@@ -158,8 +169,10 @@ export abstract class StorageSessions extends StorageConfig {
    * Constructed lazily so an installation that never runs an agent never
    * creates it.
    */
-  protected usageHistoryStore(): UsageHistoryStore {
-    this.usageHistoryStoreInstance ??= new UsageHistoryStore({ database: () => this.database });
+  private usageHistoryStore(): UsageHistoryStore {
+    this.usageHistoryStoreInstance ??= new UsageHistoryStore({
+      database: () => this.context.database,
+    });
     return this.usageHistoryStoreInstance;
   }
 
@@ -177,16 +190,6 @@ export abstract class StorageSessions extends StorageConfig {
     return this.usageHistoryStore().report(query);
   }
 
-  /**
-   * Forgets one environment's recorded usage. Deleting an environment does
-   * not call this: a usage report of the last ninety days must not change
-   * because an environment was removed today, and the rows hold no
-   * conversation content.
-   */
-  deleteAgentUsageHistoryByEnvironment(environmentId: string): number {
-    return this.usageHistoryStore().deleteByEnvironment(environmentId);
-  }
-
   async createSession(
     environmentId: string,
     containerId: string,
@@ -194,8 +197,8 @@ export abstract class StorageSessions extends StorageConfig {
     sessionType: SessionType,
   ): Promise<Session> {
     const session = createSessionObject(environmentId, containerId, tabId, sessionType);
-    const evicted = this.updateStore(
-      this.sessionsFile(),
+    const evicted = this.context.updateStore(
+      this.files.sessionsFile(),
       (): Session[] => [],
       (sessions) => {
         const envSessions = sessions.filter(
@@ -216,14 +219,14 @@ export abstract class StorageSessions extends StorageConfig {
         return oldest;
       },
     );
-    if (evicted) await this.deleteSessionBuffer(evicted.id);
-    this.announce("session", environmentId);
+    if (evicted) await this.repos.drafts.deleteSessionBuffer(evicted.id);
+    this.context.changes.announce("session", environmentId);
     return session;
   }
 
   async getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
-    const layouts = await this.loadJsonCached<Record<string, PersistedPaneLayout>>(
-      this.paneLayoutsFile(),
+    const layouts = await this.context.loadJsonCached<Record<string, PersistedPaneLayout>>(
+      this.files.paneLayoutsFile(),
       () => ({}),
     );
     return layouts[environmentId] ?? null;
@@ -235,8 +238,8 @@ export abstract class StorageSessions extends StorageConfig {
    */
   async removeMultiReviewTabs(environmentId: string, workflowId: string): Promise<string[]> {
     return this.enqueuePaneLayoutMutation(async () => {
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[environmentId];
@@ -272,8 +275,8 @@ export abstract class StorageSessions extends StorageConfig {
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
       return removed;
     });
   }
@@ -289,7 +292,7 @@ export abstract class StorageSessions extends StorageConfig {
     layouts: Record<string, PersistedPaneLayout>;
   }> {
     try {
-      const stored = this.loadStoreStrict<unknown>(this.paneLayoutsFile());
+      const stored = this.context.loadStoreStrict<unknown>(this.files.paneLayoutsFile());
       if (!stored) return { available: true, layouts: {} };
       if (!isRecord(stored.value)) return { available: false, layouts: {} };
       return {
@@ -313,7 +316,7 @@ export abstract class StorageSessions extends StorageConfig {
     assertPaneLayoutRootWithinBounds(layout.root);
 
     return this.enqueuePaneLayoutMutation(async () => {
-      const environment = await this.getEnvironment(environmentId);
+      const environment = await this.repos.projects.getEnvironment(environmentId);
       if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
@@ -324,8 +327,8 @@ export abstract class StorageSessions extends StorageConfig {
       // the same renderer at save_pane_layout instead.
       assertPaneLayoutGeneration(environment, layout.containerId, "write");
 
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[environmentId];
@@ -346,8 +349,8 @@ export abstract class StorageSessions extends StorageConfig {
       // Selection changes make this a high-churn record. Keep one current
       // recovery snapshot without rotating five near-identical historical
       // backups for every focus change.
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
       return saved;
     });
   }
@@ -368,7 +371,7 @@ export abstract class StorageSessions extends StorageConfig {
     assertPaneLayoutRootWithinBounds(desired.root);
     assertPaneLayoutSelectionIntentWithinBounds(selectionIntent);
     return this.enqueuePaneLayoutMutation(async () => {
-      const environment = await this.getEnvironment(environmentId);
+      const environment = await this.repos.projects.getEnvironment(environmentId);
       if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
@@ -377,8 +380,8 @@ export abstract class StorageSessions extends StorageConfig {
       // which resurrects the tabs that ancestor carried.
       assertPaneLayoutGeneration(environment, desired.containerId, "intent");
       assertPaneLayoutGeneration(environment, base.containerId, "intent");
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[environmentId];
@@ -414,8 +417,8 @@ export abstract class StorageSessions extends StorageConfig {
         revision: (previous?.revision ?? 0) + 1,
       };
       layouts[environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
       return saved;
     });
   }
@@ -428,10 +431,10 @@ export abstract class StorageSessions extends StorageConfig {
     isLocal: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
-      const environment = await this.getEnvironment(input.environmentId);
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
       if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[input.environmentId];
@@ -509,8 +512,8 @@ export abstract class StorageSessions extends StorageConfig {
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", input.environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
       return saved;
     });
   }
@@ -534,10 +537,10 @@ export abstract class StorageSessions extends StorageConfig {
     activate?: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
-      const environment = await this.getEnvironment(input.environmentId);
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
       if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[input.environmentId];
@@ -609,8 +612,8 @@ export abstract class StorageSessions extends StorageConfig {
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", input.environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
       return saved;
     });
   }
@@ -626,10 +629,10 @@ export abstract class StorageSessions extends StorageConfig {
     existingOnly?: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
-      const environment = await this.getEnvironment(input.environmentId);
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
       if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[input.environmentId];
@@ -735,8 +738,8 @@ export abstract class StorageSessions extends StorageConfig {
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", input.environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
       return saved;
     });
   }
@@ -751,8 +754,8 @@ export abstract class StorageSessions extends StorageConfig {
    */
   async clearBackendTerminalSessionIds(environmentId?: string): Promise<number> {
     return this.enqueuePaneLayoutMutation(async () => {
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const changedEnvironmentIds: string[] = [];
@@ -782,9 +785,9 @@ export abstract class StorageSessions extends StorageConfig {
       }
 
       if (changedEnvironmentIds.length === 0) return 0;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
       for (const environmentId of changedEnvironmentIds) {
-        this.announce("pane-layout", environmentId);
+        this.context.changes.announce("pane-layout", environmentId);
       }
       return cleared;
     });
@@ -841,10 +844,10 @@ export abstract class StorageSessions extends StorageConfig {
     initialFastMode?: boolean;
   }): Promise<PersistedPaneLayout | null> {
     return this.enqueuePaneLayoutMutation(async () => {
-      const environment = await this.getEnvironment(input.environmentId);
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
       if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
-      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
-        this.paneLayoutsFile(),
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[input.environmentId];
@@ -1014,8 +1017,8 @@ export abstract class StorageSessions extends StorageConfig {
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
-      this.announce("pane-layout", input.environmentId);
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
       return saved;
     });
   }

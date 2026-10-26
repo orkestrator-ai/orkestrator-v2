@@ -217,7 +217,7 @@ describe("agent mail between many actors", () => {
     // The worker is still on its first request when the coordinator adds to it.
     const followUp = await world.delegate(coordinator, worker, "also add tests");
     expect(followUp.placement).toBe("pending-inject");
-    expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
 
     // Its first turn ends without having read the follow-up: no wake yet.
     await world.finishTurn(worker);

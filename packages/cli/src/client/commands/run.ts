@@ -63,6 +63,7 @@ export const runCommands: CommandSpec[] = [
           capabilities.backend.installationId,
           action,
           requestId,
+          session.node,
         );
         namespace = local?.namespace;
       }
@@ -284,10 +285,11 @@ export const runCommands: CommandSpec[] = [
         action: "run.receipts",
         result: { items: receipts },
         human: table(
-          ["REQUEST", "ACTION", "OPERATION", "STATE", "UPDATED"],
+          ["REQUEST", "ACTION", "NODE", "OPERATION", "STATE", "UPDATED"],
           receipts.map((receipt) => [
             receipt.requestId,
             receipt.action,
+            receipt.node ?? "(connected node)",
             receipt.operationId ?? "(no response)",
             receipt.state ?? "-",
             receipt.updatedAt,

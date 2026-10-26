@@ -126,6 +126,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 let capturedMenuItems: Array<{ id: string }> = [];
+let capturedDefaultSection: string | undefined;
 
 mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
   FullscreenSettingsLayout: ({
@@ -133,6 +134,7 @@ mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
     children,
     headerActions,
     menuItems,
+    defaultSection,
   }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
@@ -140,8 +142,10 @@ mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
     menuItems: unknown[];
     children: (section: string) => React.ReactNode;
     headerActions?: React.ReactNode;
+    defaultSection?: string;
   }) => {
     capturedMenuItems = menuItems as Array<{ id: string }>;
+    capturedDefaultSection = defaultSection;
     if (!open) return null;
     return (
       <div data-testid="settings-layout">
@@ -296,6 +300,22 @@ describe("EnvironmentSettingsDialog", () => {
         agentSettings: { platforms: { codex: { mode: "terminal" } } },
       }),
     );
+  });
+
+  test("opens on the section it was asked for", () => {
+    const dialog = (initialSection?: string) => (
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => undefined}
+        environment={makeEnvironment({ status: "running", containerId: "container-1" })}
+        onUpdate={() => undefined}
+        initialSection={initialSection}
+      />
+    );
+    const { rerender } = render(dialog("container"));
+    expect(capturedDefaultSection).toBe("container");
+    rerender(dialog());
+    expect(capturedDefaultSection).toBeUndefined();
   });
 
   test("offers a tab per enabled platform, in platform order", () => {

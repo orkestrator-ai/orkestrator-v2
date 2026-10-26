@@ -145,6 +145,12 @@ orkestrator environment exec "$ENV" --wait -- bun test
   pass `--literal` to send plain text. `session commands` and `session
   command` list and run slash commands by ID. `--enqueue` queues a prompt
   behind a busy session instead of refusing it.
+- `review launch|list|get|open|address|cancel` drives Multi Review, and `pr
+  create` / `pr resolve` open the Create PR and Resolve Conflicts agent tabs
+  (runs you can `--wait` on; neither merges).
+- Connected to a command node, `--node NODE_ID` runs any command on one of its
+  leaf nodes (`orkestrator node list`); `--node all` lists projects,
+  environments or attention across every node, tagged by node.
 - `orkestrator completion bash|zsh|fish` prints a shell completion script.
 - A timeout or Ctrl+C only stops observing. Resume with `orkestrator run wait
   OP`; recover a lost response with `orkestrator run get --request-id KEY

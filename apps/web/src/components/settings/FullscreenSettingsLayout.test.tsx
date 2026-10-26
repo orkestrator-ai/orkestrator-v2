@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useLayoutEffect } from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { FullscreenSettingsLayout, SettingsHeaderActions } from "./FullscreenSettingsLayout";
 import {
   DropdownMenu,
@@ -637,25 +639,115 @@ describe("FullscreenSettingsLayout", () => {
     const opener = document.createElement("button");
     const elsewhere = document.createElement("button");
     document.body.append(opener, elsewhere);
+    // Another owner moves focus in the commit that closes the layout.
+    function FocusElsewhereOnClose({ open }: { open: boolean }) {
+      useLayoutEffect(() => {
+        if (!open) elsewhere.focus();
+      }, [open]);
+      return null;
+    }
     const view = (open: boolean) => (
-      <FullscreenSettingsLayout
-        open={open}
-        onOpenChange={() => undefined}
-        title="Settings"
-        menuItems={menuItems}
-      >
-        {() => null}
-      </FullscreenSettingsLayout>
+      <>
+        <FullscreenSettingsLayout
+          open={open}
+          onOpenChange={() => undefined}
+          title="Settings"
+          menuItems={menuItems}
+        >
+          {() => null}
+        </FullscreenSettingsLayout>
+        <FocusElsewhereOnClose open={open} />
+      </>
     );
     try {
       opener.focus();
       const { rerender } = render(view(true));
-      elsewhere.focus();
       rerender(view(false));
       expect(document.activeElement).toBe(elsewhere);
     } finally {
       opener.remove();
       elsewhere.remove();
+    }
+  });
+
+  test("keeps Tab and Shift+Tab inside the layer", () => {
+    render(
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
+        {() => <button type="button">Last control</button>}
+      </FullscreenSettingsLayout>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    const first = screen.getByRole("button", { name: /General/ });
+    const last = screen.getByRole("button", { name: "Last control" });
+
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  test("pulls focus back when it moves to the page underneath", () => {
+    const underneath = document.createElement("button");
+    document.body.append(underneath);
+    try {
+      render(
+        <FullscreenSettingsLayout
+          open
+          onOpenChange={() => undefined}
+          title="Settings"
+          menuItems={menuItems}
+        >
+          {() => <button type="button">Inside</button>}
+        </FullscreenSettingsLayout>,
+      );
+      const inside = screen.getByRole("button", { name: "Inside" });
+      inside.focus();
+
+      underneath.focus();
+
+      expect(document.activeElement).toBe(inside);
+    } finally {
+      underneath.remove();
+    }
+  });
+
+  test("lets a select opened inside it take focus, then traps again once it closes", async () => {
+    const underneath = document.createElement("button");
+    document.body.append(underneath);
+    try {
+      render(
+        <FullscreenSettingsLayout
+          open
+          onOpenChange={() => undefined}
+          title="Settings"
+          menuItems={menuItems}
+        >
+          {() => <button type="button">Inside</button>}
+        </FullscreenSettingsLayout>,
+      );
+      const picker = screen.getByRole("combobox", { name: "Settings section" });
+      fireEvent.keyDown(picker, { key: "Enter" });
+      const listbox = await screen.findByRole("listbox");
+      // The select's own focus scope pauses the layer's trap while it is open,
+      // so focus can sit in the select's portal outside the layer.
+      await waitFor(() => expect(listbox.contains(document.activeElement)).toBe(true));
+      fireEvent.click(screen.getByRole("option", { name: /Network/ }));
+      await waitFor(() => expectDomAbsent(screen.queryByRole("listbox")));
+
+      const inside = screen.getByRole("button", { name: "Inside" });
+      inside.focus();
+      underneath.focus();
+      expect(document.activeElement).toBe(inside);
+    } finally {
+      underneath.remove();
     }
   });
 });

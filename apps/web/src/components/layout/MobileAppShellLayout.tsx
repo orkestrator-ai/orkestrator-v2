@@ -78,6 +78,8 @@ export function MobileAppShellLayout({
   const restoreSidebarFocusRef = useRef(false);
   const restoreToolsFocusRef = useRef(false);
   const restoreFocusAfterAppDialogRef = useRef(false);
+  /** Bumped when a drawer-requested dialog closes; the trigger takes focus after that commit. */
+  const [appDialogFocusReturn, setAppDialogFocusReturn] = useState(0);
   const titleUsesNativeDragRegion = usesNativeWindowDragRegion();
 
   const handleSidebarOpenChange = (open: boolean) => {
@@ -120,7 +122,9 @@ export function MobileAppShellLayout({
   // the drawer. The drawer gives way to it: left open, it would keep the
   // dialog behind its modal layer. The dialog takes focus as it opens, so the
   // closing drawer must not pull focus back to its trigger; the trigger gets it
-  // once the dialog closes, standing in for the row that opened it.
+  // once the dialog closes, standing in for the row that opened it. It waits
+  // for the commit that unmounts the dialog: until then the dialog's focus
+  // trap would pull focus straight back into it.
   useEffect(
     () =>
       useAppDialogStore.subscribe((state, previous) => {
@@ -131,11 +135,15 @@ export function MobileAppShellLayout({
           setSidebarOpen(false);
         } else if (!state.request && previous.request && restoreFocusAfterAppDialogRef.current) {
           restoreFocusAfterAppDialogRef.current = false;
-          sidebarTriggerRef.current?.focus();
+          setAppDialogFocusReturn((count) => count + 1);
         }
       }),
     [],
   );
+
+  useEffect(() => {
+    if (appDialogFocusReturn > 0) sidebarTriggerRef.current?.focus();
+  }, [appDialogFocusReturn]);
 
   // Realm dialogs live in another document and never update the local dialog
   // store. Yield on each request even when local selection was already empty.

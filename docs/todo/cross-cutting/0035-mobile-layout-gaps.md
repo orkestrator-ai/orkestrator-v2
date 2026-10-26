@@ -1,6 +1,7 @@
 # Mobile layout gaps
 
-Checked against `main` at `9906db30` (2026-10-16).
+Checked against `main` at `9906db30` (2026-10-16); code items finished on
+2026-10-26 against `93018933`.
 
 Below 768 px the renderer switches to a phone layout: a projects drawer instead
 of the sidebar, and a pane switcher instead of resize handles. A window can
@@ -9,8 +10,9 @@ rotates or when split-screen starts. Crossing it must not throw away UI state,
 and every action has to stay reachable in the narrow layout. #988 fixed this for
 the app shell, stable per-pane hosts fixed it for split panes, and an app-level
 dialog host fixed environment settings opened from the projects drawer, and
-panes the mobile switcher hides now stay laid out. What remains is two small
-settings follow-ups and real-device qualification.
+panes the mobile switcher hides now stay laid out. The two settings follow-ups
+are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
+`moveBefore`. What remains is a real iOS device or simulator run.
 
 ## Current state
 
@@ -111,20 +113,39 @@ settings follow-ups and real-device qualification.
     trigger, standing in for the unmounted row, once the dialog closes.
   - `FullscreenSettingsLayout` takes focus when it opens and returns it to its
     opener when it closes, unless something else has placed focus by then.
+    While open it traps focus: a Radix `FocusScope` (`trapped`, `loop`) keeps
+    Tab and Shift+Tab inside the layer and pulls back focus that moves to the
+    page underneath. Radix layers opened from inside it (selects, menus,
+    dialogs) pause the trap while they are open, because they share Radix's
+    focus-scope stack.
+  - Because of that trap, the drawer gives its trigger focus in an effect
+    after the commit that unmounts the dialog, not from the store callback.
+    Focused from the callback, the trigger lost focus straight back to the
+    still-mounted dialog, and then to `body` when the dialog unmounted.
   - The drawer backdrop no longer has its own click handler. Radix closes the
     drawer on a press outside it, and only while the drawer is the top layer.
-  - The ActionBar "Environment settings" button still keeps its own
-    `envSettingsEnvironmentId` state and dialog (`ActionBar.view.tsx`). It
-    lives outside the drawer and works; see the follow-ups.
-  - Covered by `AppDialogHost.test.tsx`, `MobileAppShellLayout.test.tsx` (the
+  - The ActionBar "Environment settings" button records the same request
+    (`openEnvironmentSettings` in `useActionBarController.ts`), so
+    `AppDialogHost` is the only renderer of the dialog opened from the
+    drawer or the toolbar. `ServiceBrowserTab` still renders its own copy
+    from a browser tab's error state; it is not in the drawer.
+  - Covered by `AppDialogHost.test.tsx` (including a background rename of
+    the requested environment and restart through the backend),
+    `ActionBar.test.tsx` (the toolbar button records the request and renders
+    no dialog of its own), `MobileAppShellLayout.test.tsx` (the
     drawer gives way to a requested dialog; a click on the backdrop that a
-    press inside the drawer began does not close it),
+    press inside the drawer began does not close it; focus returns to the
+    trigger past the real settings layer's trap),
     `tests/unit/components/EnvironmentItem.test.tsx` and
     `HierarchicalSidebar.test.tsx`, and the browser specs
     `e2e/EnvironmentSettingsDrawer.spec.ts` (touch taps and the keyboard
     through the drawer into an interactive settings dialog, focus on the
     drawer trigger after it closes, then reopen the drawer),
-    `FullscreenSettingsLayout.test.tsx` (focus in and back out) and
+    `FullscreenSettingsLayout.test.tsx` (focus in and back out, Tab and
+    Shift+Tab wrap, focus pulled back from the page underneath, a select
+    inside pausing the trap),
+    `e2e/FullscreenSettingsLayout.spec.ts` (thirty Tab and thirty Shift+Tab
+    presses in a real browser never reach a button on the page underneath) and
     `e2e/MobileAppShellLayout.spec.ts` (tapping the backdrop closes the drawer
     and returns focus).
   - **Before the fix, in `mobile-chromium` (390 × 844):** a touch tap on a
@@ -141,14 +162,29 @@ settings follow-ups and real-device qualification.
 
 ### Code
 
-1. **Open the ActionBar's environment settings through `AppDialogHost`.** The
-   ActionBar still holds `envSettingsEnvironmentId` and renders its own copy
-   of the dialog (`useActionBarController.ts`, `ActionBar.view.tsx`). Moving
-   it onto `useAppDialogStore` leaves one host for the dialog. Its tests in
-   `ActionBar.test.tsx` mock the dialog and would follow it to the host.
-2. **Trap focus in fullscreen settings.** `FullscreenSettingsLayout` now
-   takes focus and gives it back, but Tab can still leave it for the page
-   underneath once it reaches its last control.
+1. ~~**Open the ActionBar's environment settings through `AppDialogHost`.**~~
+   Done 2026-10-26. `useActionBarController` no longer holds
+   `envSettingsEnvironmentId`, the pinned environment or the effect that
+   dropped it. The button calls `openEnvironmentSettings`, which records
+   `{ kind: "environment-settings", environmentId }` in `useAppDialogStore`,
+   and `ActionBar.view.tsx` no longer renders the dialog. The ActionBar tests
+   that drove the mocked dialog (pinning across a selection change, a
+   background rename, deletion closing it, update and restart forwarding)
+   now check the recorded request. The dialog's own behaviour is covered in
+   `AppDialogHost.test.tsx`, which already covered deletion and updates and
+   gained a rename case and a restart case.
+2. ~~**Trap focus in fullscreen settings.**~~ Done 2026-10-26.
+   `FullscreenSettingsLayout` wraps its dialog in a Radix `FocusScope`
+   (`@radix-ui/react-focus-scope` 1.3.1, already installed through the other
+   Radix packages, now a direct dependency of `apps/web`). Its
+   `onMountAutoFocus` focuses the dialog itself, as before, and its unmount
+   auto-focus is turned off so the layout's own effect still returns focus.
+   `MobileAppShellLayout` now gives its trigger focus after the dialog
+   unmounts. Evidence: the three new unit tests and the new browser case fail
+   with `trapped={false} loop={false}`. With the trap in and the drawer still
+   focusing from the store callback, both `EnvironmentSettingsDrawer.spec.ts`
+   cases failed in `mobile-chromium` (trigger not focused). The new
+   `MobileAppShellLayout` unit case fails the same way.
 
 ### Qualification
 
@@ -157,10 +193,41 @@ settings follow-ups and real-device qualification.
   `mobile-chromium` and `desktop-chromium` projects, and
   `e2e/EnvironmentSettingsDrawer.spec.ts` opens Settings from the drawer by
   touch in `mobile-chromium`.
-- Rotate a real phone, or an iOS simulator, with a split open and with a
-  terminal pane visible, and open Settings from the drawer there. Safari has
-  no `moveBefore`, so this exercises the `appendChild` fallback, which the
-  browser spec only emulates in Chromium.
+- **WebKit, done 2026-10-26.** `ORKESTRATOR_E2E_BROWSER=webkit` (new, see
+  the testing guide's "Other browser engines") runs the component specs in
+  Playwright's WebKit 27.2, which has no `moveBefore`
+  (`"moveBefore" in Element.prototype` is `false`). So every case there,
+  including the ones labelled "moveBefore", uses the `appendChild` fallback
+  natively. Command:
+  `ORKESTRATOR_E2E_BROWSER=webkit bunx playwright test --config e2e/playwright.config.ts PaneBreakpoint EnvironmentSettingsDrawer FullscreenSettingsLayout MobileAppShellLayout CoordinatorPaneTree`.
+  Result: 27 passed, 18 skipped (project-specific), 1 failed. Passing in
+  WebKit: every `PaneBreakpoint` case in both projects, in both directions
+  across the breakpoint, plus phone pane switching with the transcript and
+  terminal checks; both drawer-to-settings cases (touch and keyboard); the
+  Tab trap; and the `CoordinatorPaneTree` breakpoint, switcher and drop
+  cases. The one failure is the mobile title tooltip staying open after an
+  outside tap. It also fails with `main`'s layout, so it is now its own todo,
+  [0202](0202-webkit-title-tooltip-outside-tap.md).
+- **Still open: a real phone or an iOS simulator.** Playwright's WebKit runs on
+  the macOS host with emulated touch. It does not rotate a device, and it has
+  no iOS visual viewport, on-screen keyboard or WKWebView. To close this item:
+  1. Connect to a backend with web access enabled. Either run
+     `mise run dev:ios`, which builds the `WKWebView` app for the simulator
+     (see `apps/ios/README.md` for the origin and gateway token), or open the
+     web client in Safari on a phone on the same tailnet.
+  2. Open a project with a split containing a terminal pane and a native
+     agent pane. Type a draft in the composer and scroll the terminal back.
+  3. Rotate between portrait (phone layout) and landscape. On a large enough
+     device landscape crosses 768 px; otherwise use iPad split view.
+  4. Record that terminal output, the scroll offsets, the draft and the caret
+     survive each rotation.
+  5. Open the projects drawer, open a row's "Environment actions" menu, tap
+     Settings, change the section with the picker, close the dialog, and
+     confirm the drawer reopens.
+
+  Record the device, the iOS version and the build, and a screenshot or
+  recording of each step. On 2026-10-26 `xcrun simctl list devices` did not
+  answer within two minutes on this host, so no simulator run was attempted.
 
 ## Constraints and rationale
 
@@ -244,12 +311,61 @@ settings follow-ups and real-device qualification.
   800 px wide). The browser spec therefore checks that the terminal is still
   scrolled back into its history, not that it shows one exact line.
 
+## Assumptions and decisions
+
+- **One host for the toolbar's dialog (2026-10-26).** Options: (a) record a
+  `useAppDialogStore` request and let `AppDialogHost` render the dialog;
+  (b) keep the ActionBar's own copy and only share code with the host.
+  Chose (a), as the item asked. Pros: one renderer, one pin-by-id and
+  drop-on-delete path, and a toolbar request now also closes an open drawer.
+  Cons: the toolbar's dialog only appears where `AppShell` mounts
+  `AppDialogHost`, and the ActionBar tests can no longer see the dialog. A
+  bare `<ActionBar />` render shows nothing, so they check the request
+  instead. The ActionBar's repository settings keep their own copy: the item
+  did not cover them, and they are not opened from the drawer.
+- **How to trap focus (2026-10-26).** Options: (a) Radix `FocusScope` around
+  the existing dialog; (b) convert the layer to a Radix `Dialog`; (c) a
+  hand-written Tab handler plus a `focusin` guard. Chose (a). Pros: it shares
+  Radix's focus-scope stack with the selects, menus and alert dialogs the
+  settings open, so those pause the trap with no extra code. It changes no
+  styling, layering or outside-press behaviour, and the package was already
+  installed at the same version. Cons: a new direct dependency (lockfile one
+  line). It pulls back focus that any non-Radix layer outside the settings
+  tries to take, a toast button for example, which is how a modal is meant
+  to behave. (b) would add outside-press dismissal, scroll locking and
+  `aria-hidden` on siblings that the layer does not have today. (c) would
+  have to reimplement the nested-layer stack.
+- **Where the dialog's opening focus goes (2026-10-26).** Kept focus on the
+  dialog itself, set in `FocusScope`'s `onMountAutoFocus` so the trap is
+  already listening and knows where to send focus. Radix's default, the
+  first control, would have changed what a screen reader announces first
+  and where the keyboard starts.
+- **Returning focus past the trap (2026-10-26).** Options: (a) the drawer
+  bumps a counter from its store callback and focuses its trigger in an
+  effect, after the dialog's unmount commit; (b) the settings layer drops
+  its trap when it starts to close. Chose (a). The layer cannot see the close
+  coming: `onOpenChange(false)` reaches the store and its subscribers before
+  React renders. A counter avoids setting state in an effect body. Con: the
+  trigger gets focus one commit later than before, which no test or user can
+  see.
+- **`ORKESTRATOR_E2E_BROWSER` (2026-10-26).** Options: (a) an opt-in
+  environment variable that swaps the engine and keeps the project names;
+  (b) new `mobile-webkit` and `desktop-webkit` projects; (c) a throwaway
+  config. Chose (a). Pros: the WebKit qualification can be repeated with one
+  command, CI does not need WebKit installed, and the many
+  `project.name === "mobile-chromium"` skips keep working. Cons: under WebKit
+  the project names say "chromium". The config comment and the testing guide
+  say they name the viewport profile. The two `-webkit-app-region`
+  assertions (Electron-only CSS) now only run under Chromium.
+
 ## Related
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md): browser suite
   ownership.
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md):
   iOS and Safari runs.
+- [0202-webkit-title-tooltip-outside-tap.md](0202-webkit-title-tooltip-outside-tap.md):
+  found during the WebKit run.
 
 ## Replaces
 

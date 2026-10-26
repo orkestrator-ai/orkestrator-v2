@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { FocusScope } from "@radix-ui/react-focus-scope";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { OverlayPortalLayer } from "@/components/ui/overlay-portal-layer";
@@ -100,12 +101,12 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   // A modal takes focus when it opens, so the keyboard starts inside it rather
   // than on the control underneath that opened it, and hands it back to that
   // control when it closes. Focus another owner already placed is left alone.
+  // The `FocusScope` below moves focus in (`onMountAutoFocus`) once its trap
+  // listens, so the trap knows where to send focus that tries to leave.
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const opener = document.activeElement;
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.contains(opener)) dialog.focus({ preventScroll: true });
     return () => {
       const focusWasLost = !document.activeElement || document.activeElement === document.body;
       if (focusWasLost && opener instanceof HTMLElement && opener.isConnected) {
@@ -134,141 +135,156 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   const settingsLayout = (
     <OverlayPortalLayer className={Z_FULLSCREEN_POPOVER}>
       <SettingsHeaderActionsContext.Provider value={headerActionsTarget}>
-        <div
-          ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={title}
-          tabIndex={-1}
-          className={cn(
-            "fixed inset-0 flex flex-col bg-background outline-none md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-input-surface [&_textarea]:bg-input-surface [&_[data-slot=select-trigger]]:bg-input-surface",
-            Z_FULLSCREEN_SURFACE,
-          )}
+        {/* Tab and Shift+Tab cycle inside the layer instead of reaching the page
+            underneath. Radix layers opened from inside (selects, menus, dialogs)
+            pause the trap while they are open. */}
+        <FocusScope
+          asChild
+          loop
+          trapped
+          onMountAutoFocus={(event) => {
+            event.preventDefault();
+            dialogRef.current?.focus({ preventScroll: true });
+          }}
+          // The effect above returns focus, and leaves focus another owner placed.
+          onUnmountAutoFocus={(event) => event.preventDefault()}
         >
-          {/* Sidebar */}
-          <div className="hidden min-h-0 shrink-0 flex-col border-b border-white/5 md:flex md:w-56 md:border-b-0 md:border-r">
-            {/* Sidebar header */}
-            <div className="hidden h-12 shrink-0 items-center px-4 bg-zinc-900/80 md:flex">
-              <span className="text-sm font-medium text-foreground">{title}</span>
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            tabIndex={-1}
+            className={cn(
+              "fixed inset-0 flex flex-col bg-background outline-none md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-input-surface [&_textarea]:bg-input-surface [&_[data-slot=select-trigger]]:bg-input-surface",
+              Z_FULLSCREEN_SURFACE,
+            )}
+          >
+            {/* Sidebar */}
+            <div className="hidden min-h-0 shrink-0 flex-col border-b border-white/5 md:flex md:w-56 md:border-b-0 md:border-r">
+              {/* Sidebar header */}
+              <div className="hidden h-12 shrink-0 items-center px-4 bg-zinc-900/80 md:flex">
+                <span className="text-sm font-medium text-foreground">{title}</span>
+              </div>
+
+              {/* Menu items scroll independently so short windows can reach every section. */}
+              <nav
+                aria-label="Settings sections"
+                data-slot="settings-sections"
+                className="block min-h-0 flex-1 overflow-y-auto overscroll-contain py-2"
+              >
+                {menuItems.map((item) => (
+                  <button
+                    key={item.id}
+                    ref={activeSection === item.id ? scrollActiveItemIntoView : undefined}
+                    aria-current={activeSection === item.id ? "page" : undefined}
+                    onClick={() => setActiveSection(item.id)}
+                    className={cn(
+                      "flex min-h-10 w-full shrink-0 items-center gap-3 rounded-none border-l-2 px-4 py-2 text-sm transition-colors",
+                      activeSection === item.id
+                        ? "border-blue-500 bg-zinc-900/80 text-foreground"
+                        : "border-transparent text-muted-foreground hover:bg-zinc-900/50 hover:text-foreground",
+                    )}
+                  >
+                    {item.icon}
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
             </div>
 
-            {/* Menu items scroll independently so short windows can reach every section. */}
-            <nav
-              aria-label="Settings sections"
-              data-slot="settings-sections"
-              className="block min-h-0 flex-1 overflow-y-auto overscroll-contain py-2"
-            >
-              {menuItems.map((item) => (
-                <button
-                  key={item.id}
-                  ref={activeSection === item.id ? scrollActiveItemIntoView : undefined}
-                  aria-current={activeSection === item.id ? "page" : undefined}
-                  onClick={() => setActiveSection(item.id)}
-                  className={cn(
-                    "flex min-h-10 w-full shrink-0 items-center gap-3 rounded-none border-l-2 px-4 py-2 text-sm transition-colors",
-                    activeSection === item.id
-                      ? "border-blue-500 bg-zinc-900/80 text-foreground"
-                      : "border-transparent text-muted-foreground hover:bg-zinc-900/50 hover:text-foreground",
-                  )}
+            {/* Content area */}
+            <div className="flex flex-1 flex-col overflow-hidden">
+              {/* Content header */}
+              <div className="flex h-12 shrink-0 items-center justify-between gap-4 bg-zinc-900/80 px-4 md:px-8">
+                <Select
+                  value={activeSection}
+                  onValueChange={(value) => setActiveSection(value as TSection)}
                 >
-                  {item.icon}
-                  {item.label}
-                </button>
-              ))}
-            </nav>
-          </div>
-
-          {/* Content area */}
-          <div className="flex flex-1 flex-col overflow-hidden">
-            {/* Content header */}
-            <div className="flex h-12 shrink-0 items-center justify-between gap-4 bg-zinc-900/80 px-4 md:px-8">
-              <Select
-                value={activeSection}
-                onValueChange={(value) => setActiveSection(value as TSection)}
-              >
-                <SelectTrigger
-                  aria-label="Settings section"
-                  className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-visible:ring-0 md:hidden"
-                >
-                  <SelectValue>
-                    <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                      {activeMenuItem?.icon}
-                      <span className="truncate">{activeMenuItem?.label}</span>
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent
-                  position="popper"
-                  align="start"
-                  className={cn(Z_FULLSCREEN_POPOVER, "w-[min(20rem,calc(100vw-2rem))]")}
-                >
-                  {menuItems.map((item) => (
-                    <SelectItem
-                      key={item.id}
-                      value={item.id}
-                      textValue={item.label}
-                      className="min-h-10"
-                    >
-                      <span className="flex items-center gap-2">
-                        {item.icon}
-                        <span>{item.label}</span>
+                  <SelectTrigger
+                    aria-label="Settings section"
+                    className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-visible:ring-0 md:hidden"
+                  >
+                    <SelectValue>
+                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                        {activeMenuItem?.icon}
+                        <span className="truncate">{activeMenuItem?.label}</span>
                       </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {headerStartContent ? (
-                <div className="hidden min-w-0 flex-1 md:flex">{headerStartContent}</div>
-              ) : (
-                <h2 className="hidden text-sm font-medium text-foreground md:block">
-                  {activeMenuItem?.label}
-                </h2>
-              )}
-              <div className="flex min-w-0 shrink-0 items-center gap-2">
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent
+                    position="popper"
+                    align="start"
+                    className={cn(Z_FULLSCREEN_POPOVER, "w-[min(20rem,calc(100vw-2rem))]")}
+                  >
+                    {menuItems.map((item) => (
+                      <SelectItem
+                        key={item.id}
+                        value={item.id}
+                        textValue={item.label}
+                        className="min-h-10"
+                      >
+                        <span className="flex items-center gap-2">
+                          {item.icon}
+                          <span>{item.label}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 {headerStartContent ? (
-                  <h2 className="mr-2 hidden whitespace-nowrap text-sm font-medium text-foreground md:block">
+                  <div className="hidden min-w-0 flex-1 md:flex">{headerStartContent}</div>
+                ) : (
+                  <h2 className="hidden text-sm font-medium text-foreground md:block">
                     {activeMenuItem?.label}
                   </h2>
-                ) : null}
-                <div
-                  data-slot="settings-header-actions"
-                  className="flex min-w-0 items-center gap-2"
-                >
-                  <div className="flex items-center gap-2">{headerActions}</div>
-                  <div ref={setHeaderActionsTarget} className="flex min-w-0 items-center gap-2" />
+                )}
+                <div className="flex min-w-0 shrink-0 items-center gap-2">
+                  {headerStartContent ? (
+                    <h2 className="mr-2 hidden whitespace-nowrap text-sm font-medium text-foreground md:block">
+                      {activeMenuItem?.label}
+                    </h2>
+                  ) : null}
+                  <div
+                    data-slot="settings-header-actions"
+                    className="flex min-w-0 items-center gap-2"
+                  >
+                    <div className="flex items-center gap-2">{headerActions}</div>
+                    <div ref={setHeaderActionsTarget} className="flex min-w-0 items-center gap-2" />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-10 w-10 text-muted-foreground hover:text-foreground md:h-7 md:w-7"
+                    onClick={() => onOpenChange(false)}
+                    aria-label="Close settings"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-10 w-10 text-muted-foreground hover:text-foreground md:h-7 md:w-7"
-                  onClick={() => onOpenChange(false)}
-                  aria-label="Close settings"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
               </div>
-            </div>
 
-            {headerStartContent ? (
-              <div className="flex shrink-0 border-b border-white/5 px-4 py-2 md:hidden">
-                {headerStartContent}
-              </div>
-            ) : null}
-
-            {/* Content body */}
-            <div
-              data-slot="settings-content-scrollport"
-              className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6"
-            >
-              <div className="flex-1">{children(activeSection)}</div>
-              {footer && (
-                <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
-                  {footer}
+              {headerStartContent ? (
+                <div className="flex shrink-0 border-b border-white/5 px-4 py-2 md:hidden">
+                  {headerStartContent}
                 </div>
-              )}
+              ) : null}
+
+              {/* Content body */}
+              <div
+                data-slot="settings-content-scrollport"
+                className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6"
+              >
+                <div className="flex-1">{children(activeSection)}</div>
+                {footer && (
+                  <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+                    {footer}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        </FocusScope>
       </SettingsHeaderActionsContext.Provider>
     </OverlayPortalLayer>
   );

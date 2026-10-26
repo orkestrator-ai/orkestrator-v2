@@ -88,6 +88,33 @@ test.describe("desktop settings sections", () => {
   });
 });
 
+test("Tab and Shift+Tab cycle inside settings without reaching the page underneath", async ({
+  page,
+}) => {
+  await page.goto("/fullscreen-settings");
+  const dialog = page.getByRole("dialog", { name: "Fixture settings" });
+  await expect(dialog).toBeFocused();
+  const focusedLabel = () =>
+    page.evaluate(() => {
+      const active = document.activeElement;
+      const dialog = document.querySelector("[role='dialog'][aria-label='Fixture settings']");
+      if (!active || !dialog?.contains(active)) return `outside:${active?.textContent ?? ""}`;
+      return active.getAttribute("aria-label") ?? active.textContent?.trim() ?? "";
+    });
+
+  // More presses than the layer has controls, so each direction wraps at least once.
+  for (const key of ["Tab", "Shift+Tab"]) {
+    const visited: string[] = [];
+    for (let press = 0; press < 30; press += 1) {
+      await page.keyboard.press(key);
+      visited.push(await focusedLabel());
+    }
+    expect(visited.filter((label) => label.startsWith("outside:"))).toEqual([]);
+    expect(new Set(visited).size).toBeLessThan(visited.length);
+  }
+  await expect(page.getByRole("button", { name: "Page underneath" })).not.toBeFocused();
+});
+
 test("narrow settings use the selector to reach the last section with the keyboard", async ({
   page,
 }, testInfo) => {

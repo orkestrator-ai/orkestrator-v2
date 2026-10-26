@@ -178,6 +178,15 @@ own verdicts (a rejected structured result, a lost rebind) add none.
   output reports a refusal. Only a cell with no record falls back to its
   source: strict-JSON single-argument `tools.mcp__<server>__<tool>(…)` calls,
   bounded, never evaluated, and never claimed successful.
+- Never reload a user message Codex wrote itself as a **You** row. The live
+  tab shows only what the user sent, but the rollout also holds Codex's own
+  user-role blocks: AGENTS.md instructions, `<environment_context>`, a
+  skill's `<skill>` instructions, `<turn_aborted>`, `<subagent_notification>`
+  and `<user_shell_command>`. `isSyntheticPersistedUserText`
+  (`history/rollout.ts`) drops a message only when every segment is such a
+  block, framed by its own open and close tags, so a prompt that mentions a
+  tag still renders. A Codex bump re-checks the list (`upgrade-agents.md`;
+  `live-resume-context.test.ts`, no credits).
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

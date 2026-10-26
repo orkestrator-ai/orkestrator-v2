@@ -2787,3 +2787,106 @@ describe("interactions", () => {
     expect(h.runtime.listInteractions(sessionId)).toEqual([]);
   });
 });
+
+describe("resumed transcript", () => {
+  test("shows the user messages the live tab showed, without Codex's own context blocks", async () => {
+    const prompts = [
+      "Open the design canvas",
+      "$tidy the header",
+      "Stop there",
+      "<environment_context> looks wrong, why?",
+    ];
+    let turn = 0;
+    const live = await harness({ "turn/start": () => ({ turn: { id: `turn-${++turn}` } }) });
+    const { sessionId } = live.runtime.createSession({ mode: "build" });
+    for (const [index, prompt] of prompts.entries()) {
+      await live.runtime.prompt(sessionId, {
+        prompt,
+        requestId: `req-${index + 1}`,
+        attachments: [],
+      });
+      live.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: `turn-${index + 1}`, status: index === 2 ? "interrupted" : "completed" },
+      });
+      await live.drain();
+    }
+    const userContents = (messages: Array<{ role: string; content: string }> | null) =>
+      (messages ?? []).filter((message) => message.role === "user").map((m) => m.content);
+    const liveUsers = userContents(await live.runtime.getMessages(sessionId));
+    expect(liveUsers).toEqual(prompts);
+
+    // The rollout as Codex 0.164 writes it: the instructions and environment
+    // open the thread as one message of two segments, a cwd change adds the
+    // environment alone, a skill's instructions follow the `$name` prompt and
+    // an interrupt leaves a note before the next prompt.
+    const user = (...texts: string[]) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: texts.map((text) => ({ type: "input_text", text })),
+      },
+    });
+    const assistant = (text: string) => ({
+      type: "response_item",
+      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] },
+    });
+    const turnContext = (turnId: string) => ({
+      type: "turn_context",
+      payload: { turn_id: turnId, cwd: "/tmp/ws" },
+    });
+    const environment =
+      "<environment_context>\n  <cwd>/tmp/ws</cwd>\n  <shell>zsh</shell>\n" +
+      "  <current_date>2026-10-24</current_date>\n</environment_context>";
+    const records = [
+      {
+        type: "session_meta",
+        payload: { id: "thread-1", cwd: "/tmp/ws", timestamp: "2026-10-24T12:00:00.000Z" },
+      },
+      turnContext("turn-1"),
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "<permissions instructions>…" }],
+        },
+      },
+      user("# AGENTS.md instructions\n\n<INSTRUCTIONS>\nBe brief.\n</INSTRUCTIONS>", environment),
+      user(prompts[0]!),
+      assistant("Opened."),
+      turnContext("turn-2"),
+      user(environment),
+      user(prompts[1]!),
+      user("<skill>\n<name>tidy</name>\n<path>/skills/tidy/SKILL.md</path>\nTidy.\n</skill>"),
+      assistant("Tidied."),
+      turnContext("turn-3"),
+      user(prompts[2]!),
+      user("<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"),
+      turnContext("turn-4"),
+      user(prompts[3]!),
+      assistant("It is Codex's own block."),
+    ];
+    mkdirSync(join(codexHome, "sessions"), { recursive: true });
+    writeFileSync(
+      join(codexHome, "sessions", "thread-1.jsonl"),
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+
+    // Close the tab, then resume the thread from a fresh bridge.
+    expect(await live.runtime.closeSessionRetaining(sessionId)).toBe("closed");
+    const resumed = await harness();
+    const session = await resumed.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    expect(session).not.toBeNull();
+    const resumedMessages = await resumed.runtime.getMessages(session!.sessionId);
+    expect(userContents(resumedMessages)).toEqual(liveUsers);
+    // Each prompt still lands on its own turn.
+    expect(
+      (resumedMessages ?? [])
+        .filter((message) => message.role === "user")
+        .map((message) => message.turnId),
+    ).toEqual(["turn-1", "turn-2", "turn-3", "turn-4"]);
+  });
+});

@@ -83,6 +83,28 @@
 - **Evidence:** `orkestrator-test-run.sQR1xm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer aggregate log is `orkestrator-test-run.k2y50g/aggregate-tests.log.gz`.
 - **Assessment:** Recurrence of the existing intermittent failure. No backend implementation, assertion, deadline or skip changed; the original aggregate remains non-green.
 
+## Codex resume-context review validation — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` used
+workspace/root/bridges/protocol reservations of 4/1/2/1 slots, with two Bun
+workers for backend. The restart reconciliation case failed during fixture cleanup with `EPERM` at
+`test-support.ts:143` after 1142.41 ms.
+
+The complete unchanged owner passed alone, exit 0 in 13.5 seconds:
+
+```sh
+mise run test:logged -- --name public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary directory
+`orkestrator-test-run.unZQTH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed on aggregate completion), enclosing log
+`orkestrator-test-run.2JILAH/repository-tests.log`. No backend implementation,
+test, assertion, deadline or skip changed. The aggregate remains failed.
+
+Aggregate backend totals: 11,196 passed, 95 skipped, three failed and one
+error across 655 files (501.24 s). The groups finished in 1010.2 s; exit 1.
+
 ## Recurrence — 2026-10-26
 
 - **Original command:** `mise run test` on `todo-0020-container-state-observation-fb5e330d3136` (container image, entrypoint, an e2e spec, a CI workflow and docs; nothing in the public API), macOS 27.0 arm64, default worker plan, host load average about 12 to 19.

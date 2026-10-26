@@ -28,10 +28,10 @@ beforeEach(() => {
   setClaudeHomeForTesting(fixture.home);
 });
 
-afterEach(() => {
+afterEach(async () => {
   setClaudeHomeForTesting(null);
   clearJsonFileCache();
-  fixture.cleanup();
+  await fixture.cleanup();
 });
 
 interface ParityFixture {

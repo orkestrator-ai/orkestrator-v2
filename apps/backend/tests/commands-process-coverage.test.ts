@@ -18,6 +18,11 @@ type Handler = NonNullable<
 
 const originalPath = process.env.PATH;
 const originalHome = process.env.HOME;
+// Commands prefer these over HOME (OpenCode's `model.json` is read from
+// `XDG_STATE_HOME`), so the file clears them: every path resolves under the
+// fake HOME, never the host's own state.
+const XDG_KEYS = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+const originalXdg = new Map(XDG_KEYS.map((key) => [key, process.env[key]]));
 const originalHomedir = os.homedir;
 const originalDockerLog = process.env.FAKE_DOCKER_LOG;
 const originalLauncherLog = process.env.FAKE_LAUNCHER_LOG;
@@ -439,6 +444,7 @@ beforeAll(async () => {
   }
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
   process.env.HOME = fakeHome;
+  for (const key of XDG_KEYS) delete process.env[key];
   process.env.FAKE_DOCKER_LOG = commandLog;
   process.env.FAKE_LAUNCHER_LOG = launcherLog;
   // Lets the fake `docker ps` label one row with the owner the registry under
@@ -484,6 +490,10 @@ afterAll(async () => {
   else process.env.PATH = originalPath;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  for (const [key, value] of originalXdg) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   Object.defineProperty(os, "homedir", { configurable: true, value: originalHomedir });
   if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
   else process.env.FAKE_DOCKER_LOG = originalDockerLog;

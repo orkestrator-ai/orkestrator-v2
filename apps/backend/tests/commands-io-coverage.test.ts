@@ -80,6 +80,8 @@ const { BackendRuntime } = await import("../src/core/backend-runtime");
 
 const tempDirs: string[] = [];
 const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
+/** Terminal history every context writes; removed once the file's runtimes have settled. */
+const historyDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-commands-io-history-"));
 
 function createContext(
   environment: Record<string, unknown> | null = null,
@@ -96,7 +98,7 @@ function createContext(
       loadEnvironments: mock(async () =>
         ["container-1", "container-tree-cap"].map((containerId) => ({ containerId })),
       ),
-      getDataDir: () => path.join(os.tmpdir(), `ork-commands-io-history-${process.pid}`),
+      getDataDir: () => historyDataDir,
     },
   } as unknown as CommandContext;
   context.runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
@@ -156,7 +158,10 @@ async function withFakeDocker(
 }
 
 afterEach(async () => {
-  for (const runtime of runtimes.splice(0)) runtime.shutdown();
+  const finished = runtimes.splice(0);
+  for (const runtime of finished) runtime.shutdown();
+  // Closed terminals finish their history writes after the command returns.
+  await Promise.all(finished.map((runtime) => runtime.terminals.history.settled()));
   spawnedPtys.length = 0;
   spawnPty.mockClear();
   await Promise.all(
@@ -164,8 +169,9 @@ afterEach(async () => {
   );
 });
 
-afterAll(() => {
+afterAll(async () => {
   mock.module("../src/core/pty", () => realPtySnapshot);
+  await fs.rm(historyDataDir, { recursive: true, force: true });
 });
 
 describe("backend command I/O coverage", () => {
@@ -794,7 +800,10 @@ describe("backend command I/O coverage", () => {
   });
 
   test("reads base64 from the active profile's configured worktree directory", async () => {
-    const profileWorktrees = await createTempDir("ork-profile-worktrees-");
+    // The outside file sits next to the worktree directory, inside a directory
+    // the test owns rather than the shared temporary root.
+    const profileWorktrees = path.join(await createTempDir("ork-profile-root-"), "worktrees");
+    await fs.mkdir(profileWorktrees);
     const filePath = path.join(
       profileWorktrees,
       "environment",

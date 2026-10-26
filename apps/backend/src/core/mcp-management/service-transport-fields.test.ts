@@ -18,8 +18,8 @@ beforeEach(() => {
   fixture = createFixture({ env: {} });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 const USER_SOURCE: Record<AgentPlatform, string> = {

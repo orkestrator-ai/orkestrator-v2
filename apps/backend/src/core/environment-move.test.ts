@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
@@ -24,6 +23,13 @@ import * as pathSafety from "./path-safety.js";
 import { createProject, StorageService } from "./storage.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../tests/temp-sweep.js";
+
+// An Arch Linux sweep (0247) found `ork-env-move-*` roots left by runs whose
+// tests passed; on macOS the file leaves none, so the writer is unproven.
+// Roots carry their owner's PID and a later run removes those of dead owners.
+const TEMP_PREFIXES = ["ork-env-move-", "ork-env-move-template-"];
+sweepStaleTempDirs({ prefix: TEMP_PREFIXES, maxAgeMs: 60 * 60 * 1_000 });
 
 const roots: string[] = [];
 const runtimes: BackendRuntime[] = [];
@@ -57,7 +63,9 @@ afterEach(async () => {
   mock.restore();
   if (optionalLocks === undefined) delete process.env.GIT_OPTIONAL_LOCKS;
   else process.env.GIT_OPTIONAL_LOCKS = optionalLocks;
-  for (const runtime of runtimes.splice(0)) runtime.shutdown();
+  const finished = runtimes.splice(0);
+  for (const runtime of finished) runtime.shutdown();
+  await Promise.all(finished.map((runtime) => runtime.terminals.history.settled()));
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -72,9 +80,7 @@ afterAll(async () => {
 });
 
 async function buildTemplates(): Promise<string> {
-  const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "ork-env-move-template-")),
-  );
+  const root = await fs.realpath(await fs.mkdtemp(ownedTempDirPrefix("ork-env-move-template-")));
   const projectPath = path.join(root, "app");
   await runCommand("git", ["init", "-q", "-b", "main", projectPath]);
   await fs.writeFile(path.join(projectPath, "README.md"), "fixture");
@@ -131,7 +137,7 @@ async function copyTemplate(
 }
 
 async function setup() {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-env-move-")));
+  const root = await fs.realpath(await fs.mkdtemp(ownedTempDirPrefix("ork-env-move-")));
   roots.push(root);
   const projectPath = path.join(root, "app");
   // `app` names `origin.git` as its remote and the bare clone names `app`.

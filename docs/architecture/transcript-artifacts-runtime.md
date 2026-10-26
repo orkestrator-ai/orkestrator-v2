@@ -201,7 +201,12 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   The worker gets a scrubbed environment (fixed `PATH`, nothing inherited:
   no tokens, credentials, proxies or user configuration) and a private,
   owner-only scratch directory that is its `HOME`, `TMPDIR`, XDG directories
-  and cwd; the directory is removed once the exit is verified. The watchdog
+  and cwd; the directory is removed once the exit is verified, by the job or
+  by the reaper of an unverified exit. It is named
+  `ork-artifact-preview-<backend pid>-<random>`, and startup removes those of
+  backends that have exited once they are an hour old (a day for names
+  without a PID): a backend killed during a job, or stopped while an exit was
+  still unverified, leaves its scratch behind. The watchdog
   lives in the backend, kills the whole process tree on deadline or memory
   breach (single process over 1 GiB or tree over 4 GiB, sampled every
   500 ms), and verifies exit before freeing the slot. Network denial is

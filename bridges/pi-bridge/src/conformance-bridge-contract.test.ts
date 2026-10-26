@@ -41,8 +41,12 @@ const { json, route } = await import("./http.js");
 const { authToken } = await import("./config.js");
 const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
-const { drainPersistence, loadPersistedState, setPersistWriteGateForTests } =
-  await import("./persistence.js");
+const {
+  drainPersistence,
+  loadPersistedState,
+  setPersistWriteGateForTests,
+  settlePersistenceForTests,
+} = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 afterAll(() => {
@@ -130,6 +134,7 @@ runBridgeContractSuite({
         clientSessionKeys.clear();
         setAgentSessionTestHooks(undefined);
         delete process.env.PI_BRIDGE_STATE_DIR;
+        await settlePersistenceForTests();
         await rm(stateDirectory, { recursive: true, force: true });
       },
     };

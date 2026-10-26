@@ -12,6 +12,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import { lstat, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -120,6 +121,80 @@ export interface SupervisedJob {
   reap(): Promise<boolean>;
   /** Process mode: path of the job's private HOME/TMPDIR (the directory is removed after a verified exit). */
   scratchDir(): string | null;
+}
+
+/**
+ * Prefix of a process-mode worker's scratch directory, named
+ * `<prefix><backend pid>-<random>` so a later backend can tell whose it is.
+ */
+export const PREVIEW_SCRATCH_PREFIX = "ork-artifact-preview-";
+const PREVIEW_SCRATCH_NAME = /^ork-artifact-preview-([1-9]\d*)-[A-Za-z0-9]{6}$/;
+/** The name used before the backend PID was embedded; only age can decide for these. */
+const LEGACY_PREVIEW_SCRATCH_NAME = /^ork-artifact-preview-[A-Za-z0-9]{6}$/;
+/** How long the scratch of a backend that has exited is kept before startup recovery removes it. */
+export const PREVIEW_SCRATCH_STALE_MS = 60 * 60_000;
+/** How long a legacy-named scratch directory is kept; a job is bounded to minutes. */
+export const LEGACY_PREVIEW_SCRATCH_STALE_MS = 24 * 60 * 60_000;
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Startup recovery for process isolation, the counterpart of
+ * `reapOrphanPreviewContainers`. A scratch directory outlives its backend when
+ * the backend is killed during a job, or stops while a worker's exit is still
+ * unverified (the reaper stops with it). Removes those whose backend has
+ * exited and that are past the age limit, which also covers a backend in
+ * another PID namespace sharing the directory, and legacy-named ones (no PID)
+ * a day old. Never throws; returns what it removed.
+ */
+export async function sweepStalePreviewScratch(
+  options: {
+    root?: string;
+    now?: number;
+    maxAgeMs?: number;
+    isProcessAlive?: (pid: number) => boolean;
+  } = {},
+): Promise<string[]> {
+  const root = options.root ?? tmpdir();
+  const now = options.now ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? PREVIEW_SCRATCH_STALE_MS;
+  const alive = options.isProcessAlive ?? isProcessAlive;
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    const owner = PREVIEW_SCRATCH_NAME.exec(name);
+    let ageLimit: number;
+    if (owner) {
+      const pid = Number(owner[1]);
+      if (pid === process.pid || alive(pid)) continue;
+      ageLimit = maxAgeMs;
+    } else if (LEGACY_PREVIEW_SCRATCH_NAME.test(name)) {
+      ageLimit = LEGACY_PREVIEW_SCRATCH_STALE_MS;
+    } else continue;
+    const target = path.join(root, name);
+    try {
+      const info = await lstat(target);
+      if (!info.isDirectory() || now - info.mtimeMs <= ageLimit) continue;
+      await rm(target, { recursive: true, force: true });
+      removed.push(target);
+    } catch {
+      // Removed concurrently, or not ours to remove; the next start retries.
+    }
+  }
+  return removed;
 }
 
 /**
@@ -359,7 +434,9 @@ export function superviseWorker(
     if (launch.isolation === "process") {
       // A private, owner-only scratch directory is the worker's HOME, TMPDIR
       // and cwd, so neither the worker nor Chromium sees the user's home.
-      scratch = mkdtempSync(path.join(launch.scratchRoot ?? tmpdir(), "ork-artifact-preview-"));
+      scratch = mkdtempSync(
+        path.join(launch.scratchRoot ?? tmpdir(), `${PREVIEW_SCRATCH_PREFIX}${process.pid}-`),
+      );
       scratchPath = scratch;
       child = spawn(launch.command, launch.args, {
         stdio: ["pipe", "pipe", "ignore"],

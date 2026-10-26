@@ -1117,6 +1117,13 @@ from `apps/backend` is isolated too; Bun loads a preload named in both places
 once. Without it a backend test fell back to `ORKESTRATOR_WORKTREE_DIR` from
 the shell, or to a non-canonical `os.tmpdir()` such as macOS `/tmp`.
 
+Turbo runs in strict environment mode and passes a task only the variables
+`turbo.json` declares. `TMPDIR` is in `globalPassThroughEnv` (not hashed), so
+the workspace and bridge groups use the same temporary directory as the root
+group and the caller: an operator's choice is honoured, and an aggregate run
+with a private `TMPDIR` can be inspected afterwards for leftovers. Before
+2026-10-26 Turbo dropped it and those groups fell back to `/tmp`.
+
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate
 run and uses them to schedule slow files earlier on future runs. The profiles

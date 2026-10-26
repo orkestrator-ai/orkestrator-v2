@@ -17,8 +17,8 @@ beforeEach(() => {
   fixture = createFixture();
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 describe("rename through the service", () => {

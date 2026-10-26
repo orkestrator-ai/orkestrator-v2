@@ -93,6 +93,19 @@ export async function persistBarrier(): Promise<void> {
   await operation;
 }
 
+/**
+ * Wait for every queued write, including writes queued meanwhile, without
+ * closing the queue. A write already running keeps the state path it read, so
+ * a test clears `PI_BRIDGE_STATE_DIR` and awaits this before removing it.
+ */
+export async function settlePersistenceForTests(): Promise<void> {
+  let settled: Promise<void>;
+  do {
+    settled = tail;
+    await settled.catch(() => undefined);
+  } while (settled !== tail);
+}
+
 /** Flush and stop accepting further writes. Used on shutdown. */
 export async function drainPersistence(): Promise<void> {
   if (!stateFilePath()) return;

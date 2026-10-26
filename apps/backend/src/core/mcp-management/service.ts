@@ -287,6 +287,15 @@ export class McpManagementService {
     this.timer = null;
   }
 
+  /**
+   * Resolves once an apply pass already running has finished; it can still
+   * write the operation history after `dispose()`. For teardown that removes
+   * the data directory.
+   */
+  async settled(): Promise<void> {
+    await this.ticking?.catch(() => undefined);
+  }
+
   // -------------------------------------------------------------------------
   // Catalog
   // -------------------------------------------------------------------------

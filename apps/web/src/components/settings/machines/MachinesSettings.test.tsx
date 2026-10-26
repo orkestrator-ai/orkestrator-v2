@@ -21,6 +21,8 @@ import {
   takeMachineUpdatesRequest,
 } from "@/lib/settings-navigation";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useUIStore } from "@/stores/uiStore";
 import { MachinesSettings } from "./MachinesSettings";
 
 const originalPortal = portalStore.getState();
@@ -991,3 +993,52 @@ test("the account overview follows machine additions and removals while Settings
     listener.mockImplementation(() => Promise.resolve(() => {}));
   }
 });
+
+for (const nodeId of ["bk_self", null]) {
+  test(`self Rebuild opens local Container settings with nodeId ${nodeId}`, async () => {
+    const originalDialogs = useAppDialogStore.getState();
+    const originalUI = useUIStore.getState();
+    portalStore.store.setState({ selfId: "bk_self" as never });
+    useRemoteWorkspaceStore.setState({ active: null });
+    install({
+      status: { ...commandStatus, nodeId: nodeId as never },
+      maintenance: {
+        self: {
+          ...current,
+          image: {
+            name: "orkestrator-v2:latest",
+            present: true,
+            compatible: true,
+            reason: null,
+            releaseReference: "ghcr.io/orkestrator-ai/orkestrator-v2:2.25.0",
+            outdatedEnvironments: [{ id: "env-self", projectId: "project-1", name: "self-old" }],
+          },
+        },
+      },
+    });
+    installDesktop();
+    const closeSettings = mock(() => undefined);
+    const stopListening = onGlobalSettingsCloseRequest(closeSettings);
+    try {
+      await renderPage();
+      fireEvent.click(within(row("Desk")).getByRole("button", { name: /^Updates for Desk/ }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(await within(dialog).findByRole("button", { name: "Rebuild self-old" }));
+      expect(closeSettings).toHaveBeenCalledTimes(1);
+      expectDomAbsent(screen.queryByText("Updates for Desk"));
+      expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-self");
+      expect(useAppDialogStore.getState().request).toEqual({
+        kind: "environment-settings",
+        environmentId: "env-self",
+        section: "container",
+      });
+    } finally {
+      stopListening();
+      portalStore.store.setState(originalPortal, true);
+      useRemoteWorkspaceStore.setState(originalRemote, true);
+      useAppDialogStore.setState(originalDialogs, true);
+      useUIStore.setState(originalUI, true);
+    }
+  });
+}

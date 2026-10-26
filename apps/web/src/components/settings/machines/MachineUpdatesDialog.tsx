@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
+import { portalStore } from "@/lib/portal/portal-store";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { requestCloseGlobalSettings } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,10 @@ export function MachineUpdatesDialog({
   const issues = snapshot ? maintenanceIssues(snapshot) : [];
   // An environment on an older image is rebuilt one at a time, from its own
   // settings: Rebuild (keep work) reviews preservation and space for it.
-  const nodeId = machine.role === "self" ? (machine.nodeId ?? "") : machine.nodeId;
+  const nodeId =
+    machine.role === "self"
+      ? (machine.nodeId ?? portalStore.getState().selfId ?? "")
+      : machine.nodeId;
   const rebuild =
     nodeId === null
       ? undefined
@@ -52,7 +56,10 @@ export function MachineUpdatesDialog({
           onOpenChange(false);
           requestCloseGlobalSettings();
           openMachineWorkspace({
-            connectionId: nodeId,
+            connectionId:
+              machine.role === "self"
+                ? (machine.nodeId ?? portalStore.getState().selfId ?? "")
+                : nodeId,
             projectId: environment.projectId,
             environmentId: environment.id,
             dialog: "environment-rebuild",

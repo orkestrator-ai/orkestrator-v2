@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toNodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
+import { AppDialogHost } from "@/components/layout/AppDialogHost";
+import { MachineUpdatesDialog } from "@/components/settings/machines/MachineUpdatesDialog";
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -323,4 +326,100 @@ test("environment settings waits for its environment and selects without startin
   expect(
     nativeInvoke.mock.calls.filter(([command]) => String(command).startsWith("start_environment")),
   ).toEqual([]);
+});
+
+test("remote Updates Rebuild reaches the loaded realm's visible Container section without starting a stopped environment", async () => {
+  const stopped = {
+    ...home,
+    id: "stopped-container",
+    name: "Old container",
+    projectHome: false,
+    environmentType: "containerized",
+    containerId: "container-old",
+    status: "stopped",
+  } as Environment;
+  const snapshot = hostMaintenanceSnapshotFixture({
+    image: {
+      name: "orkestrator-v2:latest",
+      present: true,
+      compatible: true,
+      reason: null,
+      releaseReference: "old",
+      outdatedEnvironments: [{ id: stopped.id, projectId: project.id, name: stopped.name }],
+    },
+  });
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "invoke_on_node") return { outcome: "ok", result: snapshot };
+    return undefined;
+  });
+  const updates = render(
+    <MachineUpdatesDialog
+      machine={{
+        key: nodeId,
+        role: "node",
+        nodeId,
+        name: "Leaf",
+        colorToken: "teal",
+        connected: true,
+        current: false,
+        maintenance: true,
+        address: null,
+        via: "relay",
+        statusText: "Connected",
+      }}
+      open
+      onOpenChange={() => {}}
+      initial={snapshot}
+      onSnapshot={() => {}}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Rebuild Old container" }));
+  const request = useRemoteWorkspaceStore.getState().requests[nodeId]!.request;
+  expect(request.dialog).toBe("environment-rebuild");
+  updates.unmount();
+
+  let finish!: (environments: Environment[]) => void;
+  const environments = new Promise<Environment[]>((resolve) => {
+    finish = resolve;
+  });
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") return [project];
+    if (command === "get_environments") return environments;
+    if (command === "get_config") return originalConfig.config;
+    if (command === "get_environment_resources") return null;
+    if (command === "get_environment_inputs" || command === "get_container_lifecycle_snapshot")
+      return null;
+    if (command === "list_recovery_copies") return { copies: [], limit: 3 };
+    return [];
+  });
+  happyDOM.setURL(`http://localhost/?${realmSearchParams(request)}`);
+  window.orkestratorWorkspaceTarget = { nodeId, nodeName: "Leaf", path: "relay" } as never;
+  render(
+    <>
+      <WorkspaceRealmHost />
+      <AppDialogHost />
+    </>,
+  );
+  await waitFor(() => expect(useProjectStore.getState().hasLoaded).toBe(true));
+  expect(useAppDialogStore.getState().request).toBeNull();
+  await act(async () => finish([stopped]));
+  expect(await screen.findByRole("button", { name: "Rebuild (keeps files)…" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Container" }).getAttribute("aria-current")).toBe(
+    "page",
+  );
+  expect(useUIStore.getState().selectedEnvironmentId).toBe(stopped.id);
+  expect(
+    nativeInvoke.mock.calls.some(([command]) => String(command).startsWith("start_environment")),
+  ).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Ports" }));
+  expect(screen.getByRole("button", { name: "Ports" }).getAttribute("aria-current")).toBe("page");
+  // Another request through the realm uses the same environment and section.
+  const { openDialog } = await import("@/lib/federation/open-workspace");
+  act(() => openDialog("environment-rebuild", project.id, stopped.id));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Container" }).getAttribute("aria-current")).toBe(
+      "page",
+    ),
+  );
 });

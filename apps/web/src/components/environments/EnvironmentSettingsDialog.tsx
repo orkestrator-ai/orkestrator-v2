@@ -90,6 +90,8 @@ interface EnvironmentSettingsDialogProps {
   onRestart?: (environmentId: string, options: backend.RecreateEnvironmentOptions) => Promise<void>;
   /** The section to open on; the first section when absent or not shown. */
   initialSection?: string;
+  /** Reselect the requested section for each navigation request. */
+  sectionRequest?: number;
 }
 
 const AGENT_ORDER: backend.AgentExtensionId[] = [
@@ -333,6 +335,7 @@ export function EnvironmentSettingsDialog({
   onUpdate,
   onRestart,
   initialSection,
+  sectionRequest,
 }: EnvironmentSettingsDialogProps) {
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
@@ -1503,6 +1506,7 @@ export function EnvironmentSettingsDialog({
         title="Environment Settings"
         menuItems={menuItems}
         defaultSection={initialSection}
+        sectionRequest={sectionRequest}
         headerActions={
           <>
             <Button variant="outline" onClick={() => onOpenChange(false)}>

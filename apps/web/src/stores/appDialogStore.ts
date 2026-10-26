@@ -22,12 +22,14 @@ export type AppDialogRequest =
 interface AppDialogState {
   /** The dialog to show, or null when none is open. */
   request: AppDialogRequest | null;
+  requestSequence: number;
   open: (request: AppDialogRequest) => void;
   close: () => void;
 }
 
 export const useAppDialogStore = create<AppDialogState>()((set) => ({
   request: null,
-  open: (request) => set({ request }),
+  requestSequence: 0,
+  open: (request) => set((state) => ({ request, requestSequence: state.requestSequence + 1 })),
   close: () => set({ request: null }),
 }));

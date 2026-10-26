@@ -1,6 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { AppDialogHost } from "../../apps/web/src/components/layout/AppDialogHost";
+import { portalStore } from "../../apps/web/src/lib/portal/portal-store";
+import { onGlobalSettingsCloseRequest } from "../../apps/web/src/lib/settings-navigation";
+import { useAppDialogStore } from "../../apps/web/src/stores/appDialogStore";
+import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import type { Environment } from "../../apps/web/src/types";
 import type { ConnectionList, ConnectToRemoteInput } from "@orkestrator/protocol/connections";
 import { MachinesSettings } from "../../apps/web/src/components/settings/machines/MachinesSettings";
+
+const rebuildMode = new URLSearchParams(window.location.search).has("rebuild");
+const oldEnvironment = {
+  id: "old-environment",
+  projectId: "project",
+  name: "Old environment",
+  order: 0,
+  environmentType: "containerized",
+  status: "stopped",
+  containerId: "old-container",
+  networkAccessMode: "restricted",
+  createdAt: "2026-10-26T00:00:00Z",
+} as Environment;
 
 const connections: ConnectionList = {
   activeConnectionId: "local",
@@ -70,7 +89,22 @@ function snapshot(version: string, latestVersion: string | null) {
     tools: [
       { name: "claude", pinnedVersion: "2.1.3", source: "managed", installedVersion: "2.1.3" },
     ],
-    image: null,
+    image: rebuildMode
+      ? {
+          name: "orkestrator-v2:latest",
+          present: true,
+          compatible: true,
+          reason: null,
+          releaseReference: "old",
+          outdatedEnvironments: [
+            {
+              id: oldEnvironment.id,
+              name: oldEnvironment.name,
+              projectId: oldEnvironment.projectId,
+            },
+          ],
+        }
+      : null,
   };
 }
 
@@ -104,15 +138,29 @@ function hostSignIns() {
 // What reached the backend and the desktop API is kept in localStorage so the
 // browser assertion proves the exact input crossed each boundary.
 function installMachinesFixture() {
+  if (rebuildMode) {
+    portalStore.store.setState({ selfId: "bk_self" as never });
+    useEnvironmentStore.setState({ environments: [] });
+  }
   window.orkestrator = {
     ...window.orkestrator!,
     listen: () => () => undefined,
     invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
       const value = ((): unknown => {
         switch (command) {
+          case "get_environment_extensions":
+            return [];
+          case "get_environment_inputs":
+          case "get_container_lifecycle_snapshot":
+          case "get_environment_resources":
+            return null;
+          case "list_recovery_copies":
+            return { copies: [], limit: 3 };
+          case "start_environment":
+            throw new Error("Navigation must not start the stopped environment");
           case "get_node_status":
             return {
-              nodeId: "bk_self",
+              nodeId: rebuildMode ? null : "bk_self",
               mode: "command",
               registrationEnabled: true,
               controllers: [],
@@ -180,9 +228,30 @@ function installMachinesFixture() {
 
 export function MachinesSettingsFixture() {
   useState(installMachinesFixture);
+  const [showMachines, setShowMachines] = useState(true);
+  useEffect(() => onGlobalSettingsCloseRequest(() => setShowMachines(false)), []);
   return (
     <main className="p-4">
-      <MachinesSettings />
+      <AppDialogHost />
+      {showMachines && <MachinesSettings />}
+      {rebuildMode && (
+        <>
+          <button onClick={() => useEnvironmentStore.getState().setEnvironments([oldEnvironment])}>
+            Load environment snapshot
+          </button>
+          <button
+            onClick={() =>
+              useAppDialogStore.getState().open({
+                kind: "environment-settings",
+                environmentId: oldEnvironment.id,
+                section: "container",
+              })
+            }
+          >
+            Request Rebuild again
+          </button>
+        </>
+      )}
     </main>
   );
 }

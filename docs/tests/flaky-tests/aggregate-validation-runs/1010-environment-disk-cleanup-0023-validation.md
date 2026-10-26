@@ -48,3 +48,29 @@ mise run test:logged -- --name rerun-release-desktop -- bun test ./tests/unit/re
   plus one deterministic register defect inherited from `main` (since fixed
   on `main`). No
   implementation, assertion, deadline or skip changed for the flakes.
+
+## Second run, after rebasing (2026-10-26)
+
+- **Change under test:** `85b42e17` (the branch rebased onto main
+  `f1223e0b`), adding the `recurring-live-ab-cli-*` fix and these docs.
+- **Command:** `mise run test:logged -- --name full-test -- mise run test`
+  (default `TMPDIR`). Host load average 40 to 52 on 12 CPUs from other workers.
+- **Result:** exit 1 after 1462.0 s of test groups. Root and agent-support,
+  bridges and protocol passed. Workspace: web 9,833 passed, 10 skipped, 4
+  failed plus one worker killed; backend 11,741 passed, 3 failed; desktop,
+  protocol, toolchain, CLI and web-public passed. Evidence:
+  `/tmp/orkestrator-test-run.MAKR4a/` on omarchy-hp.
+
+| Owning file | Failing test | Owner alone |
+| --- | --- | --- |
+| `apps/web/src/App.test.tsx` | `App Docker availability > keeps the first startup diagnostic when the confirming probe fails differently` (1,149.20 ms) | Passed (13.4 s). |
+| `apps/web/src/components/build/BuildLaunchDialog.radix.test.tsx` | worker crashed (SIGKILL) | Passed (1.7 s). |
+| `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning` (2,706.50 ms) | Passed (7.9 s). |
+| `apps/web/src/components/chat/rich-transcript.long-fixture.test.tsx` | `long transcript fixture > bounded concurrency and queues; caches converge within bounds over 20 scroll/expand cycles` (120,177.75 ms) | Passed (115.5 s). |
+| `apps/backend/src/core/commands-project-creation.test.ts` | `create_project_from_scratch > add_project serializes two clones of the same missing local path` (270.40 ms) | Failed once alone (`serializes two requests for the same canonical path`), then passed twice (15.9 s, and 17.5 s with `main`'s versions of the branch's files). |
+| `apps/backend/src/core/storage-writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` (5,513.20 ms timeout) | Timed out alone three times at load 44 to 52, including with `main`'s versions of the branch's files checked out; it had passed alone in 4.9 s at lower load. A five-second deadline on a whole-source scan, not caused by this change. |
+| `apps/backend/src/core/opencode-coordinator-research-live.test.ts` | flake 0785 (40,003.87 ms) | Timed out alone again (40,024.77 ms). |
+
+Web reruns used `bun test --cwd apps/web ./<file> --parallel=1 --only-failures`;
+backend reruns added `--preload ../../tests/setup-node.ts`, each through
+`mise run test:logged`.

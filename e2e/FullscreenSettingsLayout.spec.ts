@@ -88,6 +88,52 @@ test.describe("desktop settings sections", () => {
   });
 });
 
+test("Tab and Shift+Tab cycle inside settings without reaching the page underneath", async ({
+  page,
+}) => {
+  await page.goto("/fullscreen-settings");
+  const dialog = page.getByRole("dialog", { name: "Fixture settings" });
+  const first =
+    page.viewportSize()!.width < 768
+      ? dialog.getByRole("combobox", { name: "Settings section" })
+      : dialog.getByRole("button", { name: "Section 1", exact: true });
+  const last = dialog.getByRole("button", { name: "Close settings" });
+  await expect(first).toBeFocused();
+  // Reverse navigation must work immediately, before a forward Tab.
+  await page.keyboard.press("Shift+Tab");
+  await expect(last).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(first).toBeFocused();
+
+  const focusedLabel = () =>
+    page.evaluate(() => {
+      const active = document.activeElement;
+      const dialog = document.querySelector("[role='dialog'][aria-label='Fixture settings']");
+      if (!active || !dialog?.contains(active)) return `outside:${active?.textContent ?? ""}`;
+      return active.getAttribute("aria-label") ?? active.textContent?.trim() ?? "";
+    });
+
+  // Visit every visible control in order and prove each press advances before
+  // checking the wrap. A focus trap stuck on one element must fail this test.
+  const controls = [
+    ...(page.viewportSize()!.width < 768
+      ? ["Settings section"]
+      : Array.from({ length: 16 }, (_, index) => `Section ${index + 1}`)),
+    "Jump to last section",
+    "Close settings",
+  ];
+  expect(await focusedLabel()).toBe(controls[0]);
+  for (const label of [...controls.slice(1), controls[0]]) {
+    await page.keyboard.press("Tab");
+    expect(await focusedLabel()).toBe(label);
+  }
+  for (const label of [...controls.slice(1).reverse(), controls[0]]) {
+    await page.keyboard.press("Shift+Tab");
+    expect(await focusedLabel()).toBe(label);
+  }
+  await expect(page.getByRole("button", { name: "Page underneath" })).not.toBeFocused();
+});
+
 test("narrow settings use the selector to reach the last section with the keyboard", async ({
   page,
 }, testInfo) => {

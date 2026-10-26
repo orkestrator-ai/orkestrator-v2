@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { ActionBar } from "../../apps/web/src/components/layout/ActionBar";
+import { TerminalProvider } from "../../apps/web/src/contexts/TerminalContext";
+import { useProjectStore } from "../../apps/web/src/stores/projectStore";
+import { useUIStore } from "../../apps/web/src/stores/uiStore";
 import { EnvironmentItem } from "../../apps/web/src/components/environments/EnvironmentItem";
 import { AppDialogHost } from "../../apps/web/src/components/layout/AppDialogHost";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
@@ -27,6 +31,22 @@ function installBackend() {
       return new Promise<T>(() => {});
     },
   } as unknown as Window["orkestrator"];
+  useUIStore.setState({
+    selectedProjectId: "settings-drawer-project",
+    selectedEnvironmentId: ENVIRONMENT_ID,
+  });
+  useProjectStore.setState({
+    projects: [
+      {
+        id: "settings-drawer-project",
+        name: "settings-project",
+        gitUrl: "",
+        localPath: "/fixture/settings-project",
+        order: 0,
+        addedAt: "2026-10-16T00:00:00.000Z",
+      },
+    ],
+  });
   useEnvironmentStore.setState({
     environments: [
       {
@@ -52,34 +72,36 @@ export function EnvironmentSettingsDrawerFixture() {
   );
   if (!environment) return null;
   return (
-    <main className="flex h-screen flex-col bg-background text-foreground">
-      <AppDialogHost />
-      <MobileAppShellLayout
-        selectedProjectId="settings-drawer-project"
-        selectedEnvironmentId={null}
-        title="Settings drawer fixture"
-        filesPanelOpen={false}
-        centralPanelStyle={{}}
-        actionBar={null}
-        agentInfoButton={null}
-        sidebar={
-          <div className="pt-12">
-            <EnvironmentItem
-              environment={environment}
-              isSelected={false}
-              onSelect={() => {}}
-              onDelete={() => {}}
-              onStart={() => {}}
-              onStop={() => {}}
-              onRestart={() => {}}
-            />
-          </div>
-        }
-        filesPanel={null}
-        onTitleBarMouseDown={() => {}}
-      >
-        <div>Workspace</div>
-      </MobileAppShellLayout>
-    </main>
+    <TerminalProvider>
+      <main className="flex h-screen flex-col bg-background text-foreground">
+        <AppDialogHost />
+        <MobileAppShellLayout
+          selectedProjectId="settings-drawer-project"
+          selectedEnvironmentId={null}
+          title="Settings drawer fixture"
+          filesPanelOpen={false}
+          centralPanelStyle={{}}
+          actionBar={<ActionBar presentation="grid" />}
+          agentInfoButton={null}
+          sidebar={
+            <div className="pt-12">
+              <EnvironmentItem
+                environment={environment}
+                isSelected={false}
+                onSelect={() => {}}
+                onDelete={() => {}}
+                onStart={() => {}}
+                onStop={() => {}}
+                onRestart={() => {}}
+              />
+            </div>
+          }
+          filesPanel={null}
+          onTitleBarMouseDown={() => {}}
+        >
+          <div>Workspace</div>
+        </MobileAppShellLayout>
+      </main>
+    </TerminalProvider>
   );
 }

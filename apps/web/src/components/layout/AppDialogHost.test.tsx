@@ -1,11 +1,16 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { FullscreenSettingsLayout } from "@/components/settings/FullscreenSettingsLayout";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { portalStore } from "@/lib/portal/portal-store";
 import * as realEnvironmentSettingsDialog from "@/components/environments/EnvironmentSettingsDialog";
 import { invoke } from "@/lib/native/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useUIStore } from "@/stores/uiStore";
 import { useProjectStore } from "@/stores/projectStore";
 import type { Environment, Project } from "@/types";
 
@@ -21,6 +26,8 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
     onRestart,
     onUpdate,
     open,
+    initialSection,
+    sectionRequest,
   }: {
     environment: Environment;
     onOpenChange: (open: boolean) => void;
@@ -30,28 +37,43 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
     ) => Promise<void>;
     onUpdate: (environment: Environment) => void;
     open: boolean;
+    initialSection?: string;
+    sectionRequest?: number;
   }) =>
     open ? (
-      <div role="dialog" aria-label="Environment Settings">
-        <span>Settings for {environment.name}</span>
-        <button type="button" onClick={() => onUpdate({ ...environment, status: "stopping" })}>
-          Stop from settings
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            void onRestart(environment.id, {
-              intent: "discard",
-              expectedContainerId: environment.containerId ?? null,
-            })
-          }
-        >
-          Restart from settings
-        </button>
-        <button type="button" onClick={() => onOpenChange(false)}>
-          Close settings
-        </button>
-      </div>
+      <FullscreenSettingsLayout
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Environment Settings"
+        menuItems={[
+          { id: "first", label: "General", icon: null },
+          { id: "container", label: "Container", icon: null },
+          { id: "ports", label: "Ports", icon: null },
+        ]}
+        defaultSection={initialSection}
+        sectionRequest={sectionRequest}
+      >
+        {(active) => (
+          <>
+            <span>Settings for {environment.name}</span>
+            <span>Section: {active}</span>
+            <button type="button" onClick={() => onUpdate({ ...environment, status: "stopping" })}>
+              Stop from settings
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void onRestart(environment.id, {
+                  intent: "discard",
+                  expectedContainerId: environment.containerId ?? null,
+                })
+              }
+            >
+              Restart from settings
+            </button>
+          </>
+        )}
+      </FullscreenSettingsLayout>
     ) : null,
 }));
 
@@ -107,6 +129,16 @@ describe("AppDialogHost", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expectDomAbsent(screen.queryByRole("dialog"));
     expect(useAppDialogStore.getState().request).toBeNull();
+  });
+
+  test("opens an environment's settings on the section the request names", async () => {
+    render(<AppDialogHost />);
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ kind: "environment-settings", environmentId: "env-1", section: "container" });
+    });
+    expect(await screen.findByText("Section: container")).toBeTruthy();
   });
 
   test("writes a settings change to the environment store, which every row reads", async () => {
@@ -345,4 +377,48 @@ test("repository settings waits for saved config, saves through the owner's proj
   } finally {
     useConfigStore.setState(initialConfig, true);
   }
+});
+
+test("a local Rebuild requested before the environment snapshot arrives opens Container when it arrives", async () => {
+  const originalPortal = portalStore.getState();
+  const originalUI = useUIStore.getState();
+  const originalRemote = useRemoteWorkspaceStore.getState();
+  try {
+    portalStore.store.setState({ selfId: "self" as never });
+    useEnvironmentStore.setState({ environments: [] });
+    render(<AppDialogHost />);
+    act(() =>
+      openMachineWorkspace({
+        connectionId: "self",
+        projectId: "project-1",
+        environmentId: "env-delayed",
+        dialog: "environment-rebuild",
+        title: "Delayed",
+      }),
+    );
+    expect(useAppDialogStore.getState().request).toMatchObject({ environmentId: "env-delayed" });
+    expectDomAbsent(screen.queryByRole("dialog"));
+    act(() => useEnvironmentStore.getState().addEnvironment(environment("env-delayed", "Delayed")));
+    expect(await screen.findByText("Section: container")).toBeTruthy();
+  } finally {
+    portalStore.store.setState(originalPortal, true);
+    useUIStore.setState(originalUI, true);
+    useRemoteWorkspaceStore.setState(originalRemote, true);
+  }
+});
+
+test("a repeated Rebuild returns from Ports to Container", async () => {
+  render(<AppDialogHost />);
+  const rebuild = () =>
+    useAppDialogStore.getState().open({
+      kind: "environment-settings",
+      environmentId: "env-1",
+      section: "container",
+    });
+  act(rebuild);
+  expect(await screen.findByText("Section: container")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Ports" }));
+  expect(screen.getByText("Section: ports")).toBeTruthy();
+  act(rebuild);
+  expect(await screen.findByText("Section: container")).toBeTruthy();
 });

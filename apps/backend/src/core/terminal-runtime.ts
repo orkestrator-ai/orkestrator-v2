@@ -125,6 +125,15 @@ export class TerminalRuntime {
     return this.processes.size;
   }
 
+  /** Live terminals whose shell runs in a container (`docker exec`), not on the host. */
+  containerProcessCount(): number {
+    let count = 0;
+    for (const id of this.processes.keys()) {
+      if (this.sessionConfigs.get(id)?.kind === "container") count += 1;
+    }
+    return count;
+  }
+
   /** Live local terminal shells and the environment each was opened for. */
   localProcessRoots(): Array<{ environmentId: string; pid: number }> {
     const roots: Array<{ environmentId: string; pid: number }> = [];

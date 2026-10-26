@@ -51,6 +51,13 @@
 - **Evidence:** `orkestrator-test-run.sWhHYC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory after aggregate finalization; the aggregate summary is in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#mixed-version-compatibility-main-merge--2026-10-24).
 - **Assessment:** confirmed intermittent recurrence. Hydration under contention remains a hypothesis; no owning implementation, assertion, timeout or skip changed during merge resolution.
 
+## Remote host upgrades (0033) recurrence — 2026-10-26
+
+- **Original command:** `mise run test` on branch `todo-0033-remote-host-upgrades-e94b3d6c2a08` (base `93018933`), Bun 1.4.4 on Arch Linux x64, host load average 15–17 with other worktrees running suites. The diff touches no backend agent, bridge or projection code.
+- **Failure:** line 170 after 1,317.22 ms: the cold-restart projection's `turn.phase` was `recovering`, expected `idle` (the 2026-10-24 symptom).
+- **Suite counts:** backend 11,709 passed, 142 skipped, 4 failed across 11,855 tests in 703 files (731.65 s); the others were 0785, 1006 and the CLI package's 1007.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts --parallel=2 tests/codex-subagent-cards.test.ts` from `apps/backend`: 1 passed.
+- **Evidence:** `/tmp/orkestrator-test-run.s0jA9M/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` on omarchy-hp.
 
 ## Hidden-resume review recurrence — 2026-10-26
 

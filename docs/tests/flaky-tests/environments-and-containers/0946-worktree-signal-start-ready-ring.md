@@ -19,3 +19,7 @@
 - **Isolated rerun:** `mise run test:logged -- --name worktree-signal-isolated -- bun test --cwd apps/backend ./src/core/container-worktree-signal-install.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0 (78.5 s logged).
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.wMbwCL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and adjacent `summary.json`.
 - **Assessment:** recurrence confirmed by the complete owning-file pass. The ordering-race hypothesis remains unconfirmed. No worktree-signal implementation, assertion, deadline or skip changed.
+
+## Remote host upgrades main merge — 2026-10-26
+
+The aggregate repeated the missing `ready` ring (81.74 ms). The complete unchanged owner passed alone in 72.2 seconds. Commands, worker configuration, counts and evidence are recorded in [1009](../aggregate-validation-runs/1009-remote-host-main-merge-validation.md). No implementation, assertion, deadline or skip changed.

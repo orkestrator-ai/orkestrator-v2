@@ -20,7 +20,7 @@ export interface MachineWorkspaceSpec {
   createEnvironment?: boolean;
   /**
    * Open one of the node's own dialogs over the selection: the project's, or
-   * with `environmentId`, the environment's settings.
+   * with `environmentId`, the environment's settings (or its rebuild).
    */
   dialog?: RealmDialog;
   /** For messages while it opens. */
@@ -101,8 +101,13 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
 /** Opens one of this window's own node's dialogs, as its sidebar menus do. */
 export function openDialog(dialog: RealmDialog, projectId: string, environmentId?: string): void {
   const dialogs = useAppDialogStore.getState();
-  if (dialog === "environment-settings") {
-    if (environmentId) dialogs.open({ kind: "environment-settings", environmentId });
+  if (dialog === "environment-settings" || dialog === "environment-rebuild") {
+    if (environmentId)
+      dialogs.open({
+        kind: "environment-settings",
+        environmentId,
+        ...(dialog === "environment-rebuild" ? { section: "container" as const } : {}),
+      });
     return;
   }
   dialogs.open({ kind: dialog, projectId });

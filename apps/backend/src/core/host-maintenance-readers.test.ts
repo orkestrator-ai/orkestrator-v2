@@ -6,6 +6,7 @@ import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
 import { isHostIdle } from "@orkestrator/protocol/host-maintenance";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
+import type { PtyProcess } from "./pty.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
 
@@ -46,6 +47,43 @@ test("restart impact counts working and waiting agents and unfinished pipelines"
     workingAgents: 2,
     waitingAgents: 1,
     activePipelines: 1,
+  });
+});
+
+test("restart impact counts container terminals apart from host terminals", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const pty = { pid: 0 } as unknown as PtyProcess;
+  runtime.terminals.rememberSession("local-1", {
+    kind: "local",
+    environmentId: "env-local",
+    cols: 80,
+    rows: 24,
+  });
+  runtime.terminals.registerProcess("local-1", pty);
+  for (const id of ["box-1", "box-2"]) {
+    runtime.terminals.rememberSession(id, {
+      kind: "container",
+      containerId: "c0ffee",
+      cols: 80,
+      rows: 24,
+    });
+    runtime.terminals.registerProcess(id, pty);
+  }
+  // A session remembered but not running is no terminal yet.
+  runtime.terminals.rememberSession("box-3", {
+    kind: "container",
+    containerId: "c0ffee",
+    cols: 80,
+    rows: 24,
+  });
+  const context = {
+    runtime,
+    agentRegistry: { snapshot: async () => ({ entries: [] }) },
+    storage: { listAllBuildPipelines: async () => [] },
+  } as unknown as CommandContext;
+  expect(await readRestartImpact(context)).toMatchObject({
+    terminals: 3,
+    containerTerminals: 2,
   });
 });
 

@@ -49,6 +49,14 @@ immediately afterwards; the next isolated rerun with the same command passed
 - Evidence: `/tmp/orkestrator-test-run.BiI1L3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer logged-run summary: `/tmp/orkestrator-test-run.zPP21z/summary.json`.
 - Assessment: another aggregate-only timeout. The cause remains unconfirmed; no implementation, assertion, timeout or skip changed.
 
+## Remote host upgrades (0033) recurrence — 2026-10-26
+
+- **Original command:** `mise run test` on branch `todo-0033-remote-host-upgrades-e94b3d6c2a08` (base `93018933`), Bun 1.4.4 on Arch Linux x64 (omarchy-hp), host load average 15–17 with other worktrees running suites. The diff touches no OpenCode, provider or coordinator code.
+- **Failure:** the 40-second outer deadline (40,002.96 ms), one dangling process killed.
+- **Isolated reruns:** both failed the same way. `bun test --preload ../../tests/setup-node.ts --parallel=1 src/core/opencode-coordinator-research-live.test.ts` from `apps/backend` (40,019.46 ms), then the documented `mise run test:logged -- --name research-live-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` (40,013.44 ms; load average 10–15). Not yet confirmed as a flake on this host: no passing isolated run was obtained.
+- **Evidence:** `/tmp/orkestrator-test-run.s0jA9M/…toolchain.log.gz` and `/tmp/orkestrator-test-run.LsRgok/` on omarchy-hp.
+- **Assessment:** consistent with the earlier timeout under contention; a host-specific cause (the real `opencode serve` not reaching `connected` within 20 s at this load) is possible. No implementation, deadline or skip changed.
+- **Again after rebasing onto `a51045a4`:** `mise run test` hit the same 40-second deadline (40,001.60 ms) as the backend's only failure (11,742 passed, 142 skipped, 1 failed).
 
 ## Desktop recovery validation — 2026-10-26
 
@@ -70,6 +78,10 @@ log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.gmkkKT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Complete unchanged owner: `mise run test:logged -- --name opencode-research-isolated -- bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1` passed (exit 0, 2.4 s).
 - Assessment: another aggregate-only timeout at the 40 s deadline. Still open; nothing changed.
+
+## Remote host upgrades main merge — 2026-10-26
+
+The merged aggregate repeated the 40-second timeout (40003.45 ms). The complete unchanged owner also timed out (40015.45 ms, zero passed, one failed; one dangling fixture process killed). This remains non-green in isolation. Commands, workers, counts and evidence are recorded in [1009](../aggregate-validation-runs/1009-remote-host-main-merge-validation.md). No implementation, assertion, deadline or skip changed.
 
 ## Recurrence 2026-10-26 (0023 validation, Linux)
 

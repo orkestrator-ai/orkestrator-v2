@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import type { HostTask } from "@orkestrator/protocol/host-maintenance";
 
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import * as backend from "@/lib/backend";
 import { HostDependencySettings } from "./HostDependencySettings";
 import { connectedHostClient as client } from "@/test/host-maintenance-client";
@@ -73,6 +74,26 @@ test("lists environments still on an older image and pulls the release image", a
     screen.getByRole("button", { name: "Pull ghcr.io/orkestrator-ai/orkestrator-v2:2.21.1" }),
   );
   await waitFor(() => expect(pull).toHaveBeenCalledTimes(1));
+});
+
+test("each outdated environment opens its own rebuild when the host can reach it", () => {
+  const rebuild = mock(() => undefined);
+  render(
+    <HostDependencySettings
+      client={client}
+      snapshot={detailed}
+      accept={() => undefined}
+      onRebuildEnvironment={rebuild}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Rebuild feature-x" }));
+  expect(rebuild).toHaveBeenCalledWith({ id: "env-1", name: "feature-x", projectId: "p1" });
+});
+
+test("without a way to open the environment, the list says where to rebuild it", () => {
+  render(<HostDependencySettings client={client} snapshot={detailed} accept={() => undefined} />);
+  expectDomAbsent(screen.queryByRole("button", { name: "Rebuild feature-x" }));
+  expect(screen.getByText(/Settings → Container → Rebuild/)).toBeTruthy();
 });
 
 test("following the newest gh asks first", async () => {

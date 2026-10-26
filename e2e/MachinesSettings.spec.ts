@@ -205,3 +205,37 @@ for (const inputMethod of ["typing", "paste"] as const) {
     expect(saved).toMatchObject({ nickname: name, select: false });
   });
 }
+
+test("self Rebuild with no node id waits for its snapshot and repeated requests return to Container", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/machines-settings?rebuild");
+  await page.getByRole("button", { name: /^Updates for Studio/ }).click();
+  await page.getByRole("button", { name: "Rebuild Old environment", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: /^Updates for Studio/ })).toHaveCount(0);
+  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByTestId("machine-row")).toHaveCount(0);
+  await page.getByRole("button", { name: "Load environment snapshot" }).click();
+  await expect(
+    settings.getByRole("button", { name: "Rebuild (keeps files)…", exact: true }),
+  ).toBeVisible();
+  if (testInfo.project.name === "mobile-chromium") {
+    await settings.getByRole("combobox", { name: "Settings section" }).click();
+    await page.getByRole("option", { name: "Ports", exact: true }).click();
+  } else await settings.getByRole("button", { name: "Ports", exact: true }).click();
+  await expect(
+    settings.getByRole("button", { name: "Rebuild (keeps files)…", exact: true }),
+  ).toHaveCount(0);
+  // Exercise another request without closing the already mounted dialog.
+  await page.evaluate(() => {
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (entry) => entry.textContent === "Request Rebuild again",
+    );
+    if (!button) throw new Error("Missing fixture request control");
+    button.click();
+  });
+  await expect(
+    settings.getByRole("button", { name: "Rebuild (keeps files)…", exact: true }),
+  ).toBeVisible();
+});

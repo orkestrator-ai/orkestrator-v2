@@ -13,12 +13,20 @@ import {
   mockToastWarning,
   resetSonnerMocks,
 } from "../../../../../../tests/mocks/sonner";
+import { portalStore } from "@/lib/portal/portal-store";
 import {
+  onGlobalSettingsCloseRequest,
   onGlobalSettingsRequest,
   requestCurrentMachineUpdates,
   takeMachineUpdatesRequest,
 } from "@/lib/settings-navigation";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useUIStore } from "@/stores/uiStore";
 import { MachinesSettings } from "./MachinesSettings";
+
+const originalPortal = portalStore.getState();
+const originalRemote = useRemoteWorkspaceStore.getState();
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -333,6 +341,49 @@ describe("Machines settings", () => {
       command: "request_host_update",
       args: { version: "2.26.0" },
     });
+  });
+
+  test("an environment on an older image opens its own rebuild on that machine", async () => {
+    portalStore.store.setState({ selfId: "bk_self" as never });
+    install({
+      maintenance: {
+        self: current,
+        bk_build: {
+          ...outdated,
+          image: {
+            name: "orkestrator-v2:latest",
+            present: true,
+            compatible: true,
+            reason: null,
+            releaseReference: "ghcr.io/orkestrator-ai/orkestrator-v2:2.25.0",
+            outdatedEnvironments: [{ id: "env-old", name: "old-box", projectId: "project-1" }],
+          },
+        },
+      },
+    });
+    installDesktop();
+    const closeSettings = mock(() => undefined);
+    const stopListening = onGlobalSettingsCloseRequest(closeSettings);
+    try {
+      await renderPage();
+      fireEvent.click(
+        within(row("Build box")).getByRole("button", { name: /^Updates for Build box/ }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(await within(dialog).findByRole("button", { name: "Rebuild old-box" }));
+      await waitFor(() => expectDomAbsent(screen.queryByText("Updates for Build box")));
+      expect(closeSettings).toHaveBeenCalledTimes(1);
+      expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_build");
+      expect(useRemoteWorkspaceStore.getState().requests.bk_build?.request).toMatchObject({
+        projectId: "project-1",
+        environmentId: "env-old",
+        dialog: "environment-rebuild",
+      });
+    } finally {
+      stopListening();
+      portalStore.store.setState(originalPortal, true);
+      useRemoteWorkspaceStore.setState(originalRemote, true);
+    }
   });
 
   test("the update request from a banner opens the current machine's updates", async () => {
@@ -942,3 +993,52 @@ test("the account overview follows machine additions and removals while Settings
     listener.mockImplementation(() => Promise.resolve(() => {}));
   }
 });
+
+for (const nodeId of ["bk_self", null]) {
+  test(`self Rebuild opens local Container settings with nodeId ${nodeId}`, async () => {
+    const originalDialogs = useAppDialogStore.getState();
+    const originalUI = useUIStore.getState();
+    portalStore.store.setState({ selfId: "bk_self" as never });
+    useRemoteWorkspaceStore.setState({ active: null });
+    install({
+      status: { ...commandStatus, nodeId: nodeId as never },
+      maintenance: {
+        self: {
+          ...current,
+          image: {
+            name: "orkestrator-v2:latest",
+            present: true,
+            compatible: true,
+            reason: null,
+            releaseReference: "ghcr.io/orkestrator-ai/orkestrator-v2:2.25.0",
+            outdatedEnvironments: [{ id: "env-self", projectId: "project-1", name: "self-old" }],
+          },
+        },
+      },
+    });
+    installDesktop();
+    const closeSettings = mock(() => undefined);
+    const stopListening = onGlobalSettingsCloseRequest(closeSettings);
+    try {
+      await renderPage();
+      fireEvent.click(within(row("Desk")).getByRole("button", { name: /^Updates for Desk/ }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(await within(dialog).findByRole("button", { name: "Rebuild self-old" }));
+      expect(closeSettings).toHaveBeenCalledTimes(1);
+      expectDomAbsent(screen.queryByText("Updates for Desk"));
+      expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-self");
+      expect(useAppDialogStore.getState().request).toEqual({
+        kind: "environment-settings",
+        environmentId: "env-self",
+        section: "container",
+      });
+    } finally {
+      stopListening();
+      portalStore.store.setState(originalPortal, true);
+      useRemoteWorkspaceStore.setState(originalRemote, true);
+      useAppDialogStore.setState(originalDialogs, true);
+      useUIStore.setState(originalUI, true);
+    }
+  });
+}

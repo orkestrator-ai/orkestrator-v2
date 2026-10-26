@@ -11,3 +11,7 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name command-catalogue-scale-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-command-catalogue-scale.test.ts --parallel=1 --only-failures` passed, exit 0 in 6.5 seconds.
 - **Evidence:** `orkestrator-test-run.iEyQ7i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** the unchanged owner's isolated pass establishes intermittence. Host scheduling or contention is a hypothesis, not a confirmed root cause. No catalogue code, assertion, timeout or skip changed.
+
+## Remote host upgrades main merge — 2026-10-26
+
+The two-worker backend aggregate repeated the five-second deadline (5517.02 ms). The complete unchanged owner passed alone in 5.9 seconds. Commands, workers, counts and evidence are in [1009](../aggregate-validation-runs/1009-remote-host-main-merge-validation.md). No implementation, assertion, deadline or skip changed.

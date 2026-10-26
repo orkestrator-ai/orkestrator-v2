@@ -1,4 +1,4 @@
-import { lazy, useEffect } from "react";
+import { lazy, useEffect, useRef } from "react";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import {
@@ -25,9 +25,17 @@ const LazyRepositorySettings = lazy(async () => ({
 /** Renders the dialog `useAppDialogStore` holds, outside every drawer and row. */
 export function AppDialogHost() {
   const request = useAppDialogStore((state) => state.request);
+  const requestSequence = useAppDialogStore((state) => state.requestSequence);
   switch (request?.kind) {
     case "environment-settings":
-      return <EnvironmentSettingsHost environmentId={request.environmentId} />;
+      return (
+        <EnvironmentSettingsHost
+          key={request.environmentId}
+          environmentId={request.environmentId}
+          section={request.section}
+          sectionRequest={requestSequence}
+        />
+      );
     case "repository-settings":
       return <RepositorySettingsHost projectId={request.projectId} />;
     case "delete-project":
@@ -37,17 +45,28 @@ export function AppDialogHost() {
   }
 }
 
-function EnvironmentSettingsHost({ environmentId }: { environmentId: string }) {
+function EnvironmentSettingsHost({
+  environmentId,
+  section,
+  sectionRequest,
+}: {
+  environmentId: string;
+  section?: "container";
+  sectionRequest: number;
+}) {
   const close = useAppDialogStore((state) => state.close);
   const environment = useEnvironmentStore(
     (state) => state.environments.find((candidate) => candidate.id === environmentId) ?? null,
   );
   const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
 
-  // The environment disappeared (deleted, or the list was replaced). Drop the
-  // request too, so a later environment that reuses the id cannot reopen it.
+  // A snapshot may arrive after navigation. Keep the request pending until
+  // its environment appears; only a previously visible environment disappearing
+  // means it was removed. Keying this host by id resets that history.
+  const seenEnvironment = useRef(false);
   useEffect(() => {
-    if (!environment) close();
+    if (environment) seenEnvironment.current = true;
+    else if (seenEnvironment.current) close();
   }, [close, environment]);
 
   if (!environment) return null;
@@ -61,6 +80,8 @@ function EnvironmentSettingsHost({ environmentId }: { environmentId: string }) {
           if (!open) close();
         }}
         environment={environment}
+        initialSection={section}
+        sectionRequest={sectionRequest}
         onUpdate={(updated) => updateEnvironment(updated.id, updated)}
         onRestart={backend.recreateEnvironment}
       />

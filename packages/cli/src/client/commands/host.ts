@@ -70,8 +70,12 @@ function hostLines(host: HostMaintenanceSnapshot): string[] {
   }
   if (host.impact) {
     const impact = host.impact;
+    const inContainers =
+      impact.containerTerminals !== undefined
+        ? ` (${impact.containerTerminals} in containers)`
+        : "";
     lines.push(
-      `Running: ${impact.workingAgents} agents working, ${impact.waitingAgents} waiting, ${impact.activePipelines} pipelines, ${impact.terminals} terminals`,
+      `Running: ${impact.workingAgents} agents working, ${impact.waitingAgents} waiting, ${impact.activePipelines} pipelines, ${impact.terminals} terminals${inContainers}`,
     );
   }
   if (host.tools?.length) {

@@ -37,3 +37,38 @@ for (const dialog of ["delete-project", "repository-settings", "environment-sett
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
   });
 }
+
+test("an environment's rebuild opens its settings on the Container section", () => {
+  portalStore.store.setState({ selfId: "bk_self" as never });
+  openMachineWorkspace({
+    connectionId: "bk_self",
+    projectId: "project",
+    environmentId: "env",
+    dialog: "environment-rebuild",
+    title: "Local",
+  });
+  expect(useAppDialogStore.getState().request).toEqual({
+    kind: "environment-settings",
+    environmentId: "env",
+    section: "container",
+  });
+  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+});
+
+test("another node's environment rebuild goes to that node's realm", () => {
+  portalStore.store.setState({ selfId: "bk_self" as never });
+  openMachineWorkspace({
+    connectionId: "bk_other",
+    projectId: "project",
+    environmentId: "env",
+    dialog: "environment-rebuild",
+    title: "Remote",
+  });
+  expect(useAppDialogStore.getState().request).toBeNull();
+  expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_other");
+  expect(useRemoteWorkspaceStore.getState().requests.bk_other?.request).toMatchObject({
+    projectId: "project",
+    environmentId: "env",
+    dialog: "environment-rebuild",
+  });
+});

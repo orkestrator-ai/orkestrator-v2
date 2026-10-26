@@ -160,8 +160,14 @@ export interface HostRestartImpact {
   unknownAgents?: number;
   /** Build pipelines currently running (paused pipelines are idle). */
   activePipelines: number;
-  /** Terminals the backend owns; their shells end with it. */
+  /** Every terminal the backend owns. Host shells end with it. */
   terminals: number;
+  /**
+   * Of `terminals`, those whose shell runs in a container. The shell keeps
+   * running there, but the backend's attachment ends: the tab opens a new
+   * shell when the backend is back. Older backends leave it out.
+   */
+  containerTerminals?: number;
   /** Bridges and servers the backend runs on the host; they restart with it. */
   hostServers: number;
   measuredAt: string;

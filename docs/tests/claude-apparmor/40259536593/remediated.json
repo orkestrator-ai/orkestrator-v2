@@ -1,0 +1,44 @@
+{
+  "phase": "remediated",
+  "kernel": "7.0.0-1017-azure",
+  "os": "PRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nVERSION=\"26.04.1 LTS (Resolute Raccoon)\"\nVERSION_CODENAME=resolute\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=resolute\nLOGO=ubuntu-logo\n",
+  "cliVersion": "2.1.309 (Claude Code)",
+  "probe": {
+    "available": true
+  },
+  "tiers": {
+    "normal": {
+      "tier": "enforced",
+      "available": true,
+      "delegation": true
+    },
+    "strict": {
+      "tier": "enforced",
+      "available": true,
+      "delegation": true
+    }
+  },
+  "results": [
+    {
+      "scenario": "default-sandbox-writes",
+      "modelCalls": 2,
+      "toolError": false,
+      "written": true
+    },
+    {
+      "scenario": "coordinator-sandbox-reads",
+      "modelCalls": 2,
+      "toolError": false,
+      "written": false
+    },
+    {
+      "scenario": "coordinator-sandbox-refuses",
+      "modelCalls": 2,
+      "toolError": true,
+      "written": false
+    }
+  ],
+  "providerPromptRefused": false,
+  "revision": "18811727e82822fe6ef1fc36a1164d23acb79716",
+  "runId": "40259536593"
+}

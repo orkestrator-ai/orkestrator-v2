@@ -2926,7 +2926,7 @@ export class NativeAgentService {
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
-  ): Promise<void> {
+  ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
     if (status !== "idle" && status !== "error") return;
@@ -2942,7 +2942,10 @@ export class NativeAgentService {
         try {
           failure =
             (await provider.turnTerminalError(session.providerSessionId, requestId)) ?? undefined;
-        } catch {
+        } catch (error) {
+          if (error instanceof ProviderUnavailableError && error.retryAfterMs !== undefined) {
+            return error.retryAfterMs;
+          }
           // Unreadable: leave the outcome for an observer rather than
           // recording a success nobody proved.
           return;

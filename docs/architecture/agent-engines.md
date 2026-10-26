@@ -500,6 +500,19 @@ theirs too: `message.updated`, `message.part.updated`, `session.updated`,
 The SDK and CLI are pinned to the same exact version, and
 `tests/unit/version-drift.test.ts` enforces that they agree.
 
+Attachments travel as `file` parts (`openCodePromptParts` in
+`opencode-provider-helpers.ts`), and OpenCode routes a `file://` part by its
+declared MIME type alone: `text/plain` runs its Read tool (text inline, images
+and PDFs as attachments, binary refused in a message the model still gets), an
+image type is decoded as an image, and anything else is inlined as a data URL.
+`openCodeAttachmentMime` therefore labels a non-image file `text/plain`; a text
+file once labelled `image/png` failed decoding after `promptAsync` had
+returned 204, and OpenCode stored no message. Such a background failure
+reaches the backend only as a `session.error`; `OpenCodeStreamState` keeps the
+first one after each dispatch (`dispatchFailure`), and
+`readOpenCodeTurnTerminalError` settles the request `failed` with it when the
+history holds no message for the request.
+
 ### Maintaining the OpenCode integration
 
 The v2 SDK uses flat parameters instead of nested `path`/`body` objects:
@@ -625,6 +638,13 @@ sandbox, so adapters without a provider sandbox still report the outer boundary.
 Pipeline runs are unattended. The coordinator always
 uses the immutable `coordinator-read-only` policy regardless of an environment
 override.
+
+On Linux the Claude bridge refuses a turn that requires the CLI's command
+sandbox (a `provider` sandbox, or a coordinator qualified on it) when
+bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
+Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
+probe's reason instead of every Bash call failing; see
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
 
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the
@@ -912,7 +932,11 @@ user's own credentials, so:
   catalogue's first model. A login can refuse a model its provider lists, so
   the first model is a last resort. An agent-test profile also receives the
   host's saved default, which it uses when its own settings name no default
-  that a signed-in provider serves.
+  that a signed-in provider serves. `/global/models` marks that starting model
+  `sessionDefault` (`markSessionDefault` in `models.ts`; global settings only,
+  as no session asks), and every launch default that has no saved model (Multi
+  Review rows, the launch dialogs' `firstModelFor`) picks the marked row before
+  the first, so a review row runs where a tab would.
 - **"Signed in" is per provider.** `GET /global/auth` reports each provider's
   status; there is no single account. Sign-in itself is not served: Pi's login
   is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no

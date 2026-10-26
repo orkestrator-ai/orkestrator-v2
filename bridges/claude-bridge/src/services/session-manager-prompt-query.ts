@@ -17,7 +17,7 @@ import {
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
-import { claudeExecutionSandbox } from "./claude-execution-sandbox.js";
+import { claudeExecutionSandbox, claudeSandboxRefusal } from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -34,7 +34,11 @@ import {
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-manager-core.js";
+import {
+  claudeExecutableOptions,
+  sdkSessionIdFromBridgeId,
+  sessionOperationError,
+} from "./session-manager-core.js";
 import { answerClaudeElicitation } from "./session-manager-parked-interactions.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
 import {
@@ -93,6 +97,10 @@ export async function resolveQueryPlan(
     session.executionPolicy,
     options?.readOnly,
   );
+  // The prompt route refuses this before accepting the prompt; this covers a
+  // turn that reaches the CLI another way, or a host that changed since.
+  const sandboxRefusal = claudeSandboxRefusal(policy);
+  if (sandboxRefusal) throw sessionOperationError("invalid", sandboxRefusal);
   // What a cold command-discovery probe must reproduce to answer for this
   // session rather than for a default CLI (see `claude-query-config.ts`).
   session.commandDiscoveryInputs = {

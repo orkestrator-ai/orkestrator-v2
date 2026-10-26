@@ -75,6 +75,20 @@ export function axisEnforceable(axis: ResourceAxis, daemon: ResourceEnforcement)
   return support === true || (support === null && !daemon.rootless);
 }
 
+/**
+ * The axes of `limits` this daemon would not enforce ({@link axisEnforceable}).
+ * Creating a runtime with any of them is refused, so a budget that names one
+ * is worth saying so about wherever it is set.
+ */
+export function unenforceableAxes(
+  limits: ContainerResourceLimits,
+  daemon: Pick<ResourceEnforcement, "rootless" | "support">,
+): ResourceAxis[] {
+  return (["cpus", "memoryMiB", "pids"] as const).filter(
+    (axis) => limits[axis] !== null && !axisEnforceable(axis, { ...daemon, memoryBytes: null }),
+  );
+}
+
 export interface BuiltInResourceDefault {
   /** What a new runtime gets: only the axes this daemon enforces. */
   limits: ContainerResourceLimits;

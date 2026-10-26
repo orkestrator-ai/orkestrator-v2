@@ -343,7 +343,7 @@ host's login to it, never the host directory. Pi is the one exception, below:
 | Claude | Process-scoped OAuth access token read from the host `CLAUDE_CONFIG_DIR`/`~/.claude` (or Keychain), and `ANTHROPIC_API_KEY` when inherited. The bridge keeps the profile's own `CLAUDE_CONFIG_DIR`. |
 | Codex | Owner-only snapshot of host `CODEX_HOME`/`~/.codex` `auth.json` in the profile's own `CODEX_HOME`: an API key, or the ChatGPT access and id tokens with a placeholder refresh token; `OPENAI_API_KEY` when inherited |
 | Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
-| Grok | Owner-only snapshot of host `~/.grok/auth.json`, with each refresh token blanked and expired logins dropped, for local runs and for containers |
+| Grok | Owner-only snapshot of host `~/.grok/auth.json` in the profile's own HOME, with each refresh token blanked and expired logins dropped, for local runs and for containers. Containers stage and are pushed that snapshot (not the real host file, as before 2026-10-26), so editing it is what a container receives; a run that sets `GROK_HOME` (the CLI scenarios' disposable copy) is staged from there instead |
 | OpenCode | Owner-only snapshot of host `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` in the profile's own XDG data directory: API keys and well-known tokens, OAuth access tokens with the refresh token blanked; `OPENCODE_API_KEY` when inherited. Host OpenCode config and state are not copied. |
 | Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory. Tilde overrides expand against the host home and relative overrides resolve before HOME changes. |
 

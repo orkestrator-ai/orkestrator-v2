@@ -438,6 +438,28 @@ export class NativeAgentService {
   }
 
   /**
+   * An environment's runtime stopped with its bridges: withdraw their parked
+   * requests and settle the sessions' turn activity
+   * (`NativeAgentLaunchActivityReconciler.settleStoppedSessions`). Called by
+   * every path that stops a runtime itself; the activity sweep catches
+   * container runtimes that stopped some other way.
+   */
+  async environmentRuntimeStopped(environmentId: string): Promise<void> {
+    this.withdrawEnvironmentInteractions(environmentId);
+    const sessions = await this.storage.listNativeAgentSessions();
+    await this.launches.settleStoppedSessions(environmentId, sessions);
+  }
+
+  /** Whether the session's last turn was cut off by its runtime stopping. */
+  sessionStoppedMidTurn(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): boolean {
+    return this.launches.sessionStoppedMidTurn(environmentId, agent, logicalSessionKey);
+  }
+
+  /**
    * Operational kill switch. Existing adopted sessions keep reconciling so a
    * request already observed is not stranded; no new session is adopted.
    */
@@ -559,6 +581,8 @@ export class NativeAgentService {
       trackScan: (task) => this.trackScan(task),
       recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds) =>
         this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
+      withdrawEnvironmentInteractions: (environmentId) =>
+        this.withdrawEnvironmentInteractions(environmentId),
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchPromptWithPreparation: (input, prepare) =>
         this.dispatchPromptInternal(input, prepare),
@@ -3439,6 +3463,7 @@ export class NativeAgentService {
               this.launches.recordObservedActivity(durable.key, {
                 providerSessionId: durable.providerSessionId,
                 state: "working",
+                activeRequestId: input.requestId,
               });
               this.observations.recordDispatchAccepted({
                 sessionKey: durable.key,

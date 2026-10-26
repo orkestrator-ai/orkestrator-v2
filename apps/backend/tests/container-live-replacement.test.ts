@@ -20,6 +20,7 @@ import { waitForContainerBoot } from "../src/core/container-readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { startRuntime } from "./container-live-start";
+import { removeLabelledResources } from "./container-live-cleanup";
 import {
   POPULATE,
   STATE_SNAPSHOT,
@@ -51,25 +52,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ENABLED) return;
-  const ids = (await docker(["ps", "-aq", "--filter", `label=orkestrator-owner=${owner}`]))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  const volumes = (
-    await docker(["volume", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
-  // Environment networks are labelled with the same private owner.
-  const networks = (
-    await docker(["network", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  // Containers, volumes and environment networks all carry the private owner.
+  const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
-}, 120_000);
+  expect(leftovers).toEqual([]);
+}, 180_000);
 
 /** Providers whose host inputs are staged into the runtime (none by default). */
 interface StagedProviders {

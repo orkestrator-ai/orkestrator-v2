@@ -1,4 +1,5 @@
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
 import { runCommand } from "./shell.js";
 
 /**
@@ -69,17 +70,63 @@ export function parseBootProbe(output: string): BootObservation {
   return { kind: "current", bootId, phase, failureCode };
 }
 
-async function containerIsRunning(containerId: string): Promise<boolean> {
+/** Whether the container runs, and when its current (or last) run started. */
+async function containerRunState(
+  containerId: string,
+): Promise<{ running: boolean; startedAt: string }> {
   try {
     const { stdout } = await runCommand(
       "docker",
-      ["inspect", "-f", "{{.State.Running}}", containerId],
+      ["inspect", "-f", "{{.State.Running}} {{.State.StartedAt}}", containerId],
       { timeoutMs: 10_000 },
     );
-    return stdout.trim() === "true";
+    const [running = "", startedAt = ""] = stdout.trim().split(/\s+/, 2);
+    return { running: running === "true", startedAt };
   } catch {
-    return false;
+    return { running: false, startedAt: "" };
   }
+}
+
+const RECORD_SECOND = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+/**
+ * The failure code an exited container's last boot recorded, or null.
+ *
+ * PID 1 no longer exists, so the record cannot be matched by its start time
+ * the way {@link parseBootProbe} matches a running one. It counts only when it
+ * was written during the container's last run: its `updatedAt` (whole seconds,
+ * written by the entrypoint) is not before Docker's `State.StartedAt` for that
+ * run. A record an earlier start left behind, for an entrypoint that died
+ * before writing anything, is never reported as this boot's failure.
+ */
+export function parseExitedBootRecord(content: string, startedAt: string): string | null {
+  const line = content.split("\n", 1)[0] ?? "";
+  if (!line.startsWith("{") || line.length > MAX_BOOT_STATUS_BYTES) return null;
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (record.version !== 1 || record.phase !== "failed") return null;
+  const code = record.failureCode;
+  if (typeof code !== "string" || !FAILURE_CODE.test(code)) return null;
+  const updatedAt = record.updatedAt;
+  const runStartedSecond = `${startedAt.slice(0, 19)}Z`;
+  if (typeof updatedAt !== "string" || !RECORD_SECOND.test(updatedAt)) return null;
+  if (!RECORD_SECOND.test(runStartedSecond) || runStartedSecond.startsWith("0001-")) return null;
+  return Date.parse(updatedAt) >= Date.parse(runStartedSecond) ? code : null;
+}
+
+/** Reads the final boot record out of a stopped container (`docker cp` needs no running process). */
+async function readExitedBootFailure(
+  containerId: string,
+  startedAt: string,
+): Promise<string | null> {
+  const copied = await copyOutBounded(containerId, BOOT_STATUS_PATH, MAX_BOOT_STATUS_BYTES, 10_000);
+  if (copied.kind !== "bytes") return null;
+  const file = extractSingleTarFile(copied.tar, MAX_BOOT_STATUS_BYTES);
+  return file.ok ? parseExitedBootRecord(file.content, startedAt) : null;
 }
 
 export async function observeContainerBoot(containerId: string): Promise<BootObservation> {
@@ -166,9 +213,15 @@ export async function waitForContainerBoot(
     }
     unreachableStreak = observation.kind === "unreachable" ? unreachableStreak + 1 : 0;
     // A failed entrypoint exits, which stops the container; an exec into it
-    // then fails for as long as we care to wait.
-    if (observation.kind === "unreachable" && !(await containerIsRunning(containerId))) {
-      throw new ContainerInitializationError("failed", "container-exited");
+    // then fails for as long as we care to wait. Its last record usually
+    // still names why (a fail-closed firewall exits at once, before the next
+    // poll), so that code is reported when this run wrote it.
+    if (observation.kind === "unreachable") {
+      const state = await containerRunState(containerId);
+      if (!state.running) {
+        const recorded = await readExitedBootFailure(containerId, state.startedAt);
+        throw new ContainerInitializationError("failed", recorded ?? "container-exited");
+      }
     }
     if (now() >= deadline) throw new ContainerInitializationError("timed-out", null);
     await new Promise((resolve) =>

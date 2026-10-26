@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { removeLabelledResources } from "./container-live-cleanup";
 import {
   drainContainerProcesses,
   observeContainerBoot,
@@ -74,38 +75,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ENABLED) return;
-  // Containers carry the run label or (when created by backend code under
+  // Resources carry the run label or (when created by backend code under
   // test) this run's private owner label; nothing else is touched.
-  const ids = new Set<string>();
-  for (const filter of [`label=${RUN_LABEL}`, `label=orkestrator-owner=${owner}`]) {
-    for (const id of (await docker(["ps", "-aq", "--filter", filter]).catch(() => "")).split(
-      "\n",
-    )) {
-      if (id) ids.add(id);
-    }
-  }
-  if (ids.size > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  // Volumes are labelled with this run's private owner namespace.
-  const volumes = (
-    await docker(["volume", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`]).catch(
-      () => "",
-    )
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
-  // Networks carry the run label or, when backend code created them, this
-  // run's private owner label.
-  const networks = new Set<string>();
-  for (const filter of [`label=${RUN_LABEL}`, `label=orkestrator-owner=${owner}`]) {
-    for (const id of (
-      await docker(["network", "ls", "-q", "--filter", filter]).catch(() => "")
-    ).split("\n")) {
-      if (id) networks.add(id);
-    }
-  }
-  if (networks.size > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  const leftovers = await removeLabelledResources(docker, [
+    `label=${RUN_LABEL}`,
+    `label=orkestrator-owner=${owner}`,
+  ]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
+  expect(leftovers).toEqual([]);
   // Removing a running container takes several seconds on a loaded host; the
   // default hook timeout would abandon the cleanup part-way.
 }, 180_000);
@@ -274,7 +251,7 @@ describe("C12 persistent workspace survives stop/start and runtime replacement",
         await docker(["exec", second, "sh", "-c", "mountpoint -q /workspace && echo mounted"]),
       ).toBe("mounted");
       await docker(["rm", "-f", second]);
-      await docker(["volume", "rm", ...(storage.volumes ?? []).map((volume) => volume.name)]);
+      for (const volume of storage.volumes ?? []) await docker(["volume", "rm", volume.name]);
     },
     LIVE_TIMEOUT_MS,
   );

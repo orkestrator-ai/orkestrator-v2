@@ -40,3 +40,30 @@ no code these suites import. The launcher case is a timing-sensitive child
 lifecycle assertion under load. No implementation, assertion, timeout or skip
 changed. Raw artifacts were in `/tmp/orkestrator-test-run.is9bfG` (run 1) and
 `/tmp/orkestrator-test-run.2orfi8` (run 2).
+
+
+## Timeout coverage review validation — 2026-10-26
+
+- Commit `006b1000` adds only the migration helper's completion-timeout tests.
+  `mise run test:logged -- --name repository-tests -- mise run test` failed
+  after 610.0 s on the same Linux host, using workspace/root/bridge/protocol
+  reservations of 4/1/2/1 and two backend Bun workers.
+- Backend: 11,793 passed, 143 skipped, eight failed across 11,944 tests in
+  707 files (547.71 s). All other workspace packages and the root, bridge and
+  protocol groups passed. The migration owner passed all 12 tests; formatting,
+  lint and typechecking passed.
+- Evidence: `/tmp/orkestrator-test-run.1QvzPF/summary.json` and
+  `/tmp/orkestrator-test-run.1QvzPF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+| Owner | Aggregate failures | Complete unchanged owner rerun |
+| --- | --- | --- |
+| `apps/backend/src/core/storage-writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` timed out at 6,450.34 ms | `mise run test:logged -- --name storage-writers-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage-writer-guards.test.ts --parallel=1 --only-failures` passed, exit 0, 2.2 s. |
+| `apps/backend/tests/tmux-commands-teardown.test.ts` | Four cases: environment teardown kills live sessions (62.78 ms), orphan reconciliation leaves hooks (95.34 ms), start queued behind teardown (85.49 ms), and interactive terminal polling cleanup (70.08 ms) | `mise run test:logged -- --name tmux-teardown-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/tmux-commands-teardown.test.ts --parallel=1 --only-failures` passed, exit 0, 1.2 s. Recurrences of [0236](../backend-services-and-tooling/0236-tmux-teardown-cleanup-rejection.md), [0245](../backend-services-and-tooling/0245-tmux-orphan-hook-restore.md) and [0786](../backend-services-and-tooling/0786-tmux-interactive-polling-teardown-rejection.md). |
+| `apps/backend/src/core/opencode-coordinator-research-live.test.ts` | Research-server registration exceeded 40 s | `mise run test:logged -- --name opencode-research-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --only-failures` failed, 0 passed, 1 failed, 41.4 s; artifact `/tmp/orkestrator-test-run.dNgugO`. Still reproducible alone as previously documented in 0785. |
+| `apps/backend/tests/tmux-commands-mcp.test.ts` | First-prompt naming cleanup rejected (63.61 ms) | `mise run test:logged -- --name tmux-mcp-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/tmux-commands-mcp.test.ts --parallel=1 --only-failures` failed, 16 passed, 1 failed, 10.0 s; artifact `/tmp/orkestrator-test-run.433RzC`. Reproduces alone; not newly classified as flaky. |
+| `apps/backend/tests/container-readiness.test.ts` | Exited fail-closed boot returned `container-exited` rather than `firewall-missing` (13.02 ms) | `mise run test:logged -- --name container-readiness-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-readiness.test.ts --parallel=1 --only-failures` failed, 10 passed, 1 failed, 0.9 s; artifact `/tmp/orkestrator-test-run.P9PIb7`. Reproduces alone; not newly classified as flaky. |
+
+The storage deadline and four teardown failures passed in unchanged owners,
+confirming intermittency without establishing a cause. The other three failures
+remain reproducible. No backend implementation, assertion, deadline or skip
+changed; the aggregate result remains failed.

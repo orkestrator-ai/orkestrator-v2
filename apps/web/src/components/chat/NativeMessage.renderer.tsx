@@ -34,6 +34,7 @@ import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessag
 import { AgentGroupPart, SubagentPart, TaskGroupPart } from "./NativeMessage.agent-parts";
 import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
 import { ArtifactPart } from "./rich/ArtifactPart";
+import { UserCommandCard } from "./UserCommandCard";
 import { ToolGroupPart } from "./NativeMessage.tool-group";
 
 export function DeferredToolMessagePart({
@@ -413,6 +414,8 @@ function MessagePartContent({
       // A published artifact reference; the card resolves it through the
       // authenticated conversation scope and never trusts its own text.
       return <ArtifactPart part={part} />;
+    case "user-command":
+      return <UserCommandCard command={part.userCommand} />;
     case "task-group":
       return (
         <TaskGroupPart

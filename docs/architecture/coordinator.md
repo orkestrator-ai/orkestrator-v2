@@ -493,6 +493,35 @@ is marked as needing a person ("1 needs you", and named in the tooltip). The
 episode starting or ending announces a `coordinator` change, so the chip
 refreshes without a reload; the notice's own bookkeeping is not announced.
 
+## User `!` commands
+
+A message that starts with `!` in a coordinator conversation's composer runs
+the command as the user in the project's checkout on this node, with the
+user's own environment, and shows its output, the prompt it waits on (link,
+code, ENTER), an input line and Cancel in the conversation. The coordinator's
+agent is told what ran, and what it printed, at the start of its next turn.
+The mechanism is the same as in any agent tab; see
+[user-commands.md](user-commands.md).
+
+**Why this does not break the read-only boundary.** The read-only policy is a
+limit on the *agent*: the bridge's tool hooks, the shell allowlist and the
+sandbox decide what the coordinator model may do, and none of them changes.
+A `!` command is the person at the keyboard acting, exactly as if they typed
+it in a terminal in that checkout, and the backend runs it outside the agent
+entirely:
+
+- only the composer can start one (`run_user_command` is not a Control MCP or
+  agent tool, and the backend never treats a leading `!` in prompt text as a
+  command), so the coordinator model cannot use it to escape its policy, and
+  neither can mail, a workflow or a scheduled prompt;
+- the agent receives the command and its output as text in its next prompt,
+  not as a tool it can call again;
+- it may write to the checkout, as the user's own terminal may. It does not
+  take the coordinator-turn lease, so a long-running command (`npm login`
+  waiting on a browser) does not block Sync or branch switching; the
+  repository toolbar notices a branch or HEAD change it makes as it would any
+  other external change.
+
 ## Control MCP
 
 Coordinator uses the same Control MCP HTTP endpoint as an ordinary external
@@ -592,7 +621,13 @@ delegation's close, so failed wake writes and backend restarts preserve that
 qualification. Remote workers use the same bounded hold when their node
 reports `backgroundWorkPending` through `get_worker_request_state`; older
 nodes retain their previous turn-only settlement behavior. A report is always
-released immediately, even if background work continues.
+released immediately, even if background work continues. So is a turn end
+while a command in the worker's environment is waiting on the user (a sign-in
+link, a code, a password; see [user-commands.md](user-commands.md)): that turn
+ended to hand something to a person, and the coordinator is woken at once. A
+command an agent runs in a worker that starts waiting on the user also sends
+the main conversation one workflow notice with the link and code, whether or
+not the worker's turn has ended, and the panel shows it until it clears.
 
 A worker started by `launch_environment` receives its request as the startup
 tab's initial prompt. That prompt counts as an undelivered request until the

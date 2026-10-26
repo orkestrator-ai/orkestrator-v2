@@ -30,6 +30,7 @@ import {
 } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
+import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
@@ -141,6 +142,32 @@ const refreshNativeAgentCommandsMock = mock(async (input: { agent: AgentPlatform
   outcome: "reread" as const,
   projection: projectionFor(input.agent),
 }));
+let userCommands: UserCommandRecord[] = [];
+const runUserCommandMock = mock(
+  async (input: { environmentId: string; tabId: string; command: string }) => {
+    const record: UserCommandRecord = {
+      id: `cmd-${userCommands.length + 1}`,
+      environmentId: input.environmentId,
+      tabId: input.tabId,
+      command: input.command,
+      target: "container",
+      cwd: "/workspace",
+      status: "running",
+      startedAt: new Date().toISOString(),
+      output: "",
+      outputTruncated: false,
+      context: { state: "pending" },
+      revision: 1,
+    };
+    userCommands = [...userCommands, record];
+    return record;
+  },
+);
+const listUserCommandsMock = mock(async (environmentId: string, tabId: string) => ({
+  environmentId,
+  tabId,
+  commands: userCommands,
+}));
 const getFileTreeMock = mock(async () => []);
 const getLocalFileTreeMock = mock(async () => []);
 
@@ -182,6 +209,9 @@ mock.module("@/lib/backend", () => ({
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   refreshNativeAgentCommands: refreshNativeAgentCommandsMock,
+  runUserCommand: runUserCommandMock,
+  listUserCommands: listUserCommandsMock,
+  listHumanPrompts: async () => ({ prompts: [] }),
 }));
 mock.module("@/lib/pane-layout-persistence", () => ({
   ...realPaneLayoutPersistenceSnapshot,
@@ -256,6 +286,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  userCommands = [];
+  runUserCommandMock.mockClear();
+  listUserCommandsMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
@@ -274,6 +307,44 @@ afterEach(() => {
   });
   useNativeComposeStore.setState({ drafts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
+});
+
+describe("AgentNativeTab ! commands", () => {
+  test("a leading ! runs the command as the user, even mid-turn, and never reaches the agent", async () => {
+    projectionOptions = { phase: "running" };
+    const tabId = "tab-bang";
+    const { input } = await renderTab(tabId);
+    await type(input, tabId, "!npm login --auth-type=web");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(runUserCommandMock).toHaveBeenCalledTimes(1));
+    expect(runUserCommandMock.mock.calls[0]![0]).toEqual({
+      environmentId: "env-1",
+      tabId,
+      command: "npm login --auth-type=web",
+    });
+    await waitFor(() => expect(draftFor(tabId)?.text ?? "").toBe(""));
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    // The card comes from the backend's list, re-read after the run. (Rows
+    // themselves are virtualized and not rendered under happy-dom; the card
+    // has its own suite.)
+    await waitFor(() =>
+      expect(
+        listUserCommandsMock.mock.calls.filter(
+          ([environmentId, tab]) => environmentId === "env-1" && tab === tabId,
+        ).length,
+      ).toBeGreaterThanOrEqual(2),
+    );
+  });
+
+  test("! alone, or a literal send, is ordinary text", async () => {
+    const tabId = "tab-bang-plain";
+    const { input } = await renderTab(tabId);
+    await type(input, tabId, "!");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(runUserCommandMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("AgentNativeTab commands", () => {

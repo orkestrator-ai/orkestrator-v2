@@ -6,6 +6,7 @@
  * not on Claude/OpenCode/Codex SDK payloads.
  */
 
+import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 import type {
   NativeAgentBackgroundTaskKind,
   NativeAgentBackgroundTaskUsage,
@@ -341,6 +342,16 @@ export interface NativeArtifactPart extends NativeBasePart {
   conversationSequence: number;
 }
 
+/**
+ * A shell command the user ran with `!` from the composer, backend-owned
+ * (`list_user_commands`). Synthesized by the tab, never by a provider: the
+ * agent only reads about it at the start of its next turn.
+ */
+export interface NativeUserCommandPart extends NativeBasePart {
+  type: "user-command";
+  userCommand: UserCommandRecord;
+}
+
 export interface NativeAgentGroupPart extends NativeBasePart {
   type: "agent-group";
   parts: NativeAgentActivityPart[];
@@ -362,7 +373,8 @@ export type NativeMessagePart =
   | NativeRetryPart
   | NativeImagePart
   | NativeStatusPart
-  | NativeArtifactPart;
+  | NativeArtifactPart
+  | NativeUserCommandPart;
 
 export interface NativeMessage {
   id: string;

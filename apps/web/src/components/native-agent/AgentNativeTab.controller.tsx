@@ -1,3 +1,8 @@
+import { parseUserCommand } from "@orkestrator/protocol/user-commands";
+import { runUserCommand } from "@/lib/backend";
+import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
+import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
+import { withUserCommandRows } from "@/lib/chat/user-command-rows";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import {
   useCallback,
@@ -874,13 +879,35 @@ export function SharedNativeAgentController({
    * reads it too: a live task is worth announcing whether or not the loaded
    * window happens to contain the row that launched it.
    */
-  const transcriptMessages = useMemo(
+  /*
+   * The user's `!` commands, placed by when they started among the rows the
+   * transcript already has. Backend-owned (`list_user_commands`), so a hidden
+   * or reloaded tab shows the same cards; the agent's next prompt carries them.
+   */
+  const { commands: userCommands, refresh: refreshUserCommands } = useUserCommands(
+    data.environmentId,
+    tabId,
+  );
+  /*
+   * A shell command the agent ran here that waits on the user (a sign-in link,
+   * a code, a password). The user's own `!` commands show theirs on the card.
+   */
+  const promptEnvironments = useMemo(() => [data.environmentId], [data.environmentId]);
+  const environmentPrompts = useHumanPrompts(promptEnvironments);
+  const agentPrompts = useMemo(
     () =>
+      environmentPrompts.filter(
+        (entry) => entry.tabId === tabId && entry.source !== "user-command",
+      ),
+    [environmentPrompts, tabId],
+  );
+  const transcriptMessages = useMemo(() => {
+    const base =
       backgroundTaskRows.length === 0
         ? displayMessages
-        : [...displayMessages, ...backgroundTaskRows],
-    [backgroundTaskRows, displayMessages],
-  );
+        : [...displayMessages, ...backgroundTaskRows];
+    return userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
+  }, [backgroundTaskRows, displayMessages, userCommands]);
   const agentActivityAnnouncement = useNativeAgentActivityAnnouncement(
     transcriptMessages,
     sessionKey,
@@ -1633,6 +1660,45 @@ export function SharedNativeAgentController({
       const restoreComposerFocus = Boolean(
         inputContainerRef.current?.contains(document.activeElement),
       );
+      /*
+       * `!command` runs the command as the user in this tab's workspace (a
+       * coordinator's project checkout for a coordinator), never as a prompt:
+       * it does not queue behind a turn and the agent only reads about it at
+       * the start of its next one. Literal sends and prepared prompts are text.
+       */
+      const userCommand =
+        preparedPrompt || submitOptions?.literal === true ? null : parseUserCommand(text);
+      if (userCommand) {
+        if (
+          draft.attachments.length > 0 ||
+          sendableTranscriptAnnotations(draft.annotations).length > 0
+        ) {
+          reportSendError(
+            "A ! command is text only. Remove the attachments and annotations, or drop the ! to send this to the agent.",
+          );
+          return false;
+        }
+        reportSendError(null);
+        submitInFlightRef.current = true;
+        setIsSubmitting(true);
+        try {
+          await runUserCommand({
+            environmentId: data.environmentId,
+            tabId,
+            command: userCommand,
+          });
+          clearDraft(sessionKey);
+          discardProvisionalDraft();
+          refreshUserCommands();
+          return true;
+        } catch (error) {
+          reportSendError(error instanceof Error ? error.message : String(error));
+          return false;
+        } finally {
+          submitInFlightRef.current = false;
+          setIsSubmitting(false);
+        }
+      }
       const providerSupportedAttachments = retainSupportedAttachments(
         draft.attachments,
         adapter.capabilities.attachments,
@@ -2016,6 +2082,7 @@ export function SharedNativeAgentController({
       data.environmentId,
       data.sessionId,
       discardProvisionalDraft,
+      refreshUserCommands,
       draft.attachments,
       draft.annotations,
       draft.commandSelection,
@@ -3080,14 +3147,19 @@ export function SharedNativeAgentController({
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
       highlightedMessageId={highlightedMessageId}
-      blockingCards={pinnedInteractions.map((interaction) => (
-        <NativeAgentInteractionCard
-          key={interaction.id}
-          interaction={interaction}
-          onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-          onHold={(held) => holdInteraction(interaction.id, held)}
-        />
-      ))}
+      blockingCards={[
+        ...(agentPrompts.length > 0
+          ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
+          : []),
+        ...pinnedInteractions.map((interaction) => (
+          <NativeAgentInteractionCard
+            key={interaction.id}
+            interaction={interaction}
+            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
+          />
+        )),
+      ]}
       transcriptCards={transcriptInteractions.map((interaction) =>
         interaction.kind === "question" ? (
           <NativeAgentQuestionCard

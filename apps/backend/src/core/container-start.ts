@@ -115,7 +115,7 @@ export interface StartInspection {
   bindings: PortBindingSummary | null;
   /** The network the container was created on, or null (`host`, `none`, a joined namespace). */
   network: string | null;
-  /** Networks the container is attached to now. */
+  /** Names and IDs of networks the container is attached to now. */
   attached: string[];
 }
 
@@ -125,7 +125,15 @@ export function parseStartInspection(stdout: string): StartInspection {
   let attached: string[] = [];
   try {
     const value = JSON.parse(networks || "null") as unknown;
-    if (value && typeof value === "object" && !Array.isArray(value)) attached = Object.keys(value);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      attached = Object.entries(value).flatMap(([name, endpoint]) => {
+        // NetworkMode may name the network by ID, while Networks is keyed by
+        // name. Recognize both so recovery neither reconnects an attached
+        // endpoint nor stops a successfully reconnected runtime.
+        const id = (endpoint as { NetworkID?: unknown } | null)?.NetworkID;
+        return typeof id === "string" && id ? [name, id] : [name];
+      });
+    }
   } catch {
     attached = [];
   }

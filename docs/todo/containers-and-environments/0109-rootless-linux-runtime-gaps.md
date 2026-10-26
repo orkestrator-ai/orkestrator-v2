@@ -2,7 +2,8 @@
 
 Found 2026-10-25 against `main` at `ba7cc8d4` (branch
 `todo-0021-container-rebuild-state-8b38e460f2a1`). Code items done
-2026-10-26; the live qualification run remains.
+2026-10-26; the review follow-up qualified the affected paths on a real
+host rootless daemon with the complete environment image.
 
 The first live run on a real rootless Linux daemon (Docker 29.9.1 as a
 systemd user service, RootlessKit 3.3.0 with slirp4netns) qualified volume
@@ -15,7 +16,8 @@ in [container qualification](../../development/container-qualification.md#rootle
 ## Current state
 
 As found on 2026-10-25. All four are handled in code since 2026-10-26 (see
-the items below); only the live re-run with a new image remains.
+the items below); the affected paths subsequently passed the review
+qualification described below.
 
 - Staged inputs (`portable-inputs.ts`) are written owner-only (`0700`
   directories, `0600` files) by the backend's user and bind-mounted read-only
@@ -87,17 +89,14 @@ the items below); only the live re-run with a new image remains.
 
 ### Qualification
 
-- Re-run the live lifecycle (C20), network (C22) and readiness suites on a
-  rootless host with an environment image built from this work
-  (`docker/build.sh`, then the commands in the
-  [evidence section](../../development/container-qualification.md#rootless-linux-host-2026-10-25)
-  with `DOCKER_HOST` pointing at the rootless socket). Not run 2026-10-26: the
-  host had 16 GB free and runs a live Orkestrator, so the ~6 GB image (plus
-  build cache) was not built there. C22 needs host loopback enabled on the
-  daemon under test (a disposable daemon, as in the follow-up, avoids
-  changing the user's). Expect C20 to find `~/.codex/auth.json`, C22 to
-  answer through `10.0.2.2`, and the two C09 readiness fixtures to pass with
-  `TMPDIR` on tmpfs.
+- C20, C22, the two C09 readiness fixtures and authenticated agent-tools
+  access passed on a disposable host rootless daemon with host loopback
+  enabled. The all-mount suite also exercised every declared staged mount
+  through the image's actual root bootstrap and node consumers. See the
+  [review qualification evidence](../../development/container-qualification.md#rootless-review-qualification-2026-10-26)
+  for commands, image identity and limits: the existing full image's
+  bootstrap scripts matched this branch, but its older agent pins were not
+  rebuilt. No user daemon configuration was changed.
 
 ## Constraints and rationale
 
@@ -209,7 +208,8 @@ through the relay (`staged-input-relay.test.ts`), and detached-start
 recovery (`container-start.test.ts`, plus the live-only
 `container-start-docker.test.ts` and rootless assertions in the C20/C22
 live suites, which run only with `RUN_LIVE_DOCKER_TESTS=1` and were not run
-here). The full image's rootless qualification remains the open item above.
+here at that point). The follow-up qualification above subsequently passed
+the affected full-image rootless paths.
 The review's fix pass also made `container-readiness.test.ts` build its tar
 fixture with one 512-byte record (`-b 1`): GNU tar's default 10 KiB padding
 exceeded the 8 KiB boot-record bound added on `main`, which failed that test

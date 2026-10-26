@@ -84,7 +84,7 @@ describe("bind refusal classification", () => {
 function scriptedRun(
   results: Array<string | Error>,
   bindings: string,
-  options: { network?: string; reattach?: boolean } = {},
+  options: { network?: string; networkId?: string; reattach?: boolean } = {},
 ) {
   const calls: string[][] = [];
   const network = options.network ?? "ork-env-net";
@@ -93,8 +93,10 @@ function scriptedRun(
   const run = (async (_command: string, args: string[] = []) => {
     calls.push(args);
     if (args[0] === "inspect") {
-      const networks = attached ? `{"${network}":{"IPAddress":"172.19.0.2"}}` : "{}";
-      return { stdout: `${bindings}\t${network}\t${networks}\n`, stderr: "" };
+      const networks = attached
+        ? JSON.stringify({ [network]: { IPAddress: "172.19.0.2", NetworkID: options.networkId } })
+        : "{}";
+      return { stdout: `${bindings}\t${options.networkId ?? network}\t${networks}\n`, stderr: "" };
     }
     if (args[0] === "network" && args[1] === "connect") {
       attached = options.reattach !== false;
@@ -147,6 +149,19 @@ describe("startDockerContainer", () => {
       "start",
       "inspect",
     ]);
+  });
+
+  test("a container created with a network ID keeps its reconnected endpoint and ports", async () => {
+    const fixture = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE), "ok"], automaticOnly, {
+      networkId: "a".repeat(64),
+    });
+    await startDockerContainer("abc", { run: fixture.run, log: () => undefined });
+    expect(fixture.attached()).toBe(true);
+    expect(fixture.published()).toBe(true);
+    expect(fixture.calls.filter((args) => args[0] === "network")).toEqual([
+      ["network", "connect", "a".repeat(64), "abc"],
+    ]);
+    expect(fixture.calls.some((args) => args[0] === "stop")).toBe(false);
   });
 
   test("a second collision, or one on a fixed port, is returned unchanged", async () => {

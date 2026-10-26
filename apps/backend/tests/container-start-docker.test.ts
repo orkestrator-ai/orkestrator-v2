@@ -1,10 +1,15 @@
 /** Real Docker endpoints and published ports, with bounded collision fault injection. */
 import { afterAll, describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { startDockerContainer } from "../src/core/container-start";
 import { runCommand } from "../src/core/shell";
 
 const image = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim();
-const live = process.env.RUN_LIVE_DOCKER_TESTS === "1" && image ? test : test.skip;
+const enabled = process.env.RUN_LIVE_DOCKER_TESTS === "1" && Boolean(image);
+const live = enabled ? test : test.skip;
 const runId = `start-${crypto.randomUUID()}`;
 const containers: string[] = [];
 let network: string | undefined;
@@ -63,6 +68,60 @@ async function assertPublished(id: string) {
 }
 
 describe("Docker start recovery", () => {
+  // Use TMPDIR on nosuid/nodev to exercise the daemon's actual mount behavior.
+  // Some kernel/runtime combinations preserve those flags and allow the mount.
+  test.skipIf(!enabled || process.env.RUN_ROOTLESS_MOUNT_TESTS !== "1")(
+    "a rootless file bind stays read-only or reports a typed topology refusal",
+    async () => {
+      const security = JSON.parse(await docker(["info", "-f", "{{json .SecurityOptions}}"]));
+      expect(security).toContain("name=rootless");
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-remount-"));
+      const source = path.join(root, "input");
+      try {
+        await fs.writeFile(source, "fixture", { mode: 0o600 });
+        const id = await docker([
+          "create",
+          "--label",
+          `orkestrator-qualification=${runId}`,
+          "--mount",
+          `type=bind,src=${source},dst=/etc/orkestrator-seed/input,readonly`,
+          "--entrypoint",
+          "sleep",
+          image!,
+          "600",
+        ]);
+        containers.push(id);
+        const error = await startDockerContainer(id).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        if (error) {
+          expect(parseContainerLifecycleError(error)).toMatchObject({
+            code: "unsupported-topology",
+          });
+          expect((error as Error).message).toContain(`${source} at /etc/orkestrator-seed/input`);
+          expect(await docker(["inspect", "-f", "{{.State.Running}}", id])).toBe("false");
+        } else {
+          expect(
+            await docker([
+              "exec",
+              "--user",
+              "root",
+              id,
+              "sh",
+              "-c",
+              'test "$(cat /etc/orkestrator-seed/input)" = fixture && if printf changed > /etc/orkestrator-seed/input; then exit 1; else echo readonly; fi',
+            ]),
+          ).toBe("readonly");
+          expect(await fs.readFile(source, "utf8")).toBe("fixture");
+        }
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
+
   live(
     "a real fixed-port collision recovers when its listener closes",
     async () => {
@@ -91,7 +150,7 @@ describe("Docker start recovery", () => {
       `two detached collision failures during ${verb} preserve a later start's ports`,
       async () => {
         const id = await fixture();
-        if (verb === "restart") await docker(["start", id]);
+        if (verb === "restart") await startDockerContainer(id);
         let failures = 0;
         const verbs: string[] = [];
         // Rootful Docker shares the host allocator and cannot naturally reproduce

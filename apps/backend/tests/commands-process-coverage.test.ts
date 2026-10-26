@@ -1058,6 +1058,15 @@ describe("process and platform command behavior", () => {
     }
   });
 
+  test("preserves the RootlessKit alias when topology discovery fails", async () => {
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.2.2 host.docker.internal\n";
+    process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+    const log = await readCommandLog();
+    expect(log).not.toContain("docker exec --user root");
+    expect(log).not.toContain("docker inspect --format");
+  });
+
   for (const existing of ["10.0.2.2", "172.17.0.1"]) {
     test(`explicit host address overrides the namespace gateway (existing=${existing})`, async () => {
       process.env.FAKE_DOCKER_HOSTS_OUTPUT = `${existing} host.docker.internal\n`;
@@ -1065,6 +1074,8 @@ describe("process and platform command behavior", () => {
       await __testing.ensureContainerAgentToolsHost("container-existing", undefined, "10.0.2.2");
       const log = await readCommandLog();
       expect(log.includes("docker exec --user root")).toBe(existing !== "10.0.2.2");
+      // A selected address does not depend on Docker's namespace gateway.
+      expect(log).not.toContain("docker inspect");
       if (existing !== "10.0.2.2") expect(log).toContain("orkestrator-host-repair 10.0.2.2");
     });
   }

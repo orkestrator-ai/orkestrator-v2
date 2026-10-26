@@ -1903,7 +1903,7 @@ export class ReviewFanoutRunner {
     const status = await provider
       .dispatchStatus?.(sessionId, requestId)
       .catch(() => "unknown" as const);
-    if (status === "dispatched") return status;
+    if (status === "dispatched" || status === "pending") return "dispatched";
     let proven = false;
     try {
       proven =

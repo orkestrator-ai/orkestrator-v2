@@ -971,8 +971,11 @@ export class InterleavingWorld {
         !this.session(sessionId).inTransit.has(requestId),
       // As the HTTP bridges answer: positive evidence or `unknown`, never
       // "not sent".
-      dispatchStatus: async (_sessionId: string, requestId: string) =>
-        this.acceptedRequests.has(requestId) ? ("dispatched" as const) : ("unknown" as const),
+      dispatchStatus: async (sessionId: string, requestId: string) => {
+        if (!this.acceptedRequests.has(requestId)) return "unknown" as const;
+        const turn = this.session(sessionId).turns.find((turn) => turn.requestId === requestId);
+        return turn && !turn.finished ? ("pending" as const) : ("dispatched" as const);
+      },
       messages: (sessionId: string) =>
         this.op(owner, reviewerOf(sessionId), "messages", () => {
           const session = this.session(sessionId);

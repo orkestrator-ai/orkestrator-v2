@@ -158,6 +158,9 @@ for (const toolMode of [false, true]) {
             if (outcome === "stale-notice") {
               // Sent, not started: the notice still names the original
               // request, so it is not the continuation's second restart (0112).
+              spyOn(provider, "dispatchStatus").mockImplementation(async (_sessionId, requestId) =>
+                requestId === nextId ? "pending" : "dispatched",
+              );
               await service.advanceNow(started.id);
               const waiting = await read(started.id);
               expect(waiting.phase).toBe("building");

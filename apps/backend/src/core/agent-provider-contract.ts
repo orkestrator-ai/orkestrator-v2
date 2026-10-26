@@ -221,8 +221,8 @@ export class ProviderSessionFailedError extends Error {
  * Whether a restart notice is about an earlier request than `requestId`.
  *
  * Bridges clear the notice when the next turn starts, so a notice naming
- * another request, while the provider confirms it holds `requestId`, means
- * `requestId`'s own turn was accepted and has not started yet. Both halves are
+ * another request, while the provider confirms `requestId` is still pending,
+ * means its own turn was accepted and has not started yet. Both halves are
  * needed: a name can be stale (Claude rewrites its turn-in-flight mark after
  * the turn starts, so a bridge killed in between restores the previous
  * request's name), and a provider that restarted no longer holds the request
@@ -247,7 +247,7 @@ async function interruptionSuperseded(
   const accepted = await provider
     .dispatchStatus(sessionId, requestId)
     .catch(() => "unknown" as const);
-  return accepted === "dispatched";
+  return accepted === "pending";
 }
 
 /**
@@ -332,7 +332,10 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * What a provider can still prove about one dispatch request id.
  *
  * `dispatched` is an assertion, not a guess: the provider holds a durable
- * record that this exact id was accepted. `lost` is the other assertion: an
+ * record that this exact id was accepted, including a completed request.
+ * `pending` additionally proves the accepted request has not finished yet;
+ * only that stronger evidence can supersede another request's restart notice.
+ * `lost` is the other assertion: an
  * earlier provider process recorded the id, this one cannot tell whether its
  * turn ran, and it will refuse the id for good (the read-only twin of a prompt
  * refused with `requestIdRetired`). Neither is "never sent". Everything else —
@@ -340,7 +343,7 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * `unknown`, so a lost record can never be mistaken for a prompt that was never
  * sent.
  */
-export type ProviderDispatchStatus = "dispatched" | "unknown" | "lost";
+export type ProviderDispatchStatus = "dispatched" | "pending" | "unknown" | "lost";
 /**
  * Steering reports positive evidence that a queued instruction was removed,
  * and never `lost`: a steer journal has no retired state.

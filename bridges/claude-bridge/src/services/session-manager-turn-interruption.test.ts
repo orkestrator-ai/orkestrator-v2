@@ -26,6 +26,7 @@ const {
   bridgeInstanceIdForTesting,
   claudeProcessKilledMessage,
   killedClaudeProcessSignal,
+  syncTurnInFlightMark,
 } = await import("./session-manager-turn-interruption.js");
 const { closeSessionRetainingHistory } = await import("./session-manager-close.js");
 
@@ -34,13 +35,15 @@ async function storedMark(
   expected: "present" | "absent",
   timeoutMs = 2_000,
   owner?: string,
+  requestId?: string,
 ): Promise<ClaudeTurnInFlightMark | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const mark = (await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight;
     if (
       (mark !== undefined) === (expected === "present") &&
-      (!owner || mark?.bridgeInstanceId === owner)
+      (!owner || mark?.bridgeInstanceId === owner) &&
+      (!requestId || mark?.requestId === requestId)
     )
       return mark;
     if (Date.now() > deadline) throw new Error(`Timed out waiting for the mark to be ${expected}`);
@@ -80,6 +83,37 @@ function killedBySignal(signal: string): Error {
 }
 
 describe("turn-in-flight mark", () => {
+  test("a new turn renames the mark this process already owns", async () => {
+    await withTemporaryClaudeHome("claude-turn-mark-rename-", async () => {
+      const session = await materializePersistedSession();
+      session.status = "running";
+      try {
+        syncTurnInFlightMark(session, { started: true, requestId: "first-turn" });
+        const first = await storedMark(
+          "present",
+          2_000,
+          bridgeInstanceIdForTesting(),
+          "first-turn",
+        );
+        expect(first?.requestId).toBe("first-turn");
+        expect(session.turnInFlightMarkOwned).toBe(true);
+
+        syncTurnInFlightMark(session, { started: true, requestId: "new-turn" });
+        const next = await storedMark("present", 2_000, bridgeInstanceIdForTesting(), "new-turn");
+        expect(next).toMatchObject({
+          bridgeInstanceId: first!.bridgeInstanceId,
+          pid: process.pid,
+          requestId: "new-turn",
+        });
+        expect(session.turnInFlightMarkRequestId).toBe("new-turn");
+      } finally {
+        session.status = "idle";
+        syncTurnInFlightMark(session);
+        await storedMark("absent");
+      }
+    });
+  });
+
   test("is written while a turn runs and cleared when it completes", async () => {
     await withTemporaryClaudeHome("claude-turn-mark-", async () => {
       const state = await materializePersistedSession();
@@ -413,7 +447,11 @@ test.each(["completed", "stopped", "killed"] as const)(
         call.fail(killedBySignal("SIGKILL"));
         await firstPrompt.catch(() => {});
         await waitFor(() => session.claudeRuntime === undefined);
-        expect(session).toMatchObject({ status: "error", interruption: "restart" });
+        expect(session).toMatchObject({
+          status: "error",
+          interruption: "restart",
+          interruptedRequestId: "background-request",
+        });
         expect(await storedMark("present")).toBeDefined();
       } else if (outcome === "stopped") {
         expect(abortSession(session.id)).toBe(true);

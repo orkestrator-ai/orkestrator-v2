@@ -62,7 +62,7 @@ function harness(transport: ReviewerRecord["resultTransport"] = "structured-outp
       if (options.requestId) bridge.accepted.add(options.requestId);
     },
     async dispatchStatus(_sessionId: string, requestId: string) {
-      return bridge.accepted.has(requestId) ? "dispatched" : "unknown";
+      return bridge.accepted.has(requestId) ? "pending" : "unknown";
     },
   } as unknown as BuildPipelineProvider;
   const host: ReviewFanoutHost = {

@@ -1,3 +1,4 @@
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 /**
  * The bridge's HTTP surface.
  *
@@ -447,7 +448,7 @@ async function routeGlobal(
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?(?:\/(hold))?$/;
+  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|human-prompts|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?(?:\/(hold))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -462,6 +463,9 @@ async function routeSession(
     return json(response, 404, { error: "Not found" });
   }
   const state = sessions.get(match[1]!);
+  if (match[2] === "human-prompts" && request.method === "GET") {
+    return json(response, 200, humanPromptObservation(state?.messages));
+  }
   const action = match[2];
   const subject = match[3];
   const detail = match[4];

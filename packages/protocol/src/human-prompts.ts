@@ -8,7 +8,7 @@
  * actionable item: the link to open, the code to enter, what to answer.
  *
  * Detection is deliberately conservative. A link counts only when its host is
- * a known sign-in host or the text around it says to sign in or authenticate,
+ * a known HTTPS sign-in host and path,
  * so an ordinary URL in build output is never a prompt. A question (password,
  * host key, ENTER) counts only on the last, unterminated line or with an
  * explicit wording that only interactive prompts use.
@@ -105,13 +105,20 @@ function cleanUrl(value: string): string {
   return value.replace(/[.,;:!?]+$/, "");
 }
 
-function isSignInLink(url: string): boolean {
+export function isSignInLink(url: string): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
     return false;
   }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    (parsed.port && parsed.port !== "443")
+  )
+    return false;
   return SIGN_IN_LINKS.some(
     (entry) =>
       entry.host.test(parsed.hostname) && (!entry.path || entry.path.test(parsed.pathname)),
@@ -142,12 +149,17 @@ export function detectHumanPrompt(
 
   let url: string | undefined;
   let urlLine = "";
+  let unknownSignIn = false;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
     for (const match of line.matchAll(URL_PATTERN)) {
       const candidate = cleanUrl(match[0]);
-      const context = `${lines[index - 1] ?? ""}\n${line}`;
-      if (isSignInLink(candidate) || SIGN_IN_CONTEXT.test(context)) {
+      if (!isSignInLink(candidate)) {
+        if (SIGN_IN_CONTEXT.test(`${lines[index - 1] ?? ""}\n${line}`)) unknownSignIn = true;
+        continue;
+      }
+      if (isSignInLink(candidate)) {
+        unknownSignIn = false;
         // The latest link wins: a retried login prints a new one.
         url = candidate;
         urlLine =
@@ -162,19 +174,32 @@ export function detectHumanPrompt(
   for (const line of lines) {
     for (const pattern of CODE_PATTERNS) {
       const match = pattern.exec(line);
-      // A code is digits and letters, never a plain word like "below".
-      if (match?.[1] && /\d/.test(match[1])) code = match[1].toUpperCase();
+      // Labelled uppercase alphabetic device codes are valid too; ordinary
+      // lowercase prose such as "enter the code below" is not a code.
+      if (
+        match?.[1] &&
+        (/\d/.test(match[1]) ||
+          (match[1] === match[1].toUpperCase() &&
+            /^[A-Z]{4,10}(?:-[A-Z]{3,10}){0,2}$/.test(match[1])))
+      )
+        code = match[1].toUpperCase();
     }
   }
 
-  const hostKeyLine = lines.findLast((line) => HOST_KEY.test(line));
+  const hostKeyLine = lines
+    .slice()
+    .reverse()
+    .find((line) => HOST_KEY.test(line));
   const hostKey =
     hostKeyLine !== undefined &&
     /are you sure you want to continue connecting/i.test(unterminated || hostKeyLine)
       ? unterminated || hostKeyLine
       : undefined;
   const secret = SECRET_PROMPT.test(unterminated.trim()) ? unterminated : undefined;
-  const enterLine = lines.findLast((line) => PRESS_ENTER.test(line));
+  const enterLine = lines
+    .slice()
+    .reverse()
+    .find((line) => PRESS_ENTER.test(line));
   const wantsEnter = enterLine !== undefined;
 
   let kind: HumanPromptKind;
@@ -185,6 +210,10 @@ export function detectHumanPrompt(
   } else if (secret) {
     kind = "secret";
     line = secret;
+  } else if (unknownSignIn) {
+    // Unknown destinations stay in terminal text; do not promote the login's
+    // later code or ENTER instruction into trusted sign-in chrome either.
+    return null;
   } else if (url) {
     kind = code ? "device-code" : "sign-in";
     line = urlLine;
@@ -250,7 +279,13 @@ export class HumanPromptScanner {
   }
 
   private update(next: HumanPrompt | null): { prompt: HumanPrompt } | { cleared: true } | null {
-    if (next && next.key === this.current?.key) return null;
+    if (
+      next &&
+      next.key === this.current?.key &&
+      next.wantsEnter === this.current.wantsEnter &&
+      next.text === this.current.text
+    )
+      return null;
     if (!next) {
       if (!this.current) return null;
       // A sign-in link stays relevant after its "Press ENTER" scrolls away;
@@ -287,4 +322,67 @@ export interface HumanPromptEntry {
 
 export interface HumanPromptList {
   prompts: HumanPromptEntry[];
+}
+
+/** Bounded, no-touch observation of live shell output before display projection. */
+export function humanPromptObservation(
+  messages: unknown,
+  tasks?: unknown,
+): {
+  messages: Array<{ parts: Record<string, unknown>[] }>;
+  backgroundTasks: Record<string, unknown>[];
+} {
+  const object = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const parts: Record<string, unknown>[] = [];
+  let remaining = 64 * 1024;
+  let visited = 0;
+  const walk = (value: unknown, depth = 0) => {
+    if (!Array.isArray(value) || depth > 8) return;
+    for (const part of value) {
+      if (++visited > 2048 || remaining <= 0 || parts.length >= 32) return;
+      if (!object(part)) continue;
+      if (
+        typeof part.toolOutput === "string" &&
+        (part.toolState === "pending" || part.toolOutput.includes("Output is being written to:"))
+      ) {
+        const output = part.toolOutput.slice(-Math.min(HUMAN_PROMPT_SCAN_BYTES, remaining));
+        remaining -= output.length;
+        const args = object(part.toolArgs) ? part.toolArgs : {};
+        const command = args.command ?? args.cmd;
+        parts.push({
+          toolUseId: String(part.toolUseId ?? part.id ?? "").slice(0, 200),
+          toolName: String(part.toolName ?? "").slice(0, 100),
+          toolState: part.toolState,
+          toolOutput: output,
+          ...(typeof command === "string" ? { toolArgs: { command: command.slice(0, 500) } } : {}),
+        });
+      }
+      walk(part.parts, depth + 1);
+      walk(part.childTools, depth + 1);
+      if (object(part.task)) walk([part.task], depth + 1);
+    }
+  };
+  if (Array.isArray(messages)) {
+    // Newest first, so a large history cannot starve the active call.
+    for (let i = messages.length - 1; i >= Math.max(0, messages.length - 64); i--) {
+      const message = messages[i];
+      if (object(message)) walk(message.parts);
+    }
+  }
+  const taskList = Array.isArray(tasks) ? tasks : object(tasks) ? Object.values(tasks) : [];
+  const backgroundTasks = taskList
+    .filter(object)
+    .filter((task) => task.status === "running" || task.status === "pending")
+    .slice(-64)
+    .map((task) => ({
+      id: String(task.id ?? "").slice(0, 200),
+      status: task.status,
+      kind: task.kind,
+      ...(typeof task.outputFile === "string"
+        ? { outputFile: task.outputFile.slice(0, 2048) }
+        : {}),
+      ...(typeof task.toolUseId === "string" ? { toolUseId: task.toolUseId.slice(0, 200) } : {}),
+    }));
+  return { messages: [{ parts }], backgroundTasks };
 }

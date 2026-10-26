@@ -40,14 +40,22 @@ annotations are refused, because a command is text only.
   so a progress bar never splits across chunks.
 
 Limits: at most 20 commands per tab, never dropping a running command or one
-the agent has not seen yet, and at most 4 running at once per tab.
+the agent has not seen yet, and at most 4 starting or running at once per tab.
+When all 20 records are unread or running, further commands are refused until
+an agent message consumes context or a delivered record can be evicted.
 
 **Controls.** `write_user_command_input` sends a line, or ENTER on its own; the
 input is never stored, because it may be a password. `cancel_user_command`
-sends Ctrl-C and then terminates the whole process tree.
+sends Ctrl-C and then terminates the whole process tree. An unconfirmed
+termination stays tracked and retryable; cancellation and cleanup report failure.
+Container commands have a private session and inherited identity so termination
+is confirmed inside the container, including descendants that ignore signals.
 
 Environment deletion terminates an environment's commands before the worktree
-is removed. A move refuses while one is running. Backend shutdown ends them all.
+is removed. A move refuses while one is running. Closing a tab or coordinator conversation stops its commands and clears its
+prompts. Backend shutdown ends them all. Launch admission holds the environment
+mutation fence through asynchronous setup and spawn; teardown invalidates
+launches that have not spawned.
 
 **Rendering.** `list_user_commands` is authoritative. The backend announces the
 `user-command` resource (id `env-<environment>:<tab>`) when a command starts,
@@ -65,12 +73,18 @@ another client shows the same cards.
 working directory, how it ended, and bounded output: 8 KiB per command, 24 KiB
 in total, keeping the end. Details:
 
+- Fields are escaped JSON, including commands and metadata, so shell output
+  cannot manufacture a closing delimiter or Markdown fence. The complete block
+  fits the 24 KiB character budget; omitted records remain pending.
 - In a coordinator prompt the block goes after the coordinator block.
 - Provider commands (`/…`) are left untouched, because they parse the prompt's
   start.
 - The commands are marked delivered only once that prompt is dispatched. A
   refused send offers them again, and an ambiguous one replays the same prompt.
-- A command delivered while still running is offered again once it ends.
+- Acknowledgment names the snapshot revision; newer output or completion stays
+  pending. A command delivered while still running is offered again once it ends.
+- Replaying an ambiguous dispatch preserves exactly one block. Prepared prompt
+  replacements, including attachment staging, retain that block.
 - The transcript projection strips one leading block for display
   (`stripUserCommandContext`); the cards already show the commands.
 
@@ -84,14 +98,14 @@ the user.
 `detectHumanPrompt` (protocol, browser-safe) reads the last 16 KiB of output.
 It is deliberately conservative:
 
-- **Link.** A URL counts only on a known sign-in host and path, or when its
-  line (or the line before) says to sign in, log in, authenticate or
-  authorize. Known hosts: npm login and auth, GitHub device and OAuth,
+- **Link.** A URL counts only on a known HTTPS sign-in host and path.
+  Unknown hosts remain ordinary command output and never receive the primary
+  Open action or a coordinator sign-in notice. Known hosts: npm login and auth, GitHub device and OAuth,
   Tailscale, Apple ID, Google, Microsoft device login, AWS SSO, Vercel, Claude
   and OpenAI OAuth, GitLab, Docker, Fly, Cloudflare. A docs link, a PR link or
   a preview URL is not a prompt.
-- **Device code.** It must contain a digit, so "enter the code below" is not a
-  code.
+- **Device code.** Labelled alphanumeric and uppercase alphabetic codes are
+  recognized, including `ABCD-EFGH` and `ABCDEFGH`; ordinary prose is ignored.
 - **Password, passphrase, PIN and username prompts.** These count only on the
   last, unterminated line, the line the process is reading on.
 - **Host-key confirmation.** Only the "Are you sure you want to continue
@@ -111,7 +125,10 @@ waiting prompt by source. It is fed by:
   per distinct prompt, and a sign-in link stays until the command exits or
   prints a new one.
 - **Agent shell calls and background shells:** `AgentHumanPromptMonitor`.
-  Bridges do not push tool output, so every 5 s it reads a short projection of
+  Every 5 s it reads a bounded no-touch `/session/:id/human-prompts` observation
+  from each already-running bridge (OpenCode uses its streamed message cache).
+  This scans output before display projection removes tool details, never
+  reads the tab-facing snapshot, and never changes its cache window. It scans
   each working agent tab (at most 8 per pass, round-robin) and scans:
   - running shell tool calls' streamed output: Codex, Pi and Cursor stream it;
     OpenCode and Grok report it as their providers do;
@@ -119,13 +136,17 @@ waiting prompt by source. It is fed by:
     file is on this host; the path comes from the task or from the launch
     result ("Output is being written to: …"), and is remembered per task.
     Only the provider's own task files are opened
-    (`/tmp/claude-<uid>/…/tasks/<id>.output`), with `O_NOFOLLOW`.
+    (`/tmp/claude-<uid>/…/tasks/<id>.output`), with `O_NOFOLLOW | O_NONBLOCK`. Descriptor type checks reject FIFOs and
+    other non-regular files; read deadlines keep later sessions progressing.
 
   A source is cleared when its call settles, its task ends, or the tab stops
   working.
 
 Every change announces the `human-prompt` resource (id: the environment).
-`list_human_prompts` is the read.
+`list_human_prompts` is the read. Both ephemeral views reconcile on manifest
+recovery and the shared safety cadence, including when no command is running.
+A later ENTER chunk updates actionable state under the same notification
+identity, without sending another coordinator notice.
 
 **Surfaces.**
 

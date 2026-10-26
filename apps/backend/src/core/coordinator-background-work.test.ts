@@ -183,6 +183,15 @@ describe("a worker waiting on the user", () => {
       id: "user-command:1",
       source: "user-command",
     });
+    await world.coordinator.noteWorkerHumanPrompt({
+      ...entry,
+      id: "unknown-host",
+      prompt: { ...prompt, url: "https://unlisted.example/login", key: "unknown-host" },
+    });
+    await world.coordinator.noteWorkerHumanPrompt({
+      ...entry,
+      prompt: { ...prompt, wantsEnter: true },
+    });
     const mail = await world.undelivered(main);
     expect(mail).toHaveLength(1);
     expect(mail[0]).toMatchObject({

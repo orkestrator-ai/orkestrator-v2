@@ -23,6 +23,12 @@ export type HumanPromptChange =
 const MAX_ENTRIES = 512;
 
 export class HumanPromptRegistry {
+  private cleanupRevision = 0;
+
+  get ownerCleanupRevision(): number {
+    return this.cleanupRevision;
+  }
+
   private readonly entries = new Map<string, HumanPromptEntry>();
   private readonly listeners = new Set<(change: HumanPromptChange) => void>();
 
@@ -52,7 +58,8 @@ export class HumanPromptRegistry {
   }): HumanPromptEntry {
     const key = HumanPromptRegistry.key(input.environmentId, input.id);
     const previous = this.entries.get(key);
-    if (previous && previous.prompt.key === input.prompt.key) return previous;
+    if (previous && JSON.stringify(previous.prompt) === JSON.stringify(input.prompt))
+      return previous;
     const entry: HumanPromptEntry = {
       id: input.id,
       environmentId: input.environmentId,
@@ -91,6 +98,7 @@ export class HumanPromptRegistry {
     tabId: string,
     keep: (entry: HumanPromptEntry) => boolean = () => false,
   ): void {
+    this.cleanupRevision += 1;
     for (const entry of Array.from(this.entries.values())) {
       if (entry.environmentId === environmentId && entry.tabId === tabId && !keep(entry)) {
         this.clear(environmentId, entry.id);
@@ -99,6 +107,7 @@ export class HumanPromptRegistry {
   }
 
   clearEnvironment(environmentId: string): void {
+    this.cleanupRevision += 1;
     for (const entry of Array.from(this.entries.values())) {
       if (entry.environmentId === environmentId) this.clear(environmentId, entry.id);
     }

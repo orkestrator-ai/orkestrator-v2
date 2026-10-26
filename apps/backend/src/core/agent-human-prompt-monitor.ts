@@ -5,9 +5,8 @@ import type { HumanPromptRegistry } from "./human-prompt-registry.js";
 /**
  * Watches agent shell commands for prompts that need the user.
  *
- * Bridges do not push tool output to the backend, so this reads it: every few
- * seconds, a short projection read of each working agent tab (bounded per
- * pass, round-robin), scanning
+ * Every few seconds this reads bounded live output through a no-touch
+ * observation route for each working agent tab (bounded per pass, round-robin), scanning
  * - shell tool calls still running, whose output the provider streams into
  *   the transcript (Codex, Pi, Cursor; OpenCode and Grok as they report it);
  * - background shell tasks still running. Their output is in a file the
@@ -80,7 +79,7 @@ function* walkParts(parts: unknown): Generator<Record<string, unknown>> {
   }
 }
 
-/** Running shell calls and their output so far, from a projection's rows. */
+/** Running shell calls and their output so far, before display projection strips the output. */
 export function runningShellSources(messages: unknown): Source[] {
   if (!Array.isArray(messages)) return [];
   const sources: Source[] = [];
@@ -175,11 +174,13 @@ export class AgentHumanPromptMonitor {
     if (this.running) return;
     this.running = true;
     try {
+      const cleanupRevision = this.deps.prompts.ownerCleanupRevision;
       const sessions = (await this.deps.workingSessions().catch(() => [])).filter(
         (session) =>
           !session.environmentId.startsWith("coordinator:") &&
           session.logicalSessionKey.startsWith(`env-${session.environmentId}:`),
       );
+      if (cleanupRevision !== this.deps.prompts.ownerCleanupRevision) return;
       const working = new Set(sessions.map((session) => session.logicalSessionKey));
       // A tab that stopped working has nothing waiting any more.
       for (const [key, entry] of Array.from(this.live)) {
@@ -200,8 +201,20 @@ export class AgentHumanPromptMonitor {
   }
 
   private async scanSession(session: MonitoredSession): Promise<void> {
+    const cleanupRevision = this.deps.prompts.ownerCleanupRevision;
     const tabId = session.logicalSessionKey.slice(`env-${session.environmentId}:`.length);
-    const projection = await this.deps.projection(session);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let projection: Awaited<ReturnType<AgentHumanPromptMonitorDeps["projection"]>>;
+    try {
+      projection = await Promise.race([
+        this.deps.projection(session),
+        new Promise<null>((resolve) => {
+          deadline = setTimeout(() => resolve(null), 2_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+    }
     if (!projection) return;
     const sources: Array<Source & { kind: "agent-tool" | "agent-background-task" }> =
       runningShellSources(projection.messages).map((source) => ({
@@ -231,6 +244,8 @@ export class AgentHumanPromptMonitor {
         }
       }
     }
+    // A close/delete that cleared prompts during I/O wins over this old scan.
+    if (cleanupRevision !== this.deps.prompts.ownerCleanupRevision) return;
     const previous = this.live.get(session.logicalSessionKey)?.ids ?? new Set<string>();
     const current = new Set<string>();
     for (const source of sources) {

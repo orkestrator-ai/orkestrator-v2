@@ -166,7 +166,7 @@ describe("interactive commands", () => {
     }
     await expect(
       service.run({ environmentId: "env", tabId: "tab", command: "sleep 30" }),
-    ).rejects.toThrow("already running");
+    ).rejects.toThrow("already starting or running");
     // Another tab is unaffected.
     await service.run({ environmentId: "env", tabId: "other", command: "true" });
     await service.terminateForEnvironment("env");
@@ -184,10 +184,12 @@ describe("telling the agent", () => {
       (record) => record.status === "exited",
     );
     const first = service.takeContext("env", "tab");
-    expect(first.ids).toEqual([started.id]);
-    expect(first.block).toContain("$ echo hi");
+    expect(first.ids).toEqual([`${started.id}:${service.get(started.id).revision}`]);
+    expect(first.block).toContain('"command":"echo hi"');
     // A refused dispatch never commits: the same block is offered again.
-    expect(service.takeContext("env", "tab").ids).toEqual([started.id]);
+    expect(service.takeContext("env", "tab").ids).toEqual([
+      `${started.id}:${service.get(started.id).revision}`,
+    ]);
     service.markDelivered(first.ids, "req-1");
     expect(service.takeContext("env", "tab")).toEqual({ block: "", ids: [] });
     expect(service.get(started.id).context).toMatchObject({
@@ -212,8 +214,188 @@ describe("telling the agent", () => {
       (record) => record.status === "exited",
     );
     const final = service.takeContext("env", "tab");
-    expect(final.ids).toEqual([started.id]);
+    expect(final.ids).toEqual([`${started.id}:${service.get(started.id).revision}`]);
     expect(final.block).toContain("exit code 0");
     expect(final.block).toContain("finished");
   });
+});
+
+function controlledWorld() {
+  const prompts = new HumanPromptRegistry();
+  let resolveLaunch: () => Promise<import("./user-commands.js").UserCommandLaunch>;
+  const processes: Array<{
+    output: (text: string) => void;
+    exit: (code: number) => void;
+    termination: boolean | Error;
+  }> = [];
+  const launch: import("./user-commands.js").UserCommandLaunch = {
+    target: "worktree",
+    cwd: "/work",
+    spawn() {
+      let data = (_text: string) => {};
+      let exit = (_event: { exitCode: number }) => {};
+      const control = {
+        output: (text: string) => data(text),
+        exit: (code: number) => exit({ exitCode: code }),
+        termination: true as boolean | Error,
+      };
+      processes.push(control);
+      return {
+        pid: 42,
+        write() {},
+        resize() {},
+        kill() {},
+        onData(callback) {
+          data = callback;
+          return { dispose() {} };
+        },
+        onExit(callback) {
+          exit = callback;
+          return { dispose() {} };
+        },
+        async terminate() {
+          if (control.termination instanceof Error) throw control.termination;
+          return control.termination;
+        },
+      };
+    },
+  };
+  resolveLaunch = async () => launch;
+  const service = new UserCommandService({
+    prompts,
+    announce() {},
+    resolve: () => resolveLaunch(),
+  });
+  services.push(service);
+  const run = (command = "echo test", tabId = "tab") =>
+    service.run({ environmentId: "env", tabId, command });
+  return {
+    service,
+    prompts,
+    processes,
+    launch,
+    run,
+    defer() {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      resolveLaunch = async () => {
+        await gate;
+        return launch;
+      };
+      return release;
+    },
+  };
+}
+
+describe("command lifecycle interleavings", () => {
+  test("reserves all four slots before asynchronous resolution and releases failed reservations", async () => {
+    const world = controlledWorld();
+    const release = world.defer();
+    const requests = Array.from({ length: 4 }, () => world.run());
+    await expect(world.run()).rejects.toThrow("already starting or running");
+    expect(world.service.hasRunning("env")).toBe(true);
+    release();
+    await Promise.all(requests);
+    expect(world.processes).toHaveLength(4);
+  });
+
+  test("twenty unread commands impose admission refusal while retaining every pending result", async () => {
+    const world = controlledWorld();
+    for (let i = 0; i < 20; i++) {
+      await world.run();
+      world.processes.at(-1)!.output("x".repeat(70000));
+      world.processes.at(-1)!.exit(0);
+    }
+    for (let i = 0; i < 10; i++) await expect(world.run()).rejects.toThrow("twenty unread");
+    expect(world.service.list("env", "tab")).toHaveLength(20);
+    expect(world.service.list("env", "tab").every((record) => record.output.length <= 65536)).toBe(
+      true,
+    );
+    let delivered = 0;
+    for (let batch = 0; batch < 20 && world.service.takeContext("env", "tab").ids.length; batch++) {
+      const context = world.service.takeContext("env", "tab");
+      expect(context.block.length).toBeLessThanOrEqual(24576);
+      delivered += context.ids.length;
+      world.service.markDelivered(context.ids, "request");
+    }
+    expect(delivered).toBe(20);
+    await world.run();
+    expect(world.service.list("env", "tab")).toHaveLength(20);
+  });
+
+  test("completion and output revisions between snapshot and acknowledgment remain pending", async () => {
+    const world = controlledWorld();
+    const record = await world.run();
+    const snapshot = world.service.takeContext("env", "tab");
+    world.processes[0]!.output("final output");
+    world.processes[0]!.exit(7);
+    world.service.markDelivered(snapshot.ids, "request");
+    const final = world.service.takeContext("env", "tab");
+    expect(final.ids).toHaveLength(1);
+    expect(final.block).toContain("final output");
+    expect(final.block).toContain("exit code 7");
+    expect(world.service.get(record.id).context.state).toBe("pending");
+  });
+
+  for (const failure of [false, new Error("termination failed")]) {
+    test(`unconfirmed termination (${String(failure)}) stays tracked and retryable`, async () => {
+      const world = controlledWorld();
+      const record = await world.run();
+      world.processes[0]!.output("Password: ");
+      world.processes[0]!.termination = failure;
+      await expect(world.service.cancel(record.id)).rejects.toThrow("could not be confirmed");
+      world.processes[0]!.exit(0); // host child gone; descendants still unconfirmed
+      expect(world.service.hasRunning("env")).toBe(true);
+      expect(world.prompts.list()).toHaveLength(1);
+      await expect(world.service.terminateForEnvironment("env")).rejects.toThrow();
+      expect(world.service.get(record.id).status).toBe("running");
+      world.processes[0]!.termination = true;
+      await world.service.terminateForEnvironment("env");
+      expect(world.prompts.list()).toEqual([]);
+      expect(world.service.hasRunning("env")).toBe(false);
+    });
+  }
+
+  for (const operation of ["environment", "tab", "shutdown"] as const) {
+    test(`deferred launch cannot spawn after ${operation} cleanup`, async () => {
+      const world = controlledWorld();
+      const release = world.defer();
+      const pending = world.run();
+      const refused = pending.catch((error: Error) => error);
+      if (operation === "environment") await world.service.terminateForEnvironment("env");
+      else if (operation === "tab") await world.service.terminateForTab("env", "tab");
+      else await world.service.shutdown();
+      release();
+      expect(await refused).toBeInstanceOf(Error);
+      expect(world.processes).toHaveLength(0);
+    });
+  }
+
+  test("closing a tab terminates only its commands and clears every prompt it owns", async () => {
+    const world = controlledWorld();
+    await world.run();
+    await world.run("echo other", "other");
+    world.processes[0]!.output("Password: ");
+    world.processes[1]!.output("Password: ");
+    await world.service.terminateForTab("env", "tab");
+    expect(world.service.list("env", "tab")).toEqual([]);
+    expect(world.service.list("env", "other")[0]?.status).toBe("running");
+    expect(world.prompts.list().map((entry) => entry.tabId)).toEqual(["other"]);
+  });
+});
+
+test("owner admission stays closed after command cleanup until the close is persisted", async () => {
+  const world = controlledWorld();
+  await world.run();
+  const release = world.service.beginOwnerClose("env", "tab");
+  try {
+    await world.service.terminateForTab("env", "tab");
+    await expect(world.run()).rejects.toThrow("closing or unavailable");
+    await world.run("echo other", "other");
+  } finally {
+    release();
+  }
+  await world.run();
 });

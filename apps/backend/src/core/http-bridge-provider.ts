@@ -498,6 +498,20 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.activityBatchReader.read(sessionIds);
   }
 
+  async humanPromptOutput(sessionId: string) {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/human-prompts`,
+      {},
+      this.fetchImpl,
+    );
+    if (response.status === 404 || response.status === 405) return null;
+    assertOk(response, "Human prompt observation");
+    return asRecord(
+      await boundedJson(response, "Human prompt observation", { remaining: 512 * 1024 }),
+    );
+  }
+
   async activity(sessionId: string): Promise<ProviderActivityState> {
     return (await this.observeActivity(sessionId)).state;
   }

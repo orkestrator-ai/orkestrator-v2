@@ -1,3 +1,4 @@
+import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
 import { HumanPromptRegistry } from "./human-prompt-registry.js";
@@ -518,7 +519,7 @@ export class OrkestratorBackend {
     context.humanPrompts = humanPrompts;
     humanPrompts.subscribe((change) => {
       storage.announceHumanPrompts(change.entry.environmentId);
-      if (change.type !== "set") return;
+      if (change.type !== "set" || change.previous?.prompt.key === change.entry.prompt.key) return;
       void this.coordinators.noteWorkerHumanPrompt(change.entry).catch((error: unknown) => {
         console.warn(
           "[backend] Failed to tell the coordinator about a prompt waiting on the user:",
@@ -528,7 +529,7 @@ export class OrkestratorBackend {
     });
     this.userCommands = new UserCommandService({
       prompts: humanPrompts,
-      resolve: (environmentId) => resolveUserCommandLaunch(context, environmentId),
+      resolve: (environmentId, tabId) => resolveUserCommandLaunch(context, environmentId, tabId),
       announce: (environmentId, tabId) => storage.announceUserCommands(environmentId, tabId),
     });
     context.userCommands = this.userCommands;
@@ -562,7 +563,11 @@ export class OrkestratorBackend {
           }));
       },
       projection: (session) =>
-        this.boundedProjection(session.environmentId, session.agent, session.logicalSessionKey, 12),
+        this.nativeAgents.humanPromptOutputIfRunning(
+          session.environmentId,
+          session.agent as BuildPipelineAgent,
+          session.logicalSessionKey,
+        ),
       readFileTail: readTaskOutputTail,
     });
     this.coordinators = new CoordinatorService(
@@ -1181,35 +1186,6 @@ export class OrkestratorBackend {
     tabId: string,
   ): Promise<CoordinatorWaitingBlocker | undefined> {
     return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
-  }
-
-  /** A short projection read with a deadline; null when unavailable or slow. */
-  private async boundedProjection(
-    environmentId: string,
-    agent: string,
-    logicalSessionKey: string,
-    messageLimit: number,
-  ): Promise<{ messages?: unknown; backgroundTasks?: unknown } | null> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), 5_000);
-      timer.unref?.();
-    });
-    try {
-      return await Promise.race([
-        this.nativeAgents
-          .getProjection({
-            environmentId,
-            agent: agent as never,
-            logicalSessionKey,
-            messageLimit,
-          })
-          .catch(() => null),
-        deadline,
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
   }
 
   /** A short projection read of one worker tab with a deadline; null when unavailable. */
@@ -2163,7 +2139,10 @@ export class OrkestratorBackend {
     this.coordinators.stopStatusWakes();
     this.agentHumanPrompts.stop();
     // A user's `!` commands end with the backend; their processes must not outlive it.
-    const userCommandsStopped = this.userCommands.shutdown().catch(() => undefined);
+    const userCommandsStopped = this.userCommands.shutdown().then(
+      () => ({ stopped: true as const }),
+      () => ({ stopped: false as const }),
+    );
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
@@ -2189,7 +2168,7 @@ export class OrkestratorBackend {
         }
         await nodesStopped;
         await scheduledJobsStopped;
-        await userCommandsStopped;
+        const commandTermination = await userCommandsStopped;
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {
@@ -2226,6 +2205,8 @@ export class OrkestratorBackend {
         await this.runtime.localServers.shutdown({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
+        if (!commandTermination.stopped)
+          throw new Error("User command termination could not be confirmed. Retry shutdown.");
       } finally {
         await this.context.registryWriterLease?.release().catch(() => undefined);
         this.context.previews?.dispose();

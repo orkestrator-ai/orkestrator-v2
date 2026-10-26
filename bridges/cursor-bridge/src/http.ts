@@ -1,3 +1,4 @@
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 /**
  * The bridge's HTTP surface.
  *
@@ -387,7 +388,7 @@ async function startLogin(response: ServerResponse): Promise<void> {
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages|close))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|human-prompts|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages|close))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -398,6 +399,9 @@ async function routeSession(
   const match = SESSION_ROUTE.exec(url.pathname);
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
+  if (match[2] === "human-prompts" && request.method === "GET") {
+    return json(response, 200, humanPromptObservation(state?.messages));
+  }
   const action = match[2];
   const subject = match[3];
   if (!action && subject) return json(response, 404, { error: "Not found" });

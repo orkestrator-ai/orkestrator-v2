@@ -1,3 +1,7 @@
+import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
+import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
+import { HumanPromptRegistry } from "./human-prompt-registry.js";
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 /**
  * Authoritative projection state: connection grace, composer capabilities,
  * execution profiles, the bounded read cache, and resume.
@@ -1149,8 +1153,28 @@ describe("NativeAgentService", () => {
       "Role: read-only coordinator.",
       COORDINATOR_CONTEXT_CLOSE_TAG,
       "",
+      '<orkestrator-user-commands>\n{"command":"echo setup"}\n</orkestrator-user-commands>\n',
       "Inspect the package inventory.",
     ].join("\n");
+    const mail = renderAgentMailCarrier({
+      version: 1,
+      id: "mail-1",
+      threadId: "mail-1",
+      requestId: "mail-request",
+      createdAt: new Date(0).toISOString(),
+      from: { kind: "external" },
+      toEnvironmentId: "env-1",
+      toTabId: "tab",
+      toIncarnationId: "incarnation",
+      body: "worker result",
+      bodyBytes: 13,
+      trust: "external",
+      injectDepth: 0,
+      threadDepth: 0,
+      placement: "stored",
+      revision: 1,
+    });
+    const mailSource = source.replace("Inspect the package inventory.", mail);
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({
         status: "idle",
@@ -1161,6 +1185,13 @@ describe("NativeAgentService", () => {
             content: source,
             parts: [{ type: "text", content: source }],
             createdAt: "2026-09-17T10:00:00.000Z",
+          },
+          {
+            id: "mail-row",
+            role: "user",
+            content: mailSource,
+            parts: [{ type: "text", content: mailSource }],
+            createdAt: "2026-09-17T10:00:01.000Z",
           },
         ],
       }),
@@ -1215,6 +1246,11 @@ describe("NativeAgentService", () => {
             role: "user",
             content: "Inspect the package inventory.",
             parts: [{ type: "text", content: "Inspect the package inventory." }],
+          }),
+          expect.objectContaining({
+            id: "mail-row",
+            content: mail,
+            parts: [{ type: "text", content: mail }],
           }),
         ]);
       },
@@ -4134,6 +4170,68 @@ describe("NativeAgentService", () => {
           ).toBe(false);
         },
       );
+    },
+  );
+});
+
+test("prompt monitoring sees foreground output before production projection removes tool details", async () => {
+  const raw = [
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      createdAt: new Date(0).toISOString(),
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolUseId: "login",
+          toolState: "pending",
+          toolArgs: { command: "gh auth login" },
+          toolOutput: "https://github.com/login/device\nDevice code: ABCD-EFGH\nPress ENTER",
+        },
+      ],
+    },
+  ];
+  const provider = createProviderStub("codex", {
+    interactiveSnapshot: async () => ({ status: "running", messages: raw }),
+  });
+  provider.provider.humanPromptOutput = async () => humanPromptObservation(raw);
+  await withService(
+    { prefix: "prompt-before-projection-", provider: async () => provider.provider },
+    async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab",
+      };
+      await service.ensureSession(identity);
+      const projected = await service.getProjection(identity);
+      expect(JSON.stringify(projected?.messages)).toContain("detailRef");
+      expect(JSON.stringify(projected?.messages)).not.toContain('toolOutput":');
+      const reads = provider.interactiveSnapshot!.mock.calls.length;
+      const prompts = new HumanPromptRegistry();
+      const monitor = new AgentHumanPromptMonitor({
+        prompts,
+        workingSessions: async () => [{ ...identity, local: true }],
+        projection: () =>
+          service.humanPromptOutputIfRunning(
+            identity.environmentId,
+            identity.agent,
+            identity.logicalSessionKey,
+          ),
+        readFileTail: async () => null,
+      });
+      await monitor.tick();
+      expect(prompts.list()[0]?.prompt).toMatchObject({ code: "ABCD-EFGH", wantsEnter: true });
+      expect(provider.interactiveSnapshot!.mock.calls).toHaveLength(reads);
+      expect(
+        service.cachedProjectionSnapshot(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        )?.messages,
+      ).toEqual(projected?.messages);
     },
   );
 });

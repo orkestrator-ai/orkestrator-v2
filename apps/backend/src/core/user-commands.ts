@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { HumanPromptScanner, normalizeTerminalText } from "@orkestrator/protocol/human-prompts";
 import {
-  renderUserCommandContext,
+  renderUserCommandContextBatch,
   USER_COMMAND_MAX_COMMAND_CHARS,
   USER_COMMAND_MAX_INPUT_CHARS,
   USER_COMMAND_MAX_PER_TAB,
@@ -37,8 +37,11 @@ import type { PtyProcess } from "./pty.js";
 /** How the command is started, resolved per environment by the host. */
 export interface UserCommandLaunch {
   target: UserCommandTarget;
+  containerId?: string;
   cwd: string;
   spawn: (command: string) => PtyProcess;
+  /** Release launch admission after spawn or failure. */
+  release?: () => void;
 }
 
 export interface UserCommandHost {
@@ -80,6 +83,12 @@ export class UserCommandService {
   private readonly byId = new Map<string, Running>();
   private readonly pendingAnnounce = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly now: () => number;
+  private readonly admissions = new Map<string, number>();
+  private readonly blockedEnvironments = new Set<string>();
+  private readonly blockedTabs = new Set<string>();
+  private readonly closingOwners = new Map<string, number>();
+  private stopping = false;
+  private readonly generations = new Map<string, number>();
 
   constructor(private readonly host: UserCommandHost) {
     this.now = host.now ?? Date.now;
@@ -96,14 +105,58 @@ export class UserCommandService {
       throw new UserCommandError("invalid", "That command is too long.");
     }
     const key = tabKey(input.environmentId, input.tabId);
-    const running = (this.tabs.get(key) ?? []).filter((entry) => entry.record.status === "running");
-    if (running.length >= USER_COMMAND_MAX_RUNNING_PER_TAB) {
+    this.assertAdmission(input.environmentId, key);
+    const generation = this.generations.get(key) ?? 0;
+    const environmentGeneration = this.generations.get(input.environmentId) ?? 0;
+    const list = this.tabs.get(key) ?? [];
+    const admitted = this.admissions.get(key) ?? 0;
+    const running = list.filter((entry) => entry.record.status === "running").length + admitted;
+    if (running >= USER_COMMAND_MAX_RUNNING_PER_TAB) {
       throw new UserCommandError(
         "busy",
-        `${running.length} commands are already running in this tab. Cancel one first.`,
+        "Four commands are already starting or running in this tab. Cancel one first.",
       );
     }
-    const launch = await this.host.resolve(input.environmentId, input.tabId);
+    if (
+      list.filter(
+        (entry) => entry.record.status === "running" || entry.record.context.state === "pending",
+      ).length +
+        admitted >=
+      USER_COMMAND_MAX_PER_TAB
+    ) {
+      throw new UserCommandError(
+        "busy",
+        "This tab has twenty unread commands. Send an agent message before running another.",
+      );
+    }
+    this.admissions.set(key, admitted + 1);
+    let launch: UserCommandLaunch | undefined;
+    try {
+      launch = await this.host.resolve(input.environmentId, input.tabId);
+      this.assertAdmission(input.environmentId, key);
+      if (
+        generation !== (this.generations.get(key) ?? 0) ||
+        environmentGeneration !== (this.generations.get(input.environmentId) ?? 0)
+      ) {
+        throw new UserCommandError("unavailable", "This command owner is closing or unavailable.");
+      }
+    } catch (error) {
+      launch?.release?.();
+      throw error;
+    } finally {
+      const count = (this.admissions.get(key) ?? 1) - 1;
+      if (count) this.admissions.set(key, count);
+      else {
+        this.admissions.delete(key);
+        this.generations.delete(key);
+        if (
+          !Array.from(this.admissions.keys()).some((pending) =>
+            pending.startsWith(`${input.environmentId}\u0000`),
+          )
+        )
+          this.generations.delete(input.environmentId);
+      }
+    }
     const entry: Running = {
       record: {
         id: randomUUID(),
@@ -135,13 +188,14 @@ export class UserCommandService {
         error: error instanceof Error ? error.message : String(error),
       });
       return this.snapshot(entry);
+    } finally {
+      launch.release?.();
     }
     entry.process.onData((data) => this.output(entry, data));
     entry.process.onExit(({ exitCode }) => {
-      this.finish(
-        entry,
-        entry.cancelled ? { status: "cancelled", exitCode } : { status: "exited", exitCode },
-      );
+      // A host child exit alone does not confirm descendant termination.
+      if (entry.cancelled) return;
+      this.finish(entry, { status: "exited", exitCode });
     });
     this.announce(entry, true);
     return this.snapshot(entry);
@@ -176,7 +230,13 @@ export class UserCommandService {
       // The process may already be gone.
     }
     const exited = await entry.process.terminate({ graceMs: 1_000 }).catch(() => false);
-    if (!exited || entry.record.status === "running") this.finish(entry, { status: "cancelled" });
+    if (!exited) {
+      throw new UserCommandError(
+        "unavailable",
+        "Command termination could not be confirmed. It remains tracked; retry cancellation.",
+      );
+    }
+    if (entry.record.status === "running") this.finish(entry, { status: "cancelled" });
     return this.snapshot(entry);
   }
 
@@ -190,6 +250,9 @@ export class UserCommandService {
 
   /** Whether a command in this environment is still running. */
   hasRunning(environmentId: string): boolean {
+    for (const [key, count] of this.admissions) {
+      if (count && key.startsWith(`${environmentId}\u0000`)) return true;
+    }
     for (const entry of this.byId.values()) {
       if (entry.record.environmentId === environmentId && entry.record.status === "running") {
         return true;
@@ -208,17 +271,25 @@ export class UserCommandService {
       (entry) => entry.record.context.state === "pending",
     );
     if (pending.length === 0) return { block: "", ids: [] };
+    const rendered = renderUserCommandContextBatch(pending.map((entry) => this.snapshot(entry)));
+    const included = new Set(rendered.includedIds);
     return {
-      block: renderUserCommandContext(pending.map((entry) => this.snapshot(entry))),
-      ids: pending.map((entry) => entry.record.id),
+      block: rendered.block,
+      // The revision belongs to the snapshot the provider will actually receive.
+      ids: pending
+        .filter((entry) => included.has(entry.record.id))
+        .map((entry) => `${entry.record.id}:${entry.record.revision}`),
     };
   }
 
   markDelivered(ids: readonly string[], requestId: string): void {
     const at = new Date(this.now()).toISOString();
-    for (const id of ids) {
-      const entry = this.byId.get(id);
-      if (!entry || entry.record.context.state !== "pending") continue;
+    for (const token of ids) {
+      const separator = token.lastIndexOf(":");
+      const entry = this.byId.get(token.slice(0, separator));
+      const revision = Number(token.slice(separator + 1));
+      if (!entry || entry.record.revision !== revision || entry.record.context.state !== "pending")
+        continue;
       entry.record.context = { state: "delivered", requestId, at };
       if (entry.record.status === "running") entry.deliveredWhileRunning = true;
       this.bump(entry);
@@ -226,8 +297,52 @@ export class UserCommandService {
     }
   }
 
+  private assertAdmission(environmentId: string, key: string): void {
+    if (
+      this.stopping ||
+      this.blockedEnvironments.has(environmentId) ||
+      this.blockedTabs.has(key) ||
+      this.closingOwners.has(environmentId) ||
+      this.closingOwners.has(key)
+    ) {
+      throw new UserCommandError("unavailable", "This command owner is closing or unavailable.");
+    }
+  }
+
+  /** Keep admission closed until the owning UI record has finished closing. */
+  beginOwnerClose(environmentId: string, tabId?: string): () => void {
+    const key = tabId ? tabKey(environmentId, tabId) : environmentId;
+    this.closingOwners.set(key, (this.closingOwners.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.closingOwners.get(key) ?? 1) - 1;
+      if (remaining) this.closingOwners.set(key, remaining);
+      else this.closingOwners.delete(key);
+    };
+  }
+
+  async terminateForTab(environmentId: string, tabId: string): Promise<void> {
+    const key = tabKey(environmentId, tabId);
+    if (this.admissions.has(key)) this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    this.blockedTabs.add(key);
+    const entries = this.tabs.get(tabKey(environmentId, tabId)) ?? [];
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (entry.record.status === "running") await this.cancel(entry.record.id);
+      }),
+    );
+    for (const entry of Array.from(entries)) this.remove(entry);
+    this.host.prompts.clearTab(environmentId, tabId);
+    this.blockedTabs.delete(key);
+  }
+
   /** Stop every command of an environment, waiting for each process tree. */
   async terminateForEnvironment(environmentId: string): Promise<void> {
+    if (Array.from(this.admissions.keys()).some((key) => key.startsWith(`${environmentId}\u0000`)))
+      this.generations.set(environmentId, (this.generations.get(environmentId) ?? 0) + 1);
+    this.blockedEnvironments.add(environmentId);
     const entries = Array.from(this.byId.values()).filter(
       (entry) => entry.record.environmentId === environmentId,
     );
@@ -237,9 +352,11 @@ export class UserCommandService {
       }),
     );
     for (const entry of entries) this.remove(entry);
+    this.blockedEnvironments.delete(environmentId);
   }
 
   async shutdown(): Promise<void> {
+    this.stopping = true;
     await Promise.all(
       Array.from(this.byId.values()).map(async (entry) => {
         if (entry.record.status === "running") await this.cancel(entry.record.id);

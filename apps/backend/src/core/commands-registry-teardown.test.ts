@@ -46,6 +46,7 @@ async function withTeardown<T>(
     released: Array<[string, string, string]>;
     providerCloses: ProviderClose[];
     clock: { now: number };
+    context: CommandContext;
   }) => Promise<T>,
   options: {
     deleteTimeoutMs?: number;
@@ -134,7 +135,7 @@ async function withTeardown<T>(
     return await handler(args, context);
   };
   try {
-    return await run({ invoke, storage, calls, released, providerCloses, clock });
+    return await run({ invoke, storage, calls, released, providerCloses, clock, context });
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
@@ -1151,4 +1152,25 @@ describe("teardown intent session-id fence", () => {
     });
     expect(unfenceTabTeardownSessionId(undefined)).toEqual({ retainingClose: false });
   });
+});
+
+test("tab teardown stops owned user commands and clears prompts before provider close", async () => {
+  await withTeardown(
+    async () => retained(),
+    async ({ invoke, context }) => {
+      const terminate = mock(async () => undefined);
+      const clear = mock(() => undefined);
+      context.userCommands = {
+        terminateForTab: terminate,
+      } as unknown as CommandContext["userCommands"];
+      context.humanPrompts = { clearTab: clear } as unknown as CommandContext["humanPrompts"];
+      await invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-command",
+        kind: "codex-native",
+      });
+      expect(terminate).toHaveBeenCalledWith("e1", "tab-command");
+      expect(clear).toHaveBeenCalledWith("e1", "tab-command");
+    },
+  );
 });

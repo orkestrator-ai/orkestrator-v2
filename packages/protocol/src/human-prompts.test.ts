@@ -173,3 +173,35 @@ describe("HumanPromptScanner", () => {
     expect(scanner.push("\n")).toEqual({ cleared: true });
   });
 });
+
+test("alphabetic labelled codes are accepted without treating prose as codes", () => {
+  for (const code of ["ABCD-EFGH", "ABCDEFGH"]) {
+    expect(
+      detectHumanPrompt(`Open https://github.com/login/device\nDevice code: ${code}`)?.code,
+    ).toBe(code);
+  }
+  expect(
+    detectHumanPrompt("https://github.com/login/device\nEnter the code below")?.code,
+  ).toBeUndefined();
+});
+
+test("URL then ENTER updates actions while retaining notification identity", () => {
+  const scanner = new HumanPromptScanner();
+  const first = scanner.push("https://github.com/login/device\n");
+  expect(first).toHaveProperty("prompt.wantsEnter", false);
+  const key = scanner.prompt?.key;
+  expect(scanner.push("Press ENTER to continue")).toHaveProperty("prompt.wantsEnter", true);
+  expect(scanner.prompt?.key).toBe(key);
+  expect(scanner.push("")).toBeNull();
+});
+
+test("unknown or credential-bearing hosts never become sign-in actions", () => {
+  for (const url of [
+    "https://unlisted.example/login",
+    "https://github.com.evil.example/login/device",
+    "https://evil@github.com/login/device",
+  ]) {
+    expect(detectHumanPrompt(`Sign in at ${url}`)).toBeNull();
+    expect(detectHumanPrompt(`Sign in at ${url}\nDevice code: ABCD-EFGH\nPress ENTER`)).toBeNull();
+  }
+});

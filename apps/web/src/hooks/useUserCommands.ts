@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { listHumanPrompts, listUserCommands } from "@/lib/backend";
-import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
+import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 
@@ -37,15 +38,22 @@ export function useUserCommands(
         .catch(() => undefined);
     };
     refreshRef.current = reread;
+    const reconnect = new AbortController();
+    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, reread, { signal: reconnect.signal }).catch(
+      () => undefined,
+    );
     reread();
+    const offSafety = onViewSafetyCheck(reread);
     const offChange = onResourceChanged("user-command", (change) => {
       if (change.id === key) reread();
     });
-    const offResync = onResourceResync((request) => {
-      if (request.resources === null) reread();
-    });
+    // Ephemeral resources are absent from the durable manifest.
+    const offResync = onResourceResync(reread);
     return () => {
       disposed = true;
+      reconnect.abort();
+      offSafety();
+      refreshRef.current = () => undefined;
       offChange();
       offResync();
     };
@@ -86,15 +94,21 @@ export function useHumanPrompts(environmentIds: readonly string[]): HumanPromptE
         })
         .catch(() => undefined);
     };
+    const reconnect = new AbortController();
+    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, reread, { signal: reconnect.signal }).catch(
+      () => undefined,
+    );
     reread();
+    const offSafety = onViewSafetyCheck(reread);
     const offChange = onResourceChanged("human-prompt", (change) => {
       if (wanted.has(change.id)) reread();
     });
-    const offResync = onResourceResync((request) => {
-      if (request.resources === null) reread();
-    });
+    // Ephemeral resources are absent from the durable manifest.
+    const offResync = onResourceResync(reread);
     return () => {
       disposed = true;
+      reconnect.abort();
+      offSafety();
       offChange();
       offResync();
     };

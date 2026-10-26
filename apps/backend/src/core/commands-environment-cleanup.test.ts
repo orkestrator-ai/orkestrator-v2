@@ -503,3 +503,31 @@ describe("delete_environment durable child-state cleanup", () => {
     );
   });
 });
+
+test("deletion waits for user command termination before clearing prompts or deleting state", async () => {
+  await withDeleteCommand(
+    async (storage) => {
+      await seedWorktree(storage);
+    },
+    async (remove, storage, context) => {
+      const terminate = mock<() => Promise<void>>(async () => {
+        throw new Error("termination unconfirmed");
+      });
+      const clear = mock(() => undefined);
+      context.userCommands = {
+        terminateForEnvironment: terminate,
+      } as unknown as CommandContext["userCommands"];
+      context.humanPrompts = {
+        clearEnvironment: clear,
+      } as unknown as CommandContext["humanPrompts"];
+      await expect(remove()).rejects.toThrow("termination unconfirmed");
+      expect(terminate).toHaveBeenCalledWith("e1");
+      expect(clear).not.toHaveBeenCalled();
+      expect(await storage.getEnvironment("e1")).not.toBeNull();
+      terminate.mockImplementation(async () => undefined);
+      await remove();
+      expect(clear).toHaveBeenCalledWith("e1");
+      expect(await storage.getEnvironment("e1")).toBeNull();
+    },
+  );
+});

@@ -1,3 +1,4 @@
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 // Session management routes
 import { isValidClaudeFormContent } from "../services/claude-elicitation-schema.js";
 import { randomUUID } from "node:crypto";
@@ -1237,6 +1238,11 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
  *
  * Registered as a two-segment path, so the `/:id` route above cannot shadow it.
  */
+session.get("/:id/human-prompts", (c) => {
+  const state = peekSession(c.req.param("id"));
+  return c.json(humanPromptObservation(state?.messages, state?.backgroundTasks));
+});
+
 session.get("/:id/activity", async (c) => {
   // Shared with `POST /sessions/activity`; see `readSessionActivityObservation`.
   return c.json(await readSessionActivityObservation(c.req.param("id")));

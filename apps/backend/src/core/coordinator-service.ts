@@ -1,3 +1,4 @@
+import { isSignInLink } from "@orkestrator/protocol/human-prompts";
 import { createHash, randomUUID } from "node:crypto";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import {
@@ -1280,7 +1281,8 @@ export class CoordinatorService {
    * prompt, so a redrawn or re-detected prompt is not sent twice.
    */
   async noteWorkerHumanPrompt(entry: HumanPromptEntry): Promise<void> {
-    if (entry.source === "user-command") return;
+    if (entry.source === "user-command" || (entry.prompt.url && !isSignInLink(entry.prompt.url)))
+      return;
     const environment = await this.storage.getEnvironment(entry.environmentId).catch(() => null);
     if (!environment) return;
     const associations = (

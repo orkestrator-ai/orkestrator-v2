@@ -1,3 +1,4 @@
+import { stripUserCommandContext } from "@orkestrator/protocol/user-commands";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { describe, expect, mock, test } from "bun:test";
@@ -757,18 +758,30 @@ describe("NativeAgentService", () => {
       // that the service hands the image through structurally.
       throw new Error(`Unexpected backend command: ${command}`);
     };
+    const commandBlock =
+      '<orkestrator-user-commands>\n{"command":"echo setup"}\n</orkestrator-user-commands>\n\n';
+    const userCommandContext = {
+      take: () => ({ block: commandBlock, ids: ["setup:1"] }),
+      delivered: mock(() => {}),
+    };
     const first = new NativeAgentService(firstStorage, invoke, {
       provider: async () => provider,
+      userCommandContext,
     });
     const second = new NativeAgentService(secondStorage, invoke, {
       provider: async () => provider,
+      userCommandContext,
     });
     try {
       await Promise.all([first.init(), second.init()]);
       expect(createSession).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledTimes(1);
       expect(attachmentWrites).toBe(1);
-      expect(extractMarkedAttachmentReferences(send.mock.calls[0]![1])).toEqual({
+      expect(send.mock.calls[0]![1]).toStartWith(commandBlock);
+      expect(userCommandContext.delivered).toHaveBeenCalledTimes(1);
+      expect(
+        extractMarkedAttachmentReferences(stripUserCommandContext(send.mock.calls[0]![1])),
+      ).toEqual({
         prompt: "Inspect the screenshots",
         attachments: [
           {

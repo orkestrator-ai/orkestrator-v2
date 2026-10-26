@@ -1376,6 +1376,10 @@ app.get("/session/:id/usage", async (c) => {
  *
  * Unlike `/status` this must never touch the session: see `getActivity`.
  */
+app.get("/session/:id/human-prompts", (c) => {
+  return c.json(appServerRuntime.humanPromptOutput(c.req.param("id")));
+});
+
 app.get("/session/:id/activity", (c) => {
   return c.json(appServerRuntime.getActivitySnapshot(c.req.param("id")));
 });

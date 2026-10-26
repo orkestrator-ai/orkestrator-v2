@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -50,7 +52,10 @@ function monitor(
   const instance = new AgentHumanPromptMonitor({
     prompts,
     workingSessions: async () => sessions,
-    projection: async () => read(),
+    projection: async () => {
+      const raw = read();
+      return raw ? humanPromptObservation(raw.messages, raw.backgroundTasks) : null;
+    },
     readFileTail: async (file) => files.get(file) ?? null,
   });
   return {
@@ -206,10 +211,70 @@ describe("task output files", () => {
       symlinkSync(secret, link);
       expect(isTaskOutputFile(link)).toBe(true);
       expect(await readTaskOutputTail(link, 64)).toBeNull();
+      const fifo = path.join(tasks, "fifo1.output");
+      expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+      const start = Date.now();
+      expect(await readTaskOutputTail(fifo, 64)).toBeNull();
+      expect(Date.now() - start).toBeLessThan(1000);
+      expect(await readTaskOutputTail(real, 4)).toBe("TAIL");
+      const prompts = new HumanPromptRegistry();
+      const sessions = ["fifo", "later"].map((tab) => ({
+        environmentId: "env",
+        agent: "codex",
+        logicalSessionKey: `env-env:${tab}`,
+        local: true,
+      }));
+      const scanner = new AgentHumanPromptMonitor({
+        prompts,
+        workingSessions: async () => sessions,
+        projection: async (session) =>
+          session.logicalSessionKey.endsWith("fifo")
+            ? humanPromptObservation([], [{ id: "fifo", status: "running", outputFile: fifo }])
+            : humanPromptObservation([shellRow("pending", GH_DEVICE)]),
+        readFileTail: readTaskOutputTail,
+      });
+      await scanner.tick();
+      expect(prompts.list()[0]?.tabId).toBe("later");
+      await scanner.tick();
+      expect(prompts.list()).toHaveLength(1);
       // Not a task file at all: refused before any open.
       expect(await readTaskOutputTail(secret, 64)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+test("an observation started before owner cleanup cannot resurrect its prompt", async () => {
+  const prompts = new HumanPromptRegistry();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let observing!: () => void;
+  const started = new Promise<void>((resolve) => {
+    observing = resolve;
+  });
+  const session = {
+    environmentId: "env",
+    agent: "codex",
+    logicalSessionKey: "env-env:tab",
+    local: true,
+  };
+  const monitor = new AgentHumanPromptMonitor({
+    prompts,
+    workingSessions: async () => [session],
+    projection: async () => {
+      observing();
+      await gate;
+      return humanPromptObservation([shellRow("pending", GH_DEVICE)]);
+    },
+    readFileTail: async () => null,
+  });
+  const tick = monitor.tick();
+  await started;
+  prompts.clearTab("env", "tab");
+  release();
+  await tick;
+  expect(prompts.list()).toEqual([]);
 });

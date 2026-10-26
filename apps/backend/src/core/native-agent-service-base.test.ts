@@ -3849,3 +3849,46 @@ describe("NativeAgentService", () => {
     }
   });
 });
+
+test("ambiguous retry preserves one command block and never acknowledges a newer undisclosed snapshot", async () => {
+  let ambiguous = true;
+  const provider = createProviderStub("claude", {
+    send: async () => {
+      if (ambiguous) throw new AmbiguousPromptDispatchError("acknowledgment lost");
+    },
+  });
+  const block =
+    '<orkestrator-user-commands>\n{"command":"echo first"}\n</orkestrator-user-commands>\n\n';
+  const take = mock(() => ({ block, ids: ["command:1"] }));
+  const delivered = mock(() => {});
+  await withService(
+    {
+      prefix: "command-context-replay-",
+      provider: async () => provider.provider,
+      userCommandContext: { take, delivered },
+    },
+    async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab",
+        origin: "interactive-native" as const,
+      };
+      expect(
+        await service.dispatchIntent({
+          ...identity,
+          prompt: "original message",
+          requestId: "retry-command",
+        }),
+      ).toMatchObject({ outcome: "unknown" });
+      expect(delivered).not.toHaveBeenCalled();
+      ambiguous = false;
+      expect(
+        await service.retryRecoverableDispatch({ ...identity, requestId: "retry-command" }),
+      ).toMatchObject({ outcome: "accepted" });
+      expect(provider.send.mock.calls.at(-1)?.[1]).toBe(`${block}original message`);
+      expect(take).toHaveBeenCalledTimes(1);
+      expect(delivered).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -181,6 +181,11 @@ live Pi coordinator rerun passed on 2026-10-23. Nothing is left in this file.
 3. **Keep the catalogue's first model as the last resort.** Pi's own fallback
    list (`defaultModelPerProvider` in `findInitialModel`) is not exported from
    the SDK. Copying it would drift from Pi on every release. Rejected for now.
+   (2026-10-26: a ChatGPT subscription login whose model leads the catalogue
+   now starts on the newest model of pi-ai's ChatGPT-backend catalogue
+   instead; see
+   [0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md),
+   decision 1.)
 4. **A project's saved default counts only for a trusted project.** Reading
    `<cwd>/.pi/settings.json` unconditionally would let a cloned repository
    pick the model of a read-only coordinator session. It can only pick a model

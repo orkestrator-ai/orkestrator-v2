@@ -930,9 +930,13 @@ user's own credentials, so:
   `defaultModel` in `settings.json`, what `/model` writes) when a signed-in
   provider serves it, the way `pi` itself starts, and only then on the
   catalogue's first model. A login can refuse a model its provider lists, so
-  the first model is a last resort. An agent-test profile also receives the
-  host's saved default, which it uses when its own settings name no default
-  that a signed-in provider serves. `/global/models` marks that starting model
+  the first model is a last resort, and a ChatGPT subscription login (under
+  `openai`, or the legacy `openai-codex`) whose catalogue starts the list
+  starts instead on the newest model in pi-ai's ChatGPT-backend catalogue
+  (`chatGptLoginModelIds` in `bridges/pi-bridge/src/models.ts`). An
+  agent-test profile also receives the host's saved default, which it uses
+  when its own settings name no default that a signed-in provider serves.
+  `/global/models` marks the first available saved or profile default
   `sessionDefault` (`markSessionDefault` in `models.ts`; global settings only,
   as no session asks), and every launch default that has no saved model (Multi
   Review rows, the launch dialogs' `firstModelFor`) picks the marked row before

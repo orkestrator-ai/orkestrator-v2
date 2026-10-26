@@ -655,7 +655,7 @@ export interface AgentSessionProvider {
    *
    * Read-only. It exists so an ambiguous dispatch can be settled from the
    * provider's own durable journal instead of being parked for the user:
-   * `dispatched` confirms it, `lost` retires it, `unknown` leaves it parked.
+   * `dispatched` and `pending` confirm it, `lost` retires it, `unknown` leaves it parked.
    */
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   /**

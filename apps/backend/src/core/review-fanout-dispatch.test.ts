@@ -312,12 +312,17 @@ describe("recovered reviewer dispatch", () => {
         }) as StructuredOutputResult<T>;
       const runner = new ReviewFanoutRunner(h.host);
       await runner.advanceReviewers([h.reviewer]);
-      await runner.advanceReviewers([h.reviewer]);
       expect(h.reviewer).toMatchObject({
         status: "running",
         requestId: "review-request",
         dispatchState: "sent",
       });
+      expect(h.abandoned).toHaveLength(0);
+      expect(h.sends).toHaveLength(0);
+      expect(h.saves.some((saved) => saved.dispatchState === "sent")).toBe(true);
+
+      await runner.advanceReviewers([h.reviewer]);
+      expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
       expect(h.abandoned).toHaveLength(0);
       expect(h.sends).toHaveLength(0);
     },

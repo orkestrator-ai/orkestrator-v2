@@ -51,6 +51,7 @@ test.each(["observation", "throw"] as const)(
       interruption: "restart",
       interruptedRequestId: "later-turn",
     };
+    const settled: string[] = [];
     const provider = {
       async status() {
         return "error" as const;
@@ -61,12 +62,19 @@ test.each(["observation", "throw"] as const)(
         }
         return observation;
       },
+      async settleTurn(sessionId: string, requestId: string) {
+        settled.push(`${sessionId}/${requestId}`);
+        return true;
+      },
     };
     // Isolate the optional-method guard: the notice DOES name another request.
-    expect(await readProviderStatus(provider, "session", "finished-turn")).toMatchObject(
-      observation,
-    );
+    expect(await readProviderStatus(provider, "session", "finished-turn")).toMatchObject({
+      ...observation,
+      turnSettled: true,
+    });
+    expect(settled).toEqual(["session/finished-turn"]);
     for (const acceptance of ["pending", "dispatched", "unknown", "lost", "throws"] as const) {
+      settled.length = 0;
       const status = await readProviderStatus(
         {
           ...provider,
@@ -84,11 +92,12 @@ test.each(["observation", "throw"] as const)(
       );
       if (acceptance === "pending") {
         expect(status).toEqual({ status: "idle", turnSettled: false });
+        expect(settled).toEqual([]);
       } else {
         // `dispatched` includes terminal/already-processed requests: their
         // positive journal entry must not mask a later turn's interruption.
-        expect(status).toMatchObject(observation);
-        expect(status.turnSettled).toBeUndefined();
+        expect(status).toMatchObject({ ...observation, turnSettled: true });
+        expect(settled).toEqual(["session/finished-turn"]);
       }
     }
   },

@@ -2473,6 +2473,40 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test.each([claudeConnection, codexConnection])(
+    "a finished watched request retains a later restart from $agent",
+    async (connection) => {
+      for (const pending of [false, undefined]) {
+        for (const error of ["later turn interrupted", undefined]) {
+          const observation = {
+            status: "error",
+            interruption: "restart",
+            interruptedRequestId: "later-request",
+            ...(error ? { error } : {}),
+          } as const;
+          const { provider, requests } = httpProvider(
+            (url) =>
+              new URL(url).pathname.endsWith("/dispatch")
+                ? Response.json({ dispatch: "dispatched", pending })
+                : Response.json(observation),
+            connection,
+          );
+
+          expect(await readProviderStatus(provider, "session-1", "finished-request")).toEqual(
+            observation,
+          );
+          const dispatchReads = requests.filter((request) =>
+            new URL(request.url).pathname.endsWith("/dispatch"),
+          );
+          expect(dispatchReads).toHaveLength(1);
+          expect(new URL(dispatchReads[0]!.url).searchParams.get("requestId")).toBe(
+            "finished-request",
+          );
+        }
+      }
+    },
+  );
+
   test("ignores an interruption the backend does not know, or one without a failure", async () => {
     const body = { current: {} as Record<string, unknown> };
     const { provider } = httpProvider(() => Response.json(body.current), codexConnection);

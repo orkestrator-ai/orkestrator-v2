@@ -452,7 +452,7 @@ test.each(["completed", "stopped", "killed"] as const)(
           interruption: "restart",
           interruptedRequestId: "background-request",
         });
-        expect(await storedMark("present")).toBeDefined();
+        expect(await storedMark("present")).toMatchObject({ requestId: "background-request" });
       } else if (outcome === "stopped") {
         expect(abortSession(session.id)).toBe(true);
         await firstPrompt;

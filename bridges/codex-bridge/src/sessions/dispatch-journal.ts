@@ -24,7 +24,7 @@
  */
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { codexBridgeStateDir } from "../bridge-state-dir.js";
+import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
 import { hashCwd } from "./persistence.js";
 
 export type DispatchState = "prepared" | "accepted" | "retryable" | "terminal";
@@ -164,6 +164,17 @@ function isPersistedRecord(value: unknown): value is PromptDispatchRecord {
   );
 }
 
+function sameDispatchIdentity(left: PromptDispatchRecord, right: PromptDispatchRecord): boolean {
+  return (
+    left.bridgeSessionId === right.bridgeSessionId &&
+    left.threadId === right.threadId &&
+    left.turnId === right.turnId &&
+    left.state === right.state &&
+    left.terminalStatus === right.terminalStatus &&
+    left.quarantined === right.quarantined
+  );
+}
+
 export class DispatchJournal {
   private readonly records = new Map<string, PromptDispatchRecord>();
   private readonly codexHome: string;
@@ -198,51 +209,24 @@ export class DispatchJournal {
     this.loaded = true;
     if (!this.persist) return;
 
+    const legacy = join(
+      codexLoginBridgeDir(this.codexHome),
+      `dispatch-journal-${this.cwdHash}.json`,
+    );
     try {
-      const parsed = JSON.parse(await this.readBounded()) as JournalFile;
-      if (parsed.version !== DISPATCH_JOURNAL_VERSION || !Array.isArray(parsed.records)) {
-        this.integrityError = "Dispatch journal has an unsupported or malformed file shape";
-        return;
-      }
-      for (const persisted of parsed.records) {
-        const candidate =
-          persisted && typeof persisted === "object"
-            ? (persisted as Record<string, unknown>)
-            : undefined;
-        const requestId = typeof candidate?.requestId === "string" ? candidate.requestId : "";
-        if (!requestId) continue;
-        const sequence =
-          Number.isSafeInteger(candidate?.sequence) && Number(candidate?.sequence) > 0
-            ? Number(candidate!.sequence)
-            : this.nextSequence + 1;
-        this.nextSequence = Math.max(this.nextSequence, sequence);
-        const timestamp = new Date(this.now()).toISOString();
-        const record: PromptDispatchRecord = isPersistedRecord(persisted)
-          ? { ...persisted, sequence }
-          : {
-              requestId,
-              bridgeSessionId:
-                typeof candidate?.bridgeSessionId === "string" ? candidate.bridgeSessionId : "",
-              threadId:
-                typeof candidate?.threadId === "string" || candidate?.threadId === null
-                  ? candidate.threadId
-                  : null,
-              state: "terminal",
-              terminalStatus: "failed",
-              quarantined: true,
-              createdAt: timestamp,
-              updatedAt: timestamp,
-              sequence,
-            };
-        const existing = this.records.get(requestId);
-        if (!existing || compareDispatchRecordsNewestFirst(record, existing) < 0) {
-          this.records.set(requestId, record);
-        }
+      await this.loadPath(this.path());
+      if (legacy !== this.path() && (await this.loadPath(legacy, true))) {
+        // Publish the union before retiring the source. A crash between these
+        // operations safely merges it again on restart.
+        this.collectGarbage();
+        this.refreshCapacityError();
+        if (this.capacityError) throw new DispatchJournalCapacityError(this.capacityError);
+        await this.flush({ failClosed: true });
+        await rm(legacy);
       }
       this.collectGarbage();
       this.refreshCapacityError();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
       this.integrityError =
         error instanceof DispatchJournalIntegrityError
           ? error.message
@@ -250,8 +234,72 @@ export class DispatchJournal {
     }
   }
 
-  private async readBounded(): Promise<string> {
-    const handle = await open(this.path(), "r");
+  private async loadPath(path: string, merging = false): Promise<boolean> {
+    let contents: string;
+    try {
+      contents = await this.readBounded(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+      throw error;
+    }
+    const parsed = JSON.parse(contents) as JournalFile;
+    if (parsed.version !== DISPATCH_JOURNAL_VERSION || !Array.isArray(parsed.records)) {
+      throw new DispatchJournalIntegrityError(
+        "Dispatch journal has an unsupported or malformed file shape",
+      );
+    }
+    for (const persisted of parsed.records) {
+      const candidate =
+        persisted && typeof persisted === "object"
+          ? (persisted as Record<string, unknown>)
+          : undefined;
+      const requestId = typeof candidate?.requestId === "string" ? candidate.requestId : "";
+      if (!requestId) continue;
+      const sequence =
+        Number.isSafeInteger(candidate?.sequence) && Number(candidate?.sequence) > 0
+          ? Number(candidate!.sequence)
+          : this.nextSequence + 1;
+      this.nextSequence = Math.max(this.nextSequence, sequence);
+      const timestamp = new Date(this.now()).toISOString();
+      const record: PromptDispatchRecord = isPersistedRecord(persisted)
+        ? { ...persisted, sequence }
+        : {
+            requestId,
+            bridgeSessionId:
+              typeof candidate?.bridgeSessionId === "string" ? candidate.bridgeSessionId : "",
+            threadId:
+              typeof candidate?.threadId === "string" || candidate?.threadId === null
+                ? candidate.threadId
+                : null,
+            state: "terminal",
+            terminalStatus: "failed",
+            quarantined: true,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            sequence,
+          };
+      const existing = this.records.get(requestId);
+      if (merging && existing && !sameDispatchIdentity(existing, record)) {
+        // Independent journals have no common sequence clock. Never guess
+        // which conflicting outcome is newer, especially retryable vs spent.
+        this.records.set(requestId, {
+          ...existing,
+          state: "terminal",
+          terminalStatus: "failed",
+          quarantined: true,
+        });
+      } else if (
+        !existing ||
+        (!merging && compareDispatchRecordsNewestFirst(record, existing) < 0)
+      ) {
+        this.records.set(requestId, record);
+      }
+    }
+    return true;
+  }
+
+  private async readBounded(path: string): Promise<string> {
+    const handle = await open(path, "r");
     try {
       const metadata = await handle.stat();
       if (!metadata.isFile() || metadata.size > this.maxBytes) {
@@ -287,6 +335,9 @@ export class DispatchJournal {
    */
   classify(requestId: string): DuplicateDecision {
     const record = this.records.get(requestId);
+    if (this.integrityError) {
+      return { duplicate: Boolean(record), action: "blocked", reason: this.integrityError, record };
+    }
     if (!record) {
       const blockedReason = this.integrityError ?? this.capacityError;
       if (blockedReason) {

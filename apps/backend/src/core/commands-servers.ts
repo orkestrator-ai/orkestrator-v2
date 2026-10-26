@@ -830,6 +830,7 @@ async function startLocalServerAttempt(
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.
   delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
+  delete env.CODEX_BRIDGE_STATE_DIR;
   // The same for coordinator research: read-only review turns in a worker
   // bridge consult these too, so only the coordinator branch may set them.
   delete env[COORDINATOR_WEB_RESEARCH_ENV];

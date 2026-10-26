@@ -1061,7 +1061,9 @@ export function SharedNativeAgentController({
         );
         if (pending)
           timer = setTimeout(() => void read(), Math.min(2_000, pending.expiresAt - Date.now()));
-        else if (platform === "codex" && isActive && status.state !== "signed-in")
+        // A stored login can recover before its thread notice disappears.
+        // Keep reconciling until the projection releases the auth lock.
+        else if (platform === "codex" && isActive)
           timer = setTimeout(() => void read(), CODEX_SIGNED_OUT_REREAD_MS);
         // A signed-in account's hint is about signing out.
         const hint = status.state === "signed-in" ? undefined : status.signIn.hint;

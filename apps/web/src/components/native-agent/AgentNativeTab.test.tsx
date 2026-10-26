@@ -1413,52 +1413,119 @@ describe("AgentNativeTab", () => {
     }
   });
 
-  test("a visible signed-out Codex tab asks again, so a login made elsewhere unlocks it", async () => {
+  test("Codex keeps rereading a signed-in account until the auth notice clears, then unlocks", async () => {
+    let needsAuth = true;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      notices: needsAuth
+        ? [
+            {
+              kind: "auth" as const,
+              state: "needs-auth" as const,
+              message: "Sign in to Codex again",
+              occurrenceId: "failure-1",
+            },
+          ]
+        : [],
+    }));
+    getNativeAgentAuthStatusMock.mockResolvedValue({
+      state: "signed-out",
+      signIn: { kind: "browser-url" },
+    });
+    installFakeReadCoordinator();
+    const reread = installControlledTimeout(10_000, { label: "Codex sign-out reread" });
+    try {
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-codex-reread"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await screen.findByText("Sign in to Codex again");
+      expect(
+        (screen.getByTitle("Sign in to Codex before sending") as HTMLButtonElement).disabled,
+      ).toBe(true);
+      await waitFor(() => expect(reread.pendingCount()).toBe(1));
+      const calls = getNativeAgentAuthStatusMock.mock.calls.length;
+      getNativeAgentAuthStatusMock.mockResolvedValue({
+        state: "signed-in",
+        signIn: { kind: "browser-url" },
+      });
+      await act(async () => {
+        expect(reread.advance()).toBe(1);
+      });
+      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(calls + 1);
+      // Account status can recover before the authoritative session snapshot.
+      expect(reread.pendingCount()).toBe(1);
+      expect(
+        (screen.getByTitle("Sign in to Codex before sending") as HTMLButtonElement).disabled,
+      ).toBe(true);
+      needsAuth = false;
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-codex-reread"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.queryByTitle("Sign in to Codex before sending") === null).toBe(true),
+      );
+      expect(reread.pendingCount()).toBe(0);
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Recovered" } });
+      await waitFor(() =>
+        expect((screen.getByTitle("Send") as HTMLButtonElement).disabled).toBe(false),
+      );
+      expect(reread.advance()).toBe(0);
+      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(calls + 1);
+    } finally {
+      cleanup();
+      reread.restore();
+      resetReadCoordinatorForTests();
+    }
+  });
+
+  test("hiding a signed-out Codex tab cancels its outstanding reread timer", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
-        message: "You've been signed out of Codex. Sign in again to keep working.",
+        message: "Codex needs sign-in",
         signIn: { kind: "browser-url" as const },
       },
     }));
-    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+    getNativeAgentAuthStatusMock.mockResolvedValue({
       state: "signed-out",
       signIn: { kind: "browser-url" },
-    }));
-    // A plain function, not a mock: Testing Library takes a mocked
-    // `setTimeout` for Jest fake timers.
-    const realSetTimeout = globalThis.setTimeout;
-    const rereads: Array<() => void> = [];
-    globalThis.setTimeout = ((callback: () => void, ms?: number, ...rest: unknown[]) => {
-      if (ms === 10_000) {
-        rereads.push(callback);
-        return realSetTimeout(() => undefined, 0);
-      }
-      return realSetTimeout(callback, ms, ...rest);
-    }) as typeof setTimeout;
+    });
+    installFakeReadCoordinator();
+    const reread = installControlledTimeout(10_000, { label: "Codex sign-out reread" });
     try {
       const view = render(
-        <AgentNativeTab tabId="tab-codex-reread" data={identity("codex")} isActive />,
+        <AgentNativeTab tabId="tab-codex-hidden" data={identity("codex")} isActive />,
       );
-      await screen.findByText(/signed out of Codex/);
-      await waitFor(() => expect(rereads.length).toBeGreaterThan(0));
-      const calls = getNativeAgentAuthStatusMock.mock.calls.length;
-      await act(async () => rereads.at(-1)?.());
-      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(calls + 1);
-
-      // A hidden tab does not keep asking.
+      await waitFor(() => expect(reread.pendingCount()).toBe(1));
+      await act(async () => {
+        reread.advance();
+      });
+      expect(reread.pendingCount()).toBe(1);
       view.rerender(
-        <AgentNativeTab tabId="tab-codex-reread" data={identity("codex")} isActive={false} />,
+        <AgentNativeTab tabId="tab-codex-hidden" data={identity("codex")} isActive={false} />,
       );
-      await waitFor(() =>
-        expect(getNativeAgentAuthStatusMock.mock.calls.length).toBeGreaterThan(calls + 1),
-      );
-      const scheduled = rereads.length;
-      await act(async () => undefined);
-      expect(rereads.length).toBe(scheduled);
+      await waitFor(() => expect(reread.pendingCount()).toBe(0));
+      const reads = getNativeAgentAuthStatusMock.mock.calls.length;
+      await act(async () => {
+        expect(reread.advance()).toBe(0);
+      });
+      expect(getNativeAgentAuthStatusMock.mock.calls.length).toBe(reads);
     } finally {
-      globalThis.setTimeout = realSetTimeout;
+      cleanup();
+      reread.restore();
+      resetReadCoordinatorForTests();
     }
   });
 
@@ -10333,6 +10400,67 @@ describe("AgentNativeTab", () => {
       await waitFor(() =>
         expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true),
       );
+    });
+
+    test("Claude notice timestamps reject an old sign-in when a new failure occurrence replaces it", async () => {
+      const timestamp = spyOn(Date.prototype, "toISOString").mockReturnValue(
+        "2026-10-26T10:00:00.000Z",
+      );
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-26T10:01:00.000Z",
+      };
+      const notice = (occurrenceId: string) => ({
+        kind: "auth" as const,
+        state: "expired" as const,
+        message: "Claude login failed",
+        occurrenceId,
+      });
+      try {
+        seedProjection({ notices: [notice("failure-1")] });
+        const view = render(
+          <AgentNativeTab
+            tabId="tab-claude-new-failure"
+            data={identity("claude")}
+            isActive
+            refreshRequestId={0}
+          />,
+        );
+        await screen.findByText("Signed in. Resend your message to continue.");
+        timestamp.mockReturnValue("2026-10-26T10:02:00.000Z");
+        seedProjection({ notices: [notice("failure-1")] });
+        view.rerender(
+          <AgentNativeTab
+            tabId="tab-claude-new-failure"
+            data={identity("claude")}
+            isActive
+            refreshRequestId={1}
+          />,
+        );
+        // Re-reading the same occurrence preserves when it was first seen.
+        expect(await screen.findByText("Signed in. Resend your message to continue.")).toBeTruthy();
+        seedProjection({ notices: [notice("failure-2")] });
+        const reads = getAgentAccountLoginMock.mock.calls.length;
+        view.rerender(
+          <AgentNativeTab
+            tabId="tab-claude-new-failure"
+            data={identity("claude")}
+            isActive
+            refreshRequestId={2}
+          />,
+        );
+        await waitFor(() =>
+          expect(getAgentAccountLoginMock.mock.calls.length).toBeGreaterThan(reads),
+        );
+        expect(screen.queryByText("Signed in. Resend your message to continue.") === null).toBe(
+          true,
+        );
+        expect(screen.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy();
+      } finally {
+        timestamp.mockRestore();
+      }
     });
 
     test("does not pin a second Claude sign-in card over a terminal auth error row", async () => {

@@ -1314,7 +1314,13 @@ export class AppServerEngine implements CodexEngine {
     if (sequence < this.accountAppliedSequence || generation !== this.supervisor.getGeneration())
       return;
     this.accountAppliedSequence = sequence;
+    const wasSignInRequired = this.accountSignInRequired;
     const signedIn = this.recordAccount(response);
+    if (signedIn && wasSignInRequired) {
+      // Stored-login reloads have no account/login/completed notification.
+      // Publish the confirmed recovery so thread auth locks clear as well.
+      this.emit({ kind: "account.signedIn", engineGeneration: generation });
+    }
     if (!signedIn) {
       await this.requestAccountReloadFromStoredLogin(sequence, generation);
       return;

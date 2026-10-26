@@ -1,3 +1,10 @@
+import { MAX_IMAGE_ATTACHMENT_BYTES, parseBase64ImageData } from "./image-attachment-data.js";
+export {
+  SUPPORTED_IMAGE_MEDIA_TYPES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  decodedBase64ByteLength,
+  parseBase64ImageData,
+} from "./image-attachment-data.js";
 import { openClaudeRuntime, retireDrainingClaudeRuntime } from "./session-manager-runtime.js";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
@@ -1033,16 +1040,6 @@ export function getImageMediaType(
   }
 }
 
-export const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-]);
-
-/** Matches the renderer's final image-attachment policy. */
-export const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-
 export type ClaudeAttachmentErrorCode =
   | "attachment_changed"
   | "attachment_invalid_data"
@@ -1062,39 +1059,6 @@ export class ClaudeAttachmentError extends Error {
   ) {
     super(message);
   }
-}
-
-export function decodedBase64ByteLength(value: string): number {
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  return (value.length / 4) * 3 - padding;
-}
-
-export function parseBase64ImageData(
-  value: string,
-): { data: string; mediaType?: "image/jpeg" | "image/png" | "image/gif" | "image/webp" } | null {
-  let data = value;
-  let mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" | undefined;
-
-  if (value.startsWith("data:")) {
-    const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(value);
-    if (!match || !SUPPORTED_IMAGE_MEDIA_TYPES.has(match[1])) {
-      return null;
-    }
-    mediaType = match[1] as typeof mediaType;
-    data = match[2];
-  }
-
-  const normalized = data.replace(/\s+/g, "");
-  if (
-    normalized.length === 0 ||
-    normalized.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized) ||
-    decodedBase64ByteLength(normalized) > MAX_IMAGE_ATTACHMENT_BYTES
-  ) {
-    return null;
-  }
-
-  return { data: normalized, mediaType };
 }
 
 /**

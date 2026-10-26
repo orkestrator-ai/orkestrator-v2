@@ -114,6 +114,7 @@ import {
 } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
@@ -918,6 +919,9 @@ export function registerTerminalCommands(
     return readFileBase64(asString(filePath, "filePath"), [
       getWorktreeBaseDir(context),
       ...customWorktrees,
+      // A coordinator's pasted images are staged in application data, never
+      // in the checkout it must not touch; its transcript names them there.
+      coordinatorAttachmentsRoot(context.storage.getDataDir()),
     ]);
   });
   register("read_environment_file_base64", async (args, context) => {

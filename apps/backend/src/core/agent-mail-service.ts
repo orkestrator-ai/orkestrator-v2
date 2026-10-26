@@ -7,7 +7,9 @@ import {
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import { randomUUID } from "node:crypto";
 import type { NativeAgentService } from "./native-agent-service.js";
+import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
 import type { StorageService } from "./storage.js";
 import type { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import type {
@@ -43,6 +45,11 @@ function idleFreshnessFlip(previous: MailboxPresence, next: MailboxPresence): bo
  */
 const MAX_MAIL_INJECT_BATCH = 10;
 const MAX_MAIL_INJECT_BATCH_BYTES = 128 * 1024;
+/** Keep the fully rendered, joined steer below the native 64 KB text limit. */
+const MAX_MAIL_STEER_BATCH_BYTES = 60 * 1024;
+
+/** Presences that mean a turn may be running, so Deliver now tries steering into it. */
+const STEERABLE_PRESENCES: ReadonlySet<MailboxPresence> = new Set(["working", "waiting", "draft"]);
 
 function mayInjectMessage(
   mailbox: MailboxDescriptor,
@@ -89,7 +96,15 @@ export class AgentMailService {
       NativeAgentService,
       "dispatchMailInject" | "reconcileMailInject" | "sessionActivitySnapshot"
     > &
-      Partial<Pick<NativeAgentService, "sessionPresentationSnapshot" | "mailInjectPresence">>,
+      Partial<
+        Pick<
+          NativeAgentService,
+          | "sessionPresentationSnapshot"
+          | "mailInjectPresence"
+          | "steerMailInject"
+          | "reconcileMailSteer"
+        >
+      >,
     private readonly tmux: Pick<PromptQueueDrainer, "dispatchMailInject"> &
       Partial<Pick<PromptQueueDrainer, "mailInjectPresence">>,
     private readonly hooks: {
@@ -193,7 +208,7 @@ export class AgentMailService {
       timer.unref?.();
     });
     const interrupted = await this.storage.listInterruptedAgentMailInjects();
-    for (const { mailbox, message } of interrupted) {
+    for (const { mailbox, message, steerRequestId } of interrupted) {
       if (mailbox.kind !== "native" || !mailbox.agent || !message.injectRequestId) continue;
       const logicalSessionKey =
         mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
@@ -204,9 +219,18 @@ export class AgentMailService {
           agent: mailbox.agent,
           logicalSessionKey,
           requestId: message.injectRequestId,
+          steerRecovery: Boolean(steerRequestId),
         });
       } catch {
         status = "unknown";
+      }
+      // The claim was a Deliver now steer, which may have fallen back to an
+      // ordinary dispatch. Delivered either way settles it; it is provably
+      // unsent only if neither could have landed.
+      if (steerRequestId && status !== "dispatched") {
+        const steered = await this.reconcileSteer(mailbox, logicalSessionKey, steerRequestId);
+        status =
+          steered === "dispatched" ? "dispatched" : steered === "unknown" ? "unknown" : status;
       }
       await this.applyInjectorMutation(() =>
         this.storage.finishAgentMailInject(
@@ -343,18 +367,22 @@ export class AgentMailService {
     requestId: string,
     attempts: number,
     verified: Map<string, "dispatched" | "not-dispatched" | "unknown">,
+    steer: boolean,
   ): Promise<void> {
     let status = verified.get(requestId);
     if (!status) {
-      try {
-        status = await this.nativeAgents.reconcileMailInject({
-          environmentId: mailbox.environmentId,
-          agent: mailbox.agent!,
-          logicalSessionKey,
-          requestId,
-        });
-      } catch {
-        status = "unknown";
+      if (steer) status = await this.reconcileSteer(mailbox, logicalSessionKey, requestId);
+      else {
+        try {
+          status = await this.nativeAgents.reconcileMailInject({
+            environmentId: mailbox.environmentId,
+            agent: mailbox.agent!,
+            logicalSessionKey,
+            requestId,
+          });
+        } catch {
+          status = "unknown";
+        }
       }
       verified.set(requestId, status);
     }
@@ -376,7 +404,9 @@ export class AgentMailService {
             ({ outcome: "held", reason: "parked" } as const)
           : attempts >= AGENT_MAIL_MAX_VERIFY_ATTEMPTS
             ? ({ outcome: "failed", reason: "ambiguous" } as const)
-            : ({ outcome: "verify", requestId } as const);
+            : steer
+              ? ({ outcome: "verify", requestId, steer: true } as const)
+              : ({ outcome: "verify", requestId } as const);
     this.skipReasons.delete(message.id);
     await this.applyInjectorMutation(() =>
       this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, result),
@@ -388,6 +418,24 @@ export class AgentMailService {
       journal: status,
       outcome: result.outcome,
     });
+  }
+
+  private async reconcileSteer(
+    mailbox: MailboxDescriptor,
+    logicalSessionKey: string,
+    requestId: string,
+  ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
+    if (!this.nativeAgents.reconcileMailSteer) return "unknown";
+    try {
+      return await this.nativeAgents.reconcileMailSteer({
+        environmentId: mailbox.environmentId,
+        agent: mailbox.agent!,
+        logicalSessionKey,
+        requestId,
+      });
+    } catch {
+      return "unknown";
+    }
   }
 
   drainInjects(options?: { includeDeferred?: boolean }): Promise<void> {
@@ -445,6 +493,8 @@ export class AgentMailService {
       verifyRequestId,
       verificationAttempts,
       coalescingUntil,
+      steerRequested,
+      steerRequestId: verifySteerRequestId,
     } of pending) {
       // Still gathering other notices: it may ride along, not start a turn.
       if (coalescingUntil) continue;
@@ -503,9 +553,12 @@ export class AgentMailService {
           verifyRequestId,
           verificationAttempts ?? 0,
           verified,
+          verifySteerRequestId === verifyRequestId,
         );
         continue;
       }
+      // Deliver now, while a turn may be running: offer the mail to that turn.
+      let steerRequestId: string | undefined;
       if (mailbox.kind === "native" && mailbox.agent) {
         const activity = this.nativeAgents.sessionActivitySnapshot(
           mailbox.environmentId,
@@ -522,7 +575,9 @@ export class AgentMailService {
             ? activity
             : "unknown";
         await this.recordPresence(mailbox.mailboxId, nativePresence);
-        if (deferredUntil) {
+        if (steerRequested && STEERABLE_PRESENCES.has(nativePresence)) {
+          steerRequestId = randomUUID();
+        } else if (deferredUntil) {
           if (nativePresence !== "idle") {
             this.noteSkip(message, mailbox, `backoff:${nativePresence}`);
             continue;
@@ -532,7 +587,7 @@ export class AgentMailService {
         // A never-prompted tab has no observed provider activity. The dispatch
         // gate performs one authoritative provider-status check for that cold
         // tab; known queue, draft and live activity all stop before the claim.
-        if (nativePresence !== "idle" && nativePresence !== "unknown") {
+        if (!steerRequestId && nativePresence !== "idle" && nativePresence !== "unknown") {
           this.noteSkip(message, mailbox, nativePresence);
           continue;
         }
@@ -552,6 +607,27 @@ export class AgentMailService {
           await this.storage.resetAgentMailInjectBackoff(mailbox.mailboxId);
         }
         if (tmuxPresence !== "idle") {
+          if (steerRequested && STEERABLE_PRESENCES.has(tmuxPresence)) {
+            // A terminal agent cannot take mail mid-turn. Say so on the
+            // message, which then waits for the turn to end as before.
+            const claimed = await this.applyInjectorMutation(() =>
+              this.storage.beginAgentMailInject(
+                mailbox.mailboxId,
+                message.id,
+                mailbox.incarnationId,
+              ),
+            );
+            if (claimed) {
+              this.skipReasons.delete(message.id);
+              await this.applyInjectorMutation(() =>
+                this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
+                  outcome: "held",
+                  reason: "steer-unsupported",
+                }),
+              );
+            }
+            continue;
+          }
           this.noteSkip(message, mailbox, tmuxPresence);
           continue;
         }
@@ -559,9 +635,18 @@ export class AgentMailService {
         continue;
       }
       const claimed = await this.applyInjectorMutation(() =>
-        this.storage.beginAgentMailInject(mailbox.mailboxId, message.id, mailbox.incarnationId),
+        this.storage.beginAgentMailInject(
+          mailbox.mailboxId,
+          message.id,
+          mailbox.incarnationId,
+          undefined,
+          steerRequestId ? { steerRequestId } : {},
+        ),
       );
       if (!claimed) continue;
+      const maxCarrierBytes = steerRequestId
+        ? MAX_MAIL_STEER_BATCH_BYTES
+        : MAX_MAIL_INJECT_BATCH_BYTES;
       /*
        * Everything else already waiting for this same mailbox rides along.
        *
@@ -577,6 +662,18 @@ export class AgentMailService {
        */
       const batched = [claimed];
       let carrierBytes = Buffer.byteLength(renderAgentMailCarrier(claimed), "utf8");
+      if (steerRequestId && carrierBytes > maxCarrierBytes) {
+        // Escaping can expand a valid mail body beyond the steer text limit.
+        // Keep the complete message queued for ordinary idle delivery.
+        this.skipReasons.delete(claimed.id);
+        await this.applyInjectorMutation(() =>
+          this.storage.finishAgentMailInject(mailbox.mailboxId, claimed.id, {
+            outcome: "held",
+            reason: "steer-too-large",
+          }),
+        );
+        continue;
+      }
       for (const sibling of pending) {
         if (batched.length >= MAX_MAIL_INJECT_BATCH) break;
         if (sibling.mailbox.mailboxId !== mailbox.mailboxId) continue;
@@ -592,13 +689,16 @@ export class AgentMailService {
             sibling.message.id,
             mailbox.incarnationId,
             undefined,
-            { joinCoalescing: Boolean(sibling.coalescingUntil) },
+            {
+              joinCoalescing: Boolean(sibling.coalescingUntil),
+              ...(steerRequestId ? { steerRequestId } : {}),
+            },
           ),
         );
         if (!siblingClaim) continue;
         const rendered = renderAgentMailCarrier(siblingClaim);
         const renderedBytes = Buffer.byteLength(rendered, "utf8");
-        if (carrierBytes + renderedBytes > MAX_MAIL_INJECT_BATCH_BYTES) {
+        if (carrierBytes + 2 + renderedBytes > maxCarrierBytes) {
           // Over budget: give it back rather than carry it, so the next pass
           // delivers it as its own turn instead of dropping it.
           await this.applyInjectorMutation(() =>
@@ -609,7 +709,7 @@ export class AgentMailService {
           );
           break;
         }
-        carrierBytes += renderedBytes;
+        carrierBytes += 2 + renderedBytes;
         batched.push(siblingClaim);
       }
       batched.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -628,7 +728,8 @@ export class AgentMailService {
           | { outcome: "held"; reason: string }
           | { outcome: "failed"; reason: "ambiguous" | "rejected" }
           | { outcome: "retry"; reason: string }
-          | { outcome: "verify"; requestId: string },
+          | { outcome: "verify"; requestId: string; steer?: true },
+        via: "inject" | "steer" = "inject",
       ): Promise<void> => {
         for (const entry of batched) {
           this.skipReasons.delete(entry.id);
@@ -642,8 +743,41 @@ export class AgentMailService {
           toTabId: mailbox.tabId,
           outcome: result.outcome,
           reason: "reason" in result ? result.reason : null,
+          via,
         });
       };
+      if (steerRequestId) {
+        let steered: MailSteerDispatchOutcome;
+        try {
+          steered = this.nativeAgents.steerMailInject
+            ? await this.nativeAgents.steerMailInject({
+                environmentId: mailbox.environmentId,
+                agent: mailbox.agent!,
+                logicalSessionKey,
+                text: carrier,
+                requestId: steerRequestId,
+              })
+            : { outcome: "refused", reason: "steer-unsupported" };
+        } catch {
+          // Only the lookups before the steer throw; its dispatch reports
+          // an unanswered hand-off as `unknown` instead.
+          steered = { outcome: "refused", reason: "steer-refused" };
+        }
+        if (steered.outcome === "applied") {
+          await settle({ outcome: "accepted" }, "steer");
+          continue;
+        }
+        if (steered.outcome === "unknown") {
+          await settle({ outcome: "verify", requestId: steerRequestId, steer: true }, "steer");
+          continue;
+        }
+        if (steered.outcome === "refused") {
+          // Not delivered: it waits for the turn to end, saying why.
+          await settle({ outcome: "held", reason: steered.reason }, "steer");
+          continue;
+        }
+        // No turn is running after all: deliver it the ordinary way, now.
+      }
       let outcome:
         | Awaited<ReturnType<PromptQueueDrainer["dispatchMailInject"]>>
         | Awaited<ReturnType<NativeAgentService["dispatchMailInject"]>>;

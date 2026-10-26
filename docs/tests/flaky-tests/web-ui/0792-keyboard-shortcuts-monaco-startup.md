@@ -12,8 +12,14 @@ The complete unchanged owner passed all 28 mobile/desktop cases with one worker 
 
 Failure evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.OsCV6b/shortcuts-browser-verified.log.gz` and `output/playwright/shortcuts-verified/KeyboardShortcuts-Meta-shortcut-wins-over-Monaco-Delete-Line-mobile-chromium/`. Passing screenshots are under `output/playwright/shortcuts-serial/`. The owning-file pass establishes intermittence; host contention is a possible cause, not a proven root cause.
 
+## Resume cleanup coverage validation — 2026-10-25
+
+The mobile Meta/Monaco case found no editor textbox at the five-second startup deadline in the five-worker component run. All unchanged owner cases passed in the sequential one-worker rerun.
+
+The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.
+
 ## Triage 2026-10-25
 
 - **Disposition:** open.
-- **Evidence:** single observation. The only later change to the spec (#1240, 2a06be4a6) waits for the terminal textarea in two other tests, not for Monaco.
+- **Evidence:** the initial observation and the resume-cleanup recurrence above both missed the mobile Monaco textbox startup deadline, then passed in complete unchanged one-worker owner reruns. The only later change to the spec (#1240, 2a06be4a6) waits for the terminal textarea in two other tests, not for Monaco.
 - **Next step:** check a failure trace for whether Monaco's lazy chunk was still loading; if so, wait for the editor with the longer startup budget the suite uses elsewhere.

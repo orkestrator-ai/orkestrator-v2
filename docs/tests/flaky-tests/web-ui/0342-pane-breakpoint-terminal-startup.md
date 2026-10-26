@@ -38,3 +38,10 @@ Mobile pane-tree moveBefore found zero terminals at its five-second deadline.
 ## Environment-list UI main merge — 2026-10-24
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+
+## Resume cleanup coverage validation — 2026-10-25
+
+The mobile pane-tree/moveBefore case found no terminal at the five-second startup deadline in the five-worker component run. All unchanged owner cases passed in the sequential one-worker rerun.
+
+The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.

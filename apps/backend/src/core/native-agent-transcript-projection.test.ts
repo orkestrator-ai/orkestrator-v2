@@ -13,6 +13,7 @@ import {
   nativeAgentSessionStorageKey,
   type CommandInvoker,
   type NativeAgentRuntimeProvider,
+  type NativeAgentProjectionInput,
   type StorageService,
 } from "./native-agent-service-shared.js";
 import {
@@ -52,16 +53,20 @@ async function withProjection(
     storage: StorageService;
     host: NativeAgentTranscriptProjectionHost;
   }) => Promise<void>,
+  projectionIdentity: NativeAgentProjectionInput = identity,
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-transcript-projection-"));
   const storage = await createStorage(dataDir);
   await addEnvironment(storage);
+  const projectionSessionKey = nativeAgentSessionStorageKey(
+    projectionIdentity.environmentId,
+    projectionIdentity.agent,
+    projectionIdentity.logicalSessionKey,
+  );
   await storage.getOrCreateNativeAgentSession(
     {
-      key: sessionKey,
-      environmentId: identity.environmentId,
-      agent: identity.agent,
-      logicalSessionKey: identity.logicalSessionKey,
+      key: projectionSessionKey,
+      ...projectionIdentity,
     },
     async () => "provider-session",
   );
@@ -105,6 +110,59 @@ async function withProjection(
 }
 
 describe("NativeAgentTranscriptProjection", () => {
+  test("defers a replayed Claude user image and resolves its original bytes", async () => {
+    const claudeIdentity = { ...identity, agent: "claude" as const };
+    const fileUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const image = {
+      type: "image",
+      content: "image-1.png",
+      fileUrl,
+      imageSource: "attachment",
+    };
+    const stub = createProviderStub("claude", {
+      messages: async () => [
+        {
+          id: "claude-user-image",
+          role: "user",
+          content: "",
+          parts: [image],
+          createdAt: "2026-10-01T00:00:00.000Z",
+        },
+      ],
+    });
+    await withProjection(
+      stub.provider,
+      async ({ projection }) => {
+        const projected = await projection.refreshProjection(claudeIdentity, true);
+        const messages = projected?.messages as Array<{
+          id: string;
+          role: string;
+          parts: Array<Record<string, unknown>>;
+        }>;
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({ id: "claude-user-image", role: "user" });
+        expect(messages[0]?.parts).toEqual([
+          {
+            type: "image",
+            content: "image-1.png",
+            imageSource: "attachment",
+            detailRef: expect.any(String),
+          },
+        ]);
+        expect(JSON.stringify(projected)).not.toContain(fileUrl);
+        const detailRef = messages[0]!.parts[0]!.detailRef as string;
+        expect(await projection.getProjectionToolDetails({ ...claudeIdentity, detailRef })).toEqual(
+          {
+            detailRef,
+            fileDataUrl: fileUrl,
+          },
+        );
+        expect(image.fileUrl).toBe(fileUrl);
+      },
+      claudeIdentity,
+    );
+  });
+
   test("a refresh projects the provider transcript and caches it for in-memory readers", async () => {
     const stub = createProviderStub("opencode", {
       messages: async () => [textMessage("m1", "hello")],

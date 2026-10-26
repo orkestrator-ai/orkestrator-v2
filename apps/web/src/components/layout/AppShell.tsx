@@ -201,6 +201,8 @@ export function AppShell({ children }: AppShellProps) {
         <OpenFileDialog />
         <KeyboardShortcutsDialog />
         <AppDialogHost />
+        {/* The node's tabs and their mail live here; the messages panel opens over the realm. */}
+        <AgentMailPanel />
         <HostPark parkRef={contentParkRef} />
         {/*
           The window's title bar shows this node's host meters and agent

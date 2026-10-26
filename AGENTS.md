@@ -320,6 +320,11 @@ to a `package.json`, because `bun check` runs that script instead of the type
 checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
 are in [`docs/development/linting.md`](docs/development/linting.md).
 
+Format with `bun fmt` (or `mise run format`) only. oxfmt is not a dependency,
+despite the config's file name: do not run `oxfmt`, `npx oxfmt` or Prettier.
+To format or check only the files you touched, pass them to `bun fmt` or
+`bun fmt --check`.
+
 - Only `correctness` is enabled, as errors, including the seven React
   Compiler rules (`react/refs`, `react/set-state-in-effect`, …). The one
   warning is `no-unused-vars`, for its pre-existing backlog: clean up files you

@@ -14,8 +14,10 @@ per-store repositories. To keep every public method name and signature (a
 constraint of 0009), the facade forwarded each of its 327 repository methods
 explicitly, so `storage.ts` was 2,464 lines of one-line forwarders, over the
 2,000-line limit in `AGENTS.md` ("General guidance"). `storage-agent-mail.ts`
-(`AgentMailRepository`, 3,284 lines on `main`) was the one repository file
-over the limit too.
+(`AgentMailRepository`, 3,284 lines on `main`) was over the limit too. (This
+file originally called it the one repository file over the limit;
+`storage-native.ts` was also over, by 15 lines, see
+[0214](0214-storage-files-over-size-limit.md).)
 
 ## Current state
 
@@ -53,8 +55,11 @@ over the limit too.
   (`storage-agent-mail-budgets.ts`, 356: pair loop budget, hourly limit,
   resets, releases, the held-mail notice). They reach each other through the
   `StorageRepositories` registry (`agentMail`, `agentMailboxes`,
-  `agentMailInjects`, `agentMailBudgets`). No storage source file is over
-  2,000 lines.
+  `agentMailInjects`, `agentMailBudgets`). None of them is over 2,000 lines.
+  Two storage files outside this file's scope still are
+  (`storage-shared-core.ts`, 2,185; `storage-native.ts`, 2,015, both
+  unchanged from `main`); they are followed up in
+  [0214-storage-files-over-size-limit.md](0214-storage-files-over-size-limit.md).
 
 ## Outstanding work
 
@@ -121,7 +126,15 @@ All on this branch, 2026-10-26.
   found earlier was fixed (decision 8).
 - `mise run typecheck`: no errors. `mise run lint`: exit 0, no finding in a
   changed file. `mise run format`: applied.
-- Final `mise run test`: see the coordinator report for the pushed head.
+- `mise run test` at `7e64cd377`: bridges and codex protocol lockfile
+  passed; the workspace group failed one backend test (11,768 pass, 97 skip,
+  1 fail): the terminal-history five-second deadline, already flake
+  [0213](../../tests/flaky-tests/backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md)
+  (recurrence recorded; its owner passed alone, 25 pass). The root group
+  failed one test, `flaky-tests-index.test.ts`, which also fails on `main`:
+  flake case 0887 (environments and containers, from #1279) lacked the
+  register's metadata header. Fixed here (decision 10); the test passes
+  (11 pass).
 
 ## Assumptions and decisions
 
@@ -193,6 +206,13 @@ All on this branch, 2026-10-26.
 9. **Kept this file, marked Finished.** The README says to delete a finished
    file; like 0009–0013 and 0066 it stays until the branch merges so the
    review can read these decisions.
+10. **Fixed a register case that breaks `main`'s suite.** Options: leave
+    `tests/unit/flaky-tests-index.test.ts` failing as pre-existing, or give
+    case 0887 (`environments-and-containers/0887-container-rebuild-dialog-after-reload.md`)
+    the `- **ID:**`/`- **Status:**` header every other case has. Chose the
+    fix: it is a doc-format change with no content change, and it keeps
+    `mise run test` meaningful for this branch. Cons: an unrelated file in the
+    diff.
 
 ## Constraints and rationale
 
@@ -210,3 +230,5 @@ All on this branch, 2026-10-26.
 - [0012-backend-core-domain-folders.md](0012-backend-core-domain-folders.md):
   the storage folder move.
 - [`storage.md`](../../architecture/storage.md) ("Code layout").
+- [0214-storage-files-over-size-limit.md](0214-storage-files-over-size-limit.md):
+  the two storage files still over the limit.

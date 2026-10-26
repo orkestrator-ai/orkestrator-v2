@@ -126,6 +126,12 @@ import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
 import { readOpenCodeTurnTerminalError } from "./opencode-turn-outcome.js";
 import { OpenCodeActionRetryCoordinator } from "./opencode-action-retry.js";
 import { reconcileOpenCodeStreamState } from "./opencode-stream-reconciliation.js";
+import {
+  openCodeRevertMarker,
+  openCodeRevertNotice,
+  withoutRevertedOpenCodeMessages,
+  type OpenCodeRevertMarker,
+} from "./opencode-revert.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
@@ -843,17 +849,63 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return openCodeTranscriptSource(this.streamState, sessionId, {
       readMessages: (limit, before) => this.readMessagesSnapshot(sessionId, limit, before),
       recordUnknown: (type) => this.health.recordUnknown(`part:${type}`),
+      revertMarker: () => this.revertMarker(sessionId),
       ...(this.commandChanges
         ? { commandChanges: () => this.commandChanges!.changes(sessionId) }
         : {}),
     });
   }
 
+  /**
+   * OpenCode's pending revert for a transcript read. `session.updated` and the
+   * revert actions keep it current; after a stream gap, or before either has
+   * been seen, it is read from the session. A failed read serves the marker
+   * last seen and leaves it unknown, so the next read asks again.
+   */
+  private async revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
+    if (this.streamState.revertMarkerKnown(sessionId)) {
+      return this.streamState.revertMarker(sessionId);
+    }
+    const version = this.streamState.revertVersion(sessionId);
+    try {
+      const response = await this.client.session.get(
+        { sessionID: sessionId },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode session revert read");
+      const session = asRecord(response.data);
+      const marker = openCodeRevertMarker(session);
+      if (session?.id === sessionId && (session.revert === undefined || marker)) {
+        this.streamState.observeRevert(sessionId, marker, version);
+      }
+    } catch {
+      // The transcript stays readable; only the marker is stale.
+    }
+    return this.streamState.revertMarker(sessionId);
+  }
+
+  /** An action response overtaken by another observation needs an authoritative reread. */
+  private observeRevertResult(sessionId: string, session: unknown, version: number): void {
+    const info = asRecord(session);
+    const marker = openCodeRevertMarker(session);
+    if (
+      info?.id === sessionId &&
+      (info.revert === undefined || marker) &&
+      this.streamState.observeRevert(sessionId, marker, version)
+    )
+      return;
+    // Keep the last observed marker while a later read resolves ambiguous ordering.
+    this.streamState.invalidateRevert(sessionId);
+  }
+
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
     const eventVersionBefore = this.streamState.eventVersion(sessionId);
     const status = await this.projectedStatus(sessionId);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
-    const notices = this.actionRetry.notices(sessionId);
+    const notices = [
+      ...this.actionRetry.notices(sessionId),
+      ...openCodeRevertNotice(this.streamState.revertMarker(sessionId)),
+    ];
     const streamedError = notices.some((notice) => notice.kind === "error");
     // The clock is authoritative only when a dispatch or an observed busy/retry
     // event set it. A read must never manufacture one, and an observation that
@@ -919,13 +971,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
     const eventVersionBefore = this.streamState.eventVersion(sessionId);
-    const [status, rawMessages, metadata, commandChanges] = await Promise.all([
+    const [status, heldMessages, metadata, commandChanges, revert] = await Promise.all([
       this.projectedStatus(sessionId),
       this.projectedMessages(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       this.readInteractiveMetadata(sessionId),
       this.commandChanges?.changes(sessionId),
+      this.revertMarker(sessionId),
     ]);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
+    const rawMessages = [...withoutRevertedOpenCodeMessages(heldMessages, revert)];
     const outcomeMessages = await this.actionRetry.messagesWithFailures(sessionId, rawMessages);
     const normalizedMessages = normalizeOpenCodeTranscriptMessages(
       outcomeMessages,
@@ -949,7 +1003,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // retry is live. It cannot settle the turn whose abort is pending or failed.
     const terminal =
       status === "running" && this.actionRetry.isUnsettled(sessionId) ? null : persistedTerminal;
-    const streamNotices = this.actionRetry.notices(sessionId);
+    const streamNotices = [...this.actionRetry.notices(sessionId), ...openCodeRevertNotice(revert)];
     const streamedError = streamNotices.find((notice) => notice.kind === "error");
     const latestUsage = this.streamState.contextUsage(sessionId, outcomeMessages);
     const running = status === "running" && !terminal && !streamedError;
@@ -967,7 +1021,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return {
       status: terminal?.kind === "error" || streamedError ? "error" : status,
       messages,
-      messagesComplete: rawMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      messagesComplete: heldMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
       ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       ...(metadata.title ? { title: metadata.title } : {}),
       composer: {
@@ -1247,21 +1301,28 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         );
         return { outcome: "applied" };
       }
+      // Both answer with the updated Session. Its revert marker is what the
+      // transcript hides. Only install an answer if no observation overtook
+      // the request; otherwise the next read reconciles with session.get.
       if (action.kind === "undo") {
-        await this.client.session.revert(
+        const version = this.streamState.revertVersion(sessionId);
+        const response = await this.client.session.revert(
           {
             sessionID: sessionId,
             ...(action.messageId ? { messageID: action.messageId } : {}),
           },
           { ...this.requestOptions(), throwOnError: true },
         );
+        this.observeRevertResult(sessionId, response.data, version);
         return { outcome: "applied" };
       }
       if (action.kind === "redo") {
-        await this.client.session.unrevert(
+        const version = this.streamState.revertVersion(sessionId);
+        const response = await this.client.session.unrevert(
           { sessionID: sessionId },
           { ...this.requestOptions(), throwOnError: true },
         );
+        this.observeRevertResult(sessionId, response.data, version);
         return { outcome: "applied" };
       }
       // No share/unshare: OpenCode 1.19.1 discontinued session sharing, so

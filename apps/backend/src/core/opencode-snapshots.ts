@@ -34,6 +34,7 @@ import {
 } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import { inlineFileContentLabel, inlineFileUrlDisposition } from "./native-agent-inline-files.js";
 import { normalizeOpenCodeTranscriptGroups } from "./opencode-messages.js";
+import { withoutRevertedOpenCodeMessages, type OpenCodeRevertMarker } from "./opencode-revert.js";
 import { isProvisionalOpenCodeMessage, type OpenCodeStreamState } from "./opencode-stream-state.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 
@@ -212,12 +213,22 @@ export interface OpenCodeTranscriptSource {
   recordUnknown: (type: string) => void;
   /** Measured shell changes to overlay by `callID`; see `opencode-command-changes.ts`. */
   commandChanges?: () => Promise<ReadonlyMap<string, MeasuredWorkspaceChange>>;
+  /**
+   * OpenCode's pending revert, read from the session when the stream cannot
+   * vouch for it. Its messages stay in OpenCode until the next prompt, so
+   * every read hides them (`opencode-revert.ts`). Called before the source
+   * token and epoch are taken: a marker that changes moves both.
+   */
+  revertMarker?: () => Promise<OpenCodeRevertMarker | undefined>;
 }
 
 export function openCodeTranscriptSource(
   stream: OpenCodeStreamState,
   sessionId: string,
-  reads: Pick<OpenCodeTranscriptSource, "readMessages" | "recordUnknown" | "commandChanges">,
+  reads: Pick<
+    OpenCodeTranscriptSource,
+    "readMessages" | "recordUnknown" | "commandChanges" | "revertMarker"
+  >,
 ): OpenCodeTranscriptSource {
   return {
     revision: () => stream.revision(sessionId),
@@ -267,6 +278,7 @@ export async function openCodeTranscriptSnapshot(
   options: OpenCodeTranscriptSnapshotOptions,
 ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
   try {
+    const revert = await input.revertMarker?.();
     const revision = input.revision();
     const historyEpoch = input.historyEpoch();
     const sourceToken = `opencode:${historyEpoch}:${revision}:${options.limit}:${options.targetBytes}`;
@@ -293,7 +305,10 @@ export async function openCodeTranscriptSnapshot(
       }
     }
     const commandChanges = await input.commandChanges?.();
-    const windowMessages = rawMessages.slice(-options.limit);
+    // Whether older history exists is a property of the read; what the
+    // revert hides is its newest end, never a reason to claim completion.
+    const visibleMessages = withoutRevertedOpenCodeMessages(rawMessages, revert);
+    const windowMessages = visibleMessages.slice(-options.limit);
     const groups = normalizeOpenCodeTranscriptGroups(
       windowMessages,
       input.recordUnknown,
@@ -313,17 +328,18 @@ export async function openCodeTranscriptSnapshot(
      */
     const olderHistory =
       start > 0 ||
-      rawMessages.length > windowMessages.length ||
+      visibleMessages.length > windowMessages.length ||
       !(fromStart ?? rawMessages.length < options.limit);
+    // A revert reaching past the whole read leaves nothing on screen to name
+    // the cursor; the read's oldest message still bounds what lies before it.
     const historyCursor = olderHistory
-      ? windowMessages
-          .slice(start)
+      ? (windowMessages.length > 0 ? windowMessages.slice(start) : rawMessages)
           .map(openCodeHistoryCursor)
           .find((cursor) => cursor !== undefined)
       : undefined;
     const revisedMessages = openCodeRevisedRows(
-      rawMessages,
-      rawMessages.length - windowMessages.length + start,
+      visibleMessages,
+      visibleMessages.length - windowMessages.length + start,
       input.revisedMessageIds?.(),
       input.recordUnknown,
       commandChanges,
@@ -332,7 +348,15 @@ export async function openCodeTranscriptSnapshot(
     const shownIds = new Set(
       [...groups.slice(start).flat(), ...revisedMessages].map((row) => row.id),
     );
-    const omittedIds = input.revisedMessageIds?.().filter((id) => !shownIds.has(id)) ?? [];
+    // A revised message the revert hides is not missing from the reader.
+    const hiddenIds = new Set(
+      rawMessages.slice(visibleMessages.length).flatMap((message) => {
+        const id = nonEmptyString(asRecord(asRecord(message)?.info)?.id);
+        return id ? [id] : [];
+      }),
+    );
+    const omittedIds =
+      input.revisedMessageIds?.().filter((id) => !shownIds.has(id) && !hiddenIds.has(id)) ?? [];
     const historyReconciliationToken = revisedRowsReconciliationToken(
       input.revisedRowsOverflowVersion?.() ?? 0,
       omittedIds.length ? [input.revisedRowsVersion?.() ?? revision, ...omittedIds] : [],
@@ -406,12 +430,18 @@ function openCodeRevisedRows(
 export async function openCodeTranscriptPage(
   input: Pick<
     OpenCodeTranscriptSource,
-    "historyEpoch" | "readMessages" | "recordUnknown" | "commandChanges"
+    "historyEpoch" | "readMessages" | "recordUnknown" | "commandChanges" | "revertMarker"
   >,
   options: OpenCodeTranscriptPageOptions,
 ): Promise<ProviderTranscriptPage> {
   const position = openCodeHistoryPosition(options.cursor);
   if (!position) return { status: "expired" };
+  let revert: OpenCodeRevertMarker | undefined;
+  try {
+    revert = await input.revertMarker?.();
+  } catch (error) {
+    throw new ProviderUnavailableError("OpenCode history page is unavailable", { cause: error });
+  }
   const historyEpoch = input.historyEpoch();
   const count = Math.max(
     1,
@@ -433,17 +463,22 @@ export async function openCodeTranscriptPage(
     if (input.historyEpoch() !== historyEpoch) return { status: "expired" };
     const more = read.length > count;
     const candidates = read.slice(-count);
+    // A revert hides the page's newest end; its oldest message still names
+    // the next cursor when the revert reaches past all of it.
+    const visible = withoutRevertedOpenCodeMessages(candidates, revert);
     const groups = normalizeOpenCodeTranscriptGroups(
-      candidates,
+      visible,
       input.recordUnknown,
       await input.commandChanges?.(),
     );
     const start =
-      candidates.length === 0
+      visible.length === 0
         ? 0
         : newestOpenCodeGroups(groups, { rows: count, targetBytes: options.targetBytes });
     const olderHistory = start > 0 || more;
-    const historyCursor = olderHistory ? openCodeHistoryCursor(candidates[start]) : undefined;
+    const historyCursor = olderHistory
+      ? openCodeHistoryCursor(visible.length > 0 ? visible[start] : candidates[0])
+      : undefined;
     return {
       status: "page",
       messages: groups.slice(start).flat(),

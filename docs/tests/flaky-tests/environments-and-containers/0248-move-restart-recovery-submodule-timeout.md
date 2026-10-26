@@ -345,6 +345,10 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Assessment:** the host load average was 50 to 55 from other worktrees' suites throughout, so this observation cannot separate load from a defect; it adds to the existing evidence that these submodule fixtures exceed five seconds under heavy load. No environment-move code, assertion, deadline or skip changed.
 
 
+## OpenCode review-fix validation — 2026-10-26
+
+The aggregate case timed out at 5,069.21 ms with a terminated recursive Git child. The complete unchanged owner also failed on rerun: 35 passed, two failed and two between-test errors across 37 tests (46.45 seconds); the restart case took 5,039.46 ms and the nested-submodule same-disk move case 5,070.46 ms. This observation remains non-green alone and is not newly classified as an aggregate-only flake. Exact aggregate/rerun commands, worker configuration, counts and artifact paths are recorded in [0978](../aggregate-validation-runs/0978-opencode-undo-validation-backend-timeouts.md). No move implementation, assertions, timeouts or skips changed.
+
 ## Mobile settings review-fix validation — 2026-10-26
 
 The review-fix `mise run test` on branch

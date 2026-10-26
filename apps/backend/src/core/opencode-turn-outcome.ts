@@ -1,6 +1,7 @@
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   boundedOpenCodeMessageHistory,
+  findOpenCodeMessageId,
   OPEN_CODE_MESSAGE_HISTORY_LIMIT,
   openCodeRequestMarker,
 } from "@orkestrator/protocol/opencode-message-id";
@@ -8,6 +9,16 @@ import { assertSdkResponse, asRecord } from "./agent-provider-runtime.js";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import { normalizeOpenCodeTerminalState } from "./opencode-messages.js";
 import { openCodeActionFailureForMessage } from "./opencode-action-failures.js";
+import type { OpenCodeDispatchFailure } from "./opencode-stream-state.js";
+
+/**
+ * How long a dispatch-time `session.error` must stand with no message for the
+ * request before it settles the turn. OpenCode reports a part it cannot read
+ * (a binary attachment) as a `session.error` and then still stores the
+ * message, milliseconds later; a read inside that gap must not call the turn
+ * failed.
+ */
+export const OPEN_CODE_DISPATCH_FAILURE_GRACE_MS = 2_000;
 
 /**
  * How one request's OpenCode turn ended: its terminal error, or null when the
@@ -18,12 +29,18 @@ import { openCodeActionFailureForMessage } from "./opencode-action-failures.js";
  * status alone is not evidence that the turn succeeded. The lifecycle can also
  * read idle just after a prompt is accepted, before any answer exists; only a
  * finished or failed answer settles the turn, and anything else throws.
+ *
+ * The one exception is a prompt OpenCode accepted and then dropped: a
+ * `session.error` it published after the dispatch (`dispatch.failure`) with
+ * no message for the request in the transcript. That turn failed with the
+ * error's reason; without the event it stays unproven.
  */
 export async function readOpenCodeTurnTerminalError(
   client: OpencodeClient,
   sessionId: string,
   requestId: string,
   requestOptions: { signal: AbortSignal },
+  dispatch: { failure?: OpenCodeDispatchFailure; now?: number } = {},
 ): Promise<string | null> {
   const marker = openCodeRequestMarker(requestId);
   const response = await client.session.messages(
@@ -51,8 +68,16 @@ export async function readOpenCodeTurnTerminalError(
       }
       if (terminal) return terminal.message;
       if (typeof asRecord(info.time)?.completed === "number") return null;
-      break;
+      throw new ProviderUnavailableError("OpenCode has not finished answering this request");
     }
+  }
+  const failure = dispatch.failure;
+  if (
+    failure?.requestId === requestId &&
+    !findOpenCodeMessageId(history, requestId) &&
+    (dispatch.now ?? Date.now()) - failure.observedAt >= OPEN_CODE_DISPATCH_FAILURE_GRACE_MS
+  ) {
+    return `OpenCode did not accept the prompt: ${failure.message}`;
   }
   throw new ProviderUnavailableError("OpenCode has not finished answering this request");
 }

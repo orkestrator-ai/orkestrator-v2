@@ -587,13 +587,15 @@ describe("prepareProviderRuntime", () => {
           packageRoot,
           ...(provider ? { provider } : {}),
         }),
-      ).toEqual({ serveArgs: [], toolchainTools: [] });
+        // An agent-test backend never falls back to PATH, so a packaged
+        // provider still needs its pinned binary.
+      ).toEqual({ serveArgs: [], toolchainTools: provider ? [provider] : [] });
     }
     expect(await readdir(dataDir)).toEqual([]);
   });
 
   test.each([
-    ["pi", "pi-bridge", []],
+    ["pi", "pi-bridge", ["pi"]],
     ["cursor", "cursor-bridge", []],
     ["grok", "acp-bridge", ["grok"]],
   ] as const)(
@@ -673,8 +675,9 @@ setInterval(() => {}, 1000);
           ),
         ).toEqual(["--resource-root", path.join(root, "resources")]);
         expect(serve.platforms.enabled).toContain(provider);
-        expect(recorded).toHaveLength(provider === "grok" ? 2 : 1);
-        if (provider === "grok")
+        // Cursor has no pinned binary; Pi and Grok install theirs first.
+        expect(recorded).toHaveLength(provider === "cursor" ? 1 : 2);
+        if (provider !== "cursor")
           expect(recorded[0].args).toEqual([
             "toolchain",
             "install",
@@ -682,7 +685,7 @@ setInterval(() => {}, 1000);
             "--data-dir",
             dataDir,
             "--tool",
-            "grok",
+            provider,
           ]);
       } finally {
         await backend.stop();

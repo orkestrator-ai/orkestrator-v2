@@ -155,6 +155,18 @@ type OpenCodeStreamSession = {
    */
   retryNotice?: NativeAgentNotice;
   turnFailure?: NativeAgentNotice;
+  /** The request this backend last dispatched, until the next dispatch. */
+  dispatchRequestId?: string;
+  /**
+   * The first `session.error` seen since `dispatchRequestId` was dispatched.
+   *
+   * `promptAsync` accepts a prompt before OpenCode resolves its parts, so a
+   * part OpenCode cannot build (an attachment it fails to decode) is reported
+   * only by this event, and no message for the request is ever stored. The
+   * turn outcome read uses it when the transcript holds nothing for the
+   * request; an error during a turn that did become a message is ignored there.
+   */
+  dispatchFailure?: OpenCodeDispatchFailure;
   revision: number;
   /** Exact after snapshots/structural changes; a safe upper bound after deltas. */
   transcriptBytes?: number;
@@ -174,6 +186,18 @@ type OpenCodeStreamSession = {
    */
   usageLedger: OpenCodeUsageLedger;
 };
+
+export type OpenCodeDispatchFailure = {
+  requestId: string;
+  message: string;
+  observedAt: number;
+};
+
+/** An OpenCode error message without the stack frames it often carries. */
+function withoutStackFrames(message: string): string {
+  const lines = message.split("\n").filter((line) => !/^\s+at\s/.test(line));
+  return lines.join("\n").trim() || message;
+}
 
 export type OpenCodeStreamEffect = {
   reconnect?: boolean;
@@ -419,12 +443,21 @@ export class OpenCodeStreamState {
   }
 
   /** Record dispatch before a renderer has to observe the turn. */
-  beginTurn(sessionId: string, startedAt: number): void {
+  beginTurn(sessionId: string, startedAt: number, requestId?: string): void {
     const state = this.session(sessionId);
     state.turnStartedAt = startedAt;
     state.turnConfirmed = false;
     delete state.retryNotice;
     delete state.turnFailure;
+    delete state.dispatchFailure;
+    if (requestId) state.dispatchRequestId = requestId;
+    else delete state.dispatchRequestId;
+  }
+
+  /** The `session.error` OpenCode reported after dispatching `requestId`, if any. */
+  dispatchFailure(sessionId: string, requestId: string): OpenCodeDispatchFailure | undefined {
+    const failure = this.sessions.get(sessionId)?.dispatchFailure;
+    return failure?.requestId === requestId ? { ...failure } : undefined;
   }
 
   /** The authoritative turn clock, if one has been established. */
@@ -638,6 +671,13 @@ export class OpenCodeStreamState {
         nonEmptyString(error?.message) ??
         nonEmptyString(error?.name) ??
         "OpenCode session failed";
+      if (state.dispatchRequestId && !state.dispatchFailure) {
+        state.dispatchFailure = {
+          requestId: state.dispatchRequestId,
+          message: withoutStackFrames(message).slice(0, 2_000),
+          observedAt,
+        };
+      }
       state.notices = [{ kind: "error", message: message.slice(0, 2_000) }];
       this.bump(state);
       return { sessionId };

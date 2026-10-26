@@ -8,8 +8,14 @@ import {
   createSession,
   getSession,
   materializePersistedSession,
+  mockSdkGetSessionInfo,
   mockSdkGetSessionMessages,
+  PERSISTED_SDK_ID,
+  peekSession,
+  sdkSessionInfo,
   track,
+  transcriptWithToolResult,
+  waitFor,
 } from "./session-manager-test-harness.js";
 import { describe, expect, test } from "bun:test";
 import { gunzipSync } from "node:zlib";
@@ -308,6 +314,30 @@ describe("unknown sessions", () => {
     expect((await get(transcriptPath("session-unknown", { version: "2" }))).status).toBe(404);
     // An unknown sub-path is still not a route.
     expect((await get("/session/session-unknown/transcript/other")).status).toBe(404);
+  });
+  // A persisted session that is not resident (after a bridge restart) used
+  // to answer 404 here, and only the backend's `/messages` fallback loaded it.
+  // The summary route now materializes it, so 404 means missing (0050 item 3).
+  test("the summary route materializes a persisted session, serves its preview, then hydrates", async () => {
+    const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
+    mockSdkGetSessionInfo.mockImplementation(async () => sdkSessionInfo());
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    try {
+      expect(peekSession(bridgeId)).toBeUndefined();
+      const preview = await read(transcriptPath(bridgeId, { version: "2", limit: "100" }));
+      expect(preview.status).toBe("snapshot");
+      expect(preview.value.complete).toBe(false);
+      expect(preview.value.freshness).toBe("cached");
+      const state = peekSession(bridgeId);
+      expect(state).toBeDefined();
+      await waitFor(() => state!.persistedMessagesLoaded !== false && !state!.persistedHydration);
+      const hydrated = await read(transcriptPath(bridgeId, { version: "2", limit: "100" }));
+      expect(hydrated.value.complete).toBe(true);
+      expect(hydrated.value.freshness).toBe("current");
+      expect(hydrated.value.messages.length).toBeGreaterThan(0);
+    } finally {
+      mockSdkGetSessionMessages.mockImplementation(async () => []);
+    }
   });
 });
 

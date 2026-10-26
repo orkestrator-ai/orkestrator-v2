@@ -579,10 +579,32 @@ JSON through `?retainedMiB=N`, so a large retained history stays under the
 [0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)).
 Every run also covers the page with another tab for 10 s while the response
 streams and then brings it back, recording the first frame and long tasks
-after. Headless Chrome keeps a covered page `visible`, so only `--headed`
-measures a truly hidden document; the report records the visibility the page
-saw. The report (numbers only) is written to
+after. A page Playwright drives stays `visible`, with timers at full rate,
+when covered, minimized or frozen, headless or `--headed`, because a DevTools
+session is attached to it; the report records the visibility the page saw.
+The report (numbers only) is written to
 `output/benchmarks/rich-transcripts/<run-id>.json`.
+
+**Hidden documents.** `e2e/perf/hidden-resume-perf.ts` measures a truly
+hidden and resumed page instead. It launches installed Google Chrome itself
+(fresh profile, default background throttling, as the Electron window keeps),
+serves the same fixture through a local proxy that injects a self-timing
+probe, and uses only the browser target over CDP to minimize and restore the
+window, so no DevTools session is attached to the page:
+
+```bash
+mise exec -- bun e2e/perf/hidden-resume-perf.ts \
+  [--runs 3] [--retained-mib 8] [--hidden-seconds 10,60] [--stream timer,network]
+```
+
+The `timer` stream is the fixture's own interval, which Chrome throttles while
+hidden; `network` ticks it from a server-sent event every 50 ms
+(`__richPerf.streamTick`), which a hidden page still receives at full rate, as
+it would a real backend's updates. Per run it records the visibility the page
+saw, stream ticks while hidden, the time from `visibilitychange` to the next
+frame, long tasks and long animation frames in the 3 s after, and the JS heap
+before and after, in `output/benchmarks/hidden-resume/<run-id>.json`. A Chrome
+window appears on screen for each run.
 
 **Fixture.** `/rich-transcript-perf`
 (`e2e/fixture/RichTranscriptPerfFixture.tsx`) mounts the real

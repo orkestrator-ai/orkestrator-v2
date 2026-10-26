@@ -664,7 +664,9 @@ session.get("/:id/messages", async (c) => {
 });
 
 // `GET /:id/transcript` and its detail and page reads (`session-transcript.ts`).
-registerSessionTranscriptRoutes(session, TRANSCRIPT_GENERATION);
+registerSessionTranscriptRoutes(session, TRANSCRIPT_GENERATION, (id) =>
+  resolveSession(id, "Failed to load session transcript"),
+);
 
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {

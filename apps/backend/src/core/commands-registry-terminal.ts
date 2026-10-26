@@ -106,6 +106,11 @@ import {
   containerMoveFileCommand,
   containerCreateFolderCommand,
   readLocalFileAtBranch,
+  buildFileSubtree,
+  validateFileTreeDirectory,
+  CONTAINER_FILE_TREE_LISTER,
+  MAX_FILE_TREE_NODES,
+  parseContainerFileSubtree,
 } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
@@ -883,6 +888,11 @@ export function registerTerminalCommands(
     });
     return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
   });
+  // One truncated tree directory, read when the files panel expands it. Not
+  // cached: each expansion or refresh reads the directory as it is now.
+  register("get_local_file_subtree", ({ worktreePath, directory }) =>
+    buildFileSubtree(asString(worktreePath, "worktreePath"), asString(directory, "directory")),
+  );
   register("read_local_file", ({ worktreePath, filePath }) =>
     readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
   );
@@ -1122,6 +1132,16 @@ export function registerTerminalCommands(
       refresh: refreshRequested(refresh),
     });
     return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
+  });
+  register("get_file_subtree", async ({ containerId, directory }) => {
+    const target = validateFileTreeDirectory(asString(directory, "directory"));
+    return parseContainerFileSubtree(
+      await dockerExec(
+        asString(containerId, "containerId"),
+        `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES} ${quoteShell(target)}`,
+      ),
+      target,
+    );
   });
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));

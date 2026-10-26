@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { GitFileChange, FileNode } from "@/lib/backend";
+import type { GitFileChange, FileNode, FileSubtree } from "@/lib/backend";
 import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 import type { CreateFileTabOptions } from "@/contexts/TerminalContext";
 import {
@@ -77,6 +77,14 @@ interface FilesPanelState {
   fileTree: FileNode[];
   isLoadingTree: boolean;
 
+  // Truncated tree directories read on expansion, for the target identified by
+  // `fileSubtreeKey` (not persisted). Views graft them onto `fileTree`.
+  fileSubtreeKey: string;
+  fileSubtrees: Record<string, FileSubtree>;
+  loadingFolders: string[];
+  folderLoadTokens: Map<string, symbol>;
+  failedFolders: string[];
+
   // Target branch for diff comparison (e.g., "main")
   targetBranch: string;
 
@@ -99,6 +107,21 @@ interface FilesPanelState {
   setFileTree: (tree: FileNode[]) => void;
   setLoadingChanges: (loading: boolean) => void;
   setLoadingTree: (loading: boolean) => void;
+  /** Forgets every directory read unless they are already `key`'s, and tracks `key`. */
+  resetFileSubtrees: (key: string) => void;
+  /**
+   * Marks `path` loading for `key`, returning its unique completion token.
+   * Null for another target, an active read, or (unless `reload`) loaded/failed.
+   */
+  beginFolderLoad: (key: string, path: string, reload: boolean) => symbol | null;
+  /** Accepts only the active token; `null` keeps earlier contents and marks failure. */
+  finishFolderLoad: (
+    key: string,
+    path: string,
+    token: symbol,
+    subtree: FileSubtree | null,
+  ) => boolean;
+  retryFolderLoad: (path: string) => void;
   setTargetBranch: (branch: string) => void;
   requestFileOpen: (request: PendingFileOpen) => void;
   /** Clears the pending open, but only if it is still `request`. */
@@ -162,7 +185,7 @@ function sanitizePersistedPullRequestTabs(
 
 export const useFilesPanelStore = create<FilesPanelState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       // Initial state
       isOpen: false,
       panelWidth: 320,
@@ -172,6 +195,11 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       isLoadingChanges: false,
       fileTree: [],
       isLoadingTree: false,
+      fileSubtreeKey: "",
+      fileSubtrees: {},
+      loadingFolders: [],
+      folderLoadTokens: new Map(),
+      failedFolders: [],
       targetBranch: "main",
       pendingFileOpens: [],
       pullRequestTabs: {},
@@ -184,17 +212,93 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       setActiveTab: (tab) => set({ activeTab: tab }),
       setPanelWidth: (width) => set({ panelWidth: width }),
       setFolderExpanded: (path, expanded) =>
-        set((state) => ({
-          expandedFolders: expanded
-            ? state.expandedFolders.includes(path)
-              ? state.expandedFolders
-              : [...state.expandedFolders, path]
-            : state.expandedFolders.filter((p) => p !== path),
-        })),
+        set((state) => {
+          if (expanded) {
+            return state.expandedFolders.includes(path)
+              ? {}
+              : { expandedFolders: [...state.expandedFolders, path] };
+          }
+          // Forget the whole branch, including pending reads. Descendants may
+          // keep their expansion preference, but reopening must read them afresh.
+          const inBranch = (candidate: string) =>
+            candidate === path || candidate.startsWith(`${path}/`);
+          return {
+            expandedFolders: state.expandedFolders.filter((p) => p !== path),
+            fileSubtrees: Object.fromEntries(
+              Object.entries(state.fileSubtrees).filter(([p]) => !inBranch(p)),
+            ),
+            failedFolders: state.failedFolders.filter((p) => !inBranch(p)),
+            loadingFolders: state.loadingFolders.filter((p) => !inBranch(p)),
+            folderLoadTokens: new Map([...state.folderLoadTokens].filter(([p]) => !inBranch(p))),
+          };
+        }),
       setChanges: (changes) => set({ changes }),
       setFileTree: (tree) => set({ fileTree: tree }),
       setLoadingChanges: (loading) => set({ isLoadingChanges: loading }),
       setLoadingTree: (loading) => set({ isLoadingTree: loading }),
+      resetFileSubtrees: (key) =>
+        set((state) =>
+          state.fileSubtreeKey === key
+            ? {}
+            : {
+                fileSubtreeKey: key,
+                fileSubtrees: {},
+                loadingFolders: [],
+                folderLoadTokens: new Map(),
+                failedFolders: [],
+              },
+        ),
+      beginFolderLoad: (key, path, reload) => {
+        const state = get();
+        if (state.fileSubtreeKey !== key || state.folderLoadTokens.has(path)) return null;
+        if (
+          !reload &&
+          (Object.hasOwn(state.fileSubtrees, path) || state.failedFolders.includes(path))
+        ) {
+          return null;
+        }
+        const token = Symbol(path);
+        set({
+          loadingFolders: [...state.loadingFolders, path],
+          folderLoadTokens: new Map(state.folderLoadTokens).set(path, token),
+        });
+        return token;
+      },
+      finishFolderLoad: (key, path, token, subtree) => {
+        const state = get();
+        if (state.fileSubtreeKey !== key || state.folderLoadTokens.get(path) !== token)
+          return false;
+        const folderLoadTokens = new Map(state.folderLoadTokens);
+        folderLoadTokens.delete(path);
+        const loading = {
+          folderLoadTokens,
+          loadingFolders: state.loadingFolders.filter((p) => p !== path),
+        };
+        if (!state.expandedFolders.includes(path)) {
+          set(loading);
+          return false;
+        }
+        set(
+          subtree
+            ? {
+                ...loading,
+                fileSubtrees: { ...state.fileSubtrees, [path]: subtree },
+                failedFolders: state.failedFolders.filter((failed) => failed !== path),
+              }
+            : {
+                ...loading,
+                failedFolders: state.failedFolders.includes(path)
+                  ? state.failedFolders
+                  : [...state.failedFolders, path],
+              },
+        );
+        return true;
+      },
+      retryFolderLoad: (path) =>
+        set((state) => {
+          const { [path]: _dropped, ...fileSubtrees } = state.fileSubtrees;
+          return { fileSubtrees, failedFolders: state.failedFolders.filter((p) => p !== path) };
+        }),
       setTargetBranch: (branch) => set({ targetBranch: branch }),
       requestFileOpen: (request) =>
         set((state) => {

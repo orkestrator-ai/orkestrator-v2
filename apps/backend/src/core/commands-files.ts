@@ -66,6 +66,14 @@ export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
 
 export const MAX_FILE_TREE_NODES = 5_000;
 
+/**
+ * Generated directories listed but never opened by a walk that starts above
+ * them. A local Turborepo cache alone can outgrow the whole node budget, which
+ * left every source directory below the third level unopened. They are marked
+ * truncated, so expanding one reads it on demand ({@link buildFileSubtree}).
+ */
+export const DEFERRED_FILE_TREE_DIRECTORIES = [".turbo"] as const;
+
 export type FileTreeNode = {
   name: string;
   path: string;
@@ -74,6 +82,13 @@ export type FileTreeNode = {
   /** Contents were omitted by the node cap or could not be read. */
   truncated?: boolean;
   extension?: string;
+};
+
+/** The contents of one directory, read on demand below a truncated tree node. */
+export type FileSubtree = {
+  children: FileTreeNode[];
+  /** The directory's own entries were not all listed. */
+  truncated: boolean;
 };
 
 function sortFileTreeLevel(nodes: FileTreeNode[]): FileTreeNode[] {
@@ -95,17 +110,30 @@ function sortFileTree(nodes: FileTreeNode[]): FileTreeNode[] {
  * so using it here also makes the production traversal directly testable
  * without a Docker daemon or host-specific GNU find extensions.
  *
- * The walk is breadth-first for the same reason as {@link buildFileTree}.
+ * The walk is breadth-first for the same reason as {@link buildFileTree}. An
+ * optional third argument starts it at a validated relative directory, which
+ * is reached without following a symlink and reported truncated while
+ * incomplete.
  */
 export const CONTAINER_FILE_TREE_LISTER = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(process.argv[1]);
 const limit = Number(process.argv[2]);
+const start = process.argv[3] || "";
+const deferredNames = new Set(${JSON.stringify(DEFERRED_FILE_TREE_DIRECTORIES)});
+let startDirectory = root;
+for (const segment of start ? start.split("/") : []) {
+  startDirectory = path.join(startDirectory, segment);
+  const stat = fs.lstatSync(startDirectory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error("Not a workspace directory: " + start);
+  }
+}
 const records = [];
 let count = 0;
-let level = Number.isSafeInteger(limit) && limit > 0 ? [[root, "", 0]] : [];
-const truncated = new Set();
+let level = Number.isSafeInteger(limit) && limit > 0 ? [[startDirectory, start, 0]] : [];
+const truncated = new Set(start ? [start] : []);
 
 while (level.length && count < limit) {
   const nextLevel = [];
@@ -144,7 +172,9 @@ while (level.length && count < limit) {
         added += 1;
         if (entry.isDirectory()) {
           truncated.add(relativePath);
-          nextLevel.push([path.join(directory, entry.name), relativePath, 0]);
+          if (!deferredNames.has(entry.name)) {
+            nextLevel.push([path.join(directory, entry.name), relativePath, 0]);
+          }
         }
       }
       if (complete) truncated.delete(relativeDirectory);
@@ -165,12 +195,23 @@ const UNSAFE_CONTAINER_TREE_PATH_CHARS = /[\u0000-\u001f\u007f]/;
 
 /** Build the shared tree shape from the bounded, NUL-framed container listing. */
 export function parseContainerFileTree(output: string): FileTreeNode[] {
-  if (!output) return [];
+  return parseContainerFileSubtree(output, "").children;
+}
+
+/**
+ * Parse a container listing started at `directory` (see
+ * {@link CONTAINER_FILE_TREE_LISTER}); `truncated` reports that directory's
+ * own entries were not all listed.
+ */
+export function parseContainerFileSubtree(output: string, directory: string): FileSubtree {
+  if (!output) return { children: [], truncated: false };
   if (!output.endsWith("\0")) {
     throw new Error("Malformed container file tree: missing NUL terminator");
   }
 
   const roots: FileTreeNode[] = [];
+  const rootParent = directory || ".";
+  let rootTruncated = false;
   const directories = new Map<string, FileTreeNode>();
 
   for (const record of output.slice(0, -1).split("\0")) {
@@ -195,14 +236,18 @@ export function parseContainerFileTree(output: string): FileTreeNode[] {
     }
 
     if (entryType === "t") {
-      const directory = directories.get(relativePath);
-      if (!directory) throw new Error("Malformed container file tree: missing truncated directory");
-      directory.truncated = true;
+      if (directory && relativePath === directory) {
+        rootTruncated = true;
+        continue;
+      }
+      const node = directories.get(relativePath);
+      if (!node) throw new Error("Malformed container file tree: missing truncated directory");
+      node.truncated = true;
       continue;
     }
 
     const parentPath = path.posix.dirname(relativePath);
-    const siblings = parentPath === "." ? roots : directories.get(parentPath)?.children;
+    const siblings = parentPath === rootParent ? roots : directories.get(parentPath)?.children;
     if (!siblings) {
       throw new Error(
         `Malformed container file tree: missing parent directory for ${relativePath}`,
@@ -220,7 +265,7 @@ export function parseContainerFileTree(output: string): FileTreeNode[] {
     if (isDirectory) directories.set(relativePath, node);
   }
 
-  return sortFileTree(roots);
+  return { children: sortFileTree(roots), truncated: rootTruncated };
 }
 
 /**
@@ -239,6 +284,39 @@ export async function buildFileTree(
   rootPath: string,
   budget: { remaining: number } = { remaining: MAX_FILE_TREE_NODES },
 ): Promise<FileTreeNode[]> {
+  return (await walkFileTree(rootPath, "", budget)).children;
+}
+
+/**
+ * Read one directory of a local workspace for a truncated tree node, with the
+ * same budget and policy as {@link buildFileTree}. The directory is reached
+ * without following a symlink, as the full walk never does.
+ */
+export async function buildFileSubtree(
+  rootPath: string,
+  directory: string,
+  budget: { remaining: number } = { remaining: MAX_FILE_TREE_NODES },
+): Promise<FileSubtree> {
+  const target = validateFileTreeDirectory(directory);
+  // A trailing slash makes the directory itself one of the checked ancestors.
+  await assertNoLocalSymlinkAncestors(rootPath, `${target}/`);
+  return walkFileTree(rootPath, target, budget);
+}
+
+/** A relative workspace directory the tree may list (never Git metadata). */
+export function validateFileTreeDirectory(directory: string): string {
+  const target = validateRelativeFilePath(directory, "directory");
+  if (pathHasGitMetadataSegment(target)) {
+    throw new Error("Invalid directory: Git metadata is not listed");
+  }
+  return target;
+}
+
+async function walkFileTree(
+  rootPath: string,
+  startDirectory: string,
+  budget: { remaining: number },
+): Promise<FileSubtree> {
   const roots: FileTreeNode[] = [];
   type Directory = {
     relativePath: string;
@@ -246,7 +324,16 @@ export async function buildFileTree(
     node?: FileTreeNode;
     cursor: number;
   };
-  let level: Directory[] = [{ relativePath: "", nodes: roots, cursor: 0 }];
+  // Stands in for the start directory so its completeness is tracked like any
+  // other directory's; a failure to read it still propagates.
+  const start: FileTreeNode = {
+    name: "",
+    path: startDirectory,
+    isDirectory: true,
+    children: roots,
+    truncated: true,
+  };
+  let level: Directory[] = [{ relativePath: startDirectory, nodes: roots, node: start, cursor: 0 }];
   while (level.length > 0 && budget.remaining > 0) {
     const nextLevel: Directory[] = [];
     // Reassign unused shares at this depth before descending. Store only
@@ -262,7 +349,7 @@ export async function buildFileTree(
         try {
           entries = await fs.readdir(path.join(rootPath, relativePath), { withFileTypes: true });
         } catch (error) {
-          if (!node) throw error;
+          if (node === start) throw error;
           continue;
         }
         entries.sort(
@@ -296,12 +383,14 @@ export async function buildFileTree(
               truncated: true,
             };
             nodes.push(child);
-            nextLevel.push({
-              relativePath: childRelativePath,
-              nodes: children,
-              node: child,
-              cursor: 0,
-            });
+            if (!(DEFERRED_FILE_TREE_DIRECTORIES as readonly string[]).includes(entry.name)) {
+              nextLevel.push({
+                relativePath: childRelativePath,
+                nodes: children,
+                node: child,
+                cursor: 0,
+              });
+            }
           } else {
             nodes.push({
               name: entry.name,
@@ -317,7 +406,7 @@ export async function buildFileTree(
     }
     level = nextLevel;
   }
-  return sortFileTree(roots);
+  return { children: sortFileTree(roots), truncated: start.truncated === true };
 }
 
 export type GitFileChange = {

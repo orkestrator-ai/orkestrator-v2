@@ -1,5 +1,3 @@
-import { accessSync, constants } from "node:fs";
-import { delimiter, join } from "node:path";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { NATIVE_AGENT_MAIL_CAPABILITIES } from "@orkestrator/protocol/agent-mail";
 import {
@@ -9,6 +7,10 @@ import {
   type CoordinatorProviderQualification,
   type CoordinatorProviderTier,
 } from "@orkestrator/protocol/coordinator";
+import {
+  claudeLinuxSandboxStatus,
+  type ClaudeLinuxSandboxStatus,
+} from "@orkestrator/protocol/node/claude-linux-sandbox";
 
 /**
  * The one table that decides which providers may run a coordinator.
@@ -57,46 +59,41 @@ export function coordinatorProviderTierSetting(value: unknown): CoordinatorProvi
  * input to the table rather than an assumption inside it.
  */
 export interface CoordinatorHostCapabilities {
-  /** Whether the Claude Agent SDK's command sandbox can start on this host. */
+  /** Whether the Claude Agent SDK's command sandbox can run commands on this host. */
   claudeSandbox: boolean;
-}
-
-/** Programs the Claude CLI's Linux sandbox needs on PATH (it names both when one is missing). */
-export const CLAUDE_LINUX_SANDBOX_PROGRAMS = Object.freeze(["bwrap", "socat"]);
-
-/** Whether `name` is an executable file in one of `PATH`'s directories. */
-export function executableOnPath(
-  name: string,
-  path: string | undefined = process.env.PATH,
-): boolean {
-  for (const directory of (path ?? "").split(delimiter)) {
-    if (!directory) continue;
-    try {
-      accessSync(join(directory, name), constants.X_OK);
-      return true;
-    } catch {
-      // Not here; keep looking.
-    }
-  }
-  return false;
+  /** Why it cannot, when the probe knows; shown in place of the generic reason. */
+  claudeSandboxReason?: string;
 }
 
 export function defaultCoordinatorHostCapabilities(
   platform: NodeJS.Platform = process.platform,
-  onPath: (name: string) => boolean = (name) => executableOnPath(name),
+  linuxSandbox: () => ClaudeLinuxSandboxStatus = () => claudeLinuxSandboxStatus(),
 ): CoordinatorHostCapabilities {
   // Seatbelt on macOS, which ships with the OS. On Linux the CLI runs commands
-  // under bubblewrap with a socat network bridge, and refuses to start a
-  // required sandbox without them, so a host missing either is reported as
-  // configuration rather than containment instead of failing every turn. The
-  // pinned CLI's Windows sandbox is behind a vendor flag that is off by
-  // default, so Windows is configuration too.
+  // under bubblewrap with a socat network bridge and a seccomp helper that
+  // nests a second user namespace, so the probe runs exactly that: a host
+  // missing either program, or whose policy refuses the nested namespace
+  // (Ubuntu's AppArmor bwrap profile), is reported as configuration rather
+  // than containment instead of failing every command. The pinned CLI's
+  // Windows sandbox is behind a vendor flag that is off by default, so
+  // Windows is configuration too.
   if (platform === "darwin") return { claudeSandbox: true };
   if (platform === "linux") {
-    return { claudeSandbox: CLAUDE_LINUX_SANDBOX_PROGRAMS.every((name) => onPath(name)) };
+    const status = linuxSandbox();
+    return status.available
+      ? { claudeSandbox: true }
+      : { claudeSandbox: false, claudeSandboxReason: status.reason };
   }
   return { claudeSandbox: false };
 }
+
+/** Where the probe has no specific cause (Windows, or a host given without one). */
+const CLAUDE_SANDBOX_UNAVAILABLE =
+  "Claude's command sandbox is unavailable on this host (it needs macOS, or Linux whose bubblewrap can nest a user namespace).";
+
+/** The hook sentence every unsandboxed Claude coordinator reason ends with. */
+const CLAUDE_UNSANDBOXED_BOUNDARY =
+  "File tools are removed and the bridge admits only reading commands, but nothing outside the agent enforces it.";
 
 interface Qualification {
   tier: CoordinatorProviderTier;
@@ -143,8 +140,7 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
         ? { tier: "enforced", mcpClient: true }
         : {
             tier: "provider-configured",
-            reason:
-              "Claude's command sandbox is unavailable on this host (it needs macOS, or Linux with bubblewrap and socat). File tools are removed and the bridge admits only reading commands, but nothing outside the agent enforces it.",
+            reason: `${host.claudeSandboxReason ?? CLAUDE_SANDBOX_UNAVAILABLE} ${CLAUDE_UNSANDBOXED_BOUNDARY}`,
             mcpClient: true,
           };
     case "pi":

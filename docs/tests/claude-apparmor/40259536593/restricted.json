@@ -1,0 +1,48 @@
+{
+  "phase": "restricted",
+  "kernel": "7.0.0-1017-azure",
+  "os": "PRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nVERSION=\"26.04.1 LTS (Resolute Raccoon)\"\nVERSION_CODENAME=resolute\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=resolute\nLOGO=ubuntu-logo\n",
+  "cliVersion": "2.1.309 (Claude Code)",
+  "probe": {
+    "available": false,
+    "failure": "nested-user-namespace",
+    "reason": "Claude's command sandbox cannot run commands on this host: bubblewrap starts, but AppArmor's bwrap-userns-restrict profile strips capabilities from the user namespace the Claude CLI nests inside it, so every sandboxed command would fail (unshare: unshare failed: Operation not permitted). Allow nested namespaces for bubblewrap with a local AppArmor profile, or remove bwrap-userns-restrict on a dedicated host; Orkestrator does not change AppArmor policy itself."
+  },
+  "tiers": {
+    "normal": {
+      "tier": "provider-configured",
+      "available": true,
+      "reason": "Claude's command sandbox cannot run commands on this host: bubblewrap starts, but AppArmor's bwrap-userns-restrict profile strips capabilities from the user namespace the Claude CLI nests inside it, so every sandboxed command would fail (unshare: unshare failed: Operation not permitted). Allow nested namespaces for bubblewrap with a local AppArmor profile, or remove bwrap-userns-restrict on a dedicated host; Orkestrator does not change AppArmor policy itself. File tools are removed and the bridge admits only reading commands, but nothing outside the agent enforces it.",
+      "delegation": true
+    },
+    "strict": {
+      "tier": "provider-configured",
+      "available": false,
+      "reason": "Claude's command sandbox cannot run commands on this host: bubblewrap starts, but AppArmor's bwrap-userns-restrict profile strips capabilities from the user namespace the Claude CLI nests inside it, so every sandboxed command would fail (unshare: unshare failed: Operation not permitted). Allow nested namespaces for bubblewrap with a local AppArmor profile, or remove bwrap-userns-restrict on a dedicated host; Orkestrator does not change AppArmor policy itself. File tools are removed and the bridge admits only reading commands, but nothing outside the agent enforces it.",
+      "delegation": true
+    }
+  },
+  "results": [
+    {
+      "scenario": "apparmor-sandbox-reads",
+      "modelCalls": 2,
+      "toolError": true,
+      "written": false
+    },
+    {
+      "scenario": "unavailable-hook-reads",
+      "modelCalls": 2,
+      "toolError": false,
+      "written": false
+    },
+    {
+      "scenario": "unavailable-hook-refuses-quoted",
+      "modelCalls": 2,
+      "toolError": true,
+      "written": false
+    }
+  ],
+  "providerPromptRefused": true,
+  "revision": "18811727e82822fe6ef1fc36a1164d23acb79716",
+  "runId": "40259536593"
+}

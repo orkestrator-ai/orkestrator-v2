@@ -144,6 +144,7 @@ describe("coordinator query wiring", () => {
       const call = await nextQueryCall();
       expect(call.options.cwd).toBe(cwd);
       expect(call.options.sandbox).toMatchObject({
+        enabled: false,
         failIfUnavailable: false,
         filesystem: { denyWrite: [cwd, await realpath(cwd)] },
       });

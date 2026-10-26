@@ -485,6 +485,11 @@ never replaced.
   exactly one initial prompt under the stable request ID
   `initial-prompt:<environment>:startup-agent`. Setup failure leaves the prompt
   unsent (`partial`, `dispatch: not-sent`). Never follow it with `session start`.
+- `session start` without `--model` uses the configured
+  default as a default: it is reported as the resolved model, but the
+  runtime may replace it when this login cannot serve it (the shipped Codex
+  `gpt-5.4` on a ChatGPT login), exactly as a launch from the app does. Only a
+  model named with `--model` is pinned.
 - Responses mean **submitted**. The receipt's `dispatch` is
   `accepted | rejected | unknown`; `execution` is
   `pending | running | waiting-for-input | completed | failed | cancelled | interrupted | unknown | unsupported`.
@@ -501,7 +506,12 @@ later steering input does not end a turn while the session is busy. Missing
 evidence stays `unknown`. A provider whose status reads idle after a failed
 turn (OpenCode keeps the error on the request's last assistant message) is
 asked for that request's terminal error before an idle turn counts as
-completed; an unreadable answer is retried, never settled as success.
+completed; an unreadable answer is retried, never settled as success. A turn
+the environment's stop cut off (it was last seen working or waiting when the
+runtime stopped, and no outcome was recorded) settles `interrupted` with
+evidence `none`: its bridge is gone, so no outcome can be read, and changes
+made before the stop may remain. The stopped session itself reads `idle`.
+
 OpenCode can also accept a prompt (`promptAsync` returns 204) and then drop it
 while building its parts, reporting only a `session.error` and storing no
 message. A request whose history holds nothing, two seconds or more after such

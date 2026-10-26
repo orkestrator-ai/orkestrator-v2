@@ -12,13 +12,13 @@ import {
 import {
   classifyDockerEndpoint,
   detectDockerTopology,
-  extractSingleTarFile,
   getImageStatus,
   readImageManifest,
   resetDockerTopologyCache,
   resetImageManifestCache,
   resolveDockerImage,
 } from "../src/core/docker-image";
+import { extractSingleTarFile } from "../src/core/docker-copy-out";
 import { resolveOperationImage } from "../src/core/commands-environment";
 import { shouldAddDockerHostGatewayAlias } from "../src/core/commands-container-exec";
 import {
@@ -211,6 +211,34 @@ esac
         // Cached by immutable id: a second read does not create another probe.
         await readImageManifest(IMAGE_ID, context);
         expect((await log.read()).match(/^create /gm)).toHaveLength(1);
+      },
+    );
+  });
+
+  test("a daemon lost between the probe's create and its copy is unavailable, never legacy", async () => {
+    const dir = await tempDir("ork-image-probe-daemon-lost-");
+    cleanup.push(dir);
+    const { context } = memoryLifecycleContext([lifecycleEnvironment()], dir);
+    const tarPath = await tarOf("image-manifest.json", validManifest());
+    const marker = path.join(dir, "daemon-back");
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  create) printf 'probe-container\\n' ;;
+  cp)
+    if [ -f '${marker}' ]; then cat '${tarPath}'; exit 0; fi
+    printf 'failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory\\n' >&2
+    exit 1 ;;
+  rm) exit 0 ;;
+esac
+`,
+      async () => {
+        // The CLI's own "no such file or directory" is about the socket, not
+        // the manifest.
+        expect((await readImageManifest(IMAGE_ID, context)).kind).toBe("unavailable");
+        // Not cached: the next read, with the daemon back, finds the manifest.
+        await fs.writeFile(marker, "");
+        expect((await readImageManifest(IMAGE_ID, context)).kind).toBe("manifest");
       },
     );
   });

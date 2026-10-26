@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import {
   capacityVerdict,
+  replacementCopyFailure,
+  quiesceRuntime,
   parseCopyOutput,
   candidateStartError,
   parseMeasureOutput,
@@ -43,7 +45,11 @@ describe("copy plan", () => {
       async () => {
         const started = Date.now();
         const result = await pipeContainerPath("source", "/workspace", ["run", "helper"]);
-        expect(result).toMatchObject({ absent: false, producerFailed: true });
+        expect(result).toMatchObject({
+          absent: false,
+          producerFailed: true,
+          daemonUnavailable: false,
+        });
         expect(Date.now() - started).toBeLessThan(5_000);
       },
     );
@@ -71,6 +77,9 @@ exit 125
             pipeContainerPath("source", "/workspace", ["run", "helper"]),
             new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 15_000)),
           ]);
+          // Whether the producer's message lands first is a race (the
+          // helper's exit kills it), so only settling is asserted here; a
+          // failed step asks the daemon itself (`dockerDaemonUnreachableNow`).
           expect(settled).toMatchObject({ absent: false, producerFailed: true });
         }
       },
@@ -82,11 +91,15 @@ exit 125
     for (const [stderr, expected] of [
       [
         "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory",
-        { absent: false, producerFailed: true },
+        { absent: false, producerFailed: true, daemonUnavailable: true },
       ],
       [
         "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
-        { absent: false, producerFailed: true },
+        { absent: false, producerFailed: true, daemonUnavailable: true },
+      ],
+      [
+        "Error response from daemon: container source is being removed",
+        { absent: false, producerFailed: true, daemonUnavailable: false },
       ],
       [
         "Error response from daemon: Could not find the file /home/node/.pi in container source",
@@ -728,4 +741,66 @@ describe("inode capacity", () => {
       ok: true,
     });
   });
+});
+
+describe("replacement copy failure classification", () => {
+  for (const [probe, code] of [
+    ["printf '29.7.2\\n'", "needs-attention"],
+    ["echo 'Cannot connect to the Docker daemon' >&2; exit 1", "daemon-unavailable"],
+    ["echo 'unrelated client failure' >&2; exit 1", "needs-attention"],
+    ["exec sleep 30", "daemon-unavailable"],
+  ] as const) {
+    test(`a copy stream failure probes Docker: ${probe}`, async () => {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${probe}
+`,
+        async (log) => {
+          expect(String(await replacementCopyFailure("helper-failed"))).toContain(
+            `ContainerLifecycleError:${code}`,
+          );
+          expect(await log.read()).toBe("version --format {{.Server.Version}}\n");
+        },
+      );
+    }, 15_000);
+  }
+  test("an explicit daemon failure needs no second probe", async () => {
+    await withDockerScript("#!/bin/sh\nexit 99\n", async (log) => {
+      expect(String(await replacementCopyFailure("daemon-unavailable"))).toContain(
+        "ContainerLifecycleError:daemon-unavailable",
+      );
+      expect(await log.read()).toBe("");
+    });
+  });
+});
+
+test("quiescing for rebuild or recovery-copy restore settles agents only after runtime stop", async () => {
+  const { context } = await fixture();
+  let calls = "";
+  const stopped = mock(async (environmentId: string) => {
+    expect(environmentId).toBe("env-lifecycle");
+    expect(calls).toContain("stop source-container");
+  });
+  context.nativeAgents = { environmentRuntimeStopped: stopped } as unknown as NonNullable<
+    typeof context.nativeAgents
+  >;
+  await withDockerScript(
+    `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 0
+`,
+    async (log) => {
+      // Capture the command evidence inside the callback, at the settlement edge.
+      stopped.mockImplementation(async (environmentId) => {
+        calls = await log.read();
+        expect(environmentId).toBe("env-lifecycle");
+        expect(calls).toContain("stop source-container");
+      });
+      expect(await quiesceRuntime("env-lifecycle", "source-container", undefined, context)).toEqual(
+        { forced: false },
+      );
+      expect(stopped).toHaveBeenCalledTimes(1);
+    },
+  );
 });

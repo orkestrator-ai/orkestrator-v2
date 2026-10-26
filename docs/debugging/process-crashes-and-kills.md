@@ -162,7 +162,13 @@ which its runtime removes the moment the main process exits.
   data` in the core: the new process was started from the old mount path and
   the mount disappeared under it. Restarts must start the `.appimage` file
   (`$APPIMAGE`), never `process.execPath`. `apps/desktop/electron/relaunch.ts`
-  does this for every in-app restart.
+  does this for every in-app restart. The waiter starts from the home
+  directory, so removing the original launch worktree cannot break restart.
+  In a systemd scope or service (including Omarchy/UWSM launches), it is registered
+  synchronously as a separate transient user service before quitting; a
+  detached child alone still belongs to the old cgroup and can be killed
+  when that scope stops. If service registration fails, the log reports the
+  fallback to a detached waiter.
 - **SIGBUS in a `--type=utility` network-service process on quit**: Chromium's
   child outlived the main process and the mount went away. It is noisy but
   harmless, and the app cannot hold the mount open after it exits.

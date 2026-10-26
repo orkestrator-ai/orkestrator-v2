@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { OomEventWatcher } from "../src/core/container-oom-events";
+import { spawnParentBoundCommand } from "../src/core/shell";
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -18,7 +23,78 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 const nanos = (seconds: number) => `${BigInt(seconds) * 1_000_000_000n}`;
 const ID = "a".repeat(64);
 
+async function waitUntil(predicate: () => Promise<boolean> | boolean) {
+  const deadline = Date.now() + 3_000;
+  while (!(await predicate())) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for follower state");
+    await tick();
+  }
+}
+
 describe("out-of-memory event watcher", () => {
+  test("stop terminates the inner events command through the real wrapper", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "oom-follower-"));
+    const command = path.join(root, "docker");
+    const ready = path.join(root, "ready");
+    const stopped = path.join(root, "stopped");
+    await writeFile(
+      command,
+      `#!/bin/sh
+trap 'echo stopped > "${stopped}"; exit 0' TERM
+echo ready > "${ready}"
+while :; do sleep 0.05; done
+`,
+      { mode: 0o755 },
+    );
+    let child: ReturnType<typeof spawnParentBoundCommand> | undefined;
+    const watcher = new OomEventWatcher("owner", (_command, args) => {
+      child = spawnParentBoundCommand(command, args);
+      return child;
+    });
+    try {
+      watcher.start();
+      await waitUntil(() => Bun.file(ready).exists());
+      const closed = new Promise<void>((resolve) => child!.once("close", () => resolve()));
+      watcher.stop();
+      await closed;
+      expect(await readFile(stopped, "utf8")).toBe("stopped\n");
+      expect(watcher.count(ID)).toBeNull();
+    } finally {
+      watcher.stop();
+      child?.stdin.end();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing executable exits the real wrapper with 127 and backs off before restarting", async () => {
+    const clock = installControlledTimeout(1_000, { label: "OOM follower initial backoff" });
+    const secondClock = installControlledTimeout(2_000, { label: "OOM follower second backoff" });
+    const children: ReturnType<typeof spawnParentBoundCommand>[] = [];
+    const watcher = new OomEventWatcher("owner", () => {
+      const child = spawnParentBoundCommand("/nonexistent/orkestrator-test-docker");
+      children.push(child);
+      return child;
+    });
+    try {
+      watcher.start();
+      await waitUntil(() => clock.pendingCount() === 1);
+      expect(children[0]!.exitCode).toBe(127);
+      expect(watcher.count(ID)).toBeNull();
+      expect(children).toHaveLength(1);
+      clock.advance();
+      await waitUntil(() => secondClock.pendingCount() === 1);
+      expect(children).toHaveLength(2);
+      expect(children[1]!.exitCode).toBe(127);
+      watcher.stop();
+      expect(secondClock.pendingCount()).toBe(0);
+      expect(clock.pendingCount()).toBe(0);
+    } finally {
+      watcher.stop();
+      secondClock.restore();
+      clock.restore();
+    }
+  });
+
   test("counts kills per container from Docker's events, scoped to this owner", async () => {
     const spawned: string[][] = [];
     const children: FakeChild[] = [];

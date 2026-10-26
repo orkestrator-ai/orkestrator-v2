@@ -30,9 +30,10 @@ export function installRendererRecovery(
   const now = options.now ?? Date.now;
   const schedule = options.schedule ?? ((callback, delayMs) => void setTimeout(callback, delayMs));
   const reloads: number[] = [];
+  let pending = false;
   contents.on("render-process-gone", (_event, details) => {
     // A clean exit is the window closing, not a failure.
-    if (details.reason === "clean-exit") return;
+    if (details.reason === "clean-exit" || pending) return;
     const at = now();
     while (reloads.length > 0 && at - reloads[0]! > RENDERER_RECOVERY_WINDOW_MS) reloads.shift();
     if (reloads.length >= RENDERER_RECOVERY_MAX_RELOADS) {
@@ -42,11 +43,19 @@ export function installRendererRecovery(
       return;
     }
     reloads.push(at);
+    pending = true;
     log(
       `[Desktop] Renderer gone (${details.reason}, exit ${details.exitCode}); reloading the window`,
     );
     schedule(() => {
-      if (!contents.isDestroyed()) contents.reload();
+      try {
+        if (!contents.isDestroyed()) contents.reload();
+      } catch (error) {
+        // The frame can be disposed between the event and this callback.
+        log(`[Desktop] Could not reload the renderer: ${String(error)}`);
+      } finally {
+        pending = false;
+      }
     }, RENDERER_RECOVERY_DELAY_MS);
   });
 }

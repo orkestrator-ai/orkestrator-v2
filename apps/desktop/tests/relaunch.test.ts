@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -68,7 +68,7 @@ describe("relaunchApplication", () => {
       "/home/user/AppImages/orkestrator.appimage",
       "orkestrator://open",
     ]);
-    expect(options).toMatchObject({ detached: true, stdio: "ignore", cwd: "/home/user/projects" });
+    expect(options).toMatchObject({ detached: true, stdio: "ignore", cwd: "/home/user" });
     expect(unref).toHaveBeenCalled();
   });
 
@@ -77,6 +77,34 @@ describe("relaunchApplication", () => {
     value.env.OWD = `${MOUNT}/resources`;
     relaunchApplication({ relaunch: () => undefined }, value);
     expect(spawned[0]!.options.cwd).toBe("/home/user");
+  });
+
+  test("registers a separate systemd service with sanitized environment before returning", () => {
+    const runSystemdService = mock((_args: string[], _env: NodeJS.ProcessEnv) => true);
+    const { value, spawned } = context({ runSystemdService });
+    relaunchApplication({ relaunch: () => undefined }, value);
+    expect(spawned).toHaveLength(0);
+    const [args, env] = runSystemdService.mock.calls[0]!;
+    expect(args).toContain("--service-type=exec");
+    expect(args).toContain("--working-directory=/home/user");
+    expect(args).toContain("--expand-environment=no");
+    expect(args).toContain("--setenv=HOME");
+    expect(args).not.toContain("--setenv=APPDIR");
+    expect(env).toEqual(appImageRelaunchEnvironment(value.env));
+    expect(args.slice(-3)).toEqual(["4242", value.env.APPIMAGE!, "orkestrator://open"]);
+  });
+
+  test("uses the stable detached waiter if the systemd service cannot be registered", () => {
+    const { value, spawned } = context({ runSystemdService: () => false });
+    const original = console.error;
+    console.error = mock(() => undefined);
+    try {
+      relaunchApplication({ relaunch: () => undefined }, value);
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]!.options.cwd).toBe("/home/user");
+    } finally {
+      console.error = original;
+    }
   });
 
   test("falls back to Electron's relaunch when the waiter cannot start", () => {
@@ -105,18 +133,21 @@ describe("relaunchApplication", () => {
     });
   });
 
-  test("the waiter starts the image only after the process it watches exits", async () => {
+  test("the waiter launches after exit even when the original working directory was removed", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "ork-relaunch-"));
+    const watched = Bun.spawn(["sleep", "30"]);
+    let waiter: ReturnType<typeof Bun.spawn> | undefined;
     try {
+      const owd = path.join(directory, "removed-worktree");
+      await mkdir(owd);
+      await rm(owd, { recursive: true });
       const marker = path.join(directory, "started");
       const image = path.join(directory, "fake.appimage");
       await writeFile(image, `#!/bin/sh\necho "$@" > "${marker}"\n`, { mode: 0o755 });
-      const watched = Bun.spawn(["sleep", "30"]);
-      let waiter: ReturnType<typeof Bun.spawn> | undefined;
       relaunchApplication(
         { relaunch: () => undefined },
         context({
-          env: { APPIMAGE: image, PATH: process.env.PATH },
+          env: { APPIMAGE: image, OWD: owd, PATH: process.env.PATH },
           pid: watched.pid,
           argv: ["/irrelevant", "--flag"],
           homeDirectory: directory,
@@ -133,9 +164,14 @@ describe("relaunchApplication", () => {
       await Bun.sleep(400);
       expect(await Bun.file(marker).exists()).toBe(false);
       watched.kill();
+      await watched.exited;
       await waiter!.exited;
       expect(await readFile(marker, "utf8")).toBe("--flag\n");
     } finally {
+      watched.kill();
+      waiter?.kill();
+      await watched.exited;
+      await waiter?.exited;
       await rm(directory, { recursive: true, force: true });
     }
   });

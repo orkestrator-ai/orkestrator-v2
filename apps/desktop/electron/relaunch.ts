@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 
 /**
@@ -30,6 +31,21 @@ export interface RelaunchContext {
   argv: string[];
   homeDirectory: string;
   spawn: Spawn;
+  /** Registers a waiter outside an app scope before Electron can quit. */
+  runSystemdService?: (args: string[], env: NodeJS.ProcessEnv) => boolean;
+}
+
+function inSystemdUnit(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    // The first launch can be an app scope; subsequent launches run in the
+    // transient service created below and need the same cgroup handoff.
+    return /\/(?:app[^/]*\.scope|[^/]+\.service)(?:\n|$)/.test(
+      readFileSync("/proc/self/cgroup", "utf8"),
+    );
+  } catch {
+    return false;
+  }
 }
 
 const defaultContext = (): RelaunchContext => ({
@@ -39,6 +55,17 @@ const defaultContext = (): RelaunchContext => ({
   argv: process.argv,
   homeDirectory: os.homedir(),
   spawn: (command, args, options) => spawn(command, args, options),
+  ...(inSystemdUnit()
+    ? {
+        runSystemdService: (args: string[], env: NodeJS.ProcessEnv) =>
+          spawnSync("/usr/bin/systemd-run", args, {
+            env,
+            cwd: os.homedir(),
+            stdio: "ignore",
+            timeout: 5_000,
+          }).status === 0,
+      }
+    : {}),
 });
 
 /** A path inside any AppImage runtime mount, this one's or an older instance's. */
@@ -74,25 +101,50 @@ export function relaunchApplication(
     app.relaunch();
     return;
   }
-  const owd = context.env.OWD;
-  const waiter = context.spawn(
-    "/bin/sh",
-    [
-      "-c",
-      WAIT_THEN_EXEC,
-      "orkestrator-relaunch",
-      String(context.pid),
-      image,
-      ...context.argv.slice(1),
-    ],
-    {
-      detached: true,
-      stdio: "ignore",
-      env: appImageRelaunchEnvironment(context.env),
-      // The current directory may be inside the mount that is about to go.
-      cwd: owd && !APPIMAGE_MOUNT.test(owd) ? owd : context.homeDirectory,
-    },
-  );
+  const env = appImageRelaunchEnvironment(context.env);
+  const args = [
+    "-c",
+    WAIT_THEN_EXEC,
+    "orkestrator-relaunch",
+    String(context.pid),
+    image,
+    ...context.argv.slice(1),
+  ];
+  // setsid/detached does not leave the app's cgroup. A transient service does,
+  // so stopping an Omarchy/UWSM app scope cannot kill the restart waiter.
+  // Wait for registration: callers quit immediately after this returns.
+  if (context.runSystemdService) {
+    const registered = context.runSystemdService(
+      [
+        "--user",
+        "--quiet",
+        "--collect",
+        "--service-type=exec",
+        "--expand-environment=no",
+        `--working-directory=${context.homeDirectory}`,
+        "--property=UnsetEnvironment=APPDIR APPIMAGE ARGV0",
+        // Bare keys copy values from the sanitized environment without exposing
+        // credentials in systemd-run's command line.
+        ...Object.keys(env).map((key) => `--setenv=${key}`),
+        "--",
+        "/bin/sh",
+        ...args,
+      ],
+      env,
+    );
+    if (registered) return;
+    console.error(
+      "[Desktop] Could not register the AppImage relaunch service; using a detached waiter",
+    );
+  }
+  const waiter = context.spawn("/bin/sh", args, {
+    detached: true,
+    stdio: "ignore",
+    env,
+    // OWD can be a deleted worktree; the current directory can be a mount
+    // that disappears on exit. Neither is a reliable place to start from.
+    cwd: context.homeDirectory,
+  });
   // A spawn failure arrives asynchronously, usually before the quit completes.
   // Electron's relauncher is the better fallback than no relaunch at all.
   waiter.once("error", (error) => {

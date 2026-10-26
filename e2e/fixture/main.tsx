@@ -75,6 +75,7 @@ import { SystemUsageIndicator } from "../../apps/web/src/components/layout/Syste
 import { TAB_STRIP_CLASS } from "../../apps/web/src/components/pane-layout/TabShell";
 import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectSearchBar";
 import { SortableProjectFolder } from "../../apps/web/src/components/sidebar/SortableProjectFolder";
+import { SortableProjectGroup } from "../../apps/web/src/components/sidebar/SortableProjectGroup";
 import { Button } from "../../apps/web/src/components/ui/button";
 import { cn } from "../../apps/web/src/lib/utils";
 import {
@@ -339,6 +340,35 @@ const sortableFolderProjects: Project[] = [
   },
 ];
 
+const sortableTopLevelProject: Project = {
+  ...sortableFolderProjects[0]!,
+  id: "project-standalone",
+  name: "Standalone",
+  folder: null,
+};
+
+function SortableFolderProjectRow({ project }: { project: Project }) {
+  return (
+    <SortableProjectGroup
+      project={project}
+      environments={[]}
+      isCollapsed={false}
+      isSelected={false}
+      selectedEnvironmentId={null}
+      onToggleCollapse={() => {}}
+      onSelectProject={() => {}}
+      onSelectEnvironment={() => {}}
+      onDeleteProject={() => {}}
+      onOpenSettings={() => {}}
+      onDeleteEnvironment={() => {}}
+      onStartEnvironment={() => {}}
+      onStopEnvironment={() => {}}
+      onRestartEnvironment={() => {}}
+      onCreateEnvironment={() => {}}
+    />
+  );
+}
+
 function SortableProjectFolderFixture() {
   const [projects, setProjects] = useState(sortableFolderProjects);
 
@@ -357,7 +387,8 @@ function SortableProjectFolderFixture() {
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
       <DndContext>
-        <SortableContext items={[projectFolderDragId("Work")]}>
+        <SortableContext items={[sortableTopLevelProject.id, projectFolderDragId("Work")]}>
+          <SortableFolderProjectRow project={sortableTopLevelProject} />
           <SortableProjectFolder
             name="Work"
             projectCount={projects.length}
@@ -367,13 +398,15 @@ function SortableProjectFolderFixture() {
             onSort={sortProjects}
             onUngroup={() => {}}
           >
-            <ol aria-label="Work projects">
-              {projects.map((project) => (
-                <li key={project.id} data-project-id={project.id}>
-                  {project.name}
-                </li>
-              ))}
-            </ol>
+            <SortableContext items={projects.map((project) => project.id)}>
+              <ol aria-label="Work projects">
+                {projects.map((project) => (
+                  <li key={project.id} data-project-id={project.id}>
+                    <SortableFolderProjectRow project={project} />
+                  </li>
+                ))}
+              </ol>
+            </SortableContext>
           </SortableProjectFolder>
         </SortableContext>
       </DndContext>

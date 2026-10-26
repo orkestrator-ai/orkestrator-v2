@@ -14,7 +14,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
 | `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
-| `apps/backend/src/core/storage.ts` | `StorageService`, the facade every caller uses: one forwarder per public method |
+| `apps/backend/src/core/storage.ts` | `StorageService`, the facade every caller uses: forwarders, plus area fields typed as a `Pick` of one repository |
 | `apps/backend/src/core/storage-repositories.ts` | `StorageRepositories`, which builds every repository over one context |
 | `apps/backend/src/core/storage-files.ts` | `StorageFiles`: the paths of shared stores and of the files beside the database |
 | `apps/backend/src/core/storage-<area>.ts` | One repository per store group (`ProjectsRepository`, `KanbanRepository`, …; see [Code layout](#code-layout)) |
@@ -23,11 +23,27 @@ namespace), their per-file lock files and five-deep backup ladders.
 
 ## Code layout
 
-`StorageService` (`storage.ts`) is a facade with no base class. Its public
-methods are the storage API the rest of the backend uses (mostly through
-`CommandContext.storage`), and each forwards to the repository that owns the
-store. The facade itself only opens and closes the database, runs the
-start-up steps (`init`) and exposes the change journal.
+`StorageService` (`storage.ts`) is a facade with no base class. Callers
+(mostly through `CommandContext.storage`) reach a store in one of two ways:
+
+- a public method of the facade, which forwards to the repository that owns
+  the store (`storage.loadEnvironments()`);
+- an area field, typed as a `Pick` of one repository's entry points and
+  holding that repository (`storage.kanban.addKanbanTask()`, where
+  `KanbanStorage = Pick<KanbanRepository, "addKanbanTask" | …>`).
+
+The area fields are `kanban` (`KanbanStorage`), `coordinators`
+(`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
+`nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`) and
+`agentAccounts` (`AgentAccountsStorage`). Each area type is declared next to
+its repository and re-exported from `storage.ts`, and lists only the methods
+code outside the storage files calls; a consumer that needs a few of them
+takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
+`{ coordinators: Pick<CoordinatorsStorage, …> }` beside facade methods) rather
+than the whole service. New areas follow the same shape; the remaining
+forwarders move to areas as their callers are narrowed. The facade itself only
+opens and closes the database, runs the start-up steps (`init`) and exposes
+the change journal.
 
 | Repository | File | Stores |
 | --- | --- | --- |
@@ -39,7 +55,10 @@ start-up steps (`init`) and exposes the change journal.
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
-| `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail |
+| `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention |
+| `AgentMailboxDirectory` | `storage-agent-mail-directory.ts` | Mailbox synchronisation from pane layouts and coordinators, descriptors and snapshots, mailbox policy |
+| `AgentMailInjects` | `storage-agent-mail-injects.ts` | Inject scheduling: the pending queue, claim and settle, retries and verification, delegation and stored-mail holds |
+| `AgentMailBudgets` | `storage-agent-mail-budgets.ts` | Routed mail budgets: pair loop budget and hourly limit, resets, releases and the held-mail notice |
 | `KanbanRepository` | `storage-kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
 | `PreviewServicesRepository` | `storage-preview-services.ts` | Preview services and settings, the backend profile and identity |
 | `NodesRepository` | `storage-nodes.ts` | Command-node stores |
@@ -49,7 +68,10 @@ start-up steps (`init`) and exposes the change journal.
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 
 A store written by more than one repository is written under the same lease
-by each, or only through transactions; the guard checks that per store.
+by each, or only through transactions; the guard checks that per store. The
+four agent mail classes share one `AgentMailStore`
+(`storage-agent-mail-store.ts`): the `agent-mail.json` lease (`enqueue`), its
+load and its size-checked save, plus the pure helpers on the persisted shape.
 
 Every repository takes the one `StorageContext` (`this.context`), the
 `StorageFiles` path helpers (`this.files.kanbanFile()`) and the
@@ -65,7 +87,8 @@ the repository that owns its store, with its target, label and timeout
 unchanged.
 
 Nothing outside the `storage*.ts` files names a repository, the registry or
-`StorageContext`; `storage-writer-guards.test.ts` checks both. Tests that need
+`StorageContext` (callers name the area types instead);
+`storage-writer-guards.test.ts` checks both. Tests that need
 a primitive or a repository helper the facade does not expose use
 `storageInternals(storage)` or `storageDatabase(storage)` from
 `storage-test-support.ts`.
@@ -218,7 +241,10 @@ store, with no exceptions; a write it cannot follow fails. It resolves each
 call through the declared types of the fields on the way
 (`this.repos.projects.saveEnvironments()`, `this.context.saveJson()`), and
 follows every repository method, whatever its visibility, to all of its
-callers; only the facade's public methods are entry points.
+callers. The entry points are the facade's public methods and the members its
+area fields pick; a public facade field that is not such a `Pick` (a whole
+repository, or a copy of a private field) fails the scan, as does a `Pick` of
+a name the repository does not have publicly.
 The primitives are implemented on `StorageContext` (`storage-context.ts`,
 whose `serialize` also records the lease order). The guard fails a class
 that holds a `StorageContext` without the facade reaching it, a scanned class
@@ -383,7 +409,9 @@ Use `storage-test-support.ts` rather than writing files into a data directory:
 repositories, for injecting a failure into a primitive or patching one
 repository method. Patch the repository, not the facade: a repository calls
 another repository directly, so a facade method replaced in a test is not
-seen by storage code. To exercise the import and the
+seen by storage code. An area field is the repository itself, so patching
+`storage.kanban.getKanbanTasks` is also seen by the repository's own calls;
+a patch that calls back into the same repository must let those through. To exercise the import and the
 one-shot upgrades, write legacy files into a directory without a database
 (`writeLegacyStore`) or copy a live one out in an older shape
 (`exportStoresAsLegacyJson`). Each opens its own connection,

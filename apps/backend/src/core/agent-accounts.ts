@@ -93,7 +93,7 @@ function announceAccountsChanged(context: CommandContext, platform: AgentAccount
 }
 
 function accountsRoot(context: CommandContext): string {
-  return context.storage.agentAccountsDirectory();
+  return context.storage.agentAccounts.agentAccountsDirectory();
 }
 
 function homeFor(context: CommandContext, platform: AgentAccountPlatform, id: string): string {
@@ -143,7 +143,7 @@ async function readLoginState(
 }
 
 export async function listAgentAccounts(context: CommandContext): Promise<AgentAccountsSnapshot> {
-  const store = await context.storage.loadAgentAccounts();
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
   const rows = AGENT_ACCOUNT_PLATFORMS.flatMap((platform) => [
     { platform, stored: undefined as StoredAgentAccount | undefined },
     ...store.accounts
@@ -199,20 +199,22 @@ export async function setActiveAgentAccount(
   assertKnownAccountId(accountId);
   const changed = await withAccountMutation(async () => {
     const outgoing = sharedPlanUsageCache.lastOk(platform);
-    const previous = await context.storage.mutateAgentAccounts<string | undefined>((store) => {
-      const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
-      if (current === accountId) return { store, result: undefined };
-      const active = { ...store.active };
-      if (accountId === DEFAULT_AGENT_ACCOUNT_ID) {
-        delete active[platform];
-      } else {
-        if (!store.accounts.some((a) => a.id === accountId && a.platform === platform)) {
-          throw new Error("Unknown agent account");
+    const previous = await context.storage.agentAccounts.mutateAgentAccounts<string | undefined>(
+      (store) => {
+        const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+        if (current === accountId) return { store, result: undefined };
+        const active = { ...store.active };
+        if (accountId === DEFAULT_AGENT_ACCOUNT_ID) {
+          delete active[platform];
+        } else {
+          if (!store.accounts.some((a) => a.id === accountId && a.platform === platform)) {
+            throw new Error("Unknown agent account");
+          }
+          active[platform] = accountId;
         }
-        active[platform] = accountId;
-      }
-      return { store: { ...store, active }, result: current };
-    });
+        return { store: { ...store, active }, result: current };
+      },
+    );
     // Readers take this same lock before selecting an account and before
     // publishing a result. No reader can observe a half-completed switch.
     bumpUsageGeneration(context, platform);
@@ -240,7 +242,7 @@ export async function renameAgentAccount(
     throw new Error(`Account names must be 1–${MAX_AGENT_ACCOUNT_LABEL_LENGTH} characters`);
   }
   if (!isStoredAgentAccountId(accountId)) throw new Error("The host login cannot be renamed");
-  await context.storage.mutateAgentAccounts((store) => {
+  await context.storage.agentAccounts.mutateAgentAccounts((store) => {
     const index = store.accounts.findIndex((a) => a.id === accountId && a.platform === platform);
     if (index < 0) throw new Error("Unknown agent account");
     const accounts = [...store.accounts];
@@ -288,7 +290,7 @@ export async function removeAgentAccount(
         "A terminal is still running on this account. Close it before removing the account.",
       );
     }
-    const store = await context.storage.loadAgentAccounts();
+    const store = await context.storage.agentAccounts.loadAgentAccounts();
     if (store.active[platform] === accountId)
       throw new Error("Switch to another account before removing this one.");
     if (
@@ -296,7 +298,7 @@ export async function removeAgentAccount(
     )
       throw new Error("Unknown agent account");
     await deleteAccountDirectory(context, platform, accountId);
-    await context.storage.mutateAgentAccounts((store) => {
+    await context.storage.agentAccounts.mutateAgentAccounts((store) => {
       if (store.active[platform] === accountId) {
         throw new Error("Switch to another account before removing this one.");
       }
@@ -419,7 +421,7 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
       jsonPath,
       added,
       async (promote) => {
-        await context.storage.mutateAgentAccounts(async (store) => {
+        await context.storage.agentAccounts.mutateAgentAccounts(async (store) => {
           if (entry.cancelled) throw new Error("The sign-in was cancelled");
           if (host?.identityKey === state.identityKey) {
             throw new Error("That is the host login, which is already listed.");
@@ -503,7 +505,7 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
     if (!state.identityKey)
       throw new Error("The sign-in finished without an account identity. Try signing in again.");
     const host = await readLoginState(context, platform, undefined);
-    await context.storage.mutateAgentAccounts((store) => {
+    await context.storage.agentAccounts.mutateAgentAccounts((store) => {
       const siblings = store.accounts.filter((a) => a.platform === platform);
       if (state.identityKey) {
         if (host.identityKey === state.identityKey) {
@@ -571,7 +573,7 @@ export async function startAgentAccountLogin(
   };
   activeLogin = entry;
   try {
-    const store = await context.storage.loadAgentAccounts();
+    const store = await context.storage.agentAccounts.loadAgentAccounts();
     if (mode === "reauthenticate") {
       entry.accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
       // An agent-test profile only reads the host login its harness granted;
@@ -731,7 +733,7 @@ export async function readAgentAccountUsage(
 ): Promise<PlanUsageSnapshot> {
   assertKnownAccountId(accountId);
   const { store, generation } = await withAccountMutation(async () => ({
-    store: await context.storage.loadAgentAccounts(),
+    store: await context.storage.agentAccounts.loadAgentAccounts(),
     generation: usageGeneration(context, platform),
   }));
   const now = options.now ?? Date.now;

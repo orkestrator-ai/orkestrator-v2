@@ -68,7 +68,7 @@ async function fixture() {
     );
   }
   const now = new Date(0).toISOString();
-  await storage.mutateCoordinatorWorkspace("p1", () => ({
+  await storage.coordinators.mutateCoordinatorWorkspace("p1", () => ({
     version: COORDINATOR_WORKSPACE_VERSION,
     id: "coordinator-1",
     projectId: "p1",

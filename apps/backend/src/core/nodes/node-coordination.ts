@@ -73,9 +73,9 @@ export class NodeCoordination {
   ) {
     const { storage, nodes, portal } = options;
     const mailStore: NodeMailStore = {
-      load: async () => parseMailState(await storage.loadNodeMail()),
+      load: async () => parseMailState(await storage.nodes.loadNodeMail()),
       mutate: (mutate) =>
-        storage.mutateNodeMail((current) => {
+        storage.nodes.mutateNodeMail((current) => {
           const { next, result } = mutate(parseMailState(current));
           return { next, result };
         }),
@@ -182,8 +182,8 @@ export class NodeCoordination {
       await this.projectFiles.seedEnvironment(nodeId, input.projectId, environmentId);
     };
     this.actions = new NodeActionRequests({
-      load: () => storage.loadNodeActionRequests(),
-      save: (requests) => storage.saveNodeActionRequests(requests),
+      load: () => storage.nodes.loadNodeActionRequests(),
+      save: (requests) => storage.nodes.saveNodeActionRequests(requests),
       emit: options.emit,
       executors: {
         "delete-environment": (request) => this.executeDeletion(request),
@@ -245,7 +245,7 @@ export class NodeCoordination {
     );
     await this.leafMail.recordThread(message.id, mailbox);
     // An environment the coordinator talks to reports back to it.
-    const state = await this.options.storage.loadNodeMail();
+    const state = await this.options.storage.nodes.loadNodeMail();
     if (!parseMailState(state).origins[toEnvironmentId]) {
       await this.leafMail.recordOrigin(toEnvironmentId, mailbox);
     }
@@ -310,7 +310,7 @@ export class NodeCoordination {
     let address = input.toCoordinator;
     let projectId: string | undefined;
     if (address) {
-      const workspaces = await storage.listCoordinatorWorkspaces();
+      const workspaces = await storage.coordinators.listCoordinatorWorkspaces();
       const owner = workspaces.find((workspace) =>
         workspace.conversations.some(
           (conversation) =>
@@ -331,7 +331,7 @@ export class NodeCoordination {
           input.repositoryHint && repositoryHint(candidate.gitUrl) === input.repositoryHint,
       );
       const workspace = project
-        ? (await storage.listCoordinatorWorkspaces()).find(
+        ? (await storage.coordinators.listCoordinatorWorkspaces()).find(
             (entry) => entry.projectId === project.id,
           )
         : undefined;

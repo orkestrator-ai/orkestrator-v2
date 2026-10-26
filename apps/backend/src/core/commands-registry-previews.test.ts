@@ -85,7 +85,7 @@ describe("preview commands", () => {
       effective: { transport: boolean };
     };
     expect(updated.effective.transport).toBe(true);
-    expect((await harness.storage.loadPreviewSettings()).transport).toBe(true);
+    expect((await harness.storage.previewServices.loadPreviewSettings()).transport).toBe(true);
   });
 
   test("backends without the runtime report unsupported", async () => {

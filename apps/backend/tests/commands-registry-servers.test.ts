@@ -1273,7 +1273,7 @@ exit 0
       dataDir: dir,
       globalConfig: { enabledAgentPlatforms: ["claude"] },
     });
-    context.storage.loadAgentAccounts = (async () => ({
+    context.storage.agentAccounts.loadAgentAccounts = (async () => ({
       version: 1,
       accounts: [],
       active: { claude: accountId },

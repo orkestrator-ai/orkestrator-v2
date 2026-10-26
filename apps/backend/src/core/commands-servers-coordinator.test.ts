@@ -325,7 +325,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         policy: "coordinator-read-only",
         // Attachments are staged outside the checkout, so the bridge is told
         // the one directory besides the workspace it may read them from.
-        attachmentRoot: storage.coordinatorAttachmentDirectory(
+        attachmentRoot: storage.coordinators.coordinatorAttachmentDirectory(
           snapshot.workspace.id,
           conversation.id,
         ),
@@ -349,13 +349,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
           : {}),
       });
       const attachmentRootStats = await fs.stat(
-        storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
+        storage.coordinators.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
       );
       expect(attachmentRootStats.isDirectory()).toBe(true);
       expect(attachmentRootStats.mode & 0o777).toBe(0o700);
       // The conversation's bridge identity is stored in the neutral fields, not
       // Codex's, so the reaper can find a Claude coordinator child too.
-      expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+      expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
         conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
       });
       // A renewed login must retain busy work, then replace an idle bridge and
@@ -577,7 +577,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         policy: "coordinator-read-only",
         permissionProfile: `coordinator-${conversation.id}`,
         readableRuntimeRoot: path.join(root, "bin"),
-        attachmentRoot: storage.coordinatorAttachmentDirectory(
+        attachmentRoot: storage.coordinators.coordinatorAttachmentDirectory(
           snapshot.workspace.id,
           conversation.id,
         ),
@@ -585,16 +585,16 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpToken: "scoped-token",
       },
     );
-    expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+    expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
       lifecycleState: "ready",
       conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
     });
 
     const addedId = "11111111-2222-4333-8444-555555555555";
-    const addedHome = path.join(storage.agentAccountsDirectory(), "codex", addedId);
+    const addedHome = path.join(storage.agentAccounts.agentAccountsDirectory(), "codex", addedId);
     await fs.mkdir(addedHome, { recursive: true });
     await fs.writeFile(path.join(addedHome, "auth.json"), codexAuth("replacement"));
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: {
         ...store,
         accounts: [
@@ -621,11 +621,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     cleanupRuntimeId = null;
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const current = (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!;
+      const current = (await storage.coordinators.getCoordinatorWorkspace(project.id))!
+        .conversations[0]!;
       if (current.bridgePort === undefined && current.bridgePid === undefined) break;
       await Bun.sleep(10);
     }
-    const stopped = (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!;
+    const stopped = (await storage.coordinators.getCoordinatorWorkspace(project.id))!
+      .conversations[0]!;
     expect(stopped.bridgePort).toBeUndefined();
     expect(stopped.bridgePid).toBeUndefined();
   });
@@ -690,7 +692,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       "before becoming healthy",
     );
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
-    expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+    expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
       lifecycleState: "error",
       lastStartupError: expect.stringContaining("before becoming healthy"),
     });
@@ -905,10 +907,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     cleanupRuntimeId = environment.id;
     const first = await startLocalServerUnlocked(environment.id, context, "codex");
     const accountId = "11111111-2222-4333-8444-555555555555";
-    const home = path.join(storage.agentAccountsDirectory(), "codex", accountId);
+    const home = path.join(storage.agentAccounts.agentAccountsDirectory(), "codex", accountId);
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(path.join(home, "auth.json"), '{"account":"selected"}');
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: {
         ...store,
         accounts: [

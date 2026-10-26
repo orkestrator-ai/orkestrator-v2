@@ -4376,7 +4376,7 @@ describe("NativeAgentService", () => {
             order: 0,
           });
           const now = new Date(0).toISOString();
-          await storage.mutateCoordinatorWorkspace(project.id, () => ({
+          await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
             version: COORDINATOR_WORKSPACE_VERSION,
             id: "coordinator-1",
             projectId: project.id,
@@ -4449,7 +4449,7 @@ describe("NativeAgentService", () => {
             { owner: "coordinator", previousState: undefined, state: "working" },
             { owner: "coordinator", previousState: "working", state: "idle" },
           ]);
-          await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+          await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
             ...workspace!,
             lifecycleState: "paused",
           }));
@@ -4462,7 +4462,7 @@ describe("NativeAgentService", () => {
             ),
           ).toBe("unknown");
 
-          await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+          await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
             ...workspace!,
             lifecycleState: "ready",
             conversations: workspace!.conversations.map((conversation) => ({

@@ -157,7 +157,7 @@ describe("project.remove with cascade", () => {
     expect(receipt.state).toBe("succeeded");
     expect(await h.storage.getProject(project.id)).toBeNull();
     expect(await h.storage.getEnvironmentsByProject(project.id)).toHaveLength(0);
-    const record = (await h.storage.getPublicOperation(receipt.operationId)) as {
+    const record = (await h.storage.publicOperations.getPublicOperation(receipt.operationId)) as {
       record?: { result?: Record<string, unknown> };
     };
     const result = record.record?.result as {
@@ -330,7 +330,7 @@ describe("cascade observation and restart", () => {
     test(`restart with project ${removed ? "removed" : "surviving"} preserves partial progress`, async () => {
       const h = await harness();
       const project = await addProject(h, `restart-cascade-${removed}`);
-      const admitted = await h.storage.admitPublicOperation({
+      const admitted = await h.storage.publicOperations.admitPublicOperation({
         authority: "operator",
         action: "project.remove",
         scope: `project:${project.id}`,
@@ -350,12 +350,15 @@ describe("cascade observation and restart", () => {
         [{ environmentId: "already-deleted", name: "first", state: "deleted" }],
         2,
       );
-      await h.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
-        ...record,
-        state: "running",
-        stage: "cleanup",
-        result: summary,
-      }));
+      await h.storage.publicOperations.updatePublicOperation(
+        admitted.record.operationId,
+        (record) => ({
+          ...record,
+          state: "running",
+          stage: "cleanup",
+          result: summary,
+        }),
+      );
       await h.storage.fenceEmptyProjectForRemoval(project.id);
       if (removed) await h.storage.removeProject(project.id);
       const restarted = await h.restart();
@@ -380,7 +383,7 @@ describe("cascade observation and restart", () => {
 
   test("multibyte failures retain counts and actionable rows within the ledger byte bound", async () => {
     const h = await harness();
-    const admitted = await h.storage.admitPublicOperation({
+    const admitted = await h.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "project.remove",
       scope: "project:large",
@@ -412,7 +415,10 @@ describe("cascade observation and restart", () => {
     const environments = bounded.result!.environments as { results: unknown[]; omitted: number };
     expect(environments.results.length).toBeGreaterThan(0);
     expect(environments.omitted).toBe(60 - environments.results.length);
-    await h.storage.updatePublicOperation(admitted.record.operationId, () => bounded);
+    await h.storage.publicOperations.updatePublicOperation(
+      admitted.record.operationId,
+      () => bounded,
+    );
     const read = await h.call("run.get", { operationId: admitted.record.operationId });
     expect(read.receipt?.result).toEqual(summary);
   });

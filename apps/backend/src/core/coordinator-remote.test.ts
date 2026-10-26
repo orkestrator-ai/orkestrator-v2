@@ -74,7 +74,7 @@ async function remoteWorld() {
   const remote = new FakeRemote();
   world.coordinator.setRemoteAccess(remote);
   const main = await world.main();
-  const association = await world.storage.saveCoordinatorWorkflowAssociation({
+  const association = await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: "remote-delegation",
     projectId: world.projectId,
     coordinatorId: world.coordinatorId,
@@ -87,12 +87,14 @@ async function remoteWorld() {
     baseCommit: "a".repeat(40),
     createdAt: new Date().toISOString(),
   });
-  await world.storage.openCoordinatorDelegation(association.id, "startup-agent");
+  await world.storage.coordinators.openCoordinatorDelegation(association.id, "startup-agent");
   return { world, remote, main, association };
 }
 
 async function delegationState(world: MailWorld, id: string) {
-  const associations = await world.storage.listCoordinatorWorkflowAssociations(world.projectId);
+  const associations = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+    world.projectId,
+  );
   return associations.find((entry) => entry.id === id)?.delegation;
 }
 
@@ -406,7 +408,7 @@ describe("remote delegations", () => {
 describe("remote workflow status wakes", () => {
   test("a build pipeline on a leaf wakes the coordinator with calls that name the node", async () => {
     const { world, remote, main } = await remoteWorld();
-    await world.storage.saveCoordinatorWorkflowAssociation({
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "remote-build",
       projectId: world.projectId,
       coordinatorId: world.coordinatorId,

@@ -882,7 +882,7 @@ export class CoordinatorStatusWakes {
     nodeId?: string,
   ): Promise<void> {
     return this.serialize(async () => {
-      const state = await this.storage.getCoordinatorReconciliationState();
+      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
       const owned = state.workflows.filter(
         (association) =>
           association.kind === kind &&
@@ -906,7 +906,7 @@ export class CoordinatorStatusWakes {
    */
   reconcile(): Promise<void> {
     return this.serialize(async () => {
-      const state = await this.storage.getCoordinatorReconciliationState();
+      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
       const mode = await this.mode();
       for (const association of state.workflows) {
         if (
@@ -1007,7 +1007,7 @@ export class CoordinatorStatusWakes {
     if (association.statusNotice?.key === status.key) {
       // Already sent; only the terminal bookkeeping may be missing.
       if (status.terminal)
-        await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
+        await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, revision);
       return;
     }
     const updatedAt = Date.parse(text(persisted.updatedAt) ?? "");
@@ -1047,7 +1047,7 @@ export class CoordinatorStatusWakes {
     if (!delivered) return;
     await this.recordNotice(association.id, status.key);
     if (status.terminal)
-      await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
+      await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, revision);
   }
 
   /**
@@ -1064,7 +1064,7 @@ export class CoordinatorStatusWakes {
     state: AgentActivityState | "unknown";
   }): Promise<void> {
     return this.serialize(async () => {
-      const open = (await this.storage.listOpenCoordinatorDelegations()).filter(
+      const open = (await this.storage.coordinators.listOpenCoordinatorDelegations()).filter(
         (association) =>
           !association.nodeId &&
           association.resourceId === event.environmentId &&
@@ -1074,20 +1074,27 @@ export class CoordinatorStatusWakes {
         if (event.state === "waiting") {
           if (association.delegation?.waiting) continue;
           const since = new Date(this.timers.now()).toISOString();
-          await this.storage.updateCoordinatorWorkflowAssociation(association.id, (current) => {
-            if (current.delegation?.state !== "running" || current.delegation.waiting) return false;
-            current.delegation = { ...current.delegation, waiting: { since } };
-            return true;
-          });
+          await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+            association.id,
+            (current) => {
+              if (current.delegation?.state !== "running" || current.delegation.waiting)
+                return false;
+              current.delegation = { ...current.delegation, waiting: { since } };
+              return true;
+            },
+          );
           this.scheduleWaitingCheck(association.id);
         } else if (event.state === "working" && association.delegation?.waiting) {
           this.clearWaitingTimer(association.id);
-          await this.storage.updateCoordinatorWorkflowAssociation(association.id, (current) => {
-            if (!current.delegation?.waiting) return false;
-            const { waiting: _waiting, ...rest } = current.delegation;
-            current.delegation = rest;
-            return true;
-          });
+          await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+            association.id,
+            (current) => {
+              if (!current.delegation?.waiting) return false;
+              const { waiting: _waiting, ...rest } = current.delegation;
+              current.delegation = rest;
+              return true;
+            },
+          );
         }
       }
     });
@@ -1100,7 +1107,7 @@ export class CoordinatorStatusWakes {
       this.timers.setTimeout(() => {
         this.waitingTimers.delete(associationId);
         void this.serialize(async () => {
-          const state = await this.storage.getCoordinatorReconciliationState();
+          const state = await this.storage.coordinators.getCoordinatorReconciliationState();
           const association = state.workflows.find((item) => item.id === associationId);
           if (association?.delegation?.state !== "running") return;
           if (MODE_ORDER[await this.mode()] < MODE_ORDER.settled) return;
@@ -1149,22 +1156,28 @@ export class CoordinatorStatusWakes {
     if (activity !== "waiting") {
       if (delegation.waiting && activity === "working") {
         this.clearWaitingTimer(association.id);
-        await this.storage.updateCoordinatorWorkflowAssociation(association.id, (current) => {
-          if (!current.delegation?.waiting) return false;
-          const { waiting: _waiting, ...rest } = current.delegation;
-          current.delegation = rest;
-          return true;
-        });
+        await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+          association.id,
+          (current) => {
+            if (!current.delegation?.waiting) return false;
+            const { waiting: _waiting, ...rest } = current.delegation;
+            current.delegation = rest;
+            return true;
+          },
+        );
       }
       return;
     }
     if (!delegation.waiting) {
       const since = new Date(this.timers.now()).toISOString();
-      await this.storage.updateCoordinatorWorkflowAssociation(association.id, (current) => {
-        if (current.delegation?.state !== "running" || current.delegation.waiting) return false;
-        current.delegation = { ...current.delegation, waiting: { since } };
-        return true;
-      });
+      await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (current) => {
+          if (current.delegation?.state !== "running" || current.delegation.waiting) return false;
+          current.delegation = { ...current.delegation, waiting: { since } };
+          return true;
+        },
+      );
       this.scheduleWaitingCheck(association.id);
       return;
     }
@@ -1231,24 +1244,30 @@ export class CoordinatorStatusWakes {
     );
     if (!delivered) return;
     const notifiedAt = new Date(this.timers.now()).toISOString();
-    await this.storage.updateCoordinatorWorkflowAssociation(association.id, (current) => {
-      if (current.delegation?.waiting?.since !== delegation.waiting!.since) return false;
-      current.delegation = {
-        ...current.delegation,
-        waiting: { ...current.delegation.waiting, notifiedAt },
-      };
-      current.statusNotice = { key: status.key, notifiedAt };
-      return true;
-    });
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      association.id,
+      (current) => {
+        if (current.delegation?.waiting?.since !== delegation.waiting!.since) return false;
+        current.delegation = {
+          ...current.delegation,
+          waiting: { ...current.delegation.waiting, notifiedAt },
+        };
+        current.statusNotice = { key: status.key, notifiedAt };
+        return true;
+      },
+    );
   }
 
   private async recordNotice(associationId: string, key: string): Promise<void> {
     const notifiedAt = new Date(this.timers.now()).toISOString();
-    await this.storage.updateCoordinatorWorkflowAssociation(associationId, (current) => {
-      if (current.statusNotice?.key === key) return false;
-      current.statusNotice = { key, notifiedAt };
-      return true;
-    });
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        if (current.statusNotice?.key === key) return false;
+        current.statusNotice = { key, notifiedAt };
+        return true;
+      },
+    );
   }
 
   /**

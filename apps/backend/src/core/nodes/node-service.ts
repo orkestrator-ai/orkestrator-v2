@@ -47,7 +47,8 @@ import {
   type InheritedGlobalSettings,
 } from "@orkestrator/protocol/controller-settings";
 
-import type { NodeStoreMutation } from "../storage-nodes.js";
+import type { NodeStoreMutation, NodesStorage } from "../storage-nodes.js";
+import type { PreviewServicesStorage } from "../storage-preview-services.js";
 import {
   LeafControllerSettings,
   type ControllerSettingsStorage,
@@ -73,17 +74,16 @@ import { NodeSshPrompts } from "./node-ssh-prompts.js";
  */
 
 export interface NodeServiceStorage extends ControllerSettingsStorage {
-  getNodeRegistry(): Promise<NodeRegistry>;
-  mutateNodeRegistry<T>(
-    mutate: (current: NodeRegistry) => NodeStoreMutation<NodeRegistry, T>,
-    beforeApply?: () => void,
-  ): Promise<T>;
-  getNodeAttachments(): Promise<NodeAttachments>;
-  mutateNodeAttachments<T>(
-    mutate: (current: NodeAttachments) => NodeStoreMutation<NodeAttachments, T>,
-  ): Promise<T>;
-  getBackendProfile(): Promise<BackendProfile>;
-  getPreviewBackendIdentity(): Promise<{ instanceId: string }>;
+  nodes: Pick<
+    NodesStorage,
+    | "getControllerSettings"
+    | "mutateControllerSettings"
+    | "getNodeRegistry"
+    | "mutateNodeRegistry"
+    | "getNodeAttachments"
+    | "mutateNodeAttachments"
+  >;
+  previewServices: Pick<PreviewServicesStorage, "getBackendProfile" | "getPreviewBackendIdentity">;
 }
 
 export interface NodeServiceOptions {
@@ -174,8 +174,8 @@ export class NodeService {
     if (this.started) return;
     this.started = true;
     await this.self();
-    this.attachments = await this.storage.getNodeAttachments();
-    this.registry = await this.storage.getNodeRegistry();
+    this.attachments = await this.storage.nodes.getNodeAttachments();
+    this.registry = await this.storage.nodes.getNodeRegistry();
     await this.inheritedSettings.start();
     this.lastMode = this.mode();
     this.applyMode();
@@ -214,7 +214,7 @@ export class NodeService {
   }
 
   selfProfile(): Promise<BackendProfile> {
-    return this.storage.getBackendProfile();
+    return this.storage.previewServices.getBackendProfile();
   }
 
   /*
@@ -343,7 +343,7 @@ export class NodeService {
       await this.inheritedSettings.forget(parsed.controllerId);
     }
     const timestamp = new Date(this.now()).toISOString();
-    const next = await this.storage.mutateNodeAttachments((current) => {
+    const next = await this.storage.nodes.mutateNodeAttachments((current) => {
       if (current.detachedControllers.some((entry) => entry.controllerId === parsed.controllerId)) {
         throw new NodeRefusalError(
           NODE_REFUSAL_CODES.detachedOnNode,
@@ -403,7 +403,7 @@ export class NodeService {
   ): Promise<{ detached: boolean }> {
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId to be a node identity.");
     const detachedAt = new Date(this.now()).toISOString();
-    const result = await this.storage.mutateNodeAttachments((current) => {
+    const result = await this.storage.nodes.mutateNodeAttachments((current) => {
       const removed = current.controllers.find(
         (controller) => controller.controllerId === controllerId,
       );
@@ -439,7 +439,7 @@ export class NodeService {
 
   /** Let a command node the user detached here attach again. */
   async allowController(controllerId: unknown): Promise<{ allowed: boolean }> {
-    const result = await this.storage.mutateNodeAttachments((current) => {
+    const result = await this.storage.nodes.mutateNodeAttachments((current) => {
       const detachedControllers = current.detachedControllers.filter(
         (entry) => entry.controllerId !== controllerId,
       );
@@ -514,7 +514,7 @@ export class NodeService {
     const pending = new Map(this.pendingContacts);
     this.pendingContacts.clear();
     try {
-      const value = await this.storage.mutateNodeAttachments((current) => {
+      const value = await this.storage.nodes.mutateNodeAttachments((current) => {
         let changed = false;
         const controllers = current.controllers.map((controller) => {
           const at = pending.get(controller.controllerId);
@@ -960,7 +960,7 @@ export class NodeService {
           hasCredential: node.credential !== null,
         };
       });
-    const profile = await this.storage.getBackendProfile();
+    const profile = await this.storage.previewServices.getBackendProfile();
     const selfId = await this.self();
     return {
       targetNodeId: nodeId,
@@ -1286,7 +1286,7 @@ export class NodeService {
       enabled: true,
       origin,
     }));
-    const profile = await this.storage.getBackendProfile();
+    const profile = await this.storage.previewServices.getBackendProfile();
     const selfId = await this.self();
     return {
       importedFrom: `handover:${selfId}`,
@@ -1356,14 +1356,14 @@ export class NodeService {
 
   private async self(): Promise<BackendId> {
     if (this.selfId) return this.selfId;
-    const identity = await this.storage.getPreviewBackendIdentity();
+    const identity = await this.storage.previewServices.getPreviewBackendIdentity();
     if (!isBackendId(identity.instanceId)) throw new Error("This backend has no valid identity.");
     this.selfId = identity.instanceId;
     return this.selfId;
   }
 
   private async currentRegistry(): Promise<NodeRegistry> {
-    this.registry ??= await this.storage.getNodeRegistry();
+    this.registry ??= await this.storage.nodes.getNodeRegistry();
     return this.registry;
   }
 
@@ -1372,7 +1372,7 @@ export class NodeService {
     beforeApply?: () => void,
   ): Promise<T> {
     let written: NodeRegistry | null = null;
-    const result = await this.storage.mutateNodeRegistry((current) => {
+    const result = await this.storage.nodes.mutateNodeRegistry((current) => {
       const outcome = mutate(current);
       written = outcome.next ? { ...outcome.next, revision: current.revision + 1 } : null;
       return outcome;
@@ -1482,7 +1482,7 @@ export class NodeService {
     const link = new NodeLink(record, {
       selfId: this.selfId!,
       attachInfo: async () => ({
-        displayName: (await this.storage.getBackendProfile()).displayName,
+        displayName: (await this.storage.previewServices.getBackendProfile()).displayName,
         portalOrigins: this.options.portalOrigins?.() ?? [],
       }),
       ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),

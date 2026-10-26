@@ -41,14 +41,20 @@ export async function resolveActiveAgentAccount(
   context: CommandContext,
   platform: AgentAccountPlatform,
 ): Promise<ResolvedAgentAccount> {
-  const store = await context.storage.loadAgentAccounts();
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
   const accountId = store.active[platform];
   initializeActivePlanUsageAccount(platform, accountId ?? DEFAULT_AGENT_ACCOUNT_ID);
   const loginGeneration = store.loginGeneration?.[platform];
   return {
     accountId: accountId ?? DEFAULT_AGENT_ACCOUNT_ID,
     ...(accountId
-      ? { home: agentAccountHome(context.storage.agentAccountsDirectory(), platform, accountId) }
+      ? {
+          home: agentAccountHome(
+            context.storage.agentAccounts.agentAccountsDirectory(),
+            platform,
+            accountId,
+          ),
+        }
       : {}),
     ...(loginGeneration ? { loginGeneration } : {}),
   };

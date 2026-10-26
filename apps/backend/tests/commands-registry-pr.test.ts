@@ -1112,14 +1112,14 @@ exit 1
         prState: "open",
         prMergeCommented: false,
       };
-      context.storage.getKanbanTasks = mock(async (_projectId: string) => [task]);
-      context.storage.updateKanbanTask = mock(
+      context.storage.kanban.getKanbanTasks = mock(async (_projectId: string) => [task]);
+      context.storage.kanban.updateKanbanTask = mock(
         async (_taskId: string, taskUpdates: Partial<KanbanTask>) => ({
           ...task,
           ...taskUpdates,
         }),
       );
-      context.storage.addKanbanComment = mock(async (_taskId: string, text: string) => ({
+      context.storage.kanban.addKanbanComment = mock(async (_taskId: string, text: string) => ({
         ...task,
         comments: [{ id: "comment-1", text, createdAt: new Date(0).toISOString() }],
       }));
@@ -1175,14 +1175,14 @@ exit 1
               hasMergeConflicts: false,
             }),
           );
-          expect(context.storage.updateKanbanTask).toHaveBeenCalledWith(task.id, {
+          expect(context.storage.kanban.updateKanbanTask).toHaveBeenCalledWith(task.id, {
             status: "review",
           });
-          expect(context.storage.addKanbanComment).toHaveBeenCalledWith(
+          expect(context.storage.kanban.addKanbanComment).toHaveBeenCalledWith(
             task.id,
             `🎉 PR merged: ${environment.prUrl}`,
           );
-          expect(context.storage.updateKanbanTask).toHaveBeenLastCalledWith(task.id, {
+          expect(context.storage.kanban.updateKanbanTask).toHaveBeenLastCalledWith(task.id, {
             prUrl: environment.prUrl,
             prState: "merged",
             prMergeCommented: true,

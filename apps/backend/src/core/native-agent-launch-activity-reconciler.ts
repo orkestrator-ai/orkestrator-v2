@@ -397,7 +397,7 @@ export class NativeAgentLaunchActivityReconciler {
     );
     if (coordinatorRuntimeIds.size > 0) {
       const projects = new Map<string, Awaited<ReturnType<StorageService["getProject"]>>>();
-      for (const workspace of await this.storage.listCoordinatorWorkspaces()) {
+      for (const workspace of await this.storage.coordinators.listCoordinatorWorkspaces()) {
         if (workspace.lifecycleState !== "ready") continue;
         if (!projects.has(workspace.projectId)) {
           projects.set(workspace.projectId, await this.storage.getProject(workspace.projectId));

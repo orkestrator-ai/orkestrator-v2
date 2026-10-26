@@ -69,7 +69,9 @@ function harness(options: {
         },
       }),
       loadEnvironments: async () => options.environments,
-      loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+      agentAccounts: {
+        loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+      },
     },
   } as unknown as CommandContext;
   const read = async () => {
@@ -332,7 +334,9 @@ test("default local bridge detection reads the host login and ignores other prov
     runtimeFlavor: "production",
     storage: {
       loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
-      loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+      agentAccounts: {
+        loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+      },
     },
   } as unknown as CommandContext;
   const keeper = new ContainerClaudeLoginKeeper(context, { now: () => NOW });
@@ -392,8 +396,10 @@ test("the default local read resolves an added account's own credentials", async
     runtimeFlavor: "production",
     storage: {
       loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
-      loadAgentAccounts: async () => ({ accounts: [], active: { claude: id } }),
-      agentAccountsDirectory: () => "/isolated/accounts",
+      agentAccounts: {
+        loadAgentAccounts: async () => ({ accounts: [], active: { claude: id } }),
+        agentAccountsDirectory: () => "/isolated/accounts",
+      },
     },
   } as unknown as CommandContext;
   const keeper = new ContainerClaudeLoginKeeper(context, {
@@ -425,7 +431,9 @@ for (const first of ["local", "containers"] as const) {
         runtimeFlavor: "production",
         storage: {
           loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
-          loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+          agentAccounts: {
+            loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+          },
         },
       } as unknown as CommandContext,
       {
@@ -487,7 +495,9 @@ test("default local detection includes token and loginless Claude bridges only",
     runtime: trackedRuntime(),
     storage: {
       loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),
-      loadAgentAccounts: async () => ({ active: {} }),
+      agentAccounts: {
+        loadAgentAccounts: async () => ({ active: {} }),
+      },
     },
   } as unknown as CommandContext;
   const keeper = new ContainerClaudeLoginKeeper(context, {

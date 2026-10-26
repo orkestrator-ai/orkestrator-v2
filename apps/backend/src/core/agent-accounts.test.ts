@@ -196,12 +196,14 @@ afterEach(async () => {
 
 describe("agent accounts", () => {
   test("reserves the login slot before a delayed registry read", async () => {
-    const original = context.storage.loadAgentAccounts.bind(context.storage);
+    const original = context.storage.agentAccounts.loadAgentAccounts.bind(
+      context.storage.agentAccounts,
+    );
     let release!: () => void;
     const delayed = new Promise<void>((resolve) => {
       release = resolve;
     });
-    context.storage.loadAgentAccounts = async () => {
+    context.storage.agentAccounts.loadAgentAccounts = async () => {
       await delayed;
       return original();
     };
@@ -325,7 +327,7 @@ describe("agent accounts", () => {
   });
 
   test("enforces the per-platform account limit before spawning a CLI", async () => {
-    await context.storage.mutateAgentAccounts((store) => ({
+    await context.storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: {
         ...store,
         accounts: Array.from({ length: MAX_AGENT_ACCOUNTS_PER_PLATFORM }, (_, index) => ({
@@ -418,7 +420,7 @@ describe("agent accounts", () => {
         const id = await addActiveClaudeAccount("original");
         const reading = usageReading("claude");
         await rememberAgentAccountUsage(
-          context.storage.agentAccountsDirectory(),
+          context.storage.agentAccounts.agentAccountsDirectory(),
           "claude",
           id,
           reading,
@@ -467,7 +469,9 @@ describe("agent accounts", () => {
         expect.objectContaining({ message: expect.stringContaining("account changed") }),
       );
       await expect(
-        fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
+        fs.stat(
+          path.join(context.storage.agentAccounts.agentAccountsDirectory(), "last-usage.json"),
+        ),
       ).rejects.toThrow();
     });
 
@@ -527,9 +531,9 @@ describe("agent accounts", () => {
       await addActiveClaudeAccount("sibling");
       const id = await addActiveClaudeAccount("original");
       context.runtime.localServers.adoptProcess("claude:env-1", {} as never);
-      const home = path.join(context.storage.agentAccountsDirectory(), "claude", id);
+      const home = path.join(context.storage.agentAccounts.agentAccountsDirectory(), "claude", id);
       const before = await savedLogin(home);
-      const registry = await context.storage.loadAgentAccounts();
+      const registry = await context.storage.agentAccounts.loadAgentAccounts();
       await startAgentAccountLogin(context, "claude", {
         reauthenticate: true,
         executable: "claude",
@@ -540,7 +544,7 @@ describe("agent accounts", () => {
         error: expect.stringContaining("already added"),
       });
       expect(await savedLogin(home)).toEqual(before);
-      expect(await context.storage.loadAgentAccounts()).toEqual(registry);
+      expect(await context.storage.agentAccounts.loadAgentAccounts()).toEqual(registry);
       expect(context.runtime.localServers.hasStaleLogin("claude:env-1")).toBe(false);
     });
 
@@ -557,9 +561,9 @@ describe("agent accounts", () => {
         path.join(host, ".claude.json"),
         '{"oauthAccount":{"accountUuid":"host"}}',
       );
-      const home = path.join(context.storage.agentAccountsDirectory(), "claude", id);
+      const home = path.join(context.storage.agentAccounts.agentAccountsDirectory(), "claude", id);
       const before = await savedLogin(home);
-      const registry = await context.storage.loadAgentAccounts();
+      const registry = await context.storage.agentAccounts.loadAgentAccounts();
       await startAgentAccountLogin(context, "claude", {
         reauthenticate: true,
         executable: "claude",
@@ -570,7 +574,7 @@ describe("agent accounts", () => {
         error: expect.stringContaining("host login"),
       });
       expect(await savedLogin(home)).toEqual(before);
-      expect(await context.storage.loadAgentAccounts()).toEqual(registry);
+      expect(await context.storage.agentAccounts.loadAgentAccounts()).toEqual(registry);
     });
 
     test("host renewal rejects an added identity and preserves its previous files", async () => {
@@ -588,7 +592,7 @@ describe("agent accounts", () => {
         '{"oauthAccount":{"accountUuid":"old-host"}}',
       );
       const before = await savedLogin(host);
-      const registry = await context.storage.loadAgentAccounts();
+      const registry = await context.storage.agentAccounts.loadAgentAccounts();
       await startAgentAccountLogin(context, "claude", {
         reauthenticate: true,
         executable: "claude",
@@ -599,7 +603,7 @@ describe("agent accounts", () => {
         error: expect.stringContaining("already added"),
       });
       expect(await savedLogin(host)).toEqual(before);
-      expect(await context.storage.loadAgentAccounts()).toEqual(registry);
+      expect(await context.storage.agentAccounts.loadAgentAccounts()).toEqual(registry);
     });
 
     test("host renewal preserves configuration and persists a refresh generation", async () => {
@@ -621,19 +625,19 @@ describe("agent accounts", () => {
         projects: { keep: {} },
         oauthAccount: { accountUuid: "new-host" },
       });
-      expect((await context.storage.loadAgentAccounts()).loginGeneration?.claude).toBe(
-        progress.operationId,
-      );
+      expect(
+        (await context.storage.agentAccounts.loadAgentAccounts()).loginGeneration?.claude,
+      ).toBe(progress.operationId);
     });
 
     test("registry failure rolls back promoted files", async () => {
       const id = await addActiveClaudeAccount("original");
-      const home = path.join(context.storage.agentAccountsDirectory(), "claude", id);
+      const home = path.join(context.storage.agentAccounts.agentAccountsDirectory(), "claude", id);
       const before = await savedLogin(home);
-      const registry = await context.storage.loadAgentAccounts();
-      const spy = spyOn(context.storage, "mutateAgentAccounts").mockImplementation(
+      const registry = await context.storage.agentAccounts.loadAgentAccounts();
+      const spy = spyOn(context.storage.agentAccounts, "mutateAgentAccounts").mockImplementation(
         async (mutate) => {
-          await mutate(await context.storage.loadAgentAccounts());
+          await mutate(await context.storage.agentAccounts.loadAgentAccounts());
           throw new Error("store unavailable");
         },
       );
@@ -648,7 +652,7 @@ describe("agent accounts", () => {
           error: expect.stringContaining("store unavailable"),
         });
         expect(await savedLogin(home)).toEqual(before);
-        expect(await context.storage.loadAgentAccounts()).toEqual(registry);
+        expect(await context.storage.agentAccounts.loadAgentAccounts()).toEqual(registry);
       } finally {
         spy.mockRestore();
       }
@@ -656,7 +660,7 @@ describe("agent accounts", () => {
 
     test("successful renewal refreshes identity and email-derived label", async () => {
       const id = await addActiveClaudeAccount("original");
-      await context.storage.mutateAgentAccounts((store) => ({
+      await context.storage.agentAccounts.mutateAgentAccounts((store) => ({
         store: {
           ...store,
           accounts: store.accounts.map((a) => ({
@@ -674,7 +678,7 @@ describe("agent accounts", () => {
       });
       expect((await settledLogin()).state).toBe("succeeded");
       expect(
-        (await context.storage.loadAgentAccounts()).accounts.find((a) => a.id === id),
+        (await context.storage.agentAccounts.loadAgentAccounts()).accounts.find((a) => a.id === id),
       ).toMatchObject({
         identityKey: "claude:new:",
         label: "claude@example.com",
@@ -684,9 +688,9 @@ describe("agent accounts", () => {
 
     test("cancellation after the CLI writes cannot alter the active login", async () => {
       const id = await addActiveClaudeAccount("original");
-      const home = path.join(context.storage.agentAccountsDirectory(), "claude", id);
+      const home = path.join(context.storage.agentAccounts.agentAccountsDirectory(), "claude", id);
       const before = await savedLogin(home);
-      const registry = await context.storage.loadAgentAccounts();
+      const registry = await context.storage.agentAccounts.loadAgentAccounts();
       let child!: ChildProcess;
       let temporary = "";
       await startAgentAccountLogin(context, "claude", {
@@ -731,7 +735,7 @@ describe("agent accounts", () => {
       )
         await Bun.sleep(5);
       expect(await savedLogin(home)).toEqual(before);
-      expect(await context.storage.loadAgentAccounts()).toEqual(registry);
+      expect(await context.storage.agentAccounts.loadAgentAccounts()).toEqual(registry);
       await expect(fs.stat(temporary)).rejects.toThrow();
     });
 
@@ -1009,7 +1013,7 @@ describe("agent accounts", () => {
       release.resolve();
       await Promise.all([first, second]);
       expect((await read)?.windows ?? []).toEqual([]);
-      expect((await context.storage.loadAgentAccounts()).active.codex).toBe(c);
+      expect((await context.storage.agentAccounts.loadAgentAccounts()).active.codex).toBe(c);
       expect((await readAgentAccountUsage(context, "codex", c, { reader })).windows).toEqual([]);
       contextUsageWithPlanUsage(
         "codex",
@@ -1025,7 +1029,7 @@ describe("agent accounts", () => {
       expect(sharedPlanUsageCache.peek("codex")?.windows[0]?.usedPercent).toBe(3);
       const saved = JSON.parse(
         await fs.readFile(
-          path.join(context.storage.agentAccountsDirectory(), "last-usage.json"),
+          path.join(context.storage.agentAccounts.agentAccountsDirectory(), "last-usage.json"),
           "utf8",
         ),
       );
@@ -1054,7 +1058,7 @@ describe("agent accounts", () => {
       expect.objectContaining({ message: expect.stringContaining("account changed") }),
     );
     await expect(
-      fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
+      fs.stat(path.join(context.storage.agentAccounts.agentAccountsDirectory(), "last-usage.json")),
     ).rejects.toThrow();
   });
 
@@ -1063,7 +1067,7 @@ describe("agent accounts", () => {
     const auth = JSON.parse(codexAuth("inactive@example.com", "inactive"));
     auth.tokens.access_token = jwt({ exp: 3_000_000_000 });
     await fs.writeFile(
-      path.join(context.storage.agentAccountsDirectory(), "codex", id, "auth.json"),
+      path.join(context.storage.agentAccounts.agentAccountsDirectory(), "codex", id, "auth.json"),
       JSON.stringify(auth),
     );
     return id;
@@ -1097,7 +1101,9 @@ describe("agent accounts", () => {
         "Unknown agent account",
       );
       await expect(
-        fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
+        fs.stat(
+          path.join(context.storage.agentAccounts.agentAccountsDirectory(), "last-usage.json"),
+        ),
       ).rejects.toThrow();
     } finally {
       fetchSpy.mockRestore();
@@ -1128,7 +1134,10 @@ describe("agent accounts", () => {
       const removal = removeAgentAccount(context, "codex", id);
       release.resolve();
       await Promise.all([pending, removal]);
-      const file = path.join(context.storage.agentAccountsDirectory(), "last-usage.json");
+      const file = path.join(
+        context.storage.agentAccounts.agentAccountsDirectory(),
+        "last-usage.json",
+      );
       expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({});
       await expect(readAgentAccountUsage(context, "codex", id, { reader })).rejects.toThrow(
         "Unknown agent account",
@@ -1147,7 +1156,12 @@ describe("agent accounts", () => {
       ...usageReading("codex", 54),
       fetchedAt: new Date(clock - 60_000).toISOString(),
     };
-    await rememberAgentAccountUsage(context.storage.agentAccountsDirectory(), "codex", id, reading);
+    await rememberAgentAccountUsage(
+      context.storage.agentAccounts.agentAccountsDirectory(),
+      "codex",
+      id,
+      reading,
+    );
     resetAgentAccountLastUsageForTests();
     const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
       (async () =>

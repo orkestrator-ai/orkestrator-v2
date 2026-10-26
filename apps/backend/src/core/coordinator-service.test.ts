@@ -239,7 +239,7 @@ describe("project coordinator", () => {
         metadata: { platform: "codex" },
       },
     );
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "work-of-owning",
       projectId: project.id,
       coordinatorId: workspaceId,
@@ -340,7 +340,7 @@ describe("project coordinator", () => {
     const before = await service.createConversation(project.id);
     const id = before.workspace.selectedConversationId!;
     if (usage === "provider-session") {
-      await storage.mutateCoordinatorWorkspace(project.id, (current) => ({
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) => ({
         ...current!,
         conversations: current!.conversations.map((item) =>
           item.id === id ? { ...item, providerSessionId: "session" } : item,
@@ -349,7 +349,7 @@ describe("project coordinator", () => {
     }
     const mailbox = spyOn(storage, "getAgentMailMailbox").mockImplementation(async () => {
       if (usage === "assigned-during-inspection" || usage === "session-during-inspection") {
-        await storage.mutateCoordinatorWorkspace(project.id, (current) => ({
+        await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) => ({
           ...current!,
           conversations: current!.conversations.map((item) =>
             item.id === id
@@ -462,7 +462,7 @@ describe("project coordinator", () => {
     // Fill the 64-conversation boundary in one mutation. 64 complete
     // create/close cycles (128 durable writes) exceeded Bun's 5 s limit under
     // aggregate load (flake 0266); retention itself runs on each create below.
-    await storage.mutateCoordinatorWorkspace(project.id, (current) => {
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) => {
       if (!current) throw new Error("Coordinator workspace disappeared");
       const original = current.conversations.find((item) => item.id === originalConversationId)!;
       const closed = current.conversations.find((item) => item.id === oldestClosedId)!;
@@ -511,7 +511,7 @@ describe("project coordinator", () => {
     const initial = await service.ensure(project.id);
     const coordinatorId = initial.workspace.id;
     const closedConversationId = initial.workspace.conversations[0]!.id;
-    const closedAttachment = await storage.writeCoordinatorAttachment(
+    const closedAttachment = await storage.coordinators.writeCoordinatorAttachment(
       coordinatorId,
       closedConversationId,
       "closed.png",
@@ -521,7 +521,7 @@ describe("project coordinator", () => {
 
     const firstOpen = await service.createConversation(project.id, "Open");
     const openConversationId = firstOpen.workspace.selectedConversationId!;
-    const openAttachment = await storage.writeCoordinatorAttachment(
+    const openAttachment = await storage.coordinators.writeCoordinatorAttachment(
       coordinatorId,
       openConversationId,
       "open.png",
@@ -532,7 +532,7 @@ describe("project coordinator", () => {
     // create/close cycles here makes this filesystem test exceed Bun's 5s
     // limit when the aggregate suite is under load, while the behavior under
     // test is the single retention pass on the next create.
-    await storage.mutateCoordinatorWorkspace(project.id, (current) => {
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) => {
       if (!current) throw new Error("Coordinator workspace disappeared");
       const closed = current.conversations.find((item) => item.id === closedConversationId)!;
       const open = current.conversations.find((item) => item.id === openConversationId)!;
@@ -646,7 +646,7 @@ describe("project coordinator", () => {
       service.assignConversationAgent(project.id, conversation.id, "grok"),
     ).rejects.toThrow(/request permission|turned off in settings/);
     expect(
-      (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!.agent,
+      (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]!.agent,
     ).toBeUndefined();
   });
 
@@ -790,7 +790,7 @@ describe("project coordinator", () => {
       },
     });
     const upgraded = new StorageService(legacyDir);
-    const workspace = (await upgraded.getCoordinatorWorkspace(project.id))!;
+    const workspace = (await upgraded.coordinators.getCoordinatorWorkspace(project.id))!;
     upgraded.close();
     await fs.rm(legacyDir, { recursive: true, force: true });
     expect(workspace).toMatchObject({ id: "workspace-legacy", bridgePort: 4123, bridgePid: 9911 });
@@ -824,12 +824,12 @@ describe("project coordinator", () => {
       remoteState: "unknown",
       lastError: null,
     });
-    const firstStoredRevision = (await storage.getCoordinatorWorkspace(project.id))!
+    const firstStoredRevision = (await storage.coordinators.getCoordinatorWorkspace(project.id))!
       .repositoryStatus!.revision;
     await git.status(project.id);
-    expect((await storage.getCoordinatorWorkspace(project.id))!.repositoryStatus!.revision).toBe(
-      firstStoredRevision,
-    );
+    expect(
+      (await storage.coordinators.getCoordinatorWorkspace(project.id))!.repositoryStatus!.revision,
+    ).toBe(firstStoredRevision);
 
     const releaseTurn = git.beginCoordinatorTurn(project.id);
     await expect(git.switchBranch(project.id, "refs/heads/main")).rejects.toThrow(
@@ -1496,7 +1496,7 @@ describe("project coordinator", () => {
       createProject("https://example.invalid/plain.git", plainDirectory),
     );
     await expect(coordinator.ensure(plainProject.id)).rejects.toThrow("not a Git repository");
-    expect(await storage.getCoordinatorWorkspace(plainProject.id)).toBeNull();
+    expect(await storage.coordinators.getCoordinatorWorkspace(plainProject.id)).toBeNull();
   });
 
   test("isolates invalid coordinator store records from mail and project reads", async () => {
@@ -1508,7 +1508,7 @@ describe("project coordinator", () => {
     });
     await expect(storage.synchronizeAgentMailboxes()).resolves.toBeUndefined();
     await expect(storage.listAgentMailboxes()).resolves.toBeDefined();
-    await expect(storage.listCoordinatorWorkspaces()).resolves.toEqual([]);
+    await expect(storage.coordinators.listCoordinatorWorkspaces()).resolves.toEqual([]);
 
     seedStore(storage.getDataDir(), "coordinators.json", {
       version: 1,
@@ -1517,7 +1517,7 @@ describe("project coordinator", () => {
       workflows: [],
     });
     await expect(storage.synchronizeAgentMailboxes()).resolves.toBeUndefined();
-    await expect(storage.listCoordinatorWorkspaces()).resolves.toEqual([]);
+    await expect(storage.coordinators.listCoordinatorWorkspaces()).resolves.toEqual([]);
   });
 
   test("preserves pending reservations and old idempotency receipts at store capacity", async () => {
@@ -1540,13 +1540,16 @@ describe("project coordinator", () => {
     });
 
     await expect(
-      storage.completeCoordinatorWorkflowAssociation("association-0", "environment-old"),
+      storage.coordinators.completeCoordinatorWorkflowAssociation(
+        "association-0",
+        "environment-old",
+      ),
     ).resolves.toMatchObject({ resourceId: "environment-old", pending: false });
     await expect(
-      storage.reserveCoordinatorWorkflowAssociation(associations[1]!),
+      storage.coordinators.reserveCoordinatorWorkflowAssociation(associations[1]!),
     ).resolves.toMatchObject({ claimed: false, association: { resourceId: "environment-1" } });
     await expect(
-      storage.reserveCoordinatorWorkflowAssociation({
+      storage.coordinators.reserveCoordinatorWorkflowAssociation({
         ...associations[1]!,
         id: "new-association",
         requestId: "new-request",
@@ -1717,7 +1720,7 @@ describe("project coordinator", () => {
     }));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
-    const receipt = await storage.reserveCoordinatorWorkflowAssociation({
+    const receipt = await storage.coordinators.reserveCoordinatorWorkflowAssociation({
       id: "receipt-1",
       coordinatorId: snapshot.workspace.id,
       projectId: project.id,
@@ -1729,18 +1732,18 @@ describe("project coordinator", () => {
       createdAt: new Date().toISOString(),
     });
     expect(receipt).toMatchObject({ claimed: true, association: { pending: true } });
-    await storage.completeCoordinatorWorkflowAssociation("receipt-1", "review-1");
-    expect(await storage.listCoordinatorWorkflowAssociations(project.id)).toMatchObject([
-      { resourceId: "review-1", pending: false },
-    ]);
+    await storage.coordinators.completeCoordinatorWorkflowAssociation("receipt-1", "review-1");
+    expect(
+      await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
+    ).toMatchObject([{ resourceId: "review-1", pending: false }]);
     await expect(
-      storage.reserveCoordinatorWorkflowAssociation({
+      storage.coordinators.reserveCoordinatorWorkflowAssociation({
         ...receipt.association,
         payloadHash: "different",
       }),
     ).rejects.toThrow("different payload");
 
-    const attachment = await storage.writeCoordinatorAttachment(
+    const attachment = await storage.coordinators.writeCoordinatorAttachment(
       snapshot.workspace.id,
       conversation.id,
       "pixel.png",
@@ -1756,7 +1759,7 @@ describe("project coordinator", () => {
     );
     await fs.mkdir(path.dirname(runtimeMarker), { recursive: true });
     await fs.writeFile(runtimeMarker, "private transcript");
-    await storage.deleteCoordinatorByProject(project.id);
+    await storage.coordinators.deleteCoordinatorByProject(project.id);
     await expect(fs.access(attachment)).rejects.toThrow();
     await expect(fs.access(runtimeMarker)).rejects.toThrow();
   });
@@ -1776,7 +1779,7 @@ describe("project coordinator", () => {
     const secondConversation = second.workspace.conversations.find(
       (item) => item.id !== firstConversation.id,
     )!;
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "owned-workflow",
       coordinatorId: first.workspace.id,
       projectId: project.id,
@@ -1787,7 +1790,7 @@ describe("project coordinator", () => {
       createdAt: new Date().toISOString(),
     });
     await expect(
-      storage.adoptCoordinatorWorkflowAssociation(
+      storage.coordinators.adoptCoordinatorWorkflowAssociation(
         project.id,
         first.workspace.id,
         "owned-workflow",
@@ -1796,7 +1799,7 @@ describe("project coordinator", () => {
     ).rejects.toThrow("another open conversation");
     await coordinator.closeConversation(project.id, firstConversation.id);
     await expect(
-      storage.adoptCoordinatorWorkflowAssociation(
+      storage.coordinators.adoptCoordinatorWorkflowAssociation(
         project.id,
         first.workspace.id,
         "owned-workflow",
@@ -1827,7 +1830,7 @@ describe("project coordinator", () => {
       id: "pipeline-1",
       phase: "complete",
     });
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "adopted-workflow",
       coordinatorId: initial.workspace.id,
       projectId: project.id,
@@ -1854,7 +1857,7 @@ describe("project coordinator", () => {
     const created = await coordinator.createConversation(project.id, "Adopter");
     const adopter = created.workspace.conversations.find((item) => !item.closedAt)!;
     await storage.synchronizeAgentMailboxes();
-    await storage.adoptCoordinatorWorkflowAssociation(
+    await storage.coordinators.adoptCoordinatorWorkflowAssociation(
       project.id,
       initial.workspace.id,
       "adopted-workflow",
@@ -1897,7 +1900,7 @@ describe("project coordinator", () => {
       error: null,
     }));
     const snapshot = await coordinator.ensure(project.id);
-    await storage.saveCoordinatorWorkflowAssociation({
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
       id: "settled-workflow",
       coordinatorId: snapshot.workspace.id,
       projectId: project.id,
@@ -2020,7 +2023,7 @@ describe("project coordinator", () => {
         0,
       );
       await storage.synchronizeAgentMailboxes();
-      const association = await storage.saveCoordinatorWorkflowAssociation({
+      const association = await storage.coordinators.saveCoordinatorWorkflowAssociation({
         id: "delegation-association",
         coordinatorId: initial.workspace.id,
         projectId: project.id,
@@ -2030,7 +2033,11 @@ describe("project coordinator", () => {
         requestId: "delegation-request",
         createdAt: new Date().toISOString(),
       });
-      await storage.openCoordinatorDelegation(association.id, "startup-agent", options.requestedAt);
+      await storage.coordinators.openCoordinatorDelegation(
+        association.id,
+        "startup-agent",
+        options.requestedAt,
+      );
       return {
         coordinator,
         projectId: project.id,
@@ -2047,7 +2054,7 @@ describe("project coordinator", () => {
       requestId: string,
       workerTabId = "startup-agent",
     ): Promise<string> {
-      const association = await storage.saveCoordinatorWorkflowAssociation({
+      const association = await storage.coordinators.saveCoordinatorWorkflowAssociation({
         id: `association-${requestId}`,
         coordinatorId: fixture.coordinatorId,
         projectId: fixture.projectId,
@@ -2057,7 +2064,7 @@ describe("project coordinator", () => {
         requestId,
         createdAt: new Date().toISOString(),
       });
-      await storage.openCoordinatorDelegation(association.id, workerTabId);
+      await storage.coordinators.openCoordinatorDelegation(association.id, workerTabId);
       return association.id;
     }
 
@@ -2090,7 +2097,7 @@ describe("project coordinator", () => {
         await storage.synchronizeAgentMailboxes();
         let service = fixture.coordinator;
         if (restart) {
-          await storage.mutateCoordinatorWorkspace(fixture.projectId, (current) => {
+          await storage.coordinators.mutateCoordinatorWorkspace(fixture.projectId, (current) => {
             const old = current!.conversations[0]!;
             return {
               ...current!,
@@ -2134,7 +2141,7 @@ describe("project coordinator", () => {
         expect(pending.map((item) => item.message.id)).toEqual([report.id]);
         expect(pending[0]!.message.from.kind).toBe("tab");
         expect(pending[0]!.mailbox.environmentId === fixture.runtimeId).toBe(false);
-        expect(await storage.listUnwokenCoordinatorDelegations()).toHaveLength(0);
+        expect(await storage.coordinators.listUnwokenCoordinatorDelegations()).toHaveLength(0);
       });
 
     test("a launched worker reading idle before its startup prompt is accepted is not finished", async () => {
@@ -2154,9 +2161,9 @@ describe("project coordinator", () => {
         state: "completed",
       });
 
-      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
-        fixture.associationId,
-      ]);
+      expect(
+        (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),
+      ).toEqual([fixture.associationId]);
       expect(
         (await storage.listPendingAgentMailInjects()).some(
           ({ message }) => message.from.kind === "system",
@@ -2167,7 +2174,7 @@ describe("project coordinator", () => {
       await storage.updateEnvironment(fixture.workerId, { pendingAgentLaunch: false });
       await fixture.coordinator.reconcileWorkerDelegations();
 
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
       const notices = (await storage.listPendingAgentMailInjects()).filter(
         ({ message }) => message.from.kind === "system",
       );
@@ -2189,13 +2196,13 @@ describe("project coordinator", () => {
         tabId: "startup-agent",
         state: "completed",
       });
-      expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
       expect(await storage.listPendingAgentMailInjects()).toEqual([]);
 
       // The background work reported, the worker resumed, and its turn ended.
       background = false;
       await fixture.coordinator.reconcileWorkerDelegations();
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
     });
 
     test("a report is released even while the worker's background work runs", async () => {
@@ -2208,7 +2215,7 @@ describe("project coordinator", () => {
 
       await fixture.coordinator.reconcileWorkerDelegations();
 
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
       expect((await storage.listPendingAgentMailInjects()).map((item) => item.message.id)).toEqual([
         report.id,
       ]);
@@ -2224,7 +2231,7 @@ describe("project coordinator", () => {
 
       await fixture.coordinator.reconcileWorkerDelegations();
 
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
       const notices = (await storage.listPendingAgentMailInjects()).filter(
         ({ message }) => message.from.kind === "system",
       );
@@ -2258,7 +2265,7 @@ describe("project coordinator", () => {
         environmentId: fixture.workerId,
         state: "stopped",
       });
-      expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
       expect((await storage.listPendingAgentMailInjects()).map((item) => item.message.id)).toEqual([
         request.id,
       ]);
@@ -2272,7 +2279,7 @@ describe("project coordinator", () => {
         environmentId: fixture.workerId,
         state: "completed",
       });
-      expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
       expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
     });
     test("holds worker progress and releases it all on one completion", async () => {
@@ -2332,7 +2339,7 @@ describe("project coordinator", () => {
       await fixture.coordinator.reconcileWorkerDelegations();
 
       expect(await storage.listPendingAgentMailInjects()).toEqual([]);
-      const open = await storage.listOpenCoordinatorDelegations();
+      const open = await storage.coordinators.listOpenCoordinatorDelegations();
       expect(open.map((item) => item.id)).toEqual([fixture.associationId]);
     });
 
@@ -2344,13 +2351,13 @@ describe("project coordinator", () => {
       const pending = await storage.listPendingAgentMailInjects();
       expect(pending).toHaveLength(1);
       expect(pending[0]!.message.subject).toContain("stopped");
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
     });
 
     test("a wake lost between closing and delivering is retried, not duplicated", async () => {
       const fixture = await delegationFixture();
       // Exactly the durable state a crash between the two writes leaves behind.
-      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.coordinators.closeCoordinatorDelegation(fixture.associationId, "completed");
       expect(await storage.listPendingAgentMailInjects()).toEqual([]);
 
       await fixture.coordinator.deliverDelegationWakes();
@@ -2367,7 +2374,7 @@ describe("project coordinator", () => {
         tabId: "startup-agent",
         state: "completed",
       });
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
 
       await openAdditionalDelegation(fixture, "second-delegation");
       const report = await workerSays(fixture, "second-report", "Second round done.");
@@ -2405,7 +2412,7 @@ describe("project coordinator", () => {
           body: "Finished.",
         },
       );
-      const workspace = (await storage.getCoordinatorWorkspace(fixture.projectId))!;
+      const workspace = (await storage.coordinators.getCoordinatorWorkspace(fixture.projectId))!;
       const main = workspace.conversations.find((item) => item.role === "main" && !item.closedAt)!;
       expect(main.id).not.toBe(fixture.conversation.id);
       // Started with the project's default agent, nobody at the composer.
@@ -2417,7 +2424,7 @@ describe("project coordinator", () => {
         placementReason: "delegation-running",
       });
       expect(
-        (await storage.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
+        (await storage.coordinators.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
           (item) => item.id === fixture.associationId,
         )?.conversationId,
       ).toBe(main.id);
@@ -2452,9 +2459,9 @@ describe("project coordinator", () => {
       expect(report.placementReason).toBe("delegation-running");
       // The race: the delegation closes and its wake is settled as a notice
       // without ever seeing the report.
-      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
-      await storage.prepareCoordinatorDelegationWake(fixture.associationId, "notice");
-      await storage.markCoordinatorDelegationWoken(fixture.associationId);
+      await storage.coordinators.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.coordinators.prepareCoordinatorDelegationWake(fixture.associationId, "notice");
+      await storage.coordinators.markCoordinatorDelegationWoken(fixture.associationId);
 
       await fixture.coordinator.reconcileWorkerDelegations();
       expect(
@@ -2496,8 +2503,8 @@ describe("project coordinator", () => {
 
     test("a turn that ended before the request arrived does not report finished", async () => {
       const fixture = await delegationFixture();
-      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
-      await storage.markCoordinatorDelegationWoken(fixture.associationId);
+      await storage.coordinators.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.coordinators.markCoordinatorDelegationWoken(fixture.associationId);
 
       // The coordinator messages the worker. Delivery is pending because the
       // worker is mid-turn on something else.
@@ -2530,9 +2537,9 @@ describe("project coordinator", () => {
         tabId: "startup-agent",
         state: "completed",
       });
-      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
-        followUpAssociationId,
-      ]);
+      expect(
+        (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),
+      ).toEqual([followUpAssociationId]);
       expect(
         (await storage.listPendingAgentMailInjects()).some(
           ({ mailbox }) => mailbox.tabId === fixture.conversation.tabId,
@@ -2542,8 +2549,8 @@ describe("project coordinator", () => {
 
     test("unsolicited worker mail is not held", async () => {
       const fixture = await delegationFixture();
-      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
-      await storage.markCoordinatorDelegationWoken(fixture.associationId);
+      await storage.coordinators.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.coordinators.markCoordinatorDelegationWoken(fixture.associationId);
 
       const message = await workerSays(fixture, "unsolicited", "One more thing.");
       expect(message.placement).toBe("pending-inject");
@@ -2553,10 +2560,12 @@ describe("project coordinator", () => {
       const fixture = await delegationFixture();
       const second = await openAdditionalDelegation(fixture, "second-tab", "agent-two");
       expect(
-        (await storage.listOpenCoordinatorDelegations()).map((item) => item.id).toSorted(),
+        (await storage.coordinators.listOpenCoordinatorDelegations())
+          .map((item) => item.id)
+          .toSorted(),
       ).toEqual([fixture.associationId, second].toSorted());
 
-      const conflicting = await storage.saveCoordinatorWorkflowAssociation({
+      const conflicting = await storage.coordinators.saveCoordinatorWorkflowAssociation({
         id: "same-tab-conflict",
         coordinatorId: fixture.coordinatorId,
         projectId: fixture.projectId,
@@ -2567,11 +2576,11 @@ describe("project coordinator", () => {
         createdAt: new Date().toISOString(),
       });
       await expect(
-        storage.openCoordinatorDelegation(conflicting.id, "startup-agent"),
+        storage.coordinators.openCoordinatorDelegation(conflicting.id, "startup-agent"),
       ).rejects.toThrow("already has an outstanding");
-      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).not.toContain(
-        conflicting.id,
-      );
+      expect(
+        (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),
+      ).not.toContain(conflicting.id);
     });
 
     test("settles an old delivered delegation first observed idle after restart", async () => {
@@ -2583,7 +2592,7 @@ describe("project coordinator", () => {
 
       await fixture.coordinator.reconcileWorkerDelegations();
 
-      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
       expect(
         (await storage.listPendingAgentMailInjects()).some(
           ({ message }) => message.id === report.id,
@@ -2594,7 +2603,7 @@ describe("project coordinator", () => {
     test("coalesces concurrent wake delivery without inventing a silent-worker notice", async () => {
       const fixture = await delegationFixture();
       const report = await workerSays(fixture, "concurrent-report", "Real report.");
-      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.coordinators.closeCoordinatorDelegation(fixture.associationId, "completed");
 
       await Promise.all([
         fixture.coordinator.deliverDelegationWakes(),
@@ -2609,7 +2618,7 @@ describe("project coordinator", () => {
     test("retries a failed report release without stamping or synthesizing a wake", async () => {
       const fixture = await delegationFixture();
       const report = await workerSays(fixture, "retry-report", "Do not orphan me.");
-      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.coordinators.closeCoordinatorDelegation(fixture.associationId, "completed");
       const release = storage.releaseDelegationHeldAgentMail.bind(storage);
       let failRelease = true;
       storage.releaseDelegationHeldAgentMail = async (...args) => {
@@ -2620,18 +2629,18 @@ describe("project coordinator", () => {
       await expect(fixture.coordinator.deliverDelegationWakes()).rejects.toThrow(
         "disk unavailable",
       );
-      let association = (await storage.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
-        (item) => item.id === fixture.associationId,
-      );
+      let association = (
+        await storage.coordinators.listCoordinatorWorkflowAssociations(fixture.projectId)
+      ).find((item) => item.id === fixture.associationId);
       expect(association?.delegation?.wokenAt).toBeUndefined();
       expect(association?.delegation?.wakeKind).toBe("report");
       expect(await storage.listPendingAgentMailInjects()).toEqual([]);
 
       failRelease = false;
       await fixture.coordinator.deliverDelegationWakes();
-      association = (await storage.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
-        (item) => item.id === fixture.associationId,
-      );
+      association = (
+        await storage.coordinators.listCoordinatorWorkflowAssociations(fixture.projectId)
+      ).find((item) => item.id === fixture.associationId);
       expect(association?.delegation?.wokenAt).toBeDefined();
       expect(
         (await storage.listPendingAgentMailInjects()).filter(
@@ -2653,9 +2662,9 @@ describe("project coordinator", () => {
           state: "completed",
         }),
       ).rejects.toThrow("mail store unavailable");
-      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
-        fixture.associationId,
-      ]);
+      expect(
+        (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),
+      ).toEqual([fixture.associationId]);
     });
   });
 });

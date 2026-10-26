@@ -103,7 +103,7 @@ async function addAccounts(active: { claude?: string; codex?: string }): Promise
     path.join(accountHome("claude", CLAUDE_ID), ".claude.json"),
     '{"oauthAccount":{"emailAddress":"second@example.com"}}',
   );
-  await storage.mutateAgentAccounts((store) => ({
+  await storage.agentAccounts.mutateAgentAccounts((store) => ({
     store: {
       ...store,
       accounts: [
@@ -468,7 +468,7 @@ describe("refreshStagedAgentAccountLogins", () => {
       "second@example.com",
     );
 
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: { ...store, active: {} },
       result: undefined,
     }));
@@ -555,7 +555,8 @@ describe("syncContainerAgentAccountsOnStart", () => {
       { enabledAgentPlatforms: ["claude", "codex"] } as never,
       fake.runners,
     );
-    const generation = (await context.storage.loadAgentAccounts()).loginGeneration?.claude;
+    const generation = (await context.storage.agentAccounts.loadAgentAccounts()).loginGeneration
+      ?.claude;
     expect(generation).toBeDefined();
     expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe("default");
     fake.runners.pipe = pipe;
@@ -878,7 +879,7 @@ describe("reconcileContainerAgentAccount", () => {
     );
     expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("unstaged");
 
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: { ...store, active: {} },
       result: undefined,
     }));
@@ -933,26 +934,36 @@ describe("reconcileContainerAgentAccount", () => {
     context.storage.loadConfig = async () =>
       ({ global: { enabledAgentPlatforms: ["codex"] } }) as never;
     const fake = fakeRunners(revision);
-    const loadAgentAccounts = context.storage.loadAgentAccounts.bind(context.storage);
+    const loadAgentAccounts = context.storage.agentAccounts.loadAgentAccounts.bind(
+      context.storage.agentAccounts,
+    );
     let reads = 0;
-    context.storage.loadAgentAccounts = async () => {
+    let mutating = false;
+    context.storage.agentAccounts.loadAgentAccounts = async () => {
+      // The repository's own mutation reads through this method too.
+      if (mutating) return loadAgentAccounts();
       const snapshot = await loadAgentAccounts();
       reads++;
-      await storage.mutateAgentAccounts((current) => ({
-        store: { ...current, active: {} },
-        result: undefined,
-      }));
+      mutating = true;
+      try {
+        await storage.agentAccounts.mutateAgentAccounts((current) => ({
+          store: { ...current, active: {} },
+          result: undefined,
+        }));
+      } finally {
+        mutating = false;
+      }
       return snapshot;
     };
     await start(fake);
-    context.storage.loadAgentAccounts = loadAgentAccounts;
+    context.storage.agentAccounts.loadAgentAccounts = loadAgentAccounts;
     // The credential home came from one snapshot. No second marker read can
     // misattribute a host login to A, nor does startup acknowledge an import.
     expect(reads).toBe(1);
     expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
       '{"OPENAI_API_KEY":"codex-2"}',
     );
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: { ...store, active: { codex: CODEX_ID } },
       result: undefined,
     }));
@@ -1013,7 +1024,7 @@ describe("reconcileContainerAgentAccount", () => {
     const before = "11111111-2222-4333-8444-555555555555";
     const after = "99999999-8888-4777-8666-555555555555";
     await addAccounts({ codex: CODEX_ID });
-    await storage.mutateAgentAccounts((store) => ({
+    await storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: { ...store, loginGeneration: { codex: before } },
       result: undefined,
     }));
@@ -1022,7 +1033,7 @@ describe("reconcileContainerAgentAccount", () => {
     fake.runners.exec = async (id, command) => {
       const result = await exec(id, command);
       if (command.startsWith("cat /tmp/orkestrator-codex-account")) {
-        await storage.mutateAgentAccounts((store) => ({
+        await storage.agentAccounts.mutateAgentAccounts((store) => ({
           store: { ...store, active: {}, loginGeneration: { codex: after } },
           result: undefined,
         }));
@@ -1246,7 +1257,7 @@ describe("reconcileContainerAgentAccount", () => {
     expect(attempts).toBe(2);
     expect(context.runtime.localServers.hasStaleContainerLogin(environment.id)).toBe(false);
     expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe(
-      `default:${(await storage.loadAgentAccounts()).loginGeneration?.claude}`,
+      `default:${(await storage.agentAccounts.loadAgentAccounts()).loginGeneration?.claude}`,
     );
   });
 
@@ -1271,7 +1282,7 @@ describe("reconcileContainerAgentAccount", () => {
     await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
     expect(fake.calls.filter(isCredentialPipe)).toHaveLength(1);
     expect(state.stopped).toBe(1);
-    const generation = (await restarted.loadAgentAccounts()).loginGeneration?.claude;
+    const generation = (await restarted.agentAccounts.loadAgentAccounts()).loginGeneration?.claude;
     expect(generation).toBeDefined();
     expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe(`default:${generation}`);
     await reconcileContainerAgentAccount(context, "container-1", "claude", control, fake.runners);
@@ -1879,7 +1890,7 @@ describe("access-only Claude logins", () => {
     await markContainersForClaudeLoginRefresh(context);
     fake.markers.set(
       "/tmp/orkestrator-claude-account",
-      `default:${(await context.storage.loadAgentAccounts()).loginGeneration!.claude}`,
+      `default:${(await context.storage.agentAccounts.loadAgentAccounts()).loginGeneration!.claude}`,
     );
     expect(await syncContainerClaudeLogin(context, id, { runners: fake.runners, handover })).toBe(
       true,
@@ -2013,7 +2024,7 @@ describe("access-only Claude logins", () => {
       });
       try {
         await paused.promise;
-        await storage.mutateAgentAccounts((store) => ({
+        await storage.agentAccounts.mutateAgentAccounts((store) => ({
           store:
             change === "account"
               ? { ...store, active: { claude: CLAUDE_ID } }

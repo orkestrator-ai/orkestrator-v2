@@ -38,7 +38,7 @@ export async function defaultSessionRelocationHomes(
   context: Pick<CommandContext, "storage">,
 ): Promise<SessionRelocationHomes> {
   const codexHomes = new Set([runtimeHostCodexHome(), hostCodexHome()]);
-  const accountsRoot = path.join(context.storage.agentAccountsDirectory(), "codex");
+  const accountsRoot = path.join(context.storage.agentAccounts.agentAccountsDirectory(), "codex");
   for (const entry of await fs.readdir(accountsRoot, { withFileTypes: true }).catch(() => [])) {
     if (entry.isDirectory()) codexHomes.add(path.join(accountsRoot, entry.name));
   }

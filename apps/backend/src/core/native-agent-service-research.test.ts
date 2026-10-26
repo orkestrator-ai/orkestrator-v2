@@ -28,7 +28,7 @@ for (const agent of ["codex", "opencode"] as const) {
       agent,
       logicalSessionKey: "coordinator-coordinator:conversation",
     };
-    await storage.mutateCoordinatorWorkspace(project.id, () => ({
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       id: "coordinator",
       projectId: project.id,

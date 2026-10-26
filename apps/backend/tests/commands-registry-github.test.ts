@@ -373,6 +373,8 @@ describe("Electron backend command registry", () => {
         global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
+    });
+    Object.assign(context.storage.kanban, {
       getGitHubCompletionComment: mock(async () => completionRecord),
       saveGitHubCompletionComment: mock(async (record: typeof completionRecord) => {
         completionRecord = record;
@@ -463,6 +465,8 @@ describe("Electron backend command registry", () => {
         global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
+    });
+    Object.assign(context.storage.kanban, {
       getGitHubCompletionComment: mock(async () => completionRecord),
       saveGitHubCompletionComment: mock(async (record: Record<string, unknown>) => {
         completionRecord = record;
@@ -528,6 +532,8 @@ describe("Electron backend command registry", () => {
         global: { useHostGitHubCredentials: false, githubToken: secret },
         repositories: {},
       })),
+    });
+    Object.assign(context.storage.kanban, {
       getGitHubCompletionComment: mock(async () => completionRecord),
       saveGitHubCompletionComment: mock(async (record: Record<string, unknown>) => {
         completionRecord = record;
@@ -590,6 +596,8 @@ describe("Electron backend command registry", () => {
         global: { useHostGitHubCredentials: false, githubToken: "github_secret_token" },
         repositories: {},
       })),
+    });
+    Object.assign(context.storage.kanban, {
       getGitHubCompletionComment: getCompletion,
     });
 

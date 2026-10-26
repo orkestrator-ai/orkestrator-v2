@@ -281,7 +281,7 @@ export function registerCoordinatorReviewActions(
       );
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
       const payloadHash = actionHash({ action: "launch-multi-review", input });
-      const associations = await context.storage.listCoordinatorWorkflowAssociations(
+      const associations = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
         caller.projectId,
       );
       const requestAssociation = associations.find(
@@ -343,7 +343,7 @@ export function registerCoordinatorReviewActions(
         );
       const receipt = requestAssociation
         ? requestAssociation.pending
-          ? await context.storage.reserveCoordinatorWorkflowAssociation({
+          ? await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
               id: randomUUID(),
               ...caller,
               kind: "multi-review",
@@ -355,7 +355,7 @@ export function registerCoordinatorReviewActions(
           : { association: requestAssociation, claimed: false }
         : reusableAssociation
           ? {
-              association: await context.storage.addCoordinatorWorkflowRequestAlias(
+              association: await context.storage.coordinators.addCoordinatorWorkflowRequestAlias(
                 reusableAssociation.id,
                 caller.coordinatorId,
                 caller.conversationId,
@@ -364,7 +364,7 @@ export function registerCoordinatorReviewActions(
               ),
               claimed: false,
             }
-          : await context.storage.reserveCoordinatorWorkflowAssociation({
+          : await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
               id: randomUUID(),
               ...caller,
               kind: "multi-review",
@@ -399,7 +399,7 @@ export function registerCoordinatorReviewActions(
       let workflow = { ...saved.snapshot, backendRevision: saved.revision };
       try {
         if (receipt.association.pending)
-          await context.storage.completeCoordinatorWorkflowAssociation(
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
             receipt.association.id,
             workflow.id,
           );
@@ -470,7 +470,7 @@ export function registerCoordinatorReviewActions(
           if (isProjectHomeEnvironment(environment))
             throw new Error("Coordinator credential cannot act on the project checkout");
         }
-        const associations = await context.storage.listCoordinatorWorkflowAssociations(
+        const associations = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
           caller.projectId,
         );
         const workflowAssociations = associations.filter(
@@ -502,14 +502,16 @@ export function registerCoordinatorReviewActions(
           // Address adopts renderer-started work before dispatch so the observer
           // can deliver the fix outcome even while this conversation is inactive.
           if (ownedAssociation) return;
-          const association = await context.storage.saveCoordinatorWorkflowAssociation({
-            id: randomUUID(),
-            ...caller,
-            kind: "multi-review",
-            resourceId: id,
-            requestId: `address:${id}`,
-            createdAt: new Date().toISOString(),
-          });
+          const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation(
+            {
+              id: randomUUID(),
+              ...caller,
+              kind: "multi-review",
+              resourceId: id,
+              requestId: `address:${id}`,
+              createdAt: new Date().toISOString(),
+            },
+          );
           if (association.conversationId !== caller.conversationId) {
             throw new Error(
               "Adopt this workflow into the current coordinator conversation before addressing it",

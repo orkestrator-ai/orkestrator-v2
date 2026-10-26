@@ -237,7 +237,7 @@ test("discovers per-account Codex homes and the host Claude JSON path", async ()
   const root = await tempRoot();
   const storage = new StorageService(path.join(root, "data"));
   await storage.init();
-  const accounts = path.join(storage.agentAccountsDirectory(), "codex");
+  const accounts = path.join(storage.agentAccounts.agentAccountsDirectory(), "codex");
   await fs.mkdir(path.join(accounts, "account-one"), { recursive: true });
   await fs.mkdir(path.join(accounts, "account-two"));
   await fs.writeFile(path.join(accounts, "not-an-account"), "fixture");

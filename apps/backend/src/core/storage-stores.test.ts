@@ -14,6 +14,7 @@ import {
   retireLegacyJsonStores,
   scrubLegacyJsonStore,
 } from "./storage-stores.js";
+import { storageInternals } from "./storage-test-support.js";
 
 const directories: string[] = [];
 
@@ -123,9 +124,13 @@ describe("legacy JSON import", () => {
 
     expect((await storage.loadProjects()).map((project) => project.name)).toEqual(["One"]);
     expect((await storage.getEnvironment("e1"))?.projectId).toBe("p1");
-    expect((await storage.getKanbanTasks("p1")).map((task) => task.title)).toEqual(["Ticket"]);
-    expect((await storage.getProjectNotes("p1")).content).toBe("notes");
-    expect(await storage.loadPublicOperationIndex()).toEqual({
+    expect((await storage.kanban.getKanbanTasks("p1")).map((task) => task.title)).toEqual([
+      "Ticket",
+    ]);
+    expect((await storage.kanban.getProjectNotes("p1")).content).toBe("notes");
+    expect(
+      await storageInternals(storage).repos.publicOperations.loadPublicOperationIndex(),
+    ).toEqual({
       version: 1,
       namespaces: [],
       retired: [],
@@ -203,13 +208,17 @@ describe("legacy JSON import", () => {
       layouts: {},
     });
     // Lenient stores read as empty, exactly like a corrupt file without backups.
-    expect(await storage.getKanbanTasks("p1")).toEqual([]);
+    expect(await storage.kanban.getKanbanTasks("p1")).toEqual([]);
     // The public operation ledger refuses admission instead of looking empty.
-    await expect(storage.loadPublicOperationIndex()).rejects.toThrow("unreadable");
+    await expect(
+      storageInternals(storage).repos.publicOperations.loadPublicOperationIndex(),
+    ).rejects.toThrow("unreadable");
 
     // The next write replaces the unreadable value.
-    await storage.addKanbanTask("p1", "Recovered", "");
-    expect((await storage.getKanbanTasks("p1")).map((task) => task.title)).toEqual(["Recovered"]);
+    await storage.kanban.addKanbanTask("p1", "Recovered", "");
+    expect((await storage.kanban.getKanbanTasks("p1")).map((task) => task.title)).toEqual([
+      "Recovered",
+    ]);
     storage.close();
   });
 
@@ -234,7 +243,7 @@ describe("legacy JSON import", () => {
     const directory = await dataDir();
     const first = new StorageService(directory);
     await first.init();
-    await first.addKanbanTask("p1", "Current", "");
+    await first.kanban.addKanbanTask("p1", "Current", "");
     first.close();
 
     // An older backend sharing the directory writes the file it still knows.
@@ -242,7 +251,9 @@ describe("legacy JSON import", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const second = new StorageService(directory);
-      expect((await second.getKanbanTasks("p1")).map((task) => task.title)).toEqual(["Current"]);
+      expect((await second.kanban.getKanbanTasks("p1")).map((task) => task.title)).toEqual([
+        "Current",
+      ]);
       second.close();
       expect(warn.mock.calls.some(([message]) => String(message).includes("not imported"))).toBe(
         true,
@@ -259,8 +270,8 @@ describe("legacy JSON import", () => {
     const first = new StorageService(directory);
     const second = new StorageService(directory);
     await Promise.all([first.init(), second.init()]);
-    await first.addKanbanTask("p1", "Added", "");
-    expect((await second.getKanbanTasks("p1")).map((task) => task.title)).toEqual([
+    await first.kanban.addKanbanTask("p1", "Added", "");
+    expect((await second.kanban.getKanbanTasks("p1")).map((task) => task.title)).toEqual([
       "Once",
       "Added",
     ]);

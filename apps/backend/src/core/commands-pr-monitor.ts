@@ -3,7 +3,7 @@ import { gitHubCliEnv } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
 import type { PrDetection, PrMonitorKanbanTask, PrMonitorTarget } from "./pr-monitor.js";
-import type { StorageService } from "./storage.js";
+import type { KanbanStorage, StorageService } from "./storage.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
@@ -17,7 +17,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import { readCheckoutBranch, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 
-export type StoredKanbanTask = Awaited<ReturnType<StorageService["getKanbanTasks"]>>[number];
+export type StoredKanbanTask = Awaited<ReturnType<KanbanStorage["getKanbanTasks"]>>[number];
 
 /**
  * Finds the kanban task linked to an environment: directly via the task's
@@ -31,7 +31,7 @@ export async function findKanbanTaskForEnvironment(
 ): Promise<PrMonitorKanbanTask | null> {
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) return null;
-  const tasks = await storage.getKanbanTasks(environment.projectId);
+  const tasks = await storage.kanban.getKanbanTasks(environment.projectId);
   let task: StoredKanbanTask | undefined = tasks.find(
     (candidate) => candidate.environmentId === environmentId,
   );

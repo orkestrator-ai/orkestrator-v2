@@ -250,8 +250,10 @@ function createContext(initialEnvironment = environment()): {
     storage: {
       getDataDir: () => root,
       // No added agent accounts: every launch uses the host login.
-      loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
-      agentAccountsDirectory: () => path.join(root, "agent-accounts"),
+      agentAccounts: {
+        loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
+        agentAccountsDirectory: () => path.join(root, "agent-accounts"),
+      },
       getEnvironment: mock(async (id: string) =>
         id === initialEnvironment.id ? initialEnvironment : null,
       ),
@@ -1694,7 +1696,11 @@ describe("Linear and looped review command behavior", () => {
       appRoot: root,
       resourceRoot: root,
       emit: mock(() => {}),
-      storage: { getLinearAuth },
+      storage: {
+        kanban: {
+          getLinearAuth,
+        },
+      },
     } as unknown as CommandContext;
     return { context, getLinearAuth };
   }

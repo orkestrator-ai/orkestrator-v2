@@ -345,24 +345,24 @@ describe("Linear auth mutations", () => {
       () => new Promise<void>((resolve) => (release = resolve)),
     );
     await pause();
-    const saving = second.saveLinearAuth("SECOND-KEY");
+    const saving = second.kanban.saveLinearAuth("SECOND-KEY");
     await pause();
-    expect(await first.getLinearAuth()).toBeNull();
+    expect(await first.kanban.getLinearAuth()).toBeNull();
     release();
     await Promise.all([held, saving]);
-    expect((await first.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
+    expect((await first.kanban.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
 
     held = first.serialize(
       "linear-auth.json",
       () => new Promise<void>((resolve) => (release = resolve)),
     );
     await pause();
-    const clearing = second.clearLinearAuth();
+    const clearing = second.kanban.clearLinearAuth();
     await pause();
-    expect((await first.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
+    expect((await first.kanban.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
     release();
     await Promise.all([held, clearing]);
-    expect(await first.getLinearAuth()).toBeNull();
+    expect(await first.kanban.getLinearAuth()).toBeNull();
   });
 
   test("run after a failed mutation releases the lease", async () => {
@@ -380,16 +380,16 @@ describe("Linear auth mutations", () => {
       (error: Error) => error.message,
     );
     await pause();
-    const saving = first.saveLinearAuth("QUEUED-KEY");
+    const saving = first.kanban.saveLinearAuth("QUEUED-KEY");
     await pause();
-    expect(await second.getLinearAuth()).toBeNull();
+    expect(await second.kanban.getLinearAuth()).toBeNull();
     fail(new Error("holder failed"));
     expect(await failed).toBe("holder failed");
     await saving;
-    expect((await second.getLinearAuth())?.apiKey).toBe("QUEUED-KEY");
+    expect((await second.kanban.getLinearAuth())?.apiKey).toBe("QUEUED-KEY");
     // The other backend can take the lease again.
-    await second.clearLinearAuth();
-    expect(await first.getLinearAuth()).toBeNull();
+    await second.kanban.clearLinearAuth();
+    expect(await first.kanban.getLinearAuth()).toBeNull();
   });
 });
 

@@ -309,8 +309,8 @@ after the durable write. Two rules keep a recovered record honest
   ([0223](../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md)).
 
 A restart notice names the request it cut short (`interruptedRequestId`, see
-[agent engines](agent-engines.md)), so a continuation that has been journaled
-but not yet started is not failed as a second restart. The Multi Review
+[agent engines](agent-engines.md)), so a continuation the provider has
+journaled but not yet started is not failed as a second restart. The Multi Review
 preparation, consolidation and Fix steps and Build Pipeline consolidation park
 an unconfirmed `dispatching` request the same way; they have one writer per
 request, so the first rule does not arise there.

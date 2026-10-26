@@ -211,7 +211,8 @@ describe("review fan-out interleavings", () => {
     // continuation spent and failed the reviewer as restarted twice. The
     // Claude and Codex bridges now name the interrupted request
     // (`interruptedRequestId`), and `readProviderStatus` reads a notice about
-    // another request as "this request's turn has not settled". The harness
+    // another request, while the provider confirms it holds this one, as
+    // "this request's turn has not settled". The harness
     // models the late start on half of all continuations. Seeds: fence-loss 861,
     // 1251, also in the fence-loss suite's CI list.
     test("a takeover mid-continuation does not count the old restart twice", async () => {

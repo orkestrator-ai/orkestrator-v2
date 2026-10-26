@@ -58,3 +58,12 @@ No watcher implementation, assertion, deadline or skip changed.
 - **Complete unchanged owner rerun:** `mise run test:logged -- --name mail-worktree-watcher-rerun -- sh -c 'cd apps/backend && bun test ./tests/worktree-watcher.test.ts --parallel=1 --only-failures'` passed, exit 0 in 1.4 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z9OzLB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer result in `orkestrator-test-run.nVyQ5W/mail-repository.log.gz` under the same temporary root.
 - **Assessment:** an aggregate-only recurrence in this run. Delayed OS event delivery or host contention remain hypotheses. The other failing owners (profile cleanup, submodule moves and Git snapshots) remained non-green when rerun alone. No watcher code, assertions, deadlines or skips changed; the original aggregate remains failed.
+
+## Coordinator launch coverage validation — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test` at `64e7f8262` (only coordinator renderer tests changed). Standard workspace/root/bridges/protocol reservations were 4/1/2/1 slots, including two backend workers; other worktrees were validating concurrently.
+- **Failure:** `startWorktreeWatcher > observes a real file write` received zero changes after the bounded write loop (2005.98 ms).
+- **Aggregate:** backend 11,343 passed, 99 skipped, five failed and four between-test errors across 663 files (366.63 s); desktop had two assertion failures; web passed all 9,875 active tests. Root/support, bridges and the protocol lockfile passed. Aggregate exit 1 after 441.9 s.
+- **Unchanged owner:** `mise run test:logged -- --name worktree-watcher-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.2 s.
+- **Evidence:** `orkestrator-test-run.iPZEJ3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.BxYW3V/repository-tests.log.gz` under the host temporary directory.
+- **Assessment:** another intermittent recurrence. Watcher delivery or host contention remain hypotheses; no watcher implementation, assertion, deadline or skip changed. The aggregate remains failed.

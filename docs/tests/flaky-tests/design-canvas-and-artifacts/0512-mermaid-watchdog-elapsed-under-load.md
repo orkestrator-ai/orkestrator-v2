@@ -114,6 +114,16 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 
 The aggregate recurrence passed in the complete unchanged owning-file rerun. Exact commands, durations, merge parents, aggregate results and evidence are retained in [0790](../aggregate-validation-runs/0790-environment-list-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
 
+## Resume cleanup coverage validation — 2026-10-25
+
+Original command: `mise run test:logged -- --name cleanup-repository -- mise run test`, with workspace/root/bridge/protocol worker reservations 4/1/2/1 and component browser validation running concurrently. Aggregate evidence is under the host temporary directory, `orkestrator-test-run.TabHxj/`.
+
+`mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone` measured 6,135 ms against the 5,000 ms elapsed bound (6,346.89 ms test duration).
+
+The complete unchanged owner also failed: `mise run test:logged -- --name cleanup-mermaid-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` reported 12 passed and one failed across 13 tests (72.22 s), measuring 7,281 ms against the same bound (7,588.19 ms test duration). Owner evidence: `orkestrator-test-run.UuiUGe/cleanup-mermaid-owner.log.gz` below the host temporary directory.
+
+This observation establishes no new pass-alone confirmation or cause. The aggregate and owner remain non-green; no Mermaid implementation, assertion, timeout or skip changed.
+
 ## Failing-tests fix validation — 2026-10-25
 
 The aggregate `mise run test` measured 7,090 ms against `< 5000 ms` while another

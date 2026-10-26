@@ -223,3 +223,31 @@ is unconfirmed. No assertion, timeout, skip or implementation changed.
 - **Isolated rerun:** `bun test src/http.test.ts --preload ../../tests/setup-node.ts` from `bridges/cursor-bridge`: 77 passed, 0 failed.
 - **Disposition:** recurrence confirmed by the isolated pass. No assertion,
   deadline or skip was changed.
+
+## Pi ChatGPT fallback main merge — 2026-10-26
+
+`mise run test:logged -- --name merge-tests -- mise run test` on macOS
+with Bun 1.4.4 merged parents `8da8c9cc87779451589b106c228e425ef742aa47`
+and `a51045a4a954d49ae388c0f22535e9b28274279f`. Workspace/root/bridge/protocol
+groups reserved 4/1/2/1 worker slots; each bridge package used one Bun worker,
+with two bridge tasks active. `authentication > reports an authenticated
+credential as ready` hit a beforeEach/afterEach hook timeout at 10002.04 ms.
+Cursor reported 795 passed and one failed across 45 files in 27.32 s.
+
+The complete unchanged owner passed alone (exit 0, 1.5 s):
+
+```sh
+mise run test:logged -- --name merge-cursor-http-isolated -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary directory `orkestrator-test-run.2B615e`,
+`bridges.log.gz` and `summary.json`; outer logged run
+`orkestrator-test-run.Lf5a1a/merge-tests.log.gz`. The aggregate timeout followed
+by an isolated pass matches the prior recurrence; the root cause remains
+unconfirmed. No Cursor implementation, assertion, timeout or skip changed.
+
+The complete aggregate exited 1 after 568.8 s: workspace and protocol-lockfile
+groups passed; root and bridges failed only the four firewall timeouts and
+one Cursor hook timeout described above. Backend reported 11,749 passed and
+zero failed; Pi reported 649 passed and zero failed. Formatting, lint,
+typechecking, and the flake-index contract check passed.

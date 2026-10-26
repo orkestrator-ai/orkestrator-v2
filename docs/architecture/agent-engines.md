@@ -500,6 +500,19 @@ theirs too: `message.updated`, `message.part.updated`, `session.updated`,
 The SDK and CLI are pinned to the same exact version, and
 `tests/unit/version-drift.test.ts` enforces that they agree.
 
+Attachments travel as `file` parts (`openCodePromptParts` in
+`opencode-provider-helpers.ts`), and OpenCode routes a `file://` part by its
+declared MIME type alone: `text/plain` runs its Read tool (text inline, images
+and PDFs as attachments, binary refused in a message the model still gets), an
+image type is decoded as an image, and anything else is inlined as a data URL.
+`openCodeAttachmentMime` therefore labels a non-image file `text/plain`; a text
+file once labelled `image/png` failed decoding after `promptAsync` had
+returned 204, and OpenCode stored no message. Such a background failure
+reaches the backend only as a `session.error`; `OpenCodeStreamState` keeps the
+first one after each dispatch (`dispatchFailure`), and
+`readOpenCodeTurnTerminalError` settles the request `failed` with it when the
+history holds no message for the request.
+
 ### Maintaining the OpenCode integration
 
 The v2 SDK uses flat parameters instead of nested `path`/`body` objects:
@@ -646,6 +659,13 @@ sandbox, so adapters without a provider sandbox still report the outer boundary.
 Pipeline runs are unattended. The coordinator always
 uses the immutable `coordinator-read-only` policy regardless of an environment
 override.
+
+On Linux the Claude bridge refuses a turn that requires the CLI's command
+sandbox (a `provider` sandbox, or a coordinator qualified on it) when
+bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
+Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
+probe's reason instead of every Bash call failing; see
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
 
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the
@@ -931,9 +951,17 @@ user's own credentials, so:
   `defaultModel` in `settings.json`, what `/model` writes) when a signed-in
   provider serves it, the way `pi` itself starts, and only then on the
   catalogue's first model. A login can refuse a model its provider lists, so
-  the first model is a last resort. An agent-test profile also receives the
-  host's saved default, which it uses when its own settings name no default
-  that a signed-in provider serves.
+  the first model is a last resort, and a ChatGPT subscription login (under
+  `openai`, or the legacy `openai-codex`) whose catalogue starts the list
+  starts instead on the newest model in pi-ai's ChatGPT-backend catalogue
+  (`chatGptLoginModelIds` in `bridges/pi-bridge/src/models.ts`). An
+  agent-test profile also receives the host's saved default, which it uses
+  when its own settings name no default that a signed-in provider serves.
+  `/global/models` marks the first available saved or profile default
+  `sessionDefault` (`markSessionDefault` in `models.ts`; global settings only,
+  as no session asks), and every launch default that has no saved model (Multi
+  Review rows, the launch dialogs' `firstModelFor`) picks the marked row before
+  the first, so a review row runs where a tab would.
 - **"Signed in" is per provider.** `GET /global/auth` reports each provider's
   status; there is no single account. Sign-in itself is not served: Pi's login
   is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no
@@ -1095,6 +1123,25 @@ session, under a fresh request id and result slot
     that error (`errorClass: "process_killed_by_signal"`, pinned in
     `sdk-compatibility.test.ts`). A non-zero exit is not a restart, because it
     is as likely a launch or sign-in fault.
+
+  Both bridges also name the request the restart cut short
+  (`interruptedRequestId`): Codex from its dispatch journal record for the
+  interrupted turn, Claude from the request id the `turnInFlight` mark (or the
+  killed turn) carries. Status is per session, so until the continuation's
+  turn starts the notice still describes the earlier request; given the
+  watched request id, `readProviderStatus` reads a notice that names another
+  request, while the provider's dispatch journal reports the watched one
+  accepted and unfinished (`pending`), as "this request's turn has not
+  settled" (`idle`, `turnSettled: false`) instead of a failure. The Claude
+  and Codex `/dispatch` routes add `pending: true` beside `dispatched` for a
+  request still in flight (Claude `processing`, a Codex `accepted` journal
+  record); a finished request stays plain `dispatched`, and older backends
+  read either as `dispatched`. The confirmation matters both ways: a name can
+  be stale (Claude rewrites the mark after the turn starts, so a bridge killed
+  in between restores the previous request's name, and a restarted bridge no
+  longer holds the request it lost), and a finished watched request must not
+  mask a later turn's restart. A bridge or mark that predates either field
+  names nothing, and without both the notice is taken at face value.
 
   The other bridges report none yet, so their cut-short turns fail as before.
   A step or reviewer whose bridge is unreachable keeps its state and

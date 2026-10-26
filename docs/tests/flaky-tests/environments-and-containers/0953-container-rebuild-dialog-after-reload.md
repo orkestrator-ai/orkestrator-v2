@@ -1,9 +1,11 @@
 # Docker rebuild dialog after reload
 
-- **ID:** 0977
-- **Renumbered:** filed as 0887, which `aggregate-validation-runs` already uses.
+- **ID:** 0953
 - **Status:** open
 - **Date observed:** 2026-10-25, during container security validation.
+- **Renumbered:** originally filed as 0887, a number [aggregate case 0887](../aggregate-validation-runs/0887-live-provider-review-validation.md) already held; renumbered to 0953 on 2026-10-26 (todo 0166 branch). The observation below is unchanged.
+- **Test:** `Docker fixture rebuild keeps running while another environment is open and rehydrates`
+- **File:** `e2e/agent-testing/container-rebuild-cycle.spec.ts`
 
 `Docker fixture rebuild keeps running while another environment is open and rehydrates`
 failed in `mise run test:agent:docker` because `Before a rebuild` was not visible

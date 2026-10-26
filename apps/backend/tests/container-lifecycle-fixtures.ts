@@ -79,7 +79,9 @@ export function memoryLifecycleContext(
     },
     // Container creation resolves each platform's active account; none is
     // configured, so every platform stays on its default account.
-    loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
+    agentAccounts: {
+      loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
+    },
   };
   const context = {
     storage,

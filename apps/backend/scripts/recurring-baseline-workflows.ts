@@ -234,9 +234,9 @@ async function seedFeaturePlanning(storage: StorageService, fixture: WorkflowFix
     }) satisfies FeaturePlanningRecord;
   await addEnvironment(storage, "env-planning");
   for (let index = 0; index < fixture.completedPerStore + fixture.activePerStore; index += 1) {
-    const plan = await storage.createFeaturePlan("project-1");
-    await storage.updateFeaturePlan(plan.id, { codexEnvironmentId: "env-planning" });
-    await storage.startFeaturePlanning(
+    const plan = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.updateFeaturePlan(plan.id, { codexEnvironmentId: "env-planning" });
+    await storage.kanban.startFeaturePlanning(
       record(plan.id, index < fixture.completedPerStore ? "complete" : "running"),
     );
   }

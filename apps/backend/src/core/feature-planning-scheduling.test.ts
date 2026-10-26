@@ -150,19 +150,19 @@ async function fixture(options: { completed?: number; active?: number } = {}): P
       backendRevision: 0,
     }) satisfies FeaturePlanningRecord;
   for (let index = 0; index < completed; index += 1) {
-    const plan = await storage.createFeaturePlan("project-1");
-    await storage.startFeaturePlanning(record(plan.id, "complete"));
+    const plan = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.startFeaturePlanning(record(plan.id, "complete"));
   }
   const active: string[] = [];
   const sessions = new Map<string, string>();
   for (let index = 0; index < (options.active ?? 0); index += 1) {
-    const plan = await storage.createFeaturePlan("project-1");
+    const plan = await storage.kanban.createFeaturePlan("project-1");
     const sessionId = `session-${index}`;
-    await storage.updateFeaturePlan(plan.id, {
+    await storage.kanban.updateFeaturePlan(plan.id, {
       codexEnvironmentId: "env-1",
       codexSessionId: sessionId,
     });
-    await storage.startFeaturePlanning(record(plan.id, "dispatching"));
+    await storage.kanban.startFeaturePlanning(record(plan.id, "dispatching"));
     active.push(plan.id);
     sessions.set(plan.id, sessionId);
   }
@@ -187,7 +187,7 @@ function keyedService(
 }
 
 async function planningState(storage: StorageService, featureId: string) {
-  const plan = await storage.getFeaturePlan(featureId);
+  const plan = await storage.kanban.getFeaturePlan(featureId);
   return { status: plan?.status, planning: plan?.planning as FeaturePlanningRecord | undefined };
 }
 
@@ -304,7 +304,7 @@ describe("FeaturePlanningService keyed scheduling", () => {
       autoAdvance: false,
     });
     expect(await reader.snapshot("project-1")).toEqual([]);
-    expect((await context.storage.getFeaturePlan(featureId!))?.title).toBe("Bulk export");
+    expect((await context.storage.kanban.getFeaturePlan(featureId!))?.title).toBe("Bulk export");
   });
 
   test("startup returns while a pass is stuck, and the stuck key never delays another", async () => {
@@ -392,8 +392,8 @@ describe("FeaturePlanningService keyed scheduling", () => {
   test("a corrupt record and a failed enumeration never stall unrelated work", async () => {
     const context = await fixture({ active: 1 });
     const [featureId] = context.active;
-    const broken = await context.storage.createFeaturePlan("project-1");
-    const plans = await context.storage.listAllFeaturePlans();
+    const broken = await context.storage.kanban.createFeaturePlan("project-1");
+    const plans = await context.storage.kanban.listAllFeaturePlans();
     const raw = plans.map((plan) =>
       plan.id === broken.id ? { ...plan, planning: { phase: "running", garbage: true } } : plan,
     );
@@ -401,7 +401,7 @@ describe("FeaturePlanningService keyed scheduling", () => {
       path.join(context.dataDir, "feature-plans.json"),
       `${JSON.stringify(raw, null, 2)}\n`,
     );
-    const discovered = await discoverFeaturePlanning(context.storage);
+    const discovered = await discoverFeaturePlanning(context.storage.kanban);
     expect(discovered.entries.map((entry) => entry.key)).toEqual([featureId!]);
 
     const provider = new Provider();
@@ -411,13 +411,13 @@ describe("FeaturePlanningService keyed scheduling", () => {
     await settleKeyedWork(time, [service]);
     expect(provider.sends).toHaveLength(1);
     // Storage enumeration starts failing; the known exchange still progresses.
-    const original = context.storage.listAllFeaturePlans.bind(context.storage);
-    context.storage.listAllFeaturePlans = async () => {
+    const original = context.storage.kanban.listAllFeaturePlans.bind(context.storage.kanban);
+    context.storage.kanban.listAllFeaturePlans = async () => {
       throw new Error("enumeration failed");
     };
     provider.reply(context.sessions.get(featureId!)!);
     await advanceKeyedWork(time, [service], 12_000, 1_000);
-    context.storage.listAllFeaturePlans = original;
+    context.storage.kanban.listAllFeaturePlans = original;
     expect(service.schedulingStatus()?.failedDiscoveries).toBeGreaterThan(0);
     expect((await planningState(context.storage, featureId!)).planning).toBeUndefined();
   });
@@ -432,13 +432,13 @@ describe("FeaturePlanningService keyed scheduling", () => {
     await service.init();
     await settleKeyedWork(time, [service]);
     // Another process starts an exchange in the shared data directory.
-    const plan = await context.storage.createFeaturePlan("project-1");
-    await context.storage.updateFeaturePlan(plan.id, {
+    const plan = await context.storage.kanban.createFeaturePlan("project-1");
+    await context.storage.kanban.updateFeaturePlan(plan.id, {
       codexEnvironmentId: "env-1",
       codexSessionId: "session-late",
     });
     const timestamp = new Date().toISOString();
-    await context.storage.startFeaturePlanning({
+    await context.storage.kanban.startFeaturePlanning({
       version: FEATURE_PLANNING_RECORD_VERSION,
       operationId: "late",
       featureId: plan.id,

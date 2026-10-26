@@ -236,7 +236,7 @@ const projectUpdate: MutationActionHandler<ProjectUpdateInput> = {
     return {
       resources: { projectId: project.id },
       async execute() {
-        const updated = await context.command.storage.updateProjectAtRevision(
+        const updated = await context.command.storage.publicOperations.updateProjectAtRevision(
           input.projectId,
           input.expectedRevision,
           {

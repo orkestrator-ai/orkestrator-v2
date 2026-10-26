@@ -2,7 +2,18 @@ import { expect, test } from "@playwright/test";
 
 // Use the full Chrome browser: bundled Chromium does not expose the native
 // datalist popup through automation on macOS. Install with `bunx playwright install chrome`.
-test.use({ channel: "chrome", headless: false });
+// Do not pass a Chrome channel to an alternate engine, even for skipped tests.
+test.use({
+  channel:
+    process.env.ORKESTRATOR_E2E_BROWSER && process.env.ORKESTRATOR_E2E_BROWSER !== "chromium"
+      ? undefined
+      : "chrome",
+  headless: false,
+});
+test.skip(
+  ({ browserName }) => browserName !== "chromium",
+  "Requires Chrome's native datalist and CDP",
+);
 
 test("selects a native branch suggestion with the keyboard and confirms", async ({ page }) => {
   await page.goto("/agent-launch");

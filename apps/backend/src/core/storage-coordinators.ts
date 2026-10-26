@@ -702,3 +702,38 @@ export class CoordinatorsRepository {
     }
   }
 }
+
+/**
+ * Coordinator workspaces, workflow associations, delegations and attachments: what callers reach as `storage.coordinators`.
+ *
+ * Every name here is an entry point `storage-writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type CoordinatorsStorage = Pick<
+  CoordinatorsRepository,
+  | "getCoordinatorWorkspace"
+  | "getCoordinatorWorkspaceById"
+  | "listCoordinatorWorkspaces"
+  | "listCoordinatorWorkflowAssociations"
+  | "getCoordinatorReconciliationState"
+  | "mutateCoordinatorWorkspaceWithComposeDrafts"
+  | "mutateCoordinatorWorkspace"
+  | "saveCoordinatorWorkflowAssociation"
+  | "reserveCoordinatorWorkflowAssociation"
+  | "completeCoordinatorWorkflowAssociation"
+  | "addCoordinatorWorkflowRequestAlias"
+  | "openCoordinatorDelegation"
+  | "listOpenCoordinatorDelegations"
+  | "listUnwokenCoordinatorDelegations"
+  | "closeCoordinatorDelegation"
+  | "prepareCoordinatorDelegationWake"
+  | "markCoordinatorDelegationWoken"
+  | "updateCoordinatorWorkflowAssociation"
+  | "markCoordinatorWorkflowNotified"
+  | "adoptCoordinatorWorkflowAssociation"
+  | "coordinatorAttachmentDirectory"
+  | "pruneCoordinatorAttachmentDirectories"
+  | "writeCoordinatorAttachment"
+  | "deleteCoordinatorByProject"
+>;

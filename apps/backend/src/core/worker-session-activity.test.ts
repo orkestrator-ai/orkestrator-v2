@@ -97,10 +97,10 @@ test("production coordinator and leaf RPC share the raw/turn activity probe and 
     });
     now += 119_999;
     await coordinator.reconcileWorkerDelegations();
-    expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
     now += 1;
     await coordinator.reconcileWorkerDelegations();
-    expect(await world.storage.listOpenCoordinatorDelegations()).toHaveLength(0);
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
     await world.deliver();
     expect(world.received(main)[0]).toContain("none of it reported for 2 minutes");
   } finally {

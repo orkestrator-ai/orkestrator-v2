@@ -138,7 +138,7 @@ beforeEach(async () => {
             toTabId: input.toTabId,
           };
         },
-        getCoordinatorWorkspace: async () => workspace(),
+        coordinators: { getCoordinatorWorkspace: async () => workspace() },
       },
       controlMcp: {
         credentialPolicy: (id) => server.credentialPolicy(id),

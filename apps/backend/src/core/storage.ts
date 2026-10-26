@@ -1,10 +1,21 @@
 export * from "./storage-shared.js";
+export type { AgentAccountsStorage } from "./storage-agent-accounts.js";
+export type { CoordinatorsStorage } from "./storage-coordinators.js";
+export type { KanbanStorage } from "./storage-kanban.js";
+export type { NodesStorage } from "./storage-nodes.js";
+export type { PreviewServicesStorage } from "./storage-preview-services.js";
+export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
+import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
+import type { CoordinatorsStorage } from "./storage-coordinators.js";
+import type { KanbanStorage } from "./storage-kanban.js";
+import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
+import type { PreviewServicesStorage } from "./storage-preview-services.js";
+import type { PublicOperationsStorage } from "./storage-public-operations.js";
 import path from "node:path";
-import type { AgentAccountStore } from "./agent-accounts-store.js";
 import type { BuildPipelineTranscriptMigrationReport } from "./build-pipeline-transcript-migration.js";
 import type {
   BuildPipelineTranscriptFaultStage,
@@ -19,30 +30,11 @@ import type {
 import type { EnvironmentUnreadReason, IncompleteTurnNotice } from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
 import type { NativeAgentDisplayTail } from "./native-agent-display-tails.js";
-import type { AttentionPosition } from "./public-api/attention-cursor.js";
-import type {
-  PublicAuthority,
-  PublicOperationIndex,
-  PublicOperationRecord,
-} from "./public-api/operation-ledger.js";
-import type {
-  AgentMailRepository,
-  AgentMailSender,
-  PendingAgentMailInject,
-} from "./storage-agent-mail.js";
+import type { AgentMailboxDirectory } from "./storage-agent-mail-directory.js";
+import type { PendingAgentMailInject } from "./storage-agent-mail-injects.js";
+import type { AgentMailSender } from "./storage-agent-mail-store.js";
+import type { AgentMailRepository } from "./storage-agent-mail.js";
 import type { ConfigRepository } from "./storage-config.js";
-import type { NodeStoreMutation, NodesRepository } from "./storage-nodes.js";
-import type {
-  LoadedPreviewServiceStore,
-  PreviewBackendIdentity,
-  PreviewServiceStore,
-  PreviewSettings,
-} from "./storage-preview-services.js";
-import type {
-  AdmitPublicOperationInput,
-  PublicOperationLookup,
-  PublicOperationsRepository,
-} from "./storage-public-operations.js";
 import type {
   AgentActivitySource,
   AgentActivityState,
@@ -56,16 +48,7 @@ import type {
   ConditionalResourceSnapshot,
   Environment,
   EnvironmentStatus,
-  FeaturePlan,
-  FeaturePlanMessage,
-  FeaturePlanningRecord,
-  GitHubCompletionComment,
   JsonRecord,
-  KanbanImage,
-  KanbanStatus,
-  KanbanTask,
-  LinearAuth,
-  LinearCompletionComment,
   OpenCodeModelCatalogEntry,
   OpenCodeModelCatalogSnapshot,
   PaneLayoutMergeInput,
@@ -81,9 +64,7 @@ import type {
   PersistedNativeAgentSession,
   PersistedPaneLayout,
   PersistedPromptQueue,
-  PortMapping,
   Project,
-  ProjectNotes,
   RepositoryConfig,
   ResourceChangeListener,
   ResourceManifestKind,
@@ -109,40 +90,43 @@ import type {
   AgentMailSummarySnapshot,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
-import type { BackendProfile, BackendProfileUpdate } from "@orkestrator/protocol/backend-profile";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import type { NodeAttachments, NodeRegistry } from "@orkestrator/protocol/command-nodes";
-import type { ControllerSettingsStore } from "@orkestrator/protocol/controller-settings";
-import type {
-  CoordinatorWorkflowAssociation,
-  CoordinatorWorkspace,
-} from "@orkestrator/protocol/coordinator";
 import type {
   NativeAgentControlUpdate,
   NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
-import type { PortalLayout, PortalLayoutUpdate } from "@orkestrator/protocol/portal-layout";
-import type { PublicActionName } from "@orkestrator/protocol/public-api";
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 
 /**
  * The backend's storage: one facade over per-store repositories that share
  * one {@link StorageContext} (`docs/architecture/storage.md`).
  *
- * Every public method forwards to the repository that owns its store, so the
- * surface callers use stays the same while each store's code lives in one
- * repository. These methods are the only way in: code outside the storage
- * files never names a repository, and `storage-writer-guards.test.ts` follows
- * every store write back to one of them.
+ * Callers reach a store through a public method that forwards to the
+ * repository owning it, or through an area field (`storage.kanban`) typed as
+ * a `Pick` of that repository's entry points. Those are the only ways in:
+ * code outside the storage files never names a repository, and
+ * `storage-writer-guards.test.ts` follows every store write back to one of
+ * them.
  */
 export class StorageService {
   private readonly context: StorageContext;
   private readonly repos: StorageRepositories;
+  readonly kanban: KanbanStorage;
+  readonly coordinators: CoordinatorsStorage;
+  readonly publicOperations: PublicOperationsStorage;
+  readonly nodes: NodesStorage;
+  readonly previewServices: PreviewServicesStorage;
+  readonly agentAccounts: AgentAccountsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
     this.repos = new StorageRepositories(this.context);
+    this.kanban = this.repos.kanban;
+    this.coordinators = this.repos.coordinators;
+    this.publicOperations = this.repos.publicOperations;
+    this.nodes = this.repos.nodes;
+    this.previewServices = this.repos.previewServices;
+    this.agentAccounts = this.repos.agentAccounts;
   }
 
   async init(): Promise<void> {
@@ -618,10 +602,6 @@ export class StorageService {
     return this.repos.sessions.getAgentUsageHistory(query);
   }
 
-  deleteAgentUsageHistoryByEnvironment(environmentId: string): number {
-    return this.repos.sessions.deleteAgentUsageHistoryByEnvironment(environmentId);
-  }
-
   createSession(
     environmentId: string,
     containerId: string,
@@ -1018,14 +998,6 @@ export class StorageService {
     listener: (event: NativeAgentDisplayTailDeletion) => void,
   ): () => void {
     return this.repos.nativeAgentSessions.onNativeAgentDisplayTailDeleted(listener);
-  }
-
-  deleteNativeAgentDisplayTail(key: string): Promise<void> {
-    return this.repos.nativeAgentSessions.deleteNativeAgentDisplayTail(key);
-  }
-
-  deleteNativeAgentDisplayTailsByEnvironment(environmentId: string): Promise<void> {
-    return this.repos.nativeAgentSessions.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
   }
 
   deleteNativeAgentSessionsByEnvironment(environmentId: string): Promise<void> {
@@ -1517,8 +1489,8 @@ export class StorageService {
 
   // AgentMailRepository
 
-  setAgentMailRuntimeProvider(provider: AgentMailRepository["agentMailRuntimeProvider"]): void {
-    return this.repos.agentMail.setAgentMailRuntimeProvider(provider);
+  setAgentMailRuntimeProvider(provider: AgentMailboxDirectory["agentMailRuntimeProvider"]): void {
+    return this.repos.agentMailboxes.setAgentMailRuntimeProvider(provider);
   }
 
   setCoordinatorMailResolver(resolver: AgentMailRepository["coordinatorMailResolver"]): void {
@@ -1526,19 +1498,19 @@ export class StorageService {
   }
 
   resolveAgentMailRecipientTab(sender: AgentMailSender, environmentId: string): Promise<string> {
-    return this.repos.agentMail.resolveAgentMailRecipientTab(sender, environmentId);
+    return this.repos.agentMailboxes.resolveAgentMailRecipientTab(sender, environmentId);
   }
 
   resolveUniqueAgentMailPullTabId(environmentId: string): Promise<string | null> {
-    return this.repos.agentMail.resolveUniqueAgentMailPullTabId(environmentId);
+    return this.repos.agentMailboxes.resolveUniqueAgentMailPullTabId(environmentId);
   }
 
   listAgentMailPullTabIds(environmentId: string): Promise<string[]> {
-    return this.repos.agentMail.listAgentMailPullTabIds(environmentId);
+    return this.repos.agentMailboxes.listAgentMailPullTabIds(environmentId);
   }
 
   synchronizeAgentMailboxes(): Promise<void> {
-    return this.repos.agentMail.synchronizeAgentMailboxes();
+    return this.repos.agentMailboxes.synchronizeAgentMailboxes();
   }
 
   listAgentMailboxes(
@@ -1553,11 +1525,11 @@ export class StorageService {
       environmentId?: string;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
-    return this.repos.agentMail.listAgentMailboxes(options);
+    return this.repos.agentMailboxes.listAgentMailboxes(options);
   }
 
   getAgentMailSummary(): Promise<AgentMailSummarySnapshot> {
-    return this.repos.agentMail.getAgentMailSummary();
+    return this.repos.agentMailboxes.getAgentMailSummary();
   }
 
   getAgentMailMailbox(
@@ -1570,17 +1542,17 @@ export class StorageService {
       incarnationId?: string;
     } = {},
   ): Promise<AgentMailMailboxSnapshot> {
-    return this.repos.agentMail.getAgentMailMailbox(environmentId, tabId, options);
+    return this.repos.agentMailboxes.getAgentMailMailbox(environmentId, tabId, options);
   }
 
   getAgentMailMailboxes(
     addresses: Array<{ environmentId: string; tabId: string }>,
   ): Promise<AgentMailMailboxBatchSnapshot> {
-    return this.repos.agentMail.getAgentMailMailboxes(addresses);
+    return this.repos.agentMailboxes.getAgentMailMailboxes(addresses);
   }
 
   getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {
-    return this.repos.agentMail.getAgentMailInboxSnapshot();
+    return this.repos.agentMailboxes.getAgentMailInboxSnapshot();
   }
 
   hasUndeliveredCoordinatorRequest(
@@ -1629,18 +1601,21 @@ export class StorageService {
     coordinator: { environmentId: string; tabId: string },
     worker: { nodeId: string; environmentId: string; tabId: string },
   ): Promise<void> {
-    return this.repos.agentMail.startRemoteWorkerBudget(coordinator, worker);
+    return this.repos.agentMailBudgets.startRemoteWorkerBudget(coordinator, worker);
   }
 
   resetAgentMailBudgetForSession(
     environmentId: string,
     logicalSessionKey: string,
   ): Promise<boolean> {
-    return this.repos.agentMail.resetAgentMailBudgetForSession(environmentId, logicalSessionKey);
+    return this.repos.agentMailBudgets.resetAgentMailBudgetForSession(
+      environmentId,
+      logicalSessionKey,
+    );
   }
 
   releaseHourlyHeldAgentMail(): Promise<number> {
-    return this.repos.agentMail.releaseHourlyHeldAgentMail();
+    return this.repos.agentMailBudgets.releaseHourlyHeldAgentMail();
   }
 
   replyAgentMail(
@@ -1666,7 +1641,7 @@ export class StorageService {
   }
 
   promoteStoredAgentMailForMailbox(environmentId: string, tabId: string): Promise<number> {
-    return this.repos.agentMail.promoteStoredAgentMailForMailbox(environmentId, tabId);
+    return this.repos.agentMailInjects.promoteStoredAgentMailForMailbox(environmentId, tabId);
   }
 
   hasDelegationHeldAgentMail(
@@ -1676,7 +1651,7 @@ export class StorageService {
     workerEnvironmentId: string,
     workerTabId: string,
   ): Promise<boolean> {
-    return this.repos.agentMail.hasDelegationHeldAgentMail(
+    return this.repos.agentMailInjects.hasDelegationHeldAgentMail(
       associationId,
       coordinatorEnvironmentId,
       coordinatorTabId,
@@ -1690,11 +1665,15 @@ export class StorageService {
     to: { environmentId: string; tabId: string },
     owedDelegations: ReadonlySet<string>,
   ): Promise<number> {
-    return this.repos.agentMail.moveClosedCoordinatorMail(coordinatorId, to, owedDelegations);
+    return this.repos.agentMailInjects.moveClosedCoordinatorMail(
+      coordinatorId,
+      to,
+      owedDelegations,
+    );
   }
 
   releaseOrphanedDelegationHolds(owed: ReadonlySet<string>): Promise<number> {
-    return this.repos.agentMail.releaseOrphanedDelegationHolds(owed);
+    return this.repos.agentMailInjects.releaseOrphanedDelegationHolds(owed);
   }
 
   releaseDelegationHeldAgentMail(
@@ -1704,7 +1683,7 @@ export class StorageService {
     workerEnvironmentId: string,
     workerTabId: string,
   ): Promise<number> {
-    return this.repos.agentMail.releaseDelegationHeldAgentMail(
+    return this.repos.agentMailInjects.releaseDelegationHeldAgentMail(
       associationId,
       coordinatorEnvironmentId,
       coordinatorTabId,
@@ -1718,7 +1697,7 @@ export class StorageService {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return this.repos.agentMail.retryAgentMailInject(environmentId, tabId, messageId);
+    return this.repos.agentMailInjects.retryAgentMailInject(environmentId, tabId, messageId);
   }
 
   discardAgentMail(
@@ -1738,7 +1717,7 @@ export class StorageService {
       mutedOutbound?: boolean;
     },
   ): Promise<MailboxDescriptor> {
-    return this.repos.agentMail.updateAgentMailboxPolicy(environmentId, tabId, updates);
+    return this.repos.agentMailboxes.updateAgentMailboxPolicy(environmentId, tabId, updates);
   }
 
   getAgentMailStatus(messageId: string): Promise<AgentMailMessageSummary> {
@@ -1749,15 +1728,15 @@ export class StorageService {
     limit = 100,
     options: { includeDeferred?: boolean; includeCoalescing?: boolean } = {},
   ): Promise<PendingAgentMailInject[]> {
-    return this.repos.agentMail.listPendingAgentMailInjects(limit, options);
+    return this.repos.agentMailInjects.listPendingAgentMailInjects(limit, options);
   }
 
   resetAgentMailInjectBackoff(mailboxId: string): Promise<void> {
-    return this.repos.agentMail.resetAgentMailInjectBackoff(mailboxId);
+    return this.repos.agentMailInjects.resetAgentMailInjectBackoff(mailboxId);
   }
 
   listInterruptedAgentMailInjects(): Promise<PendingAgentMailInject[]> {
-    return this.repos.agentMail.listInterruptedAgentMailInjects();
+    return this.repos.agentMailInjects.listInterruptedAgentMailInjects();
   }
 
   listAgentMailSentByMailbox(
@@ -1790,7 +1769,7 @@ export class StorageService {
   }
 
   claimAgentMailWorkerStart(environmentId: string, messageId: string): Promise<boolean> {
-    return this.repos.agentMail.claimAgentMailWorkerStart(environmentId, messageId);
+    return this.repos.agentMailInjects.claimAgentMailWorkerStart(environmentId, messageId);
   }
 
   beginAgentMailInject(
@@ -1800,7 +1779,7 @@ export class StorageService {
     verificationRequestId?: string,
     options: { joinCoalescing?: boolean } = {},
   ): Promise<AgentMailMessage | null> {
-    return this.repos.agentMail.beginAgentMailInject(
+    return this.repos.agentMailInjects.beginAgentMailInject(
       mailboxId,
       messageId,
       incarnationId,
@@ -1821,11 +1800,11 @@ export class StorageService {
       /** Outcome unknown: confirm `requestId` against the journal before resending. */
       | { outcome: "verify"; requestId: string },
   ): Promise<AgentMailMessage | null> {
-    return this.repos.agentMail.finishAgentMailInject(mailboxId, messageId, outcome);
+    return this.repos.agentMailInjects.finishAgentMailInject(mailboxId, messageId, outcome);
   }
 
   recoverInterruptedAgentMailInjects(): Promise<number> {
-    return this.repos.agentMail.recoverInterruptedAgentMailInjects();
+    return this.repos.agentMailInjects.recoverInterruptedAgentMailInjects();
   }
 
   deleteAgentMailByProject(projectId: string): Promise<void> {
@@ -1838,637 +1817,5 @@ export class StorageService {
 
   pruneAgentMail(retentionDays: number): Promise<void> {
     return this.repos.agentMail.pruneAgentMail(retentionDays);
-  }
-
-  // KanbanRepository
-
-  getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
-    return this.repos.kanban.getKanbanTasks(projectId);
-  }
-
-  getKanbanTask(taskId: string): Promise<KanbanTask | null> {
-    return this.repos.kanban.getKanbanTask(taskId);
-  }
-
-  addKanbanTask(
-    projectId: string,
-    title: string,
-    description: string,
-    initial: {
-      acceptanceCriteria?: string;
-      status?: KanbanStatus;
-      requestId?: string;
-      featureBuildRequestHash?: string;
-    } = {},
-  ): Promise<KanbanTask> {
-    return this.repos.kanban.addKanbanTask(projectId, title, description, initial);
-  }
-
-  findKanbanTaskByRequestId(projectId: string, requestId: string): Promise<KanbanTask | null> {
-    return this.repos.kanban.findKanbanTaskByRequestId(projectId, requestId);
-  }
-
-  updateKanbanTask(
-    taskId: string,
-    updates: Partial<KanbanTask>,
-    expectedProjectId?: string,
-  ): Promise<KanbanTask> {
-    return this.repos.kanban.updateKanbanTask(taskId, updates, expectedProjectId);
-  }
-
-  deleteKanbanTask(taskId: string): Promise<void> {
-    return this.repos.kanban.deleteKanbanTask(taskId);
-  }
-
-  addKanbanComment(
-    taskId: string,
-    text: string,
-    expectedProjectId?: string,
-    requestId?: string,
-  ): Promise<KanbanTask> {
-    return this.repos.kanban.addKanbanComment(taskId, text, expectedProjectId, requestId);
-  }
-
-  deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
-    return this.repos.kanban.deleteKanbanComment(taskId, commentId);
-  }
-
-  addKanbanImage(taskId: string, filename: string, data: string): Promise<KanbanTask> {
-    return this.repos.kanban.addKanbanImage(taskId, filename, data);
-  }
-
-  addNormalizedKanbanImageForRequest(
-    taskId: string,
-    filename: string,
-    data: string,
-    requestId: string,
-  ): Promise<{ task: KanbanTask; image: KanbanImage }> {
-    return this.repos.kanban.addNormalizedKanbanImageForRequest(taskId, filename, data, requestId);
-  }
-
-  deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
-    return this.repos.kanban.deleteKanbanImage(taskId, imageId);
-  }
-
-  getKanbanImageData(imageId: string): Promise<string> {
-    return this.repos.kanban.getKanbanImageData(imageId);
-  }
-
-  getProjectNotes(projectId: string): Promise<ProjectNotes> {
-    return this.repos.kanban.getProjectNotes(projectId);
-  }
-
-  saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
-    return this.repos.kanban.saveProjectNotes(projectId, content);
-  }
-
-  getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
-    return this.repos.kanban.getFeaturePlans(projectId);
-  }
-
-  createFeaturePlan(projectId: string): Promise<FeaturePlan> {
-    return this.repos.kanban.createFeaturePlan(projectId);
-  }
-
-  updateFeaturePlan(featureId: string, updates: Partial<FeaturePlan>): Promise<FeaturePlan> {
-    return this.repos.kanban.updateFeaturePlan(featureId, updates);
-  }
-
-  claimFeaturePlanBuild(
-    featureId: string,
-    taskId: string,
-  ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
-    return this.repos.kanban.claimFeaturePlanBuild(featureId, taskId);
-  }
-
-  appendFeaturePlanMessage(
-    featureId: string,
-    role: FeaturePlanMessage["role"],
-    content: string,
-    stateApplication?: FeaturePlanMessage["stateApplication"],
-    modelId?: string,
-  ): Promise<FeaturePlan> {
-    return this.repos.kanban.appendFeaturePlanMessage(
-      featureId,
-      role,
-      content,
-      stateApplication,
-      modelId,
-    );
-  }
-
-  appendFeatureStoryMessage(
-    featureId: string,
-    storyId: string,
-    role: FeaturePlanMessage["role"],
-    content: string,
-    stateApplication?: FeaturePlanMessage["stateApplication"],
-    modelId?: string,
-  ): Promise<FeaturePlan> {
-    return this.repos.kanban.appendFeatureStoryMessage(
-      featureId,
-      storyId,
-      role,
-      content,
-      stateApplication,
-      modelId,
-    );
-  }
-
-  listAllFeaturePlans(): Promise<FeaturePlan[]> {
-    return this.repos.kanban.listAllFeaturePlans();
-  }
-
-  getFeaturePlan(featureId: string): Promise<FeaturePlan | null> {
-    return this.repos.kanban.getFeaturePlan(featureId);
-  }
-
-  listActiveFeaturePlanning(): Promise<FeaturePlanningRecord[]> {
-    return this.repos.kanban.listActiveFeaturePlanning();
-  }
-
-  startFeaturePlanning(
-    record: FeaturePlanningRecord,
-  ): Promise<{ started: boolean; feature: FeaturePlan }> {
-    return this.repos.kanban.startFeaturePlanning(record);
-  }
-
-  mutateFeaturePlanning<T>(
-    featureId: string,
-    operationId: string,
-    mutator: (plan: FeaturePlan, record: FeaturePlanningRecord) => T,
-  ): Promise<{ result: T; feature: FeaturePlan }> {
-    return this.repos.kanban.mutateFeaturePlanning(featureId, operationId, mutator);
-  }
-
-  clearFeaturePlanning(featureId: string, operationId: string): Promise<FeaturePlan> {
-    return this.repos.kanban.clearFeaturePlanning(featureId, operationId);
-  }
-
-  getLinearAuth(): Promise<LinearAuth | null> {
-    return this.repos.kanban.getLinearAuth();
-  }
-
-  saveLinearAuth(apiKey: string, viewer?: LinearAuth["viewer"]): Promise<LinearAuth> {
-    return this.repos.kanban.saveLinearAuth(apiKey, viewer);
-  }
-
-  clearLinearAuth(): Promise<void> {
-    return this.repos.kanban.clearLinearAuth();
-  }
-
-  getLinearCompletionComment(pipelineId: string): Promise<LinearCompletionComment | null> {
-    return this.repos.kanban.getLinearCompletionComment(pipelineId);
-  }
-
-  saveLinearCompletionComment(
-    record: Omit<LinearCompletionComment, "updatedAt"> & { updatedAt?: string },
-  ): Promise<LinearCompletionComment> {
-    return this.repos.kanban.saveLinearCompletionComment(record);
-  }
-
-  getGitHubCompletionComment(pipelineId: string): Promise<GitHubCompletionComment | null> {
-    return this.repos.kanban.getGitHubCompletionComment(pipelineId);
-  }
-
-  withGitHubCompletionCommentLock<T>(pipelineId: string, operation: () => Promise<T>): Promise<T> {
-    return this.repos.kanban.withGitHubCompletionCommentLock(pipelineId, operation);
-  }
-
-  saveGitHubCompletionComment(
-    record: Omit<GitHubCompletionComment, "updatedAt"> & { updatedAt?: string },
-  ): Promise<GitHubCompletionComment> {
-    return this.repos.kanban.saveGitHubCompletionComment(record);
-  }
-
-  // PreviewServicesRepository
-
-  loadPreviewServiceStore(): Promise<LoadedPreviewServiceStore> {
-    return this.repos.previewServices.loadPreviewServiceStore();
-  }
-
-  mutatePreviewServiceStore<T>(
-    mutate: (store: PreviewServiceStore) => { changed: boolean; result: T },
-  ): Promise<T> {
-    return this.repos.previewServices.mutatePreviewServiceStore(mutate);
-  }
-
-  getPreviewBackendIdentity(): Promise<PreviewBackendIdentity> {
-    return this.repos.previewServices.getPreviewBackendIdentity();
-  }
-
-  getBackendProfile(): Promise<BackendProfile> {
-    return this.repos.previewServices.getBackendProfile();
-  }
-
-  updateBackendProfile(update: BackendProfileUpdate): Promise<BackendProfile> {
-    return this.repos.previewServices.updateBackendProfile(update);
-  }
-
-  loadPreviewSettings(): Promise<PreviewSettings> {
-    return this.repos.previewServices.loadPreviewSettings();
-  }
-
-  updatePreviewSettings(
-    update: (current: PreviewSettings) => PreviewSettings,
-  ): Promise<PreviewSettings> {
-    return this.repos.previewServices.updatePreviewSettings(update);
-  }
-
-  // NodesRepository
-
-  getControllerSettings(): Promise<ControllerSettingsStore> {
-    return this.repos.nodes.getControllerSettings();
-  }
-
-  mutateControllerSettings<T>(
-    mutate: (current: ControllerSettingsStore) => NodeStoreMutation<ControllerSettingsStore, T>,
-  ): Promise<T> {
-    return this.repos.nodes.mutateControllerSettings(mutate);
-  }
-
-  getPortalLayout(): Promise<PortalLayout> {
-    return this.repos.nodes.getPortalLayout();
-  }
-
-  updatePortalLayout(update: PortalLayoutUpdate): Promise<PortalLayout> {
-    return this.repos.nodes.updatePortalLayout(update);
-  }
-
-  loadNodeSummariesCache(): Promise<unknown> {
-    return this.repos.nodes.loadNodeSummariesCache();
-  }
-
-  saveNodeSummariesCache(value: unknown): Promise<void> {
-    return this.repos.nodes.saveNodeSummariesCache(value);
-  }
-
-  loadNodeMail(): Promise<unknown> {
-    return this.repos.nodes.loadNodeMail();
-  }
-
-  mutateNodeMail<T>(mutate: (current: unknown) => { next: unknown; result: T }): Promise<T> {
-    return this.repos.nodes.mutateNodeMail(mutate);
-  }
-
-  loadNodeActionRequests(): Promise<unknown> {
-    return this.repos.nodes.loadNodeActionRequests();
-  }
-
-  saveNodeActionRequests(requests: unknown): Promise<void> {
-    return this.repos.nodes.saveNodeActionRequests(requests);
-  }
-
-  loadNodeOutcomes(): Promise<unknown> {
-    return this.repos.nodes.loadNodeOutcomes();
-  }
-
-  saveNodeOutcomes(records: unknown): Promise<void> {
-    return this.repos.nodes.saveNodeOutcomes(records);
-  }
-
-  getNodeRegistry(): Promise<NodeRegistry> {
-    return this.repos.nodes.getNodeRegistry();
-  }
-
-  mutateNodeRegistry<T>(
-    mutate: (current: NodeRegistry) => NodeStoreMutation<NodeRegistry, T>,
-  ): Promise<T> {
-    return this.repos.nodes.mutateNodeRegistry(mutate);
-  }
-
-  getNodeAttachments(): Promise<NodeAttachments> {
-    return this.repos.nodes.getNodeAttachments();
-  }
-
-  mutateNodeAttachments<T>(
-    mutate: (current: NodeAttachments) => NodeStoreMutation<NodeAttachments, T>,
-  ): Promise<T> {
-    return this.repos.nodes.mutateNodeAttachments(mutate);
-  }
-
-  // PublicOperationsRepository
-
-  setPublicOperationLimitsForTesting(
-    limits: Partial<PublicOperationsRepository["publicOperationLimits"]>,
-  ): void {
-    return this.repos.publicOperations.setPublicOperationLimitsForTesting(limits);
-  }
-
-  loadPublicOperationIndex(): Promise<PublicOperationIndex> {
-    return this.repos.publicOperations.loadPublicOperationIndex();
-  }
-
-  publicOperationNamespaces(now = Date.now()): Promise<{ current: string; retained: string[] }> {
-    return this.repos.publicOperations.publicOperationNamespaces(now);
-  }
-
-  admitPublicOperation(
-    input: AdmitPublicOperationInput,
-  ): Promise<{ record: PublicOperationRecord; replayed: boolean }> {
-    return this.repos.publicOperations.admitPublicOperation(input);
-  }
-
-  updatePublicOperation(
-    operationId: string,
-    update: (record: PublicOperationRecord) => PublicOperationRecord | null,
-  ): Promise<PublicOperationRecord | null> {
-    return this.repos.publicOperations.updatePublicOperation(operationId, update);
-  }
-
-  getPublicOperation(operationId: string): Promise<PublicOperationLookup> {
-    return this.repos.publicOperations.getPublicOperation(operationId);
-  }
-
-  findPublicOperationByKey(requestKey: string): Promise<PublicOperationRecord | null> {
-    return this.repos.publicOperations.findPublicOperationByKey(requestKey);
-  }
-
-  claimStalePublicOperation(
-    operationId: string,
-    generation: string,
-  ): Promise<PublicOperationRecord | null> {
-    return this.repos.publicOperations.claimStalePublicOperation(operationId, generation);
-  }
-
-  findPublicOperationsByRequest(
-    requestId: string,
-    filter: { authority: PublicAuthority; action?: PublicActionName; namespace?: string },
-  ): Promise<{ records: PublicOperationRecord[]; expiredNamespace?: string }> {
-    return this.repos.publicOperations.findPublicOperationsByRequest(requestId, filter);
-  }
-
-  listSettledPublicOperationsChangedSince(
-    authority: PublicAuthority,
-    sinceMs: number,
-    limit: number,
-    window?: { until: number; after?: AttentionPosition },
-  ): Promise<{ records: PublicOperationRecord[]; total: number }> {
-    return this.repos.publicOperations.listSettledPublicOperationsChangedSince(
-      authority,
-      sinceMs,
-      limit,
-      window,
-    );
-  }
-
-  listActivePublicOperations(): Promise<PublicOperationRecord[]> {
-    return this.repos.publicOperations.listActivePublicOperations();
-  }
-
-  collectPublicOperations(now = Date.now()): Promise<{ retired: string[]; kept: string[] }> {
-    return this.repos.publicOperations.collectPublicOperations(now);
-  }
-
-  updateProjectAtRevision(
-    projectId: string,
-    expectedRevision: string | undefined,
-    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
-  ): Promise<Project> {
-    return this.repos.publicOperations.updateProjectAtRevision(
-      projectId,
-      expectedRevision,
-      updates,
-    );
-  }
-
-  patchRepositorySettingsAtRevision(
-    projectId: string,
-    expectedRevision: string | undefined,
-    apply: (current: RepositoryConfig) => RepositoryConfig,
-  ): Promise<RepositoryConfig> {
-    return this.repos.publicOperations.patchRepositorySettingsAtRevision(
-      projectId,
-      expectedRevision,
-      apply,
-    );
-  }
-
-  patchEnvironmentSettingsAtRevision(
-    environmentId: string,
-    expectedRevision: string | undefined,
-    apply: (
-      current: {
-        portMappings?: PortMapping[];
-        allowedDomains?: string[];
-        agentSettings?: AgentSettingsTier;
-      },
-      environment: Environment,
-    ) => {
-      portMappings?: PortMapping[];
-      allowedDomains?: string[];
-      agentSettings?: AgentSettingsTier;
-    },
-  ): Promise<Environment> {
-    return this.repos.publicOperations.patchEnvironmentSettingsAtRevision(
-      environmentId,
-      expectedRevision,
-      apply,
-    );
-  }
-
-  // CoordinatorsRepository and AgentAccountsRepository
-
-  agentAccountsDirectory(): string {
-    return this.repos.agentAccounts.agentAccountsDirectory();
-  }
-
-  loadAgentAccounts(): Promise<AgentAccountStore> {
-    return this.repos.agentAccounts.loadAgentAccounts();
-  }
-
-  mutateAgentAccounts<T>(
-    mutate: (
-      store: AgentAccountStore,
-    ) => { store: AgentAccountStore; result: T } | Promise<{ store: AgentAccountStore; result: T }>,
-  ): Promise<T> {
-    return this.repos.agentAccounts.mutateAgentAccounts(mutate);
-  }
-
-  getCoordinatorWorkspace(projectId: string): Promise<CoordinatorWorkspace | null> {
-    return this.repos.coordinators.getCoordinatorWorkspace(projectId);
-  }
-
-  getCoordinatorWorkspaceById(coordinatorId: string): Promise<CoordinatorWorkspace | null> {
-    return this.repos.coordinators.getCoordinatorWorkspaceById(coordinatorId);
-  }
-
-  listCoordinatorWorkspaces(): Promise<CoordinatorWorkspace[]> {
-    return this.repos.coordinators.listCoordinatorWorkspaces();
-  }
-
-  listCoordinatorWorkflowAssociations(
-    projectId: string,
-  ): Promise<CoordinatorWorkflowAssociation[]> {
-    return this.repos.coordinators.listCoordinatorWorkflowAssociations(projectId);
-  }
-
-  listAllCoordinatorWorkflowAssociations(): Promise<CoordinatorWorkflowAssociation[]> {
-    return this.repos.coordinators.listAllCoordinatorWorkflowAssociations();
-  }
-
-  getCoordinatorReconciliationState(): Promise<{
-    workspaces: CoordinatorWorkspace[];
-    workflows: CoordinatorWorkflowAssociation[];
-  }> {
-    return this.repos.coordinators.getCoordinatorReconciliationState();
-  }
-
-  mutateCoordinatorWorkspaceWithComposeDrafts(
-    projectId: string,
-    mutate: (
-      current: CoordinatorWorkspace | null,
-      drafts: Awaited<ReturnType<StorageService["listComposeDrafts"]>>,
-    ) => CoordinatorWorkspace | null,
-  ): Promise<CoordinatorWorkspace | null> {
-    return this.repos.coordinators.mutateCoordinatorWorkspaceWithComposeDrafts(projectId, mutate);
-  }
-
-  mutateCoordinatorWorkspace(
-    projectId: string,
-    mutate: (current: CoordinatorWorkspace | null) => CoordinatorWorkspace | null,
-  ): Promise<CoordinatorWorkspace | null> {
-    return this.repos.coordinators.mutateCoordinatorWorkspace(projectId, mutate);
-  }
-
-  saveCoordinatorWorkflowAssociation(
-    association: CoordinatorWorkflowAssociation,
-  ): Promise<CoordinatorWorkflowAssociation> {
-    return this.repos.coordinators.saveCoordinatorWorkflowAssociation(association);
-  }
-
-  reserveCoordinatorWorkflowAssociation(
-    association: CoordinatorWorkflowAssociation,
-  ): Promise<{ association: CoordinatorWorkflowAssociation; claimed: boolean }> {
-    return this.repos.coordinators.reserveCoordinatorWorkflowAssociation(association);
-  }
-
-  completeCoordinatorWorkflowAssociation(
-    associationId: string,
-    resourceId: string,
-  ): Promise<CoordinatorWorkflowAssociation> {
-    return this.repos.coordinators.completeCoordinatorWorkflowAssociation(
-      associationId,
-      resourceId,
-    );
-  }
-
-  addCoordinatorWorkflowRequestAlias(
-    associationId: string,
-    coordinatorId: string,
-    conversationId: string,
-    requestId: string,
-    payloadHash: string,
-  ): Promise<CoordinatorWorkflowAssociation> {
-    return this.repos.coordinators.addCoordinatorWorkflowRequestAlias(
-      associationId,
-      coordinatorId,
-      conversationId,
-      requestId,
-      payloadHash,
-    );
-  }
-
-  openCoordinatorDelegation(
-    associationId: string,
-    workerTabId: string,
-    at = new Date().toISOString(),
-  ): Promise<CoordinatorWorkflowAssociation | null> {
-    return this.repos.coordinators.openCoordinatorDelegation(associationId, workerTabId, at);
-  }
-
-  listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
-    return this.repos.coordinators.listOpenCoordinatorDelegations();
-  }
-
-  listUnwokenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
-    return this.repos.coordinators.listUnwokenCoordinatorDelegations();
-  }
-
-  closeCoordinatorDelegation(
-    associationId: string,
-    state: "completed" | "failed" | "stopped",
-    at = new Date().toISOString(),
-    backgroundWorkTimeoutMs?: number,
-  ): Promise<CoordinatorWorkflowAssociation | null> {
-    return this.repos.coordinators.closeCoordinatorDelegation(
-      associationId,
-      state,
-      at,
-      backgroundWorkTimeoutMs,
-    );
-  }
-
-  prepareCoordinatorDelegationWake(
-    associationId: string,
-    wakeKind: "report" | "notice",
-  ): Promise<CoordinatorWorkflowAssociation | null> {
-    return this.repos.coordinators.prepareCoordinatorDelegationWake(associationId, wakeKind);
-  }
-
-  markCoordinatorDelegationWoken(
-    associationId: string,
-    at = new Date().toISOString(),
-  ): Promise<void> {
-    return this.repos.coordinators.markCoordinatorDelegationWoken(associationId, at);
-  }
-
-  updateCoordinatorWorkflowAssociation(
-    associationId: string,
-    mutate: (association: CoordinatorWorkflowAssociation) => boolean,
-  ): Promise<CoordinatorWorkflowAssociation | null> {
-    return this.repos.coordinators.updateCoordinatorWorkflowAssociation(associationId, mutate);
-  }
-
-  markCoordinatorWorkflowNotified(associationId: string, revision: number): Promise<void> {
-    return this.repos.coordinators.markCoordinatorWorkflowNotified(associationId, revision);
-  }
-
-  adoptCoordinatorWorkflowAssociation(
-    projectId: string,
-    coordinatorId: string,
-    associationId: string,
-    conversationId: string,
-    options: { force?: boolean } = {},
-  ): Promise<CoordinatorWorkflowAssociation> {
-    return this.repos.coordinators.adoptCoordinatorWorkflowAssociation(
-      projectId,
-      coordinatorId,
-      associationId,
-      conversationId,
-      options,
-    );
-  }
-
-  coordinatorAttachmentDirectory(coordinatorId: string, conversationId: string): string {
-    return this.repos.coordinators.coordinatorAttachmentDirectory(coordinatorId, conversationId);
-  }
-
-  pruneCoordinatorAttachmentDirectories(
-    coordinatorId: string,
-    retainedConversationIds: ReadonlySet<string>,
-  ): Promise<void> {
-    return this.repos.coordinators.pruneCoordinatorAttachmentDirectories(
-      coordinatorId,
-      retainedConversationIds,
-    );
-  }
-
-  writeCoordinatorAttachment(
-    coordinatorId: string,
-    conversationId: string,
-    filename: string,
-    base64Data: string,
-  ): Promise<string> {
-    return this.repos.coordinators.writeCoordinatorAttachment(
-      coordinatorId,
-      conversationId,
-      filename,
-      base64Data,
-    );
-  }
-
-  deleteCoordinatorByProject(projectId: string): Promise<void> {
-    return this.repos.coordinators.deleteCoordinatorByProject(projectId);
   }
 }

@@ -264,6 +264,58 @@ describe("authorized global routes", () => {
     }
   });
 
+  test("marks the model a session with no explicit model starts on (0172)", async () => {
+    // Pi's saved default is not the catalogue's first model: a launch that
+    // fell back to the first one ran a model the login refused.
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-bridge-catalogue-default-"));
+    const previous = {
+      agent: process.env.PI_AGENT_DIR,
+      fallback: process.env.PI_BRIDGE_DEFAULT_MODEL,
+    };
+    process.env.PI_AGENT_DIR = agentDir;
+    delete process.env.PI_BRIDGE_DEFAULT_MODEL;
+    installRuntime({}, [
+      testModel({ id: "refused", name: "Refused" }),
+      testModel({ id: "saved", name: "Saved" }),
+    ]);
+    try {
+      const marked = async () =>
+        ((await (await call("/global/models")).json()) as { models: Record<string, unknown>[] })
+          .models;
+
+      // No saved default and no fallback: a session starts on the first
+      // model, which is where callers fall back anyway, so nothing is marked.
+      expect((await marked()).some((model) => "sessionDefault" in model)).toBe(false);
+
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: "test-provider", defaultModel: "saved" }),
+      );
+      expect((await marked()).map((model) => [model.id, model.sessionDefault ?? false])).toEqual([
+        ["test-provider/refused", false],
+        ["test-provider/saved", true],
+      ]);
+
+      // A saved default the catalogue does not offer is skipped, as a session
+      // skips it, and the backend's fallback is marked instead.
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: "signed-out", defaultModel: "x" }),
+      );
+      process.env.PI_BRIDGE_DEFAULT_MODEL = "test-provider/saved";
+      expect((await marked()).find((model) => model.sessionDefault)?.id).toBe(
+        "test-provider/saved",
+      );
+    } finally {
+      if (previous.agent === undefined) delete process.env.PI_AGENT_DIR;
+      else process.env.PI_AGENT_DIR = previous.agent;
+      if (previous.fallback === undefined) delete process.env.PI_BRIDGE_DEFAULT_MODEL;
+      else process.env.PI_BRIDGE_DEFAULT_MODEL = previous.fallback;
+      resetTestDependencies();
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   test("refreshes the runtime before rebuilding the model catalogue", async () => {
     let refreshed = 0;
     const models = [testModel({ id: "before", name: "Before" })];
@@ -1321,6 +1373,18 @@ describe("successful lifecycle routes", () => {
       expect(state.status).toBe("error");
       expect(state.error).toBe("OAuth token refresh failed: invalid_grant");
       expect(state.promptJournal.get("req-run-failed")?.state).toBe("failed");
+      // The reason is in the transcript too, where the next turn cannot
+      // replace it, rather than an empty reply.
+      const failure = state.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "status");
+      expect(failure).toEqual([
+        expect.objectContaining({
+          type: "status",
+          severity: "error",
+          content: "OAuth token refresh failed: invalid_grant",
+        }),
+      ]);
     } finally {
       resetTestDependencies();
     }
@@ -1353,6 +1417,9 @@ describe("successful lifecycle routes", () => {
       expect(state.status).toBe("idle");
       expect(state.error).toBeUndefined();
       expect(state.promptJournal.get("req-retried")?.state).toBe("completed");
+      expect(
+        state.messages.flatMap((message) => message.parts).some((part) => part.type === "status"),
+      ).toBe(false);
     } finally {
       resetTestDependencies();
     }

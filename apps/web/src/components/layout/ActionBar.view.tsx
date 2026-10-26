@@ -72,7 +72,6 @@ import {
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
 import { DockerStatsDialog } from "@/components/docker";
-import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
 import {
@@ -104,10 +103,6 @@ const LazyRepositorySettings = lazy(async () => ({
 }));
 const LazySettingsPage = lazy(async () => ({
   default: (await import("@/components/settings/SettingsPage")).SettingsPage,
-}));
-const LazyEnvironmentSettingsDialog = lazy(async () => ({
-  default: (await import("@/components/environments/EnvironmentSettingsDialog"))
-    .EnvironmentSettingsDialog,
 }));
 
 const ToolbarTooltipsEnabledContext = createContext(true);
@@ -238,7 +233,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     projectBoardTab,
     openProjectBoardTab,
     openProjectNotes,
-    updateEnvironment,
     selectedEnvironment,
     workspaceReady,
     setupRunning,
@@ -257,7 +251,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     globalSettingsDefaultSection,
     globalSettingsSectionRequest,
     setGlobalSettingsOpen,
-    setEnvSettingsEnvironmentId,
+    openEnvironmentSettings,
     dockerStatsOpen,
     setDockerStatsOpen,
     isOpeningEditor,
@@ -309,7 +303,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isDragging,
     selectedProject,
     repoSettingsProject,
-    envSettingsEnvironment,
     isProjectView,
     hasProjectCheckout,
     isCleanupTargetDeleting,
@@ -775,7 +768,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
-                    onClick={() => setEnvSettingsEnvironmentId(selectedEnvironment?.id ?? null)}
+                    onClick={() => {
+                      if (selectedEnvironment) openEnvironmentSettings(selectedEnvironment.id);
+                    }}
                     aria-label="Environment settings"
                     disabled={!selectedEnvironment}
                   >
@@ -1722,22 +1717,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               if (!open) setRepoSettingsProjectId(null);
             }}
             onUpdateProject={updateProject}
-          />
-        </LazyLoadBoundary>
-      )}
-
-      {envSettingsEnvironment && (
-        <LazyLoadBoundary
-          loadingFallback={<LazyDialogLoadingFallback label="Loading environment settings…" />}
-        >
-          <LazyEnvironmentSettingsDialog
-            open
-            onOpenChange={(open) => {
-              if (!open) setEnvSettingsEnvironmentId(null);
-            }}
-            environment={envSettingsEnvironment}
-            onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-            onRestart={backend.recreateEnvironment}
           />
         </LazyLoadBoundary>
       )}

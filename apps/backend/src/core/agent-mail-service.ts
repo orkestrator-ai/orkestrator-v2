@@ -16,7 +16,7 @@ import type {
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail.js";
+import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail-injects.js";
 
 const OBSERVED_PRESENCE_TTL_MS = 4_000;
 const HOURLY_RELEASE_INTERVAL_MS = 30_000;
@@ -454,7 +454,8 @@ export class AgentMailService {
       }
       const coordinatorId = coordinatorIdFromRuntimeId(mailbox.environmentId);
       if (coordinatorId) {
-        const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
+        const workspace =
+          await this.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
         if (!workspace || workspace.lifecycleState !== "ready") {
           await this.recordPresence(mailbox.mailboxId, "environment_unready");
           this.noteSkip(message, mailbox, "environment_unready");

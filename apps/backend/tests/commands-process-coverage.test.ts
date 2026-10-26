@@ -250,8 +250,10 @@ function createContext(initialEnvironment = environment()): {
     storage: {
       getDataDir: () => root,
       // No added agent accounts: every launch uses the host login.
-      loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
-      agentAccountsDirectory: () => path.join(root, "agent-accounts"),
+      agentAccounts: {
+        loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
+        agentAccountsDirectory: () => path.join(root, "agent-accounts"),
+      },
       getEnvironment: mock(async (id: string) =>
         id === initialEnvironment.id ? initialEnvironment : null,
       ),
@@ -663,12 +665,21 @@ describe("process and platform command behavior", () => {
 
   test("keeps an explicit per-environment allowlist intact when no platform with its own hosts is enabled", async () => {
     fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
-    fixture.globalConfig.enabledAgentPlatforms = ["claude", "opencode"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude"];
     fixture.environment.containerId = null;
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const allowed = lastAllowedDomains(await readCommandLog());
     expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
+  });
+
+  test("adds OpenCode's own providers' host when OpenCode is enabled", async () => {
+    fixture.environment.allowedDomains = ["github.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude", "opencode"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    expect(lastAllowedDomains(await readCommandLog())).toEqual(["github.com", "opencode.ai"]);
   });
 
   test("an image without per-port rules receives each domain once, without its port", async () => {
@@ -1694,7 +1705,11 @@ describe("Linear and looped review command behavior", () => {
       appRoot: root,
       resourceRoot: root,
       emit: mock(() => {}),
-      storage: { getLinearAuth },
+      storage: {
+        kanban: {
+          getLinearAuth,
+        },
+      },
     } as unknown as CommandContext;
     return { context, getLinearAuth };
   }

@@ -242,7 +242,12 @@ describe("environment overlay on a real container", () => {
             getEnvironment: async (candidate) =>
               (candidate === environment.id ? environment : null) as never,
             getProject: async () => ({ id: "p", name: "p" }) as never,
-            getPreviewBackendIdentity: async () => ({ instanceId: "live-backend" }),
+            previewServices: {
+              getPreviewBackendIdentity: async () => ({
+                instanceId: "live-backend",
+                created: false,
+              }),
+            },
           },
           emit: () => undefined,
           probe: {
@@ -524,7 +529,12 @@ describe("a real rebuild re-stages the backend user's inputs", () => {
           storage: {
             getEnvironment: (id) => fixture.context.storage.getEnvironment(id),
             getProject: async () => ({ id: "project-1", name: "Project" }) as never,
-            getPreviewBackendIdentity: async () => ({ instanceId: "live-rebuild" }),
+            previewServices: {
+              getPreviewBackendIdentity: async () => ({
+                instanceId: "live-rebuild",
+                created: false,
+              }),
+            },
           },
           emit: () => undefined,
           probe: {

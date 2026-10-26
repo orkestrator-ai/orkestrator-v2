@@ -45,7 +45,7 @@ export async function resolveCoordinatorRuntime(
   const coordinatorId = coordinatorIdFromRuntimeId(runtimeId);
   if (!coordinatorId) return { status: "not-coordinator" };
 
-  const workspace = await storage.getCoordinatorWorkspaceById(coordinatorId);
+  const workspace = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
   if (!workspace) return { status: "unavailable", coordinatorId, reason: "workspace" };
   if (workspace.lifecycleState !== "ready") {
     return { status: "unavailable", coordinatorId, reason: "workspace-not-ready" };

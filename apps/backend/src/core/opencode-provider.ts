@@ -650,7 +650,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       // Grant inside the lock; another provider may have owned the preceding turn.
       await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
       const dispatchStartedAt = this.now();
-      this.streamState.beginTurn(sessionId, dispatchStartedAt);
+      this.streamState.beginTurn(sessionId, dispatchStartedAt, options.requestId);
       this.actionRetry.beginTurn(sessionId);
       await this.changeEvidence.beginTurn(sessionId, messageID);
       let response;
@@ -698,7 +698,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
         // Drop the dispatch clock so a later turn cannot inherit an abandoned stamp.
-        this.streamState.rejectTurn(sessionId, dispatchStartedAt);
+        this.streamState.rejectTurn(sessionId, dispatchStartedAt, true);
         throw new AmbiguousPromptDispatchError("OpenCode prompt dispatch outcome is unknown", {
           cause: error,
         });
@@ -771,7 +771,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   readonly turnTerminalError = (sessionId: string, requestId: string) =>
-    readOpenCodeTurnTerminalError(this.client, sessionId, requestId, this.requestOptions());
+    readOpenCodeTurnTerminalError(this.client, sessionId, requestId, this.requestOptions(), {
+      failure: this.streamState.dispatchFailure(sessionId, requestId),
+      now: this.now(),
+    });
 
   async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
     return this.workflowResults.settleCompleted(

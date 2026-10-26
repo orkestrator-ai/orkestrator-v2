@@ -1364,7 +1364,11 @@ describe("direct backend command registry coverage", () => {
         buildTaskId: "task-winner",
       },
     }));
-    const context = contextWithStorage({ claimFeaturePlanBuild });
+    const context = contextWithStorage({
+      kanban: {
+        claimFeaturePlanBuild,
+      },
+    });
 
     await expect(
       invoke(

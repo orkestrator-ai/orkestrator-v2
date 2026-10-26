@@ -30,7 +30,7 @@ export async function loadOperation(
   if (!/^op-[0-9]{13}-[a-f0-9]{8}-[a-f0-9]{18}$/.test(operationId)) {
     throw new PublicActionError("not-found", "Operation ID is not valid");
   }
-  const lookup = await context.command.storage.getPublicOperation(operationId);
+  const lookup = await context.command.storage.publicOperations.getPublicOperation(operationId);
   if (lookup.status === "expired") {
     throw new PublicActionError(
       "history-expired",
@@ -110,7 +110,7 @@ export function createRunReadHandlers(
       if (input.operationId) {
         record = await loadOperation(context, input.operationId);
       } else {
-        const found = await context.command.storage.findPublicOperationsByRequest(
+        const found = await context.command.storage.publicOperations.findPublicOperationsByRequest(
           input.requestId!,
           {
             authority: context.authority,
@@ -249,38 +249,40 @@ const runRetry: MutationActionHandler<{ operationId: string }> = {
                   state: "rejected",
                   ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
                 } as const);
-        await context.command.storage.updatePublicOperation(record.operationId, (current) =>
-          ["admitted", "running", "unknown"].includes(current.state)
-            ? {
-                ...current,
-                dispatch,
-                ...(dispatch.state === "accepted" && record.action === "session.steer"
-                  ? { result: { sessionId: session.sessionId } }
-                  : {}),
-                ...(dispatch.state === "rejected" ||
-                (dispatch.state === "accepted" && record.action === "session.steer")
-                  ? { stage: "completed", completedAt: new Date(context.now()).toISOString() }
-                  : {}),
-                state:
-                  dispatch.state === "accepted"
-                    ? record.action === "session.steer"
-                      ? "succeeded"
-                      : "running"
-                    : dispatch.state === "unknown"
-                      ? "unknown"
-                      : "failed",
-                ...(dispatch.state === "rejected"
-                  ? {
-                      error: {
-                        code: "operation-failed" as const,
-                        message: dispatch.error ?? "The provider rejected the prompt",
-                      },
-                    }
-                  : dispatch.state === "accepted"
-                    ? { error: undefined }
+        await context.command.storage.publicOperations.updatePublicOperation(
+          record.operationId,
+          (current) =>
+            ["admitted", "running", "unknown"].includes(current.state)
+              ? {
+                  ...current,
+                  dispatch,
+                  ...(dispatch.state === "accepted" && record.action === "session.steer"
+                    ? { result: { sessionId: session.sessionId } }
                     : {}),
-              }
-            : null,
+                  ...(dispatch.state === "rejected" ||
+                  (dispatch.state === "accepted" && record.action === "session.steer")
+                    ? { stage: "completed", completedAt: new Date(context.now()).toISOString() }
+                    : {}),
+                  state:
+                    dispatch.state === "accepted"
+                      ? record.action === "session.steer"
+                        ? "succeeded"
+                        : "running"
+                      : dispatch.state === "unknown"
+                        ? "unknown"
+                        : "failed",
+                  ...(dispatch.state === "rejected"
+                    ? {
+                        error: {
+                          code: "operation-failed" as const,
+                          message: dispatch.error ?? "The provider rejected the prompt",
+                        },
+                      }
+                    : dispatch.state === "accepted"
+                      ? { error: undefined }
+                      : {}),
+                }
+              : null,
         );
         if (dispatch.state === "accepted")
           return {
@@ -347,24 +349,26 @@ const runDiscard: MutationActionHandler<{ operationId: string }> = {
         }
         // Discarding clears recovery state; it does not undo a turn that may
         // have run. The run's outcome is therefore permanently unknown.
-        await context.command.storage.updatePublicOperation(record.operationId, (current) =>
-          ["admitted", "running", "unknown"].includes(current.state)
-            ? {
-                ...current,
-                state: "interrupted",
-                completedAt: new Date(context.now()).toISOString(),
-                dispatch: { state: "unknown", recoverable: false },
-                execution: {
+        await context.command.storage.publicOperations.updatePublicOperation(
+          record.operationId,
+          (current) =>
+            ["admitted", "running", "unknown"].includes(current.state)
+              ? {
+                  ...current,
                   state: "interrupted",
-                  evidence: "none",
-                  reason: "Discarded; the turn may or may not have run",
-                },
-                error: {
-                  code: "run-interrupted",
-                  message: "The unconfirmed dispatch was discarded; it may or may not have run",
-                },
-              }
-            : null,
+                  completedAt: new Date(context.now()).toISOString(),
+                  dispatch: { state: "unknown", recoverable: false },
+                  execution: {
+                    state: "interrupted",
+                    evidence: "none",
+                    reason: "Discarded; the turn may or may not have run",
+                  },
+                  error: {
+                    code: "run-interrupted",
+                    message: "The unconfirmed dispatch was discarded; it may or may not have run",
+                  },
+                }
+              : null,
         );
         return {
           state: "succeeded",

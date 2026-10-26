@@ -43,33 +43,33 @@ afterEach(async () => {
 describe("StorageService feature planning authority", () => {
   test("canonicalizes project ownership and prevents concurrent active starts", async () => {
     const { storage } = await createStorage();
-    const feature = await storage.createFeaturePlan("canonical-project");
+    const feature = await storage.kanban.createFeaturePlan("canonical-project");
 
     const [first, second] = await Promise.all([
-      storage.startFeaturePlanning(record(feature.id, { operationId: "operation-a" })),
-      storage.startFeaturePlanning(record(feature.id, { operationId: "operation-b" })),
+      storage.kanban.startFeaturePlanning(record(feature.id, { operationId: "operation-a" })),
+      storage.kanban.startFeaturePlanning(record(feature.id, { operationId: "operation-b" })),
     ]);
 
     expect([first.started, second.started].filter(Boolean)).toHaveLength(1);
-    const persisted = await storage.getFeaturePlan(feature.id);
+    const persisted = await storage.kanban.getFeaturePlan(feature.id);
     expect(persisted?.planning?.projectId).toBe("canonical-project");
     expect(persisted?.planning?.operationId).toMatch(/^operation-[ab]$/);
   });
 
   test("lists only valid active records and permits replacing a terminal record", async () => {
     const { storage, dataDir } = await createStorage();
-    const active = await storage.createFeaturePlan("project-1");
-    const terminal = await storage.createFeaturePlan("project-1");
-    const malformed = await storage.createFeaturePlan("project-1");
-    await storage.startFeaturePlanning(record(active.id));
-    await storage.startFeaturePlanning(
+    const active = await storage.kanban.createFeaturePlan("project-1");
+    const terminal = await storage.kanban.createFeaturePlan("project-1");
+    const malformed = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.startFeaturePlanning(record(active.id));
+    await storage.kanban.startFeaturePlanning(
       record(terminal.id, {
         operationId: "terminal-operation",
         phase: "complete",
       }),
     );
 
-    const plans = await storage.listAllFeaturePlans();
+    const plans = await storage.kanban.listAllFeaturePlans();
     const malformedPlan = plans.find((plan) => plan.id === malformed.id)!;
     malformedPlan.planning = { phase: "running" } as never;
     await fs.writeFile(
@@ -77,11 +77,11 @@ describe("StorageService feature planning authority", () => {
       `${JSON.stringify(plans, null, 2)}\n`,
     );
 
-    await expect(storage.listActiveFeaturePlanning()).resolves.toEqual([
+    await expect(storage.kanban.listActiveFeaturePlanning()).resolves.toEqual([
       expect.objectContaining({ featureId: active.id, phase: "dispatching" }),
     ]);
     await expect(
-      storage.startFeaturePlanning(
+      storage.kanban.startFeaturePlanning(
         record(terminal.id, {
           operationId: "replacement-operation",
         }),
@@ -91,7 +91,7 @@ describe("StorageService feature planning authority", () => {
       feature: { planning: { operationId: "replacement-operation" } },
     });
     await expect(
-      storage.startFeaturePlanning({
+      storage.kanban.startFeaturePlanning({
         ...record(active.id),
         backendRevision: -1,
       }),
@@ -100,14 +100,14 @@ describe("StorageService feature planning authority", () => {
 
   test("fences mutations, bumps revisions, and clears only the matching operation", async () => {
     const { storage } = await createStorage();
-    const feature = await storage.createFeaturePlan("project-1");
-    await storage.startFeaturePlanning(record(feature.id));
+    const feature = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.startFeaturePlanning(record(feature.id));
 
     await expect(
-      storage.mutateFeaturePlanning(feature.id, "stale-operation", () => undefined),
+      storage.kanban.mutateFeaturePlanning(feature.id, "stale-operation", () => undefined),
     ).rejects.toBeInstanceOf(FeaturePlanningFenceError);
 
-    const mutated = await storage.mutateFeaturePlanning(
+    const mutated = await storage.kanban.mutateFeaturePlanning(
       feature.id,
       "operation-1",
       (plan, planning) => {
@@ -122,19 +122,21 @@ describe("StorageService feature planning authority", () => {
       planning: { phase: "running", backendRevision: 1 },
     });
 
-    await storage.clearFeaturePlanning(feature.id, "stale-operation");
-    expect((await storage.getFeaturePlan(feature.id))?.planning?.operationId).toBe("operation-1");
-    await storage.clearFeaturePlanning(feature.id, "operation-1");
-    expect((await storage.getFeaturePlan(feature.id))?.planning).toBeUndefined();
+    await storage.kanban.clearFeaturePlanning(feature.id, "stale-operation");
+    expect((await storage.kanban.getFeaturePlan(feature.id))?.planning?.operationId).toBe(
+      "operation-1",
+    );
+    await storage.kanban.clearFeaturePlanning(feature.id, "operation-1");
+    expect((await storage.kanban.getFeaturePlan(feature.id))?.planning).toBeUndefined();
   });
 
   test("generic storage updates preserve lifecycle-owned fields", async () => {
     const { storage } = await createStorage();
-    const feature = await storage.createFeaturePlan("project-1");
-    await storage.startFeaturePlanning(record(feature.id));
-    const attached = await storage.getFeaturePlan(feature.id);
+    const feature = await storage.kanban.createFeaturePlan("project-1");
+    await storage.kanban.startFeaturePlanning(record(feature.id));
+    const attached = await storage.kanban.getFeaturePlan(feature.id);
 
-    const updated = await storage.updateFeaturePlan(feature.id, {
+    const updated = await storage.kanban.updateFeaturePlan(feature.id, {
       id: "forged-feature",
       projectId: "forged-project",
       createdAt: "forged-created-at",

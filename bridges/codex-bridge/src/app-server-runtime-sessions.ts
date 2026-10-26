@@ -1269,6 +1269,8 @@ export class CodexRuntimeSessions {
      * a new prompt continues it.
      */
     interruption?: "restart";
+    /** The request whose turn `interruption` cut short, while the journal holds it. */
+    interruptedRequestId?: string;
     threadId?: string | null;
     turnId?: string;
     turnStartedAt?: string;
@@ -1298,6 +1300,11 @@ export class CodexRuntimeSessions {
       context?.phase ??
       (awaitingRecovery ? "recovering" : session.restartFailure ? "failed" : "idle");
     const latestDispatch = this.ctx.journal.latestForSession(sessionId);
+    // Session status is per session; this names the request the notice is
+    // about, so a workflow can tell it from a newer request not yet started.
+    const interruptedRequestId = session.restartFailure
+      ? this.ctx.journal.requestIdForTurn(session.restartFailure.turnId)
+      : undefined;
     const error =
       context?.error ??
       (phase === "failed" && session.restartFailure ? CODEX_RESTARTED_MID_TURN_MESSAGE : undefined);
@@ -1313,7 +1320,10 @@ export class CodexRuntimeSessions {
       // The notice clears when the next turn is accepted, and the error check
       // keeps a later, unrelated failure from inheriting it.
       ...(phase === "failed" && session.restartFailure && error === CODEX_RESTARTED_MID_TURN_MESSAGE
-        ? { interruption: "restart" as const }
+        ? {
+            interruption: "restart" as const,
+            ...(interruptedRequestId ? { interruptedRequestId } : {}),
+          }
         : {}),
       threadId: session.threadId,
       turnId: context?.activeTurn?.turnId,

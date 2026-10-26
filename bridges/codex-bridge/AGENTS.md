@@ -25,6 +25,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/app-server/server-request-router.ts` | Answers every server request, exactly once       |
 | `src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
+| `src/bridge-state-dir.ts`               | Where session records live; shared across accounts |
 | `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
 | `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
@@ -79,6 +80,14 @@ reaches readers; clear it whenever the history is replaced. Note through
 never when the change is sent: a send waits for the coalesced flush and can be
 dropped, and a note that lands after a read bumps nothing. Never note the
 newest row, which every window holds.
+
+A turn app-server reports failed (`turn/completed` with `status: "failed"`)
+ends with an error `status` line on its last row saying why
+(`messages/turn-failure.ts`; the provider's JSON body is reduced to its
+`error.message`). A refused model fails the turn before anything streams, so
+without it the turn read as idle with an empty reply. The rollout keeps the
+same error on `task_complete`, and the replay adds the same line. The bridge's
+own verdicts (a rejected structured result, a lost rebind) add none.
 
 ## File changes and change evidence
 
@@ -169,6 +178,15 @@ newest row, which every window holds.
   output reports a refusal. Only a cell with no record falls back to its
   source: strict-JSON single-argument `tools.mcp__<server>__<tool>(…)` calls,
   bounded, never evaluated, and never claimed successful.
+- Never reload a user message Codex wrote itself as a **You** row. The live
+  tab shows only what the user sent, but the rollout also holds Codex's own
+  user-role blocks: AGENTS.md instructions, `<environment_context>`, a
+  skill's `<skill>` instructions, `<turn_aborted>`, `<subagent_notification>`
+  and `<user_shell_command>`. `isSyntheticPersistedUserText`
+  (`history/rollout.ts`) drops a message only when every segment is such a
+  block, framed by its own open and close tags, so a prompt that mentions a
+  tag still renders. A Codex bump re-checks the list (`upgrade-agents.md`;
+  `live-resume-context.test.ts`, no credits).
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

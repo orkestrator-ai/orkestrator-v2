@@ -32,11 +32,15 @@ rather than a name, and "signed in" is one answer per provider.
 - A session with no explicit model starts on Pi's saved default
   (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
   provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
-  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
-  straight to the first model: a login can refuse models its provider lists,
-  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
-  and under the legacy `openai-codex`). Project
-  settings count only when the session trusts the project.
+  last resort from `lastResortModelId` in `models.ts` (`defaultModelIds` in
+  `agent-session.ts` supplies the preferences). The last resort is the
+  catalogue's first model, except when its provider uses a ChatGPT subscription
+  login (`openai` with OAuth since Pi 1.2.0, or legacy `openai-codex`). Then
+  it is the newest model in pi-ai's ChatGPT-backend catalogue (the
+  `openai-codex` provider's built-in list) that the login offers: the login
+  can refuse other models its provider lists. `models.test.ts` pins this
+  premise against the real SDK; recheck it on every Pi bump. Project settings
+  count only when the session trusts the project.
 - Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
   `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
   developer's saved default or writes `auth.json`/`models-store.json` into
@@ -71,6 +75,11 @@ alone. "Did this turn answer" is
 `turnOpenedAssistantRow`, not `currentAssistantMessageId`, which a response
 boundary clears mid-turn. A resume replays one row per Pi entry, dated by the
 entry, so live and resumed transcripts have the same shape.
+
+A turn Pi ended on a failed response (`stopReason: "error"` on its last
+response, which `finishTurn` fails) gets an error `status` line saying why
+(`appendTurnFailure`), on its last row or a new one when the turn produced
+none. A retried response that a later answer replaces adds nothing.
 
 ## When touching the Pi bridge
 

@@ -125,3 +125,22 @@ with `bun test ./src/commands/codex-command-catalogue.test.ts` from
 `bridges/codex-bridge`. Evidence:
 `orkestrator-test-run.rr9ak4/bridges.log.gz` in the host temporary directory.
 No assertion, skip, deadline or catalogue implementation was changed.
+
+## Codex resume-context review validation — 2026-10-26
+
+`mise run test:logged -- --name repository-tests -- mise run test` repeated
+the two-pre-plugin-answer failure at line 273 (56.47 ms): expected `stale`,
+received `ready`. The bridges group reserved two workers; the Codex package
+used one Bun worker and reported 2381 pass, 43 skip, 1 fail across 90 files.
+This change edits only the history reader and its regressions, not the catalogue.
+
+The complete unchanged catalogue owner passed alone, exit 0 in 1.5 seconds:
+
+```sh
+mise run test:logged -- --name codex-catalogue-isolated -- bun test ./bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts --preload ./tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary directory `orkestrator-test-run.unZQTH/bridges.log`
+(compressed on aggregate completion); enclosing log
+`orkestrator-test-run.2JILAH/repository-tests.log`. No catalogue assertion,
+deadline or implementation changed; the original aggregate remains failed.

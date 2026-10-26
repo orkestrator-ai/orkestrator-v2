@@ -26,6 +26,7 @@ import { denyAllApprovals } from "./interactions.js";
 import { getLastAssistantUsage } from "./pi-sdk.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
+import { appendTurnFailure } from "./translate.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
   beginEvidenceTurn,
@@ -587,8 +588,10 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
   // Pi's own verdict, not whether this bridge asked: an extension's
   // `ctx.abort()` or Pi's own abort cancels a run the bridge never touched.
   const cancelled = state.turnAborted === true;
-  // A run that resolved on a failed response did not answer; it failed.
+  // A run that resolved on a failed response did not answer; it failed, and
+  // the transcript says why.
   if (!cancelled && state.turnError !== undefined) {
+    appendTurnFailure(state, state.turnError);
     failTurn(state, session, new Error(state.turnError), input);
     return;
   }

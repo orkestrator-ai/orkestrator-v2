@@ -298,7 +298,12 @@ export async function prepareSessionStart(
           prompt: input.prompt,
           conversationMode: input.mode ?? "build",
           ...(input.title ? { title: input.title } : {}),
-          ...(resolved.model ? { modelId: resolved.model } : {}),
+          // Only a model the caller named is pinned. An inherited default is
+          // left for the launch to resolve as one (`modelSource: "default"`),
+          // so the runtime can replace a default this login cannot serve (the
+          // shipped Codex `gpt-5.4` on a ChatGPT login) instead of every
+          // `session start` failing its first turn.
+          ...(input.model ? { modelId: input.model } : {}),
           ...(resolved.reasoningEffort ? { reasoningId: resolved.reasoningEffort } : {}),
           ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
           ...(input.literal ? { literal: true } : {}),

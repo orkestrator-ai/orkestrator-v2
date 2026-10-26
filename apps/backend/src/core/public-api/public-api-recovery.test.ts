@@ -31,7 +31,7 @@ describe("admission", () => {
     const second = new StorageService(h.dataDir);
     await second.init();
     const admit = (storage: StorageService) =>
-      storage.admitPublicOperation({
+      storage.publicOperations.admitPublicOperation({
         authority: "operator",
         action: "project.add",
         scope: "installation",
@@ -47,7 +47,7 @@ describe("admission", () => {
 
   test("a full namespace refuses new work instead of evicting retained history", async () => {
     const h = await harness();
-    h.storage.setPublicOperationLimitsForTesting({ maxOperationsPerNamespace: 2 });
+    h.storage.publicOperations.setPublicOperationLimitsForTesting({ maxOperationsPerNamespace: 2 });
     await h.call(
       "project.add",
       { remote: "https://example.invalid/a.git" },
@@ -81,7 +81,7 @@ describe("restart reconciliation", () => {
     operationId: string,
     patch: Record<string, unknown>,
   ) {
-    await h.storage.updatePublicOperation(operationId, (record) => ({
+    await h.storage.publicOperations.updatePublicOperation(operationId, (record) => ({
       ...record,
       state: "running",
       completedAt: undefined,
@@ -106,7 +106,7 @@ describe("restart reconciliation", () => {
       { requestId: "r-env" },
     );
     if (!created.ok) throw new Error(created.error.message);
-    const admitted = await h.storage.admitPublicOperation({
+    const admitted = await h.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "environment.start",
       scope: `environment:${created.result.environment.id}`,
@@ -140,7 +140,7 @@ describe("restart reconciliation", () => {
     );
     if (!project.ok) throw new Error(project.error.message);
     const projectId = project.result.project.id;
-    const admitted = await h.storage.admitPublicOperation({
+    const admitted = await h.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "project.remove",
       scope: `project:${projectId}`,
@@ -193,7 +193,7 @@ describe("restart reconciliation", () => {
 
   test("an admitted record from a dead generation runs once when its key is replayed", async () => {
     const h = await harness();
-    const admitted = await h.storage.admitPublicOperation({
+    const admitted = await h.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "project.add",
       scope: "installation",
@@ -230,7 +230,7 @@ describe("restart reconciliation", () => {
   test("a failed prepare does not claim a stale admission or replay empty success", async () => {
     const h = await harness();
     const { intentFingerprint } = await import("./operation-ledger.js");
-    const admitted = await h.storage.admitPublicOperation({
+    const admitted = await h.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "project.remove",
       scope: "project:missing",
@@ -246,7 +246,9 @@ describe("restart reconciliation", () => {
         { requestId: "stale-missing" },
       );
       expect(response.ok).toBe(false);
-      const lookup = await h.storage.getPublicOperation(admitted.record.operationId);
+      const lookup = await h.storage.publicOperations.getPublicOperation(
+        admitted.record.operationId,
+      );
       expect(lookup.status === "found" && lookup.record.generation).toBe("previous-generation");
     }
   });
@@ -256,7 +258,7 @@ describe("restart reconciliation", () => {
     const { intentFingerprint } = await import("./operation-ledger.js");
     const capabilities = await h.call("capabilities", {});
     const generation = capabilities.backend!.generation;
-    const admitted = await h.storage.admitPublicOperation({
+    const admitted = await h.storage.publicOperations.admitPublicOperation({
       authority: "operator",
       action: "project.add",
       scope: "installation",

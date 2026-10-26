@@ -40,6 +40,7 @@ import {
   type BridgeCompactionPart,
   type BridgeImagePart,
   type BridgeRetryPart,
+  type BridgeStatusPart,
   type BridgeTextPart,
   type BridgeToolPart,
   type JsonObject,
@@ -684,6 +685,34 @@ function applyResponseOutcome(state: SessionState, message: unknown): void {
           MAX_TOOL_TITLE_BYTES,
         )
       : undefined;
+}
+
+/**
+ * Put the provider's reason for failing the turn in the transcript.
+ *
+ * A refused model (a ChatGPT login refusing `openai/gpt-4`) ends the run on a
+ * failed response before anything streams, so the turn otherwise ended with
+ * no reply at all and the reason only in the session status, which the next
+ * turn replaces. It lands on the turn's last row, opening one if the turn
+ * produced none.
+ */
+export function appendTurnFailure(state: SessionState, reason: string): void {
+  const message = currentAssistantMessage(state);
+  closeTextParts(state);
+  const part: BridgeStatusPart = {
+    type: "status",
+    content: boundText(
+      reason.trim() || "Pi ended the turn on a provider error.",
+      MAX_TOOL_TITLE_BYTES,
+    ),
+    severity: "error",
+    sourcePartId: `turn-error:${nextPartOrdinal(message)}`,
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+  };
+  message.parts.push(part);
+  chargeNewEntry(state, part);
+  rowChanged(state, message);
 }
 
 /**

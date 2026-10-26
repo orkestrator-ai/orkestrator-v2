@@ -162,14 +162,16 @@ test("concurrent retries and a fresh registry use the same durable identity and 
 });
 
 test("a pending receipt recovers the exact saved workflow after receipt completion failed", async () => {
-  const complete = storage.completeCoordinatorWorkflowAssociation.bind(storage);
-  storage.completeCoordinatorWorkflowAssociation = mock(async () => {
+  const complete = storage.coordinators.completeCoordinatorWorkflowAssociation.bind(
+    storage.coordinators,
+  );
+  storage.coordinators.completeCoordinatorWorkflowAssociation = mock(async () => {
     throw new Error("disk unavailable");
   });
   const failed = await launch();
   expect(failed.outcome).toBe("partial");
   expect(failed.recovery).toContain("same requestId");
-  storage.completeCoordinatorWorkflowAssociation = complete;
+  storage.coordinators.completeCoordinatorWorkflowAssociation = complete;
   commands = createCommandRegistry();
   expect((await launch()).workflow.id).toBe(failed.workflow.id);
   expect(start).toHaveBeenCalledTimes(1);
@@ -190,7 +192,9 @@ test("existing active workflows reattach even with a different model selection a
   });
   expect(start).toHaveBeenCalledTimes(1);
   expect(cancel).not.toHaveBeenCalled();
-  const associations = await storage.listCoordinatorWorkflowAssociations(scope.projectId);
+  const associations = await storage.coordinators.listCoordinatorWorkflowAssociations(
+    scope.projectId,
+  );
   expect(associations).toHaveLength(1);
   expect(associations[0]?.requestAliases).toContainEqual(
     expect.objectContaining({ requestId: "new-click" }),
@@ -217,7 +221,9 @@ test("an active review cannot be implicitly associated with another open convers
       context,
     ),
   ).rejects.toThrow("another conversation");
-  expect(await storage.listCoordinatorWorkflowAssociations(scope.projectId)).toHaveLength(1);
+  expect(
+    await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId),
+  ).toHaveLength(1);
 });
 
 async function fullLayout(workflowId?: string, tabId?: string) {
@@ -357,9 +363,10 @@ test("immediate cancellation after publication failure is reported without delet
   const outcome = await launch();
   expect(outcome.recovery).toContain("was cancelled");
   expect(await storage.getMultiReviewWorkflow(outcome.workflow.id)).not.toBeNull();
-  expect((await storage.listCoordinatorWorkflowAssociations(scope.projectId))[0]?.resourceId).toBe(
-    outcome.workflow.id,
-  );
+  expect(
+    (await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId))[0]
+      ?.resourceId,
+  ).toBe(outcome.workflow.id);
 });
 
 test("launch failure creates no orphan tab and retry retains the reserved identity", async () => {
@@ -732,7 +739,7 @@ test("address accepts a renderer-started review with no coordinator association"
   );
   await server.start();
   try {
-    const workspace = (await storage.getCoordinatorWorkspace(scope.projectId))!;
+    const workspace = (await storage.coordinators.getCoordinatorWorkspace(scope.projectId))!;
     const conversation = workspace.conversations.find((item) => item.id === scope.conversationId)!;
     const credential = server.issueCoordinatorCredential({
       role: "coordinator",
@@ -768,9 +775,9 @@ test("address accepts a renderer-started review with no coordinator association"
     const outcome = result.structuredContent as MultiReviewActionResult;
     expect(outcome).toMatchObject({ outcome: "pending", workflow: { id: ready.id } });
     expect(address).toHaveBeenCalledWith(ready.id);
-    expect(await storage.listCoordinatorWorkflowAssociations(scope.projectId)).toEqual([
-      expect.objectContaining({ ...scope, kind: "multi-review", resourceId: ready.id }),
-    ]);
+    expect(await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)).toEqual(
+      [expect.objectContaining({ ...scope, kind: "multi-review", resourceId: ready.id })],
+    );
     // The fix settles while no renderer is mounted; the saved association is
     // sufficient for the real observer to put the promised wake in the inbox.
     await storage.saveMultiReviewWorkflow(ready.id, environmentId, 1, {

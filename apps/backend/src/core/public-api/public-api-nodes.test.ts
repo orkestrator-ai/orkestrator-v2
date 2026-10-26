@@ -94,7 +94,9 @@ describe("request.node routes a public action to a leaf", () => {
     expect(again.receipt?.operationId).toBe(first.receipt!.operationId);
     expect(again.receipt?.replayed).toBe(true);
     // The leaf holds the operation; the command node holds none.
-    const onCommand = await command.storage.getPublicOperation(first.receipt!.operationId);
+    const onCommand = await command.storage.publicOperations.getPublicOperation(
+      first.receipt!.operationId,
+    );
     expect(onCommand.status).not.toBe("found");
     const onLeaf = await call(leaf.harness, "run.get", {
       operationId: first.receipt!.operationId,
@@ -126,7 +128,9 @@ describe("request.node routes a public action to a leaf", () => {
     });
     if (!byAlice.ok || !byBob.ok) throw new Error("ticket.create failed");
     expect(byBob.receipt!.operationId).not.toBe(byAlice.receipt!.operationId);
-    const record = await leaf.harness.storage.getPublicOperation(byAlice.receipt!.operationId);
+    const record = await leaf.harness.storage.publicOperations.getPublicOperation(
+      byAlice.receipt!.operationId,
+    );
     expect(record.status === "found" && record.record.authority).toBe(
       `node:${commandId}/control-mcp:alice`,
     );
@@ -345,7 +349,7 @@ describe("node regression coverage", () => {
     for (const harness of [command, leaf.harness]) {
       for (let index = 0; index < 2; index += 1) {
         const key = `attention-${index}`;
-        const { record } = await harness.storage.admitPublicOperation({
+        const { record } = await harness.storage.publicOperations.admitPublicOperation({
           authority: "operator",
           action: "ticket.create",
           scope: "project:test",
@@ -354,11 +358,14 @@ describe("node regression coverage", () => {
           fingerprint: "0".repeat(64),
           generation: "test",
         });
-        await harness.storage.updatePublicOperation(record.operationId, (current) => ({
-          ...current,
-          state: "succeeded",
-          stage: "completed",
-        }));
+        await harness.storage.publicOperations.updatePublicOperation(
+          record.operationId,
+          (current) => ({
+            ...current,
+            state: "succeeded",
+            stage: "completed",
+          }),
+        );
         expected.push(record.operationId);
       }
     }
@@ -490,7 +497,7 @@ test("aggregate attention orders a blocking leaf question before a newer local r
     updatedAt: Date.now() - 1_000,
   } as AgentInteractionRequest);
   setActivity(leaf.service, "claude", session.result.tabId, providerSessionId, "waiting");
-  const { record } = await command.storage.admitPublicOperation({
+  const { record } = await command.storage.publicOperations.admitPublicOperation({
     authority: "operator",
     action: "ticket.create",
     scope: "project:test",
@@ -499,7 +506,7 @@ test("aggregate attention orders a blocking leaf question before a newer local r
     fingerprint: "0".repeat(64),
     generation: "test",
   });
-  await command.storage.updatePublicOperation(record.operationId, (current) => ({
+  await command.storage.publicOperations.updatePublicOperation(record.operationId, (current) => ({
     ...current,
     state: "succeeded",
     stage: "completed",

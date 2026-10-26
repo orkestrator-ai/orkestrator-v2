@@ -20,15 +20,23 @@ function runScanner(
   provider: string,
   operation: string,
   filePath = "",
-  options: { env?: Record<string, string | undefined>; stdin?: string } = {},
+  options: { env?: Record<string, string | undefined>; stdin?: string; script?: string } = {},
 ) {
   return Bun.spawnSync({
-    cmd: [process.execPath, "-e", ENVIRONMENT_AGENT_SKILLS_SCRIPT, provider, operation, filePath],
+    cmd: [
+      process.execPath,
+      "-e",
+      options.script ?? ENVIRONMENT_AGENT_SKILLS_SCRIPT,
+      provider,
+      operation,
+      filePath,
+    ],
     cwd,
     env: {
       ...process.env,
       HOME: path.join(cwd, ".test-home"),
       CODEX_HOME: path.join(cwd, ".test-codex"),
+      CLAUDE_CONFIG_DIR: "",
       XDG_CONFIG_HOME: path.join(cwd, ".test-config"),
       ...options.env,
     },
@@ -51,6 +59,85 @@ async function createWorktree() {
 }
 
 describe("environment agent skills scanner", () => {
+  test("filters plugin roots and reads by user/project enablement and CLAUDE_CONFIG_DIR", async () => {
+    const worktree = await createWorktree();
+    const config = path.join(worktree, "agent-config");
+    const plugins: Record<string, { installPath: string }[]> = {};
+    for (const id of ["on", "off", "never", "project-on", "project-off", "local-only"]) {
+      const installPath = path.join(worktree, "installs", id);
+      plugins[`${id}@market`] = [{ installPath }];
+      await fs.mkdir(path.join(installPath, "skills", "review"), { recursive: true });
+      await fs.writeFile(
+        path.join(installPath, "skills", "review", "SKILL.md"),
+        "---\nname: review\n---\n",
+      );
+    }
+    const home = path.join(worktree, ".test-home");
+    await fs.mkdir(config, { recursive: true });
+    await fs.mkdir(path.join(home, ".claude", "plugins"), { recursive: true });
+    await fs.writeFile(
+      path.join(home, ".claude", "plugins", "installed_plugins.json"),
+      JSON.stringify({ plugins }),
+    );
+    await fs.writeFile(
+      path.join(config, "settings.json"),
+      JSON.stringify({
+        enabledPlugins: {
+          "on@market": true,
+          "off@market": false,
+          "project-off@market": true,
+          "project-on@market": false,
+        },
+      }),
+    );
+    await fs.mkdir(path.join(worktree, ".claude"));
+    await fs.writeFile(
+      path.join(worktree, ".claude", "settings.json"),
+      JSON.stringify({
+        enabledPlugins: { "project-off@market": false, "project-on@market": true },
+      }),
+    );
+    await fs.writeFile(
+      path.join(worktree, ".claude", "settings.local.json"),
+      JSON.stringify({ enabledPlugins: { "local-only@market": true } }),
+    );
+    const options = { env: { CLAUDE_CONFIG_DIR: config, ORKESTRATOR_AGENT_TEST_ISOLATED: "0" } };
+    const listed = runScanner(worktree, "claude", "list", "", options);
+    expect(listed.stderr.toString()).toBe("");
+    expect(listed.exitCode).toBe(0);
+    expect(
+      JSON.parse(listed.stdout.toString()).skills.map((skill: { name: string }) => skill.name),
+    ).toEqual(["on:review", "project-on:review"]);
+    // The packaged backend minifies this module. Its embedded shared rule
+    // must remain executable without references to bundle-local variables.
+    const bundled = await Bun.build({
+      entrypoints: [path.join(import.meta.dir, "environment-agent-skills.ts")],
+      target: "node",
+      minify: true,
+    });
+    expect(bundled.success).toBe(true);
+    const bundlePath = path.join(worktree, "scanner-bundle.mjs");
+    await fs.writeFile(bundlePath, await bundled.outputs[0]!.text());
+    const { ENVIRONMENT_AGENT_SKILLS_SCRIPT: script } = await import(bundlePath);
+    const packaged = runScanner(worktree, "claude", "list", "", { ...options, script });
+    expect(packaged.stderr.toString()).toBe("");
+    expect(packaged.exitCode).toBe(0);
+    expect(
+      JSON.parse(packaged.stdout.toString()).skills.map((skill: { name: string }) => skill.name),
+    ).toEqual(["on:review", "project-on:review"]);
+    for (const id of ["off", "never", "project-off", "local-only"]) {
+      expect(
+        runScanner(
+          worktree,
+          "claude",
+          "read",
+          path.join(worktree, "installs", id, "skills", "review", "SKILL.md"),
+          options,
+        ).exitCode,
+      ).toBe(1);
+    }
+  });
+
   test("lists and reads a project skill from inside the environment", async () => {
     const worktree = await createWorktree();
     const skillDirectory = path.join(worktree, ".codex", "skills", "review");
@@ -183,6 +270,10 @@ describe("environment agent skills scanner", () => {
     await fs.mkdir(path.join(outside, "notes"), { recursive: true });
     await fs.symlink(path.join(outside, "notes"), path.join(userRoot, "notes"), "dir");
 
+    await fs.writeFile(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "@team/quality@official": true } }),
+    );
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
     const scan = JSON.parse(listed.stdout.toString()) as {
@@ -258,6 +349,10 @@ describe("environment agent skills scanner", () => {
       ),
     );
 
+    await fs.writeFile(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "@team/quality@official": true } }),
+    );
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
     const scan = JSON.parse(listed.stdout.toString()) as {
@@ -313,6 +408,10 @@ describe("environment agent skills scanner", () => {
       }),
     );
 
+    await fs.writeFile(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "@team/quality@official": true } }),
+    );
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
     const scanned = JSON.parse(listed.stdout.toString()) as {
@@ -399,6 +498,10 @@ describe("environment agent skills scanner", () => {
       }),
     );
 
+    await fs.writeFile(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "@team/quality@official": true } }),
+    );
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
     const scan = JSON.parse(listed.stdout.toString()) as {

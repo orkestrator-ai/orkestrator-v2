@@ -601,4 +601,40 @@ while :; do sleep 1; done`);
     await expect(persistSessionTitle(blockedHome, "thread", "Valid title")).rejects.toThrow();
     expect(await readPersistedSessionTitles(blockedHome)).toEqual(new Map());
   });
+  test("an added account shares the host's titles and keeps its own earlier ones", async () => {
+    const host = createTemporaryDirectory();
+    const account = createTemporaryDirectory();
+    const saved = process.env.CODEX_BRIDGE_STATE_DIR;
+    try {
+      // Written on the account before the state directory was shared.
+      delete process.env.CODEX_BRIDGE_STATE_DIR;
+      await persistSessionTitle(account, "older", "Older title", {
+        updatedAt: new Date(2026, 0, 1),
+      });
+      await persistSessionTitle(account, "both", "Account title", {
+        updatedAt: new Date(2026, 0, 1),
+      });
+
+      process.env.CODEX_BRIDGE_STATE_DIR = join(host, "orkestrator-bridge");
+      await persistSessionTitle(account, "both", "Shared title", {
+        updatedAt: new Date(2026, 0, 1),
+      });
+      await persistSessionTitle(account, "newer", "Newer title");
+      expect(existsSync(join(host, "orkestrator-bridge", "session-titles.jsonl"))).toBe(true);
+      expect(await readPersistedSessionTitles(account)).toEqual(
+        new Map([
+          ["older", "Older title"],
+          ["both", "Shared title"],
+          ["newer", "Newer title"],
+        ]),
+      );
+
+      // The host login's bridge reads what the account's wrote.
+      delete process.env.CODEX_BRIDGE_STATE_DIR;
+      expect((await readPersistedSessionTitles(host)).get("newer")).toBe("Newer title");
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_BRIDGE_STATE_DIR;
+      else process.env.CODEX_BRIDGE_STATE_DIR = saved;
+    }
+  });
 });

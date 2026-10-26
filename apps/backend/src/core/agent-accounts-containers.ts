@@ -28,6 +28,7 @@ import {
   accessOnlyLoginText,
   INPUT_LIMITS,
   defaultInputSourceRoots,
+  grokStagingHome,
   portableInputRevisionDirectory,
   replaceStagedInputFile,
   type InputSourceRoots,
@@ -308,7 +309,7 @@ function hostStagingSources(context: CommandContext): {
     claudeConfigDir: roots.agentTest ? roots.claudeConfigDir : path.join(roots.home, ".claude"),
     claudeJson: path.join(hostHome, ".claude.json"),
     codexHome: roots.agentTest ? roots.codexHome : path.join(roots.home, ".codex"),
-    grokAuth: path.join(hostHome, ".grok", "auth.json"),
+    grokAuth: path.join(grokStagingHome(roots), "auth.json"),
     opencodeAuth: roots.agentTest
       ? roots.xdgDataHome && path.join(roots.xdgDataHome, "opencode", "auth.json")
       : path.join(roots.home, ".local", "share", "opencode", "auth.json"),
@@ -320,7 +321,7 @@ async function accountHasBeenUsed(
   context: CommandContext,
   platform: AgentAccountPlatform,
 ): Promise<boolean> {
-  const store = await context.storage.loadAgentAccounts();
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
   return (
     Boolean(store.loginGeneration?.[platform]) ||
     Boolean(store.active[platform]) ||
@@ -1028,14 +1029,20 @@ export async function syncContainerClaudeLoginUnlocked(
     }
     // Account and generation come from one authoritative snapshot. Credential
     // reads stay pinned to it even if the selection changes during marker I/O.
-    const store = await context.storage.loadAgentAccounts();
+    const store = await context.storage.agentAccounts.loadAgentAccounts();
     const accountId = store.active.claude ?? DEFAULT_AGENT_ACCOUNT_ID;
     const generation = store.loginGeneration?.claude;
     const expected = generation ? `${accountId}:${generation}` : accountId;
     const active = {
       accountId,
       ...(store.active.claude
-        ? { home: agentAccountHome(context.storage.agentAccountsDirectory(), "claude", accountId) }
+        ? {
+            home: agentAccountHome(
+              context.storage.agentAccounts.agentAccountsDirectory(),
+              "claude",
+              accountId,
+            ),
+          }
         : {}),
     };
     if ((await readMarker(runners, containerId, "claude")) !== expected) return false;
@@ -1117,7 +1124,7 @@ async function currentAccountMarker(
   context: CommandContext,
   platform: AgentAccountPlatform,
 ): Promise<string> {
-  const store = await context.storage.loadAgentAccounts();
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
   const accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
   const generation = store.loginGeneration?.[platform];
   return generation ? `${accountId}:${generation}` : accountId;
@@ -1454,7 +1461,7 @@ export async function markContainersForClaudeLoginRefresh(
   generationPersisted = false,
 ): Promise<void> {
   if (!generationPersisted)
-    await context.storage.mutateAgentAccounts((store) => ({
+    await context.storage.agentAccounts.mutateAgentAccounts((store) => ({
       store: {
         ...store,
         loginGeneration: { ...store.loginGeneration, claude: crypto.randomUUID() },

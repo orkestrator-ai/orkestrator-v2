@@ -675,3 +675,28 @@ export class PublicOperationsRepository {
     });
   }
 }
+
+/**
+ * The public API's operation ledger and its revision-checked project, repository and environment edits: what callers reach as `storage.publicOperations`.
+ *
+ * Every name here is an entry point `storage-writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type PublicOperationsStorage = Pick<
+  PublicOperationsRepository,
+  | "setPublicOperationLimitsForTesting"
+  | "publicOperationNamespaces"
+  | "admitPublicOperation"
+  | "updatePublicOperation"
+  | "getPublicOperation"
+  | "findPublicOperationByKey"
+  | "claimStalePublicOperation"
+  | "findPublicOperationsByRequest"
+  | "listSettledPublicOperationsChangedSince"
+  | "listActivePublicOperations"
+  | "collectPublicOperations"
+  | "updateProjectAtRevision"
+  | "patchRepositorySettingsAtRevision"
+  | "patchEnvironmentSettingsAtRevision"
+>;

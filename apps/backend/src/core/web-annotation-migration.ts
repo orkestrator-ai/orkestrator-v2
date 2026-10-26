@@ -522,6 +522,7 @@ export class WebAnnotationMigration {
         imported.captureVariants.push(captureVariant);
       return;
     }
+    annotation = tx.edit("annotations", annotation.id)!;
     let captureId: string | null = null;
     if (!imported.captureVariants.includes(captureVariant)) {
       // Divergent evidence: retain it as a historical capture in the thread.

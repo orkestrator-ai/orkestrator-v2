@@ -131,8 +131,10 @@ test.skipIf(!enabled)(
         toolchainBinDir,
         storage: {
           getDataDir: () => root,
-          agentAccountsDirectory: () => path.dirname(path.dirname(home)),
-          loadAgentAccounts: async () => ({ active: { claude: accountId }, accounts: [] }),
+          agentAccounts: {
+            agentAccountsDirectory: () => path.dirname(path.dirname(home)),
+            loadAgentAccounts: async () => ({ active: { claude: accountId }, accounts: [] }),
+          },
           loadConfig: async () => ({ global: { enabledAgentPlatforms: ["claude"] } }),
           loadEnvironments: async () => [environment],
           getEnvironment: async () => environment,

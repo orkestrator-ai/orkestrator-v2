@@ -122,6 +122,7 @@ export function buildReviewModelCatalog(
         new Set(model.reasoning?.map((option) => option.id).filter((id) => id !== "default") ?? []),
       ),
       ...(model.supportsSpeed ? { supportsSpeed: true as const } : {}),
+      ...(model.sessionDefault ? { sessionDefault: true as const } : {}),
     }));
   const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
   const grok = toLaunchOptions(cachedAcpCatalog.grokModels);

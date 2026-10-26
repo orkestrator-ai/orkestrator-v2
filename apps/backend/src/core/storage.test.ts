@@ -3534,11 +3534,11 @@ describe("environment completion and unread state", () => {
 describe("Kanban point reads", () => {
   test("returns one task by id and null when it is absent", async () => {
     await withTemporaryStorage(async (storage) => {
-      const task = await storage.addKanbanTask("project-1", "Build", "Details");
-      await storage.addKanbanTask("project-2", "Other", "Other details");
+      const task = await storage.kanban.addKanbanTask("project-1", "Build", "Details");
+      await storage.kanban.addKanbanTask("project-2", "Other", "Other details");
 
-      await expect(storage.getKanbanTask(task.id)).resolves.toEqual(task);
-      await expect(storage.getKanbanTask("missing-task")).resolves.toBeNull();
+      await expect(storage.kanban.getKanbanTask(task.id)).resolves.toEqual(task);
+      await expect(storage.kanban.getKanbanTask("missing-task")).resolves.toBeNull();
     });
   });
 });
@@ -3944,6 +3944,8 @@ describe("host agent model catalogue cache", () => {
           supportsMode: false,
           contextWindow: 400_000,
           supportsImageInput: false,
+          // Where a Pi tab with no model starts; launch defaults read it (0172).
+          sessionDefault: true,
         },
       ];
 

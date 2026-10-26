@@ -237,3 +237,30 @@ export class NodesRepository {
     return registry;
   }
 }
+
+/**
+ * Command-node state: controller settings, portal layout, the node registry and attachments, and the node mail, action and outcome stores: what callers reach as `storage.nodes`.
+ *
+ * Every name here is an entry point `storage-writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type NodesStorage = Pick<
+  NodesRepository,
+  | "getControllerSettings"
+  | "mutateControllerSettings"
+  | "getPortalLayout"
+  | "updatePortalLayout"
+  | "loadNodeSummariesCache"
+  | "saveNodeSummariesCache"
+  | "loadNodeMail"
+  | "mutateNodeMail"
+  | "loadNodeActionRequests"
+  | "saveNodeActionRequests"
+  | "loadNodeOutcomes"
+  | "saveNodeOutcomes"
+  | "getNodeRegistry"
+  | "mutateNodeRegistry"
+  | "getNodeAttachments"
+  | "mutateNodeAttachments"
+>;

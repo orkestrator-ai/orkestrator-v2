@@ -139,9 +139,9 @@ async function refineFeatureTitle(
   try {
     const title = await generateRefinedFeatureTitle(description, context);
     if (!title || title === provisionalTitle) return;
-    const current = await storage.getKanbanTask(taskId);
+    const current = await storage.kanban.getKanbanTask(taskId);
     if (!current || current.title !== provisionalTitle) return;
-    await storage.updateKanbanTask(taskId, { title });
+    await storage.kanban.updateKanbanTask(taskId, { title });
   } catch (error) {
     // Naming is an enhancement, not a reason to reject an otherwise valid
     // feature. Log only a discriminator: the model body may echo the
@@ -217,7 +217,7 @@ export async function createFeatureBuild(
   let resolvedTask = task;
   const snapshotImages = [];
   for (const [index, image] of images.entries()) {
-    const persisted = await storage.addNormalizedKanbanImageForRequest(
+    const persisted = await storage.kanban.addNormalizedKanbanImageForRequest(
       resolvedTask.id,
       image.filename,
       image.data,
@@ -226,7 +226,7 @@ export async function createFeatureBuild(
     resolvedTask = persisted.task;
     snapshotImages.push({
       filename: persisted.image.filename,
-      data: await storage.getKanbanImageData(persisted.image.id),
+      data: await storage.kanban.getKanbanImageData(persisted.image.id),
     });
   }
 
@@ -351,7 +351,10 @@ async function resolveTaskOnce(
   },
 ): Promise<KanbanTask> {
   if (fields.requestId) {
-    const existing = await storage.findKanbanTaskByRequestId(fields.projectId, fields.requestId);
+    const existing = await storage.kanban.findKanbanTaskByRequestId(
+      fields.projectId,
+      fields.requestId,
+    );
     if (existing) {
       if (existing.featureBuildRequestHash !== fields.requestHash) {
         throw new Error("Feature build requestId was already used with different arguments");
@@ -380,7 +383,7 @@ async function addKanbanTaskForRequest(
   },
 ): Promise<KanbanTask> {
   try {
-    return await storage.addKanbanTask(fields.projectId, title, fields.description, {
+    return await storage.kanban.addKanbanTask(fields.projectId, title, fields.description, {
       ...(fields.acceptanceCriteria ? { acceptanceCriteria: fields.acceptanceCriteria } : {}),
       // The build starts immediately, so the column reflects what is happening.
       // The pipeline's own lifecycle updates then move it on from here.
@@ -394,7 +397,10 @@ async function addKanbanTaskForRequest(
       error instanceof Error &&
       error.message.includes("requestId was already used")
     ) {
-      const existing = await storage.findKanbanTaskByRequestId(fields.projectId, fields.requestId);
+      const existing = await storage.kanban.findKanbanTaskByRequestId(
+        fields.projectId,
+        fields.requestId,
+      );
       if (existing && existing.featureBuildRequestHash === fields.requestHash) {
         return existing;
       }

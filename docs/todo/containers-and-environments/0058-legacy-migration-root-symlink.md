@@ -53,7 +53,10 @@ Fixed and qualified on 2026-10-26; every item is done.
    stream when a step selects members (a whole-tree listing already starts
    with it), the check uses `END { exit !found }` so an empty listing is never
    a refusal, and the helper waits for each consumer's own completion file
-   instead of a fixed 0.2 s sleep. Unit tests in
+   instead of a fixed 0.2 s sleep; if either listing has not finished within
+   the 60 s ceiling, the step fails (`extract-failed`) rather than reading a
+   partial root entry. That last guard was added in self-review after the live
+   runs below; the unit tests ran on the final script. Unit tests in
    `tests/unit/migrate-copy.test.ts`: "a selective copy that matches nothing
    is a complete, empty copy" and "a symlinked root is refused for whole-tree
    and selective copies".

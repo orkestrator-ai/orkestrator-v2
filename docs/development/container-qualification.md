@@ -352,6 +352,28 @@ out after 40 seconds, and its complete unchanged owner timed out alone
 [0785](../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md).
 No timeout or assertion in that unrelated test was changed.
 
+### Validation follow-up (2026-10-26)
+
+The two remaining validation failures were subsequently addressed. Both
+local and Docker annotation evidence tests now expect the full request hash
+in materialized filenames, matching the existing collision-resistant
+ownership format. The local case passed (3.5 s), and the full rootless
+`test:agent:docker` suite passed (14 passed, four live-provider skips,
+160.1 s) against the same complete environment image in a new disposable
+host daemon and application profile. Those resources were removed afterwards.
+
+The OpenCode test's initial HTTP readiness request could remain pending
+past its own 20-second deadline. It now uses the backend's bounded health
+probe before bootstrapping MCP and gives the MCP response and body the
+remaining readiness budget. The unchanged permission/registration
+assertions passed once and in ten stress repetitions; see the resolution
+in [0785](../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md).
+
+The final non-iOS `mise run test` passed all four groups (380.2 s).
+Formatting, lint, typechecking and the flake-registry integrity check also
+passed. The earlier aggregate and Docker limitations above are historical;
+the completed follow-up has no failing validation checks.
+
 ## Docker Desktop on Apple Silicon (2026-10-23)
 
 The full live set, now six suites, ran on Docker Desktop 4.95.0 (Engine

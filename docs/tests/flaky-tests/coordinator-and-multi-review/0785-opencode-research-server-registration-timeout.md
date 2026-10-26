@@ -1,7 +1,7 @@
 # OpenCode coordinator research-server registration timeout
 
 - **ID:** 0785
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `OpenCode coordinator research servers > registers a research server and allows exactly its tools`
 - **Owning file:** `apps/backend/src/core/opencode-coordinator-research-live.test.ts`
@@ -120,3 +120,35 @@ src/core/opencode-coordinator-research-live.test.ts`): 0 pass, 1 fail each
 time. On this host it is not intermittent, so it is environmental here
 (probably the host's OpenCode CLI or its first-run state), not a branch
 regression.
+
+## Readiness request fix — 2026-10-26
+
+The follow-up on todo 0109 reproduced the unchanged owner's 40-second
+timeout. Instrumentation located the wait in the initial `/mcp` fetch,
+before either fixture MCP server had received a request. The child was
+alive and answered independent authenticated `/global/health` and `/mcp`
+probes, while the test's own fetch remained pending. Logging and copied-file
+controls could pass, so this does not establish a vendor or Bun root cause.
+
+The fixture's 20-second readiness deadline was checked only **after** that
+unbounded fetch and body read completed. It now probes the existing health
+endpoint with the backend's bounded `checkHttpHealth` before bootstrapping
+the directory, and bounds the MCP response and body by the remaining
+readiness deadline. The original 20-second readiness and 40-second outer
+budgets, real CLI, MCP registration and permission assertions are unchanged.
+
+Validation through `mise run test:logged` on the same Linux host and pinned
+OpenCode 1.19.4:
+
+```bash
+bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1
+bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --rerun-each=10
+```
+
+The owner passed in 2.0 seconds; all ten stress repetitions passed in 28.1
+seconds. The fix removes the unbounded readiness wait without relaxing the
+registration test or relying on added diagnostic logging.
+
+The subsequent full `mise run test` also passed all four groups (380.2 s),
+including this owner in the normal parallel backend suite. Evidence:
+`/tmp/orkestrator-test-run.1JOfGg/summary.json`.

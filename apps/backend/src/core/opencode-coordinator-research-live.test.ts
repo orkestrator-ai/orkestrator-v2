@@ -14,7 +14,7 @@ import {
   policyQualificationCli,
   withPolicyCliFixture,
 } from "../../../../tests/conformance/execution-policy/vendor-cli.js";
-import { openCodeHealthHeaders } from "./commands-server-health.js";
+import { checkHttpHealth, openCodeHealthHeaders } from "./commands-server-health.js";
 import {
   configureOpenCodeCoordinatorResearch,
   ensureOpenCodeCoordinatorResearch,
@@ -79,14 +79,27 @@ describe("OpenCode coordinator research servers", () => {
           const headers = openCodeHealthHeaders(password);
           const deadline = Date.now() + 20_000;
           for (;;) {
-            const ready = await fetch(
-              `http://127.0.0.1:${port}/mcp?directory=${encodeURIComponent(fixture.cwd)}`,
-              { headers },
-            ).catch(() => undefined);
-            if (ready?.ok) {
-              const status = (await ready.json()) as Record<string, { status?: string }>;
+            // Probe liveness before asking the directory instance to bootstrap.
+            // Every request, including its body, must fit the readiness budget.
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) throw new Error("opencode serve did not become ready");
+            if (
+              await checkHttpHealth(port, "/global/health", headers, Math.min(2_000, remaining))
+            ) {
+              const status = await fetch(
+                `http://127.0.0.1:${port}/mcp?directory=${encodeURIComponent(fixture.cwd)}`,
+                { headers, signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) },
+              )
+                .then(async (ready) => {
+                  if (!ready.ok) {
+                    await ready.body?.cancel();
+                    return undefined;
+                  }
+                  return (await ready.json()) as Record<string, { status?: string }>;
+                })
+                .catch(() => undefined);
               // Wait for the project server to settle so its tools are listed.
-              if (status.context7_x?.status === "connected") break;
+              if (status?.context7_x?.status === "connected") break;
             }
             if (Date.now() > deadline) throw new Error("opencode serve did not become ready");
             await Bun.sleep(200);

@@ -669,6 +669,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           const resumed = await projection(resumedTabId);
           expect(userTurnsOf(resumed), "resuming sent a prompt").toHaveLength(userTurns.length);
           expect(resumed?.turn.phase).not.toBe("running");
+          console.log(
+            `[design-live] ${provider} user rows: live=${userTurns.length}, resumed=${userTurnsOf(resumed).length}`,
+          );
           await page.screenshot({ path: testInfo.outputPath(`${provider}-5-resume.png`) });
         });
       } finally {

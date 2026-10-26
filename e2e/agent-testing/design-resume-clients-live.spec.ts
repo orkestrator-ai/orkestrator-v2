@@ -336,6 +336,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             expect(userTurns(resumed), "resuming sent a prompt").toBe(turnsBefore);
             expect(resumed?.turn.phase).not.toBe("running");
             expect(await agentTabs()).toHaveLength(1);
+            console.log(
+              `[design-resume] ${provider} user rows: live=${turnsBefore}, resumed=${userTurns(resumed)}`,
+            );
             for (const [index, client] of clients.entries()) {
               await client.screenshot({
                 path: testInfo.outputPath(`${provider}-client-${index + 1}-resumed.png`),

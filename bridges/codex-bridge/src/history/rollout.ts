@@ -943,7 +943,10 @@ export function extractPersistedMessageContent(
     return null;
   }
 
-  if (role === "user" && isSyntheticPersistedUserText(text)) {
+  // Recheck a single segment after stripping injected wrappers. For multipart
+  // messages the segment-level decision above is authoritative: joining can
+  // frame real user text between context tags or put it after a synthetic prefix.
+  if (role === "user" && segments.length === 1 && isSyntheticPersistedUserText(text)) {
     return null;
   }
 

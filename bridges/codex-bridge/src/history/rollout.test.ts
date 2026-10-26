@@ -1035,6 +1035,61 @@ describe("rollout public helpers (continued)", () => {
     ).toBe("Explain this\n<environment_context>\n  <cwd>/w</cwd>\n</environment_context>");
   });
 
+  const mixedUserMessages = [
+    ...[
+      "environment_context",
+      "skill",
+      "turn_aborted",
+      "subagent_notification",
+      "user_shell_command",
+    ].map((tag) => ({
+      name: `user text between two ${tag} blocks`,
+      segments: [`<${tag}>one</${tag}>`, "Please compare these", `<${tag}>two</${tag}>`],
+    })),
+    ...[
+      "# AGENTS.md instructions for /workspace",
+      "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse the docs CLI.\n</INSTRUCTIONS>",
+      "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+    ].map((prefix) => ({
+      name: `user text after ${prefix.split("\n")[0]}`,
+      segments: [prefix, "Why is this shown?"],
+    })),
+  ];
+
+  for (const { name, segments } of mixedUserMessages) {
+    test(`extracts ${name}`, () => {
+      const content = segments.map((text) => ({ type: "input_text", text }));
+      expect(extractPersistedMessageContent(content, "user")).toEqual({
+        text: segments.join("\n"),
+        attachments: [],
+      });
+      expect(extractPersistedMessageText(content, "user")).toBe(segments.join("\n"));
+    });
+
+    test(`hydrates ${name}`, async () => {
+      const threadId = "thread-mixed-context";
+      const hydrated = await hydrateRollout(threadId, [
+        sessionMeta(threadId),
+        {
+          timestamp: "2026-07-25T12:01:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: segments.map((text) => ({ type: "input_text", text })),
+          },
+        },
+      ]);
+
+      expect(hydrated.messages).toHaveLength(1);
+      expect(hydrated.messages[0]).toMatchObject({
+        role: "user",
+        content: segments.join("\n"),
+        parts: [{ type: "text", content: segments.join("\n") }],
+      });
+    });
+  }
+
   test("rehydrates a coordinator turn without its injected preamble", () => {
     const preamble =
       "<orkestrator-coordinator-context>\nProject: project-id\nCoordinator: coordinator-id\n" +

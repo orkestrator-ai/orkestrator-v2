@@ -200,7 +200,10 @@ is not permission to execute. The editor never changes an execution policy.
     off in Claude Code turns it off for Orkestrator's sessions too. The
     layers are the session's own `settingSources`: user only without project
     resources, user and project by default, plus local with "Include local
-    settings", none for a coordinator (which therefore gets no installs). A
+    settings", none for a coordinator (which therefore gets no installs; it
+    gets two bridge-generated plugins instead, carrying the user's and the
+    project's skills and no MCP servers, see
+    [the coordinator's skills](coordinator.md#skills)). A
     follow-up that leaves local settings unsaid and joins the running CLI
     uses that CLI's layers (`claudeTurnSettingSources`). The bridge reads user
     settings from `$CLAUDE_CONFIG_DIR/settings.json` when its environment sets

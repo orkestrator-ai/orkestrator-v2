@@ -239,7 +239,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       await fs.mkdir(bridge, { recursive: true });
       await fs.writeFile(
         path.join(bridge, "index.js"),
-        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX }));
+        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP, oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX, userSkills: process.env.ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -337,6 +337,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
         oauthToken: "login",
+        // The skills a worker on the host account reads, never the private
+        // home's: the bridge mirrors them without hooks or tool grants.
+        userSkills: path.join(process.env.CLAUDE_CONFIG_DIR!, "skills"),
         // The host probe the qualification table used, so the bridge requires
         // the OS sandbox exactly where Claude was offered as enforced.
         commandSandbox: defaultCoordinatorHostCapabilities().claudeSandbox
@@ -964,7 +967,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX ?? null }));
+      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null, commandSandbox: process.env.ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX ?? null, userSkills: process.env.ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR ?? null }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -998,6 +1001,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       ]),
       // Only a coordinator bridge may be told the sandbox is optional.
       ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX: "unavailable",
+      // Or where to mirror user skills from.
+      ORKESTRATOR_COORDINATOR_CLAUDE_USER_SKILLS_DIR: path.join(root, "inherited-skills"),
     };
     const previous = Object.fromEntries(
       Object.keys(inherited).map((name) => [name, process.env[name]]),
@@ -1010,6 +1015,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         research: null,
         researchMcp: null,
         commandSandbox: null,
+        userSkills: null,
       });
     } finally {
       for (const [name, value] of Object.entries(previous)) {

@@ -14,14 +14,19 @@
  * lists, model, effort and every other option that changes how a turn runs
  * rather than which commands exist.
  */
-import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import {
   readOnlyTurnReportedPolicy,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 import type { PermissionMode, PromptOptions, SessionState } from "../types/index.js";
+import { coordinatorSkillPlugins, coordinatorSkillSources } from "./coordinator-skills.js";
 import { getPluginsForSdk, type SdkPluginConfig } from "./plugin-config.js";
-import { effectiveExecutionPolicy, isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
+import {
+  effectiveExecutionPolicy,
+  isCoordinatorReadOnlyPolicy,
+  processExecutionPolicyIsCoordinator,
+} from "./read-only-policy.js";
 
 /** The policy a `readOnly` prompt runs under, whatever the session's own policy. */
 export const READ_ONLY_TURN_POLICY: NativeAgentExecutionPolicy = Object.freeze({
@@ -163,10 +168,69 @@ export function claudeSettingSources(
   return includeLocalSettings ? ["user", "project", "local"] : ["user", "project"];
 }
 
+/**
+ * Managed settings for a turn: the policy layer, which no other settings
+ * source can loosen.
+ *
+ * Any read-only turn drops every plugin and skill hook and every skill's
+ * inline shell. Plugins are loaded inline even with `settingSources: []`, and
+ * on CLI 2.1.309 a plugin's `hooks/hooks.json` and a skill's frontmatter
+ * `hooks` run command hooks outside the sandbox, while a skill's `` !`cmd` ``
+ * runs before the model sees the skill and is checked against the skill's own
+ * `allowed-tools` only — the bridge's PreToolUse hook never sees it. The
+ * bridge's own hooks are SDK callbacks, which `allowManagedHooksOnly` keeps.
+ */
+export function claudeManagedSettings(
+  policy: NativeAgentExecutionPolicy | undefined,
+): Options["managedSettings"] {
+  return isCoordinatorReadOnlyPolicy(policy)
+    ? { allowManagedHooksOnly: true, disableSkillShellExecution: true }
+    : undefined;
+}
+
+/**
+ * Whether a turn loads the user's and the project's skills through mirrored
+ * plugins (`coordinator-skills.ts`): only a coordinator process's turns. A
+ * read-only review turn in a worker bridge keeps loading neither.
+ */
+export function loadsCoordinatorSkills(
+  policy: NativeAgentExecutionPolicy | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return isCoordinatorReadOnlyPolicy(policy) && processExecutionPolicyIsCoordinator(env);
+}
+
+/** The plugins a turn passes, and the mirrored skills among them. */
+export interface ClaudeTurnPlugins {
+  plugins: SdkPluginConfig[];
+  /** Plugin-qualified names of the coordinator's mirrored skills. */
+  coordinatorSkills: string[];
+}
+
+/**
+ * Every plugin a turn passes, resolved the same way for a turn, a launch
+ * conflict check and a discovery probe, so that all three agree on the plugin
+ * paths the launch fingerprint compares.
+ */
+export async function resolveClaudeTurnPlugins(
+  cwd: string,
+  policy: NativeAgentExecutionPolicy | undefined,
+  settingSources: readonly SettingSource[],
+): Promise<ClaudeTurnPlugins> {
+  const [plugins, skills] = await Promise.all([
+    getPluginsForSdk(cwd, policy?.projectResources !== false, settingSources),
+    loadsCoordinatorSkills(policy)
+      ? coordinatorSkillPlugins(coordinatorSkillSources(cwd))
+      : { plugins: [], skills: [] },
+  ]);
+  return { plugins: [...plugins, ...skills.plugins], coordinatorSkills: skills.skills };
+}
+
 export interface ClaudeDiscoveryConfig {
   cwd: string;
   settingSources: SettingSource[];
   plugins: SdkPluginConfig[];
+  managedSettings: Options["managedSettings"];
   /**
    * Content-free identity of the configuration, so a probe answer computed for
    * one configuration is never served for another.
@@ -182,12 +246,19 @@ export async function resolveClaudeDiscoveryConfig(
   const policy = claudeTurnPolicy(sessionPolicy, inputs.readOnly);
   const cwd = claudeWorkspaceCwd();
   const settingSources = claudeSettingSources(policy, inputs.includeLocalSettings);
-  const plugins = await getPluginsForSdk(cwd, policy?.projectResources !== false, settingSources);
+  const { plugins } = await resolveClaudeTurnPlugins(cwd, policy, settingSources);
+  const managedSettings = claudeManagedSettings(policy);
   return {
     cwd,
     settingSources,
     plugins,
-    fingerprint: JSON.stringify([cwd, settingSources, plugins.map((plugin) => plugin.path)]),
+    managedSettings,
+    fingerprint: JSON.stringify([
+      cwd,
+      settingSources,
+      plugins.map((plugin) => plugin.path),
+      managedSettings ?? null,
+    ]),
   };
 }
 

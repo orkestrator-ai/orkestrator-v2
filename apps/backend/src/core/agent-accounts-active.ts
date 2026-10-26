@@ -6,6 +6,7 @@ import {
   DEFAULT_AGENT_ACCOUNT_ID,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
+import { COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import { jwtExpiryMs, restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 
 import type { CommandContext } from "./commands-context.js";
@@ -18,6 +19,7 @@ import {
   agentAccountHome,
   claudeKeychainService,
   hostAgentAccountSources,
+  hostClaudeConfigDir,
   prepareAgentAccountHome,
   readCodexAuthFile,
 } from "./agent-accounts-homes.js";
@@ -383,6 +385,13 @@ export async function applyCoordinatorClaudeAccount(
   // An agent-test profile may have pointed the run at its own isolated home,
   // whose login stands in for the host's.
   const profileConfigDir = active.home ? undefined : env.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  // The skills a worker on this account would read, named before the private
+  // directory replaces `CLAUDE_CONFIG_DIR`. The bridge mirrors them into the
+  // coordinator with their executable parts removed (`coordinator-skills.ts`).
+  env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV] = path.join(
+    active.home ?? hostClaudeConfigDir(env),
+    "skills",
+  );
   // The directory outlives a launch, and earlier builds copied logins into it.
   for (const name of [".credentials.json", "credentials.json"]) {
     await fs.rm(path.join(coordinatorHome, name), { force: true });

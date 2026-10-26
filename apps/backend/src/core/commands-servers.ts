@@ -98,6 +98,7 @@ import { createBridgeOutputForwarder } from "./bridge-output-redaction.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import {
+  COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
   COORDINATOR_COMMAND_SANDBOX_ENV,
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
@@ -845,6 +846,7 @@ async function startLocalServerAttempt(
   delete env[COORDINATOR_WEB_RESEARCH_ENV];
   delete env[COORDINATOR_RESEARCH_MCP_ENV];
   delete env[COORDINATOR_COMMAND_SANDBOX_ENV];
+  delete env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment

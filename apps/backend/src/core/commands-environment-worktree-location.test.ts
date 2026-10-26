@@ -9,6 +9,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
+import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import { updateWorktreeLocations } from "./worktree-locations.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
@@ -149,6 +150,25 @@ test("start uses and persists both explicit and configured roots; generic reads 
     );
     await expect(read(path.join(selected, "sibling.txt"))).rejects.toThrow();
   }
+});
+
+test("generic reads reach a coordinator's staged attachments but nothing else in application data", async () => {
+  const { storage, context, commands } = await setup();
+  const attachment = path.join(
+    coordinatorAttachmentsRoot(storage.getDataDir()),
+    "coordinator",
+    "conversation",
+    "pasted.png",
+  );
+  await fs.mkdir(path.dirname(attachment), { recursive: true });
+  await fs.writeFile(attachment, "png");
+  await fs.writeFile(path.join(storage.getDataDir(), "secret.json"), "{}");
+  const read = (filePath: string) => commands.get("read_file_base64")!({ filePath }, context);
+
+  expect(await read(attachment)).toBe(Buffer.from("png").toString("base64"));
+  await expect(read(path.join(storage.getDataDir(), "secret.json"))).rejects.toThrow(
+    "outside Orkestrator workspace storage",
+  );
 });
 
 test("start rejects a configured default inside its project before creating directories", async () => {

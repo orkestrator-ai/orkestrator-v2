@@ -2388,7 +2388,15 @@ describe("HTTP bridge provider", () => {
 
   test("a restart notice about an earlier request is not the watched request's outcome", async () => {
     const body = { current: {} as Record<string, unknown> };
-    const { provider } = httpProvider(() => Response.json(body.current), codexConnection);
+    // What the bridge's dispatch journal says about the continuation.
+    let continuation = "dispatched";
+    const { provider } = httpProvider(
+      (url) =>
+        new URL(url).pathname.endsWith("/dispatch")
+          ? Response.json({ dispatch: continuation })
+          : Response.json(body.current),
+      codexConnection,
+    );
     body.current = {
       status: "error",
       error: "Codex restarted before this turn finished.",
@@ -2404,7 +2412,7 @@ describe("HTTP bridge provider", () => {
       interruptedRequestId: "original",
     });
     expect((await readProviderStatus(provider, "session-1")).interruption).toBe("restart");
-    // The continuation that replaced it has not started yet.
+    // The continuation that replaced it was accepted and has not started yet.
     await expect(readProviderStatus(provider, "session-1", "continuation")).resolves.toEqual({
       status: "idle",
       turnSettled: false,
@@ -2415,6 +2423,21 @@ describe("HTTP bridge provider", () => {
       status: "idle",
       turnSettled: false,
     });
+    // A provider that no longer holds the continuation (it restarted, and the
+    // name may be stale) gets no benefit of the doubt.
+    body.current = {
+      status: "error",
+      error: "restarted",
+      interruption: "restart",
+      interruptedRequestId: "original",
+    };
+    for (const answer of ["unknown", "lost"]) {
+      continuation = answer;
+      expect((await readProviderStatus(provider, "session-1", "continuation")).status).toBe(
+        "error",
+      );
+    }
+    continuation = "dispatched";
     // A bridge that predates the field: the notice is taken at face value.
     body.current = { status: "error", error: "restarted", interruption: "restart" };
     expect((await readProviderStatus(provider, "session-1", "continuation")).status).toBe("error");

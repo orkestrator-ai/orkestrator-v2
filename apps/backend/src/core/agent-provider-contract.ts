@@ -221,21 +221,33 @@ export class ProviderSessionFailedError extends Error {
  * Whether a restart notice is about an earlier request than `requestId`.
  *
  * Bridges clear the notice when the next turn starts, so a notice naming
- * another request means `requestId`'s own turn has not started yet: a
- * continuation accepted a moment ago, or one still in transit. Without a named
- * request there is nothing to compare, and the notice is taken at face value.
+ * another request, while the provider confirms it holds `requestId`, means
+ * `requestId`'s own turn was accepted and has not started yet. Both halves are
+ * needed: a name can be stale (Claude rewrites its turn-in-flight mark after
+ * the turn starts, so a bridge killed in between restores the previous
+ * request's name), and a provider that restarted no longer holds the request
+ * it lost. Anything short of both reads the notice at face value.
  */
-function interruptionSuperseded(
+async function interruptionSuperseded(
+  provider: Pick<AgentSessionProvider, "dispatchStatus">,
+  sessionId: string,
   observation: Pick<ProviderSessionObservation, "status" | "interruption" | "interruptedRequestId">,
   requestId: string | undefined,
-): boolean {
-  return (
-    requestId !== undefined &&
-    observation.status === "error" &&
-    observation.interruption !== undefined &&
-    observation.interruptedRequestId !== undefined &&
-    observation.interruptedRequestId !== requestId
-  );
+): Promise<boolean> {
+  if (
+    requestId === undefined ||
+    observation.status !== "error" ||
+    observation.interruption === undefined ||
+    observation.interruptedRequestId === undefined ||
+    observation.interruptedRequestId === requestId ||
+    !provider.dispatchStatus
+  ) {
+    return false;
+  }
+  const accepted = await provider
+    .dispatchStatus(sessionId, requestId)
+    .catch(() => "unknown" as const);
+  return accepted === "dispatched";
 }
 
 /**
@@ -258,7 +270,10 @@ function supersededInterruption(
 }
 
 export async function readProviderStatus(
-  provider: Pick<AgentSessionProvider, "status" | "observeSession" | "settleTurn">,
+  provider: Pick<
+    AgentSessionProvider,
+    "status" | "observeSession" | "settleTurn" | "dispatchStatus"
+  >,
   sessionId: string,
   requestId?: string,
 ): Promise<ProviderSessionObservation & { error?: string }> {
@@ -266,7 +281,9 @@ export async function readProviderStatus(
     const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
       : { status: await provider.status(sessionId) };
-    if (interruptionSuperseded(observation, requestId)) return supersededInterruption(observation);
+    if (await interruptionSuperseded(provider, sessionId, observation, requestId)) {
+      return supersededInterruption(observation);
+    }
     if (
       requestId &&
       observation.status === "idle" &&
@@ -290,7 +307,9 @@ export async function readProviderStatus(
         ...(error.interruption ? { interruption: error.interruption } : {}),
         ...(error.interruptedRequestId ? { interruptedRequestId: error.interruptedRequestId } : {}),
       };
-      if (interruptionSuperseded(failed, requestId)) return supersededInterruption(failed);
+      if (await interruptionSuperseded(provider, sessionId, failed, requestId)) {
+        return supersededInterruption(failed);
+      }
       const settled = requestId ? await provider.settleTurn?.(sessionId, requestId) : undefined;
       return {
         ...failed,

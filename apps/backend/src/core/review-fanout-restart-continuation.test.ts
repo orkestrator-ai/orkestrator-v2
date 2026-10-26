@@ -27,6 +27,8 @@ function harness(transport: ReviewerRecord["resultTransport"] = "structured-outp
     turn: "restarted" as "restarted" | "failed" | "running" | "idle",
     /** The request a restart notice names; unset as on a bridge that predates it. */
     interrupted: undefined as string | undefined,
+    /** Request ids the bridge's dispatch journal holds. */
+    accepted: new Set<string>(["review-request"]),
     /** What the provider's structured-output slot holds for any request. */
     structured: null as unknown,
     /** Accepted tool-transport results, by request id. */
@@ -57,6 +59,10 @@ function harness(transport: ReviewerRecord["resultTransport"] = "structured-outp
     async abort() {},
     async send(_sessionId: string, prompt: string, options: { requestId?: string }) {
       sent.push({ prompt, requestId: options.requestId });
+      if (options.requestId) bridge.accepted.add(options.requestId);
+    },
+    async dispatchStatus(_sessionId: string, requestId: string) {
+      return bridge.accepted.has(requestId) ? "dispatched" : "unknown";
     },
   } as unknown as BuildPipelineProvider;
   const host: ReviewFanoutHost = {
@@ -171,6 +177,21 @@ describe("a reviewer whose turn a provider restart cut short", () => {
     await runner.advanceReviewers([reviewer]);
     expect(reviewer.status).toBe("completed");
     expect(sent).toHaveLength(1);
+  });
+
+  test("fails closed on a stale name once the bridge no longer holds the continuation", async () => {
+    // A Claude bridge killed before it rewrote its turn-in-flight mark
+    // restores the original request's name; the restarted bridge has lost the
+    // continuation it was running.
+    const { reviewer, runner, bridge, sent } = harness();
+    reviewer.restartContinuationSent = true;
+    bridge.interrupted = "an-earlier-request";
+    bridge.accepted.clear();
+
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.status).toBe("failed");
+    expect(reviewer.error).toBe(`The reviewer session failed: ${RESTARTED}`);
+    expect(sent).toEqual([]);
   });
 
   test("fails closed when the notice names the continuation itself", async () => {

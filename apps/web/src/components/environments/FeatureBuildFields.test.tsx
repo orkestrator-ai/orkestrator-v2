@@ -88,8 +88,8 @@ describe("FeatureBuildFields build step speed", () => {
       within(reasoning).getByRole("menuitemradio", { name: "High", hidden: true }),
     ).toBeTruthy();
     expect(
-      within(reasoning).queryByRole("menuitemradio", { name: "Low", hidden: true }),
-    ).toBeNull();
+      within(reasoning).queryAllByRole("menuitemradio", { name: "Low", hidden: true }),
+    ).toHaveLength(0);
   });
 
   test("keeps the Fast choice when the reasoning level changes afterwards", async () => {

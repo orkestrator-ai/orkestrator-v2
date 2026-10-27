@@ -102,6 +102,26 @@ export class CodexRuntimePrompt {
       command?: NativeAgentBridgeCommandInvocation;
     },
   ): Promise<PromptDispatchOutcome> {
+    // The exact id the journal records (the route has already trimmed it).
+    const claimed = input.requestId?.trim() ? input.requestId : undefined;
+    if (!claimed) return this.promptUnclaimed(sessionId, input);
+    // Held from route entry to return, so `/dispatch` cannot answer `absent`
+    // for an id this request may still journal and send.
+    const inFlight = this.ctx.promptRequestsInFlight;
+    inFlight.set(claimed, (inFlight.get(claimed) ?? 0) + 1);
+    try {
+      return await this.promptUnclaimed(sessionId, input);
+    } finally {
+      const remaining = (inFlight.get(claimed) ?? 1) - 1;
+      if (remaining > 0) inFlight.set(claimed, remaining);
+      else inFlight.delete(claimed);
+    }
+  }
+
+  private async promptUnclaimed(
+    sessionId: string,
+    input: Parameters<CodexRuntimePrompt["prompt"]>[1],
+  ): Promise<PromptDispatchOutcome> {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return { ok: false, status: 404, error: "Session not found" };
     if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
@@ -238,6 +258,11 @@ export class CodexRuntimePrompt {
         await this.ctx.journal.forget(requestId);
       }
     }
+    // What the journal held for this id when it was classified. Checked again
+    // at the claim below: the dispatch lock is keyed by the thread once one
+    // exists, so a first prompt that is still creating this session's thread
+    // does not exclude a second one for the same id.
+    const classifiedRecord = this.ctx.journal.get(requestId);
 
     // Literal intent (workflows, mail, structured requests from the backend)
     // skips every bridge resolver: the text goes to Codex exactly as written.
@@ -498,6 +523,12 @@ export class CodexRuntimePrompt {
     // close that fenced the session during any of the awaits above must not
     // find a turn starting after it decided the thread was quiet.
     if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
+    // Another prompt claimed this thread, or journaled this id, during the
+    // awaits above. Without this both could write `turn/start` for one id.
+    this.ctx.registry.assertNoActiveTurn(context);
+    if (this.ctx.journal.get(requestId) !== classifiedRecord) {
+      throw new OverlappingTurnError(context.threadId);
+    }
     context.dispatchInFlight = true;
     this.ctx.registry.setPhase(context, "starting");
 

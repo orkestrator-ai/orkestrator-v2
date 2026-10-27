@@ -36,7 +36,11 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
-import { nextThreadAuthNotice } from "./sessions/auth-recovery-notice.js";
+import {
+  isRefusedLoginError,
+  nextThreadAuthNotice,
+  refusedLoginNotice,
+} from "./sessions/auth-recovery-notice.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
@@ -1142,8 +1146,16 @@ export class CodexRuntimeLifecycle {
       case "turn.completed": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
-        // A turn that finished proves the login works again.
+        // A turn that finished proves the login works again; one the API
+        // refused for its login asks for a sign-in, which app-server's own
+        // recovery never does for a key it holds as signed in.
         if (event.status === "completed") this.setThreadAuthNotice(context, undefined);
+        else if (event.status === "failed" && isRefusedLoginError(event.error)) {
+          this.setThreadAuthNotice(
+            context,
+            refusedLoginNotice(context.authNotice, () => crypto.randomUUID()),
+          );
+        }
         this.discardOutlivingCommandWindows(turn);
         if (turn.stoppedByShutdown && event.status === "interrupted")
           this.completeRecoveredTurn(turn, event.status);

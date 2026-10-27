@@ -14,6 +14,7 @@ import { gzip } from "node:zlib";
 import {
   authenticate,
   MAX_BODY_BYTES,
+  MAX_PROMPT_REQUEST_ID_BYTES,
   MAX_STEER_ID_BYTES,
   PROVIDER,
   workingDirectory,
@@ -984,7 +985,7 @@ async function handlePrompt(
 ): Promise<void> {
   const body = await readJson(request);
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const requestId = readBoundedString(body.requestId, 512, "requestId");
+  const requestId = readBoundedString(body.requestId, MAX_PROMPT_REQUEST_ID_BYTES, "requestId");
   const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
   const readOnly = body.readOnly;
   if (readOnly !== undefined && typeof readOnly !== "boolean") {
@@ -1165,6 +1166,8 @@ async function dispatchClaimedPrompt(
     // answer.
     state.dispatching = false;
     if (requestId && prepared) {
+      // The one deletion that keeps the journal complete: this attempt is the
+      // record's only cause and never reached the SDK, so `absent` stays true.
       if (priorEntry) setPromptJournal(state, priorEntry);
       else state.promptJournal.delete(requestId);
       schedulePersist();

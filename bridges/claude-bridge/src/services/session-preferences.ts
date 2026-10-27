@@ -38,6 +38,16 @@ export interface SessionPreferences {
    */
   dispatchedRequestIds?: string[];
   /**
+   * `dispatchedRequestIds` holds every request id this session ever claimed,
+   * under any bridge process: none was dropped by the bound, and every claim
+   * was written here before its turn could start. Only then can a missing id
+   * be reported as never sent (`absent`). Written beside every journal write
+   * and cleared (`undefined`) once the bound drops an id. A bridge that
+   * predates it drops it on its next write, since parsing keeps only known
+   * fields, and every turn start writes the in-flight mark.
+   */
+  dispatchJournalComplete?: true;
+  /**
    * Recently accepted or attempted steer request ids.
    *
    * In-memory only would let a restart lose the digest, so a retried id could
@@ -421,17 +431,25 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
     preferences.clientSessionBridgeId = record.clientSessionBridgeId;
   }
   if (typeof record.planMode === "boolean") preferences.planMode = record.planMode;
+  // Any id this parse drops leaves the journal incomplete.
+  let journalIntact = true;
   if (Array.isArray(record.dispatchedRequestIds)) {
     const unique = new Set<string>();
     for (const value of record.dispatchedRequestIds) {
       const normalized = typeof value === "string" ? value.trim() : "";
       if (typeof value === "string" && normalized.length > 0 && normalized.length <= 200) {
         unique.add(normalized);
+      } else {
+        journalIntact = false;
       }
     }
+    if (unique.size > MAX_DISPATCHED_REQUEST_IDS) journalIntact = false;
     if (unique.size > 0) {
       preferences.dispatchedRequestIds = [...unique].slice(-MAX_DISPATCHED_REQUEST_IDS);
     }
+  }
+  if (record.dispatchJournalComplete === true && journalIntact) {
+    preferences.dispatchJournalComplete = true;
   }
   if (Array.isArray(record.steerJournal)) {
     const journal: ClaudeSteerPreferenceEntry[] = [];

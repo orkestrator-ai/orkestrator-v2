@@ -188,12 +188,13 @@ describe("ACP bridge", () => {
     )) as { resumableSessionId?: string; status: string };
     expect(snapshot.resumableSessionId).toBeTruthy();
     expect(snapshot.status).toBe("idle");
-    // The same request id remains usable: session/new is not prompt dispatch.
+    // The same request id remains usable: session/new is not prompt dispatch,
+    // and the journal can prove the id never reached the agent.
     expect(
       await nativeFetch(`${base}/session/${id}/dispatch?requestId=retry-startup`, { headers }).then(
         (r) => r.json(),
       ),
-    ).toMatchObject({ dispatch: "unknown" });
+    ).toMatchObject({ dispatch: "absent" });
     const retry = await nativeFetch(`${base}/session/${id}/prompt`, {
       method: "POST",
       headers,
@@ -770,7 +771,7 @@ describe("ACP provider commands", () => {
     expect(await removed.json()).toMatchObject({ kind: "command-unavailable" });
     expect(
       await bridge.request("/dispatch?requestId=removed-1").then((response) => response.json()),
-    ).toEqual({ dispatch: "unknown" });
+    ).toEqual({ dispatch: "absent" });
 
     await fs.writeFile(bridge.commandsFile, JSON.stringify([review]));
     expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
@@ -810,7 +811,7 @@ describe("ACP provider commands", () => {
     }
     expect(
       await bridge.request("/dispatch?requestId=bad-1").then((response) => response.json()),
-    ).toEqual({ dispatch: "unknown" });
+    ).toEqual({ dispatch: "absent" });
 
     // ACP cannot suppress command interpretation, so literal text is sent as
     // typed; the backend is what refuses a literal that names a command.
@@ -1193,7 +1194,7 @@ describe("ACP provider commands", () => {
       expect(await retry.json()).toEqual({ accepted: true, duplicate: true });
       expect((await postCompact(bridge, { requestId: "compact-new" })).status).toBe(422);
       expect(await bridge.request("/dispatch?requestId=compact-new").then((r) => r.json())).toEqual(
-        { dispatch: "unknown" },
+        { dispatch: "absent" },
       );
       expect(await bridge.blocks()).toEqual(before);
 
@@ -1250,7 +1251,7 @@ describe("ACP provider commands", () => {
         await bridge
           .request("/dispatch?requestId=compact-missing")
           .then((response) => response.json()),
-      ).toEqual({ dispatch: "unknown" });
+      ).toEqual({ dispatch: "absent" });
       expect(await bridge.blocks()).toEqual([]);
     });
 

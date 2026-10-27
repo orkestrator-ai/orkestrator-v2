@@ -376,7 +376,7 @@ describe("interactive approvals", () => {
     expect(h.transcript).toHaveLength(0);
   });
 
-  test("an amendment approval is counted as approved and returns the selected proposal", async () => {
+  test("approving a request that proposes policy amendments sends plain accept", async () => {
     const h = approvalHarness();
     h.router.handle(
       {
@@ -386,30 +386,20 @@ describe("interactive approvals", () => {
           turnId: "turn-1",
           itemId: "item-1",
           command: "curl https://two.example",
-          proposedNetworkPolicyAmendments: [
-            { host: "one.example", action: "allow" },
-            { host: "two.example", action: "allow" },
-          ],
+          proposedExecpolicyAmendment: ["curl"],
+          proposedNetworkPolicyAmendments: [{ host: "two.example", action: "allow" }],
         },
       },
       1,
     );
     await settle();
 
-    expect(
-      h.router.resolveApproval(h.presented[0]!.approvalId, "approve-with-network-amendment", 1),
-    ).toBe(true);
+    expect(h.presented[0]).not.toHaveProperty("amendments");
+    expect(h.router.resolveApproval(h.presented[0]!.approvalId, "approve")).toBe(true);
     await settle();
 
-    expect(h.answers[0]!.result).toEqual({
-      decision: {
-        applyNetworkPolicyAmendment: {
-          network_policy_amendment: { host: "two.example", action: "allow" },
-        },
-      },
-    });
+    expect(h.answers[0]!.result).toEqual({ decision: "accept" });
     expect(h.router.getMetrics().approvalsApproved).toBe(1);
-    expect(h.router.getMetrics().approvalsDenied).toBe(0);
     expect(h.router.getHistory().at(-1)?.resolution).toBe("user-approved");
     expect(h.transcript).toEqual([]);
   });
@@ -1262,6 +1252,103 @@ describe("pausing a parked deadline", () => {
       timedOut: true,
     });
     expect(h.transcript.at(-1)?.message).toContain("expired");
+  });
+
+  // The command test above proves the shared timer. Each kind still answers
+  // in its own wire shape, and every one of them must refuse.
+  for (const { method, kind, params, denied, outcome } of [
+    {
+      method: "item/fileChange/requestApproval",
+      kind: "file-change",
+      params: { reason: "Write the release notes" },
+      denied: { decision: "decline" },
+      outcome: "permission to apply a file change",
+    },
+    {
+      method: "applyPatchApproval",
+      kind: "file-change",
+      params: { fileChanges: { "/repo/a.ts": { type: "update" } } },
+      denied: { decision: { denied: { rejection: "The user declined this action" } } },
+      outcome: "permission to change 1 file(s)",
+    },
+    {
+      method: "item/permissions/requestApproval",
+      kind: "permissions",
+      params: { permissions: { network: { enabled: true }, fileSystem: { write: ["/repo"] } } },
+      // An empty grant, turn-scoped: the turn goes on sandboxed.
+      denied: { permissions: {}, scope: "turn" },
+      outcome: "additional permissions",
+    },
+  ] as const) {
+    test(`an unanswered ${method} expires as a denial in its own shape`, async () => {
+      const h = pauseHarness();
+      h.router.handle(
+        {
+          ...request(method),
+          params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", ...params },
+        },
+        1,
+      );
+      await settle();
+      expect(h.approvals[0]).toMatchObject({ kind, expiresAt: START + WINDOW });
+
+      h.advance(WINDOW - 1);
+      await settle();
+      expect(h.answers).toHaveLength(0);
+      expect(h.router.getParkedApprovals()).toHaveLength(1);
+
+      h.advance(1);
+      await settle();
+      expect(h.answers).toEqual([{ generation: 1, id: "srv-1", result: denied }]);
+      expect(h.resolved).toEqual(["timed-out"]);
+      expect(h.router.getParkedApprovals()).toEqual([]);
+      expect(h.router.getMetrics().approvalsExpired).toBe(1);
+      expect(h.router.getMetrics().approvalsApproved).toBe(0);
+      expect(h.transcript.at(-1)?.message).toBe(
+        `Codex asked for ${outcome}. The request expired without an answer, so it was declined.`,
+      );
+    });
+  }
+
+  test("an unanswered MCP url sign-in is cancelled at its deadline", async () => {
+    const h = pauseHarness();
+    h.router.handle(
+      {
+        kind: "server-request",
+        id: "srv-url",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "linear",
+          mode: "url",
+          message: "Authorize Orkestrator",
+          url: "https://linear.app/oauth/authorize",
+          elicitationId: "elicit-7",
+        },
+      },
+      1,
+    );
+    await settle();
+    expect(h.interactions[0]).toMatchObject({
+      kind: "mcp-url",
+      url: "https://linear.app/oauth/authorize",
+      expiresAt: START + WINDOW,
+    });
+
+    h.advance(WINDOW - 1);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+
+    h.advance(1);
+    await settle();
+    // Cancel, never accept: an ignored sign-in link authorises nothing.
+    expect(h.answers).toEqual([
+      { generation: 1, id: "srv-url", result: { action: "cancel", content: null, _meta: null } },
+    ]);
+    expect(h.resolved).toEqual(["timed-out"]);
+    expect(h.router.getParkedInteractions()).toEqual([]);
+    expect(h.router.getMetrics().interactionsExpired).toBe(1);
   });
 
   test("resuming restarts a fresh full window rather than the remainder", async () => {

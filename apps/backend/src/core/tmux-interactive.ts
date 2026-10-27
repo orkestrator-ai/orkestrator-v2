@@ -196,6 +196,11 @@ export class InteractiveTmuxTerminalManager {
     }
   }
 
+  /** Stops every pane snapshot timer; the backend is shutting down. */
+  detachAll(): void {
+    for (const id of Array.from(this.terminals.keys())) this.detach(id);
+  }
+
   private require(id: string): InteractiveTerminalSession {
     const terminal = this.terminals.get(id);
     if (!terminal) throw new Error("tmux interactive terminal session not found");
@@ -249,6 +254,7 @@ export class InteractiveTmuxTerminalManager {
    * and the pane appeared frozen exactly while they were using it.
    */
   private schedule(terminal: InteractiveTerminalSession): void {
+    if (this.terminals.get(terminal.id) !== terminal) return;
     const dueAt = Date.now() + terminal.intervalMs;
     if (terminal.timer !== undefined) {
       if (terminal.nextCaptureAt !== undefined && terminal.nextCaptureAt <= dueAt) return;
@@ -302,10 +308,4 @@ export class InteractiveTmuxTerminalManager {
       context.emit(`terminal-output-${terminal.id}`, bytesPayload(update.text, update.full));
     }
   }
-}
-
-export const interactiveTerminals = new InteractiveTmuxTerminalManager();
-
-export function detachInteractiveTerminalsForEnvironment(environmentId: string): void {
-  interactiveTerminals.detachEnvironment(environmentId);
 }

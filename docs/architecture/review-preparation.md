@@ -303,21 +303,43 @@ after the durable write. Two rules keep a recovered record honest
   or a result for this exact request id (the tool-transport slot, or a
   structured result naming the request), moves it to `sent`. `lost` (the
   provider restored the id without an outcome and refuses it for good) fails
-  the reviewer at once. Anything else parks it, and the idle-poll bound fails
-  it closed. It is never re-sent under a new id, and not under the same id
-  either: no bridge can yet prove an id never reached it
+  the reviewer at once. `absent` (the provider proves the id never reached
+  it) moves it back to `prepared`, and the next pass re-runs admission and
+  sends it again under the same id; a result for the exact request outranks
+  that answer, and a late delivery of the first send is the provider's
+  duplicate. Anything else parks it, and the idle-poll bound fails it closed.
+  It is never re-sent under a new id
   ([0223](../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md)).
 
 A restart notice names the request it cut short (`interruptedRequestId`, see
 [agent engines](agent-engines.md)), so a continuation the provider has
 journaled but not yet started is not failed as a second restart. The Multi Review
 preparation, consolidation and Fix steps and Build Pipeline consolidation park
-an unconfirmed `dispatching` request the same way; they have one writer per
-request, so the first rule does not arise there.
+an unconfirmed `dispatching` request, and re-send an `absent` one, the same way;
+they have one writer per request, so the first rule does not arise there.
+All these paths use `provider-dispatch-recovery.ts`: a saved result for the
+exact request takes precedence over `absent`, `lost`, and `unknown`. A failed
+result read supplies no proof, and a structured result naming another request
+cannot settle the dispatch.
+
+Build Pipeline's stage prompts follow the same rule. A new
+`pendingPromptAttempt` carries `dispatchVersion: 1` and gets `dispatchingAt`
+durably just before its send (cleared again when the send is refused before
+the prompt was written). Only a versioned attempt without that timestamp is
+known to be prepared and may send immediately. Legacy pending attempts without
+the version may have reached the provider, even without `dispatchingAt`, so
+require the same reconciliation as marked attempts. Both settle as sent on
+`dispatched`, `pending`, or an exact-request result; without a result, `lost`
+fails the stage, `absent` permits a same-id resend, and anything else waits
+within the reconnect deadline before failing closed ("dispatch acceptance
+could not be confirmed"). Legacy attempts use their original `startedAt`
+for that deadline. An older backend ignores these fields and re-sends, as before.
 
 `review-fanout-interleaving.test.ts` checks both rules over seeded
 interleavings of commits, provider calls, cancellation, fence loss and backend
-restarts. Without a crash, a durable `dispatching` request that no send was
+restarts. Its "a provider that proves an id never arrived" suites run the
+restart and chaos flavours against a provider that answers `absent`, lets a
+crash leave a send on the wire to land later, and must deduplicate it. Without a crash, a durable `dispatching` request that no send was
 ever attempted for fails the seed, and the fake provider starts half of all
 continuations late, so the status read still shows the restart they continue.
 

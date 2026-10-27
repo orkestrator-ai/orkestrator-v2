@@ -13,3 +13,51 @@
 - **Isolated owner command:** `mise run test:logged -- --name isolated-worktree-git -- sh -c 'cd apps/backend && bun test ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures'`.
 - **Isolated result:** Complete unchanged owner passed, exit 0, in 2.1 seconds.
 - **Hypothesis:** Shared-host contention delayed filesystem watcher reconciliation beyond the runner's default deadline. Unproven; the tests, their assertions and deadlines were not changed. This is distinct from resolved case 0180, which concerned a tracked-edit cache-hit assertion rather than these two watcher timeouts.
+
+## Recurrence — 0247 sweeps, 2026-10-26
+
+- Both direct backend sweeps (`TMPDIR=<private dir> mise exec -- bun run --cwd apps/backend test:workspace`, macOS arm64, at `5eb3f9037` and `8268be981` on `test-temp-directory-4cd0548cf2b5-r1`, which does not touch this owner) timed out `real Git through the shared owner` cases at 5,000 ms: the tracked-edit, linked-worktree staging and shared-ref cases in the first, the tracked-edit case in the second. The owner rerun alone at load average 37 (`mise run test:logged -- --name rerun-worktree-snapshots-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts`) also failed the staging and shared-ref cases (2 pass, 2 fail; artifact `orkestrator-test-run.62Ge9Y`); no quieter rerun was taken. No change.
+
+## 0247 review follow-up — 2026-10-27
+
+The `review-full` repository run repeated staging and shared-ref timeouts
+(5002.01 / 5001.60 ms). The complete unchanged owner was rerun with
+`mise run test:logged -- --name worktree-snapshots-owner -- bun test --cwd
+apps/backend ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`.
+It remained non-green: one passed, three failed, one between-test error,
+16.3 s. The tracked-edit case also timed out in this rerun. Evidence:
+`orkestrator-test-run.Y7XbQD` under the host temporary directory. This does
+not establish a quieter-host pass or a new cause; the prior passing-owner
+evidence remains above. No deadline or assertion was changed.
+
+## 0247 repeat sweep — 2026-10-27
+
+The 0247 repeat sweep (`TMPDIR=<private dir> mise exec -- bun run --cwd
+apps/backend test:workspace` at `0c77d9b46`, which does not touch this owner or
+`worktree-snapshots*.ts`; macOS arm64, host load average 67 to 95) timed out
+all three `real Git through the shared owner` watcher cases at 5,000 ms
+(tracked-edit 5002.01 ms, staging 5001.38 ms, shared-ref 5001.71 ms). After
+them the file reported three between-test errors, `condition not reached
+before the deadline` from `worktree-snapshots-git.test.ts:150`, and one
+`(unnamed)` failure, "a beforeEach/afterEach hook timed out for this test"
+(10180.85 ms): the late waits of the timed-out cases running into the next
+hook. The complete owner rerun alone at load average 155,
+`mise run test:logged -- --name worktree-snapshots-0957 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts`,
+failed only the shared-ref case (3 pass, 1 fail, 12.8 s; artifact
+`orkestrator-test-run.hAC4iW`). No assertion, timeout or skip was changed.
+
+
+## Main-merge validation recurrence (2026-10-27)
+
+The merge of `863b578217fca437c37c53372bec7a4f97719079` into
+`711de8869705b8672a214aeb4d82c408a055c2d0` was validated with
+`mise run test:logged -- --name merge-repository-tests -- mise run test`,
+using two backend workers and the concurrent workspace/root/bridge/protocol
+groups. Backend totals were 12,072 passed, 120 skipped, 18 failed and six
+between-test errors across 733 files. The aggregate remains failed; see
+[1013](../aggregate-validation-runs/1013-interactive-command-main-merge-validation.md)
+for all groups and owning-file results. Evidence:
+`orkestrator-test-run.2onpQ5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory.
+
+The file reported an `(unnamed)` beforeEach/afterEach hook timeout at 5000.79 ms, after `killed 4 dangling processes`. The complete unchanged owner passed, exit 0 in 6.1 s, with `mise run test:logged -- --name merge-worktree-snapshots-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`. This records the hook-timeout recurrence already described above, without assigning it to an individual watcher case. Cause remains unconfirmed; no assertion, timeout, skip or implementation changed.

@@ -229,6 +229,13 @@ What was left of items 1, 3 and 5, narrowed; nothing here is new scope.
    2026-10-25: nothing calls Codex `thread/archive`, Cursor never reads
    `SDKAgentInfo.archived`, and no platform has an archive state for a link to
    report. Add an archived state to the dialog when that lands.
+   Unblocked 2026-10-27 by 0006: Codex conversations can be archived from the
+   resume list (`thread/archive`, capability `actions.archive`, backend
+   command `set_native_agent_resumable_session_archived`), and Cursor's list
+   hides agents the SDK reports `archived`. No platform reports a per-session
+   archived flag a link could read yet; Codex's `thread/list` with
+   `archived: true` is the source to read
+   ([agent-engines.md](../../architecture/agent-engines.md#removing-a-conversation-from-the-resume-list)).
 
 ## Assumptions and decisions
 

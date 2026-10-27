@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { MenuItemConstructorOptions } from "electron";
+import type { KeyboardEvent as MenuKeyboardEvent, MenuItemConstructorOptions } from "electron";
 import {
   createApplicationMenuTemplate,
   type ApplicationMenuWindow,
@@ -35,6 +35,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow: () => {},
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     };
     const withoutUpdater = createApplicationMenuTemplate(actions);
     expect(submenu(withoutUpdater[0]!).some((item) => item.label === "Check for Updates…")).toBe(
@@ -59,6 +60,7 @@ describe("desktop application menu", () => {
       closeTab,
       selectWindow: () => {},
       zoom,
+      showKeyboardShortcuts: () => {},
     });
 
     const fileMenu = template.find((item) => item.label === "File");
@@ -81,6 +83,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow: () => {},
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     const labels = template.map((item) => item.label);
@@ -100,6 +103,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow,
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     const localItem = windowItem(template, "Orkestrator AI — Local");
@@ -124,6 +128,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow,
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     const first = windowItem(template, "Orkestrator AI — Local (1)");
@@ -142,6 +147,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow: () => {},
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     const placeholder = windowItem(template, "No Open Windows");
@@ -160,6 +166,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow: () => {},
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     expect(windowRadioLabels(template)).toEqual([
@@ -181,6 +188,7 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow: () => {},
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     const labels = windowRadioLabels(template);
@@ -203,8 +211,51 @@ describe("desktop application menu", () => {
       closeTab: () => {},
       selectWindow: () => {},
       zoom: () => {},
+      showKeyboardShortcuts: () => {},
     });
 
     expect(windowRadioItems(template).every((item) => item.checked === false)).toBe(true);
+  });
+
+  test("View offers Keyboard Shortcuts… with its chord, shown but owned by native input", () => {
+    const zoom = mock((_direction: "in" | "out" | "reset") => {});
+    const showKeyboardShortcuts = mock((_request: "open" | "toggle") => {});
+    const template = createApplicationMenuTemplate({
+      productName: "Orkestrator AI",
+      windows: [],
+      newWindow: () => {},
+      closeTab: () => {},
+      selectWindow: () => {},
+      zoom,
+      showKeyboardShortcuts,
+    });
+
+    const viewMenu = template.find((item) => item.label === "View");
+    const items = viewMenu ? submenu(viewMenu) : [];
+    expect(items.map((item) => item.label ?? item.type)).toEqual([
+      "Zoom In",
+      "Zoom Out",
+      "separator",
+      "Actual Size",
+      "separator",
+      "Keyboard Shortcuts…",
+    ]);
+    const item = items.at(-1)!;
+    expect(item.accelerator).toBe("CmdOrCtrl+Shift+K");
+    // Display-only on Windows and Linux: main's before-input-event hook owns the key.
+    expect(item.registerAccelerator).toBe(false);
+
+    const click = item.click as (
+      menuItem: unknown,
+      window: unknown,
+      event: MenuKeyboardEvent,
+    ) => void;
+    // A pointer or keyboard-navigated click opens; it never closes the dialog.
+    click(undefined, undefined, {});
+    click(undefined, undefined, { triggeredByAccelerator: false });
+    // macOS's key equivalent fires only for a press no page claimed; it toggles.
+    click(undefined, undefined, { triggeredByAccelerator: true });
+    expect(showKeyboardShortcuts.mock.calls).toEqual([["open"], ["open"], ["toggle"]]);
+    expect(zoom).not.toHaveBeenCalled();
   });
 });

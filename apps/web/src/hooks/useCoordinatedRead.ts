@@ -45,6 +45,8 @@ export interface CoordinatedRead<T> {
   refresh: () => Promise<ReadState<T> | null>;
   /** Invalidation hint; coalesced, joined and deferred while hidden. */
   invalidate: () => void;
+  /** See `ReadSubscription.noteActivity`: restores the base cadence, never reads. */
+  noteActivity: () => void;
 }
 
 /**
@@ -121,15 +123,19 @@ export function useCoordinatedRead<T>({
   const intervalMs = demand?.intervalMs;
   const priority = demand?.priority;
   const quietBackoff = demand?.quietBackoffMs?.join(",") ?? "";
+  const dataSaving = demand?.dataSaving
+    ? JSON.stringify([demand.dataSaving.intervalMs, demand.dataSaving.quietBackoffMs])
+    : "";
   useEffect(() => {
     handleRef.current?.update({ demand: demandRef.current });
-  }, [active, intervalMs, priority, quietBackoff]);
+  }, [active, intervalMs, priority, quietBackoff, dataSaving]);
 
   const refresh = useCallback(
     () => (handleRef.current ? handleRef.current.refresh() : Promise.resolve(null)),
     [],
   );
   const invalidate = useCallback(() => handleRef.current?.invalidate(), []);
+  const noteActivity = useCallback(() => handleRef.current?.noteActivity(), []);
 
-  return { state, refresh, invalidate };
+  return { state, refresh, invalidate, noteActivity };
 }

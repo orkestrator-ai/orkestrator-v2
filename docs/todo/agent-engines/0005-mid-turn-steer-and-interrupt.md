@@ -1,14 +1,17 @@
 # Mid-turn steer and interrupt
 
-Checked against `main` at `31d0fb06` (2026-10-17).
+Checked against `main` at `863b5782` (2026-10-27).
 
 Users should be able to redirect or stop a running turn without losing work, on
 every provider whose vendor surface allows it. Steer and the graceful abort
 ladder are live on Claude, Codex, Cursor and Pi. Claude's CLI now stays warm
 between turns and releases itself after an idle window, so a follow-up is
-written into the running process. What is left for Claude is a live model
-catalogue, a warm first turn and collapsing the last per-process task maps.
-OpenCode and Grok steer are blocked upstream and are recorded here.
+written into the running process. Background-task ownership is that
+process's own state, and bridge-wide reads (models, account, plan usage) ask a
+running CLI before spawning a probe. What is left is live qualification
+through the app and the browser. OpenCode and Grok steer are blocked upstream
+and are recorded here; the Cursor `force` send is deferred until a wedged
+agent is seen.
 
 ## Current state
 
@@ -46,19 +49,32 @@ OpenCode and Grok steer are blocked upstream and are recorded here.
   - The continuation a task notification owes is a flag on the latest turn
     (`awaitingContinuation`) that stretches the idle window to
     `CONTINUATION_SILENCE_MS`; `retainedContinuationRequestIds` still reports it
-    to backend workflows. `backgroundTaskControls`,
-    `backgroundTaskCandidates` and `settlingBackgroundTasks` remain as
-    task-to-process maps (`session-manager-background-tasks.ts`).
-  - The task and compaction hooks are already registered (`TaskCreated`,
-    `TaskCompleted`, `SubagentStart`, `PreCompact`, `PostCompact`).
-  - The model catalogue still comes from a throwaway `maxTurns: 0` query
-    (`getAvailableModelCatalog` in `session-manager-interactions.ts`). Account
-    and MCP reads use the same kind of probe when no CLI is live (`createProbe`
-    in `session-manager-catalog.ts`).
+    to backend workflows.
+  - Background work belongs to the runtime (`runtime.tasks`,
+    `ClaudeRuntimeTasks` in `session-manager-background-tasks.ts`): the live
+    tasks that process started, its unresolved Bash candidates and the
+    snapshots a level signal parked before their edge. The task hooks
+    (`TaskCreated`, `TaskCompleted`, `SubagentStart`), the `task_*` and
+    `background_tasks_changed` frames and the Bash calls feed it.
+    `stopBackgroundTask` reaches only the CLI that owns the task
+    (`backgroundTaskOwner`), and `endClaudeRuntime` settles what the process
+    owned through `releaseClaudeRuntimeTasks`. Nothing about task ownership is
+    kept on the session any more.
+  - The model catalogue (`getAvailableModelCatalog` in
+    `session-manager-interactions.ts`), the account (`probeAccount` in
+    `claude-sign-in.ts`) and the plan-usage windows (`readClaudePlanUsage` in
+    `session-manager-catalog.ts`) ask an open runtime first
+    (`live-claude-control.ts`): models and account from its held initialize
+    answer, plan usage over its control channel. A control-only probe runs only
+    when no running CLI answers. MCP actions already used the session's live
+    control and probe only without one.
+  - `startup()` / `WarmQuery` are not used: measured, the spawn and initialize
+    they save is about 0.2 s (see "Assumptions and decisions").
   - Bridge tests cover an idle steer reading back as `absent` and the
     interrupt receipt (`session-manager-catalog-steer.test.ts`,
-    `routes/session.test.ts`), and the warm runtime's join, window, cap,
-    replacement and reclaim (`session-manager-runtime-idle.test.ts`).
+    `routes/session.test.ts`), the warm runtime's join, window, cap,
+    replacement and reclaim (`session-manager-runtime-idle.test.ts`), and the
+    live reads with their probe fallbacks (`live-claude-control.test.ts`).
 - Cursor: `Run.steer` with a bounded `steer-journal.ts`. Status comes from
   `onDidChangeStatus` (`prompt.ts`). `recoverActiveRun` (`agent-session.ts`)
   re-adopts a surviving run, and `cancelSurvivingRuns` (`cursor-runs.ts`)
@@ -77,24 +93,13 @@ OpenCode and Grok steer are blocked upstream and are recorded here.
 
 ## Outstanding work
 
-### Code
+### Deferred
 
-1. **Collapse the task-to-process maps into the runtime.** With one CLI per
-   session, `backgroundTaskControls`, `backgroundTaskCandidates` and
-   `settlingBackgroundTasks` only ever name that session's runtime. Make them
-   runtime state fed by the `TaskCreated` / `TaskCompleted` / `SubagentStart`
-   hooks and the `task_*` system messages, so `stopBackgroundTask` and
-   `endClaudeRuntime` read the runtime instead of a per-control map. Keep the
-   strict-owner rule: a stop never reaches a process that did not start the
-   task.
-2. **Live model catalogue.** Read models from `initializationResult()` on the
-   live runtime instead of `getAvailableModelCatalog`'s throwaway query. Keep
-   the probe only for the no-runtime case. Do the same for `createProbe` reads
-   when a runtime is live.
-3. **Warm first turn.** Use `startup()` / `WarmQuery` so the first turn in an
-   environment does not pay the cold spawn. Neither is used today. Measure it.
-4. **Cursor, low priority.** `SendOptions.local.force` for a wedged agent. It is
-   unused; add it only if `recoverActiveRun` shows wedged agents in practice.
+- **Cursor `SendOptions.local.force`.** The SDK documents it as expiring the
+  agent's active persisted run before a new follow-up, a recovery path for an
+  agent left wedged by a crashed CLI. It stays unused until
+  `recoverActiveRun` is seen re-adopting a run that never progresses; see
+  "Assumptions and decisions".
 
 ### Blocked
 
@@ -121,7 +126,10 @@ OpenCode and Grok steer are blocked upstream and are recorded here.
   server added and removed between turns. Confirm the process id stays the
   same and the composer changes take effect. The bridge-level runs are below;
   the app path is not yet qualified.
-- Measure the first turn again once item 3 lands.
+- With a real login on a throwaway profile, through one warm CLI: the model
+  picker, the account card and the plan-usage panel answer without a probe
+  process appearing, and stopping a background task started two turns earlier
+  reaches it (see "Needs verification").
 
 ## Constraints and rationale
 
@@ -182,7 +190,9 @@ Decisions, each the option built:
    existing sources, against a new 215-line `session-manager-runtime-idle.ts`.
    Kept: the owed-continuation flag and `retainedContinuationRequestIds`,
    which backend workflows read to keep supervising a released dispatch, and
-   the task-to-process maps (item 1), which carry the strict-owner stop rule.
+   the task-to-process maps, which carried the strict-owner stop rule. Those
+   maps were collapsed into the runtime on 2026-10-27 (see "Assumptions and
+   decisions").
 7. **A prompt settles at its result.** `sendPrompt` no longer waits for the
    process to exit. A root loop the CLI resumes on its own later (a
    continuation it owed) reclaims the foreground through the latest turn and
@@ -209,6 +219,122 @@ Decisions, each the option built:
   launch-only differences get a 409 instead of a second process.
 - An interrupt must not kill background tasks (`perTaskStopAffordance`).
 - Missing steer is a `false` capability bit, not an error.
+
+## Assumptions and decisions
+
+### Task ownership is the runtime's state (2026-10-27, was Code item 1)
+
+- **Options.** (a) Move the three session maps onto the runtime unchanged,
+  still keyed task id → control. (b) Make ownership implicit in the runtime:
+  `runtime.tasks` holds a set of live task ids, a set of Bash candidates and a
+  map of parked snapshots, and the owner of a task is the session's runtime if
+  that set names it. (c) Leave the maps on the session.
+- **Choice: (b).**
+- **Why.** With one CLI per session every map entry named the same control,
+  so the value carried no information. A process that ends releases what it
+  owned (`releaseClaudeRuntimeTasks`) before a successor can start
+  (`retireDrainingClaudeRuntime` waits for `runtime.ended`), so "the session's
+  runtime, if it names the task" is exactly the strict owner: a successor's
+  sets are empty, and a stop for an older task answers `no_control_channel`
+  instead of reaching a CLI that never started it.
+- **Pros.** The state lives and dies with the process; the transcript
+  eviction guard no longer needs three map checks (the runtime check covers
+  them); `claudeRuntimeOwnsLiveWork` takes the runtime alone; no session field
+  can outlive its CLI.
+- **Cons.** A turn with no runtime (unit tests that drive handlers on a bare
+  session) records no ownership at all, where the old maps recorded an
+  `undefined` owner. Teardown (`takeQueryControls`) still clears the sets
+  immediately, as it cleared the maps, so a stop between a close and the
+  process exit answers `no_control_channel` as before. Tests that read the
+  maps now read `runtime.tasks`; the "owned by another query" test simulates
+  that by removing the id from the CLI's set.
+
+### Live reads before probes (2026-10-27, was Code item 2)
+
+- **Options.** (a) Models only, from `initializationResult()` of the open
+  runtime. (b) Models, account and plan usage from any open runtime on the
+  bridge, most recently active first, falling back to the probe. (c) Re-send
+  `initialize` (`reinitialize()`) for a fresh answer.
+- **Choice: (b).** `live-claude-control.ts`. Models and account come from the
+  SDK's held initialize answer (`supportedModels()` and `accountInfo()` are
+  the same cached promise in Agent SDK 0.3.309, so nothing is sent). Plan
+  usage sends `/usage` on the live control channel, as each turn's own refresh
+  already does. Each live answer is bounded (5 s; plan usage keeps its 10 s
+  probe bound) and any failure or empty answer moves on to the probe.
+- **Why.** The account read is cached for only 30 s, so a tab that polls it
+  spawned a CLI every 30 s while a warm one was already running. `reinitialize`
+  re-registers hooks and resolves any hook the CLI is waiting on, so it is not
+  a read.
+- **Pros.** No probe process while a session's CLI is warm; a draining or
+  aborted runtime is never asked; no read is a frame, so none extends the idle
+  window.
+- **Cons.** The answer is from the CLI's launch. A sign-in since then shows up
+  only once that CLI is released or no CLI answers: for the account, only a
+  signed-in live answer counts, because a signed-out one would keep the
+  composer locked after a terminal login only a probe can see; a login revoked
+  since is caught by the turn that fails (`noteClaudeAuthenticationFailure`).
+  The model list may lag a sign-in by up to the idle window. A CLI launched
+  without user and project settings (a coordinator) is skipped, because a
+  probe reads those settings and they can narrow `availableModels`; one
+  launched without local settings is accepted.
+
+### `startup()` / `WarmQuery` not adopted (2026-10-27, was Code item 3)
+
+- **Measured.** Agent SDK 0.3.309 with its bundled CLI 2.1.309, a throwaway
+  `HOME` and `CLAUDE_CONFIG_DIR`, no login, no prompt sent: `query()` to a
+  resolved `initializationResult()` took 2,991 ms on the first exec after the
+  binary left the page cache, then 211–264 ms (four runs). `startup()` took
+  210–235 ms, after which the same read on `warm.query()` resolved in 0 ms. So
+  `startup()` saves only the spawn and initialize handshake, about 0.2 s; the
+  2026-10-17 table puts a first turn at 4.3–5.2 s against 0.9–1.0 s warm.
+- **Options.** (a) Call `startup()` when a session is created. (b) Pre-spawn on
+  some earlier signal (tab open, bridge start). (c) `prewarm()` spares. (d) Do
+  not adopt.
+- **Choice: (d).**
+- **Why.** `startup()` fixes every option at spawn, and a Claude launch's
+  options come with the prompt: the resumed session id, the turn's abort
+  controller, hooks and `canUseTool` bound to that turn, its MCP servers,
+  plugins, policy and model. (a) has no lead time, because the backend creates
+  a session on its first prompt. (b) has no signal on the bridge surface: the
+  backend polls `GET /session/:id` all the time, and catalogue reads must not
+  re-attach; and a speculative CLI holds about 300 MB. (c) is `@alpha`, its
+  `claim()` cannot resume a session, and it fixes hooks, MCP servers and
+  plugins at prewarm. The rest of the cold first turn (resume, MCP connects,
+  plugins, the first model call) is paid after the prompt either way.
+- **Pros.** No speculative process or second launch path.
+- **Cons.** The first turn in an environment still pays its spawn; with
+  the bridge's own probes paging the binary in, that part is about 0.2 s.
+
+### Cursor `force` deferred (2026-10-27, was Code item 4)
+
+- **Options.** (a) Send with `local.force` whenever a send finds an active
+  run. (b) Only after `recoverActiveRun` re-adopts a run that never
+  progresses. (c) Leave it unused until a wedged agent is seen.
+- **Choice: (c).**
+- **Why.** `force` expires the agent's active persisted run. `recoverActiveRun`
+  re-adopts a run that survived a bridge restart and tails it; forcing past it
+  would cancel live work, which interrupt and unmount must never do. No wedged
+  agent has been observed, and there is no field evidence here to tell a
+  wedged run from a slow one.
+- **Pros.** Nothing can expire a working run.
+- **Cons.** An agent wedged by a crashed CLI still needs the user to stop it.
+
+## Needs verification
+
+- **Live reads with a real login.** The live-first model, account and plan
+  usage reads are proven against the SDK source (the cached initialize promise)
+  and mocked controls only. On a throwaway profile with a real login, confirm
+  that with one warm CLI the model picker, the account card and the plan-usage
+  panel answer without a new `claude` process, and that a probe still runs once
+  the CLI is released.
+- **Stop after several turns on a real CLI.** Start a background agent,
+  send two follow-ups into the same warm CLI, then stop the agent: it must stop
+  (`ok`) and its snapshot settle; after the CLI is released, a stop for a task
+  it owned must answer `no_control_channel`.
+- **First-turn cost split.** The 0.2 s spawn measurement used a bare
+  configuration with no MCP servers, plugins or login. How much of a 4–5 s
+  first turn with the bridge's real launch options is resume, MCP connects and
+  the first model call is not measured.
 
 ## Related
 

@@ -238,7 +238,6 @@
         "apps/backend/src/core/http-bridge-interactions.ts",
         "apps/backend/src/core/project-git-service.ts",
         "apps/backend/src/core/public-api/actions-settings.ts",
-        "apps/backend/src/core/tmux-session-manager.ts",
         "apps/backend/src/gateway-support-core.ts",
         "apps/desktop/electron/browser-preview-capture-page.ts",
         "apps/desktop/electron/browser-preview-capture-validation.ts",

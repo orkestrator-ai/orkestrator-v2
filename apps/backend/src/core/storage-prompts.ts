@@ -185,20 +185,20 @@ export class PromptsRepository {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return (await this.repos.nativeAgentSessions.loadPromptQueues())[queueKey] ?? null;
+    return (await this.repos.promptQueues.loadPromptQueues())[queueKey] ?? null;
   }
 
   async listPromptQueues(environmentId: string): Promise<PersistedPromptQueue[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
-    return Object.values(await this.repos.nativeAgentSessions.loadPromptQueues()).filter(
+    return Object.values(await this.repos.promptQueues.loadPromptQueues()).filter(
       (queue) => queue.environmentId === environmentId,
     );
   }
 
   async listAllPromptQueues(): Promise<PersistedPromptQueue[]> {
-    return Object.values(await this.repos.nativeAgentSessions.loadPromptQueues());
+    return Object.values(await this.repos.promptQueues.loadPromptQueues());
   }
 
   /**
@@ -218,12 +218,12 @@ export class PromptsRepository {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
         environmentId,
         "Agent mail",
       );
-      const queue = (await this.repos.nativeAgentSessions.loadPromptQueues())[queueKey];
+      const queue = (await this.repos.promptQueues.loadPromptQueues())[queueKey];
       if (
         queue &&
         (queue.outstandingClaim !== undefined ||
@@ -257,17 +257,17 @@ export class PromptsRepository {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    this.repos.nativeAgentSessions.validatePromptQueueMessages(messages);
+    this.repos.promptQueues.validatePromptQueueMessages(messages);
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Prompt queue expected revision must be a non-negative integer");
     }
 
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
@@ -275,7 +275,7 @@ export class PromptsRepository {
       if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("Prompt queue revision conflict");
       }
-      return this.repos.nativeAgentSessions.savePromptQueueMutation(
+      return this.repos.promptQueues.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -304,14 +304,14 @@ export class PromptsRepository {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    this.repos.nativeAgentSessions.validatePromptQueueMessage(message);
+    this.repos.promptQueues.validatePromptQueueMessage(message);
 
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
@@ -323,7 +323,7 @@ export class PromptsRepository {
       ) {
         return previous;
       }
-      return this.repos.nativeAgentSessions.savePromptQueueMutation(
+      return this.repos.promptQueues.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -366,19 +366,19 @@ export class PromptsRepository {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     assertPromptQueueKeyOwner(queueKey, environmentId);
-    this.repos.nativeAgentSessions.validatePromptQueueMessage(message);
+    this.repos.promptQueues.validatePromptQueueMessage(message);
     const messageId = message.id as string;
     const expected = fingerprint ?? canonicalPromptQueueMessageFingerprint(message);
     if (!isNonBlankString(expected)) {
       throw new Error("Prompt queue message fingerprint must not be blank");
     }
 
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
@@ -423,7 +423,7 @@ export class PromptsRepository {
       // is no longer allowed (for example, a read-only session left Plan).
       if (!allowNewMessage) throw new Error(PROMPT_QUEUE_NEW_PUBLICATION_REFUSED);
 
-      const queue = await this.repos.nativeAgentSessions.savePromptQueueMutation(
+      const queue = await this.repos.promptQueues.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -473,12 +473,12 @@ export class PromptsRepository {
       throw new Error("Prompt queue message ID must not be blank");
     }
 
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return { removed: null, queue: null };
       if (previous.environmentId !== environmentId) {
@@ -490,7 +490,7 @@ export class PromptsRepository {
       if (index < 0) return { removed: null, queue: previous };
       const messages = [...previous.messages];
       const [removed] = messages.splice(index, 1);
-      const queue = await this.repos.nativeAgentSessions.savePromptQueueMutation(
+      const queue = await this.repos.promptQueues.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -520,12 +520,12 @@ export class PromptsRepository {
       throw new Error("Prompt queue move direction must be up or down");
     }
 
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return null;
       if (previous.environmentId !== environmentId) {
@@ -540,7 +540,7 @@ export class PromptsRepository {
       }
       const messages = [...previous.messages];
       [messages[index], messages[target]] = [messages[target], messages[index]];
-      return this.repos.nativeAgentSessions.savePromptQueueMutation(
+      return this.repos.promptQueues.savePromptQueueMutation(
         queues,
         queueKey,
         environmentId,
@@ -556,8 +556,8 @@ export class PromptsRepository {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return null;
       if (previous.outstandingClaim || previous.dispatchError) return null;
@@ -587,8 +587,8 @@ export class PromptsRepository {
     queueKey: string,
     requestId: string,
   ): Promise<PersistedPromptQueue | null> {
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
         return previous ?? null;
@@ -634,8 +634,8 @@ export class PromptsRepository {
     if (!isNonBlankString(queueKey) || !isNonBlankString(requestId)) {
       throw new Error("Prompt queue dispatch identity must not be blank");
     }
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
         return previous ?? null;
@@ -669,8 +669,8 @@ export class PromptsRepository {
     if (!isNonBlankString(queueKey) || !isNonBlankString(requestId) || !isNonBlankString(message)) {
       throw new Error("Prompt queue failure identity must not be blank");
     }
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
         return previous ?? null;
@@ -708,8 +708,8 @@ export class PromptsRepository {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous?.dispatchError) return previous ?? null;
       const { dispatchError: _dispatchError, ...withoutError } = previous;
@@ -733,8 +733,8 @@ export class PromptsRepository {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
-    return this.repos.nativeAgentSessions.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
       const removedKeys = Object.values(queues)
         .filter((queue) => queue.environmentId === environmentId)
         .map((queue) => queue.queueKey);

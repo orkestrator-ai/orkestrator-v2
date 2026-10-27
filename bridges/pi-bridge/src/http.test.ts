@@ -38,7 +38,8 @@ const { isSessionClosed, newSessionState, setAgentSessionTestHooks } =
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
-const { loadPersistedState, setPersistWriteGateForTests } = await import("./persistence.js");
+const { loadPersistedState, setPersistWriteGateForTests, settlePersistenceForTests } =
+  await import("./persistence.js");
 const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
@@ -874,6 +875,7 @@ describe("successful lifecycle routes", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.clear();
       clientSessionKeys.clear();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
       resetTestDependencies();
     }
@@ -915,6 +917,7 @@ describe("successful lifecycle routes", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.clear();
       clientSessionKeys.clear();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
       resetTestDependencies();
     }
@@ -1100,6 +1103,7 @@ describe("successful lifecycle routes", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.clear();
       clientSessionKeys.clear();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
       resetTestDependencies();
     }
@@ -1136,6 +1140,7 @@ describe("successful lifecycle routes", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.clear();
       clientSessionKeys.clear();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
       resetTestDependencies();
     }
@@ -1178,6 +1183,7 @@ describe("successful lifecycle routes", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.clear();
       clientSessionKeys.clear();
+      await settlePersistenceForTests();
       await rm(sessionDir, { recursive: true, force: true });
       await rm(stateDir, { recursive: true, force: true });
       resetTestDependencies();
@@ -1588,6 +1594,7 @@ describe("successful lifecycle routes", () => {
       sessions.clear();
       clientSessionKeys.clear();
       resetTestDependencies();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2457,6 +2464,7 @@ describe("provider-owned follow-ups", () => {
       sessions.delete(state.id);
       if (previous === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
       else process.env.PI_BRIDGE_STATE_DIR = previous;
+      await settlePersistenceForTests();
       await rm(stateDirectory, { recursive: true, force: true });
     }
   });
@@ -2815,6 +2823,7 @@ describe("at-most-once dispatch", () => {
       await persistBarrier();
     } finally {
       delete process.env.PI_BRIDGE_STATE_DIR;
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -2847,6 +2856,7 @@ describe("at-most-once dispatch", () => {
       expect(state.dispatching).toBe(false);
     } finally {
       delete process.env.PI_BRIDGE_STATE_DIR;
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
     }
   });

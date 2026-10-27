@@ -93,6 +93,19 @@ export async function persistBarrier(): Promise<void> {
   await operation;
 }
 
+/**
+ * Wait for every queued write, including writes queued meanwhile, without
+ * closing the queue. A write already running keeps the state path it read, so
+ * a test clears `PI_BRIDGE_STATE_DIR` and awaits this before removing it.
+ */
+export async function settlePersistenceForTests(): Promise<void> {
+  let settled: Promise<void>;
+  do {
+    settled = tail;
+    await settled.catch(() => undefined);
+  } while (settled !== tail);
+}
+
 /** Flush and stop accepting further writes. Used on shutdown. */
 export async function drainPersistence(): Promise<void> {
   if (!stateFilePath()) return;
@@ -207,6 +220,9 @@ function toPersisted(state: SessionState): PersistedSession {
         ? { ...entry, state: "ambiguous" as const }
         : entry,
     ),
+    // Always in the same snapshot as the journal it describes: an eviction
+    // clears it in memory before the next write can publish either.
+    ...(state.promptJournalComplete ? { promptJournalComplete: true as const } : {}),
     steerJournal: Array.from(state.steerJournal.values()).map((entry) =>
       entry.state === "prepared" || entry.state === "queued"
         ? { ...entry, state: "ambiguous" as const }
@@ -247,6 +263,9 @@ export async function loadPersistedState(): Promise<void> {
     try {
       const restored = restoreSession(entry);
       if (!restored) continue;
+      // Two records under one id: whichever is kept, the other's journal is
+      // gone, so neither can vouch for a complete history.
+      if (sessions.has(restored.id)) restored.promptJournalComplete = false;
       sessions.set(restored.id, restored);
       if (restored.clientSessionKey) clientSessionKeys.set(restored.clientSessionKey, restored.id);
     } catch {
@@ -299,9 +318,17 @@ function restoreSession(entry: unknown): SessionState | undefined {
       if (Array.isArray(pair) && nonBlank(pair[0])) state.structured.set(pair[0], pair[1]);
     }
   }
+  // Complete only if the record says so and every journal entry it holds is
+  // restored: a skipped or collapsed entry is an id that may have reached Pi
+  // and that "no record" would no longer cover.
+  let journalComplete = entry.promptJournalComplete === true && Array.isArray(entry.promptJournal);
   if (Array.isArray(entry.promptJournal)) {
     for (const journalEntry of entry.promptJournal) {
-      if (!isObject(journalEntry) || !nonBlank(journalEntry.requestId)) continue;
+      if (!isObject(journalEntry) || !nonBlank(journalEntry.requestId)) {
+        journalComplete = false;
+        continue;
+      }
+      if (state.promptJournal.has(journalEntry.requestId)) journalComplete = false;
       state.promptJournal.set(journalEntry.requestId, {
         requestId: journalEntry.requestId,
         state: readJournalState(journalEntry.state),
@@ -310,6 +337,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
       });
     }
   }
+  state.promptJournalComplete = journalComplete;
   if (Array.isArray(entry.steerJournal)) {
     for (const journalEntry of entry.steerJournal) {
       if (

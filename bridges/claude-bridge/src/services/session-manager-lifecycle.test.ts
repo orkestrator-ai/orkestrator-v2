@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { MAX_DISPATCHED_REQUEST_IDS } from "./session-preferences.js";
 import {
   abortSession,
   captureEvents,
@@ -15,7 +16,8 @@ import {
   deleteSessionDurably,
   getLastIdleTranscriptSweep,
   getPromptDispatchState,
-  persistedDispatchClaimLost,
+  dispatchJournalProvesAbsent,
+  persistedDispatchStatus,
   restoredDispatchClaimLost,
   getSession,
   getSessionInitData,
@@ -29,7 +31,7 @@ import {
   sdkSessionInfo,
   sendPrompt,
   sessionIdForClientKey,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   setSessionPreferences,
   updateSessionPreferences,
@@ -159,8 +161,7 @@ describe("session lifecycle", () => {
       followUpCall.finish();
       await followUp;
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -415,8 +416,7 @@ describe("session lifecycle", () => {
       call.finish();
       await promptTask;
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -497,8 +497,7 @@ describe("session lifecycle", () => {
       call.finish();
       await promptTask;
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -549,8 +548,7 @@ describe("session lifecycle", () => {
       expect(firstDispatch).toHaveBeenCalledTimes(1);
       expect(duplicateDispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -592,8 +590,7 @@ describe("session lifecycle", () => {
         false,
       );
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -623,9 +620,104 @@ describe("session lifecycle", () => {
       expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
       expect(getSession(session.id)).toBeUndefined();
     } finally {
+      await releaseTemporaryClaudeHome(directory);
+    }
+  });
+
+  test("a complete journal proves an unclaimed id absent until the bound drops an id", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-complete-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("review");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+      const started = () => ({ started: Promise.resolve(), completion: Promise.resolve() });
+      expect(session.dispatchJournalComplete).toBe(true);
+      expect(dispatchJournalProvesAbsent(session, "first")).toBe(true);
+
+      await expect(claimPromptDispatch(session.id, "first", started)).resolves.toBe("claimed");
+      session.status = "idle";
+      // Written to disk before the turn could start, with the marker beside it.
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({
+        dispatchedRequestIds: ["first"],
+        dispatchJournalComplete: true,
+      });
+      expect(dispatchJournalProvesAbsent(session, "first")).toBe(false);
+      expect(dispatchJournalProvesAbsent(session, "never-sent")).toBe(true);
+
+      for (let index = 1; index < MAX_DISPATCHED_REQUEST_IDS; index += 1) {
+        await claimPromptDispatch(session.id, `later-${index}`, started);
+        session.status = "idle";
+      }
+      expect(session.dispatchJournalComplete).toBe(true);
+      // The 65th claim forgets "first": nothing missing is provable any more.
+      await claimPromptDispatch(session.id, "overflow", started);
+      session.status = "idle";
+      expect(session.dispatchedRequestIds?.has("first")).toBe(false);
+      expect(session.dispatchJournalComplete).toBe(false);
+      expect(dispatchJournalProvesAbsent(session, "first")).toBe(false);
+      expect(dispatchJournalProvesAbsent(session, "never-sent")).toBe(false);
+      const persisted = await readSessionPreferences(sdkSessionId);
+      expect(persisted?.dispatchJournalComplete).toBeUndefined();
+      expect(persisted?.dispatchedRequestIds).toHaveLength(MAX_DISPATCHED_REQUEST_IDS);
+    } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("a client-key session is complete only with no journal on disk or one marked complete", async () => {
+    await withTemporaryClaudeHome("claude-dispatch-stable-", async () => {
+      mockSdkGetSessionInfo.mockImplementation(async () => undefined);
+      const fresh = await createOrRecoverSession("Reviewer", "env-env-1:reviewer-fresh");
+      track(fresh.id);
+      expect(fresh.dispatchJournalComplete).toBe(true);
+
+      // A claim an earlier process wrote before its turn left a rollout.
+      const unmarkedKey = "env-env-1:reviewer-unmarked";
+      await updateSessionPreferences(sdkIdForClientKey(unmarkedKey), {
+        dispatchedRequestIds: ["before-restart"],
+      });
+      const unmarked = await createOrRecoverSession("Reviewer", unmarkedKey);
+      track(unmarked.id);
+      expect(unmarked.dispatchJournalComplete).toBeUndefined();
+      expect(unmarked.restoredDispatchedRequestIds?.has("before-restart")).toBe(true);
+      expect(dispatchJournalProvesAbsent(unmarked, "never-sent")).toBe(false);
+
+      const markedKey = "env-env-1:reviewer-marked";
+      await updateSessionPreferences(sdkIdForClientKey(markedKey), {
+        dispatchedRequestIds: ["before-restart"],
+        dispatchJournalComplete: true,
+      });
+      const marked = await createOrRecoverSession("Reviewer", markedKey);
+      track(marked.id);
+      expect(marked.dispatchJournalComplete).toBe(true);
+      expect(restoredDispatchClaimLost(marked, "before-restart")).toBe(true);
+      expect(dispatchJournalProvesAbsent(marked, "before-restart")).toBe(false);
+      expect(dispatchJournalProvesAbsent(marked, "never-sent")).toBe(true);
+    });
+  });
+
+  test("the preferences parse drops the marker when it drops a journal entry", async () => {
+    await withTemporaryClaudeHome("claude-dispatch-parse-", async () => {
+      const sdkSessionId = "6b1e2c3d-4f50-4a61-8b72-9c8d7e6f5a40";
+      const write = (record: unknown) =>
+        writeFile(
+          join(claudeSessionPreferencesDir(), `${sdkSessionId}.json`),
+          JSON.stringify(record),
+          "utf-8",
+        );
+      await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+      await write({ dispatchedRequestIds: ["a"], dispatchJournalComplete: true });
+      expect((await readSessionPreferences(sdkSessionId))?.dispatchJournalComplete).toBe(true);
+      await write({ dispatchedRequestIds: ["a", 7], dispatchJournalComplete: true });
+      expect((await readSessionPreferences(sdkSessionId))?.dispatchJournalComplete).toBeUndefined();
+      const tooMany = Array.from({ length: MAX_DISPATCHED_REQUEST_IDS + 1 }, (_, i) => `id-${i}`);
+      await write({ dispatchedRequestIds: tooMany, dispatchJournalComplete: true });
+      expect((await readSessionPreferences(sdkSessionId))?.dispatchJournalComplete).toBeUndefined();
+      await write({ dispatchedRequestIds: ["a"], dispatchJournalComplete: "yes" });
+      expect((await readSessionPreferences(sdkSessionId))?.dispatchJournalComplete).toBeUndefined();
+    });
   });
 
   test("post-write invalidation removes the request id from the durable journal", async () => {
@@ -652,10 +744,9 @@ describe("session lifecycle", () => {
       releasePersistence!();
       await expect(claim).rejects.toMatchObject({ code: "conflict" });
       expect(dispatch).not.toHaveBeenCalled();
-      expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({ dispatchJournalComplete: true });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -677,8 +768,7 @@ describe("session lifecycle", () => {
         getSession(session.id)?.dispatchedRequestIds?.has("initial-prompt:env-1:tab-failure"),
       ).toBe(false);
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -701,10 +791,9 @@ describe("session lifecycle", () => {
       expect(session.status).toBe("error");
       expect(session.turnStartedAt).toBe("2026-01-01T00:00:00.000Z");
       expect(session.dispatchedRequestIds?.has("initial-prompt:env-1:tab-start")).toBe(false);
-      expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({ dispatchJournalComplete: true });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -748,11 +837,10 @@ describe("session lifecycle", () => {
       expect(session.status).toBe("idle");
       expect(session.turnStartedAt).toBeUndefined();
       expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
-      expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({ dispatchJournalComplete: true });
       expect(getPromptDispatchState(session.id, requestId)).toBe("new");
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -781,8 +869,7 @@ describe("session lifecycle", () => {
         data: { planMode: true },
       });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -808,8 +895,7 @@ describe("session lifecycle", () => {
         data: { planMode: true },
       });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -845,8 +931,7 @@ describe("session lifecycle", () => {
       expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
       expect(getPromptDispatchState(session.id, requestId)).toBe("new");
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -885,23 +970,32 @@ describe("session lifecycle", () => {
         ],
       });
 
-      expect(await persistedDispatchClaimLost(bridgeId, "before-restart")).toBe(true);
-      expect(await persistedDispatchClaimLost(bridgeId, "steer-1")).toBe(false);
-      expect(await persistedDispatchClaimLost(bridgeId, "never-seen")).toBe(false);
+      expect(await persistedDispatchStatus(bridgeId, "before-restart")).toBe("lost");
+      expect(await persistedDispatchStatus(bridgeId, "steer-1")).toBe("unknown");
+      // Written by a bridge that did not mark its journal complete.
+      expect(await persistedDispatchStatus(bridgeId, "never-seen")).toBe("unknown");
       // No journal at all, and an id no bridge session can map to a rollout.
       expect(
-        await persistedDispatchClaimLost(
+        await persistedDispatchStatus(
           "session-00000000-0000-4000-8000-000000000000",
           "before-restart",
         ),
-      ).toBe(false);
-      expect(await persistedDispatchClaimLost("not a session id", "before-restart")).toBe(false);
+      ).toBe("unknown");
+      expect(await persistedDispatchStatus("not a session id", "before-restart")).toBe("unknown");
       // Read-only: answering registers nothing.
+      expect(getSession(bridgeId)).toBeUndefined();
+
+      // A complete journal proves a missing id never arrived, and only that.
+      await updateSessionPreferences(sdkSessionId, { dispatchJournalComplete: true });
+      expect(await persistedDispatchStatus(bridgeId, "never-seen")).toBe("absent");
+      expect(await persistedDispatchStatus(bridgeId, "before-restart")).toBe("lost");
+      expect(await persistedDispatchStatus(bridgeId, "steer-1")).toBe("unknown");
       expect(getSession(bridgeId)).toBeUndefined();
 
       // An unreadable journal is not evidence of anything.
       await writeFile(join(claudeSessionPreferencesDir(), `${sdkSessionId}.json`), "{", "utf-8");
-      expect(await persistedDispatchClaimLost(bridgeId, "before-restart")).toBe(false);
+      expect(await persistedDispatchStatus(bridgeId, "before-restart")).toBe("unknown");
+      expect(await persistedDispatchStatus(bridgeId, "never-seen")).toBe("unknown");
     });
   });
 });

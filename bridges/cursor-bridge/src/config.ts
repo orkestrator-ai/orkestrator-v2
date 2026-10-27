@@ -135,6 +135,8 @@ export const MAX_MODEL_ID_BYTES = 1_024;
 /** Tool names retained from a run's `system` message, for the runtime panel. */
 export const MAX_RUN_TOOL_NAMES = 128;
 export const MAX_PROMPT_JOURNAL = 256;
+/** Longest prompt request id the prompt route accepts, in UTF-8 bytes. */
+export const MAX_PROMPT_REQUEST_ID_BYTES = 512;
 /**
  * Steer records retained per session, by count and by encoded bytes. Records
  * that could still be retried against the running turn are never evicted to

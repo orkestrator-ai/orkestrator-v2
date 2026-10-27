@@ -226,6 +226,9 @@ export function setPromptJournal(state: SessionState, entry: PromptJournalEntry)
   if (!state.promptJournal.has(entry.requestId) && state.promptJournal.size >= MAX_PROMPT_JOURNAL) {
     const oldest = state.promptJournal.keys().next().value;
     if (typeof oldest === "string") state.promptJournal.delete(oldest);
+    // The evicted id may have reached the agent, so "no record" stops
+    // meaning "never sent" for this session from here on.
+    state.promptJournalComplete = false;
   }
   state.promptJournal.set(entry.requestId, entry);
 }

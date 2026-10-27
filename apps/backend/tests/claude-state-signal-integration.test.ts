@@ -1,10 +1,11 @@
 import { resetNetworkOwnerCache } from "../src/core/container-network-owner";
-import { expect, test, describe, spyOn } from "bun:test";
+import { expect, test, describe } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  backendClaudeStateSignal,
   claudeStateSignalSupport,
   claudeStateSignalInstaller,
 } from "../src/core/claude-state-signal.js";
@@ -16,8 +17,6 @@ import {
   memoryLifecycleContext,
   withDockerScript,
 } from "./container-lifecycle-fixtures.js";
-import { registerTeardownCommands } from "../src/core/commands-registry-teardown.js";
-import type { RegistryDependencies } from "../src/core/commands-registry-types.js";
 import { ClaudeStatePollManager, parseClaudeStateSnapshot } from "../src/core/tmux-poll.js";
 
 const SCRIPT = join(import.meta.dir, "../../../docker/orkestrator-state-signal.sh");
@@ -168,20 +167,15 @@ describe("Claude state signal capability gate", () => {
   });
 });
 
-test("production registry registers the Docker installer", () => {
-  const manager = new ClaudeStatePollManager();
-  const installed = spyOn(manager, "setSignalInstaller");
+test("the production backend builds its polls with the Docker installer", () => {
   const original = process.env.NODE_ENV;
   try {
     process.env.NODE_ENV = "production";
-    registerTeardownCommands(() => undefined, {
-      options: { claudeStatePolls: manager },
-      commands: new Map(),
-    } as unknown as RegistryDependencies);
-    expect(installed).toHaveBeenCalledWith(claudeStateSignalInstaller);
+    expect(backendClaudeStateSignal()).toBe(claudeStateSignalInstaller);
+    process.env.NODE_ENV = "test";
+    expect(backendClaudeStateSignal()).toBeUndefined();
   } finally {
     process.env.NODE_ENV = original;
-    installed.mockRestore();
   }
 });
 

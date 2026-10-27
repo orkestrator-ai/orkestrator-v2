@@ -49,12 +49,6 @@ import {
   type SpawnLike,
 } from "./agent-accounts-login.js";
 import { setActivePlanUsageAccount, sharedPlanUsageCache } from "./plan-usage-cache.js";
-import {
-  forgetAgentAccountUsage,
-  rememberAgentAccountUsage,
-  resetAgentAccountLastUsageForTests,
-  withLastKnownUsage,
-} from "./agent-accounts-last-usage.js";
 import { readAgentAccountPlanUsage, readPlanUsage, type PlanUsageReader } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
@@ -223,7 +217,12 @@ export async function setActiveAgentAccount(
     usageCache.delete(usageKey(context, platform, accountId));
     if (previous) usageCache.delete(usageKey(context, platform, previous));
     if (previous && outgoing) {
-      await rememberAgentAccountUsage(accountsRoot(context), platform, previous, outgoing);
+      await context.runtime.accounts.lastUsage.remember(
+        accountsRoot(context),
+        platform,
+        previous,
+        outgoing,
+      );
     }
     return previous !== undefined;
   });
@@ -310,7 +309,7 @@ export async function removeAgentAccount(
     });
     bumpUsageGeneration(context, platform);
     usageCache.delete(usageKey(context, platform, accountId));
-    await forgetAgentAccountUsage(accountsRoot(context), platform, accountId);
+    await context.runtime.accounts.lastUsage.forget(accountsRoot(context), platform, accountId);
     announceAccountsChanged(context, platform);
     return listAgentAccounts(context);
   });
@@ -466,7 +465,7 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
     // A local slot can be renewed as a different provider identity. Its old
     // quota must not survive that replacement, including across a restart.
     if (previousIdentity.identityKey !== state.identityKey) {
-      await forgetAgentAccountUsage(accountsRoot(context), platform, accountId);
+      await context.runtime.accounts.lastUsage.forget(accountsRoot(context), platform, accountId);
     }
     await discardNewAccount(context, entry).catch(() =>
       console.warn("[agent-accounts] Temporary login cleanup failed"),
@@ -684,7 +683,6 @@ export function resetAgentAccountLoginForTests(): void {
   activeLogin = undefined;
   usageCache.clear();
   usageGenerations.clear();
-  resetAgentAccountLastUsageForTests();
 }
 
 // ---------------------------------------------------------------------------
@@ -743,7 +741,13 @@ export async function readAgentAccountUsage(
       if (usageGeneration(context, platform) !== generation) {
         throw new Error("The account changed while reading plan usage. Try again.");
       }
-      const result = await withLastKnownUsage(root, platform, accountId, snapshot, now());
+      const result = await context.runtime.accounts.lastUsage.withLastKnown(
+        root,
+        platform,
+        accountId,
+        snapshot,
+        now(),
+      );
       if (cache) {
         usageCache.set(usageKey(context, platform, accountId), {
           expiresAt:

@@ -14,7 +14,8 @@ share the store.
 ## Current state
 
 - `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
-  prompt-queue load, including claims written by a peer after startup. Reads
+  prompt-queue load in `PromptQueueStore` (`storage-prompt-queue-store.ts`),
+  including claims written by a peer after startup. Reads
   do not write the store or increment queue revisions.
 - A claim with a message record, nonblank token, readable claim timestamp and
   future expiry is retained verbatim. Queue writes, including writes to an
@@ -112,6 +113,51 @@ and its three failing group logs. The outer logged command's artifact is
 Isolated failure artifacts are `orkestrator-test-run.wR63Gv` (commands),
 `orkestrator-test-run.LVlz6O` (copy), and `orkestrator-test-run.UUUJO1` (profiles)
 under the same temporary root.
+
+## Main merge validation — 2026-10-27
+
+Merged `origin/main` at `511d3de8e` into `486c88627`. The resolution keeps
+main's storage split: queue load/save normalization now lives in
+`storage-prompt-queue-store.ts`, the queue guard in
+`storage-shared-records.ts`, and delivery journals in
+`storage-native-deliveries.ts`. The original ten conflicted paths and both
+parent IDs are retained in local Git metadata.
+
+- `merge-queue-focused` passed all ten owners: the nine regression owners
+  above plus `storage-writer-guards.test.ts`, with the backend preload and
+  `--parallel=3 --only-failures`.
+- `merge-format-final`, `merge-lint` and `merge-typecheck` passed their
+  repository tasks through `test:logged`.
+- `merge-tests` ran `mise run test` through `test:logged` and exited 1
+  after 1225.6 s. Backend: 12,356 pass, 121 skip, 46 fail; desktop:
+  1,394 pass, 16 skip, 2 fail; root: 3,531 pass, 2 fail; Claude bridge:
+  1,734 pass, 6 skip, 7 fail. Web, web-public, CLI, protocol, toolchain,
+  the other four bridges and the protocol lockfile passed. Failures outside
+  the resolution include copy fixtures, profile-cleanup Keychain-warning
+  expectations, environment Git/cleanup deadlines, Claude CLI qualification
+  deadlines, and undefined `sessionManagerTestHome` references in the
+  unchanged Claude persistence/lifecycle tests, plus Docker identity and
+  staged-input relay fixtures. These do not constitute a
+  passing full-suite result.
+- Individual logged reruns also failed in `migrate-copy.test.ts` (10 pass,
+  2 fail), `profile-cleanup.test.ts` (20 pass, 2 fail), both Claude CLI
+  qualification owners (4 pass/5 fail and 3 pass/1 fail), the Claude
+  persistence owner (99 pass, 1 skip, 1 fail), its lifecycle owner
+  (38 pass, 1 fail), and `commands-registry-environments.test.ts`
+  (64 pass, 4 fail, 1 error). The environment-move owner also failed
+  individually (14 pass, 24 fail, 22 errors), with Git/cleanup deadlines and
+  follow-on missing-fixture errors. No new flake classification was made.
+- Browser, Electron, Docker and iOS scenario suites were omitted: this
+  resolution changes backend persistence and its documentation.
+
+The aggregate group's failure evidence is under
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2ZM3b9/`;
+the outer `merge-tests` log and summary are under the same temporary root in
+`orkestrator-test-run.54ULhq/`. Individual rerun evidence is in
+`orkestrator-test-run.nDm2RN` (copy), `.QxwiCa` (profiles), `.yaYtZp`
+(Claude sandbox), `.6faMjy` (Claude policy), `.nbeIfa` (persistence),
+`.5tzMbJ` (lifecycle), `.qc1G3e` (environment commands) and `.7Vzxz2`
+(environment move).
 
 ## Related
 

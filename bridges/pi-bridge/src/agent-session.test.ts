@@ -42,6 +42,7 @@ import { catalogReadFailed, refreshModels } from "./models.js";
 import { dispatchPrompt } from "./prompt.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
 import { clientSessionKeys, sessionCreations, sessions, type SessionState } from "./state.js";
+import { settlePersistenceForTests } from "./persistence.js";
 
 let sessionDirectory: string;
 let previousSessionDirectory: string | undefined;
@@ -519,6 +520,7 @@ describe("session ownership", () => {
     } finally {
       if (previousStateDirectory === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
       else process.env.PI_BRIDGE_STATE_DIR = previousStateDirectory;
+      await settlePersistenceForTests();
       await rm(stateDirectory, { recursive: true, force: true });
     }
   });

@@ -327,6 +327,17 @@ export interface SessionState {
   revision: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
+  /**
+   * True only while `promptJournal`, in memory and in the state file, still
+   * holds every request id this session ever journaled in any bridge process,
+   * which is what lets `/dispatch` answer `absent`. Set on a session this
+   * bridge created with `session/new`; never on one adopted with
+   * `session/load`. Restored only from a record that carries it and whose
+   * journal loaded without a dropped entry. Cleared for good when an entry is
+   * evicted (`MAX_PROMPT_JOURNAL`) or left off disk by the byte budget. Unset
+   * means incomplete, so a path that forgets it fails safe.
+   */
+  promptJournalComplete?: boolean;
   /** Dormant Grok extension correlation; runtime steer remains unadvertised. */
   grokInterjectionJournal: Map<string, GrokInterjectionJournalEntry>;
   approvals: Map<string, ApprovalState>;
@@ -603,6 +614,8 @@ export interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  /** Written only when true; see `SessionState.promptJournalComplete`. */
+  promptJournalComplete?: true;
   grokInterjectionJournal?: GrokInterjectionJournalEntry[];
   composer?: NativeAgentComposerState;
   sessionConfig?: AcpNormalizedSessionConfig;

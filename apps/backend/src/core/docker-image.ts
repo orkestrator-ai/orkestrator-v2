@@ -107,6 +107,7 @@ export type ManifestRead =
   | { kind: "invalid"; reason: string }
   | { kind: "unavailable" };
 
+/** Process-wide on purpose: keyed by image, whose manifest is the same for every backend. */
 const manifestCache = new Map<string, ManifestRead>();
 const MANIFEST_CACHE_LIMIT = 32;
 
@@ -342,6 +343,7 @@ export function imageWritesVolumeStorage(formats: ImageManifest["stateFormats"] 
 // Daemon topology
 // ---------------------------------------------------------------------------
 
+/** Process-wide on purpose: it describes the Docker daemon, not one backend. */
 let topologyCache: { value: DockerTopology; at: number } | null = null;
 const TOPOLOGY_CACHE_MS = 60_000;
 

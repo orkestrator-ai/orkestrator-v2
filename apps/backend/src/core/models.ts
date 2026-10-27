@@ -740,8 +740,44 @@ export interface PersistedNativeAgentSession {
    * stale value reads as absent.
    */
   resumeIdentity?: { providerSessionId: string; resumableSessionId: string };
+  /**
+   * The title the backend chose for `providerSessionId` (generated, or the
+   * first-message fallback when no generator could run), and whether the
+   * provider has accepted it. Unpushed, it outranks the provider's own title,
+   * so a failed push never loses it; Cursor and Grok have no setter, so there
+   * it is always authoritative. Deliberately not validated with the session
+   * record: read it only through {@link nativeAgentSessionBackendTitle}, where
+   * a malformed or stale value reads as absent.
+   */
+  backendTitle?: NativeAgentSessionBackendTitle;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface NativeAgentSessionBackendTitle {
+  providerSessionId: string;
+  title: string;
+  source: "generated" | "fallback";
+  /** The provider confirmed it holds this title. */
+  pushed?: boolean;
+}
+
+/** Bytes a stored backend title may hold; a longer one reads as absent. */
+const MAX_BACKEND_TITLE_LENGTH = 512;
+
+/** The recorded backend title, only while it still describes the mapped session. */
+export function nativeAgentSessionBackendTitle(
+  session: Pick<PersistedNativeAgentSession, "providerSessionId" | "backendTitle">,
+): NativeAgentSessionBackendTitle | undefined {
+  const value: unknown = session.backendTitle;
+  if (!value || typeof value !== "object") return undefined;
+  const { providerSessionId, title, source, pushed } = value as Record<string, unknown>;
+  if (providerSessionId !== session.providerSessionId) return undefined;
+  if (typeof title !== "string" || !title.trim() || title.length > MAX_BACKEND_TITLE_LENGTH) {
+    return undefined;
+  }
+  if (source !== "generated" && source !== "fallback") return undefined;
+  return { providerSessionId, title, source, ...(pushed === true ? { pushed: true } : {}) };
 }
 
 /** The recorded resume identity, only while it still describes the mapped session. */

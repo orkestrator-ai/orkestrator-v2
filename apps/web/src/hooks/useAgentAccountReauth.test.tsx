@@ -120,6 +120,27 @@ describe("useAgentAccountReauth", () => {
     },
   );
 
+  test("does not adopt a prior completion for an epoch terminal failure, but can sign in again", async () => {
+    login = { ...pending, state: "succeeded", completedAt: "2026-01-01T00:00:00.000Z" };
+    const view = renderHook(() =>
+      useAgentAccountReauth("claude", true, "1970-01-01T00:00:00.000Z"),
+    );
+    await flush();
+    expect(view.result.current.progress.state).toBe("idle");
+    await act(async () => {
+      await view.result.current.start();
+    });
+    expect(view.result.current.progress.state).toBe("pending");
+    login = {
+      ...pending,
+      operationId: "two",
+      state: "succeeded",
+      completedAt: new Date().toISOString(),
+    };
+    await tick();
+    expect(view.result.current.progress.state).toBe("succeeded");
+  });
+
   test("serializes reads while a poll is unresolved", async () => {
     login = pending;
     const view = renderHook(() => useAgentAccountReauth("claude"));

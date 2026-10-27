@@ -25,7 +25,10 @@ function restartHistory(options?: TerminalHistoryOptions): void {
 }
 
 afterEach(async () => {
-  for (const created of histories.splice(0)) created.shutdown();
+  const finished = histories.splice(0);
+  for (const created of finished) created.shutdown();
+  // Disposal, completion and pruning write after the call returns.
+  await Promise.all(finished.map((created) => created.settled()));
   history = createHistory();
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),

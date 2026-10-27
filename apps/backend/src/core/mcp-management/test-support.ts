@@ -73,7 +73,7 @@ export interface Fixture {
   write(relative: string, content: string): string;
   read(relative: string): string;
   newService(): McpManagementService;
-  cleanup(): void;
+  cleanup(): Promise<void>;
 }
 
 export function createFixture(
@@ -257,8 +257,9 @@ export function createFixture(
     read(relative) {
       return readFileSync(path.join(root, relative), "utf8");
     },
-    cleanup() {
+    async cleanup() {
       fixture.service.dispose();
+      await fixture.service.settled();
       rmSync(root, { recursive: true, force: true });
     },
   };

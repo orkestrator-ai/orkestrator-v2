@@ -19,7 +19,10 @@ import {
   openCodeWorkflowResultPermissionRules,
 } from "./opencode-provider-helpers.js";
 import { openCodeMessageFinishReason } from "./opencode-turn-recovery.js";
-import { closeOpenCodeSessionRetaining } from "./opencode-session-close.js";
+import {
+  closeOpenCodeSessionRetaining,
+  rejectPendingOpenCodeRequests,
+} from "./opencode-session-close.js";
 import {
   metadataWithOpenCodeActionFailure,
   openCodeActionFailureForMessage,
@@ -276,29 +279,55 @@ export class OpenCodeWorkflowResultBroker {
     sessionId: string,
     endTurn: () => void,
     restoreReviewer: () => Promise<unknown>,
-    options: { missingIsGone?: boolean; alreadyLocked?: boolean } = {},
+    options: {
+      missingIsGone?: boolean;
+      alreadyLocked?: boolean;
+      restoreReviewerWithoutTurn?: boolean;
+    } = {},
   ): Promise<"aborted" | "missing"> {
     try {
-      // Interrupt transport immediately. Cleanup is serialized afterwards so
-      // it cannot race a newer dispatch, but the user-visible stop never waits
-      // behind a slow prompt request or permission readback.
-      const response = await this.client.session.abort(
-        { sessionID: sessionId, directory: this.directory },
-        this.requestOptions(),
-      );
-      if (options.missingIsGone && response.response?.status === 404) {
+      // Start the transport interrupt immediately, even if a prompt still holds
+      // the lock. Reserve cleanup's place in the queue before yielding, so any
+      // later dispatch waits for both ownership settlement and pending rejection.
+      // Observe rejection immediately too: the lock may be held for a long time.
+      const interrupted = (async () => {
+        const response = await this.client.session.abort(
+          { sessionID: sessionId, directory: this.directory },
+          this.requestOptions(),
+        );
+        if (options.missingIsGone && response.response?.status === 404) {
+          endTurn();
+          return "missing" as const;
+        }
+        assertSdkResponse(response, "OpenCode abort");
         endTurn();
-        return "missing";
-      }
-      assertSdkResponse(response, "OpenCode abort");
-      endTurn();
-      const settle = async () => {
-        const requestId = await this.requestId(sessionId);
-        if (requestId) await this.settle(sessionId, requestId, restoreReviewer);
+        return "aborted" as const;
+      })().then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      const cleanup = async () => {
+        const result = await interrupted;
+        if (!result.ok) throw result.error;
+        if (result.value === "missing") return result.value;
+        try {
+          const requestId = await this.requestId(sessionId);
+          if (requestId) await this.settle(sessionId, requestId, restoreReviewer);
+          if (options.restoreReviewerWithoutTurn) await restoreReviewer();
+        } finally {
+          // A successful interrupt already stopped the turn. Even a failed
+          // ownership read must not leave its permission or question answerable.
+          await rejectPendingOpenCodeRequests(
+            this.client,
+            this.directory,
+            sessionId,
+            options.missingIsGone ? "close" : "abort",
+            this.requestOptions,
+          );
+        }
+        return result.value;
       };
-      if (options.alreadyLocked) await settle();
-      else await this.runExclusive(sessionId, settle);
-      return "aborted";
+      return await (options.alreadyLocked ? cleanup() : this.runExclusive(sessionId, cleanup));
     } catch (error) {
       if (options.missingIsGone && error instanceof MissingOpenCodeSessionError) return "missing";
       throw new ProviderUnavailableError("OpenCode abort is unavailable", { cause: error });
@@ -311,11 +340,10 @@ export class OpenCodeWorkflowResultBroker {
     endTurn: () => void,
     restoreReviewer: () => Promise<unknown>,
   ): Promise<void> {
-    return closeOpenCodeSessionRetaining(this.client, this.directory, sessionId, {
+    return closeOpenCodeSessionRetaining(sessionId, {
       broker: this,
       endTurn,
       restoreReviewer,
-      requestOptions: this.requestOptions,
     });
   }
 

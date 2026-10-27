@@ -133,28 +133,6 @@ export function connectivitySummary(machines: readonly MachineView[]): Connectiv
   };
 }
 
-export interface SearchResult {
-  rows: ActivityRow[];
-  /** Some machine is unavailable, still loading or truncated: results may be missing. */
-  incomplete: boolean;
-}
-
-export function searchMachines(machines: readonly MachineView[], query: string): SearchResult {
-  const needle = query.trim().toLocaleLowerCase();
-  const rows = activityRows(machines).filter(
-    ({ environment, project, machine }) =>
-      !needle ||
-      environment.name.toLocaleLowerCase().includes(needle) ||
-      (environment.branch ?? "").toLocaleLowerCase().includes(needle) ||
-      (project?.name ?? "").toLocaleLowerCase().includes(needle) ||
-      machine.name.toLocaleLowerCase().includes(needle),
-  );
-  return {
-    rows,
-    incomplete: machines.some((machine) => machine.freshness !== "current" || machine.truncated),
-  };
-}
-
 /**
  * Machines sharing a colour. A finite palette cannot guarantee uniqueness
  * across independently configured machines; this only powers a suggestion

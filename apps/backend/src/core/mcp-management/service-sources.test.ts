@@ -22,8 +22,8 @@ beforeEach(() => {
   fixture = createFixture({ env: {} });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 function source(snapshot: McpManagementSnapshot, sourceId: string) {
@@ -198,7 +198,7 @@ describe("Codex project trust comes from Codex's own settings", () => {
 describe("OpenCode layers match the pinned binary's load order", () => {
   test(".opencode, ~/.opencode, OPENCODE_CONFIG_DIR and inline content stack above project files", async () => {
     const configDir = mkdtempSync(path.join(tmpdir(), "mcp-oc-dir-"));
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({
       env: {
         OPENCODE_CONFIG_DIR: configDir,
@@ -278,7 +278,7 @@ describe("OpenCode layers match the pinned binary's load order", () => {
   });
 
   test("OPENCODE_DISABLE_PROJECT_CONFIG excludes project files but keeps them editable", async () => {
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { OPENCODE_DISABLE_PROJECT_CONFIG: "TRUE" } });
     fixture.write(
       "worktree/opencode.json",

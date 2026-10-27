@@ -34,3 +34,5 @@
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts tests/container-replacement.test.ts` from `apps/backend`: 23 passed, 0 failed.
 - **Disposition:** recurrence confirmed by the isolated pass. No assertion,
   deadline or skip was changed.
+
+- **Recurrence (2026-10-27, node mbp3):** the todo-0214 branch's complete `mise run test` failed it at 5001.48 ms. Rerun alone (`bun test ./tests/container-replacement.test.ts --parallel=1` from `apps/backend`), the unchanged owner passed (29 of 29). The branch does not touch container replacement. See [1150](../aggregate-validation-runs/1150-storage-files-size-0214-validation.md).

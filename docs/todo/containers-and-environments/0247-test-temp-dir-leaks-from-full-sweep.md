@@ -1,7 +1,8 @@
 # Test temporary-directory leaks found by the full sweep
 
 Checked against `main` at `ce205ad34` plus the 0247 branch at `8268be981`
-(2026-10-26).
+(2026-10-26) and at `0c77d9b46` and `39980f699` (2026-10-27, the
+verification follow-up).
 
 [0023](0023-environment-and-disk-cleanup.md) fixed the test temp-directory
 leaks it listed. Its 2026-10-26 sweep then ran the bridge and backend suites
@@ -9,8 +10,15 @@ with a private `TMPDIR` and found many more directories left behind, plus one
 test that reads the host's real state. This file holds that newly found work;
 0023 does not take new items.
 
-The code fixes include the review follow-up below (2026-10-27). The macOS
-private-directory sweep left only intended entries. Qualification still needs
+The code fixes include the review follow-up below (2026-10-27). The
+acceptance verification's own private-directory sweep then left five more
+directories (three Claude bridge session fixtures, the live MCP-calls probe
+root and one preview scratch); their causes are fixed in the verification
+follow-up (2026-10-27). The repeat sweep after it left only the by-design
+entries and one ACP bridge root, whose cause (and the same one in the
+protocol package) is fixed and rechecked; see
+[the 2026-10-27 sweeps](#verification-sweep-and-repeat-sweep-2026-10-27).
+Qualification still needs
 the original Arch Linux host, where `ork-env-move-*` leaked and macOS never
 reproduced it. The repository-wide test result remains non-green; the recorded
 baseline failures must not be read as a passing acceptance run.
@@ -38,13 +46,21 @@ baseline failures must not be read as a passing acceptance run.
   | `ork-runtime-*` | `app-server-runtime-test-harness.ts` removed `CODEX_HOME` in `afterEach` while the runtime's dispatch journal still had a write queued (`orkestrator-bridge/dispatch-journal-*.json`). Seen from the lifecycle and prompt files. | The harness records every runtime it builds and `afterEach` awaits `runtime.stop()` (which drains pending work) before the removal. | Yes, 4 before, 0 after (485 tests). |
   | `orkestrator-state-sync-*`, `ork-terminal-history-*`, `ork-command-registry-data`, `ork-commands-io-history-<pid>` | Closing a terminal disposes its history without awaiting it (`TerminalRuntime.explicitlyCloseSession`), and completion, disposal and pruning write `terminal-history/*/manifest.json` after the command returns. The last two were also fixed paths nothing removed. | New `TerminalHistory.settled()`, awaited after `runtime.shutdown()` by `commands-state-sync.test.ts`, `terminal-history.test.ts`, `commands-io-coverage.test.ts`, `commands-registry-coverage.test.ts` and `environment-move.test.ts`. The two fixed paths are now `mkdtemp` directories removed in `afterAll`. | Yes, all four in the baseline sweep; state-sync also directly (2 before, 0 after). |
   | `ork-env-move-*` | Not established: the file left none on macOS, alone or under host load average 12 to 19, before or after the change. | Defence in depth: the `afterEach` also settles terminal history, and the roots and the template are named through `ownedTempDirPrefix`, so `sweepStaleTempDirs` at the top of the file removes those of dead owners after an hour and legacy names without a PID after a day. | No. |
-  | `ork-artifact-preview-*` | The backends `apps/backend/tests/standalone.test.ts` starts (the baseline sweep never ran them: its checkout had no `dist/`). Every backend start runs the preview availability probe, whose worker the runner did not track, so a backend stopping mid-probe exited without cancelling it; and a backend whose Tailscale Serve setup failed exited without `backend.shutdown()`. The `transcript-artifacts` tests themselves (323 pass, real Chromium in process mode) left none. | `TranscriptPreviewRunner.close()` cancels the probe's worker and waits for its verified exit; gateway startup in `main.ts` uses `startGatewayServices` to shut the backend down on failure, even if another cleanup rejects; scratch is PID-named and swept at startup (Code item 2). | Yes, 5 before, 1 after the `close()` fix, 0 after the `main.ts` fix (two runs). |
+  | `claude-client-session-restart-*`, `claude-dispatch-journal-*`, `claude-metadata-noop-*` (found by the verification sweep, 2026-10-27) | Each held only `.claude/orkestrator/session-preferences/<id>.json` containing `{}`: the turn-in-flight clear write, which a turn queues without waiting (`writeTurnInFlightMark` in `session-manager-turn-interruption.ts`). The session-manager fixtures restored the suite's Claude home and removed their private one straight after the body, while the harness's `afterEach` settled preference writes only later. | New `releaseTemporaryClaudeHome()` in `session-manager-test-harness.ts` restores the home, awaits `settleSessionPreferenceWritesForTesting()` and the terminal-command writes, then removes the directory. `withTemporaryClaudeHome` and the 21 inline removals in five session-manager test files use it. | Evidence is the verification sweep's leftovers (contents above); 18 direct runs of the owning file at load 84, with the old and with the new harness, left none, so the before/after is not reproduced. The full `test:bridge` with the fix left nothing (1,706 pass). |
+| `claude-mcp-calls-*` (found by the verification sweep) | The same as `claude-mcp-sync-*`, in the second probe: `runMcpCallProbe` in `session-manager-prompt-mcp-sync.live-calls.ts` removed its root once the stream ended, while the closing CLI was still writing `Library/Caches/claude-cli-nodejs/.../mcp-logs-*` and its project transcript under it (both in the leftover). | It spawns the CLI through `spawnClaudeCodeProcess` and awaits its exit before the removal, like `run()`. | Not reproduced directly (two direct runs left none before the fix); covered by the sweep after it. |
+| `ork-artifact-preview-*` | The backends `apps/backend/tests/standalone.test.ts` starts (the baseline sweep never ran them: its checkout had no `dist/`). Every backend start runs the preview availability probe, whose worker the runner did not track, so a backend stopping mid-probe exited without cancelling it; and a backend whose Tailscale Serve setup failed exited without `backend.shutdown()`. The `transcript-artifacts` tests themselves (323 pass, real Chromium in process mode) left none. | `TranscriptPreviewRunner.close()` cancels the probe's worker and waits for its verified exit; gateway startup in `main.ts` uses `startGatewayServices` to shut the backend down on failure, even if another cleanup rejects; scratch is PID-named and swept at startup (Code item 2). A third cause, found by the verification sweep (one `ork-artifact-preview-<pid>-*` holding a Chromium profile): a worker killed while Playwright was still launching Chromium orphaned the browser in its own process group, outside the kill; the kill verified, and the browser re-created its profile in the removed scratch. `killTree` now also owns any process whose command line names the job's scratch (Chromium's `--user-data-dir`) and needs a second empty scan (Code item 2). | Yes, 5 before, 1 after the `close()` fix, 0 after the `main.ts` fix (two runs). The third cause: 1 of 3 concurrent `standalone.test.ts` runs, and 7 of 72 direct SIGTERMs of a `dist` backend during its probe (5 of 40, 2 of 32), left one; instrumented, every such case was a verified kill with no browser PID known. After the fix 0 of 48. |
   | `mcp-mgmt-*` | A timer-started apply pass (`McpManagementService.tick`) still wrote `data/mcp-management/operations.json` after `dispose()`; seen from `service-apply.test.ts`. | New `McpManagementService.settled()`; the fixture's `cleanup()` is async, awaits it, and every caller awaits `cleanup()`. | Yes, 1 before, 0 after (441 tests, twice). |
   | `ork-clone-capacity-*` | The last clone the test started was still running at teardown and created `.orkestrator-clone-*` in the removed root. | The test waits for that clone to fail before returning. | Yes, before in the baseline sweep; 0 after in three runs. |
   | `media-stream-*` (a `staging/` directory) | `TranscriptMediaStreams` re-creates its staging root at construction without awaiting it; `dispose()` did not wait, so the `mkdir` landed after the test removed the root. | `dispose()` awaits the staging-root work. | Yes, 3 of 3 before, 0 of 3 after. |
   | `ork-backend-activity-event-<uuid>`, `ork-backend-activity-stamp-<uuid>`, `ork-backend-interaction-env` | `index.test.ts` passed these data directories to `OrkestratorBackend` and never removed them. | `mkdtemp` directories removed after `backend.shutdown()`. | Yes, before in the baseline sweep; 0 after. |
   | `outside-profile.bin` | `commands-io-coverage.test.ts` wrote the "outside" file next to a worktree directory that sat directly in the temporary root. | The worktree directory is now inside a test-owned root, so the outside file is too. | Yes, before in the baseline sweep; 0 after. |
 
+- `acp-bridge-test-*` (found by the 2026-10-27 repeat sweep, one, holding
+  `entries.jsonl`) and `ork-spool-*` (the same shape in the protocol package,
+  found by reading for it): a restart test restored a second
+  `ChangeEvidenceSpool` from the directory and never awaited the compaction
+  rewrite its constructor queues. Both tests now flush it before teardown
+  (4 of 12 and 3 of 12 runs left one before, 0 of 12 after).
 - `ork-backend-core-*` (found by the first macOS qualification sweep, one
   `data/design-canvases/index.json`): `backend-core.test.ts` initialised a
   backend it never shut down, and startup work wrote after the directory was
@@ -80,7 +96,9 @@ baseline failures must not be read as a passing acceptance run.
    table above. Every prefix is removed at source by the test that made it,
    after whatever wrote into it has settled. `ork-env-move-*`, whose writer
    was not found, is additionally covered by `tests/temp-sweep.ts`, and
-   `ork-artifact-preview-*` by the production startup sweep.
+   `ork-artifact-preview-*` by the production startup sweep. The four
+   Claude bridge prefixes and the escaped-Chromium preview case found by the
+   verification sweep were fixed at source on 2026-10-27 (rows above).
 2. ~~Decide whether the preview supervisor itself leaks its scratch directory
    in production.~~ Done 2026-10-26. It does, but only off the normal path.
    Evidence from `transcript-artifacts/preview-supervisor.ts` and
@@ -110,6 +128,25 @@ baseline failures must not be read as a passing acceptance run.
    `preview-supervisor.test.ts`, which also checks the new name and the
    removal after a verified exit. With all three, `standalone.test.ts` left
    nothing in two runs.
+   The verification sweep (2026-10-27) found one more scratch, a Chromium
+   profile in it, and a fourth case on the normal path: Playwright launches
+   Chromium in its own process group, and until the worker reports the
+   browser's PID the supervisor knows only the worker. A worker killed in that
+   window (a backend stopped during its probe, or a job cancelled or timed out
+   early) orphans the browser outside both the tree and the owned groups, so
+   `killTree` reported a verified exit, the scratch was removed, and the
+   browser wrote its profile back into it. Reproduced with a `dist` backend
+   started and sent SIGTERM during the probe, eight at a time: 7 of 72 left
+   the scratch; with temporary logging, each was a verified kill with
+   `browserPid: null`. `killTree` now takes the scratch path as an ownership
+   marker: a process whose command line contains it (Chromium's
+   `--user-data-dir`), with its tree and the groups it leads, is killed and
+   verified too, and an empty scan must be confirmed by a second one 100 ms
+   later, so a browser between fork and exec is not missed. After the fix, 0
+   of 48. Unit test in `preview-process-tree.test.ts` (an escaped, marked
+   process tree survives a pass without the marker and is killed with it).
+   This is production behaviour too, so it was fixed rather than left to the
+   startup sweep.
 3. ~~Make `process and platform command behavior > controls bridge
    processes, reads logs and preferences, and reports port health`
    hermetic.~~ Done 2026-10-26. `commands-process-coverage.test.ts` clears
@@ -122,13 +159,18 @@ baseline failures must not be read as a passing acceptance run.
 ### Qualification
 
 1. ~~Repeat the sweep after the fixes and record what the private `TMPDIR`
-   holds.~~ Done on macOS 2026-10-26, not on the original Arch host; see
+   holds.~~ Done on macOS 2026-10-26, and again on 2026-10-27 after the
+   verification follow-up (left only the by-design entries plus one ACP
+   bridge root, fixed and rechecked), not on the original Arch host; see
    [Qualification results](#qualification-results-2026-10-26).
 2. Repeat the same sweep on omarchy-hp (Arch Linux), where `ork-env-move-*`
    leaked and macOS never reproduced it, and confirm the
    `ork-artifact-preview-*` fixes there (see Needs verification).
 
 ## Qualification results (2026-10-26)
+
+The 2026-10-27 runs (verification sweep and the repeat sweep after its
+fixes) are in [the section after this table](#verification-sweep-and-repeat-sweep-2026-10-27).
 
 Host: arktech-mini, macOS 27.0 (Darwin 27.0.0) arm64, Bun 1.4.4, not the
 original omarchy-hp. Both sweeps ran outside Turbo, each with an empty private
@@ -153,6 +195,60 @@ and
 [1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md).
 The unchanged `main` checkout failed the environment-move owner the same way at
 the same load.
+
+## Verification sweep and repeat sweep (2026-10-27)
+
+Same host, method and order as above (the five `test:bridge` runs, then the
+backend `test:workspace`, outside Turbo, one empty private `TMPDIR` under
+`/var/folders/.../T/`, a fresh `dist/`).
+
+| Run | Revision | Result | Left in the private `TMPDIR` |
+| --- | --- | --- | --- |
+| Acceptance verification sweep (run by the verifier; directory `ork0247-verify.l3eR6W0G`) | `5702c8255` | ACP, Codex, Cursor and Pi passed; Claude 1,705 passed, 6 skipped, 1 failed (a coordinator sandbox test that failed the same way on `origin/main`). Backend exit 1: 12,002 passed, 115 skipped, 17 failed, 14 errors. | `claude-client-session-restart-*`, `claude-dispatch-journal-*`, `claude-metadata-noop-*`, `claude-mcp-calls-*`, `ork-artifact-preview-92054-*` (a dead owner; Chromium profile inside), plus the intended `orkestrator-mcp-locks-501`, `jiti`, `node-compile-cache` and the kept `orkestrator-test-run.*` failure logs. All five causes are fixed at source (leak table, Code item 2). |
+| Repeat sweep after those fixes (directory `ork0247-qual3`) | `0c77d9b46` | Bridges all passed (acp 695, claude 1,706, codex 2,412, cursor 801, pi 651). Backend exit 1 in 677 s at load average 67 to 95: 12,006 passed, 115 skipped, 16 failed, 12 errors, all five-second deadlines of Git-heavy fixtures (below). | `acp-bridge-test-*` (one, holding `entries.jsonl`), plus the intended `orkestrator-mcp-locks-501`, `jiti` and `node-compile-cache`. No preview scratch, no Claude bridge fixture, nothing from the backend. |
+| ACP bridge and protocol package after the spool fix (`ork0247-qual3b`, `ork0247-qual3c`) | `39980f699` | ACP `test:bridge` 695 passed, 3 skipped; protocol `test:workspace` 1,935 passed, 2 skipped. | Nothing. |
+
+The `acp-bridge-test-*` root came from `change-evidence.test.ts`: the test
+restores a second `ChangeEvidenceSpool` from the directory, the constructor
+queues a compaction rewrite of `entries.jsonl`, and nothing awaited it before
+the harness removed the directory. The protocol package's
+`evidence-spool.test.ts` restart test had the same shape (`ork-spool-*`). Both
+now flush the restored spool in a `finally`. With temporary copies of the old
+test files run twelve times each under a private `TMPDIR`, the old ACP test
+left 4 roots and the old protocol test 3; the fixed files left none.
+
+The repeat sweep's backend failures, all at Bun's five-second deadline, with
+their tracking: nine `environment-move.test.ts` cases (0248, 0291, 0621,
+[0935](../../tests/flaky-tests/environments-and-containers/0935-environment-move-cursor-read-failure-timeout.md),
+and [1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md),
+which now names the one new case; it passed alone in 2.7 s at load 161);
+the three `worktree-snapshots-git.test.ts` watcher cases, their three
+between-test errors and a hook timeout
+([0947](../../tests/flaky-tests/environments-and-containers/0947-worktree-git-aggregate-timeouts.md),
+[0957](../../tests/flaky-tests/environments-and-containers/0957-worktree-index-and-shared-ref-aggregate-timeouts.md);
+the untouched owner alone at load 155 still failed the shared-ref case, 3 of
+4); `injects workspace artifact git excludes` ([0187](../../tests/flaky-tests/environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md));
+`start uses and persists both explicit and configured roots` ([1107](../../tests/flaky-tests/environments-and-containers/1107-worktree-location-aggregate-timeouts.md));
+and `startWorktreeWatcher > observes a real file write` ([0091](../../tests/flaky-tests/environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md)).
+The remaining between-test errors were Git children of timed-out
+environment-move cases running against removed fixtures. None is a leak.
+
+### The verifier's full `mise run test` (2026-10-27)
+
+`verify-0247-full-suite`, 619.0 s, exit 1 (workspace summary
+`orkestrator-test-run.IpdbGA` under the host temporary directory). Bridges and
+the Codex lockfile group passed. Every failure, with its tracking:
+
+| Failure | Tracking |
+| --- | --- |
+| `verified copy helper > a missing listing completion times out as extract-failed`, `... a missing root completion ...` (root group) | Deterministic on the base revision too; [1013](../../tests/flaky-tests/aggregate-validation-runs/1013-interactive-command-main-merge-validation.md). |
+| `pruneProfiles > the age rule applies only when asked for`, `... unregisters worktrees the profile made in an outside repository` (desktop) | Deterministic on the base revision too (the macOS `keychainWarning`); [1013](../../tests/flaky-tests/aggregate-validation-runs/1013-interactive-command-main-merge-validation.md). The verifier reproduced both on `origin/main`. |
+| `move_environment > moves a worktree with nested submodules (copy)` and `(same disk)`, `a failed submodule re-link restores the original checkout`, `restart recovery re-links submodules of an adopted or abandoned copy` | [0621](../../tests/flaky-tests/environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), [0291](../../tests/flaky-tests/environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md), [0248](../../tests/flaky-tests/environments-and-containers/0248-move-restart-recovery-submodule-timeout.md); the verifier reproduced the deadline family on `origin/main`. |
+| `an incomplete copy rollback never asks recovery to adopt its partially removed destination`, `rejected path commit clears the journal and preserves subsequent edits (false)`, `source cleanup failure retains a committed copy for restart retry` | Not named before; now in [1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md), with the verifier's isolated passes on the branch and `origin/main` and a further pass here (12.0 s at load 81). |
+| Eight between-test errors | Git children of the timed-out environment-move cases (`fatal: cannot change to .../ork-env-move-*`), as in the earlier runs. |
+| `injects workspace artifact git excludes into local worktrees before status reads` | [0187](../../tests/flaky-tests/environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md). |
+| `local preview service discovery on this host > two environments, a restart on the reused port, and an auto-incremented port` | [0942](../../tests/flaky-tests/aggregate-validation-runs/0942-service-preview-rollout-0042-validation.md); passed alone on `origin/main` (`verify-main-preview-discovery`). |
+| `startWorktreeWatcher > observes a real file write` | [0091](../../tests/flaky-tests/environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md); passed alone on `origin/main` (`verify-main-worktree-watcher`). |
 
 ## Review follow-up and acceptance evidence (2026-10-27)
 
@@ -266,13 +362,17 @@ None.
   old; legacy names without an owner are eligible after a day. Whether the Linux
   `ork-artifact-preview-*` leftovers had the same cause as the macOS ones
   (the untracked probe) is also unproven there.
+- The escaped-browser ownership marker on Linux: `ps -A -ww -o ...,command=`
+  is also valid for procps, and Chromium carries `--user-data-dir` there
+  too, but the reproduction and the unit test ran only on macOS.
 - `sweepStalePreviewScratch` on a real backend start with leftovers present
   (only unit-tested here; the backend was not run against a real data
   directory).
 
 ## Assumptions and decisions
 
-Decisions made on 2026-10-26 while working through the file.
+Decisions 1 to 8 were made on 2026-10-26 while working through the file;
+9 and 10 on 2026-10-27, for the leaks the verification sweep found.
 
 1. **Fix at source, or opt into `tests/temp-sweep.ts`.** Options: (a) find
    each writer and settle it before the removal; (b) rename every prefix to
@@ -337,6 +437,28 @@ Decisions made on 2026-10-26 while working through the file.
 8. **Where the qualification ran.** The repeat sweep ran on macOS, the only
    host available, not on omarchy-hp. It is recorded as macOS, and the Linux
    repeat stays open (Qualification item 2).
+9. **The browser that escapes the preview kill.** Options: (a) leave it to
+   the startup sweep; (b) remove the scratch again some time after the kill;
+   (c) stop Playwright from giving Chromium its own process group; (d) treat
+   a process whose command line names the job's scratch as owned, and confirm
+   an empty scan. Chose (d). Pros: the scratch path is unique per job and is
+   on Chromium's command line, so ownership is exact and needs no change to
+   how Playwright launches; it also frees the capacity the escaped browser
+   was using, which (a) and (b) do not; the kill stays verified rather than
+   timed. Cons: process-mode kills list full command lines (`ps -ww`, about
+   250 KB on this busy host, within the existing 8 MB buffer) and take one
+   extra 100 ms scan; (c) is not offered: Playwright 1.64.0's process
+   launcher sets `detached: process.platform !== "win32"` unconditionally, so
+   it would need a patch to Playwright.
+10. **Settling Claude-home writes in the bridge fixtures.** Options: (a) a
+    settle call in each test; (b) one harness helper that restores the
+    suite's home, settles, then removes, used by every fixture; (c) make
+    `updateSessionPreferences` resolve its path when the write runs. Chose
+    (b). Pros: one place for the ordering, the 21 inline removals cannot
+    drift; no production change. Cons: a new fixture that removes a home
+    without the helper can leak again; (c) was not taken because a write
+    queued for one home must not land in another (the reason the path is
+    resolved at queue time).
 
 ## Related
 

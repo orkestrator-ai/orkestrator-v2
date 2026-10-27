@@ -29,3 +29,20 @@ It remained non-green: one passed, three failed, one between-test error,
 `orkestrator-test-run.Y7XbQD` under the host temporary directory. This does
 not establish a quieter-host pass or a new cause; the prior passing-owner
 evidence remains above. No deadline or assertion was changed.
+
+## 0247 repeat sweep — 2026-10-27
+
+The 0247 repeat sweep (`TMPDIR=<private dir> mise exec -- bun run --cwd
+apps/backend test:workspace` at `0c77d9b46`, which does not touch this owner or
+`worktree-snapshots*.ts`; macOS arm64, host load average 67 to 95) timed out
+all three `real Git through the shared owner` watcher cases at 5,000 ms
+(tracked-edit 5002.01 ms, staging 5001.38 ms, shared-ref 5001.71 ms). After
+them the file reported three between-test errors, `condition not reached
+before the deadline` from `worktree-snapshots-git.test.ts:150`, and one
+`(unnamed)` failure, "a beforeEach/afterEach hook timed out for this test"
+(10180.85 ms): the late waits of the timed-out cases running into the next
+hook. The complete owner rerun alone at load average 155,
+`mise run test:logged -- --name worktree-snapshots-0957 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts`,
+failed only the shared-ref case (3 pass, 1 fail, 12.8 s; artifact
+`orkestrator-test-run.hAC4iW`). No assertion, timeout or skip was changed.
+

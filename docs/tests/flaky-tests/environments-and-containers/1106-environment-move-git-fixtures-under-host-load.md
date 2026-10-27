@@ -17,6 +17,10 @@
   - `cleanup retries preserve a new directory at the source pathname`
   - `a paused copy refuses file writers and new workers before deleting the source`
   - `an acknowledged native turn with persisted idle prevents move before quiescing`
+  - `an incomplete copy rollback never asks recovery to adopt its partially removed destination` (added 2026-10-27)
+  - `rejected path commit clears the journal and preserves subsequent edits (false)` (added 2026-10-27)
+  - `source cleanup failure retains a committed copy for restart retry` (added 2026-10-27)
+  - `abandons a final copy without a copied-phase record and repairs the original` (added 2026-10-27, repeat sweep)
 - **Tested revisions:** `1a1ef24f9` to `8268be981` on branch `test-temp-directory-4cd0548cf2b5-r1`, and the unchanged `main` at `ce205ad34` in a second checkout, macOS 27.0 arm64, Bun 1.4.4, checkout on an external volume. The branch changes only this file's teardown (it also settles terminal history) and its temporary-directory names.
 - **Commands:** the 0247 qualification sweep (`TMPDIR=<empty private dir> mise exec -- bun run --cwd apps/backend test:workspace`, two workers), and the owner alone with `mise run test:logged -- --name rerun-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts`, and the same `bun test` in the `main` checkout.
 - **Failures:** each run failed a different subset, every one at Bun's five-second deadline (5,008 to 11,103 ms), usually alongside the registered [0248](0248-move-restart-recovery-submodule-timeout.md), [0291](0291-environment-move-submodule-aggregate-timeout.md) and [0621](0621-environment-move-nested-submodules-aggregate-timeout.md) cases. Host load average was 3 to 37 across the session, from other worktrees' suites; `fseventsd` held a full core.
@@ -45,3 +49,41 @@ names into a day-old sweep; its new deterministic private-root sweep test
 passes. No timeout, assertion, skip or move implementation was changed.
 The submodule siblings remain tracked in [0621](0621-environment-move-nested-submodules-aggregate-timeout.md)
 and [0291](0291-environment-move-submodule-aggregate-timeout.md).
+
+## 0247 verification run — 2026-10-27
+
+The acceptance verification's `mise run test` (`verify-0247-full-suite`,
+619.0 s, exit 1; workspace summary `orkestrator-test-run.IpdbGA` under the
+host temporary directory) failed three cases of this file that no entry named
+before: `an incomplete copy rollback never asks recovery to adopt its
+partially removed destination` (5008.95 ms), `rejected path commit clears the
+journal and preserves subsequent edits (false)` (6351.48 ms; its `(true)`
+variant was already listed) and `source cleanup failure retains a committed
+copy for restart retry` (5110.94 ms), all at Bun's five-second deadline,
+beside the registered submodule cases. The same run's isolated reruns of
+these cases passed on the branch (`verify-branch-environment-move-extra-cases`,
+6.6 s) and on `origin/main` (`verify-main-environment-move-extra-cases`,
+5.8 s). A further owner rerun of just these three names on this branch
+(`5702c8255` plus the then-uncommitted bridge and preview fixes of
+`8e5990c5e`, none of which touch this file or `environment-move.ts`),
+`mise run test:logged -- --name env-move-1106-extra -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts -t "an incomplete copy rollback never asks recovery|rejected path commit clears the journal and preserves subsequent edits|source cleanup failure retains a committed copy"`,
+passed in 12.0 s at host load average 81. They are added to the list above;
+no assertion, timeout or skip was changed.
+
+## 0247 repeat sweep — 2026-10-27
+
+The 0247 repeat sweep (`TMPDIR=<private dir> mise exec -- bun run --cwd
+apps/backend test:workspace` at `0c77d9b46`, host load average 67 to 95)
+failed nine cases of this file at Bun's five-second deadline: the registered
+submodule cases (both nested-submodule moves, the failed re-link, restart
+recovery), `Cursor read failure retains recovery until the store can follow
+the destination` ([0935](0935-environment-move-cursor-read-failure-timeout.md)),
+the listed `moves every file and re-points git (copy)`, `a storage rejection
+after publishing the path never rolls it back` and `an incomplete copy
+rollback never asks recovery to adopt its partially removed destination`, and
+one new name, `abandons a final copy without a copied-phase record and
+repairs the original`. That case alone,
+`mise run test:logged -- --name env-move-1106-abandons -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts -t "abandons a final copy without a copied-phase record"`,
+passed in 2.7 s at load average 161. Added to the list above; nothing
+changed.
+

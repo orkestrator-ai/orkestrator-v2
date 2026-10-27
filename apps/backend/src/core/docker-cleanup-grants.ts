@@ -28,6 +28,11 @@ export class DockerCleanupGrants {
   record(selectionToken: string, grant: DockerCleanupGrant, now: number): void {
     this.prune(now);
     this.grants.set(selectionToken, grant);
+    while (this.grants.size > MAX_TOKENS) {
+      const oldest = this.grants.keys().next().value;
+      if (oldest === undefined) break;
+      this.grants.delete(oldest);
+    }
   }
 
   /**
@@ -45,11 +50,6 @@ export class DockerCleanupGrants {
   private prune(now: number): void {
     for (const [token, grant] of Array.from(this.grants)) {
       if (grant.expiresAt <= now) this.grants.delete(token);
-    }
-    while (this.grants.size >= MAX_TOKENS) {
-      const oldest = this.grants.keys().next().value;
-      if (oldest === undefined) break;
-      this.grants.delete(oldest);
     }
   }
 }

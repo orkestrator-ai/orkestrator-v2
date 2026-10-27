@@ -254,6 +254,7 @@ export class InteractiveTmuxTerminalManager {
    * and the pane appeared frozen exactly while they were using it.
    */
   private schedule(terminal: InteractiveTerminalSession): void {
+    if (this.terminals.get(terminal.id) !== terminal) return;
     const dueAt = Date.now() + terminal.intervalMs;
     if (terminal.timer !== undefined) {
       if (terminal.nextCaptureAt !== undefined && terminal.nextCaptureAt <= dueAt) return;

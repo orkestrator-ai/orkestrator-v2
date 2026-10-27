@@ -135,10 +135,12 @@ export class OomEventWatcher {
 export class ContainerOomEvents {
   private watcher: OomEventWatcher | null = null;
 
+  constructor(private readonly spawn: Spawn = spawnParentBoundCommand) {}
+
   /** Starts the backend's watcher (idempotent). */
   start(owner: string): void {
     if (this.watcher) return;
-    this.watcher = new OomEventWatcher(owner);
+    this.watcher = new OomEventWatcher(owner, this.spawn);
     this.watcher.start();
   }
 

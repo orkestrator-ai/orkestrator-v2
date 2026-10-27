@@ -216,6 +216,7 @@ export class ClaudeStatePollManager {
   /** Lifetime counters for {@link status}. */
   private readonly demotions: Partial<Record<SignalDemotionReason, number>> = {};
   private acceptedRings = 0;
+  private stopped = false;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -234,6 +235,7 @@ export class ClaudeStatePollManager {
   }
 
   start(containerId: string, context: CommandContext): void {
+    if (this.stopped) return;
     const existing = this.polls.get(containerId);
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
@@ -415,7 +417,9 @@ export class ClaudeStatePollManager {
 
   /** Adopt every running container without waiting for a renderer lease. */
   async reconcile(context: CommandContext): Promise<void> {
+    if (this.stopped) return;
     const environments = await context.storage.loadEnvironments();
+    if (this.stopped) return;
     const running = new Set<string>();
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
@@ -437,8 +441,9 @@ export class ClaudeStatePollManager {
     if (poll) this.deactivate(containerId, poll);
   }
 
-  /** Retire every poll; the backend is shutting down. */
+  /** Permanently close admission and retire every poll at backend shutdown. */
   shutdownAll(): void {
+    this.stopped = true;
     for (const containerId of Array.from(this.polls.keys())) this.shutdown(containerId);
   }
 

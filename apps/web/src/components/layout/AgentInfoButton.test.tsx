@@ -8,6 +8,7 @@ import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import {
   nativeAgentCapabilities,
   type NativeAgentAccountUsageWindow,
@@ -412,6 +413,42 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, reject, resolve };
+}
+
+function quotaAccount(
+  platform: AgentSessionAccount["platform"] = "claude",
+  label = "Work",
+): AgentSessionAccount {
+  return {
+    platform,
+    source: "account",
+    running: true,
+    account: {
+      id: label,
+      platform,
+      label,
+      isDefault: false,
+      isActive: true,
+      signedIn: true,
+      identity: {},
+    },
+  };
+}
+
+function routeQuotaAccountRead(read: () => Promise<AgentSessionAccount | null>) {
+  nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "get_native_agent_projection") {
+      return (
+        useNativeAgentProjectionStore.getState().projections.get(String(args?.logicalSessionKey)) ??
+        null
+      );
+    }
+    if (command === "get_native_agent_session_account") return read();
+    if (command === "list_agent_accounts") {
+      return { accounts: [], active: { claude: "default", codex: "default" } };
+    }
+    return undefined;
+  });
 }
 
 let confirmResult = true;
@@ -1058,6 +1095,208 @@ describe("AgentInfoButton usage panel", () => {
         agent: provider,
       });
     });
+  }
+
+  test("names the account the session runs on beside the quota heading", async () => {
+    seedUsage(usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }));
+    const summary = (id: string, label: string, isActive: boolean) => ({
+      id,
+      platform: "claude",
+      label,
+      isDefault: id === "default",
+      isActive,
+      signedIn: true,
+      identity: {},
+    });
+    const running = summary("default", "Work", false);
+    const active = summary("personal", "Personal", true);
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_projection") return mockNativeProjectionRead();
+      if (command === "list_agent_accounts") {
+        return { accounts: [running, active], active: { claude: "personal" } };
+      }
+      if (command === "get_native_agent_session_account") {
+        return {
+          platform: "claude",
+          source: "account",
+          account: running,
+          running: true,
+          pendingActive: active,
+        };
+      }
+      return undefined;
+    });
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const quota = within(screen.getByRole("region", { name: "Account usage" }));
+    expect(await quota.findByText("(Work)")).toBeTruthy();
+    expect(quota.queryByText("(Personal)")).toBe(null);
+  });
+
+  for (const connection of ["connected", "error"] as const) {
+    test(`does not attribute retained quotas to a stopped bridge's next account (${connection})`, async () => {
+      seedUsage(usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }));
+      let account = quotaAccount();
+      const read = mock(async () => account);
+      routeQuotaAccountRead(read);
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      const quota = within(screen.getByRole("region", { name: "Account usage" }));
+      expect(await quota.findByText("(Work)")).toBeTruthy();
+
+      account = { ...quotaAccount("claude", "Personal"), running: false };
+      read.mockClear();
+      await act(async () => {
+        const projection = useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY)!;
+        useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
+          ...projection,
+          connection,
+          turn: { phase: "recovering" },
+          revision: projection.revision + 1,
+        });
+      });
+      await waitFor(() => expect(read).toHaveBeenCalled());
+      expect(quota.getByRole("progressbar", { name: "Weekly quota: 25% used" })).toBeTruthy();
+      expect(quota.queryByText("(Personal)")).toBe(null);
+      expect(quota.queryByText("(Work)")).toBe(null);
+    });
+  }
+
+  for (const connection of ["connecting", "error"] as const) {
+    test(`does not label retained quotas while the projection is ${connection}`, async () => {
+      seedUsage(
+        usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }),
+        "claude",
+        { connection },
+      );
+      const read = mock(async () => quotaAccount("claude", "Personal"));
+      routeQuotaAccountRead(read);
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      await waitFor(() => expect(read).toHaveBeenCalled());
+      const quota = within(screen.getByRole("region", { name: "Account usage" }));
+      expect(quota.getByText("Weekly quota")).toBeTruthy();
+      expect(quota.queryByText("(Personal)")).toBe(null);
+    });
+  }
+
+  for (const result of ["container", "unknown", "null", "rejected"] as const) {
+    for (const initiallyLabeled of [false, true]) {
+      test(`${result} account read ${initiallyLabeled ? "clears a previous label" : "leaves quotas unlabeled"}`, async () => {
+        seedUsage(
+          usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }),
+        );
+        let invalid = !initiallyLabeled;
+        const read = mock(async () => {
+          if (!invalid) return quotaAccount();
+          if (result === "rejected") throw new Error("Account read failed");
+          if (result === "null") return null;
+          // Even an unexpected account field on a non-account source cannot label usage.
+          return { ...quotaAccount(), source: result };
+        });
+        routeQuotaAccountRead(read);
+        render(<AgentInfoButton activeTab={claudeTab()} />);
+        open();
+        const quota = within(screen.getByRole("region", { name: "Account usage" }));
+        if (initiallyLabeled) {
+          expect(await quota.findByText("(Work)")).toBeTruthy();
+          invalid = true;
+          read.mockClear();
+          await act(async () => {
+            const projection = useNativeAgentProjectionStore
+              .getState()
+              .projections.get(SESSION_KEY)!;
+            useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
+              ...projection,
+              turn: { phase: "running" },
+              revision: projection.revision + 1,
+            });
+          });
+        }
+        await waitFor(() => expect(read).toHaveBeenCalled());
+        if (result === "rejected")
+          expect(await screen.findByText("Account read failed")).toBeTruthy();
+        expect(quota.getByText("Weekly quota")).toBeTruthy();
+        expect(quota.queryByText("(Work)")).toBe(null);
+      });
+    }
+  }
+
+  for (const change of ["environment", "provider", "generation"] as const) {
+    for (const pendingOldRead of [false, true]) {
+      test(`clears quota attribution across a ${change} change with ${pendingOldRead ? "an in-flight read" : "a previously reported account"}`, async () => {
+        seedUsage(
+          usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }),
+        );
+        const oldRead = deferred<AgentSessionAccount | null>();
+        const newRead = deferred<AgentSessionAccount | null>();
+        const read = mock<() => Promise<AgentSessionAccount | null>>(async () => quotaAccount());
+        routeQuotaAccountRead(read);
+        const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+        open();
+        expect(await screen.findByText("(Work)")).toBeTruthy();
+
+        if (pendingOldRead) {
+          read.mockImplementation(() => oldRead.promise);
+          read.mockClear();
+          await act(async () => {
+            const projection = useNativeAgentProjectionStore
+              .getState()
+              .projections.get(SESSION_KEY)!;
+            useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
+              ...projection,
+              turn: { phase: "running" },
+              revision: projection.revision + 1,
+            });
+          });
+          await waitFor(() => expect(read).toHaveBeenCalled());
+        }
+
+        read.mockImplementation(() => newRead.promise);
+        read.mockClear();
+        const provider = change === "provider" ? "codex" : "claude";
+        const environmentId = change === "environment" ? "env-2" : ENVIRONMENT_ID;
+        await act(async () => {
+          const projection = useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY)!;
+          useNativeAgentProjectionStore
+            .getState()
+            .setProjection(createSessionKey(environmentId, TAB_ID), {
+              ...projection,
+              platform: provider,
+              environmentId,
+              generation: `${change}-new-generation`,
+              turn: { phase: "idle" },
+              revision: 1,
+            });
+          view.rerender(
+            <AgentInfoButton
+              activeTab={claudeTab({
+                nativeAgentData: {
+                  platform: provider,
+                  environmentId,
+                  sessionId: "claude-session-1",
+                },
+              })}
+            />,
+          );
+        });
+        if (!isPopoverOpen()) open();
+        await waitFor(() => expect(read).toHaveBeenCalled());
+        const quota = within(screen.getByRole("region", { name: "Account usage" }));
+        expect(quota.queryByText("(Work)")).toBe(null);
+
+        await act(async () => oldRead.resolve(quotaAccount("claude", "Stale")));
+        expect(quota.queryByText("(Stale)")).toBe(null);
+        expect(quota.queryByText("(Work)")).toBe(null);
+        expect(quota.getByText("Weekly quota")).toBeTruthy();
+
+        await act(async () => newRead.resolve(quotaAccount(provider, "Personal")));
+        expect(await quota.findByText("(Personal)")).toBeTruthy();
+        expect(quota.queryByText("(Stale)")).toBe(null);
+      });
+    }
   }
 
   test("shows live system percentages in one row and reveals full names on tap", async () => {

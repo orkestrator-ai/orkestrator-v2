@@ -479,8 +479,8 @@ describe("node face rows", () => {
       else pipeline.createdAt = createdAt;
       renderPipelineTab(pipeline);
       const ticket = graphNode("Ticket");
-      expect(ticket.querySelector('[data-flow-node-row="start"]')).toBeNull();
-      expect(ticket.querySelector('[data-flow-node-row="runtime"]')).toBeNull();
+      expect(ticket.querySelector('[data-flow-node-row="start"]') === null).toBe(true);
+      expect(ticket.querySelector('[data-flow-node-row="runtime"]') === null).toBe(true);
       expect(ticket.getAttribute("aria-label")).toBe("Ticket, Started with");
       expect(ticket.style.height).toBe("64px");
     },

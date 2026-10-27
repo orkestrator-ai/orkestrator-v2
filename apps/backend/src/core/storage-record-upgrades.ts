@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { StorageMigration } from "./storage-database.js";
 import {
   isPersistedNativeAgentSession,
+  isNonBlankString,
   isRecord,
   migratePersistedNativeAgentSession,
 } from "./storage-shared.js";
@@ -129,36 +130,50 @@ export function upgradePromptQueueRecords(stored: unknown): unknown {
 }
 
 /**
- * Backends up to v2.28.0-beta could move a queue's head into an exclusive
- * `outstandingClaim` through the removed prompt-queue claim commands, and such
- * a backend can still share this schema version's database. So unlike the
- * upgrades above, this one is applied to every load of the prompt queues
- * (`loadPromptQueues`) rather than once at open, and nothing else reads the
- * field. It does what the claim's lease expiry always did: the claimed message
- * goes back to the head of its queue, replacing a copy with the same id, and
- * the claim is dropped. It never dispatches the message (the client that
- * claimed it may already have sent it); the queue's drainer does, as for any
- * head. A claim without a message record has nothing to restore and is
- * dropped. Returns `stored` itself when no queue holds a claim.
+ * Older backends sharing this schema can still write exclusive claims. Preserve
+ * a live lease verbatim so its holder can settle it, including after unrelated
+ * queue writes. On expiry (or malformed lease metadata), restore the message
+ * to the head, replacing a queued copy of its id. Reads never persist changes.
+ * A corrupt message id gets a deterministic recovery id so it remains both
+ * deliverable and stable across reads before the next write.
  */
 export function restoreLegacyPromptQueueClaims(stored: unknown): unknown {
   if (!isRecord(stored)) return stored;
+  const now = Date.now();
   let upgraded: Record<string, unknown> | null = null;
   for (const [key, queue] of Object.entries(stored)) {
     if (!isRecord(queue) || !Object.hasOwn(queue, "outstandingClaim")) continue;
     const { outstandingClaim: claim, ...rest } = queue;
     const message = isRecord(claim) ? claim.message : undefined;
+    if (
+      isRecord(claim) &&
+      isRecord(message) &&
+      isNonBlankString(claim.token) &&
+      typeof claim.claimedAt === "string" &&
+      Number.isFinite(Date.parse(claim.claimedAt)) &&
+      typeof claim.expiresAt === "string" &&
+      Date.parse(claim.expiresAt) > now
+    ) {
+      continue;
+    }
     const messages = rest.messages;
     upgraded ??= { ...stored };
+    const restored = isRecord(message)
+      ? {
+          ...message,
+          id: isNonBlankString(message.id)
+            ? message.id
+            : `legacy-claim-${promptQueueMessageFingerprint(message)}`,
+        }
+      : undefined;
     upgraded[key] =
-      isRecord(message) && Array.isArray(messages)
+      restored && Array.isArray(messages)
         ? {
             ...rest,
             messages: [
-              message,
+              restored,
               ...messages.filter(
-                (candidate) =>
-                  message.id === undefined || !isRecord(candidate) || candidate.id !== message.id,
+                (candidate) => !isRecord(candidate) || candidate.id !== restored.id,
               ),
             ],
           }

@@ -13,7 +13,7 @@ import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js"
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import type { PublicApiHarness } from "./test-support.js";
-import { storageInternals } from "../storage-test-support.js";
+import { seedLegacyPromptQueueClaim, storageInternals } from "../storage-test-support.js";
 
 /**
  * The CLI command surface added after the first release: selected slash
@@ -427,6 +427,31 @@ describe("durable enqueue", () => {
     expect(settled.state).toBe("failed");
     expect(settled.dispatch?.state).toBe("rejected");
     expect(settled.error?.message).toContain("409");
+  });
+
+  test("a live legacy claim keeps its public run pending instead of cancelled", async () => {
+    const { harness, service, stub, sessionId, queueKey, tabId, providerSessionId } =
+      await busySession();
+    const queued = await harness.call<{ runId: string }>(
+      "session.prompt",
+      { sessionId, prompt: "held by an older backend", enqueue: true },
+      { requestId: "q-legacy-held" },
+    );
+    if (!queued.ok) throw new Error(queued.error.message);
+    const id = queued.result.runId;
+    seedLegacyPromptQueueClaim(harness.storage.getDataDir(), queueKey, id);
+    const held = await receipt(harness, id);
+    expect(held.stage).toBe("queued");
+    expect(held.dispatch?.state).toBe("pending");
+    const sent = stub.sends.length;
+    stub.setStatus(async () => "idle");
+    setActivity(service, "claude", tabId, providerSessionId, "idle");
+    await service.drainPromptQueueForSession({
+      agent: "claude",
+      logicalSessionKey: nativeTabLogicalSessionKey("env-1", tabId),
+    });
+    expect(stub.sends).toHaveLength(sent);
+    expect((await receipt(harness, id)).dispatch?.state).toBe("pending");
   });
 
   test("a queued prompt removed before it was sent cancels its run", async () => {

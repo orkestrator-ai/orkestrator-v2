@@ -2799,7 +2799,8 @@ export class NativeAgentService {
         session.pendingDispatch ||
         session.pendingSteer ||
         queue?.messages.length ||
-        queue?.inFlight
+        queue?.inFlight ||
+        queue?.outstandingClaim
       ) {
         return { outcome: "pending" as const };
       }
@@ -3029,7 +3030,10 @@ export class NativeAgentService {
     if (composeDraftHoldsQueue(draft?.value)) return "draft";
     if (
       session?.pendingDispatch ||
-      (queue && (queue.inFlight !== undefined || queue.messages.length > 0))
+      (queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.inFlight !== undefined ||
+          queue.messages.length > 0))
     ) {
       return "working";
     }
@@ -3127,7 +3131,12 @@ export class NativeAgentService {
           }
           const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
           const queue = await this.storage.getPromptQueue(queueKey);
-          if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+          if (
+            queue &&
+            (queue.outstandingClaim !== undefined ||
+              queue.inFlight !== undefined ||
+              queue.messages.length > 0)
+          ) {
             heldReason = "queue";
             return { dispatch: false };
           }

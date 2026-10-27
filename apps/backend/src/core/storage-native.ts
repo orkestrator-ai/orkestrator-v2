@@ -1281,7 +1281,7 @@ export class NativeAgentSessionsRepository {
         const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
         const queue = queues[queueKey];
         if (!queue || queue.environmentId !== session.environmentId) return null;
-        if (queue.inFlight)
+        if (queue.outstandingClaim || queue.inFlight)
           throw new Error("A queued prompt is already being delivered; refresh before steering");
         const index = queue.messages.findIndex((item) => isRecord(item) && item.id === messageId);
         const message = queue.messages[index];
@@ -1744,6 +1744,11 @@ export class NativeAgentSessionsRepository {
     previous?: PersistedPromptQueue,
   ): Promise<PersistedPromptQueue> {
     this.validatePromptQueueMessages(messages);
+    // A stale whole-list save must not publish a second copy of a live claim.
+    const claimedId = previous?.outstandingClaim?.message.id;
+    if (isNonBlankString(claimedId)) {
+      messages = messages.filter((candidate) => !isRecord(candidate) || candidate.id !== claimedId);
+    }
     const failedMessageStillUnchanged =
       previous?.dispatchError !== undefined &&
       messages.some(
@@ -1758,6 +1763,7 @@ export class NativeAgentSessionsRepository {
       queueKey,
       environmentId,
       messages,
+      ...(previous?.outstandingClaim ? { outstandingClaim: previous.outstandingClaim } : {}),
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
       ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
       ...(removedOrigins.length > 0 ? { removedOrigins } : {}),
@@ -1784,7 +1790,11 @@ export class NativeAgentSessionsRepository {
     const existing = previous?.removedOrigins ?? [];
     if (!previous) return existing;
     const kept = new Set<unknown>();
-    for (const candidate of [...messages, previous.inFlight?.message]) {
+    for (const candidate of [
+      ...messages,
+      previous.outstandingClaim?.message,
+      previous.inFlight?.message,
+    ]) {
       if (isRecord(candidate)) kept.add(candidate.id);
     }
     const added: Array<{ requestId: string; removedAt: string }> = [];
@@ -1939,8 +1949,8 @@ export class NativeAgentSessionsRepository {
     );
     // A first-generation dispatch error was upgraded once at import
     // (storage-record-upgrades.ts); every stored error identifies its item.
-    // A claim an older backend sharing the database wrote is restored to the
-    // head on every load, so no reader sees one.
+    // Expired legacy claims return to the head on every load. Live claims
+    // retain their exclusion and must survive every queue mutation.
     return Object.fromEntries(
       Object.entries(restoreLegacyPromptQueueClaims(stored) as typeof stored).filter(
         ([storedKey, queue]) => isPersistedPromptQueue(queue, storedKey),

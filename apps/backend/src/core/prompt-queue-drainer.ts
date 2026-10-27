@@ -135,7 +135,12 @@ export class PromptQueueDrainer {
     ) {
       return { outcome: "held", reason: "environment-unready" };
     }
-    if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+    if (
+      queue &&
+      (queue.outstandingClaim !== undefined ||
+        queue.inFlight !== undefined ||
+        queue.messages.length > 0)
+    ) {
       return { outcome: "held", reason: "queue" };
     }
     if (this.composeDraftHoldsQueue(draft?.value)) return { outcome: "held", reason: "draft" };
@@ -149,7 +154,12 @@ export class PromptQueueDrainer {
       this.storage.getPromptQueue(queueKey),
       this.storage.getComposeDraft(draftKey),
     ]);
-    if (latestQueue && (latestQueue.inFlight !== undefined || latestQueue.messages.length > 0)) {
+    if (
+      latestQueue &&
+      (latestQueue.outstandingClaim !== undefined ||
+        latestQueue.inFlight !== undefined ||
+        latestQueue.messages.length > 0)
+    ) {
       return { outcome: "held", reason: "queue" };
     }
     if (this.composeDraftHoldsQueue(latestDraft?.value))
@@ -198,7 +208,13 @@ export class PromptQueueDrainer {
       return "environment_unready";
     }
     if (this.composeDraftHoldsQueue(draft?.value)) return "draft";
-    if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) return "working";
+    if (
+      queue &&
+      (queue.outstandingClaim !== undefined ||
+        queue.inFlight !== undefined ||
+        queue.messages.length > 0)
+    )
+      return "working";
     const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", input);
     return status?.running && status.busy !== true ? "idle" : "working";
   }
@@ -213,6 +229,7 @@ export class PromptQueueDrainer {
           const separator = queue.queueKey.indexOf("\0");
           if (queue.queueKey.slice(0, separator) !== TMUX_AGENT) return false;
           return (
+            queue.outstandingClaim === undefined &&
             (queue.messages.length > 0 || queue.inFlight !== undefined) &&
             // A latched dispatch error is the user's to clear; retrying it here
             // would spin on the same prompt and hide the error they must see.
@@ -260,7 +277,7 @@ export class PromptQueueDrainer {
     if (!target) return;
 
     const queue = await this.storage.getPromptQueue(queueKey);
-    if (!queue || queue.dispatchError) return;
+    if (!queue || queue.outstandingClaim || queue.dispatchError) return;
     if (queue.environmentId !== target.environmentId) {
       // A persisted queue is a trust boundary. Never let the owner field and
       // the environment encoded in its routing key select different targets.

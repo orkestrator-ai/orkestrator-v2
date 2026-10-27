@@ -224,7 +224,12 @@ export class PromptsRepository {
         "Agent mail",
       );
       const queue = (await this.repos.nativeAgentSessions.loadPromptQueues())[queueKey];
-      if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+      if (
+        queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.inFlight !== undefined ||
+          queue.messages.length > 0)
+      ) {
         return { empty: false };
       }
       return { empty: true, value: await operation() };
@@ -312,6 +317,7 @@ export class PromptsRepository {
         throw new Error("Prompt queue belongs to another environment");
       }
       if (
+        (previous?.outstandingClaim && previous.outstandingClaim.message.id === message.id) ||
         (isRecord(previous?.inFlight?.message) && previous.inFlight.message.id === message.id) ||
         previous?.messages.some((candidate) => isRecord(candidate) && candidate.id === message.id)
       ) {
@@ -331,7 +337,7 @@ export class PromptsRepository {
    * Appends one backend-authored prompt exactly once per stable message id.
    *
    * Unlike {@link enqueuePromptQueueMessage}, presence is checked against every
-   * durable identity the native queue can hold — queued, renderer-claimed,
+   * durable identity the native queue can hold — queued, held by a live legacy claim,
    * reserved in flight, parked with a dispatch error — and against the native
    * session's consumed receipts (`dispatchedRequestIds` and an ambiguous
    * `pendingDispatch`). A lost response can therefore be retried with the same
@@ -377,9 +383,11 @@ export class PromptsRepository {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
-      const held = [...(previous?.messages ?? []), previous?.inFlight?.message].find(
-        (candidate) => isRecord(candidate) && candidate.id === messageId,
-      );
+      const held = [
+        ...(previous?.messages ?? []),
+        previous?.outstandingClaim?.message,
+        previous?.inFlight?.message,
+      ].find((candidate) => isRecord(candidate) && candidate.id === messageId);
       if (held !== undefined) {
         if (canonicalPromptQueueMessageFingerprint(held) !== expected) {
           throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
@@ -552,7 +560,7 @@ export class PromptsRepository {
       const queues = await this.repos.nativeAgentSessions.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return null;
-      if (previous.dispatchError) return null;
+      if (previous.outstandingClaim || previous.dispatchError) return null;
       if (previous.inFlight) return previous.inFlight;
       const message = previous.messages[0];
       if (!isRecord(message) || !isNonBlankString(message.id)) return null;

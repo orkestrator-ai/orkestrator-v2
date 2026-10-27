@@ -793,6 +793,13 @@ export type PersistedAgentInteractionWorkflowSummary = AgentInteractionWorkflowS
  * the backend has no reason to understand any of them.
  */
 export interface PersistedPromptQueue {
+  /** Only older backends write this lease; retain exclusion until settlement or expiry. */
+  outstandingClaim?: {
+    token: string;
+    message: Record<string, unknown>;
+    claimedAt: string;
+    expiresAt: string;
+  };
   queueKey: string;
   environmentId: string;
   messages: unknown[];

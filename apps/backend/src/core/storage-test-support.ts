@@ -64,8 +64,8 @@ type StoredPromptQueueRecord = {
  * removed prompt-queue claim command did (and an older backend sharing
  * the data directory still can): a fresh token, the message, `claimedAt`, and
  * `expiresAt` (default: a five-minute lease), with the revision bumped. Every
- * load of a running `StorageService` restores the message to the head
- * (`restoreLegacyPromptQueueClaims`). Returns the token.
+ * load of a running `StorageService` restores expired claims to the head
+ * (`restoreLegacyPromptQueueClaims`) and retains live leases. Returns the token.
  */
 export function seedLegacyPromptQueueClaim(
   dataDir: string,

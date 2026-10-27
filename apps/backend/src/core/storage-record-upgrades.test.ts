@@ -120,6 +120,42 @@ describe("record shape upgrades", () => {
     expect(restoreLegacyPromptQueueClaims("garbage")).toBe("garbage");
   });
 
+  test("leaves a live legacy claim untouched", () => {
+    const now = Date.now();
+    const queue = {
+      messages: [{ id: "tail" }],
+      outstandingClaim: {
+        token: "holder",
+        message: { id: "head" },
+        claimedAt: new Date(now - 1000).toISOString(),
+        expiresAt: new Date(now + 300_000).toISOString(),
+      },
+    };
+    const stored = { queue };
+    expect(restoreLegacyPromptQueueClaims(stored)).toBe(stored);
+  });
+
+  test.each([undefined, "", "  ", 42])(
+    "gives a recovered claim with id %p a stable deliverable identity",
+    (id) => {
+      const message = { ...(id === undefined ? {} : { id }), text: "preserved", attachments: [] };
+      const stored = { queue: { messages: [{ id: "tail" }], outstandingClaim: { message } } };
+      const before = structuredClone(stored);
+      const expected = {
+        queue: {
+          messages: [
+            { ...message, id: `legacy-claim-${promptQueueMessageFingerprint(message)}` },
+            { id: "tail" },
+          ],
+        },
+      };
+      expect(restoreLegacyPromptQueueClaims(stored)).toEqual(expected);
+      expect(restoreLegacyPromptQueueClaims(stored)).toEqual(expected);
+      expect(restoreLegacyPromptQueueClaims(expected)).toBe(expected);
+      expect(stored).toEqual(before);
+    },
+  );
+
   test("versions legacy native sessions and keeps unreadable ones verbatim", () => {
     const upgraded = upgradeNativeAgentSessionRecords({
       "env-e1:tab": {

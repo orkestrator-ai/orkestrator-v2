@@ -82,6 +82,21 @@ function setup(discoveryIntervalMs = 30_000) {
 }
 
 describe("native queue obligations", () => {
+  test("a sole legacy claim stays due for expiry checks", () => {
+    const claimed = queue("codex\0tab", {
+      outstandingClaim: {
+        token: "holder",
+        message: { id: "head" },
+        claimedAt: new Date(0).toISOString(),
+        expiresAt: new Date(300_000).toISOString(),
+      },
+    });
+    expect(nativeQueueObligation(claimed)).toBe("pending");
+    expect(discoverNativeQueues([claimed]).entries).toEqual([
+      { key: claimed.queueKey, obligation: "pending", target: "env-1" },
+    ]);
+  });
+
   test("pending and reserved native queues owe work; parked, empty and tmux queues do not", () => {
     expect(nativeQueueObligation(queue("codex\0tab", { messages: ["a"] }))).toBe("pending");
     expect(

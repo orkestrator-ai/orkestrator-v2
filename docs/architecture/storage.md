@@ -355,9 +355,10 @@ no current writer can produce belong in an upgrade migration.
 One upgrade cannot run once: a backend up to v2.28.0-beta shares this schema
 version and can still write a prompt-queue claim (`outstandingClaim`). So
 `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
-load of the prompt queues (`loadPromptQueues`): it puts each claimed message
-back at the head of its queue and drops the claim, and the next save persists
-that. No other reader sees a claim. A new migration for it would have made
+load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
+and survive queue writes until settlement or expiry. Expired or malformed
+leases restore their message to the head, and the next save persists that.
+Malformed message ids receive a stable recovery id. A new migration would have made
 every older release refuse the database.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking

@@ -788,6 +788,14 @@ export function isPersistedPromptQueue(
     isNonBlankString(value.environmentId) &&
     promptQueueKeyMatchesEnvironment(value.queueKey, value.environmentId) &&
     Array.isArray(value.messages) &&
+    (value.outstandingClaim === undefined ||
+      (isRecord(value.outstandingClaim) &&
+        isRecord(value.outstandingClaim.message) &&
+        isNonBlankString(value.outstandingClaim.token) &&
+        typeof value.outstandingClaim.claimedAt === "string" &&
+        Number.isFinite(Date.parse(value.outstandingClaim.claimedAt)) &&
+        typeof value.outstandingClaim.expiresAt === "string" &&
+        Number.isFinite(Date.parse(value.outstandingClaim.expiresAt)))) &&
     (value.inFlight === undefined ||
       (isRecord(value.inFlight) &&
         Object.hasOwn(value.inFlight, "message") &&

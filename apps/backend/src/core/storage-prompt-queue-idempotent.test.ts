@@ -68,6 +68,31 @@ describe("enqueuePromptQueueMessageIfAbsent", () => {
     });
   });
 
+  test("live legacy claims deduplicate retries and block steering across queue edits", async () => {
+    await withStorage(async (storage) => {
+      await createSession(storage);
+      await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
+      const token = seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1");
+      expect(
+        (await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"))).status,
+      ).toBe("present");
+      await expect(
+        storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1", "changed")),
+      ).rejects.toThrow(PROMPT_QUEUE_MESSAGE_CONFLICT);
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
+      await storage.savePromptQueue(KEY, "e1", [message("r1"), { id: "user-1", text: "mine" }]);
+      expect((await storage.getPromptQueue(KEY))?.messages).toEqual([
+        { id: "user-1", text: "mine" },
+      ]);
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ outstandingClaim: { token } });
+      expect((await storage.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
+      await expect(storage.reservePromptQueueSteer(SESSION_KEY, "user-1", "run-1")).rejects.toThrow(
+        "already being delivered",
+      );
+      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
+    });
+  });
+
   test("fingerprints are independent of key order", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));

@@ -36,6 +36,7 @@ async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Pro
   try {
     return await run(storage);
   } finally {
+    storage.close();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
@@ -206,28 +207,36 @@ describe("StorageService prompt queues", () => {
     });
   });
 
-  test("reserves a legacy claimed head as soon as it is loaded, whatever its lease", async () => {
+  test("preserves a live legacy lease across queue saves and restores it at expiry", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
+      const expiresAt = Date.now() + 5 * 60 * 1000;
+      const token = seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1", { expiresAt });
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
-      // An older backend sharing the database claims m1 under a live lease.
-      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1");
+      const queue = await storage.getPromptQueue(KEY);
+      expect(queue).toMatchObject({
+        messages: [{ id: "m2" }],
+        outstandingClaim: { token, message: { id: "m1" } },
+      });
+      await storage.savePromptQueue(KEY, "e1", queue!.messages, queue!.revision);
+      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
+      expect(
+        readStoredValue<Record<string, unknown>>(storage.getDataDir(), QUEUES)?.[KEY],
+      ).toMatchObject({ outstandingClaim: { token } });
 
-      expect(await storage.getPromptQueue(KEY)).toMatchObject({
-        messages: [{ id: "m1" }, { id: "m2" }],
-        revision: 3,
-      });
-      await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toMatchObject({
-        message: { id: "m1" },
-        requestId: "m1",
-      });
-      // The reservation's write persists the restored queue without the claim.
-      const stored = readStoredValue<Record<string, Record<string, unknown>>>(
-        storage.getDataDir(),
-        QUEUES,
-      );
-      expect(stored?.[KEY]).toMatchObject({ messages: [{ id: "m2" }], inFlight: {} });
-      expect(stored?.[KEY]).not.toHaveProperty("outstandingClaim");
+      const clock = spyOn(Date, "now").mockReturnValue(expiresAt);
+      try {
+        await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toMatchObject({
+          message: { id: "m1" },
+          requestId: "m1",
+        });
+        expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m2" }] });
+        expect(
+          readStoredValue<Record<string, unknown>>(storage.getDataDir(), QUEUES)?.[KEY],
+        ).not.toHaveProperty("outstandingClaim");
+      } finally {
+        clock.mockRestore();
+      }
     });
   });
 
@@ -271,7 +280,8 @@ describe("StorageService prompt queues", () => {
         text: "replacement must not win",
       });
       expect(enqueueClaimed.revision).toBe(claimed!.revision);
-      expect(enqueueClaimed.messages).toEqual([{ id: "m1" }]);
+      expect(enqueueClaimed.messages).toEqual([]);
+      expect(enqueueClaimed.outstandingClaim?.message).toEqual({ id: "m1" });
     });
   });
 
@@ -622,12 +632,11 @@ describe("StorageService prompt queues", () => {
 
 /**
  * Only a backend up to v2.28.0-beta sharing the database writes
- * `outstandingClaim` (through the removed claim commands). Every load restores
- * its message to the head (`restoreLegacyPromptQueueClaims`), so no reader
- * sees a claim and the next write drops it.
+ * `outstandingClaim` (through the removed claim commands). Live leases remain
+ * exclusive; expired or malformed leases are restored on every load.
  */
 describe("StorageService legacy prompt queue claims", () => {
-  test("restores every claim on load, at startup or written while running", async () => {
+  test("restores expired claims on load, at startup or written while running", async () => {
     await withStorage(async (storage) => {
       const otherKey = "claude env-e2:tab-1";
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
@@ -642,7 +651,7 @@ describe("StorageService legacy prompt queue claims", () => {
       });
       expect(await restarted.getPromptQueue(KEY)).not.toHaveProperty("outstandingClaim");
 
-      seedLegacyPromptQueueClaim(restarted.getDataDir(), otherKey, "m2");
+      seedLegacyPromptQueueClaim(restarted.getDataDir(), otherKey, "m2", { expiresAt: 1 });
       expect(await restarted.getPromptQueue(otherKey)).toMatchObject({
         messages: [{ id: "m2" }],
         revision: 2,

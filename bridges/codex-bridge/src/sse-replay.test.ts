@@ -783,7 +783,15 @@ describe("/session/:id/approvals", () => {
   });
 
   test("rejects a missing or invalid decision", async () => {
-    for (const body of [{}, { decision: "yes" }, { decision: "accept" }, { decision: 1 }]) {
+    for (const body of [
+      {},
+      { decision: "yes" },
+      { decision: "accept" },
+      { decision: 1 },
+      // Retired by todo 0160: each saved a Codex rule Orkestrator cannot revoke.
+      { decision: "approve-with-execpolicy-amendment" },
+      { decision: "approve-with-network-amendment", amendmentIndex: 0 },
+    ]) {
       const response = await app.request("/session/s/approvals/apr-1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

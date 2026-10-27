@@ -1003,10 +1003,10 @@ token. The whole run takes about 20 minutes.
   the catalogue's first `gpt-4`, which that login refuses).
 
 The approval card is answered with **Approve** alone. The spec never picks an
-optional or amendment option. Codex's "Approve with command policy" writes a
-rule into the profile's isolated Codex home. Earlier profiles shared the host
-home, as recorded in
-[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+optional or amendment option. Codex cards no longer offer one: the old
+"Approve with command policy" wrote a durable rule into the Codex home (the
+profile's isolated one; earlier profiles shared the host home, as recorded in
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)).
 The task remains explicitly opt-in (the environment flag above is required);
 it is not part of the default suite or CI because it spends real provider tokens.
 Two additional cases inject setup failures immediately after creation and

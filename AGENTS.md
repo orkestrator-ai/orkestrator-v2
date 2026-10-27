@@ -587,6 +587,9 @@ When touching the app-server engine:
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.
+- Never offer or send an exec-policy or network-policy amendment. Codex writes
+  an accepted one into `CODEX_HOME/rules/` for every later session on the host,
+  and app-server has no method to list or remove it.
 - Never answer an approval belonging to a **dead generation**. app-server has
   forgotten the request; withdraw the card and say so in the transcript instead
   (`abandonGeneration`). Conversely a *live* child must always be answered —

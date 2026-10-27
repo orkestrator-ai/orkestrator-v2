@@ -32,6 +32,7 @@ import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
+import { AgentsMdApprovalFixture } from "./AgentsMdApprovalFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
 import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -1846,6 +1847,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
+  if (window.location.pathname === "/agents-md-approval") return <AgentsMdApprovalFixture />;
   if (window.location.pathname === "/design-canvas") {
     installDesignCanvasFixture();
     return <DesignCanvasFixture />;

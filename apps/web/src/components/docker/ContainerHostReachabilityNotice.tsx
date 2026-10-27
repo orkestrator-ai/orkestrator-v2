@@ -235,6 +235,17 @@ export function ContainerHostReachabilityDialog({
               <dd className="font-mono">{value.url ?? "unknown"}</dd>
               <dt className="text-muted-foreground">Host firewall</dt>
               <dd>{value.firewall.detail ?? value.firewall.kind}</dd>
+              {value.dockerRootless ? (
+                <>
+                  <dt className="text-muted-foreground">Docker</dt>
+                  <dd>
+                    Rootless
+                    {value.hostAddress
+                      ? ` · containers reach this computer at ${value.hostAddress}`
+                      : ""}
+                  </dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">Docker subnets</dt>
               <dd className="font-mono">{value.subnets.join(", ") || "unknown"}</dd>
               <dt className="text-muted-foreground">Probe image</dt>
@@ -252,6 +263,7 @@ export function ContainerHostReachabilityDialog({
                         ({probe.network ?? "?"}
                         {probe.subnet ? `, ${probe.subnet}` : ""}):
                       </span>{" "}
+                      {probe.hostAddress ? `via ${probe.hostAddress}: ` : ""}
                       {outcomeLabel(probe)} after {Math.round(probe.elapsedMs / 100) / 10}s
                     </div>
                     {probe.detail && (

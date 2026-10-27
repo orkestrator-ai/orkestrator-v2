@@ -643,10 +643,11 @@ test("a sent request writes its evidence image into the local worktree under .or
     const [attachment] = request.attachments;
     expect(request.attachments).toHaveLength(1);
     expect(attachment!.digest).toBe(image.digest);
-    // The brief names `<digest>.png`; the file written is `<request>-<digest>.png`.
+    // The written filename includes the full request hash to avoid ID collisions.
     const name = `${image.digest.slice(0, 32)}.png`;
     expect(attachment!.relativePath).toBe(`.orkestrator/annotations/${name}`);
-    const written = `.orkestrator/annotations/${requestId}-${name}`;
+    const requestHash = createHash("sha256").update(requestId).digest("hex");
+    const written = `.orkestrator/annotations/${requestId.slice(0, 12)}-${requestHash}-${name}`;
     expect(attachment!.materializedPath).toBe(path.join(setup.worktreePath, written));
     const bytes = await readFile(attachment!.materializedPath!);
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(image.digest);
@@ -900,7 +901,8 @@ test("Docker fixture writes annotation evidence inside the container, checks pat
     const request = await materializedRequest(setup, requestId);
     expect(request.state).toBe("queued");
     const [attachment] = request.attachments;
-    const written = `.orkestrator/annotations/${requestId}-${image.digest.slice(0, 32)}.png`;
+    const requestHash = createHash("sha256").update(requestId).digest("hex");
+    const written = `.orkestrator/annotations/${requestId.slice(0, 12)}-${requestHash}-${image.digest.slice(0, 32)}.png`;
     expect(attachment!.materializedPath).toBe(`/workspace/${written}`);
     const digest = inContainer(setup.containerId, ["sha256sum", attachment!.materializedPath!]);
     expect(digest.status, digest.stderr).toBe(0);

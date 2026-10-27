@@ -1,7 +1,7 @@
 # OpenCode coordinator research-server registration timeout
 
 - **ID:** 0785
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `OpenCode coordinator research servers > registers a research server and allows exactly its tools`
 - **Owning file:** `apps/backend/src/core/opencode-coordinator-research-live.test.ts`
@@ -109,3 +109,46 @@ The merged aggregate repeated the 40-second timeout (40003.45 ms). The complete 
 - Command: `mise run test:logged -- --name full-test -- mise run test`. The case timed out at 40,000.51 ms.
 - Unlike earlier observations, the complete unchanged owner also timed out **alone**, three times at 40.0–40.9 s: `bun test --preload ../../tests/setup-node.ts src/core/opencode-coordinator-research-live.test.ts` from `apps/backend`, at load average 11–15 on 12 cores. It timed out the same way in a disposable worktree of clean `origin/main` (`a51045a4`), so the branch did not cause it. The binary is the pinned toolchain copy that `policyQualificationCli("opencode")` resolves from the host's data directory (read only).
 - Assessment: on this host the hang is now deterministic rather than load-only, which supports the startup-hang hypothesis above. No implementation, assertion, timeout or skip changed.
+
+## 2026-10-26 observation (omarchy-hp)
+
+The test timed out at 40 s in `mise run test` on branch
+`todo-0109-rootless-linux-runtime-d03790b22a6c`, and also when its owning file
+ran alone (load about 8), and on a clean `origin/main` worktree
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts
+src/core/opencode-coordinator-research-live.test.ts`): 0 pass, 1 fail each
+time. On this host it is not intermittent, so it is environmental here
+(probably the host's OpenCode CLI or its first-run state), not a branch
+regression.
+
+## Readiness request fix — 2026-10-26
+
+The follow-up on todo 0109 reproduced the unchanged owner's 40-second
+timeout. Instrumentation located the wait in the initial `/mcp` fetch,
+before either fixture MCP server had received a request. The child was
+alive and answered independent authenticated `/global/health` and `/mcp`
+probes, while the test's own fetch remained pending. Logging and copied-file
+controls could pass, so this does not establish a vendor or Bun root cause.
+
+The fixture's 20-second readiness deadline was checked only **after** that
+unbounded fetch and body read completed. It now probes the existing health
+endpoint with the backend's bounded `checkHttpHealth` before bootstrapping
+the directory, and bounds the MCP response and body by the remaining
+readiness deadline. The original 20-second readiness and 40-second outer
+budgets, real CLI, MCP registration and permission assertions are unchanged.
+
+Validation through `mise run test:logged` on the same Linux host and pinned
+OpenCode 1.19.4:
+
+```bash
+bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1
+bun test --cwd apps/backend ./src/core/opencode-coordinator-research-live.test.ts --parallel=1 --rerun-each=10
+```
+
+The owner passed in 2.0 seconds; all ten stress repetitions passed in 28.1
+seconds. The fix removes the unbounded readiness wait without relaxing the
+registration test or relying on added diagnostic logging.
+
+The subsequent full `mise run test` also passed all four groups (380.2 s),
+including this owner in the normal parallel backend suite. Evidence:
+`/tmp/orkestrator-test-run.1JOfGg/summary.json`.

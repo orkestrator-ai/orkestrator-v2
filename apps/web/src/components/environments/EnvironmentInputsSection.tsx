@@ -91,6 +91,12 @@ export function EnvironmentInputsSection({
   return (
     <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
       <p className="font-medium">Agent inputs</p>
+      {status.unreadableOnRootless ? (
+        <p role="alert" className="text-amber-500">
+          Docker runs rootless and this container&apos;s image cannot hand these inputs to its agent
+          user, so its agents start without them. Rebuild it on a current image.
+        </p>
+      ) : null}
       {status.mode === "host-mounts" ? (
         <p className="text-muted-foreground">
           This container was created with your agent home directories mounted read-only. Rebuilding

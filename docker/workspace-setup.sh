@@ -556,17 +556,30 @@ if [ "$PREPARE_ONLY" = true ]; then
     exit 0
 fi
 
+# Project seed files bound read-only. Under rootless Docker node cannot open an
+# owner-only one; the root entrypoint then relayed it into node's own
+# /run/orkestrator-inputs (network-policy-entrypoint.sh, relay_staged_inputs).
+project_input() {
+    if [ -e "/run/orkestrator-inputs/$1" ] && [ ! -L "/run/orkestrator-inputs/$1" ]; then
+        printf '%s\n' "/run/orkestrator-inputs/$1"
+    else
+        printf '/%s\n' "$1"
+    fi
+}
+PROJECT_ENV_INPUT="$(project_input project-env)"
+OPENCODE_PROJECT_JSON_INPUT="$(project_input opencode-project-json)"
+
 # Copy .env files to workspace
 echo ""
 echo -e "${BLUE}>>> Setting up environment files <<<${NC}"
 
-if [ -d /project-env ]; then
-    if [ -f /project-env/.env ]; then
-        cp /project-env/.env /workspace/.env
+if [ -d "$PROJECT_ENV_INPUT" ]; then
+    if [ -f "$PROJECT_ENV_INPUT/.env" ]; then
+        cp "$PROJECT_ENV_INPUT/.env" /workspace/.env
         echo -e "  ${GREEN}Copied .env from project folder${NC}"
     fi
-    if [ -f /project-env/.env.local ]; then
-        cp /project-env/.env.local /workspace/.env.local
+    if [ -f "$PROJECT_ENV_INPUT/.env.local" ]; then
+        cp "$PROJECT_ENV_INPUT/.env.local" /workspace/.env.local
         echo -e "  ${GREEN}Copied .env.local from project folder${NC}"
     fi
 elif [ -f /env/.env ]; then
@@ -611,12 +624,12 @@ if [ -d /project-files ]; then
 fi
 
 # Set up opencode.json if mounted from project
-if [ -f /opencode-project-json ]; then
+if [ -f "$OPENCODE_PROJECT_JSON_INPUT" ]; then
     echo ""
     echo -e "${BLUE}>>> Setting up OpenCode configuration <<<${NC}"
 
     # Copy to workspace root
-    cp /opencode-project-json /workspace/opencode.json
+    cp "$OPENCODE_PROJECT_JSON_INPUT" /workspace/opencode.json
 
     # Add default model attribute if missing (use OPENCODE_MODEL env var or fallback to default)
     if ! jq -e '.model' /workspace/opencode.json > /dev/null 2>&1; then

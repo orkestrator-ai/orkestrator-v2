@@ -402,7 +402,11 @@ export class OrkestratorBackend {
             // Read lazily: the gateway that receives events is created after init.
             emit: (event, payload) => options.emit(event, payload),
             prepareContainer: async (containerId) => {
-              await ensureContainerAgentToolsHost(containerId);
+              await ensureContainerAgentToolsHost(
+                containerId,
+                undefined,
+                this.containerHostReachability?.containerHostAddress(),
+              );
               await ensureContainerHostServicePorts(
                 containerId,
                 this.agentTools.servicePort?.() ?? null,

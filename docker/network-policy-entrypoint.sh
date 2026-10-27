@@ -141,5 +141,59 @@ fi
 umask 022
 printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 
+# Staged inputs (staged-inputs=3, see entrypoint.sh). The backend binds its
+# staged revision read-only, owner-only (0700/0600) and owned by its own
+# user. On a rootful daemon that user is the container's node. Under rootless
+# Docker the backend's user is container root and node is a subordinate UID,
+# so node cannot open the mounts. Each mount node cannot read in full is
+# copied, root reading and node writing, into a node-owned 0700 directory the
+# entrypoint reads instead. Nothing is widened on the host or for any other
+# user. The relay is rebuilt from the mounts on every boot, so emptying the
+# revision (revocation) empties it at the next start.
+STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs
+# The mount points below `/`, as the backend binds them
+# (apps/backend/src/core/portable-inputs.ts and the project seed files).
+STAGED_INPUT_MOUNTS="claude-config claude-config.json codex-home opencode-config opencode-data opencode-state/model.json grok-home grok-config pi-config cursor-config tmp/gitconfig project-env opencode-project-json"
+# The backend's own staging bounds (INPUT_LIMITS totals).
+STAGED_INPUT_RELAY_MAX_ENTRIES=20000
+STAGED_INPUT_RELAY_MAX_BYTES=536870912
+
+as_input_user() {
+    setpriv --reuid=node --regid=node --init-groups "$@"
+}
+
+relay_staged_inputs() {
+    local source_root="$1" relay_dir="$2" owner="$3"
+    local name source parent unreadable entries bytes
+    # Root's own directory under root-owned /run: node cannot plant it, and
+    # rm never follows a link node left inside it.
+    rm -rf --one-file-system -- "$relay_dir"
+    for name in $STAGED_INPUT_MOUNTS; do
+        source="$source_root/$name"
+        # A mount point is a real file or directory; a link is never followed.
+        { [ -e "$source" ] && [ ! -L "$source" ]; } || continue
+        unreadable=$(as_input_user find -P "$source" ! -readable -print -quit 2>/dev/null) || unreadable=yes
+        [ -n "$unreadable" ] || continue
+        entries=$(find -P "$source" 2>/dev/null | head -n "$((STAGED_INPUT_RELAY_MAX_ENTRIES + 1))" | wc -l) || true
+        bytes=$(du -s -B1 --apparent-size "$source" 2>/dev/null | cut -f1) || true
+        if [ "${entries:-0}" -gt "$STAGED_INPUT_RELAY_MAX_ENTRIES" ] || [ "${bytes:-0}" -gt "$STAGED_INPUT_RELAY_MAX_BYTES" ]; then
+            echo "Staged input /$name is over the relay bounds and stays unreadable" >&2
+            continue
+        fi
+        [ -d "$relay_dir" ] || install -d -o "$owner" -g "$owner" -m 0700 "$relay_dir"
+        parent="$relay_dir/$(dirname "$name")"
+        as_input_user mkdir -p -m 0700 "$parent" || continue
+        # tar -c archives links as links and -x as node writes only where node
+        # can; modes keep the staged 0700/0600 under umask 077.
+        if ! tar -C "$(dirname "$source")" -cf - "$(basename "$source")" 2>/dev/null |
+            as_input_user sh -c 'umask 077; exec tar -C "$1" -xf - --no-same-owner --no-same-permissions' sh "$parent"; then
+            echo "Staged input /$name could not be relayed" >&2
+            as_input_user rm -rf -- "$relay_dir/$name" || true
+        fi
+    done
+}
+
+relay_staged_inputs "" "$STAGED_INPUT_RELAY_DIR" node || echo "Staged inputs were not relayed" >&2
+
 export HOME=/home/node USER=node LOGNAME=node
 exec setpriv --reuid=node --regid=node --init-groups /usr/local/bin/entrypoint.sh "$@"

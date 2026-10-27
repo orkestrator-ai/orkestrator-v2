@@ -350,6 +350,12 @@ describe("C20 staged portable inputs", () => {
       };
       await write(path.join(fixtureHome, ".claude", ".credentials.json"), '{"claudeAiOauth":{}}');
       await write(path.join(fixtureHome, ".claude", "CLAUDE.md"), "fixture memory");
+      await write(
+        path.join(fixtureHome, ".claude", "settings.json"),
+        JSON.stringify({
+          enabledPlugins: { "review@fixture": true, "off@fixture": false },
+        }),
+      );
       await write(path.join(fixtureHome, ".claude", "history.jsonl"), `${SENTINEL}-HISTORY`);
       await write(path.join(fixtureHome, ".claude", "projects", "p", "s.jsonl"), `${SENTINEL}-T`);
       // A Codex auth.json that holds no login is withheld at staging
@@ -416,6 +422,34 @@ describe("C20 staged portable inputs", () => {
         ]);
         await docker(["start", containerId]);
         await waitForContainerBoot(containerId);
+        const { detectDockerTopology } = await import("../src/core/docker-image");
+        if ((await detectDockerTopology()).rootless) {
+          // No substituted user: qualify the actual namespace UID mapping and
+          // the root bootstrap's owner-only relay before node imports anything.
+          expect(
+            await docker([
+              "exec",
+              "-u",
+              "node",
+              containerId,
+              "sh",
+              "-c",
+              "test ! -r /claude-config/settings.json && test -r /run/orkestrator-inputs/claude-config/settings.json && stat -c '%u:%a' /run/orkestrator-inputs",
+            ]),
+          ).toBe("1000:700");
+        }
+        expect(
+          JSON.parse(
+            await docker([
+              "exec",
+              "-u",
+              "node",
+              containerId,
+              "cat",
+              "/home/node/.claude/settings.json",
+            ]),
+          ).enabledPlugins,
+        ).toEqual({ "review@fixture": true, "off@fixture": false });
         const sentinelScan = await docker([
           "exec",
           containerId,
@@ -435,6 +469,30 @@ describe("C20 staged portable inputs", () => {
             "cat /home/node/.codex/auth.json; test -f /home/node/.claude/CLAUDE.md && echo claude-md",
           ]),
         ).toBe('{"OPENAI_API_KEY":"fixture-not-a-key"}claude-md');
+        const { startContainerClaudeServer } = await import("../src/core/commands-containers");
+        // Starts the shipped bridge and waits for its authenticated readiness
+        // route as the backend does; no provider turn or billing is involved.
+        expect((await startContainerClaudeServer(containerId)).hostPort).toBeGreaterThan(0);
+        // Revocation removes the imported and relayed copies and scrubs the
+        // bound revision; the next real boot must not bring the credential back.
+        await context.storage.updateEnvironment(environment.id, { containerId });
+        const { revokeProviderCredentials } = await import("../src/core/portable-input-status");
+        expect((await revokeProviderCredentials(environment.id, "codex", context)).removed).toBe(
+          true,
+        );
+        await docker(["restart", containerId]);
+        await waitForContainerBoot(containerId);
+        expect(
+          await docker([
+            "exec",
+            "-u",
+            "node",
+            containerId,
+            "sh",
+            "-c",
+            "test ! -e /home/node/.codex/auth.json && test ! -e /run/orkestrator-inputs/codex-home/auth.json && echo revoked",
+          ]),
+        ).toBe("revoked");
         await docker(["rm", "-f", containerId]);
       } finally {
         for (const [key, value] of [

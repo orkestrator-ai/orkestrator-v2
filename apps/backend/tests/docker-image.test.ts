@@ -692,13 +692,19 @@ esac
         expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
           "created-workload",
         );
-        const creates = (await log.read())
-          .split("\n")
-          .filter((line) => line.startsWith("create --name ork-"));
+        const lines = (await log.read()).split("\n");
+        const creates = lines.filter((line) => line.startsWith("create --name ork-"));
+        // The seed is copied into the gateway before it starts, never bound:
+        // a rootless daemon cannot bind it read-only from a nosuid/nodev source.
+        expect(
+          lines.some(
+            (line) => line.startsWith("cp ") && line.endsWith(`${gatewayId}:/etc/orkestrator-seed`),
+          ),
+        ).toBe(true);
         expect(creates).toHaveLength(2);
         const [gateway, workload] = creates as [string, string];
         // The gateway owns the namespace: capability, network, IPv6 setting,
-        // published ports, policy and its GitHub seed.
+        // published ports and policy.
         expect(gateway).toMatch(/--name ork-[0-9a-f]{16}-env-lifecycle-egress /);
         expect(gateway).toContain("--label orkestrator-resource-role=egress-gateway");
         expect(gateway).toContain("--label orkestrator-egress-environment=env-lifecycle");
@@ -712,7 +718,8 @@ esac
         expect(gateway).toContain("--tmpfs /run:rw,nosuid,nodev,mode=0755");
         expect(gateway).toContain("--network ork-");
         expect(gateway).toContain("--sysctl net.ipv6.conf.all.disable_ipv6=1");
-        expect(gateway).toContain("dst=/etc/orkestrator-seed/github-ranges");
+        expect(gateway).not.toContain("github-ranges");
+        expect(gateway).toContain("--add-host host.docker.internal:host-gateway");
         expect(gateway).toContain("-p 127.0.0.1:3000:3000/tcp");
         expect(gateway).toContain("-p 127.0.0.1::4097/tcp");
         expect(gateway).toContain("-e NETWORK_MODE=restricted");
@@ -749,16 +756,91 @@ esac
       process.env.ORKESTRATOR_EGRESS = "in-container";
       await withDockerScript(script("printf 'created-workload\\n'"), async (log) => {
         await createDockerContainer(environment, context, { imageId: IMAGE_ID });
-        const creates = (await log.read())
-          .split("\n")
-          .filter((line) => line.startsWith("create --name ork-"));
+        const lines = (await log.read()).split("\n");
+        const creates = lines.filter((line) => line.startsWith("create --name ork-"));
         expect(creates).toHaveLength(1);
+        expect(creates[0]).not.toContain("github-ranges");
+        expect(
+          lines.some(
+            (line) =>
+              line.startsWith("cp ") && line.endsWith("created-workload:/etc/orkestrator-seed"),
+          ),
+        ).toBe(true);
         expect(creates[0]).toContain("--cap-add NET_ADMIN");
         expect(creates[0]).toContain("--network ork-");
         expect(creates[0]).toContain("-p 127.0.0.1::4097/tcp");
         expect(creates[0]).not.toContain("ORKESTRATOR_EGRESS");
       });
     } finally {
+      if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
+      else process.env.ORKESTRATOR_EGRESS = saved;
+    }
+  });
+
+  test("a rootless daemon names the host address the reachability check chose", async () => {
+    const dir = await tempDir("ork-rootless-alias-");
+    cleanup.push(dir);
+    const environment = lifecycleEnvironment();
+    const { context } = memoryLifecycleContext([environment], dir);
+    const resolved: number[] = [];
+    Object.assign(context, {
+      runtimeFlavor: "agent-test",
+      credentialSources: new Set(),
+      containerHostReachability: {
+        resolveContainerHostAddress: async () => {
+          resolved.push(1);
+          return "10.0.2.2";
+        },
+      },
+    });
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://example.invalid/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { enabledAgentPlatforms: [] },
+        repositories: {},
+      }),
+    });
+    await fs.writeFile(
+      path.join(dir, "github-ranges.txt"),
+      "# github-ranges fixture\n203.0.113.0/24\n",
+    );
+    const tar = await tarOf(
+      "image-manifest.json",
+      validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
+    );
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const saved = process.env.ORKESTRATOR_EGRESS;
+    process.env.ORKESTRATOR_EGRESS = "in-container";
+    resetDockerTopologyCache();
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///run/user/1000/docker.sock\\n' ;;
+  info) printf '{"OSType":"linux","OperatingSystem":"Arch Linux","Architecture":"x86_64","SecurityOptions":["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]}\\n' ;;
+  create) printf 'created-rootless\\n' ;;
+  cp) cat '${tar}' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
+esac
+`,
+        async (log) => {
+          await createDockerContainer(environment, context, { imageId: IMAGE_ID });
+          const create = (await log.read())
+            .split("\n")
+            .find((line) => line.startsWith("create --name"));
+          expect(create).toContain("--add-host host.docker.internal:10.0.2.2");
+          expect(create).not.toContain("host-gateway");
+          expect(resolved).toHaveLength(1);
+        },
+      );
+    } finally {
+      resetDockerTopologyCache();
       if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
       else process.env.ORKESTRATOR_EGRESS = saved;
     }

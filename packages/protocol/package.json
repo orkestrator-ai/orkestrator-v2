@@ -6,6 +6,7 @@
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
+    "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",

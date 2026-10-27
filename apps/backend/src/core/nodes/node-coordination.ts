@@ -4,10 +4,12 @@ import {
   coordinatorMainConversation,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrator";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 
 import type { StorageService } from "../storage.js";
+import { agentsMdBranchName, agentsMdRequestKey, type AgentsMdPrResult } from "../agents-md-pr.js";
 import {
   describeNodeAction,
   NodeActionRequests,
@@ -241,6 +243,7 @@ export class NodeCoordination {
         "reveal-env-value": (request) => this.projectFiles.executeReveal(request),
         "create-project": (request, approval) => this.executeCreateProject(request, approval),
         "apply-root-changes": (request, approval) => this.executeRootChanges(request, approval),
+        "update-agents-md": (request, approval) => this.executeAgentsMdUpdate(request, approval),
       },
       notify: (request) => this.notifyRequester(request),
     });
@@ -428,6 +431,7 @@ export class NodeCoordination {
         "update-project-files",
         "reveal-env-value",
         "apply-root-changes",
+        "update-agents-md",
       ].includes(kind)
     ) {
       throw new Error("Unknown request kind.");
@@ -480,7 +484,100 @@ export class NodeCoordination {
         projectId: by.projectId,
       },
       ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+      ...(kind === "update-agents-md"
+        ? { agentsMd: { changes: parseAgentsMdChanges(agentsMdPayload(args.agentsMd)) } }
+        : {}),
     });
+  }
+
+  /**
+   * Run `command` on the node that owns a target's project copy: this node
+   * directly, another through the node link. A lost answer is retried while
+   * `idempotent`, which joins the run still going on that node.
+   */
+  private async onTargetNode<T>(
+    nodeId: string,
+    command: string,
+    args: Record<string, unknown>,
+    requestKey: string,
+  ): Promise<{ outcome: "ok"; result: T } | { outcome: "unknown" }> {
+    if (nodeId === (await this.options.nodes.selfIdentity()))
+      return { outcome: "ok", result: await this.options.invoke<T>(command, args) };
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const routed = await this.options.portal.invokeOnNode({
+          nodeId,
+          command,
+          args,
+          requestKey: `${requestKey}:${attempt}`,
+        });
+        if (routed.outcome === "ok") return { outcome: "ok", result: routed.result as T };
+      } catch (error) {
+        if (!(error instanceof NodeOutcomeUnknownError)) throw error;
+      }
+    }
+    return { outcome: "unknown" };
+  }
+
+  /**
+   * Approved: open the pull request for the AGENTS.md section on the node
+   * that owns the project copy, with the entries the user settled on. The
+   * command there is idempotent per request, so a retry after a lost answer
+   * or a restart finds the pull request instead of opening a second.
+   */
+  private async executeAgentsMdUpdate(request: NodeActionRequest, approval: NodeActionApproval) {
+    const [target] = request.targets;
+    if (!target?.projectId || request.targets.length !== 1 || !request.agentsMd)
+      throw new Error("The request names one project.");
+    const changes = approval.changes ?? request.agentsMd.changes;
+    const key = agentsMdRequestKey(request.requestId);
+    const outcome = await this.onTargetNode<AgentsMdPrResult>(
+      target.nodeId,
+      "open_project_agents_md_pr",
+      {
+        projectId: target.projectId,
+        requestKey: key,
+        changes,
+        reason: request.reason ?? "Approved in Orkestrator",
+        nodeName: target.nodeName,
+      },
+      `agents-md:${request.requestId}`,
+    );
+    if (outcome.outcome === "unknown")
+      return {
+        code: "outcome-unknown",
+        message: `The connection to ${target.nodeName} was lost while it opened the pull request. Check GitHub for branch ${agentsMdBranchName(key)} before proposing again.`,
+        outcomeUnknown: true,
+      };
+    const pr = outcome.result;
+    if (pr.status === "unchanged")
+      return {
+        code: "unchanged",
+        message: `AGENTS.md on ${pr.baseBranch} already has these entries; no pull request was needed.`,
+      };
+    return {
+      code: pr.status === "existing" ? "pr-existing" : "pr-opened",
+      message: `${pr.status === "existing" ? "The pull request was already open" : "Opened a pull request"} for the ## Orkestrator section of AGENTS.md: ${pr.url}`,
+      ...(pr.url ? { url: pr.url } : {}),
+    };
+  }
+
+  /** The section the approval dialog diffs against: the latest base on the owning node. */
+  async previewAgentsMd(requestId: string): Promise<Record<string, unknown>> {
+    const request = await this.actions.get(requestId);
+    if (!request || request.kind !== "update-agents-md")
+      throw new Error("That AGENTS.md request does not exist.");
+    const [target] = request.targets;
+    if (!target?.projectId) throw new Error("The request names no project.");
+    const read = await this.onTargetNode<Record<string, unknown>>(
+      target.nodeId,
+      "read_project_agents_md_section",
+      { projectId: target.projectId },
+      `agents-md-preview:${requestId}`,
+    );
+    if (read.outcome !== "ok")
+      throw new Error(`${target.nodeName} did not answer; try again when it is connected.`);
+    return { ...read.result, nodeName: target.nodeName };
   }
 
   private async executeDeletion(request: NodeActionRequest) {
@@ -635,4 +732,10 @@ export class NodeCoordination {
       },
     );
   }
+}
+
+function agentsMdPayload(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("An AGENTS.md request carries its proposed changes.");
+  return (value as Record<string, unknown>).changes;
 }

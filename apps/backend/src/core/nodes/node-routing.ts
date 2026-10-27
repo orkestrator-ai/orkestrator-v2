@@ -81,6 +81,10 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "custom_fix_coordinator_multi_review_action",
   "request_coordinator_root_changes",
   "apply_project_root_changes",
+  // An AGENTS.md proposal and its review belong to the coordinator's command
+  // node; the read and the pull request run on the node owning the copy.
+  "request_coordinator_agents_md_update",
+  "preview_agents_md_update",
   "get_node_summaries",
   "watch_node_events",
   "unwatch_node_events",

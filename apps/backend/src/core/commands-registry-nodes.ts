@@ -309,7 +309,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   // Action requests (command node): coordinators ask, the user decides.
   register("create_node_action_request", async (args, context) => {
-    assertOnlyKeys(args, ["kind", "targets", "requestedBy", "reason"], "arguments");
+    assertOnlyKeys(
+      args,
+      ["requestId", "kind", "targets", "requestedBy", "reason", "agentsMd"],
+      "arguments",
+    );
     return coordination(context).createActionRequest(args);
   });
 
@@ -329,6 +333,13 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       args.decision,
       parseNodeActionApproval(args.approval),
     );
+  });
+
+  // The section an AGENTS.md request's review diffs against (command node).
+  register("preview_agents_md_update", async (args, context) => {
+    assertOnlyKeys(args, ["requestId"], "arguments");
+    if (typeof args.requestId !== "string") throw new Error("Expected requestId.");
+    return coordination(context).previewAgentsMd(args.requestId);
   });
 
   // Node files (any node; a command node calls them on itself and its nodes).

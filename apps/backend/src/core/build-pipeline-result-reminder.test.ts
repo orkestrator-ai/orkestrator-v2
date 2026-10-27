@@ -477,3 +477,92 @@ test.each([false, true])(
     );
   },
 );
+
+for (const toolMode of [false, true]) {
+  test.each(["absent", "lost"] as const)(
+    `consolidation accepts a saved ${toolMode ? "tool-v1" : "structured"} result over %s`,
+    async (answer) => {
+      await withPipeline(
+        async ({ service, createService, storage, provider, read, workflowResults }) => {
+          provider.runningConsolidation = true;
+          const started = await service.start(startInput(fourReviewers()));
+          let current = await read(started.id);
+          for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+            await service.advanceNow(started.id);
+            current = await read(started.id);
+          }
+          const request = current.reviewFanout!.consolidation!;
+          if (toolMode) {
+            const result = await provider.structured<unknown>(
+              request.providerSessionId,
+              request.requestId,
+            );
+            if (!result?.ok) throw new Error("Missing consolidation fixture result");
+            await workflowResults!.submit(scope, request.requestId, strictReport(result.value));
+          }
+          await rewritePipeline(storage, started.id, (pipeline) => {
+            pipeline.reviewFanout!.consolidation!.state = "dispatching";
+          });
+          await service.shutdown();
+          const dispatch = spyOn(provider, "dispatchStatus").mockResolvedValue(answer);
+          const before = provider.sent.length;
+          const restored = createService();
+          try {
+            await restored.init();
+            await restored.advanceNow(started.id);
+            expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("sent");
+            expect(provider.sent).toHaveLength(before);
+            expect(dispatch).toHaveBeenCalledWith(request.providerSessionId, request.requestId);
+          } finally {
+            dispatch.mockRestore();
+            await restored.shutdown();
+          }
+        },
+        { toolMode },
+      );
+    },
+  );
+}
+
+test.each(["absent", "lost"] as const)(
+  "a stage accepts a saved tool-v1 result over %s dispatch status",
+  async (answer) => {
+    await withPipeline(
+      async ({ service, storage, provider, read, workflowResults }) => {
+        const started = await service.start(startInput());
+        const building = await advanceUntil(service, read, started.id, "building");
+        const session = building.sessions[building.currentSessionIndex]!;
+        const requestId = session.structuredRequestId!;
+        const result = await provider.structured<unknown>(session.sdkSessionId, requestId);
+        if (!result?.ok) throw new Error("Missing stage fixture result");
+        await workflowResults!.submit(scope, requestId, result.value);
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          pipeline.pendingPromptAttempt = {
+            id: "recovered-stage",
+            sessionId: session.sdkSessionId,
+            requestId,
+            phase: "building",
+            prompt: "Review preparation",
+            useTaskImages: false,
+            structuredReview: true,
+            resultTransport: "tool-v1",
+            dispatchVersion: 1,
+            startedAt: new Date().toISOString(),
+            dispatchingAt: new Date().toISOString(),
+          };
+        });
+        const dispatch = spyOn(provider, "dispatchStatus").mockResolvedValue(answer);
+        const before = provider.sent.length;
+        try {
+          await service.advanceNow(started.id);
+          expect((await read(started.id)).pendingPromptAttempt).toBeUndefined();
+          expect((await read(started.id)).phase).toBe("building");
+          expect(provider.sent).toHaveLength(before);
+        } finally {
+          dispatch.mockRestore();
+        }
+      },
+      { toolMode: true, toolKinds: ["review-preparation"] },
+    );
+  },
+);

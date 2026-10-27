@@ -164,7 +164,11 @@ class RecordingProvider implements BuildPipelineProvider {
     return [{ id: `${sessionId}-assistant`, role: "assistant", parts: [] }];
   }
 
-  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
+  async structured<T>(
+    sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T> | null> {
+    if (!this.taken.has(requestId)) return null;
     const phase = this.phases.get(sessionId);
     return {
       ok: true,

@@ -255,6 +255,7 @@ class ScriptedProvider implements BuildPipelineProvider {
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
     if (this.structuredResult === "absent") {
+      if (!this.sent.some((entry) => entry.requestId === requestId)) return null;
       const phase = this.phases.get(sessionId);
       return {
         ok: true,
@@ -533,6 +534,157 @@ describe("BuildPipelineService reconnect", () => {
 });
 
 describe("BuildPipelineService prompt dispatch", () => {
+  test.each(["unknown", "lost", "dispatched", "absent"] as const)(
+    "legacy pending attempts require %s reconciliation after upgrade",
+    async (answer) => {
+      await withService(async ({ service, storage, dataDir, provider }) => {
+        const staged = await startAtSetup(service, storage);
+        provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+        await service.advanceNow(staged.id);
+        const legacy = await snapshot(storage, staged.id);
+        const attempt = legacy.pendingPromptAttempt!;
+        delete attempt.dispatchVersion;
+        delete attempt.dispatchingAt;
+        const stored = (await storage.getBuildPipeline(staged.id))!;
+        await storage.saveBuildPipeline(
+          stored.id,
+          stored.projectId,
+          stored.environmentId,
+          stored.version,
+          legacy,
+          stored.revision,
+        );
+        await service.shutdown();
+        const freshStorage = new StorageService(dataDir);
+        await freshStorage.init();
+        provider.dispatchAnswer = answer;
+        const restored = new BuildPipelineService(freshStorage, async () => undefined as never, {
+          autoAdvance: false,
+          provider: async () => provider,
+        });
+        try {
+          await restored.init();
+          await restored.advanceNow(staged.id);
+          const recovered = await snapshot(freshStorage, staged.id);
+          expect(provider.dispatchReads).toContain(attempt.requestId);
+          expect(provider.sent).toHaveLength(answer === "absent" ? 1 : 0);
+          if (answer === "unknown")
+            expect(recovered.pendingPromptAttempt?.requestId).toBe(attempt.requestId);
+          if (answer === "lost") expect(recovered.phase).toBe("failed");
+          if (answer === "dispatched" || answer === "absent")
+            expect(recovered.pendingPromptAttempt).toBeUndefined();
+          if (answer === "absent") expect(provider.sent[0]?.requestId).toBe(attempt.requestId);
+        } finally {
+          await restored.shutdown();
+        }
+      });
+    },
+  );
+
+  test("legacy reconciliation uses the original attempt deadline", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      const current = await snapshot(storage, staged.id);
+      delete current.pendingPromptAttempt!.dispatchVersion;
+      delete current.pendingPromptAttempt!.dispatchingAt;
+      current.pendingPromptAttempt!.startedAt = new Date(0).toISOString();
+      const stored = (await storage.getBuildPipeline(staged.id))!;
+      await storage.saveBuildPipeline(
+        stored.id,
+        stored.projectId,
+        stored.environmentId,
+        stored.version,
+        current,
+        stored.revision,
+      );
+      provider.dispatchAnswer = "unknown";
+      await service.advanceNow(staged.id);
+      expect((await snapshot(storage, staged.id)).phase).toBe("failed");
+      expect(provider.sent).toHaveLength(0);
+    });
+  });
+
+  test("a newly prepared attempt can send immediately after a storage and owner restart", async () => {
+    await withService(async ({ service, storage, dataDir, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new ProviderUnavailableError("definite preflight refusal")];
+      await service.advanceNow(staged.id);
+      const attempt = (await snapshot(storage, staged.id)).pendingPromptAttempt!;
+      expect(attempt.dispatchVersion).toBe(1);
+      expect(attempt.dispatchingAt).toBeUndefined();
+      await service.shutdown();
+      const freshStorage = new StorageService(dataDir);
+      await freshStorage.init();
+      const restored = new BuildPipelineService(freshStorage, async () => undefined as never, {
+        autoAdvance: false,
+        provider: async () => provider,
+      });
+      try {
+        await restored.init();
+        provider.dispatchAnswer = "unknown";
+        await restored.advanceNow(staged.id);
+        expect((await snapshot(freshStorage, staged.id)).pendingPromptAttempt).toBeUndefined();
+        expect(provider.sent.map((entry) => entry.requestId)).toEqual([attempt.requestId]);
+        expect(provider.dispatchReads).toHaveLength(0);
+      } finally {
+        await restored.shutdown();
+      }
+    });
+  });
+
+  test("a dispatch mark survives a fresh storage and service owner and still gates resend", async () => {
+    await withService(async ({ service, storage, dataDir, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      const attempt = (await snapshot(storage, staged.id)).pendingPromptAttempt!;
+      expect(attempt.dispatchVersion).toBe(1);
+      expect(attempt.dispatchingAt).toEqual(expect.any(String));
+      await service.shutdown();
+      const freshStorage = new StorageService(dataDir);
+      await freshStorage.init();
+      const restored = new BuildPipelineService(freshStorage, async () => undefined as never, {
+        autoAdvance: false,
+        provider: async () => provider,
+      });
+      try {
+        await restored.init();
+        provider.dispatchAnswer = "unknown";
+        await restored.advanceNow(staged.id);
+        expect((await snapshot(freshStorage, staged.id)).pendingPromptAttempt).toEqual(attempt);
+        expect(provider.sent).toHaveLength(0);
+        expect(provider.dispatchReads).toEqual([attempt.requestId]);
+      } finally {
+        await restored.shutdown();
+      }
+    });
+  });
+
+  test.each(["absent", "lost"] as const)(
+    "a stage accepts its saved structured result over %s dispatch status",
+    async (answer) => {
+      await withService(async ({ service, storage, provider }) => {
+        const staged = await startAtSetup(service, storage);
+        provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+        await service.advanceNow(staged.id);
+        const attempt = (await snapshot(storage, staged.id)).pendingPromptAttempt!;
+        provider.structuredResult = {
+          ok: true,
+          provider: "claude",
+          requestId: attempt.requestId,
+          value: TEST_REVIEW_PREPARATION,
+        };
+        provider.dispatchAnswer = answer;
+        await service.advanceNow(staged.id);
+        expect((await snapshot(storage, staged.id)).pendingPromptAttempt).toBeUndefined();
+        expect((await snapshot(storage, staged.id)).phase).toBe("building");
+        expect(provider.sent).toHaveLength(0);
+      });
+    },
+  );
+
   test("SIGKILL before provider acceptance retries the durable request id once on a fresh owner", async () => {
     await withService(async ({ service, storage, dataDir, provider }) => {
       const staged = await startAtSetup(service, storage);
@@ -710,6 +862,7 @@ describe("BuildPipelineService prompt dispatch", () => {
       const staged = await startAtSetup(service, storage);
       provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
       await service.advanceNow(staged.id);
+      expect(provider.dispatchReads).toHaveLength(0);
       expect((await snapshot(storage, staged.id)).pendingPromptAttempt?.dispatchingAt).toEqual(
         expect.any(String),
       );

@@ -3,6 +3,7 @@
  * lock, and the state machine each pass advances (provisioning, stage start and
  * dispatch, review packages, validation and the multi-model review).
  */
+import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -914,6 +915,7 @@ export class BuildPipelineSupervisor {
       session.structuredResultStatus = "pending";
       session.turnStartedAt = startedAt;
       pipeline.pendingPromptAttempt = {
+        dispatchVersion: 1,
         id: randomUUID(),
         sessionId: session.sdkSessionId,
         requestId,
@@ -1160,6 +1162,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: next.id,
       sessionId: session.sdkSessionId,
       requestId,
@@ -1440,6 +1443,7 @@ export class BuildPipelineSupervisor {
       delete pipeline.failureContext;
 
       pipeline.pendingPromptAttempt = {
+        dispatchVersion: 1,
         id: randomUUID(),
         sessionId,
         requestId,
@@ -1704,6 +1708,7 @@ export class BuildPipelineSupervisor {
       if (phase === "reviewing") pipeline.structuredReviewRequestId = requestId;
     }
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: randomUUID(),
       sessionId: session.sdkSessionId,
       requestId,
@@ -1730,7 +1735,10 @@ export class BuildPipelineSupervisor {
   async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
     const attempt = pipeline.pendingPromptAttempt;
     if (!attempt) return;
-    if (attempt.dispatchingAt !== undefined && !(await this.resendProvenSafe(pipeline, provider))) {
+    if (
+      (attempt.dispatchVersion !== 1 || attempt.dispatchingAt !== undefined) &&
+      !(await this.resendProvenSafe(pipeline, provider))
+    ) {
       return;
     }
     const schema = attempt.structuredReview
@@ -1883,6 +1891,7 @@ export class BuildPipelineSupervisor {
   private async closeDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
     const attempt = pipeline.pendingPromptAttempt;
     if (attempt?.requestId !== requestId || attempt.dispatchingAt === undefined) return;
+    attempt.dispatchVersion = 1;
     delete attempt.dispatchingAt;
     await this.ctx.save(pipeline, pipeline.backendRevision).catch(() => undefined);
   }
@@ -1904,10 +1913,14 @@ export class BuildPipelineSupervisor {
       (candidate) => candidate.sdkSessionId === attempt.sessionId,
     );
     const label = session?.label.toLowerCase() ?? `${attempt.phase} step`;
-    const acceptance =
-      (await provider
-        .dispatchStatus?.(attempt.sessionId, attempt.requestId)
-        .catch(() => "unknown" as const)) ?? "unknown";
+    const acceptance = await recoveredDispatchAcceptance(
+      provider,
+      attempt.sessionId,
+      attempt.requestId,
+      attempt.resultTransport === "tool-v1"
+        ? () => this.ctx.options.workflowResults?.structured<unknown>(attempt.requestId)
+        : undefined,
+    );
     if (acceptance === "absent") return true;
     if (acceptance === "dispatched" || acceptance === "pending") {
       if (session) session.status = "running";
@@ -1923,7 +1936,7 @@ export class BuildPipelineSupervisor {
         `The ${label} dispatch was lost in a provider restart and cannot be resent safely`,
       );
     }
-    const elapsed = Date.now() - Date.parse(attempt.dispatchingAt!);
+    const elapsed = Date.now() - Date.parse(attempt.dispatchingAt ?? attempt.startedAt);
     if (elapsed >= this.ctx.reconnectDeadlineMs) {
       this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
       throw new Error(`The ${label} dispatch acceptance could not be confirmed`);

@@ -317,15 +317,23 @@ journaled but not yet started is not failed as a second restart. The Multi Revie
 preparation, consolidation and Fix steps and Build Pipeline consolidation park
 an unconfirmed `dispatching` request, and re-send an `absent` one, the same way;
 they have one writer per request, so the first rule does not arise there.
+All these paths use `provider-dispatch-recovery.ts`: a saved result for the
+exact request takes precedence over `absent`, `lost`, and `unknown`. A failed
+result read supplies no proof, and a structured result naming another request
+cannot settle the dispatch.
 
-Build Pipeline's stage prompts follow the same rule. A `pendingPromptAttempt`
-gets `dispatchingAt` durably just before its send (cleared again when the send
-is refused before the prompt was written). A later pass re-sends an attempt
-without that mark freely, since it never reached the provider; one with it is
-settled as sent on `dispatched` or `pending`, fails the stage on `lost`, is
-re-sent under the same id only on `absent`, and otherwise waits within the
-reconnect deadline and then fails closed ("dispatch acceptance could not be
-confirmed"). An older backend ignores the mark and re-sends, as before.
+Build Pipeline's stage prompts follow the same rule. A new
+`pendingPromptAttempt` carries `dispatchVersion: 1` and gets `dispatchingAt`
+durably just before its send (cleared again when the send is refused before
+the prompt was written). Only a versioned attempt without that timestamp is
+known to be prepared and may send immediately. Legacy pending attempts without
+the version may have reached the provider, even without `dispatchingAt`, so
+require the same reconciliation as marked attempts. Both settle as sent on
+`dispatched`, `pending`, or an exact-request result; without a result, `lost`
+fails the stage, `absent` permits a same-id resend, and anything else waits
+within the reconnect deadline before failing closed ("dispatch acceptance
+could not be confirmed"). Legacy attempts use their original `startedAt`
+for that deadline. An older backend ignores these fields and re-sends, as before.
 
 `review-fanout-interleaving.test.ts` checks both rules over seeded
 interleavings of commits, provider calls, cancellation, fence loss and backend

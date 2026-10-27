@@ -1,8 +1,9 @@
 # Provider proof that a prompt never arrived
 
 Checked against `main` at `93018933` (2026-10-26). Code items done on
-2026-10-27 against `main` at `863b5782`; only the live qualification below is
-left.
+2026-10-27 against `main` at `863b5782`; recovery review fixes and live
+qualification evidence are recorded below. Cursor and Grok qualification
+remain open.
 
 Split out of
 [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md),
@@ -52,12 +53,17 @@ found.
   the Multi Review step runner and Build Pipeline consolidation move an
   `absent` recovered `dispatching` request back to `prepared`; the next pass
   sends it again under the same id. A result for the exact request outranks
-  `absent` in the fan-out.
+  `absent`, `lost`, and `unknown` in all recovery paths, including stage
+  prompts, through the shared `provider-dispatch-recovery.ts` helper.
 - **Build Pipeline's stage redispatch is at-most-once** (item 3). A
   `pendingPromptAttempt` gets `dispatchingAt` durably just before each send,
   and loses it when the send is refused before the prompt was written. An
-  attempt with the mark is re-sent only on `absent`; `dispatched`/`pending`
-  settle it as sent, `lost` fails the stage, anything else waits within the
+  attempt with the mark is re-sent only on `absent`; new attempts also carry
+  `dispatchVersion: 1`, so only a versioned, unmarked attempt is known to be
+  prepared. Unversioned legacy attempts require reconciliation even without
+  the mark, using their original `startedAt` for the deadline. An exact-request
+  result or `dispatched`/`pending` settles the attempt as sent; otherwise `lost`
+  fails the stage and anything else waits within the
   reconnect deadline and then fails closed. Recorded in
   [review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery).
 
@@ -110,13 +116,49 @@ found.
    scripted provider that proves absence. Claude: the route test "forwards a
    structured schema and stable request id" asserts the claim.
 
+4. **Recovery review regressions addressed on 2026-10-27.** Structured Claude
+   preparation stopped before launch now rejects its startup promise and rolls
+   back the durable claim. `routes/session-dispatch-cancellation.test.ts`
+   holds real query preparation and separately stops and deletes the session,
+   asserting settled HTTP requests, zero SDK query starts and claim rollback.
+   Backend regressions cover legacy pending attempts with `unknown`, `lost`,
+   `dispatched`, and `absent`; the legacy deadline; a dispatch mark reloaded
+   through fresh storage and service instances; and same-id tool and structured
+   results overriding contradictory journal answers for Multi Review prepare,
+   consolidate and fix, Build Pipeline consolidation, and stage prompts.
+   `provider-dispatch-recovery.test.ts` also checks mismatched request ids and
+   failed reads do not manufacture proof.
+
 ### Qualification
 
-- A live check per bridge that a resend after a bridge restart is refused or
-  deduplicated rather than run twice: needs each provider's credentials
-  (batched with
-  [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md)).
-  Not run on this branch; see "Needs verification".
+Live checks ran on 2026-10-27 in disposable `dev:test` profile
+`qa-dispatch-0223-review`, with a fixture local environment and explicitly
+authorized Claude, Codex, Pi, Cursor and Grok credential sources. Grok seeding
+was refused because its host login had expired. Each passing check:
+
+1. Created a fresh session and observed `absent` for an unseen id.
+2. Received an authenticated reply to a unique prompt, stopped that bridge
+   through `stop_local_*_server_cmd`, and restarted it through the matching
+   start command.
+3. Retried the accepted id after restart and counted exactly one user prompt.
+4. Observed `absent` for the unseen id after restart, sent it, received the
+   authenticated reply, and retried that id. Its dispatch became `dispatched`
+   and the transcript still contained exactly one user prompt.
+
+| Provider | Live result |
+| --- | --- |
+| Claude 2.1.309 | Passed. Accepted id restored as `lost`; retry refused. The absent id ran once and its retry was deduplicated. |
+| Codex 0.164.0 | Passed. Accepted id restored as `dispatched`; retries deduplicated. |
+| Pi 1.4.0 | Passed. Accepted id restored as `dispatched`; retries deduplicated. |
+| Cursor | Incomplete. Bridge reported signed-in and the fresh id was `absent`, but the first send returned HTTP 500 (`AmbiguousPromptDispatchError`), before an authenticated reply or restart could be established. |
+| Grok | Blocked. Profile credential seeding reported the host login expired; the first send was rejected for authentication. |
+
+Only content-free statuses and prompt counts were retained. No credential,
+prompt or transcript content was logged. Bridges were stopped after each
+check; the disposable profile was stopped and reset afterwards. This live
+check uses bridge process stop/start; the deterministic SIGKILL tests cover
+the interrupted handoff. Remaining live checks stay batched with
+[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ## Constraints and rationale
 
@@ -244,10 +286,10 @@ found.
 
 ## Needs verification
 
-- The live qualification above: a real bridge restart for each provider with
-  its own credentials, showing a resent id is refused or deduplicated and an
-  `absent` id runs once. Only Claude was exercised against a real bridge
-  process (with a fake CLI); none was run against a signed-in provider.
+- Complete Cursor and Grok live qualification once Cursor can complete its
+  first prompt and a current Grok login can be seeded. Claude, Codex and Pi
+  passed signed-in bridge restart checks above; deterministic fake-CLI checks
+  remain separate evidence.
 - Whether OpenCode deduplicates a `promptAsync` that reuses a message id.
   OpenCode still never answers `absent`, so nothing here depends on it.
 

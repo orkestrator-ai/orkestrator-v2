@@ -60,3 +60,48 @@ change: staged input relay, Docker image arguments, profile cleanup and
 migrate-copy fail the same way on the base, and the rest pass alone on the
 branch. No assertion, deadline, skip or implementation was changed to hide a
 failure.
+
+
+## Recovery review implementation validation (2026-10-27)
+
+A further `mise run test` ran through `test:logged` with four concurrent groups:
+workspace four worker slots (Turbo concurrency two), root/support one, bridges
+two, and lockfile one. Artifacts: `orkestrator-test-run.mif9L3` (inner groups)
+and `orkestrator-test-run.ikB7ZC` (outer logged command), under the host temporary
+directory. The run finished in 511.6 seconds. Bridges and the protocol lockfile
+passed. Backend: 12,130 passed, 120 skipped, nine failed; desktop: 1,369 passed,
+16 skipped, two failed; root/support: 3,526 passed, two failed. Other workspace
+packages passed.
+
+Three backend failures were related fixture assumptions in
+`build-pipeline-steps.test.ts`: its provider fabricated a structured result for
+any requested id, including unsent ones. The shared recovery rule correctly
+accepted that purported result instead of resending. The fake now returns a
+result only for an id in its accepted-id set; all 34 owning-file tests passed.
+The combined pipeline/fan-out run also passed after this correction:
+
+```sh
+mise run test:logged -- --name pipeline-and-fanout -- bun test --cwd apps/backend ./src/core/build-pipeline-steps.test.ts ./src/core/build-pipeline-service-recovery.test.ts ./src/core/build-pipeline-result-reminder.test.ts ./src/core/review-fanout-dispatch.test.ts ./src/core/review-fanout-interleaving.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=4 --only-failures
+```
+
+Remaining failures match the previously recorded base failures above:
+
+- `tests/unit/migrate-copy.test.ts`: both missing-completion cases expected
+  extraction status `0` but received `2` (41.36/41.70 ms). Its isolated logged
+  rerun with `--parallel=1` repeated them: 10 passed, two failed (1.1 s).
+- `apps/desktop/scripts/dev/profile-cleanup.test.ts`: both extra
+  `keychainWarning` failures repeated alone with `--parallel=1`: 20 passed,
+  two failed (0.5 s).
+- `apps/backend/tests/docker-image.test.ts`: both missing `--add-host`
+  failures repeated alone with `--parallel=1`: 19 passed, two failed (4.2 s).
+- `apps/backend/tests/staged-input-relay.test.ts`: the four relay
+  failures match the previous runs and base comparison above. An isolated
+  logged rerun with `--parallel=1` repeated them: five passed, four failed
+  (0.3 s).
+
+These are repeatable failures, not newly classified flakes. No assertion or
+skip was changed for them. Format, lint and typechecking passed through
+`mise run check`; the new cancellation, legacy-upgrade, round-trip and
+saved-result regressions passed in their focused suites. Signed-in restart
+qualification for Claude, Codex and Pi and the remaining Cursor/Grok limits are
+recorded in [0223](../../../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md).

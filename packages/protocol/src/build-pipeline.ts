@@ -699,6 +699,8 @@ export interface PipelineReconnectAttempt extends PipelineFailureContext {
 }
 
 export interface PipelinePromptAttempt {
+  /** Version 1 distinguishes newly prepared attempts from legacy ambiguous sends. */
+  dispatchVersion?: 1;
   /** Persist the preparation contract so a restart dispatches the same schema. */
   validationPlan?: boolean;
   id: string;
@@ -713,8 +715,8 @@ export interface PipelinePromptAttempt {
   /**
    * Written durably just before the send, so a later pass knows the prompt may
    * have reached the provider and re-sends it under the same id only on the
-   * provider's proof that it did not (`absent`). Absent means "never sent":
-   * every preparation step before it is safe to retry.
+   * provider's proof that it did not (`absent`). Only a versioned attempt
+   * without this timestamp is known to be prepared and safe to send immediately.
    */
   dispatchingAt?: string;
 }
@@ -1332,6 +1334,7 @@ function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
       value.resultTransport === "structured-output-v1") &&
     (value.validationPlan === undefined || typeof value.validationPlan === "boolean") &&
     isIsoDate(value.startedAt) &&
+    (value.dispatchVersion === undefined || value.dispatchVersion === 1) &&
     (value.dispatchingAt === undefined || isIsoDate(value.dispatchingAt))
   );
 }

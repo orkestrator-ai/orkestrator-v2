@@ -281,6 +281,7 @@ export class FanoutProvider implements BuildPipelineProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
+    if (!this.sent.some((entry) => entry.requestId === requestId)) return null;
     const base = { ok: true as const, provider: "claude" as const, requestId };
     if (sessionId.includes("consolidation")) {
       if (this.missingConsolidationResult) return null;

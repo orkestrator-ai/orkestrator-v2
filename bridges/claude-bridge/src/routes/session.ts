@@ -1,3 +1,4 @@
+import { sessionOperationError } from "../services/session-manager-core.js";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 // Session management routes
 import { isValidClaudeFormContent } from "../services/claude-elicitation-schema.js";
@@ -941,10 +942,17 @@ session.post("/:id/prompt", async (c) => {
             onQueryStarted: () => resolveStarted?.(),
           },
         );
-        void completion.catch((error) => {
-          rejectStarted?.(error);
-          console.error("[session] Error processing prompt:", error);
-        });
+        void completion.then(
+          () => {
+            // Preparation can be stopped without throwing. Completion before
+            // the SDK handoff is an unsent turn, so release its durable claim.
+            rejectStarted?.(sessionOperationError("conflict", "Prompt stopped before launch"));
+          },
+          (error) => {
+            rejectStarted?.(error);
+            console.error("[session] Error processing prompt:", error);
+          },
+        );
         return { started, completion };
       });
       if (dispatchState === "not-found") {

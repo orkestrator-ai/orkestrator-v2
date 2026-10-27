@@ -18,6 +18,7 @@
  * reviewer field it writes is a durable one, because the turn it describes runs
  * inside the environment and outlives this process.
  */
+import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { randomUUID } from "node:crypto";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
@@ -1909,22 +1910,14 @@ export class ReviewFanoutRunner {
     provider: BuildPipelineProvider,
     reviewer: ReviewerRecord,
   ): Promise<ProviderDispatchStatus> {
-    const sessionId = reviewer.providerSessionId!;
-    const requestId = reviewer.requestId!;
-    const status = await provider
-      .dispatchStatus?.(sessionId, requestId)
-      .catch(() => "unknown" as const);
-    if (status === "dispatched" || status === "pending") return "dispatched";
-    let proven = false;
-    try {
-      proven =
-        reviewer.resultTransport === "tool-v1"
-          ? Boolean(await this.host.readResult?.<unknown>(requestId))
-          : (await provider.structured<unknown>(sessionId, requestId))?.requestId === requestId;
-    } catch {
-      // A failed read proves nothing either way.
-    }
-    return proven ? "dispatched" : (status ?? "unknown");
+    return recoveredDispatchAcceptance(
+      provider,
+      reviewer.providerSessionId!,
+      reviewer.requestId!,
+      reviewer.resultTransport === "tool-v1"
+        ? () => this.host.readResult?.<unknown>(reviewer.requestId!)
+        : undefined,
+    );
   }
 
   /** Ends a reviewer that can make no further progress, best-effort aborting its turn. */

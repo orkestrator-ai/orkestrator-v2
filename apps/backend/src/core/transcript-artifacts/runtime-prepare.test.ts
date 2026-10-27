@@ -9,8 +9,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { PreviewRunner } from "./contracts.js";
+import { workerContextDigest } from "./preview-worker-context-digest.js";
 import {
   localWorkerPinFile,
+  prepareWorkerImage,
   readPublishedWorkerImage,
   resolvePublishedPinFile,
 } from "./preview-worker-prepare.js";
@@ -34,11 +36,15 @@ function scratch(prefix: string): string {
   return dir;
 }
 
-/** A fake `docker` CLI: image present only after a build or pull; every call is logged. */
-function fakeDocker(): { cli: string; log: () => string[][] } {
+/**
+ * A fake `docker` CLI: image present only after a build or pull; every call
+ * is logged. A label inspect prints `label` (the pulled image's context label).
+ */
+function fakeDocker(label = "", present = false): { cli: string; log: () => string[][] } {
   const dir = scratch("ork-fake-docker-");
   const log = path.join(dir, "calls.log");
   const built = path.join(dir, "built");
+  if (present) writeFileSync(built, "");
   const cli = path.join(dir, "docker");
   writeFileSync(
     cli,
@@ -48,7 +54,10 @@ case "$1" in
   version) echo 29.8.0; exit 0 ;;
   build) touch '${built}'; echo '${BUILT_ID}'; exit 0 ;;
   pull) touch '${built}'; exit 0 ;;
-  image) if [ -f '${built}' ]; then echo '${BUILT_ID}'; exit 0; fi; exit 1 ;;
+  image)
+    if [ ! -f '${built}' ]; then exit 1; fi
+    case "$*" in *Labels*) echo '${label}' ;; *) echo '${BUILT_ID}' ;; esac
+    exit 0 ;;
   ps) exit 0 ;;
   *) exit 1 ;;
 esac
@@ -232,8 +241,10 @@ describe("worker preparation", () => {
     expect(runtime.workerPreparation()).toMatchObject({ state: "ready", image: BUILT_ID });
   });
 
-  test("a published digest is pulled exactly; an explicit process configuration is not switched", async () => {
-    const docker = fakeDocker();
+  test("a published digest built from the shipped context is pulled exactly; an explicit process configuration is not switched", async () => {
+    const context = buildContext();
+    const contextDigest = await workerContextDigest(context);
+    const docker = fakeDocker(contextDigest);
     const pinDir = scratch("ork-published-pin-");
     const pinFile = path.join(pinDir, "published-image.json");
     writeFileSync(
@@ -242,6 +253,7 @@ describe("worker preparation", () => {
         image: "ghcr.io/example/artifact-preview-worker",
         tag: "1",
         digest: DIGEST,
+        contextDigest,
       }),
     );
     const runtime = await createTranscriptArtifactRuntime({
@@ -250,7 +262,7 @@ describe("worker preparation", () => {
         ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: docker.cli,
         ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "process",
       },
-      workerBuildContext: { context: null, stageScript: null },
+      workerBuildContext: { context, stageScript: null },
       publishedPinFile: pinFile,
       imagePinFile: null,
     });
@@ -271,6 +283,129 @@ describe("worker preparation", () => {
       `ghcr.io/example/artifact-preview-worker@${DIGEST}`,
     ]);
     expect(docker.log().some((args) => args[0] === "build")).toBe(false);
+    // The pulled image's context label is checked against the pin.
+    expect(docker.log().at(-1)?.join(" ")).toBe(
+      `image inspect --format {{index .Config.Labels "orkestrator.artifact-preview-worker.context"}} ghcr.io/example/artifact-preview-worker@${DIGEST}`,
+    );
+  });
+
+  test("a pin for another context, a failed pull or a disagreeing label falls back to building", async () => {
+    const context = buildContext();
+    const contextDigest = await workerContextDigest(context);
+    const other = `sha256:${"9".repeat(64)}`;
+    const published = (digest: string) => ({
+      reference: `ghcr.io/example/artifact-preview-worker@${DIGEST}`,
+      repository: "ghcr.io/example/artifact-preview-worker",
+      digest: DIGEST,
+      contextDigest: digest,
+    });
+    const prepare = (docker: { cli: string }, digest: string) =>
+      prepareWorkerImage({
+        docker: docker.cli,
+        tag: DEFAULT_PREVIEW_WORKER_IMAGE,
+        dataDir: scratch("ork-prepare-fallback-"),
+        published: published(digest),
+        buildContext: { context, stageScript: null },
+      });
+
+    // Another context: never pulled.
+    const stale = fakeDocker(contextDigest);
+    expect(await prepare(stale, other)).toEqual({
+      ok: true,
+      method: "build",
+      reference: BUILT_ID,
+      pinned: true,
+      publishedSkipped: "context_mismatch",
+    });
+    expect(stale.log().some((args) => args[0] === "pull")).toBe(false);
+
+    // The registry served an image labelled for another context.
+    const mislabelled = fakeDocker(other);
+    expect(await prepare(mislabelled, contextDigest)).toMatchObject({
+      ok: true,
+      method: "build",
+      reference: BUILT_ID,
+      publishedSkipped: "label_mismatch",
+    });
+    expect(mislabelled.log().map((args) => args[0])).toEqual([
+      "version",
+      "pull",
+      "image",
+      "build",
+      "image",
+    ]);
+
+    // Docker cannot pull at all.
+    const offline = scratch("ork-fake-docker-offline-");
+    const offlineCli = path.join(offline, "docker");
+    writeFileSync(
+      offlineCli,
+      `#!/bin/sh
+case "$1" in
+  version) echo 29.8.0; exit 0 ;;
+  build) echo '${BUILT_ID}'; exit 0 ;;
+  image) case "$*" in *Labels*) exit 1 ;; *) echo '${BUILT_ID}'; exit 0 ;; esac ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    chmodSync(offlineCli, 0o755);
+    expect(await prepare({ cli: offlineCli }, contextDigest)).toMatchObject({
+      ok: true,
+      method: "build",
+      publishedSkipped: "pull_failed",
+    });
+  });
+
+  test("at startup a present published image is preferred only when built from the shipped context", async () => {
+    const context = buildContext();
+    const contextDigest = await workerContextDigest(context);
+    const reference = `ghcr.io/example/artifact-preview-worker@${DIGEST}`;
+    const start = async (pinned: string) => {
+      const pinFile = path.join(scratch("ork-startup-pin-"), "published-image.json");
+      writeFileSync(
+        pinFile,
+        JSON.stringify({
+          image: "ghcr.io/example/artifact-preview-worker",
+          digest: DIGEST,
+          contextDigest: pinned,
+        }),
+      );
+      const runtime = await createTranscriptArtifactRuntime({
+        dataDir: scratch("ork-runtime-startup-"),
+        env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker(contextDigest, true).cli },
+        workerBuildContext: { context, stageScript: null },
+        publishedPinFile: pinFile,
+        imagePinFile: null,
+      });
+      cleanups.push(() => runtime.close());
+      return runtime.config.workerImage?.reference;
+    };
+    expect(await start(contextDigest)).toBe(reference);
+    // A pin left from another context names an image built from other sources.
+    expect(await start(`sha256:${"9".repeat(64)}`)).toBe(DEFAULT_PREVIEW_WORKER_IMAGE);
+  });
+
+  test("a published pin alone, with no build context to check it against, is not usable", async () => {
+    const pinFile = path.join(scratch("ork-published-only-"), "published-image.json");
+    writeFileSync(
+      pinFile,
+      JSON.stringify({
+        image: "ghcr.io/example/artifact-preview-worker",
+        digest: DIGEST,
+        contextDigest: DIGEST,
+      }),
+    );
+    const runtime = await createTranscriptArtifactRuntime({
+      dataDir: scratch("ork-runtime-published-only-"),
+      env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker().cli },
+      workerBuildContext: { context: null, stageScript: null },
+      publishedPinFile: pinFile,
+      imagePinFile: null,
+    });
+    cleanups.push(() => runtime.close());
+    expect(runtime.workerPreparation()).toMatchObject({ available: false });
+    expect(runtime.workerPreparation().reason).toContain("build context");
   });
 
   test("without Docker or a build context, preparation is unavailable and says why", async () => {
@@ -298,23 +433,31 @@ describe("worker preparation", () => {
 });
 
 describe("published image pin", () => {
-  test("only a valid repository and digest are accepted; the checked-in pin is unpublished", () => {
+  test("only a valid repository, digest and context digest are accepted; the checked-in pin is unpublished", () => {
     const dir = scratch("ork-pin-");
     const write = (value: unknown) => {
       const file = path.join(dir, `${Math.random()}.json`);
       writeFileSync(file, JSON.stringify(value));
       return file;
     };
-    expect(readPublishedWorkerImage(write({ image: "ghcr.io/a/b", digest: DIGEST }))).toEqual({
+    expect(
+      readPublishedWorkerImage(
+        write({ image: "ghcr.io/a/b", digest: DIGEST, contextDigest: BUILT_ID }),
+      ),
+    ).toEqual({
       reference: `ghcr.io/a/b@${DIGEST}`,
       repository: "ghcr.io/a/b",
       digest: DIGEST,
+      contextDigest: BUILT_ID,
     });
     for (const bad of [
-      { image: "ghcr.io/a/b:latest", digest: DIGEST },
-      { image: "ghcr.io/a/b; rm -rf /", digest: DIGEST },
-      { image: "ghcr.io/a/b", digest: "sha256:short" },
-      { image: null, digest: null },
+      { image: "ghcr.io/a/b:latest", digest: DIGEST, contextDigest: BUILT_ID },
+      { image: "ghcr.io/a/b; rm -rf /", digest: DIGEST, contextDigest: BUILT_ID },
+      { image: "ghcr.io/a/b", digest: "sha256:short", contextDigest: BUILT_ID },
+      // A pin that does not name its build context is never pulled.
+      { image: "ghcr.io/a/b", digest: DIGEST },
+      { image: "ghcr.io/a/b", digest: DIGEST, contextDigest: "sha256:short" },
+      { image: null, digest: null, contextDigest: null },
     ])
       expect(readPublishedWorkerImage(write(bad))).toBeNull();
     const checkedIn = resolvePublishedPinFile();

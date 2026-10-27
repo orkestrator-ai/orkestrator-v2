@@ -57,6 +57,7 @@ import {
   canPrepareWorker,
   localWorkerPinFile,
   prepareWorkerImage,
+  publishedMatchesContext,
   readPublishedWorkerImage,
   resolvePublishedPinFile,
   resolveWorkerBuildContext,
@@ -401,7 +402,9 @@ export async function createTranscriptArtifactRuntime(
     ).catch(() => ({ code: null, stdout: "" }));
 
   // A published, digest-pinned worker that is present locally is preferred
-  // over the local tag; an explicit ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins.
+  // over the local tag when it was built from the context this backend ships
+  // (a pin left over from another context is ignored); an explicit
+  // ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins.
   let configuredImage = explicitImage ?? DEFAULT_PREVIEW_WORKER_IMAGE;
   let dockerAnswered: boolean | null = null;
   if (
@@ -412,7 +415,12 @@ export async function createTranscriptArtifactRuntime(
   ) {
     const present = await inspectImage(published.reference);
     dockerAnswered = present.code !== null;
-    if (present.code === 0) configuredImage = published.reference;
+    if (
+      present.code === 0 &&
+      buildContext.context &&
+      (await publishedMatchesContext(published, buildContext.context))
+    )
+      configuredImage = published.reference;
   }
 
   let isolation: "process" | "container" | "disabled";
@@ -537,7 +545,7 @@ export async function createTranscriptArtifactRuntime(
         reason:
           "ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE names the worker image; prepare it with Docker directly",
       };
-    if (!canPrepareWorker({ published, buildContext }))
+    if (!canPrepareWorker({ buildContext }))
       return {
         available: false,
         reason: "No preview worker build context ships with this installation",
@@ -612,6 +620,10 @@ export async function createTranscriptArtifactRuntime(
       ...(options.prepareDocker ? { runDocker: options.prepareDocker } : {}),
     });
     const finishedAt = new Date().toISOString();
+    if (outcome.publishedSkipped)
+      options.logger?.info?.(
+        `[transcript-artifacts] published preview worker image not used (${outcome.publishedSkipped}); building locally`,
+      );
     if (!outcome.ok) {
       preparationState = {
         available: true,

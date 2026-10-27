@@ -8,6 +8,11 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
+    "@orkestrator/backend#build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docker/artifact-preview-worker/**"],
+      "outputs": ["dist/**"]
+    },
     "typecheck": {
       "dependsOn": ["^typecheck"],
       "outputs": []

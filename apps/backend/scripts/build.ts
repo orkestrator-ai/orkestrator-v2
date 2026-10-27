@@ -124,3 +124,17 @@ await cp(
   path.join(workerDocker, "published-image.json"),
   path.join(artifactRuntime, "published-image.json"),
 );
+// The pin is used only for the context it was published from (see
+// preview-worker-context-digest.ts); say so when this build's context differs,
+// because packaged installs of it will build the worker locally instead.
+const { workerContextDigest } = await import(
+  path.join(packageRoot, "src/core/transcript-artifacts/preview-worker-context-digest.ts")
+);
+const contextDigest = await workerContextDigest(workerContext);
+const publishedPin = (await Bun.file(path.join(workerDocker, "published-image.json")).json()) as {
+  contextDigest?: unknown;
+};
+if (publishedPin.contextDigest !== contextDigest)
+  console.log(
+    `Preview worker: no published image for build context ${contextDigest}; installs build it locally`,
+  );

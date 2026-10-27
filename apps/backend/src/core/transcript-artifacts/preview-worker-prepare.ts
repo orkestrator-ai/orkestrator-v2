@@ -4,9 +4,11 @@
  * without a restart (`transcript_artifact_prepare_worker`).
  *
  * Two fixed routes, chosen by checked-in data only, never by a request:
- * - `pull`: the published, digest-pinned image recorded by
- *   docker/artifact-preview-worker/publish.sh in `published-image.json`
- *   (shipped as `artifact-runtime/published-image.json`);
+ * - `pull`: the published, digest-pinned image recorded in
+ *   `published-image.json` (shipped as `artifact-runtime/published-image.json`)
+ *   by the publish-preview-worker workflow or publish.sh, used only when the
+ *   pin's context digest equals the digest of the context this backend ships
+ *   and the pulled image carries the same digest label;
  * - `build`: `docker build` of the worker build context the backend build
  *   ships in `artifact-runtime/worker-context/` (Dockerfile, npm manifest and
  *   lockfile, worker bundle, pinned renderer bundles, licenses). In a source
@@ -25,6 +27,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runDocker } from "./preview-supervisor.js";
+import {
+  WORKER_CONTEXT_DIGEST,
+  WORKER_CONTEXT_LABEL,
+  workerContextDigest,
+} from "./preview-worker-context-digest.js";
 
 /** Upper bound for a worker image build or pull (base image download included). */
 export const WORKER_PREPARE_TIMEOUT_MS = 10 * 60_000;
@@ -40,6 +47,8 @@ export interface PublishedWorkerImage {
   reference: string;
   repository: string;
   digest: string;
+  /** Digest of the build context the image was built from (`workerContextDigest`). */
+  contextDigest: string;
 }
 
 function moduleDirectory(): string {
@@ -78,13 +87,28 @@ export function readPublishedWorkerImage(
 ): PublishedWorkerImage | null {
   if (!file) return null;
   try {
-    const pin = JSON.parse(readFileSync(file, "utf8")) as { image?: unknown; digest?: unknown };
-    if (typeof pin.image !== "string" || typeof pin.digest !== "string") return null;
-    if (!REPOSITORY.test(pin.image) || !DIGEST.test(pin.digest)) return null;
+    const pin = JSON.parse(readFileSync(file, "utf8")) as {
+      image?: unknown;
+      digest?: unknown;
+      contextDigest?: unknown;
+    };
+    if (
+      typeof pin.image !== "string" ||
+      typeof pin.digest !== "string" ||
+      typeof pin.contextDigest !== "string"
+    )
+      return null;
+    if (
+      !REPOSITORY.test(pin.image) ||
+      !DIGEST.test(pin.digest) ||
+      !WORKER_CONTEXT_DIGEST.test(pin.contextDigest)
+    )
+      return null;
     return {
       reference: `${pin.image}@${pin.digest}`,
       repository: pin.image,
       digest: pin.digest,
+      contextDigest: pin.contextDigest,
     };
   } catch {
     return null;
@@ -123,9 +147,26 @@ function stageContext(script: string, target: string): Promise<boolean> {
   });
 }
 
+/**
+ * Why a published pin was not used (content-free): its context digest is not
+ * this backend's, the pull failed, or the pulled image's label disagreed.
+ */
+export type PublishedSkipReason = "context_mismatch" | "pull_failed" | "label_mismatch";
+
 export type WorkerPrepareResult =
-  | { ok: true; method: "build" | "pull"; reference: string; pinned: true }
-  | { ok: false; method: "build" | "pull" | null; reason: string };
+  | {
+      ok: true;
+      method: "build" | "pull";
+      reference: string;
+      pinned: true;
+      publishedSkipped?: PublishedSkipReason;
+    }
+  | {
+      ok: false;
+      method: "build" | "pull" | null;
+      reason: string;
+      publishedSkipped?: PublishedSkipReason;
+    };
 
 export interface WorkerPrepareOptions {
   docker: string;
@@ -139,19 +180,31 @@ export interface WorkerPrepareOptions {
   runDocker?: typeof runDocker;
 }
 
-export function canPrepareWorker(
-  options: Pick<WorkerPrepareOptions, "published" | "buildContext">,
-): boolean {
-  return (
-    options.published !== null ||
-    options.buildContext.context !== null ||
-    options.buildContext.stageScript !== null
-  );
+/**
+ * A build context (shipped or stageable) is required for both routes: a
+ * published pin is only trusted once the context it names is known to be
+ * this backend's.
+ */
+export function canPrepareWorker(options: Pick<WorkerPrepareOptions, "buildContext">): boolean {
+  return options.buildContext.context !== null || options.buildContext.stageScript !== null;
+}
+
+/** Whether `published` was built from the build context in `context`. */
+export async function publishedMatchesContext(
+  published: PublishedWorkerImage,
+  context: string,
+): Promise<boolean> {
+  try {
+    return (await workerContextDigest(context)) === published.contextDigest;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Pull the published digest, or build the shipped context. Returns the
- * content-addressed reference to run, or a content-free reason.
+ * Pull the published digest when it was built from this backend's context,
+ * or build that context. Returns the content-addressed reference to run, or a
+ * content-free reason.
  */
 export async function prepareWorkerImage(
   options: WorkerPrepareOptions,
@@ -170,31 +223,6 @@ export async function prepareWorkerImage(
       reason: "Docker is not installed or its daemon is not running",
     };
 
-  if (options.published) {
-    const pulled = await docker(
-      options.docker,
-      ["pull", "--quiet", options.published.reference],
-      timeoutMs,
-    );
-    if (pulled.code === 0) {
-      const inspect = await docker(options.docker, [
-        "image",
-        "inspect",
-        "--format",
-        "{{.Id}}",
-        options.published.reference,
-      ]);
-      if (inspect.code === 0)
-        return { ok: true, method: "pull", reference: options.published.reference, pinned: true };
-    }
-    if (!options.buildContext.context && !options.buildContext.stageScript)
-      return {
-        ok: false,
-        method: "pull",
-        reason: "The published preview worker image could not be pulled",
-      };
-  }
-
   let context = options.buildContext.context;
   let staged: string | null = null;
   try {
@@ -202,18 +230,48 @@ export async function prepareWorkerImage(
       if (!options.buildContext.stageScript)
         return {
           ok: false,
-          method: "build",
+          method: options.published ? "pull" : "build",
           reason: "No preview worker build context ships with this installation",
         };
       staged = mkdtempSync(path.join(tmpdir(), "ork-preview-worker-context-"));
       if (!(await stageContext(options.buildContext.stageScript, staged)))
         return {
           ok: false,
-          method: "build",
+          method: options.published ? "pull" : "build",
           reason: "The preview worker build context could not be staged",
         };
       context = staged;
     }
+
+    let publishedSkipped: PublishedSkipReason | undefined;
+    if (options.published) {
+      const published = options.published;
+      if (!(await publishedMatchesContext(published, context))) {
+        publishedSkipped = "context_mismatch";
+      } else {
+        const pulled = await docker(
+          options.docker,
+          ["pull", "--quiet", published.reference],
+          timeoutMs,
+        );
+        if (pulled.code !== 0) {
+          publishedSkipped = "pull_failed";
+        } else {
+          const label = await docker(options.docker, [
+            "image",
+            "inspect",
+            "--format",
+            `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`,
+            published.reference,
+          ]);
+          if (label.code === 0 && label.stdout.trim() === published.contextDigest)
+            return { ok: true, method: "pull", reference: published.reference, pinned: true };
+          publishedSkipped = label.code === 0 ? "label_mismatch" : "pull_failed";
+        }
+      }
+    }
+    const skipped = publishedSkipped ? { publishedSkipped } : {};
+
     const built = await docker(
       options.docker,
       [
@@ -232,6 +290,7 @@ export async function prepareWorkerImage(
       return {
         ok: false,
         method: "build",
+        ...skipped,
         reason:
           built.code === null
             ? "Building the preview worker image timed out or Docker could not be started"
@@ -249,10 +308,11 @@ export async function prepareWorkerImage(
       return {
         ok: false,
         method: "build",
+        ...skipped,
         reason: "The built preview worker image could not be inspected",
       };
     await writePin(localWorkerPinFile(options.dataDir), options.tag, id);
-    return { ok: true, method: "build", reference: id, pinned: true };
+    return { ok: true, method: "build", reference: id, pinned: true, ...skipped };
   } finally {
     if (staged) rmSync(staged, { recursive: true, force: true });
   }

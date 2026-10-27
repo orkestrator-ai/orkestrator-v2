@@ -4,6 +4,157 @@ Checked against `main` at `459d2944` plus the 0019 qualification branch
 (2026-10-23). Worked through on 2026-10-26 against `main` at `93018933`
 (branch `todo-0061-container-qual-follow-ups-56ae439cf200`).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Settle agent state after a stop (items 1–2)**: a stopped session reads idle, and every stop path withdraws requests. Status: done.
+2. **Failure classification (items 3–5)**: specific boot codes, `daemon-unavailable` during a rebuild copy, and a lost daemon is not a legacy image. Status: done.
+3. **Busy local Cursor bridge keeps its key (item 6)**. Status: done.
+4. **Grok login from the agent-test profile (item 7)**: the code is done; the live `grok-container-login.spec.ts` run is owed. Status: blocked (on a current host Grok login).
+5. **Container bridge logs (item 8)**: mawk buffering fixed with `-W interactive`. Status: done.
+6. **OpenCode egress (item 9)**: `opencode.ai` is a required host. Status: done.
+7. **Provider refusals in the transcript (item 10)**: Codex and Pi get a status row; the Pi refusal has never been reproduced live. Status: partly done (Pi live evidence owed).
+8. **Budget warning on save (item 11)**. Status: done.
+9. **Harness cleanup and orphaned setup (items 12–13)**. Status: done.
+10. **Retire the file**: what happens to it once tasks 4 and 7 have their evidence. Status: open.
+
+### 1. Settle agent state after a stop
+
+**Problem.** A stopped session stayed `waiting`, so sends and moves were refused as busy.
+
+**Context.** Decisions 1–2: a quiet settle to `idle` with `stoppedMidTurn`, an explicit call in `quiesceRuntime`, and a sweep catch-all.
+
+**Investigation.** Present at HEAD: `settleStoppedSessions` (`apps/backend/src/core/native-agent-launch-activity-reconciler.ts:327`, called at `:420` and from `native-agent-service.ts:455`), `stoppedMidTurn` (`:69`, `:303`) and `settleStoppedRuntimeAgents` (`stopped-runtime-agents.ts`, imported at `commands-environment.ts:53`). The known limit stands: `stoppedMidTurn` is in memory only, so a backend restart while stopped turns the run's outcome into `unknown`.
+
+**Decisions.** None: done. The in-memory flag is a recorded con of decision 1, not open work.
+
+### 2. Failure classification
+
+**Problem.** Boot, copy and manifest failures were reported under misleading codes.
+
+**Context.** Decisions 7–8.
+
+**Investigation.** `parseExitedBootRecord` (`apps/backend/src/core/container-readiness.ts:102`), `docker-cli-errors.ts`, `docker-copy-out.ts` and `dockerDaemonUnreachableNow` (used by `container-replacement.ts:21`) all exist. On 2026-10-26, rootful CI (run 40409285999) passed the readiness and rebuild-fault suites on linux-x64 and linux-arm64, in addition to the file's Docker Desktop runs.
+
+**Decisions.** None: done, with live evidence on both daemons.
+
+### 3. Busy local Cursor bridge keeps its key
+
+**Problem.** A key change replaced a busy local Cursor bridge mid-turn.
+
+**Context.** It now matches the container path.
+
+**Investigation.** Covered by `commands-local-bridge-reuse.test.ts`, as the file says.
+
+**Decisions.** None: done.
+
+### 4. Grok login from the agent-test profile
+
+**Problem.** Agent-test containers staged the host's real Grok login instead of the profile's snapshot. The code fix has not been run against a real login.
+
+**Context.** This also unblocks the Grok half of C21 in [0019](0019-container-platform-qualification.md). The procedure is in `docs/development/agent-testing.md:122` ("Grok container login qualification"), gated by `ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN=1` (`e2e/agent-testing/grok-container-login.spec.ts:10`).
+
+**Investigation.** `grokStagingHome` is at `apps/backend/src/core/portable-inputs.ts:184`. The host still has no usable Grok login: `~/.grok/` has an `auth.json.lock` dated 2026-10-26 but no `auth.json`. The auto-memory note on Grok ACP "Invalid params" (1.0.41 failing at `session/new`) also concerns this host's Grok setup.
+
+**Decisions.**
+
+- **How to unblock it?**
+  - **Ask the user to run `grok login` on the host, then run the spec in an isolated `dev:test` profile following agent-testing.md (recommended).**
+    - Pros: the agreed procedure; also closes 0019's C21 Grok half.
+    - Cons: needs the user's interactive login; Grok's CLI version on the host may need checking first because of the ACP issue.
+  - **Use a disposable Grok account on a second machine.**
+    - Pros: no host credential involved.
+    - Cons: needs another account and machine; the evidence would then not be on the qualification host.
+  - **Defer and rely on the unit and staging tests.**
+    - Pros: no work now.
+    - Cons: the `expires_at == 2000-01-01` assertion, which would have caught the old staging, never runs.
+
+### 5. Container bridge logs
+
+**Problem.** Container bridge logs were missing because mawk block-buffers a piped stdin.
+
+**Context.** Images built before the fix keep the old behaviour until they are rebuilt.
+
+**Investigation.** The fix is in `docker/orkestrator-log-writer.sh` (comment at `:28`). `ce205ad3` ("keep bridge logs streaming and bounded", #1317) has since touched the same area.
+
+**Decisions.** None: done.
+
+### 6. OpenCode egress
+
+**Problem.** OpenCode's zero-config providers failed in restricted mode.
+
+**Context.** Decision 3.
+
+**Investigation.** `packages/protocol/src/network-allowlist.ts:119` lists `opencode.ai` for OpenCode. `docker/default-allowed-domains` is generated from it and pinned by `version-drift.test.ts`.
+
+**Decisions.** None: done.
+
+### 7. Provider refusals in the transcript
+
+**Problem.** A provider's refusal of a turn (for example a model the login does not offer) left no trace in the transcript.
+
+**Context.** Decision 4: a `status` row in Codex and Pi, and `session start` stops pinning the configured default. Its recorded con remains: `session start`'s receipt still reports the configured model as the resolved one when the runtime swaps it.
+
+**Investigation.** Codex: `recordProviderFailure` (`bridges/codex-bridge/src/app-server-runtime-lifecycle.ts:1154`), verified live. Pi: `appendTurnFailure` (`bridges/pi-bridge/src/translate.ts`, used in `prompt.ts:29`), tested only on a unit fixture of `stopReason: "error"`. The Pi login on this host answered every model it was asked for.
+
+**Decisions.**
+
+- **How to get the Pi live evidence?**
+  - **Provoke a refusal with a provider the user already has, for example an OpenRouter or API-key provider asked for a model id the key cannot use, in an isolated `dev:test` profile (recommended).**
+    - Pros: a real `stopReason: "error"` from Pi's SDK; no new account needed if such a key exists.
+    - Cons: depends on which Pi providers the host is signed in to; uses real credentials, so prompts must stay trivial.
+  - **Accept the unit fixture and drop the item.**
+    - Pros: no live dependency.
+    - Cons: a provider whose error shape differs (Pi fronts about fifteen) could still leave an empty row.
+- **Fix the receipt's resolved-model report?**
+  - **Leave it out of this file and open a new todo if it matters (recommended).**
+    - Pros: README rule; it is a reporting gap, not a refusal.
+    - Cons: CLI users see a model that did not run.
+  - **Treat it as part of item 10.**
+    - Pros: one place.
+    - Cons: adds new work to an existing file, which the README forbids.
+
+### 8. Budget warning on save
+
+**Problem.** A saved global budget could name an axis the daemon cannot enforce, and nothing said so.
+
+**Context.** Decision 5.
+
+**Investigation.** `unenforceableOnThisDaemon` is used by `apps/backend/src/core/commands-registry-environments.ts:14`.
+
+**Decisions.** None: done.
+
+### 9. Harness cleanup and orphaned setup
+
+**Problem.** Live suites leaked resources, and a setup retry raced an orphaned setup.
+
+**Context.** Decision 6 (wait for the orphan, never run setup twice).
+
+**Investigation.** `removeLabelledResources` (`apps/backend/tests/container-live-cleanup.ts:34-52`) and `CONTAINER_WORKSPACE_SETUP_WAIT_MESSAGE` (`apps/backend/src/core/container-scripts.ts:14`) are present. Note that this cleanup covers only resources the live suites label. The probe-network leak in [0241](0241-leaked-reach-probe-networks.md) comes from backends outside these suites.
+
+**Decisions.** None: done.
+
+### 10. Retire the file
+
+**Problem.** Eleven of thirteen items are done. Only live evidence for items 7 and 10 (Pi) remains, and both depend on external logins.
+
+**Context.** README: delete a file once its last item is done, after moving its durable behaviour. The file already lists where that behaviour lives (`container-lifecycle.md`, `public-cli.md` and the others).
+
+**Investigation.** The folder index rates the file Medium because of the Grok spec. The Pi refusal is only a "Needs verification" item.
+
+**Decisions.**
+
+- **Keep the file open for both pieces of evidence?**
+  - **Keep it open for the Grok spec; close the Pi item as accepted on unit evidence unless task 7's first option is cheap on this host (recommended).**
+    - Pros: the Grok spec guards a credential-isolation fix and unblocks 0019; the Pi row is a display improvement.
+    - Cons: the Pi path is never seen live.
+  - **Move both runs into [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) and delete this file now.**
+    - Pros: live runs batched in one place, as the README suggests.
+    - Cons: 0031 is an existing file, so new items cannot be added to it; this needs a new file or a rule exception.
+
 The 2026-10-23 qualification pass for
 [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
 fixed what it found that was small and in scope. This file holds the gaps it

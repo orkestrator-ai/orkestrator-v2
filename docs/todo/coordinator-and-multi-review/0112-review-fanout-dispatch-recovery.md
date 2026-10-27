@@ -1,5 +1,96 @@
 # Review fan-out dispatch recovery
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: both code items are done and merged, the open question
+and the needs-verification item are answered, and the remaining provider work
+lives in 0223.
+
+1. **Retire the file**: the branch it was kept for has merged; delete it under
+   the README rules. Status: open.
+2. **Optional live restart observation** (Qualification): see the new
+   `interruptedRequestId` on a real killed-Claude run. Status: deferred (the
+   file says it is not needed).
+
+### 1. Retire the file
+
+**Problem.** The file is kept "only until this branch's Multi Review reads it,
+then deleted". The branch has merged, so the file and its index row
+(`0000-index.md:21`, Finished: Yes) are stale.
+
+**Context.** README "Maintaining the folders": move durable behaviour into
+`architecture/`, delete the file, remove its index row. Its split-out work is
+[0223](0223-provider-non-delivery-proof.md), which is open and rated Medium.
+
+**Investigation.** The fix landed as `71abfcfb` "fix(review): settle recovered
+fan-out dispatches on proof and scope restart notices (todo 0112) (#1288)", an
+ancestor of `863b5782`. Every reference still holds:
+`ReviewFanoutRunner.commit(transition?)` at
+`apps/backend/src/core/review-fanout.ts:762` (apply at `:768`, revert at
+`:773`); `recoveredDispatchAcceptance` at `review-fanout.ts:1897`, called at
+`:1278`, with the "lost in a provider restart" and "could not be confirmed"
+errors at `:1285` and `:1291`; `readProviderStatus` and the `turnSettled:
+false` reading at `apps/backend/src/core/agent-provider-contract.ts:256-272`;
+`ProviderDispatchStatus = "dispatched" | "pending" | "unknown" | "lost"` at
+`agent-provider-contract.ts:346`; Codex `DispatchJournal.requestIdForTurn` at
+`bridges/codex-bridge/src/sessions/dispatch-journal.ts:478`, used at
+`app-server-runtime-sessions.ts:1310`; Claude's `interruptedRequestId` across
+`session-manager-turn-interruption.ts` and the prompt modules;
+`REGRESSION_SEEDS` with fence-loss 861 and 1251 at
+`apps/backend/src/core/review-fanout-interleaving.test.ts:31-34`. The durable
+behaviour is already written up in
+`docs/architecture/review-preparation.md:289` ("Dispatch recovery") and
+`docs/architecture/agent-engines.md:1109` ("Restart continuation"). Inbound
+links: 0027 (lines 560, 912) and 0223 (lines 6, 106), plus the code comment
+`// 0112: …` in `review-fanout-interleaving.test.ts:33`.
+
+**Decisions.**
+
+- **What to do with the file now?**
+  - **Delete it and its index row now; repoint the 0027 and 0223 links to
+    `review-preparation.md#dispatch-recovery` (recommended).**
+    - Pros: follows the README rule; the architecture docs already carry the
+      behaviour; 0223 already restates the per-bridge survey it needs.
+    - Cons: decisions 8 and 9 (why `pending`, why the dispatch-journal
+      confirmation) are richer here than in `review-preparation.md`, so copy
+      the gist first or lose it; the `// 0112:` test comment then names a
+      deleted file (harmless, the number is never reused).
+  - **Keep it until 0223 is finished, as background for that work.**
+    - Pros: 0223's implementer has the full history in one place.
+    - Cons: contradicts the README and the file's own "kept only until"
+      line; 0223 already summarises what it needs.
+
+### 2. Optional live restart observation
+
+**Problem.** The `interruptedRequestId` field and the `pending` dispatch answer
+are proven by deterministic tests and the real-bridge
+`tests/multi-review-claude-bridge-restart.test.ts`, not by a live provider run.
+
+**Context.** The Qualification section says no live run can force these
+interleavings, and 0027's killed-Claude case would only show the field.
+
+**Investigation.** The real-bridge test exercises the actual Claude bridge
+process restart (8 of 8 passes recorded in decision 8), which covers the part a
+live run could add except the model itself. Nothing in 0024 or 0027 lists it as
+a required check.
+
+**Decisions.**
+
+- **Keep a live observation as a task?**
+  - **No: drop it with the file (recommended).**
+    - Pros: the field is additive and the real-bridge test already restarts
+      the real bridge; a live run cannot force the race.
+    - Cons: Codex's half (`requestIdForTurn`) has no real-bridge restart test,
+      only `app-server-runtime-lifecycle.test.ts` and `dispatch-journal.test.ts`.
+  - **Fold a check into 0027's killed-Claude live case.**
+    - Pros: costs almost nothing when that run happens anyway.
+    - Cons: adds an item to an existing file, which the README forbids; it
+      would need a new file or a narrowing edit to 0027's existing case.
+
 Found on 2026-10-25 by the seeded interleaving tests that
 [0027-multi-review-scale-and-cost.md](0027-multi-review-scale-and-cost.md)
 added (`apps/backend/src/core/review-fanout-interleaving.test.ts`). Checked

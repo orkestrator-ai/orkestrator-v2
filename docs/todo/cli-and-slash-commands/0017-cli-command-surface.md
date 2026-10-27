@@ -2,6 +2,159 @@
 
 Checked against `main` at `ba7cc8d4` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+The shipped items (Done 1 to 5, 8 and 9) are on `main` through `2d3a55ea`
+(#1246). Note that "8" is used twice: Done 8 is shell completion, Remaining 8
+is `apply` and auto-start. The task numbers below are this section's own.
+
+### Tasks
+
+1. **Event-stream transcript following**: a JSONL follow over the gateway SSE instead of cursor polling (Remaining 6). Status: deferred (until a measurement shows polling is a problem).
+2. **Worker-scoped CLI credentials**: let the CLI authenticate with a scoped Control MCP credential (Remaining 7). Status: deferred.
+3. **Declarative `apply` and backend auto-start** (Remaining 8). Status: deferred (no demand; auto-start needs process ownership first).
+4. **`project-cascade` in the container matrix**: run the cascade scenario with container environments. Status: done (2026-10-25, recorded in 0014 but still listed here as left).
+5. **New `live-session` steps on other providers**: `--literal`, `--attach`, `--enqueue` and the refusals on Codex, OpenCode, Pi, Cursor and Grok. Status: partly done (OpenCode done 2026-10-26; Codex open; Pi, Cursor and Grok blocked on credentials with 0014).
+6. **Selected-command step beyond Claude, and browser checks for enqueue and selected commands**. Status: open (decision only: extend or retire).
+
+### 1. Event-stream transcript following
+
+**Problem.** `session transcript --follow --jsonl` polls snapshot pages by cursor; there is no push follow. Nobody has reported latency or load from it.
+
+**Context.** Optional by the file's own decision 10; needs a new `transcriptFollow` value and must keep the transport invariants (replay subscribes first, `connected` echoes the cursor, bounded buffers, explicit desync).
+
+**Investigation.** Still accurate. `transcriptFollow` is typed `"poll" | "unavailable"` (`packages/protocol/src/public-api.ts:1268`) and `publicFeatures()` returns `"poll"` (`apps/backend/src/core/public-api/registry.ts:71`). The reuse targets exist: `parseGatewayCursor` at `apps/backend/src/gateway-event-replay.ts:66` and `GatewayEventReplay` at `:82`. New since the file: `attention --follow --jsonl` (`packages/cli/src/client/commands/attention.ts:43`) is a second polling follower, so a push transport would serve two commands, not one. `publicFeatures()` also now returns `nodeRouting` (added by #1268/#1302), which the file's "Current state" does not list; leaf-node routing (`--node`) would have to be handled by any SSE follow too, since the stream would come from the leaf.
+
+**Decisions.**
+
+- **When to build it?**
+  - **Keep deferred until a measurement exists (recommended).** Measure poll latency and backend load for a typical follow (and `attention --follow`) first, as the file requires.
+    - Pros: no new streaming surface to keep within the transport invariants; polling already rehydrates from snapshots by construction.
+    - Cons: follows stay as slow as the poll interval.
+  - **Build it now for both followers.**
+    - Pros: one push transport for transcript and attention; lower latency for voice and notifier clients.
+    - Cons: gateway SSE, replay, gap detection and node relay for an unmeasured need; a large review surface.
+- **What would count as the trigger measurement?**
+  - **A recorded poll-interval latency and request rate from a scripted follow on a busy session, with a stated budget (recommended).**
+    - Pros: makes the deferral testable; the CLI scenario harness can produce it.
+    - Cons: someone has to choose a budget without a user complaint to anchor it.
+  - **A user report only.**
+    - Pros: zero work until needed.
+    - Cons: the item may never be re-rated.
+
+### 2. Worker-scoped CLI credentials
+
+**Problem.** A worker that wants to run the CLI has no scoped credential of its own; the only CLI credential is the operator token, which must never be discovered from inside a worker.
+
+**Context.** The proposed shape reuses Control MCP credentials on `public_action` only, with `controlMcpActionAllowed` and `control-mcp:<id>` authority, read from a private file. Decision 10 says it is a new authentication path into the gateway and needs its own design and review.
+
+**Investigation.** `controlMcpActionAllowed` is at `packages/protocol/src/control-mcp.ts:123` and is applied in `apps/backend/src/core/control-mcp-caller.ts:65` and `apps/backend/src/core/scheduled-jobs/executor.ts`. `control-mcp:` authority is already threaded through `public-api/operation-ledger.ts`, `node-targets.ts` and `actions-schedules.ts`; #1268 added relaying a Control MCP credential's authority to leaf nodes. The gateway still accepts no Control MCP bearer on `public_action`, and the CLI has no `--credential-file` option on `connection add` (`packages/cli/src/client/commands/connection.ts` only manages its own credential file). So the backend half of the proposal (authority namespace, allow rules, relay) is more in place than when the file was written; the gateway authentication and CLI halves are untouched.
+
+**Decisions.**
+
+- **Should the work start now?**
+  - **Keep deferred and spin it out as a new todo with a security design when someone asks (recommended).** Control MCP credentials already give scoped automation over MCP.
+    - Pros: no new gateway authentication path without a threat review; matches decision 10 and the folder rule that new work goes into a new file.
+    - Cons: shell-only workers still cannot use the CLI with scoped authority.
+  - **Implement the proposed shape now.**
+    - Pros: most of the authority plumbing exists, so the code is smaller than it was.
+    - Cons: widens what the gateway accepts as a bearer; needs isolation review (worker can reach the gateway port) before it is safe.
+- **Credential transport when it is built?**
+  - **Private file named by `connection add --credential-file` (recommended).** As proposed.
+    - Pros: keeps tokens out of argv and the environment (metrics and logs invariants).
+    - Cons: the worker needs a provisioned file path, so environment setup must stage it.
+  - **Environment variable.**
+    - Pros: trivial to inject into a container.
+    - Cons: inherited by every child process and visible in `/proc`; the file rejects it.
+
+### 3. Declarative `apply` and backend auto-start
+
+**Problem.** The CLI cannot apply a desired-state file, and client commands never start a backend.
+
+**Context.** Not requested. The root `AGENTS.md` ("Client commands never start a backend") and this file's constraints forbid starting a second backend over the desktop's data directory.
+
+**Investigation.** Unchanged: no `apply` command in `packages/cli/src/client/commands/`, and the launcher still decides service versus client before importing the backend. No demand recorded since 2026-10-25.
+
+**Decisions.**
+
+- **Keep or retire the item?**
+  - **Retire it from this file and leave the constraint in `public-cli.md` (recommended).** Record "not planned; reopen as a new todo on demand".
+    - Pros: removes an open item nobody wants; the file can then finish once task 5 is done; the safety constraint already lives in the architecture doc and `AGENTS.md`.
+    - Cons: the design notes (process ownership, readiness, data-directory exclusivity) live only in git history.
+  - **Keep it deferred here.**
+    - Pros: the prerequisites stay listed next to the CLI surface.
+    - Cons: keeps the file open indefinitely for unrequested work.
+
+### 4. `project-cascade` in the container matrix
+
+**Problem.** The file says the cascade scenario was never run with container environments.
+
+**Context.** It needed a worktree-owned image.
+
+**Investigation.** Out of date. `project-cascade` has no `environmentTypes` restriction (`packages/cli/scenarios/cases.ts:730`; filter at `packages/cli/scripts/run-scenarios.ts:88`) and creates environments with `--type context.environmentType` (`cases.ts:79-80`). The 0014 evidence log records a container matrix of 7/7 on 2026-10-25 at `bab01b13` (image `orkestrator-v2:dev-1af641a7170c`); the seven container-eligible cases are `read-only`, `local-lifecycle`, `retry-and-retention`, `exec`, `wrong-profile`, `foreign-owner` and `project-cascade`, so the cascade passed in containers.
+
+**Decisions.**
+
+- **How to close it?**
+  - **Mark it done, citing the 0014 2026-10-25 review follow-up run (recommended).**
+    - Pros: matches the evidence; removes a false open item.
+    - Cons: the run was recorded as a matrix total, not per case; the manifest (`2026-10-25T18-39-29-682Z-8f32d1f8`) is git-ignored and may be gone.
+  - **Re-run `project-cascade` alone in a container and record it explicitly.**
+    - Pros: a per-case record in this file.
+    - Cons: needs a dev image build for a result already covered.
+
+### 5. New `live-session` steps on other providers
+
+**Problem.** `--literal`, `--attach`, `--enqueue` and the refusal steps were live-qualified only on Claude when the file was written.
+
+**Context.** Steps are in `packages/cli/scenarios/cases.ts:1052-1223`; Pi, Cursor and Grok are batched with 0014 item 1 (no API-key credentials on the qualifying host).
+
+**Investigation.** OpenCode is now done: 0166 and the 0014 evidence log record `live-session --provider opencode` passing every stage, local and container, on 2026-10-26 (`--attach` included). Codex has not run since the new steps landed; its last `live-session` pass is the 2026-10-22 run, before #1246. Since #1270 every host provider needs its pinned binary, which the harness now installs (`packages/cli/scenarios/harness.ts:147-168`), so Codex is unblocked.
+
+**Decisions.**
+
+- **Where to track the remaining runs?**
+  - **Run Codex now and leave Pi, Cursor and Grok to 0014 item 1 only (recommended).** Record Codex here, then drop this item.
+    - Pros: one owner per provider run; this file can finish without waiting for credentials.
+    - Cons: 0014 must remember that its Pi, Cursor and Grok runs also cover these steps (the scenario runs them anyway).
+  - **Keep all five providers listed here until each passes.**
+    - Pros: a complete per-provider record next to the feature.
+    - Cons: duplicates 0014 and keeps this file open on a credential blocker.
+- **Codex run scope?**
+  - **Local and container, with the provider default model recorded in the manifest (recommended).**
+    - Pros: matches the OpenCode evidence; container covers the restricted allowlist.
+    - Cons: the container run needs a dev image and `--network full` per the 2026-10-22 notes, costing a build and live tokens.
+  - **Local only.**
+    - Pros: cheaper.
+    - Cons: leaves attachment staging through `write_container_file` unproved live on Codex (Codex refuses non-image files, so only the refusal path runs).
+
+### 6. Selected-command step beyond Claude, and browser checks
+
+**Problem.** The live selected-command step is gated to Claude (`cases.ts:1089`), so other providers only exercise the refusals; enqueue and selected-command results have no browser check.
+
+**Context.** The file argues the UI (queue and transcript) is unchanged, so no browser check is needed. 0015 already qualifies selected commands for all six providers through the composer.
+
+**Investigation.** Gate confirmed at `packages/cli/scenarios/cases.ts:1089-1093` (Claude's built-in `/context`). Earlier attempts with project `.claude/commands` failed because that build's session catalogue omitted them; other providers would need a command they reliably list before the first turn (for example an OpenCode `command.list` entry, or a Pi template, which 0069 now lists before attach).
+
+**Decisions.**
+
+- **Extend the selected-command step to other providers?**
+  - **No; keep it Claude-only and rely on 0015 for per-provider executor proof (recommended).**
+    - Pros: the CLI path is provider-neutral after `dispatch_native_agent_intent`; 0015 already proves each executor live.
+    - Cons: the CLI's name-to-ID resolution and `bindingRevision` echo are proved live on one catalogue shape only.
+  - **Add a per-provider planted command (OpenCode command file, Pi template, Codex skill).**
+    - Pros: end-to-end CLI proof per provider.
+    - Cons: more fixture setup per provider and more live tokens; brittle when a provider changes discovery.
+- **Browser-check enqueue and selected-command results?**
+  - **No; retire that note (recommended).** The renderer path is unchanged and is covered by existing queue and transcript tests.
+    - Pros: no new browser spec for unchanged UI.
+    - Cons: a CLI-enqueued item's appearance in the tab's queue is not observed in a real browser.
+  - **Add one `cli-ui.spec.ts` case that enqueues through the CLI and checks the queue panel.**
+    - Pros: proves the inactive-tab path for a CLI-originated queue item.
+    - Cons: a live turn in a browser spec; slower and needs credentials.
+
 The published `orkestrator` client reaches the backend only through versioned
 public actions, all entering the single `public_action` registry command. The
 first release left several capabilities out on purpose and advertised them as

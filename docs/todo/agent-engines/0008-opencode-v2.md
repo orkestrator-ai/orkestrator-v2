@@ -2,6 +2,206 @@
 
 Checked against `main` at `2459b05c` (2026-10-15).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Upstream recheck**: rerun the recheck procedure against the current 1.x and 2.x releases (the "Needs verification" item). Status: open (npm tags read on 2026-10-27; the spec, migration and OpenAPI reading is still to do).
+2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: blocked (upstream storage compatibility policy, stale-turn guard for steering, bounded inbox, MCP endpoints still experimental).
+3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: open.
+4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: partly done (share already dropped with 1.19.1).
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: deferred.
+6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (the compatibility probe no longer uses `--pure`).
+7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: deferred.
+8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: deferred.
+
+### 1. Upstream recheck
+
+**Problem.** The upstream evidence (API mapping, readiness table) was last refreshed against 2.0.18 on 2026-09-27. Picking the work up on stale evidence risks building against routes that have since moved.
+
+**Context.** The file's "Recheck procedure" (steps 1 to 5) and "Needs verification" describe the run. It must use an isolated `HOME`/`XDG_*`: 2.x migrates `opencode.db` in place on start (see "Coexistence and data").
+
+**Investigation.** `npm view` on 2026-10-27: `@opencode/cli` latest is `2.1.4` (published 2026-10-23; 2.1.1 to 2.1.4 between 2026-10-20 and 2026-10-23), so 2.x has moved a minor line since the 2.0.18 checkpoint. `@opencode-ai/sdk` latest is still `1.19.4` (2026-10-22), matching every pin: `apps/backend/package.json:23`, `packages/toolchain/src/manifest.ts:10`, and `OPENCODE_CLI_VERSION` in `docker/Dockerfile` (comment at `docker/Dockerfile:189`, download at `:219`). The SDK patch is `patches/@opencode-ai%2Fsdk@1.19.4.patch`. 1.x is still shipping, so the "stay on 1.x" constraint holds. `mise run verify:opencode:live` exists (`mise.toml:327`). Not yet checked: whether 2.1 published a storage compatibility policy, a steer precondition, or moved MCP out of `/api/experimental`.
+
+**Decisions.**
+
+- **When to run the full recheck?**
+  - **Now, as a short standalone pass (recommended).** Run steps 2 to 5 against `v2.1.4` and update the tables and gate.
+    - Pros: a new minor line is the most likely point for the open gate conditions to change; keeps the "Low" rating honest; cheap (no code change).
+    - Cons: costs an isolated 2.x install and an OpenAPI diff for a file that may stay deferred anyway.
+  - **Only when someone picks up the migration.**
+    - Pros: no work until it is needed.
+    - Cons: the readiness gate can open unnoticed; the file's rating rests on evidence a full minor line old.
+
+### 2. Readiness gate and start decision
+
+**Problem.** Without a clear gate the rewrite is either started too early (on an unstable 2.x storage model) or left until 1.x stops shipping, which would force a rushed move.
+
+**Context.** Five gate conditions were met at 2.0.18; six remain open (storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox, MCP endpoints). 0005 (OpenCode steer) and 0028 are blocked on this file.
+
+**Investigation.** No `@opencode/*` dependency exists in any manifest, and there are zero `client.v2.*` call sites in `apps/`, `packages/` or `bridges/`. The upstream state of the open conditions at 2.1.4 is unknown until task 1 runs. No 1.x end-of-life notice is recorded.
+
+**Decisions.**
+
+- **What triggers starting the 2.x provider?**
+  - **All open gate conditions met or explicitly accepted, or a 1.x end-of-life notice, whichever comes first (recommended).**
+    - Pros: matches the file's rule to stay on 1.x while it ships; an end-of-life notice forces the move with time to spare.
+    - Cons: several conditions (storage policy, bounded inbox) may never be formally published, so "accepted" needs an explicit owner decision.
+  - **Start once 2.x storage has a compatibility policy, accepting the other gaps.**
+    - Pros: unblocks OpenCode steer (0005) sooner; storage churn is the biggest data risk.
+    - Cons: ships losses (structured output, read-only tool mask) that break the workflow result broker and read-only turns.
+  - **Wait for 1.x end-of-life only.**
+    - Pros: least work while 1.x is maintained.
+    - Cons: no slack if end-of-life is abrupt; 2.x-only features (native steer, durable replay) stay out of reach.
+
+### 3. Legacy 1.x session policy
+
+**Problem.** Existing OpenCode sessions live in the 1.x schema (`message`/`part`). 2.x migrates them into `session_v2`/`session_message` on start and drops the `event` table, and running 1.x against a migrated database is untested upstream.
+
+**Context.** Open question 1; code item 5 says the 1.x provider retires only after this is decided. Constraint: "Never open a 1.x session through 2.x implicitly".
+
+**Investigation.** Host OpenCode uses the default `~/.local/share/opencode/opencode.db`; no host code sets `OPENCODE_DB`. Containers set it only when the persistent state mount exists (`apps/backend/src/core/container-state-layout.ts:47-48`, `:152`). The session mapping has no protocol marker today.
+
+**Decisions.**
+
+- **What happens to 1.x sessions?**
+  - **Keep them on a pinned 1.x binary with its own database; new sessions go to 2.x (recommended).**
+    - Pros: no user conversation is mutated or lost; matches the "two binaries" route the file already found is the only coexistence path; the persisted marker makes routing explicit.
+    - Cons: two pins, two toolchain entries and two providers to maintain until retirement.
+  - **Migrate them through 2.x's own V1 migration.**
+    - Pros: one runtime afterwards; upstream owns the conversion.
+    - Cons: mutates the database the user's own 1.x TUI uses; migration runs only in the Bun binary; untested rollback; about 6.4 GB on the development host.
+  - **Retire them (read-only or hidden) at the switch.**
+    - Pros: simplest code.
+    - Cons: users lose the ability to continue existing conversations, close to violating the "closing never deletes the conversation" spirit.
+
+### 4. Losses to decide
+
+**Problem.** Eight capabilities have no direct 2.x equivalent; each needs an explicit rebuild, gate or drop before a pin.
+
+**Context.** "Losses to decide" 1 to 8 and open question 2.
+
+**Investigation.** Current usage confirmed: the prompt sends per-prompt `model`, `agent`, `variant` and the tools mask (`apps/backend/src/core/opencode-provider.ts:684-695`, mask `OPENCODE_READ_ONLY_TURN_TOOLS` at `apps/backend/src/core/opencode-provider-helpers.ts:330`; the file's reference to it in `opencode-provider.ts` is stale). Todos are consumed today (`todo.updated` handled at `apps/backend/src/core/opencode-stream-state.ts:726`, listed at `apps/backend/src/core/opencode-events.ts:85`). Share is already off (1.19.1). Structured output lives in `apps/backend/src/core/opencode-structured-output.ts`.
+
+**Decisions.**
+
+- **How to handle the read-only per-prompt tools mask?**
+  - **Move it to session permissions, as reviewer sessions already do (`opencode-review-session-permissions.ts`) (recommended).**
+    - Pros: reuses a working pattern; permissions are enforced by OpenCode, not by a hint.
+    - Cons: a session flips between read-only and writable turns, so permission state must be rewritten per turn and raced against queued input.
+  - **Use a separate read-only session per read-only turn.**
+    - Pros: no per-turn permission churn.
+    - Cons: loses conversation context, which is the point of a read-only turn in the same tab.
+- **Todos, LSP and formatter status?**
+  - **Capability-gate them off for 2.x sessions (recommended).**
+    - Pros: honest UI; 1.x sessions keep them; matches the qualification line "share, todos and LSP off".
+    - Cons: a visible parity regression in the runtime summary.
+  - **Rebuild todos from tool calls.**
+    - Pros: keeps the summary.
+    - Cons: 2.x removed the todo tool, so there is nothing to rebuild from.
+- **Structured output?**
+  - **Use a workflow-result MCP tool, as other providers' result turns do (recommended).**
+    - Pros: provider-agnostic; independent of 2.x prompt schema.
+    - Cons: relies on the experimental MCP registration endpoint (loss 8) until it stabilises.
+  - **Parse a fenced answer from the final text.**
+    - Pros: no MCP dependency.
+    - Cons: fragile; the broker would accept malformed output or need retries.
+
+### 5. `opencode2` provider
+
+**Problem.** A 2.x server serves only `/api/*`, so the current provider cannot drive it; the move is a new provider.
+
+**Context.** Code items 1, 2 and 4; the rewrite surface list. Inactive-environment invariants apply: `/api/event` has no replay, so the snapshot is authoritative.
+
+**Investigation.** Every file in the rewrite surface still exists under `apps/backend/src/core/` (stream state, events, observation stream, messages, snapshots with `openCodeHistoryCursor` at `opencode-snapshots.ts:68`, display transcript, reconciliation, interactions, provider, review permissions, structured output, capabilities, agent tools, `mcp-management/`). The renderer has no OpenCode client (`apps/web/src/lib/opencode-messages.ts` is gone). 19 non-test backend files import `@opencode-ai/sdk/v2/client` (the file says sixteen), plus `scripts/opencode-live-compatibility-probe.ts`. `apps/backend/src/core/opencode-provider.ts` is 1,403 lines.
+
+**Decisions.**
+
+- **Provider shape?**
+  - **A separate `opencode2` provider beside the 1.x one, sharing only pure helpers (recommended).**
+    - Pros: the 1.x path stays untouched while legacy sessions exist; avoids branching every call on protocol; respects the no-inheritance rule.
+    - Cons: duplicated plumbing (launch, health, credentials) until 1.x retires.
+  - **One provider with a protocol switch per session.**
+    - Pros: one registration, one capability table.
+    - Cons: every method branches; the 1,403-line provider grows past the 2,000-line limit.
+- **Adopt native steer in the first release?**
+  - **Queue only first; steer behind the expected-turn precondition (recommended).**
+    - Pros: follows the file's rule not to advertise turn-pinned `/steer` without a guard.
+    - Cons: OpenCode steer (0005) stays unavailable longer.
+  - **Ship steer and queue together.**
+    - Pros: parity with Claude and Codex.
+    - Cons: a steer can land on the wrong turn at the end-of-turn race.
+
+### 6. Changes that must ship with the first 2.x pin
+
+**Problem.** Several hazards would break or silently mislead a 2.x pin, chiefly the health probe reporting a 2.x server healthy.
+
+**Context.** "Concrete changes that must ship with the first 2.x pin" and the hazard note.
+
+**Investigation.**
+- Health: `checkHttpHealth` still defaults to `/global/health` and accepts any 2xx (`apps/backend/src/core/commands-server-health.ts:42-66`; `waitForHealth` at `:124`). Callers: `commands-containers.ts:720, 801, 838, 966, 972, 996`, `commands-registry-servers.ts:85, 157, 263, 270`, `agent-accounts-session.ts:24`.
+- Database: see task 3; host has no isolated `OPENCODE_DB`.
+- Plugin: `buildOpenCodeGitHubEnvironmentPluginSource` at `apps/backend/src/core/agent-credential-files.ts:43`.
+- Sign-in: `apps/backend/src/core/opencode-provider-login.ts:426, 461` (`client.provider.oauth.*`).
+- Live tests: the compatibility probe now runs `serve` without `--pure` (`scripts/opencode-live-compatibility-probe.ts:374`), so that half is done; `apps/backend/src/core/opencode-review-permissions.live.test.ts:155, 446, 540` still pass `--pure`.
+- Distribution: `packages/toolchain/src/manifest.ts:147` and `docker/Dockerfile:219` download GitHub Release archives; 2.x ships only as npm platform tarballs.
+- Auto-update guard: `OPENCODE_PINNED_RUNTIME_ENV` (`packages/protocol/src/terminal-agent-launch.ts:17`) is applied in `commands-servers.ts:886`, `host-model-catalog-refresh.ts:358`, `packages/cli/src/client/fix.ts:55`, and `ENV` in `docker/Dockerfile:226`.
+
+**Decisions.**
+
+- **Harden the health probe now or with the pin?**
+  - **Now: make OpenCode health checks reject non-JSON 2xx responses on the 1.x route (recommended).**
+    - Pros: small, testable today; removes the hazard before anyone tries a binary-only bump; also catches any SPA fallback on a reused port.
+    - Cons: touches eleven call sites for a risk that cannot occur while pins are enforced by `tests/unit/version-drift.test.ts`.
+  - **With the first 2.x pin, as the file says.**
+    - Pros: one change, already in the plan.
+    - Cons: leaves a known silent-failure mode in place.
+- **Isolate the host `OPENCODE_DB` before 2.x?**
+  - **Only when 2.x lands, and only for 2.x (recommended).**
+    - Pros: users keep sharing their 1.x history with their own TUI.
+    - Cons: two database paths to document.
+  - **Isolate it for 1.x now too.**
+    - Pros: protects Orkestrator sessions from a user's own 2.x CLI migrating the shared database (the `opencode-go` sign-in case shows users already run 2.x).
+    - Cons: Orkestrator sessions disappear from the user's own 1.x TUI; needs a migration of existing mappings.
+
+### 7. Qualification of the first 2.x pin
+
+**Problem.** No 2.x path has been proved on the real stack.
+
+**Context.** The "Qualification" list; live runs are batched in `cross-cutting/0031-live-provider-and-platform-qualification.md`.
+
+**Investigation.** Nothing exists yet: no 2.x tests, fixtures or mise task. The current live task is `mise run verify:opencode:live` (1.x only).
+
+**Decisions.**
+
+- **Where do the 2.x live checks live?**
+  - **A new 2.x live test set and its own mise task, alongside `verify:opencode:live` (recommended).**
+    - Pros: 1.x keeps its gate while both lines run; failures map to one line.
+    - Cons: a second task and probe to maintain.
+  - **Extend the existing probe with a protocol parameter.**
+    - Pros: one entry point.
+    - Cons: one red run hides which line broke; the routes share almost nothing.
+
+### 8. Session V2 features after the move
+
+**Problem.** Native steer/queue, model/agent switching, durable replay, staged revert, saved rules and in-app credentials are only reachable through Session V2.
+
+**Context.** The repository deliberately does not call `client.v2.*` on 1.x. Related: 0005 (steer), 0001 (saved rules), 0006 (staged revert), 0003 (sign-in), and 0175 (whose `session.next.revert.*` events are not consumed).
+
+**Investigation.** `session.next.*` events are known but unhandled (`apps/backend/src/core/opencode-events.ts:34-38` onward, map at `:22`). No `client.v2.*` call sites.
+
+**Decisions.**
+
+- **Try any Session V2 feature through the 1.x SDK's experimental `client.v2.*` before the move?**
+  - **No, keep the rule and adopt them on the 2.x provider (recommended).**
+    - Pros: avoids the mixed V1/V2 execution on one session the August gaps warned about; no throwaway code.
+    - Cons: these features wait for the whole migration.
+  - **Adopt queued input or saved rules early through `client.v2.*`.**
+    - Pros: earlier user value.
+    - Cons: experimental surface on a line upstream is no longer developing; the code would be rewritten for `@opencode/client` anyway.
+
 This is the deferred checkpoint for moving from the OpenCode 1.x line to
 OpenCode 2.x. The decision is still: do not bump the OpenCode binary or SDK to
 2.x. A 2.x server has no legacy HTTP API, so the move is a rewrite of the

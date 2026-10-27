@@ -1,5 +1,113 @@
 # Rootless Linux runtime gaps
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Staged inputs readable by `node` on rootless (Code 1)**: a root-phase relay to `/run/orkestrator-inputs`. Status: done (`1aabf049`, #1307).
+2. **Agent tools on rootless (Code 2)**: probe RootlessKit's host loopback, otherwise show a clear unavailable state. Status: done.
+3. **Read-only binds from `nosuid`/`nodev` sources (Code 3)**: copy the GitHub seed in, and give a typed refusal. Status: done; the refusal itself was never captured live.
+4. **Start retry on port collision (Code 4)**: `startDockerContainer` retries once and reconnects the network. Status: done.
+5. **Rootless re-run on a freshly built image (Qualification)**: C20, C22 and readiness on a rootless daemon with an image built from current `main`. Status: partly done (passed on an existing image with older agent pins; rootful CI passed on a fresh build).
+6. **Retire the file**: decide when the file is Finished and deleted. Status: open (after 5).
+
+### 1. Staged inputs readable by `node` on rootless
+
+**Problem.** Under rootless Docker, `node` could not read the owner-only staged mounts, so the environment started without the provider logins.
+
+**Context.** Decisions 1–3 chose a root-phase relay, triggered by what `node` can read, that also covers the project seed binds.
+
+**Investigation.** Present at HEAD: `relay_staged_inputs` (`docker/network-policy-entrypoint.sh:165`, called at `:196`), `staged_input_path` (`docker/entrypoint.sh:51`), the capability marker `staged-inputs=3` (`docker/entrypoint.sh:32`), `stagedInputRelayPaths` (`apps/backend/src/core/portable-inputs.ts:950`) and `unreadableOnRootless` (`portable-input-status.ts:172-187`).
+
+Rootful CI on GitHub runners, where the runner's uid is not 1000, now exercises decision 2's "rootful host whose user is not UID 1000" case. C20 failed there before the relay (run 40333566613: `cat: /home/node/.codex/auth.json: No such file or directory`) and passed with it (run 40409285999, linux-x64 and linux-arm64).
+
+The same run still failed "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw mount `/codex-home/config.toml` as `node`, and on a non-1000 host that is now correctly unreadable. This is a test bug (see [0058](0058-legacy-migration-root-symlink.md)'s analysis), not a relay bug. No release has the relay yet: `v2.33.0-beta` (`225a91f3`) predates `1aabf049`.
+
+**Decisions.** None: the item is done. The C14 precondition belongs to a new todo, as 0058's analysis recommends.
+
+### 2. Agent tools on rootless
+
+**Problem.** A rootless container could not reach the agent-tools service, and the user was not told why.
+
+**Context.** Decision 4: never change the user's daemon; use host loopback when they have enabled it.
+
+**Investigation.** Present at HEAD: the loopback alias is kept when no address is known (`apps/backend/src/core/commands-environment.ts:2375`, Multi Review finding 1), the probe uses `ROOTLESSKIT_HOST_LOOPBACK_ADDRESS` (`container-host-reachability.ts:796-798`), and `EnvironmentAgentToolsStatus` exists (`apps/web/src/components/environments/EnvironmentAgentToolsStatus.tsx`). Other RootlessKit network drivers (pasta, lxc-user-nic) still report `blocked`, as decision 4 says.
+
+**Decisions.** None: done. Other RootlessKit drivers are a known limit, not open work.
+
+### 3. Read-only binds from `nosuid`/`nodev` sources
+
+**Problem.** A read-only file bind from a `nosuid`/`nodev` filesystem failed to start under rootless.
+
+**Context.** Decision 6: copy the GitHub seed in, and classify any other refusal as `unsupported-topology`.
+
+**Investigation.** `copyGithubRangesSeed` (`apps/backend/src/core/github-ranges-cache.ts:120`) and `bindMountRefusedError` (`container-start.ts:100-113`) exist. The classifier matches `REMOUNT_REFUSED` plus "operation not permitted". The pattern comes from the 2026-10-25 report: the review qualification could not reproduce the refusal, either on a tmpfs data root or on on-disk storage.
+
+**Decisions.**
+
+- **Is an unreproduced classifier good enough?**
+  - **Yes; keep it and record the next real occurrence's message (recommended).**
+    - Pros: the error fails safe either way (start refused); only the wording depends on the match.
+    - Cons: a different runc message would surface as a generic start failure.
+  - **Hunt for a reproducing runc and kernel combination now.**
+    - Pros: a captured message.
+    - Cons: open-ended work for a rare, fail-safe path.
+
+### 4. Start retry on port collision
+
+**Problem.** A rootless start could collide on an automatically picked host port and fail with `port-conflict`.
+
+**Context.** Decision 7: retry on any daemon, because the condition is the error itself.
+
+**Investigation.** `startDockerContainer` is at `apps/backend/src/core/container-start.ts:185`. "Live start and port recovery" (`container-start-docker.test.ts`) passed in CI on both architectures in run 40409285999.
+
+**Decisions.** None: done and live-tested.
+
+### 5. Rootless re-run on a freshly built image
+
+**Problem.** The rootless qualification ran on an existing image whose bootstrap scripts matched the branch but whose pinned agents were older. Nothing has proved a freshly built image on a rootless daemon.
+
+**Context.** The folder index names this as the only remaining work. Decision 6 says "the full live suite is still owed". 0019 owns the wider rootless matrix, for example a host without `cpu` delegation.
+
+**Investigation.** `docs/development/container-qualification.md:293-340` records the review run: C20, C22, C09 readiness, all 13 mounts and start recovery, on `orkestrator-review-rootless:d03790`. Rootful CI built a fresh qualification image and passed every suite except the C14 staged case (run 40409285999). The difference between the two images is only the agent CLI pins, which the relay, the probe and the start paths do not depend on.
+
+**Decisions.**
+
+- **Is a fresh-image rootless run still needed?**
+  - **Yes, but fold it into 0019's next rootless session rather than running it alone (recommended).**
+    - Pros: one rootless setup covers both files; it confirms the shipped image rather than a lookalike.
+    - Cons: 0109 stays open until then.
+  - **Accept the review run plus rootful CI and close the item now.**
+    - Pros: the evidence covers every changed script byte for byte; agent pins are irrelevant to these paths.
+    - Cons: the index's stated gate was a new image; a packaging difference (for example image layer ownership) would go unseen.
+- **Where to run it?**
+  - **A disposable host rootless daemon, as in the review run, with `DOCKER_HOST` pointed at it and the suites run through `test:logged` (recommended).**
+    - Pros: never touches the user's daemon; the recipe is already proven.
+    - Cons: host loopback has to be enabled on that daemon, so the default-disabled path is covered only by the earlier verdict run.
+  - **A rootless CI job.**
+    - Pros: repeatable on every change.
+    - Cons: GitHub runners need a rootless daemon set up per job; that is new workflow work.
+
+### 6. Retire the file
+
+**Problem.** Every code item is done. The file stays open only for task 5.
+
+**Context.** README rule: once the last item is done, move durable behaviour into `architecture/` and delete the file.
+
+**Investigation.** `docs/architecture/container-lifecycle.md` already covers portable inputs and environment networks (named in Related). The decisions and Multi Review notes here are history.
+
+**Decisions.**
+
+- **When to delete it?**
+  - **After task 5, moving decisions 1, 4 and 6 into one paragraph each in `container-lifecycle.md` (recommended).**
+    - Pros: follows the README; keeps the rationale where maintainers look.
+    - Cons: some editing work on the architecture doc.
+  - **Delete it now and move the rootless re-run into 0019.**
+    - Pros: one fewer open file.
+    - Cons: 0019 may not take new items under the README rules, so the run would need yet another new file.
+
 Found 2026-10-25 against `main` at `ba7cc8d4` (branch
 `todo-0021-container-rebuild-state-8b38e460f2a1`). Code items done
 2026-10-26; the review follow-up qualified the affected paths on a real

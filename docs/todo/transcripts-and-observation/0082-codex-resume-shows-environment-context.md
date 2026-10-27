@@ -3,6 +3,40 @@
 Checked against `main` at `8454d18b8` (2026-10-24); fixed against `main` at
 `930189337` (2026-10-26).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: all three items are done and verified at HEAD.
+
+1. **Drop Codex's own user blocks on resume**: filter `CODEX_CONTEXT_FRAGMENTS`, judged per segment. Status: done.
+2. **Bridge, rollout and loopback tests**: the resumed rows equal the live ones. Status: done.
+3. **Remove the design specs' exclusion and rerun them live**: 1/1 and 3/3 live/resumed user rows. Status: done.
+4. **What to do with the file**: delete it under the README rules, or keep it. Status: open (the only decision left).
+
+### 4. What to do with the file
+
+**Problem.** The folder index marks the file Finished, but it is still in `todo/`. The README says that once the last item is done, its durable behaviour moves into `architecture/` or `development/` and the file is deleted.
+
+**Context.** The rule already lives outside the file: `bridges/codex-bridge/AGENTS.md:193` describes the dropped user-role blocks, and `docs/development/upgrade-agents.md:837` carries the bump step that lists them from the binary. 0211, which followed on from this file, also landed (`863b5782`, #1319).
+
+**Investigation.** The code matches the file at HEAD. `CODEX_CONTEXT_FRAGMENTS` is at `bridges/codex-bridge/src/history/rollout.ts:871`, `isSyntheticPersistedUserText` at `:879`, and the per-segment `extractPersistedMessageContent` at `:912`. The "resumed transcript" suite is at `bridges/codex-bridge/src/app-server-runtime-sessions.test.ts:2791`, and `app-server/live-resume-context.test.ts` exists. Neither design spec still mentions an `environment_context` exclusion. The pinned Codex is still 0.164.0 (`packages/toolchain/src/manifest.ts:8`), so the tag list checked against that binary is still current. Inbound links that a deletion must update: `docs/todo/design-canvas/0038-design-agent-conversation-links.md:142` and `:398`, and this folder's 0211 (Related) and index row 9. The decisions section (why each tag, why per segment, why not `<user_instructions>`) has no durable home yet.
+
+**Decisions.**
+
+- **Delete the file now, or keep it?**
+  - **Delete it now, moving the rationale for the tag list and the per-segment rule into `bridges/codex-bridge/AGENTS.md` (recommended).** Update the links from 0038 and 0211 and remove index row 9 in the same change.
+    - Pros: follows the README rule; the AGENTS.md note and the upgrade step already carry the behaviour; nothing is waiting on a branch.
+    - Cons: the live qualification narrative (profile names, row counts) is lost unless it is summarised in the AGENTS.md note.
+  - **Delete it together with 0211 in one change.**
+    - Pros: one link-update pass, since 0211 links here and both are Finished.
+    - Cons: couples this deletion to 0211's own review follow-ups being confirmed.
+  - **Keep it as a historical record.**
+    - Pros: no link edits.
+    - Cons: goes against the README rule, and a Finished row stays in the ranked index for no reason.
+
 Found while qualifying design conversation links live
 ([0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)).
 After a Codex conversation is resumed, the transcript gains a **You** message

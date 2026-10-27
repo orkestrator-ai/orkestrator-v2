@@ -2,6 +2,170 @@
 
 Checked against `main` at `2459b05c` (2026-10-15).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: open.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: open.
+3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
+4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
+5. **Record the type-level import cycle**: re-measure and record it here. Status: open.
+6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: open (not in the file's list).
+7. **Open questions**: where `keyed-record-format.ts` and `pi-model-catalog-seeding.ts` go, and whether `storage` and `native-agent` move before or after their splits. Status: partly done (the 0009/0010 splits have landed).
+
+### 1. Wave 1 (leaves)
+
+**Problem.** `apps/backend/src/core/` is one flat directory whose domains exist only as file-name prefixes, so nothing shows or enforces a domain's public surface. Every backend contributor pays for it when reading or reviewing; the cost grows with every feature.
+
+**Context.** The plan moves low-dependency domains first to prove the codemod procedure. Only `design/` is done (#979, `0466ebd0`), with an `index.ts` and patterns in both `.oxlintrc.json` overrides (`apps/backend/src/**` at line 177, pattern at 188; `tests/unit/**` at 216, pattern at 223).
+
+**Investigation.** Nothing has moved since #979, and the root has grown fast: 521 source files and 446 tests (the file says 378 and 299). Wave 1 prefix counts today: `opencode-*` 41 source / 33 tests (was 29/22), `web-annotation-*` 29/25 (28/22), `http-bridge-*` 18/14 (13/11), `control-mcp-*` 20/9 (2/1). `mcp-management/` (29 source, 27 tests) and `public-api/` (42, 20) still have no `index.ts`. The codemod `scripts/move-backend-modules.ts` and its test `tests/unit/move-backend-modules.test.ts` still exist (last touched for Bun 1.4.4 in #1229). `mise run build:backend` and `mise run verify:packaged-backend` exist in `mise.toml`.
+
+**Decisions.**
+
+- **Is the one-domain-per-PR plan still worth starting, given the root grew by about 40 per cent in twelve days?**
+  - **Yes, start with `control-mcp` or `http-bridge` as the procedure proof (recommended).**
+    - Pros: the longer it waits the more importers each slice rewrites; a small leaf proves the codemod against today's tree with low conflict risk.
+    - Cons: each slice disrupts open branches touching that domain; the benefit is organisational only.
+  - **Require new domains to start in a folder and leave existing prefixes alone.**
+    - Pros: no churn on existing files; stops the root growing.
+    - Cons: the existing 521 files stay flat, so the main goal (a reviewable surface per domain) is not reached.
+  - **Retire the plan.**
+    - Pros: no disruption.
+    - Cons: the root keeps growing with no boundary enforcement; the Medium rating says this is a real readability and risk cost.
+- **Do the `index.ts` files for `mcp-management/` and `public-api/` first, before any move?**
+  - **Yes (recommended).** They need no file moves, only an `index.ts`, importer rewrites and two lint patterns.
+    - Pros: lowest-risk way to exercise steps 3 to 5 of the procedure; no rename conflicts for open branches.
+    - Cons: delivers enforcement for only two folders.
+  - **Bundle them with the first moved domain.**
+    - Pros: one PR.
+    - Cons: mixes two kinds of change in the review.
+
+### 2. Wave 2 (mid-tier)
+
+**Problem.** Eleven mid-tier domains stay flat.
+
+**Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
+
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) are the subject of the open size todo [0057](0057-native-agent-service-size.md).
+
+**Decisions.**
+
+- **Should `native-agent` move before or after 0057's splits?**
+  - **After 0057 (recommended).**
+    - Pros: moves the files once, under their final names; avoids a rename colliding with a large split diff.
+    - Cons: the busiest domain stays flat for as long as 0057 is unscheduled.
+  - **Before 0057.**
+    - Pros: the new collaborators are created inside the folder from the start.
+    - Cons: every open native-agent branch rebases twice.
+
+### 3. Wave 3 (hubs)
+
+**Problem.** The hub domains are imported by many files, some from outside `core/`, so their slices touch the most files.
+
+**Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
+
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged), so the `storage` slice can be done once, but two storage files are still to be split ([0214](0214-storage-files-over-size-limit.md)), and the tmux module state is still to move into the runtime ([0133](0133-backend-module-state-beyond-0066.md)).
+
+**Decisions.**
+
+- **Should `storage` and `tmux` wait for 0214 and 0133?**
+  - **Yes, sequence each slice after its refactor (recommended).**
+    - Pros: same reasoning as `native-agent`: move files once.
+    - Cons: both refactors are rated Low and may not be scheduled soon.
+  - **Move them in wave order regardless.**
+    - Pros: the wave plan stays independent of other todos.
+    - Cons: the later refactors land in moved files, so the rename and the split both conflict with in-flight work.
+
+### 4. Last: `commands`
+
+**Problem.** `commands*` is the largest prefix group and depends on most other domains.
+
+**Context.** The file required 0011 to land first.
+
+**Investigation.** 0011 merged (`8290f2ca`, #1209); `commands-runtime-state.ts` is gone and its state is in `BackendRuntime`. `commands*` is now 61 source files and 46 tests (was 51/35).
+
+**Decisions.**
+
+- **Keep `commands` last?**
+  - **Yes (recommended).**
+    - Pros: its `index.ts` can then import every other domain through its own `index.ts`, so the slice is mostly specifier rewrites.
+    - Cons: the largest group stays flat the longest.
+  - **Split `commands` by domain instead (for example `commands-registry-native.ts` into `native-agent/`).**
+    - Pros: registry handlers sit beside their domain, which is where readers look.
+    - Cons: no longer a pure move; it changes how the command registry is assembled, outside this file's "pure moves" rule.
+
+### 5. Record the type-level import cycle
+
+**Problem.** The file asks for a re-measured type-level cycle across `core/` (112 files on 2026-10-14) recorded here.
+
+**Context.** Runtime cycles are already blocked by `import/no-cycle` and `tests/unit/module-import-cycles.test.ts`, whose `KNOWN_CYCLES` is empty (`:39`).
+
+**Investigation.** No script in the repository computes the type-level cycle; the 2026-10-14 number was measured ad hoc. No newer measurement is recorded.
+
+**Decisions.**
+
+- **How to measure it?**
+  - **A one-off measurement recorded here at the start of wave 1, repeated at the end (recommended).**
+    - Pros: gives a baseline and a result for the plan; no tooling to maintain.
+    - Cons: the method lives in prose.
+  - **Extend `module-import-cycles.test.ts` to report type-only cycles too.**
+    - Pros: repeatable and visible in CI.
+    - Cons: the file says the number is not expected to reach zero, so a test would need a moving threshold; more test machinery for a measurement.
+
+### 6. Folders created since the plan
+
+**Problem.** Four domain folders were created after this file was written, none with an `index.ts` or lint pattern: `nodes/` (26 source, 21 tests; from #1127 onwards), `change-tracking/` (27, 14; #1107), `transcript-artifacts/` (57, 34; #1103) and `scheduled-jobs/` (6, 2). Production files outside each folder import their internals directly.
+
+**Context.** The file lists only `mcp-management/` and `public-api/` as unenforced folders. Under the README, new work goes into a new numbered file, but bringing these under the same procedure is arguably a correction of the "Current state" scope.
+
+**Investigation.** A grep of production importers outside each folder finds roughly 10 for `nodes/`, 8 for `change-tracking/`, 8 for `scheduled-jobs/` and 4 for `transcript-artifacts/`. Each would get an `index.ts` and the two patterns, the same as `mcp-management/`.
+
+**Decisions.**
+
+- **Where to track them?**
+  - **Treat them as part of wave 1's `index.ts` step, recording that correction in this file (recommended).**
+    - Pros: the same procedure and validation as `mcp-management/` and `public-api/`; no moves needed.
+    - Cons: stretches the README's "never add new todos" rule; an argument for a new file instead.
+  - **A new numbered todo for the four folders.**
+    - Pros: follows the README rule exactly.
+    - Cons: splits one procedure across two files.
+- **Should new domains be required to start with an `index.ts`?**
+  - **Yes, as a line in `docs/development/linting.md` "Module boundaries" (recommended).**
+    - Pros: stops the list of unenforced folders growing while the waves run.
+    - Cons: a rule in prose, not enforced until a lint pattern is added.
+  - **No rule.**
+    - Pros: no process change.
+    - Cons: the four folders above show folders keep being created without one.
+
+### 7. Open questions
+
+**Problem.** Three placements are undecided.
+
+**Context.** Listed under "Open questions".
+
+**Investigation.** `keyed-record-format.ts` is no longer imported only by `build-pipeline-transcript-*`: `transcript-artifacts/store.ts` imports it too, alongside `build-pipeline-transcript-store.ts` and `build-pipeline-transcript-legacy-manifests.ts`. `pi-model-catalog-seeding.ts` now sits beside `pi-catalog-probes.ts` (from 0066, owned by `runtime.localServers.piCatalog`). The third question is settled: the 0009 and 0010 inheritance splits merged (#1276, #1180), so `storage` and `native-agent` are no longer about to be rewritten by those, though 0214 and 0057 are follow-ups (see tasks 2 and 3).
+
+**Decisions.**
+
+- **Where does `keyed-record-format.ts` go?**
+  - **The shared kernel at the `core/` root (recommended).**
+    - Pros: it now has importers in two domains, which is what the kernel is for.
+    - Cons: one more root file.
+  - **`build-pipeline/`, exported from its `index.ts`.**
+    - Pros: the file's original suggestion.
+    - Cons: `transcript-artifacts/` would then depend on `build-pipeline/` for a format helper.
+- **Where does `pi-model-catalog-seeding.ts` go?**
+  - **With `pi-catalog-probes.ts`, in whichever domain owns the model catalogues when it is touched (recommended).**
+    - Pros: keeps the two Pi catalogue files together; defers a choice nothing yet forces.
+    - Cons: stays unplaced for now.
+  - **The kernel now.**
+    - Pros: settles it.
+    - Cons: the kernel should hold shared primitives, not one provider's catalogue code.
+
 `apps/backend/src/core/` holds several hundred source files in one directory,
 and its domains exist only as file-name prefixes (`opencode-*`,
 `web-annotation-*`, …). Nothing shows or enforces what a domain offers the

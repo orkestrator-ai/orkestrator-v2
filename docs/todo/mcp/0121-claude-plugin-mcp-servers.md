@@ -1,5 +1,86 @@
 # Claude plugin MCP servers in the editor
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Container run**: a container environment whose home holds a plugin, read by the real container reader and loaded by a real container session, including an install turned off on the host. Status: open.
+2. **Narrow-viewport check**: the 390×844 layout of the plugin rows was not exercised in the real-app pass. Status: open (low value).
+3. **Stale decision text and file retirement**: one decision row still describes the pre-0151 gap, and the file should be retired once task 1 is done. Status: open.
+
+### 1. Container run
+
+**Problem.** The container path of the plugin editor is proven only with the fake reader in unit tests and with the real reader against a bare `docker run` container; no container environment created by Orkestrator has loaded a plugin in a real Claude session and had its live row joined to the editor's row. Since 0151, the same run is also the only end-to-end proof that a plugin turned off on the host stays off in a rebuilt container. Users of container environments with Claude plugins are the ones affected.
+
+**Context.** The file asks for this run to be batched with the container session run in [0040](0040-mcp-environment-delivery.md) (its "Open for a live run" item). It needs an image built from a tree that includes `35081a81` ("fix(claude): honor plugin enablement across runtimes (#1289)"), because older images neither merge the staged `enabledPlugins` nor carry the filtering bridge. 0151 proved each piece separately in `orkestrator-v2:dev-0c3cd9a3dec9`.
+
+**Investigation.** The pieces are all on `main`: the container reader path in `apps/backend/src/core/mcp-management/claude-plugins.ts`, the staging filter (`apps/backend/src/core/portable-inputs.ts:235`, `claudeContainerPluginSettings` at `packages/protocol/src/node/claude-plugin-set.ts:296`) and the entrypoint merge (`docker/entrypoint.sh:855-865`). The opt-in real-reader test is `apps/backend/tests/claude-plugin-mcp-container.test.ts` (gated by `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1` at `:14`); it defaults to the image `orkestrator-v2:latest` (`:90`) unless `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` is set. On this host `orkestrator-v2:latest` was built on 2026-10-07, before #1289, and the image named in 0151 is not present, so a run here must build a fresh image (`mise run docker:build:dev`) and pass it explicitly; the unset default would silently test a stale image. Pins are unchanged since the qualification: `@anthropic-ai/claude-agent-sdk` 0.3.309 (`bridges/claude-bridge/package.json:16`) and `CLAUDE_CLI_VERSION=2.1.309` (`docker/Dockerfile:193`), so the CLI rules recorded below still apply. `mise run test:agent:docker` exists but its Docker fixture does not install plugins, so it does not cover this on its own.
+
+**Decisions.**
+
+- **How to run it?**
+  - **Batch with 0040's container session run on one fresh dev image (recommended).** Build with `mise run docker:build:dev`, run `claude-plugin-mcp-container.test.ts` with `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` set to that image, then in an isolated `dev:test` profile with `--fixture-environments local,container` create a container environment whose staged home has one enabled and one host-disabled install, start one short Claude session, and check the editor row, live row and join.
+    - Pros: one image build and one credentialed profile serve both files, as both already ask; proves staging, merge, bridge filter and editor together.
+    - Cons: blocks this low-rated file on 0040's larger run; needs Claude credentials and Docker time.
+  - **Run it alone now.** Same steps, without waiting for 0040.
+    - Pros: closes this file sooner; smaller scope per run.
+    - Cons: a second image build and credentialed session for the same machinery; 0040 would repeat most of it.
+  - **Retire the item, accepting the piecewise evidence from 0151.**
+    - Pros: no further cost; each component is already proven in a real image.
+    - Cons: never proves the pieces compose in an Orkestrator-created container, which is the case users hit.
+- **What counts as a pass?**
+  - **Editor rows equal the session's live plugin servers, every live row joins its editor row, and the host-disabled install is absent from the session and shown disabled with its reason (recommended).**
+    - Pros: the same pass criteria as the local live test, so results are comparable.
+    - Cons: requires reading the live panel inside a container session, not just a reader test.
+  - **Only the real-reader test passes on the fresh image.**
+    - Pros: credential-free and repeatable.
+    - Cons: does not load a session, so the bridge filter and the live join stay unproven in a container.
+- **Should the container test's default image change?**
+  - **Leave the default but always pass `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` in the run notes (recommended).**
+    - Pros: no code change in a research item; the env var already exists.
+    - Cons: a future runner who omits it tests a stale `orkestrator-v2:latest` without a warning.
+  - **Make the test require the image variable (or fail when `latest` predates the code under test).**
+    - Pros: removes the stale-image trap.
+    - Cons: a code change outside this todo's remaining scope; needs its own small change.
+
+### 2. Narrow-viewport check
+
+**Problem.** The real-app pass did not exercise the 390×844 layout: the fullscreen settings layer closed when the viewport switched to the mobile layout, and the script could not reach the settings entry from the mobile menu.
+
+**Context.** The change added no layout, and `McpStatusAndStates.test.tsx` covers the rendering. The AGENTS.md change-type table asks for a narrow viewport only for layout-affecting changes.
+
+**Investigation.** Nothing in this todo's code changed layout since the pass. The "settings layer closes on viewport switch" behaviour is a property of the settings shell, not of plugin rows, and is not tracked as a defect in this file.
+
+**Decisions.**
+
+- **Run the narrow-viewport check?**
+  - **Drop it from this file, noting that the change is not layout-affecting (recommended).**
+    - Pros: matches the documented verification rule; no extra profile run.
+    - Cons: the mobile reachability of MCP settings remains unverified (but it is not this file's concern).
+  - **Run it with the container session in task 1, opening settings fresh at 390×844 rather than resizing.**
+    - Pros: cheap when a profile is already up; would show whether the mobile menu reaches settings.
+    - Cons: scope creep; any finding belongs in a new todo, not here.
+
+### 3. Stale decision text and file retirement
+
+**Problem.** The "Which enablement rule to mirror" row in "Assumptions and decisions" still says, as a con, that turning a plugin off in Claude Code does not show it off here and points to 0151 as "the bridge gap". Since `35081a81` that is no longer true for installs. Separately, once task 1 is done the file is finished and should be retired.
+
+**Context.** The README allows correcting an existing item. The durable behaviour is already in `docs/architecture/mcp-management.md:178-200` ("Claude plugins"). [0151](0151-claude-bridge-plugin-settings.md) is finished and also due for retirement, and this file links to it twice.
+
+**Investigation.** The "Answers" section of this file (line beginning "`<name>@<marketplace>` entries never apply") was already updated for 0151; only the decision-table con was not. `mcp-management.md` cites this todo by number in its "Claude plugins" section and evidence table, so retiring the file needs those references reworded too.
+
+**Decisions.**
+
+- **When to fix the stale con and retire the file?**
+  - **Correct the con now; retire the file (and repoint links from 0151's replacement text) as part of the change that records task 1 (recommended).**
+    - Pros: readers stop seeing a fixed gap described as current; retirement happens in one change with the final evidence.
+    - Cons: two small docs edits instead of one.
+  - **Leave everything until task 1 is done.**
+    - Pros: one edit.
+    - Cons: the stale con misleads anyone reading the decisions in the meantime.
+
 Split from item 7 of [0039-mcp-management.md](0039-mcp-management.md) on
 2026-10-25 (`ba7cc8d4`). The MCP editor
 ([`mcp-management.md`](../../architecture/mcp-management.md)) shows the files

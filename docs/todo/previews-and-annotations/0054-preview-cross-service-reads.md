@@ -2,6 +2,141 @@
 
 Checked against `main` at `06297124` (2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Shipping Safari and iOS check**: run the sibling-read refusal and the
+   top-level link on real Safari (macOS) and iOS, including private browsing.
+   Status: blocked (on Safari and iOS hardware and 0042's platform run).
+2. **Wildcard-DNS `publicPort` deployment check**: full browser traffic through
+   a real wildcard-DNS Tailscale Serve deployment, with the listed fetch, image,
+   frame, link and prefetch probes. Status: blocked (on 0042's "Real private
+   DNS and certificates" run).
+3. **Cross-service read demand**: the open question, whether real projects need
+   cookie-authenticated cross-service reads (and so an opt-out). Status: open
+   (waiting on user reports).
+
+The code item, Chromium, Firefox and Playwright WebKit runs, the iframe
+redirect case and the live Tailscale Serve metadata probe are done. The folder
+index row still says "Firefox ... and a live Tailscale Serve check remain";
+both are done, so that row is stale.
+
+### 1. Shipping Safari and iOS check
+
+**Problem.** The read policy relies on browsers sending Fetch Metadata. Safari
+16.4+ should, but shipping Safari and iOS (with Intelligent Tracking Prevention,
+private browsing and real certificate trust) have not been observed. If they
+omit the headers, a sibling's blind `no-cors` read still reaches the
+application.
+
+**Context.** Publication is off by default and an operator opt-in, which is
+why the file is rated Medium. The same platform gate is in
+[0042](0042-service-preview-rollout.md) (`:232-239` and the hostile-worker
+item, `:250-261`), and the hardware batch in
+[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+
+**Investigation.** The policy is unchanged since `9da8131c` (#1178):
+`crossServiceReadViolation`
+(`packages/protocol/src/preview-header-policy.ts:290-303`) and
+`crossSiteViolation` (`:312-328`), called at
+`apps/backend/src/preview-publication.ts:462` (HTTP) and `:561` (upgrade). The
+session cookie is still `SameSite=Lax` (`preview-publication.ts:528`). The
+cross-engine projects are in `e2e/preview/playwright.preview.config.ts:16-19`,
+on Playwright `^1.64.0` (root `package.json`). Nothing runs against shipping
+Safari or a device.
+
+**Decisions.**
+
+- **How to run it?**
+  - **Run 0042's Safari and iOS top-level pass and include this file's sibling
+    probes in the same session (recommended).**
+    - Pros: one setup of real certificate trust and devices; the cases already
+      exist in the preview spec and can be repeated by hand.
+    - Cons: waits on 0042's hardware run.
+  - **Drive Safari with `safaridriver` through the existing preview spec.**
+    - Pros: repeatable, closer to automation.
+    - Cons: Playwright does not drive shipping Safari; a separate WebDriver
+      harness is new code; iOS still needs a device.
+- **What counts as a pass?**
+  - **Each sibling fetch, image and frame gets 403 and a
+    `http.rejected{forbidden}`, nothing reaches the sibling, and the top-level
+    link opens signed in, in both normal and private windows (recommended).**
+    - Pros: the same oracle as the Chromium negative check; private browsing
+      is where Safari is most likely to differ.
+    - Cons: needs the backend metrics visible during the run.
+  - **The page cannot read the sibling's response.**
+    - Pros: easy to observe.
+    - Cons: explicitly ruled out by the file (an opaque result proves
+      nothing).
+
+### 2. Wildcard-DNS `publicPort` deployment check
+
+**Problem.** Header preservation through Tailscale Serve is proved only with a
+synthetic receiver. DNS, Host routing, TLS renewal and sessions across a real
+wildcard deployment are untested.
+
+**Context.** The file's "Needs verification" gives the probe list; 0042's
+"Real private DNS and certificates" item (`0042:228-231`) owns the deployment.
+
+**Investigation.** `apps/backend/src/tailscale-serve-metadata.test.ts` exists
+and is gated on `ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1`. `publicPort` is
+handled in `apps/backend/src/preview-publication.ts` and
+`apps/backend/src/core/storage-preview-services.ts`. No wildcard deployment
+harness exists.
+
+**Decisions.**
+
+- **Keep this check here or hand it to 0042?**
+  - **Keep it here, run it inside 0042's DNS run, and close this file when
+    tasks 1 and 2 pass (recommended).**
+    - Pros: the probe list and the read-policy rationale stay together; the
+      file closes cleanly.
+    - Cons: two files track one hardware session.
+  - **Move the remaining probes into 0042 and close this file now.**
+    - Pros: one owner for every preview platform gate.
+    - Cons: 0042 is already over 1,300 lines; the README forbids adding new
+      todos to an existing file, so this would have to be framed as narrowing
+      an existing 0042 item.
+
+### 3. Cross-service read demand
+
+**Problem.** A frontend and its API published as two services can no longer
+make cookie-authenticated reads between them. Nobody knows whether real
+projects do this.
+
+**Context.** The rejected option 4 (a per-deployment opt-out) is the fallback
+if users report breakage. The documented path is to proxy the API through the
+frontend's dev server.
+
+**Investigation.** No opt-out setting exists in
+`packages/protocol/src/preview-header-policy.ts` or
+`apps/backend/src/preview-publication.ts`. Before the fix such a pair could
+already not write or send a bearer token, so the lost behaviour was only
+simple credentialed reads.
+
+**Decisions.**
+
+- **Act now or wait for reports?**
+  - **Wait for a user report, then add the opt-out (recommended).**
+    - Pros: no setting or UI for an unreported need; the default stays safe.
+    - Cons: the first affected user hits a 403 and has to read the refusal
+      page.
+  - **Add the per-deployment opt-out now.**
+    - Pros: a ready escape hatch.
+    - Cons: a security-weakening switch with UI and tests for a hypothetical
+      user.
+- **Keep the question in this file?**
+  - **Drop it from the file when tasks 1 and 2 close, recording the decision in
+    `browser-previews.md` "Known limitations" (recommended).**
+    - Pros: lets the file finish; the limitation is already documented there.
+    - Cons: no open todo tracks the question; a report would start a new file.
+  - **Keep the file open until someone answers it.**
+    - Pros: the question stays visible.
+    - Cons: it may never be answered, so the file never finishes.
+
 Found by the hostile service-worker run of 2026-10-22 (evidence log of
 [0042-service-preview-rollout.md](0042-service-preview-rollout.md)). Script on
 one published service (a page or its service worker) could send a credentialed

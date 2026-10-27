@@ -3,6 +3,160 @@
 Checked against `main` at `ba7cc8d4` (2026-10-25); upstream versions checked
 with `npm view`, `bun audit` and Electron's release schedule the same day.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day through the npm registry's dist-tags, `nodejs.org/dist/index.json` and `bun audit`.
+
+### Tasks
+
+1. **Electron 46**: adopt it once stable, with a HiDPI capture-masking live run and a macOS floor re-check. Status: blocked (on Electron 46 stable, due 2027-01-05; `alpha` is 46.0.0-alpha.2).
+2. **electron-builder 27 and electron-updater 7 with signed update manifests**: migrate the config, auto-update API and macOS feed edit, generate and wire the keys. Status: blocked (on electron-builder 27 stable; `next` is 27.0.0-alpha.13).
+3. **`marked` 18**: move once `@tiptap/markdown` accepts it. Status: blocked (`@tiptap/markdown` 3.32.0, still latest, depends on `marked ^17.0.1`).
+4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
+5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
+6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: blocked (on `@tailwindcss/typography` and the Pi SDK; both still latest).
+7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); open (24.22.1 is a security release).
+
+### 1. Electron 46
+
+**Problem.** Electron 45 loses support on 2027-04-27, so the desktop app must reach 46 before then.
+
+**Context.** Item 1's first half (44 to 45) landed on 2026-10-25. 46 changes `capturePage` to report and accept DIPs; the masking code was pre-adapted. The file rates itself Low until 46 is stable, then Medium.
+
+**Investigation.** Root and desktop pin `electron ^45.0.0` (`package.json:28`, `apps/desktop/package.json:29`); npm `latest` is still 45.0.0 and `alpha` is 46.0.0-alpha.2. `maskCaptureImage` reads scales through `image.getScaleFactors?.()` at `apps/desktop/electron/browser-preview-capture-image.ts:23`, as described. Nothing has changed since 2026-10-25.
+
+**Decisions.**
+
+- **When to start the 46 move?**
+  - **On the first 46 stable release, with the HiDPI run on a Retina Mac in the same change (recommended).**
+    - Pros: leaves almost four months before 45's end of support; the DIP risk is already covered by `apps/desktop/tests/browser-preview-capture-flow.test.ts`.
+    - Cons: needs a Retina Mac the day the change is made; the Linux host here is 1x only.
+  - **Try 46 beta in a branch in December to find breakage early.**
+    - Pros: surfaces surprises before the stable date.
+    - Cons: betas change; the work may need repeating, and Electron 46's macOS floor is only final at stable.
+
+### 2. electron-builder 27 and electron-updater 7 with signed update manifests
+
+**Problem.** Linux AppImage updates are trusted on the feed's SHA-512 alone, so a compromised GitHub release could push code to Linux users. Signed manifests (decision 3) close that, but only arrive with electron-builder 27.
+
+**Context.** The key decision is made: Ed25519, current and next key, release machines hold the current key. A signed release is a one-way door. `scripts/mac-update-feed.ts` edits the macOS feed after it is written, which would invalidate a signature.
+
+**Investigation.** Pins are `electron-builder ^26.18.0` (`package.json:29`) and `electron-updater 6.8.11` (`apps/desktop/package.json:30`). Upstream `next` moved to 27.0.0-alpha.13 and 7.0.0-alpha.12. Newly published: a `v26` dist-tag carrying electron-builder 26.18.1 and electron-updater 6.8.12, patch releases this file does not mention. `auto-update.ts` still sets `updater.autoInstallOnAppQuit = true` (`apps/desktop/electron/auto-update.ts:148`) and calls `quitAndInstall` at `:191` and `:339`. `scripts/mac-update-feed.ts:27` still writes `minimumSystemVersion` after the build.
+
+**Decisions.**
+
+- **How to make the macOS feed's `minimumSystemVersion` survive signing?**
+  - **Set it through electron-builder config before signing, if 27 stable exposes it; otherwise re-sign with `createUpdateManifestSignatures` (recommended).**
+    - Pros: one signature, produced by the tool that publishes; no second signing step to keep in step.
+    - Cons: depends on what 27 stable exposes, which alpha.12 did not.
+  - **Always re-sign the edited feed in `scripts/mac-update-feed.ts`.**
+    - Pros: works today with alpha behaviour.
+    - Cons: a second place that needs the private key; `release:publish` must verify both.
+- **Take the 26.18.1 / 6.8.12 patches now?**
+  - **Yes, in the next routine in-range batch, recorded in a new todo file per the README rule (recommended).**
+    - Pros: stays current on the supported line while 27 is alpha.
+    - Cons: one more lockfile change and a desktop build check.
+  - **No, wait for the 27 migration.**
+    - Pros: one change instead of two.
+    - Cons: could be months away; misses any fix in the patches.
+
+### 3. `marked` 18
+
+**Problem.** `apps/web` stays on `marked` 17.0.6 while 18.1.2 is current.
+
+**Context.** `@tiptap/markdown` pins `marked ^17.0.1`. 18 stops keeping trailing blank lines in block tokens' `raw`.
+
+**Investigation.** Still blocked: npm `@tiptap/markdown` latest is 3.32.0 with `marked ^17.0.1`. Pins at `apps/web/package.json:46` and `:57`. The `raw` comparisons are in `apps/web/src/components/markdown/tiptap-extensions.ts:181`-`:183`; `SearchTextRenderer extends Renderer` at `apps/web/src/components/chat/native-message-search.ts:26`.
+
+**Decisions.**
+
+- **Whether to wait for tiptap?**
+  - **Wait (recommended).**
+    - Pros: tiptap's own parser is tested against 17; no duplicate `marked` copies.
+    - Cons: no 18 fixes until tiptap moves.
+  - **Override `marked` to 18 for `apps/web` only.**
+    - Pros: current `marked` now.
+    - Cons: runs tiptap on an untested major; the `raw` change hits exactly the code above.
+
+### 4. hono 5
+
+**Problem.** claude-bridge and codex-bridge use hono 4.
+
+**Context.** Only once 5 is stable.
+
+**Investigation.** Both pin `hono ^4.13.13` (`bridges/claude-bridge/package.json:21`, `bridges/codex-bridge/package.json:17`); npm `latest` is 4.13.14 and `next` 5.0.0-rc.1. claude-bridge has its own `bun.lock`, which the file notes is awkward to regenerate.
+
+**Decisions.**
+
+- **When?**
+  - **After 5.0.0 stable plus one patch release (recommended).**
+    - Pros: avoids first-release regressions in both bridges' HTTP surface.
+    - Cons: slightly later.
+  - **On 5.0.0 day.**
+    - Pros: earliest.
+    - Cons: the bridges' routing and `app.onError` behaviour are load-bearing; a first major is riskier.
+
+### 5. `@dnd-kit/react` 1.0
+
+**Problem.** The classic `@dnd-kit/*` packages have had no release since December 2024.
+
+**Context.** Not deprecated; the migration is a rewrite of the sidebar, pane layout, Kanban and GitHub issues drag-and-drop.
+
+**Investigation.** `@dnd-kit/react` latest is 0.5.1 (plus a dated beta). `apps/web/src` has 32 files that import `@dnd-kit` (20 excluding tests), not the 24 the file states. Root `package.json:13`-`:14` still duplicates `@dnd-kit/core` and `/sortable`.
+
+**Decisions.**
+
+- **Wait for 1.0, or move early?**
+  - **Wait for 1.0, and drop the root duplicates whenever `package.json` is next touched (recommended).**
+    - Pros: the classic packages work; a pre-1.0 API may change under a 32-file rewrite.
+    - Cons: stays on an unmaintained line.
+  - **Migrate to 0.5.x now.**
+    - Pros: off the unmaintained line.
+    - Cons: pre-1.0 churn; large diff for no user-visible gain.
+
+### 6. Accepted advisories
+
+**Problem.** `bun audit` still reports four advisories.
+
+**Context.** Decision 4: in-range fixes were taken; exact upstream pins were left.
+
+**Investigation.** `bun audit` today reports the same four: `postcss-selector-parser` 6.0.10 (moderate, through `@tailwindcss/typography` 0.5.20, still latest) and `undici` 8.10.2 (one high, two moderate, fixed in 8.12.2) through `@earendil-works/pi-coding-agent` 1.4.0, which is still the latest Pi release and still pins `undici 8.10.2` (and `PI_CLI_VERSION=1.4.0` in `docker/Dockerfile:197`). `undici` 7.30.1 and 6.29.1 under Electron's `@electron/get` are outside the affected range.
+
+**Decisions.**
+
+- **Keep accepting the `undici` pin?**
+  - **Yes, until the next Pi bump (recommended).**
+    - Pros: an override would run the Pi SDK on an undici it was not built against; the bridge talks only to model providers the user chose.
+    - Cons: a high-severity DoS stays; nothing upstream has moved it yet.
+  - **Add a root `overrides.undici` to 8.12.x for the Pi bridge.**
+    - Pros: clears the advisory now.
+    - Cons: Pi bumps are governed by `upgrade-agents.md`, which this file excludes; the SDK and the `pi` binary are pinned together.
+
+### 7. Node in the Docker image
+
+**Problem.** The image ships `NODE_VERSION=24.21.0` (`docker/Dockerfile:114`).
+
+**Context.** The file defers Node 26 until its LTS settles (not before December 2026) and lets 24.22.1 ride with that or the next image change.
+
+**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads.
+
+**Decisions.**
+
+- **When to take 24.22.1?**
+  - **Now, as its own small image change with the checksum update and `docker/tests/final-image-smoke.sh` (recommended).**
+    - Pros: closes a security release in a runtime that runs agent CLIs; a patch bump on the same LTS line.
+    - Cons: an image rebuild and smoke run on both architectures.
+  - **Keep riding with Node 26 or the next image change.**
+    - Pros: one image change instead of two.
+    - Cons: leaves a known security release unapplied for at least six weeks.
+- **When to move to Node 26?**
+  - **After 26 enters LTS (2026-10-28) and one further patch, not before December (recommended).**
+    - Pros: matches the file; avoids early-LTS regressions in the agent CLIs.
+    - Cons: two Node changes in the image within two months.
+  - **Stay on 24 until its end of life.**
+    - Pros: fewer image changes.
+    - Cons: users' projects increasingly expect the current LTS.
+
 Third-party dependencies, runtimes and image tools should stay on supported
 lines, with every fixable advisory cleared. Agent SDKs and CLIs are out of
 scope here; they follow [`upgrade-agents.md`](../../development/upgrade-agents.md).

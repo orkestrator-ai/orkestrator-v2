@@ -8,6 +8,78 @@ The behaviour now lives in
 this change is reviewed the file can be deleted (README: "Maintaining the
 folders").
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: all nine code items, the qualification note and the one
+"Needs verification" item are done, and the branch merged as `a566e47c`
+(#1221).
+
+1. **Retire the file**: decide what happens to this finished file now that its
+   change is on `main`. Status: open.
+
+### 1. Retire the file
+
+**Problem.** The file lists nine done items and no open work, but still sits
+in the folder index (rank 8, Finished: Yes). A reader picking work from the
+index has to open it to learn there is nothing to do.
+
+**Context.** README "Maintaining the folders": when the last item is done, move
+durable behaviour into `architecture/` or `development/`, delete the file and
+remove its row. The file says it is kept only until the change is reviewed.
+Its decisions D1 to D7 and the live evidence table are the only parts not yet
+recorded elsewhere in full.
+
+**Investigation.** Every item is on `main`, merged in `a566e47c`
+("close the 0043 web annotation known limitations", #1221):
+`regionCropRelation` at `apps/backend/src/core/web-annotation-service-threads.ts:117`
+(used at `:403`); `parentCaptureId` is refused at
+`packages/protocol/src/web-annotations-validation.ts:326-330`;
+`currentDocumentResults` at
+`apps/web/src/components/browser/annotations/useAnnotationPins.ts:100`;
+`CONTAINER_PATH_CHECKER` at `apps/backend/src/core/web-annotation-source-checks.ts:81`;
+`check_container_workspace_paths` registered at
+`apps/backend/src/core/commands-registry-terminal.ts:1221` and called from
+`apps/backend/src/core/web-annotation-dispatch.ts:1337`;
+`webAnnotationProducerSource` at `packages/protocol/src/web-annotations.ts:416`;
+the drain guard on `requireSessionMode` at
+`apps/backend/src/core/native-agent-prompt-queue-dispatcher.ts:728` and the
+publish guard at `apps/backend/src/core/native-agent-service.ts:3671`;
+`noteTurnEnded` at `apps/backend/src/core/web-annotation-service-requests.ts:1428`,
+wired at `apps/backend/src/core/index.ts:791`; `currentCaptureAssets` at
+`packages/protocol/src/web-annotations.ts:651`; `getCaptureDiagnostics` at
+`apps/desktop/electron/preload-api.ts:194`. The plan-step comment search from
+item 9 finds nothing. `docs/architecture/web-page-annotations.md` already
+describes the crop relation and producer label (`:72-77`), the turn-end read
+(`:359-360`), the Plan-mode guard (`:382`), the container check (`:477`) and a
+Diagnostics section (`:526-536`). It does not carry the D1 to D7 rationale
+(why not attestation, why not a second session) in decision form. The "Replaces"
+paths under `docs/improvements/web-page-annotations/` no longer exist. 0044
+already expects the container check rather than `unavailable` (0044 `:193-195`).
+
+**Decisions.**
+
+- **What to do with the file now?**
+  - **Move D1 to D7 into the architecture doc, then delete (recommended).** Add
+    a short "Decisions" note (crop relation is geometric, producer is
+    client-declared, no second Discuss session, no mode switch) to
+    `web-page-annotations.md`, delete this file and remove its index row.
+    - Pros: follows the README rule; the rationale that stops someone
+      re-proposing attestation or mode switching survives; the index shrinks.
+    - Cons: one more small docs change; the per-provider evidence table is lost
+      except in git history.
+  - **Delete now without moving anything.**
+    - Pros: smallest change; behaviour is already documented.
+    - Cons: the reasons behind D2 and D3 (both "we chose not to") are not in the
+      architecture doc and would be lost from the living docs.
+  - **Keep until a human reviews the decisions.**
+    - Pros: matches the file's own "once reviewed" wording.
+    - Cons: the change merged in #1221, so review has effectively happened; a
+      finished file keeps occupying an index row with no end date.
+
 These were code gaps in the shipped annotation workflow. Some appeared under
 "Known limitations" in
 [web-page-annotations.md](../../architecture/web-page-annotations.md); others

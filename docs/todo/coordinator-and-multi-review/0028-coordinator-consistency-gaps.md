@@ -3,6 +3,125 @@
 Checked against `main` at `20f6de91` (2026-10-25). First written against
 `2459b05c` (2026-10-15).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: every code item (2 to 8) is done and on `main`, item 1 is
+owned by 0005, and the one qualification run is owned by 0024. What is left is
+housekeeping.
+
+1. **Retire the file**: the branch it was waiting on has merged, so the file
+   should now be deleted under the README rules. Status: open.
+2. **Steer for OpenCode and Grok** (item 1): tracked here only as a pointer.
+   Status: blocked (OpenCode 2.x `delivery: steer`, an ACP mid-turn input for
+   Grok; owned by 0005 and 0008).
+3. **Live proof of ride-along and blocker wording** (Qualification): tracked
+   here only as a pointer. Status: open (owned by 0024).
+
+### 1. Retire the file
+
+**Problem.** The file says to keep it "until this branch's review passes" and
+then delete it. That branch has merged, so the file and its index row are now
+stale backlog. Anyone ranking work from the folder index sees a Finished row
+with nothing to pick up.
+
+**Context.** README "Maintaining the folders": when the last item is done, set
+**Finished** to Yes (done, `0000-index.md:20`), move durable behaviour into
+`architecture/`, delete the file and remove its index row. Decision D8 in this
+file says the same.
+
+**Investigation.** Branch `todo-0028-coordinator-consistency-b1b98c1981f1`
+landed as `40ff2511` "feat(coordinator): close coordinator consistency gaps
+(#1256)" on 2026-10-25, an ancestor of `863b5782`. Every code reference in
+"Current state" still exists:
+`environmentListFingerprint` (`apps/backend/src/core/control-mcp-tools.ts:391`,
+used at `:833`); `unusedCoordinatorConversationIds`
+(`apps/web/src/components/projects/CoordinatorPanel.tsx:623`);
+`waitingBlocker` (`apps/backend/src/core/coordinator-status-wakes.ts:672`);
+`includeCoalescing` / `joinCoalescing`
+(`apps/backend/src/core/agent-mail-service.ts:485`, `:693`; the storage half is
+now in `storage-agent-mail-injects.ts:469`, not `storage-agent-mail.ts`);
+`MAX_OPEN_COORDINATOR_CONVERSATIONS = 16`
+(`apps/backend/src/core/coordinator-service.ts:90`). The durable behaviour is
+already in `docs/architecture/coordinator.md` (unused side agents at line 124,
+"Status wakes" at line 779) and `agent-registry.md`. Two "Current state" facts
+are slightly stale: OpenCode's actions are now `compact`, `undo` and `redo`
+with no `share` (`packages/protocol/src/native-agent.ts:1174`), and Grok's are
+`{ compact: true }`, not empty (`native-agent.ts:1113`). Neither changes the
+steer conclusion. The file is linked from 0005, 0008, 0024, 0026 and 0142, and
+from the folder index; deleting it means editing those links (no unit test
+checks relative Markdown links, so nothing would fail, but the links would
+rot).
+
+**Decisions.**
+
+- **What to do with the file now?**
+  - **Delete it now, with its index row, and repoint the five inbound links
+    (recommended).** Point them at `architecture/coordinator.md` or drop them.
+    - Pros: follows the README rule and D8; the condition it was waiting on is
+      met; removes a dead row from the index.
+    - Cons: touches five other todo files; loses the D1 to D7 rationale unless
+      it is first copied into `coordinator.md`.
+  - **Copy D1 to D7 into `coordinator.md` first, then delete.**
+    - Pros: keeps the reasoning (why sides only, why the renderer names
+      candidates) next to the behaviour.
+    - Cons: more work; `coordinator.md` is already long and much of this is
+      history rather than behaviour.
+  - **Keep it as Finished.**
+    - Pros: no edits elsewhere.
+    - Cons: contradicts the README and the file's own D8; the stale
+      "Current state" facts above would keep drifting.
+
+### 2. Steer for OpenCode and Grok
+
+**Problem.** OpenCode and Grok cannot steer a running turn; prompts sent
+mid-turn are queued instead.
+
+**Context.** Not this file's work (struck through as item 1); owned by
+[0005](../agent-engines/0005-mid-turn-steer-and-interrupt.md) and
+[0008](../agent-engines/0008-opencode-v2.md).
+
+**Investigation.** Still true. `nativeAgentCapabilities()` gives `steer` to
+Claude (`native-agent.ts:1139`), Pi (`:1196`), Codex (`:1208`) and Cursor
+(`:1113`), not to OpenCode (`:1174`) or Grok (`:1113`). `@opencode-ai/sdk` is
+still pinned at `1.19.4` (`apps/backend/package.json:23`).
+
+**Decisions.** None: ownership is already settled in 0005 and 0008, and the
+pointer disappears with the file under task 1.
+
+### 3. Live proof of ride-along and blocker wording
+
+**Problem.** The ride-along of held notices and the "approval" or "question"
+wording are proven by unit tests only.
+
+**Context.** The run belongs to
+[0024](0024-coordinator-live-conformance.md), "Status wakes" (line 432), whose
+`status` scenario already covers the approval part.
+
+**Investigation.** 0024's status-wake item covers a worker held on an approval
+for more than 20 seconds and seven reviews coalescing into one wake. It does not
+say it checks the question wording ("for an answer to a question") or a held
+notice riding along with mail dispatched meanwhile; 0024's "How to hold a worker on an
+approval" decision (line 784) considered a question as option (c) and chose an
+approval instead, because not every provider has a question tool.
+
+**Decisions.**
+
+- **Where should the question wording and ride-along checks live once this
+  file is deleted?**
+  - **Leave them to 0024's existing status scenario and accept unit coverage
+    for the question case (recommended).**
+    - Pros: no new todo; 0024 already decided which states the live run must
+      prove; the wording is a pure function of the projection's interactions.
+    - Cons: the question wording is never seen on a real provider.
+  - **Record them as explicit checks in 0024 before deleting this file.**
+    - Pros: nothing falls through when the pointer goes.
+    - Cons: README rules forbid adding new todos to an existing file; it would
+      need a new numbered file or a narrowing edit to 0024's existing item.
+
 Every enabled platform can already inspect, delegate, wake and queue through
 the same coordinator interface. This file collected the smaller differences
 that kept the platforms from feeling the same. All of them are now closed on

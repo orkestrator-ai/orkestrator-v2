@@ -9,6 +9,326 @@ the opening prompt, export into an Orkestrator container, mixed versions and
 the 0174 reproduction against `20f6de91` (2026-10-25, see
 [Qualification evidence (2026-10-25)](#qualification-evidence-2026-10-25)).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). One accepted residual window and a stale test name remain.
+2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: open (this host and CI both have a Linux Engine).
+3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open.
+4. **Human screen-reader pass**: VoiceOver and NVDA over the layer tree, frame list, inspector and status regions. Status: open.
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: open (this host qualifies as both).
+6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open (published desktop builds exist).
+7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
+8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: open (0174 was reopened on 2026-10-26, after this file called it resolved).
+9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: deferred.
+10. **Shared live-provider harness (open question)**: whether design joins a shared live harness. Status: done in practice (own specs with a shared support module).
+11. **Cross-environment transfer UI (open question)**: whether to build one. Status: open (question only).
+
+### 1. Opening prompt without the tab mounted
+
+**Problem.** A **New design workspace** brief used to depend on the new tab being mounted. A user who switched environment at once could lose the brief, or have it sent twice.
+
+**Context.** Fixed on 2026-10-25 by handing the brief to the backend's durable prompt queue under `initial-prompt:<environment>:<tab>` (decisions 1–4).
+
+**Investigation.** Done at HEAD:
+- `handTabInitialPromptToBackend` is at `apps/web/src/lib/tab-initial-prompt.ts:163`. It is called from `apps/web/src/components/design/DesignWorkspaceDialog.tsx:415` and `apps/web/src/components/layout/useActionBarController.ts:856`.
+- The `noQueue` guard is at `apps/web/src/components/native-agent/AgentNativeTab.controller.tsx:1650-1656` and `:2477`, and its test is at `AgentNativeTab.test.tsx:6542`.
+- The inactive real-stack case at `e2e/agent-testing/design-canvas.spec.ts:480` is now named "an image brief drains after enqueue acknowledgement and fallback failure while inactive", not "a new design tab's brief is sent while its environment is inactive" as "Current state" says. It was renamed within #1262.
+- The residual window from decision 1 still exists: a renderer that dies between creating the tab and the queue write loses the brief.
+
+**Decisions.**
+
+- **Close the renderer-death window?**
+  - **Accept it and record it in `design-canvas.md` (recommended).**
+    - Pros: the window is a few milliseconds of renderer work; no new backend surface; the same exposure exists for every renderer-created tab.
+    - Cons: a crash at exactly that moment still loses a brief silently.
+  - **Have the backend create the tab and queue the prompt in one command (decision 1 option a).**
+    - Pros: atomic; nothing depends on the renderer surviving.
+    - Cons: a new backend command and layout write path for a rare crash; the pane layout deliberately never stores prompts.
+
+### 2. Container export on Linux Docker Engine
+
+**Problem.** The export protocol, including reconciliation by digest after a killed client, is proved only on Docker Desktop for macOS. Linux Engine users run the same helpers on a different daemon, filesystem and stdin-close behaviour. The "killed after every byte" case depends on the daemon closing the helper's stdin.
+
+**Context.** Batched with 0019. The file says "this machine is macOS with Docker Desktop only". That was true of the earlier host; it is not true of every host this work runs on.
+
+**Investigation.**
+- `apps/backend/src/core/design/export-container.test.ts` is unchanged in shape: 11 cases, gated on `ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE` (`:40`, `:114`).
+- This host runs Docker Engine 29.9.1 on Linux x64 (rootful, seccomp builtin), with `orkestrator-v2:latest` (two weeks old) and a current dev image available.
+- `.github/workflows/container-live-qualification.yml` already runs real Linux Engines on `ubuntu-24.04` and `ubuntu-24.04-arm`, with `ORKESTRATOR_QUALIFICATION_IMAGE` built per job (`:59-61`). It does not run `export-container.test.ts`, and `tests/unit/ci-workflows.test.ts` only checks the suites it lists.
+- The Orkestrator-created path (`e2e/agent-testing/design-container-export.spec.ts:55`, run by `mise run test:agent:docker`) needs a `dev:test --fixture-environments local,container` profile, so it cannot run in that workflow.
+
+**Decisions.**
+
+- **Where to qualify Linux Engine?**
+  - **Add `export-container.test.ts` to `container-live-qualification.yml`, with `ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE` set to the job's qualification image, and list it in `ci-workflows.test.ts` (recommended).**
+    - Pros: amd64 and arm64 Linux Engine every week and on PRs touching it; no shared-host risk; no change to the test.
+    - Cons: adds about 10–30 s per architecture to that workflow; CI runners are not a user's host (no rootless, no SELinux).
+  - **One manual run on this Linux host: the backend file plus `mise run test:agent:docker` on a `--fixture-environments local,container` profile.**
+    - Pros: covers the Orkestrator-created container on Linux too; quick.
+    - Cons: one-off evidence; the host also runs a production instance, so the run needs care (exact-owner labels already handle cleanup).
+  - **Leave it batched in 0019 until a Linux pass happens there.**
+    - Pros: no new work now.
+    - Cons: keeps the "Docker Desktop for macOS only" qualification although a Linux Engine is already at hand.
+- **What counts as a pass?** All 11 backend cases pass on both CI architectures. A pass on this host also needs `design-container-export.spec.ts` to pass once. A skip (no image variable) is not a pass.
+
+### 3. Electron gaps
+
+**Problem.** Four Electron behaviours are unproven:
+- OS-delivered key equivalents through the native menu.
+- The OS Save dialog of a download.
+- The packaged `file://` renderer.
+- A one-in-twelve failure where Ctrl/⌘+0 left the canvas at 71%.
+
+The menu gap has a concrete risk. The application menu binds the same keys the canvas claims.
+
+**Context.** Playwright sends keys through Chromium, not the OS. The production main loads the renderer from `process.resourcesPath/web` (`apps/desktop/electron/main.ts:768`, `:1141`, `:1234`), so a dev-served spec never sees it. 0031 batches Electron runs.
+
+**Investigation.**
+- `apps/desktop/electron/application-menu.ts:119-122` gives View → **Actual Size** `CmdOrCtrl+0` (and Zoom In/Out `CmdOrCtrl+=`/`-`). These emit `menu-zoom` (`main.ts:718`). App.tsx's `menu-zoom` listener (`apps/web/src/App.tsx:907`) resets app zoom with no check for the canvas. Only the keydown handler checks `defaultPrevented` (`:930`).
+- If the OS key equivalent reaches the menu even though the canvas claimed the key, Ctrl/⌘+0 on a focused canvas would reset both canvas zoom and app zoom. Chromium normally gives the page first refusal on key equivalents, so this is expected to be fine, but nothing has checked it.
+- Edit → `undo`/`redo` roles (`application-menu.ts:107-108`) have the same question for ⌘Z on the canvas.
+- The spec header (`e2e/agent-testing/design-canvas-electron.spec.ts:25-37`) still lists the packaged renderer as not covered.
+- `mise run package:linux` builds and installs an unpacked Linux app, and release assets include an AppImage, a pacman package and a dmg (checked for v2.22.3). So a packaged renderer can be run without a release.
+
+**Decisions.**
+
+- **How to cover the packaged renderer?**
+  - **A Playwright `_electron.launch({ executablePath })` variant of the design Electron spec against a `mise run package:linux` build, run with the release smoke (recommended).**
+    - Pros: exercises `file://` loading, the CSP and asset paths with the existing assertions; repeatable on Linux without signing.
+    - Cons: needs a packaged build (minutes); the macOS bundle still needs its own run.
+  - **A manual checklist on the release build.**
+    - Pros: no harness work.
+    - Cons: not repeatable; easy to skip.
+- **How to settle native menu key equivalents?**
+  - **A manual pass in a real macOS desktop session: ⌘0, ⌘=, ⌘- and ⌘Z with the canvas focused, checking that app zoom does not change (recommended).**
+    - Pros: answers the exact question in minutes; no code change unless it fails.
+    - Cons: needs an unshared desktop session; Linux and Windows menu accelerators remain unchecked.
+  - **Defensively ignore `menu-zoom` while the canvas owns shortcuts.**
+    - Pros: removes the double-reset whatever the OS does.
+    - Cons: a mouse click on View → Actual Size while the canvas is focused would stop resetting app zoom, which is wrong; a fix for an unproven bug.
+- **Keep the OS Save dialog check?**
+  - **Retire it (recommended).** The product installs no `will-download` handler, so the dialog is Electron's own default, and the spec already proves the download manager path.
+    - Pros: drops a check that tests Electron, not Orkestrator.
+    - Cons: a future `will-download` handler would need its own test (worth noting in `design-canvas.md`).
+  - **Keep it in the macOS manual pass.**
+    - Pros: costs seconds alongside the menu check.
+    - Cons: keeps an item open for no product code.
+- **The unexplained Ctrl/⌘+0 failure?**
+  - **Keep the key-event dump and close the item unless it recurs in the batched Electron runs (recommended).**
+    - Pros: no recurrence in eight runs; the diagnostics are in place.
+    - Cons: the re-measure wait in the spec could hide a real timing issue.
+  - **Investigate now by stressing the step (`--repeat-each`) under CPU throttle.**
+    - Pros: may find a product race.
+    - Cons: time on a one-in-twelve failure with no user report.
+
+### 4. Human screen-reader pass
+
+**Problem.** No screen reader has been used on the canvas. Verbosity, live-region timing during nudge bursts, the `aria-description` on frames, Preview-mode frames and browse-mode navigation are unknown to screen-reader users.
+
+**Context.** The automated pass and 0054 fixed every defect the tree and focus checks could find. 0054 deliberately chose label-only inspector names and left verbosity to this pass.
+
+**Investigation.** The surfaces exist as described:
+- the frame `aria-description` at `apps/web/src/components/design/DesignFrameView.tsx:343`;
+- the layer tree's polite region at `DesignLayerTree.tsx:824`;
+- the save state and status at `DesignStatus.tsx:200` and `:294`;
+- the canvas announcer at `DesignCanvasTab.tsx:1150`.
+
+No screen-reader automation (for example Guidepup) is a dependency, and Orca is not installed on this Linux host. The pass still needs a person.
+
+**Decisions.**
+
+- **Which readers, and who?**
+  - **VoiceOver on macOS first, then NVDA on Windows, by someone who uses a screen reader daily, following a checklist built from the five areas above (recommended).**
+    - Pros: the two most-used desktop readers; a daily user catches verbosity problems a sighted tester accepts.
+    - Cons: needs access to such a person and a Windows machine.
+  - **VoiceOver only, by the team.**
+    - Pros: available now on the dev Macs.
+    - Cons: NVDA's browse mode and virtual cursor differ the most from VoiceOver, and that is where the canvas and iframes are riskiest.
+  - **Automate with Guidepup in CI.**
+    - Pros: repeatable.
+    - Cons: a new dependency and macOS/Windows runners with screen readers; it checks speech strings, not whether the experience is usable.
+- **What counts as a pass?** Every journey step of `DesignCanvasAccessibility.spec.ts` completed by speech alone, with findings filed as a new numbered todo (not added here), and the label-only naming either confirmed or reversed.
+
+### 5. Client performance on other hosts and Electron
+
+**Problem.** The client numbers come from one Apple M5 Max running headless Chrome. A slower laptop or Linux GPU stack could drop pan frames or slow acknowledgments, and nobody would know.
+
+**Context.** The numbers are host evidence, not thresholds. The deferred backend optimisations (task 9) do not depend on them.
+
+**Investigation.**
+- `e2e/perf/design-canvas-perf.ts:1449-1450` launches `channel: "chrome"`. This host is a Linux x64 laptop with an AMD Ryzen 5 PRO 5650U (12 threads) and Google Chrome at `/opt/google/chrome/chrome`, so it is both "Linux" and "a slower laptop", and the harness can run here unchanged.
+- The harness has no Electron mode. Electron 44.7.0 ships Chromium 152, against Chrome 155 in the measured run.
+
+**Decisions.**
+
+- **Where to run next?**
+  - **Run the same command on this Linux laptop on a quiet host, keeping the JSON report alongside the M5 Max one (recommended).**
+    - Pros: covers both missing host classes in one run; no harness change.
+    - Cons: the host is shared with production work, so load must be recorded and runs repeated.
+  - **Wait for a dedicated perf machine.**
+    - Pros: cleaner numbers.
+    - Cons: no such machine is planned; the gap stays open.
+- **Measure the Electron renderer?**
+  - **No: treat Chrome as a proxy and retire the Electron part unless an Electron-only regression is reported (recommended).**
+    - Pros: same Blink and V8 lineage, three Chromium versions apart; avoids building an Electron mode for a measurement nobody is waiting on.
+    - Cons: Electron's IPC transport and compositor flags are not measured, and acknowledgment there includes a different hop.
+  - **Add an `--electron` mode using `_electron.launch`.**
+    - Pros: measures the shipped desktop path, including the transport.
+    - Cons: a sizeable harness change; Electron cannot run headless, so it needs a display.
+
+### 6. Old renderer with new backend, and the reverse
+
+**Problem.** No run has paired an old renderer with the new backend, or the reverse. The desktop app can connect to a remote backend with either side newer (`docs/architecture/version-compatibility.md:45`, through `apps/desktop/electron/connection-manager.ts`), so users can hit both.
+
+**Context.** The npm package has no renderer. The file says this needs "an old desktop app build", and that is available: GitHub releases v2.21.0, v2.21.1, v2.22.3 and v2.23.0 are published, and v2.22.3 carries an AppImage, a pacman package, a dmg and a zip.
+
+**Investigation.**
+- New finding: the renderer's v1 fallback (`getCapabilities` returns `null` on `unsupported`, `apps/web/src/lib/design-client.ts:107-118`, which drives `legacySync` at `apps/web/src/components/design/design-controller.ts:321-334` and `:391`) serves backends without `design_capabilities`. That command shipped in #844 (2026-09-25) and is in every release from v2.21.0, the floor. So the fallback cannot be reached inside the support window.
+- `version-compatibility.md:91` says "The renderer has none left", which this path contradicts.
+- Newer commands an old renderer lacks are handled on the renderer side, for example the `design_session_link_states` "unsupported" fallback (0038 decision 10; added 2026-10-24, so v2.21–v2.23 backends lack it). That fallback is still needed.
+
+**Decisions.**
+
+- **How to run the renderer half?**
+  - **Run the v2.22.3 desktop build (AppImage on this Linux host, or the dmg on macOS) connected to a `dev:test` backend from this checkout. Then run the current renderer from a `dev:test` profile against `orkestrator@2.22.3` installed by `scripts/qualify-design-mixed-versions.ts`. Exercise open, edit, export, Ask agent and Resume (recommended).**
+    - Pros: real published binaries on both sides; reuses the existing install step; covers the user path through the connection manager.
+    - Cons: manual; an old desktop app on a shared host must use its own data directory and port.
+  - **Build old renderers from tags in worktrees (like `qualify-backend-upgrade-rollback.ts`).**
+    - Pros: scriptable and repeatable.
+    - Cons: not the binary users run; slower.
+- **What to do with the renderer's v1 design fallback?**
+  - **Retire it: delete the `null`-capabilities path and its `design_action` snapshot use in the controller, and keep `design_action` on the backend for MCP and the old adapters (recommended).**
+    - Pros: removes an unreachable branch and its test; makes `version-compatibility.md:91` true.
+    - Cons: a source build from before #844, outside the window, would show an error instead of a v1 canvas.
+  - **Register it in `version-compatibility.md` as a renderer path with removal condition "met".**
+    - Pros: documents it truthfully without code churn.
+    - Cons: keeps dead code that the register itself says should go.
+
+### 7. Interrupted migration on a real binary
+
+**Problem.** The window between writing a migrated `.orkrec` and moving the legacy `.orkdes` into `legacy-backups` has not been exercised on a real binary.
+
+**Context.** The window cannot be reached from outside the process. It is covered by "an interrupted migration (record written, legacy not retired) reads the record" (`apps/backend/src/core/design/records.test.ts:323`).
+
+**Investigation.** No fault hook exists in the shipped backend that would let a real binary stop at that point. `records.ts` takes `this.faults` only in tests (`writeAtomically(..., this.faults)`, `apps/backend/src/core/design/records.ts:534`).
+
+**Decisions.**
+
+- **Keep or retire?**
+  - **Retire it as covered by the unit test (recommended).**
+    - Pros: the unit test uses the real record code and filesystem; a real-binary run adds only process-kill timing.
+    - Cons: no proof that a SIGKILL in that window behaves the same as a thrown fault.
+  - **Add an env-gated fault hook to the backend and SIGKILL it at the window in the mixed-version script.**
+    - Pros: end-to-end proof.
+    - Cons: ships a test-only kill point in production code for a window the unit test already covers.
+
+### 8. Design browser flakes 0208 and 0174
+
+**Problem.** Two design browser flakes keep the real-stack and component suites from being reliably green. This file's statements about both are out of date.
+
+**Context.** Flakes are tracked only in `docs/tests/flaky-tests/` (AGENTS.md). This file holds the qualification next steps.
+
+**Investigation.**
+- **0174** is `open` again in `docs/tests/flaky-tests/design-canvas-and-artifacts/0000-index.md:16`. It reached its deadlines in the nine-worker suite on `74841142b` on 2026-10-26, waiting for a replacement iframe's `display: inline-block` on mobile, and the cause is not established. So this file's "0174 is resolved; one quiet nine-worker run would confirm" no longer holds.
+- **0208** recurred on 2026-10-24 in a full `mise run test:agent:browser:isolated` run (case 56 of 83). Its case now starts at `e2e/agent-testing/design-canvas.spec.ts:305`, with the **Select file** assertion at `:420`; the index still says `:230`.
+- **0246**, listed under Related as an open design flake, is `resolved` in the index (`:23`).
+- The CPU throttle (`ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE`, `e2e/DesignCanvas.spec.ts:14`) exists only in the component spec, not the real-stack one.
+
+**Decisions.**
+
+- **Who owns the flake work?**
+  - **The flake registry owns it. This file keeps only "suites green" as a qualification gate that links 0174 and 0208 (recommended).**
+    - Pros: follows AGENTS.md; avoids two diverging records, which already happened with 0174 and 0246.
+    - Cons: the design-specific next steps move into the case files.
+  - **Keep the next steps here.**
+    - Pros: one place for design qualification.
+    - Cons: duplicates the registry and drifts, as this file already has.
+- **Next step for 0208?**
+  - **Port the CDP CPU throttle to `design-canvas.spec.ts` and run the private-canvas case under it (recommended).**
+    - Pros: the same approach found 0174's first race in hours; it does not need an idle host, which this shared host never is.
+    - Cons: a harness change in the real-stack spec; may reproduce only budget exhaustion, not the real ordering.
+  - **A full shared-profile `mise run test:agent:browser` run on an idle host, as the file says.**
+    - Pros: reproduces the real setting.
+    - Cons: needs an idle host, which has not been available on any recorded date.
+- **Next step for 0174?**
+  - **Reproduce the mobile replacement-iframe stall under the existing throttle before changing anything (recommended).**
+    - Pros: same method that found the first cause.
+    - Cons: may be another budget-only failure.
+  - **Raise the per-test deadline for the mobile project.**
+    - Pros: quick.
+    - Cons: decision 7 rejected this, because it hides real stalls.
+
+### 9. Deferred optimisations
+
+**Problem.** Five optimisations are deliberately unbuilt: thumbnails, a capture/inspection cache, a second render worker, a warm context pool, and a storage redesign. The open question asks whether thumbnails are wanted at all.
+
+**Context.** Each waits on a measurement. The client numbers (2026-10-22) made no case for them.
+
+**Investigation.** The baseline facts still hold:
+- `DESIGN_LIMITS.renderWorkers: 1` is at `packages/protocol/src/design-operations.ts:27`, and the `workers` option is at `apps/backend/src/core/design/renderer.ts:99` and `:200`.
+- Whole-record atomic writes go through `writeAtomically` (`apps/backend/src/core/design/records.ts:170`, `:534`).
+- Leases use the database (`apps/backend/src/core/design/coordination.ts`).
+- Nothing in `apps/web/src/components/design/DesignLibrary.tsx` or the backend design code mentions thumbnails.
+
+No measurement since 2026-09-24 has touched repeated captures, worker contention or rewrite cost.
+
+**Decisions.**
+
+- **Keep them here or split them out?**
+  - **Move the five into a new Low todo file ("design canvas deferred optimisations") so this file holds only qualification (recommended).**
+    - Pros: this file can finish when qualification does; the deferred list keeps its measurement gates.
+    - Cons: one more file; the decision table and baseline have to move with it.
+  - **Keep them here.**
+    - Pros: no churn.
+    - Cons: this Medium file can never be marked Finished while it holds items that may never be built.
+- **Are thumbnails wanted on their own merits?**
+  - **No, not until users ask: the library lists facts, and the first page renders in about 35 ms at 256 canvases (recommended).**
+    - Pros: avoids a render-queue workload that would then justify the cache.
+    - Cons: a visual library is harder to scan once there are many canvases.
+  - **Yes: build library thumbnails as a product feature.**
+    - Pros: a better saved-designs experience.
+    - Cons: brings in items 1 and 2 (bounded capture jobs, invalidation, cache) at once.
+
+### 10. Shared live-provider harness
+
+**Problem.** The open question asks whether design should use a shared live harness rather than its own spec.
+
+**Context.** It was asked before the design live specs existed.
+
+**Investigation.** Design now has `e2e/agent-testing/design-live.spec.ts` and `design-resume-clients-live.spec.ts`, which share `e2e/agent-testing/design-live-support.ts`. Both are opt-in and excluded from the default browser run (`e2e/agent-testing/playwright.browser.config.ts:16-17`). They passed for Claude and Codex (2026-10-21, 2026-10-25, 2026-10-26). `opencode-live.spec.ts` is also its own spec. No cross-provider live harness exists to join.
+
+**Decisions.**
+
+- **Answer the question?**
+  - **Close it: design keeps its own opt-in specs with a shared support module (recommended).**
+    - Pros: matches what shipped and passed; the specs encode design-only steps (stale selection, handoff).
+    - Cons: a future shared harness would need to absorb them.
+  - **Build a shared live harness and move design onto it.**
+    - Pros: one place for provider setup, rate-limit handling and usage logging.
+    - Cons: a cross-cutting project with no owner; nothing is blocked on it.
+
+### 11. Cross-environment transfer UI
+
+**Problem.** There is no UI to move or copy a canvas between environments.
+
+**Context.** Recovery copies, download and import cover copying today. If a transfer UI is built, the file requires a defined lock order for two-canvas operations first.
+
+**Investigation.** No two-canvas operation exists. Duplicate stays within one environment. Nothing in the code is waiting on this.
+
+**Decisions.**
+
+- **Build it?**
+  - **No: close the question and record "download then import" as the supported path in `design-canvas.md` (recommended).**
+    - Pros: no cross-environment lock order to design; the current path works.
+    - Cons: two steps for the user and a file on disk in between.
+  - **Yes: add "Copy to environment…" with a two-canvas lock order.**
+    - Pros: one step.
+    - Cons: a new class of concurrent operation across two canvases' lanes, which this file warns needs design first.
+
 The design canvas ([`design-canvas.md`](../../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
 sync, visible-frame culling, the saved-designs library and agent context all

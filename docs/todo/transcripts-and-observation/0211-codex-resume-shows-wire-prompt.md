@@ -3,6 +3,44 @@
 Checked against `main` at `930189337` (2026-10-26); fixed against `main` at
 `ce205ad34` (2026-10-26).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: both items and the real-stack check are done, and the fix is on `main` as `863b5782` (#1319).
+
+1. **Reloaded user rows match the live ones**: exact plan-preamble strip, plus per-turn typed-prompt records for skill, template and recovered-context turns. Status: done.
+2. **Bridge, rollout and loopback tests**: all four cases, forks, write failures and oversized records. Status: done.
+3. **Real-stack composer check**: plan, skill and template through reload, an inactive environment and picker resume. Status: done (recovered context is proven only by bridge and loopback tests, by decision).
+4. **What to do with the file**: delete it under the README rules, or keep it. Status: open (the only decision left).
+
+### 4. What to do with the file
+
+**Problem.** The folder index marks the file Finished and its branch has merged, but the file is still in `todo/`, holding a long decisions section and two review follow-up logs.
+
+**Context.** The rule is already recorded in `bridges/codex-bridge/AGENTS.md` (key files table at `:30`, rule at `:205`) and in `upgrade-agents.md`. 0082, its parent, is also Finished. The only case without composer evidence is recovered context, which cannot be reached through the composer without forcing a failed resume. The file records the decision to finish without it.
+
+**Investigation.** The code matches the file at HEAD. `PLAN_MODE_PREAMBLE` and `stripPlanModePreamble` are at `bridges/codex-bridge/src/prompts/slash-commands.ts:43` and `:73`. `recordTypedPrompt` (`bridges/codex-bridge/src/sessions/typed-prompts.ts:122`) is called failure-silent after acceptance (`app-server-runtime-prompt.ts:822`). `inheritTypedPrompts` (`typed-prompts.ts:136`) is called from `forkSession` (`app-server-runtime-sessions.ts:286`). The resolver is threaded through `extractPersistedMessageContent` (`history/rollout.ts:915`, `:966`). `e2e/agent-testing/codex-typed-prompts-live.spec.ts` exists. Two minor points found, neither a bug. First, the sidecar directory is still named `<thread>.jsonl.d` (`typed-prompts.ts:56`), a leftover from the removed single-file journal. Second, records are capped per file (`MAX_RECORD_BYTES`, `:15`, about 194 KB) but not in count, and nothing ever deletes them. That matches rollouts, which are never deleted either, but the sidecar store has no retention.
+
+**Decisions.**
+
+- **Delete the file now, or keep it?**
+  - **Delete it now, moving the decisions that explain the design (digest matching, per-turn files, no CLI record, unproved recovered context) into `bridges/codex-bridge/AGENTS.md` (recommended).** Update 0082's Related link and remove index row 8 in the same change.
+    - Pros: follows the README rule; the branch has merged; the AGENTS.md note already carries the rule.
+    - Cons: the review follow-up history and validation logs go; the flake records 1100 and 1101 keep the suite evidence.
+  - **Keep it until a recovered-context turn is seen in a real rollout.**
+    - Pros: leaves a place to record that evidence.
+    - Cons: that case may never occur naturally (no local rollout holds one), so the file could stay forever; the README says new findings go in a new file anyway.
+- **Should the sidecar naming and retention be followed up?**
+  - **No action; mention retention in the AGENTS.md note when the file is deleted (recommended).**
+    - Pros: records are small, written only for rewritten turns, and live as long as the rollout they annotate.
+    - Cons: the misleading `.jsonl.d` name stays.
+  - **Open a new low-rated todo to rename the directory and add retention tied to the rollout's existence.**
+    - Pros: tidies a misleading name; bounds disk use in principle.
+    - Cons: a rename needs a migration or a dual-read path for records already written; little real benefit.
+
 Found while fixing
 [0082-codex-resume-shows-environment-context.md](0082-codex-resume-shows-environment-context.md).
 The live tab shows the user's message as they typed it; a reload rebuilt the

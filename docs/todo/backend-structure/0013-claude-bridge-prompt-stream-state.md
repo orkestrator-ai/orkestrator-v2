@@ -7,6 +7,35 @@ Every item below is done. The durable rules now live in
 ("One row per model response"); delete this file and its index row once the
 branch has merged.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire this finished file**: the direct tests, the delta-handler split, the plan-mode flags on `TurnState` and the `PromptStream` class are done and merged (#1241); only the file's own retirement remains. Status: done.
+
+### 1. Retire this finished file
+
+**Problem.** The file is marked Finished and says to delete it with its index row once the branch merged. It still holds rank 9 in the folder index, and another todo still plans around it as if it were open.
+
+**Context.** The README rule: move durable behaviour into `architecture/` (here, the bridge's `AGENTS.md`), delete the file, remove the row.
+
+**Investigation.** The branch merged as `ad024ea8` (#1241). The claims hold at HEAD: `createPromptStreamState` is a factory (`bridges/claude-bridge/src/services/session-manager-prompt-stream.ts:184`) returning `class PromptStream` (`:209`); the bounds are unchanged (`MAX_STREAM_CONTENT_BLOCK_INDEX` `:72`, `MAX_TRACKED_STREAM_ROWS` `:83`, `MAX_SUBAGENT_PARTS_PER_CALL` `:94`); `sessionStreamRows` is still the module `WeakMap` (`:154`, looked up at `:265`); the plan-mode flags are on `TurnState` (`session-manager-prompt-turn.ts:185`, `:210`). The longest methods in the stream module are about 70 to 80 lines (`createRow`, a pending-chunks branch), within the file's "about 150 lines" target. `session-manager-prompt-stream.test.ts` has 15 `test(` calls (the file says 16, likely counting a parameterised case). Neither stream file has changed since the merge; seven later commits touched other `session-manager-prompt*.ts` files. The durable rules are in `bridges/claude-bridge/AGENTS.md` "One row per model response" (from line 93): one row per API message id, `refreshToolRows`, the allocation-free delta path, identity comparison, shared rows through `sessionStreamRows`, coalescing and `clearFlushTimer`, and turn flags on `TurnState`. That covers every item under "Constraints and rationale". Stale elsewhere: [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md) still has a decision "Order relative to 0013?" recommending its work go first, and links here from its Related section; both need updating when this file goes.
+
+**Decisions.**
+
+- **What to do with this file now that its branch has merged?**
+  - **Delete it now, and update 0005's link and ordering decision in the same change (recommended).**
+    - Pros: follows the README rule; every durable rule is already in the bridge `AGENTS.md`, which Claude Code loads when editing those files; removes a misleading ordering question from 0005.
+    - Cons: decisions 3 (reused lookup target) and 5 (successor adopts a shared row by API message id only) survive only in git history; 3 is summarised in `AGENTS.md`, and 5 is pinned only by the handoff test in `session-manager-prompt-stream.test.ts`.
+  - **Delete it after adding decision 5 to `bridges/claude-bridge/AGENTS.md`.**
+    - Pros: keeps the one row-sharing rule not yet written down beside the other row rules.
+    - Cons: edits a bridge `AGENTS.md`, which then needs the normal review that file's area rules ask for.
+  - **Keep it until 0005 is done.**
+    - Pros: 0005 keeps a working link.
+    - Cons: contradicts the README rule, and 0005's ordering decision stays wrong.
+
 `createPromptStreamState` in the Claude bridge turns the SDK's streamed
 frames into transcript rows. It carries the bridge's transcript-row rules (one
 row per model response, late updates finding their row, bounded state, rows

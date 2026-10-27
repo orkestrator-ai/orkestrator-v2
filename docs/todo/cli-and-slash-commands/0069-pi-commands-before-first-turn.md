@@ -4,6 +4,60 @@ Checked against `main` at `8454d18b` (2026-10-24). Implemented on branch
 `todo-0069-pi-commands-first-turn-694a28fc5c19` on 2026-10-25, against `main`
 at `20f6de91`, Pi SDK 1.4.0.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+The file is Finished: every item is done and merged to `main` in `7170f454`
+(#1254, 2026-10-25). The only open decision is what to do with the file.
+
+### Tasks
+
+1. **Resource-only Pi command read before attach**: list templates and skills as `stale` + `attachPending` (or `ready`) without attaching. Status: done.
+2. **Live picker qualification, host and container**: `slash-command-picker.spec.ts` Pi step with no refresh. Status: done.
+3. **Retire the finished file**: delete it under the folder rules now that its branch has merged. Status: open.
+
+### 1. Resource-only Pi command read before attach
+
+**Problem.** A new Pi tab's `/` menu showed only `/steer` and `/compact` until the session attached.
+
+**Context.** Found by the 0016 picker run; parity with Claude, Codex, OpenCode and Grok, which list before the first turn.
+
+**Investigation.** On `main`: `bridges/pi-bridge/src/command-preview.ts` with `COMMAND_PREVIEW_READ_WAIT_MS` at `:54`, the private-field guard `skipPackageInstalls` at `:76-84`, and the Multi Review `discarded` retry at `:165` and `:179`; `attachPending` in `packages/protocol/src/agent-command-catalogue.ts:200` and `:340`; the picker line in `apps/web/src/components/native-agent/useNativeCommandComposer.tsx:62` (tested in `AgentNativeTab.commands.test.tsx:670`). Durable docs are in place: `docs/architecture/native-agent-commands.md:79`, `:213`, `:313` and `:366`, and `bridges/pi-bridge/AGENTS.md:145-149`. The Pi SDK pin is still `1.4.0` (`bridges/pi-bridge/package.json:17`), so the private `packageManager` field the guard reaches is unchanged; only release version bumps touched these files since. The residual risk (decision 3: a Pi bump renaming the field) fails closed and is pinned by `command-preview.test.ts`, and the Pi bridge `AGENTS.md` already tells the next bumper about it.
+
+**Decisions.** None: done and merged.
+
+### 2. Live picker qualification, host and container
+
+**Problem.** The change needed live proof without the attaching refresh step, and the original "Needs verification" asked for a container tab.
+
+**Context.** Profile `qa-picker-0069`, Pi SDK/CLI 1.4.0, 2026-10-25; validation run recorded in `docs/tests/flaky-tests/aggregate-validation-runs/0860-pi-commands-before-first-turn-validation.md`.
+
+**Investigation.** Both runs recorded as passed. Not re-run (research only); no Pi bump since.
+
+**Decisions.** None: done. A re-run belongs to the next Pi pin bump, under `docs/development/upgrade-agents.md`.
+
+### 3. Retire the finished file
+
+**Problem.** The folder rules say a finished file is deleted once its durable behaviour has moved; this one was kept "until the Multi Review of this branch".
+
+**Context.** The branch merged as #1254 on 2026-10-25, and the Multi Review (`action-18dc39945a2fed456047a580352a4781`) is recorded in item 1, so the keep condition has passed. Inbound links: `0016-slash-command-catalogue.md`, the folder index row 5, and two flaky-test case files (`0860-…` and `0239-…`).
+
+**Investigation.** Everything durable is already in `native-agent-commands.md` and the Pi bridge `AGENTS.md`. The decision rationale (why a resource-only read rather than an early attach; why the private-field guard) lives only here and in the #1254 description.
+
+**Decisions.**
+
+- **What to do with the file now?**
+  - **Delete it now, after moving the one-paragraph rationale for decisions 1 and 3 into `native-agent-commands.md` (recommended).** Remove the file and its index row; turn the links in 0016 and the two flaky cases into plain text naming #1254.
+    - Pros: follows the folder rules; the keep condition is met; the next Pi bumper keeps the reason the guard exists next to the contract.
+    - Cons: a small edit to an architecture doc and to three referring files.
+  - **Delete it now without moving anything.**
+    - Pros: smallest change; `AGENTS.md:145-149` already states the guard and its test.
+    - Cons: the reasons an early attach was rejected (extension code, MCP client and auth check per unused tab) survive only in git history.
+  - **Keep it until the next Pi pin bump re-proves the private-field guard.**
+    - Pros: the evidence stays at hand for that bump.
+    - Cons: contradicts the folder rules; the guard already fails closed in tests, so there is nothing for the file to track.
+
 A new Pi tab's `/` menu listed none of Pi's own commands (templates, skills,
 extension commands) until its session attached, which happens at the first
 turn or when the user presses "Refresh commands" in the menu. Until then it

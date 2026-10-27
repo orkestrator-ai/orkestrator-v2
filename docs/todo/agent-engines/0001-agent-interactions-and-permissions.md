@@ -5,6 +5,226 @@ capability half of item 13 updated on `b83ae534` (2026-10-22). Every code
 item, the open questions and the verification items worked through on
 `00a0cb82` (2026-10-25); what is left needs a live provider or a person.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+Code items 1 to 5, 7, 8, 10, 11 and 13 are done on `main` and are not
+repeated as tasks; their live checks are. The open questions and the
+"Needs verification" items are all answered.
+
+### Tasks
+
+1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12). Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67).
+2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: partly done (the slash-catalogue risk is closed).
+3. **Live Grok pause and approval kinds**: Grok permission and question paused past ten minutes, command/file approval kinds, a pause past the 30-minute turn deadline. Status: open (needs a valid Grok login).
+4. **Live Codex question**: the `codex-question` case of the paused-interactions spec on a real model (item 13). Status: open.
+5. **Live Claude tmux pause**: a paused PermissionRequest outliving Claude Code's 600 s hook limit (item 9). Status: open.
+6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
+7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: open.
+8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: open (the suite has no Cursor or Pi case).
+9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: open.
+
+### 1. Grok project resources off
+
+**Problem.** With project resources off (the host default), Grok still loads AGENTS.md, skills, commands, hooks and MCP servers from a checkout whose main repository the user trusted in Grok, including a fresh `git worktree` of it. That crosses the execution-policy boundary on the host.
+
+**Context.** Codex was closed the same way in item 6. Decision 14 rejected a throwaway `GROK_HOME`. `acpReportedPolicy` reports the axis honestly as on, with a note.
+
+**Investigation.** Unchanged. Grok is pinned at `1.0.67` (`packages/toolchain/src/manifest.ts:9`). The bridge only opens the gate: `PROJECT_TRUST.grok.env = { GROK_FOLDER_TRUST: "0" }` when the policy enables project resources (`bridges/acp-bridge/src/acp-provider-config.ts:115-143`); `acp-policy.ts:73-75` reports `projectResources: true` otherwise.
+
+**Decisions.**
+
+- **Wait for xAI or ship the throwaway-home workaround?**
+  - **Wait for an xAI switch and re-probe on every Grok bump with `_x.ai/hooks/list` (recommended).**
+    - Pros: keeps the user's config, skills, MCP servers and `session/load` store; the probe needs no model turn, so it is cheap to repeat.
+    - Cons: the leak persists on hosts where a main checkout was trusted.
+  - **Qualify a throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointing at the real login, resume included, and ship it for policy-off sessions.**
+    - Pros: closes the leak now.
+    - Cons: loses user-level config and skills; resume depends on a session store in the throwaway home; the very qualification decision 14 found too costly.
+- **Ask xAI?**
+  - **File an upstream request for a per-process "never trust" switch (recommended).**
+    - Pros: the only clean fix; small for xAI.
+    - Cons: no control over timing.
+  - **Do not.**
+    - Pros: no effort.
+    - Cons: the item may stay blocked indefinitely.
+
+### 2. Codex project-resources residual risks
+
+**Problem.** Item 6 left three risks: a repo skill added while a thread is loaded is not disabled until the thread restarts, the slash catalogue listed repo skills for a policy-off session, and hooks were not probed on their own.
+
+**Context.** Item 6's pin covers config layers, AGENTS.md and MCP; skills need a thread-scoped `skills.config`.
+
+**Investigation.** The catalogue risk is closed: `skillUnavailability` (`bridges/codex-bridge/src/commands/skill-inventory.ts:204-213`) marks every non-user/system/admin skill "disabled because project resources are off for this session", and both catalogue rows and typed dispatch go through it (`bridges/codex-bridge/src/commands/codex-command-catalogue.ts:274,421,444-467,514`), so the bridge refuses the dispatch itself. This landed in #1147 (`649482d8`, 2026-10-22), so item 6's text is out of date on this point. The mid-thread skill gap and the separate hook probe are still open; `live-project-trust.test.ts` exists for extending.
+
+**Decisions.**
+
+- **How to close the mid-thread skill gap?**
+  - **Accept it as residual risk, since the bridge's own dispatch refusal now covers selected and typed skills (recommended).**
+    - Pros: the only remaining path is the model invoking a newly added repo skill by itself mid-thread, which needs a write into the checkout during the turn.
+    - Cons: a skill written by the agent itself could load on the next model call.
+  - **Re-read `skills/list` on each turn start and reload the thread when a new repo skill appears.**
+    - Pros: closes it fully.
+    - Cons: a `skills/list` per turn, and a thread reload (see the `reloadThread` rule in AGENTS.md) on change.
+- **Probe hooks separately?**
+  - **Add a hook canary to `live-project-trust.test.ts` on the next Codex bump (recommended).**
+    - Pros: cheap; no credentials (loopback endpoint).
+    - Cons: one more live-gated case to maintain.
+  - **Rely on the config-layer canary.**
+    - Pros: no work.
+    - Cons: an inference, not a proof.
+
+### 3. Live Grok pause and approval kinds
+
+**Problem.** Grok is the only interaction-raising provider whose pause was never qualified, and its command/file approval mapping (item 2) and turn-clock fix (item 10) have no live evidence.
+
+**Context.** Two attempts failed because the host Grok login had expired; a profile may not refresh a single-use refresh token.
+
+**Investigation.** `e2e/agent-testing/paused-interactions-live.spec.ts:84-85` has `grok-question` and `grok-approval` cases. The spec accepts any of `command-approval`, `file-approval` or `permission` as an approval (:52), so it would not fail if Grok still arrived as a generic `permission`. The wait is `ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS`, default 10.5 minutes (:41), so the 30-minute deadline check needs it raised.
+
+**Decisions.**
+
+- **How to prove the approval kind?**
+  - **Assert `command-approval` for the Grok approval case in the spec, not the generic approval set (recommended).**
+    - Pros: makes item 2's live claim automatic.
+    - Cons: a spec change; Grok tool kinds could vary by prompt.
+  - **Check the card kind by eye during the run.**
+    - Pros: no code.
+    - Cons: not repeatable.
+- **One run or two?**
+  - **Two: the default 10.5-minute run for both cases, then one approval with the wait set past 30 minutes (recommended).**
+    - Pros: a failure in the long run does not hide the basic result.
+    - Cons: about 45 minutes of a live login.
+  - **One run with the wait past 30 minutes.**
+    - Pros: one session.
+    - Cons: any early failure costs the whole half-hour.
+
+### 4. Live Codex question
+
+**Problem.** Codex questions now park as cards, but no real model turn has raised one through the app.
+
+**Context.** Proven against the pinned binary with a loopback endpoint (`bridges/codex-bridge/src/app-server/live-request-user-input.test.ts`). The feature flag `default_mode_request_user_input` is marked under development upstream; 0161 tracks `isBlocking: false`.
+
+**Investigation.** The spec case exists (`paused-interactions-live.spec.ts:76`) and the task `test:agent:paused-interactions` is defined (`mise.toml:267`). Codex is pinned at `0.164.0`, the version the loopback test used.
+
+**Decisions.**
+
+- **Run it alone or with task 3?**
+  - **With the other live provider runs, in one profile authorising Codex and Grok (recommended).**
+    - Pros: one setup; both are the same spec.
+    - Cons: blocked on the Grok login if run together; run Codex alone if Grok is still unavailable.
+  - **Alone, now.**
+    - Pros: unblocked today.
+    - Cons: a second profile run later.
+
+### 5. Live Claude tmux pause
+
+**Problem.** It is unproven that a real Claude CLI honours the 172,800 s hook `timeout` and keeps a paused PermissionRequest alive past 600 s.
+
+**Context.** If the CLI clamps the timeout, the hook is killed and the tool call fails, which is fail-closed but defeats the pause.
+
+**Investigation.** The protocol marker is `HOOK_HOLD_PROTOCOL = "hold-v1"` (`apps/backend/src/core/tmux-shared.ts:81`); the generated script is tested in `apps/backend/tests/tmux-hook-hold.test.ts`. No real-stack spec drives Claude tmux mode; Claude Code is now pinned at `2.1.309`.
+
+**Decisions.**
+
+- **Manual or scripted?**
+  - **Manual run as the file describes, recording the CLI version and outcome here (recommended).**
+    - Pros: tmux mode has no browser harness; one run answers the clamp question.
+    - Cons: not repeated on Claude bumps, where a clamp could appear.
+  - **Add a bridge-free script that runs the real CLI with a hook and a 700 s wait.**
+    - Pros: repeatable on each bump, like Codex's live tests.
+    - Cons: needs a Claude login and 12 minutes per run.
+
+### 6. Live Claude question preview
+
+**Problem.** It is not known whether Claude emits option previews for a plain question, so the feature may never show.
+
+**Context.** Previews are requested with `previewFormat: "markdown"` (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:474`) and shown verbatim.
+
+**Investigation.** Code and unit tests are present; no live evidence.
+
+**Decisions.**
+
+- **What counts as a pass?**
+  - **A prompted "use AskUserQuestion with a preview for each option" shows previews verbatim in monospace (recommended).**
+    - Pros: matches the item; proves the wire path.
+    - Cons: does not show whether Claude uses previews unprompted.
+  - **Also record whether an unprompted question carries previews.**
+    - Pros: tells whether the feature matters in normal use.
+    - Cons: model behaviour varies; one sample is weak.
+
+### 7. Browser interaction checks
+
+**Problem.** MCP elicitation rehydration, Claude's `ask` and `deny` policy overrides and a delegating coordinator turn have no real-browser evidence.
+
+**Context.** These are the "Browser" qualification bullet. The coordinator half overlaps 0024 (coordinator live conformance).
+
+**Investigation.** No spec under `e2e/` raises an MCP elicitation. The Claude `ask` override is covered by the live pause spec (Claude approval), so only `deny` (refused without a card, question still shown) and elicitation are new.
+
+**Decisions.**
+
+- **Split or keep together?**
+  - **Run the Claude `deny` and elicitation checks here and leave the coordinator turn to 0024 (recommended).**
+    - Pros: avoids double-counting coordinator work; the remaining checks fit one Claude profile.
+    - Cons: this file then depends on 0024 to call the bullet closed.
+  - **Keep all three here.**
+    - Pros: one owner.
+    - Cons: duplicates 0024's live runs.
+- **Which MCP server raises the elicitation?**
+  - **A small local fixture MCP server that elicits on a tool call (recommended).**
+    - Pros: deterministic; no third-party account.
+    - Cons: a fixture to write.
+  - **A real third-party server.**
+    - Pros: realistic.
+    - Cons: depends on its behaviour and credentials.
+
+### 8. Container cells on Cursor and Pi
+
+**Problem.** Cursor and Pi execution-policy behaviour inside a container (sandbox `container`, firewall-enforced network) is unproven.
+
+**Context.** The item names `mise run test:agent:docker`, which needs a profile started with `--fixture-environments container` and Cursor and Pi logins.
+
+**Investigation.** That task only runs tests whose title contains "Docker fixture" (`mise.toml:243-246`). None of those specs (`browser-gateway.spec.ts`, `container-*.spec.ts`, `grok-container-login.spec.ts` and others) has a Cursor or Pi execution-policy case, so running the suite as written would not qualify these cells.
+
+**Decisions.**
+
+- **How to qualify them?**
+  - **Add a "Docker fixture" case per platform that starts a Cursor and a Pi session in the container and checks the reported policy and one refused off-allowlist request (recommended).**
+    - Pros: makes the item runnable and repeatable.
+    - Cons: new spec work and two credentials in a container profile.
+  - **Manual run in a container environment.**
+    - Pros: no spec work.
+    - Cons: not repeatable; easy to miss a cell.
+  - **Drop the item, relying on the bridge conformance tests.**
+    - Pros: no work.
+    - Cons: the container network path is exactly what unit tests cannot show.
+
+### 9. Claude provider sandbox on a real CLI
+
+**Problem.** The conformance suite proves the sandbox options are set, not that the CLI enforces them.
+
+**Context.** `claudeExecutionSandbox` sets `allowUnsandboxedCommands` from whether the policy asks for approval and `strictAllowlist` when the network is restricted (`bridges/claude-bridge/src/services/claude-execution-sandbox.ts:31-52`). On Linux without bubblewrap and socat the sandbox cannot run at all.
+
+**Investigation.** No live test exists. The pinned CLI is `2.1.309`.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **macOS host and a Linux host with bubblewrap, one each (recommended).**
+    - Pros: the sandbox implementation differs per OS; both are supported hosts.
+    - Cons: two machines.
+  - **macOS only.**
+    - Pros: one run.
+    - Cons: the Linux sandbox, which has more failure modes, stays unproven.
+- **What counts as a pass?**
+  - **A command that writes outside the workspace fails, and a request to a domain off the allowlist fails, with no approval card (recommended).**
+    - Pros: covers both options directly.
+    - Cons: needs a known-unlisted domain reachable from the host.
+  - **Only the network check.**
+    - Pros: shorter.
+    - Cons: leaves `allowUnsandboxedCommands` unproven.
+
 Every question, approval, elicitation and dialog a provider raises should either
 reach the user through the shared interaction contract and its one generic card,
 or be resolved by backend policy. The backend execution policy, not the bridges,

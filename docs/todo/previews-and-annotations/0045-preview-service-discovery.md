@@ -5,6 +5,111 @@ Checked against `main` at `2459b05c` (2026-10-15). Code items done on branch
 `20f6de91`). What is left is one in-app qualification run; see **Outstanding
 work**.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **In-app desktop qualification**: the five-step run in a `dev:test` desktop
+   profile with two local environments and real dev servers. Status: open.
+2. **`orkestrator environment exec` as a managed root**: the open question,
+   whether detached exec workers should count as ownership roots. Status: open.
+
+Code items 1 to 5 and the host-level qualification are done and on `main`
+(`22b16597`, #1258).
+
+### 1. In-app desktop qualification
+
+**Problem.** Local seeding is on by default and every layer is unit- and
+host-tested, but nobody has watched it work through the desktop UI: the wait
+state, two environments on one port, the move offer, restart reconnection,
+agent-link gesture and framework hints.
+
+**Context.** The file lists the five checks. It suggests batching with
+[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+The fixture needs an `entryPort` in its repository config.
+
+**Investigation.** The code the run exercises is all present:
+`desiredGeneratedDefinitions` with `kind: "entry-port"`
+(`apps/backend/src/core/preview-service-registry.ts:192`, `:203`),
+`scheduleRecheck` (`:1189`), `LoopbackListenerOwnership`
+(`apps/backend/src/core/preview-listener-ownership.ts:127`, `ss` parsing at
+`:86`), the roots wired at `apps/backend/src/core/index.ts:388-389`
+(`apps/backend/src/core/terminal-runtime.ts:138`,
+`apps/backend/src/core/local-server-runtime.ts:153`), `requiresListenerOwner`
+(`packages/protocol/src/preview-services.ts:180`), `confirmPreviewService`
+(`apps/web/src/lib/backend/previews.ts:104`), `relocationCandidates`
+(`apps/web/src/lib/preview-service-display.ts:144`), `PreviewLinkSourceContext`
+consumed in `apps/web/src/components/chat/MessageMarkdown.tsx:173`, and
+`PreviewFrameworkHints.tsx`. Nothing has changed in the ownership module since
+the merge. The Electron suite already drives local fixture environments and
+service tabs in a real window
+(`e2e/agent-testing/service-preview-electron.spec.ts`, run by
+`mise run test:agent:electron`), but none of its tests covers a seeded
+`entry:<port>` service; no dev-test fixture sets `entryPort` today.
+
+**Decisions.**
+
+- **Manual run or automated Electron test?**
+  - **Add the five checks to `service-preview-electron.spec.ts`
+    (recommended).**
+    - Pros: the spec already creates local environments and service tabs in a
+      real window; the run becomes repeatable regression coverage instead of
+      a one-off; runs on Linux too.
+    - Cons: the PTY-typed dev server and ⌘⇧-click on an agent reply need a
+      scripted terminal and a seeded agent message; more test code to keep.
+  - **Manual run in a `dev:test` profile, recorded here.**
+    - Pros: matches the file's plan; also checks real look and feel.
+    - Cons: one-off evidence that ages; needs someone at the desktop.
+- **What counts as a pass for step 3 (restart reconnects)?**
+  - **The open tab shows the new process without a manual reload, and the old
+    generation is refused (recommended).**
+    - Pros: matches the generation-bump design (D3) and the host test.
+    - Cons: needs a page marker that differs between the two processes.
+  - **The tab loads after one Retry.**
+    - Pros: easier to observe.
+    - Cons: would accept a regression of the recheck backoff (D6).
+- **Batch with 0031 or run alone?**
+  - **Run alone, now (recommended).**
+    - Pros: needs no special hardware (Linux desktop is enough); unblocks
+      closing this file.
+    - Cons: one more profile start.
+  - **Batch with 0031.**
+    - Pros: one session for many runs.
+    - Cons: 0031 waits on macOS, Safari and two-machine runs, which would hold
+      this file open for no reason.
+
+### 2. `orkestrator environment exec` as a managed root
+
+**Problem.** A dev server started through `orkestrator environment exec` is
+`unattributed`, so a seeded service waits until the user clicks **Show any
+process**.
+
+**Context.** Open question. Exec runs are detached workers keyed by operation,
+not environment; counting them needs their live pid and a reuse guard (D2).
+
+**Investigation.** The worker spawns the command with `detached: true` and
+persists `childPid`, `pgid` and `startedAt` to its state file
+(`apps/backend/src/core/public-api/exec-worker.ts:73-82`); the worker itself is
+re-spawned detached from `/` (`:196`). So a pid and a start time are already
+recorded, but the backend holds no live handle, which is exactly what made
+terminal and bridge roots safe against pid reuse.
+
+**Decisions.**
+
+- **Count exec runs as roots?**
+  - **Not now; keep them `unattributed` with the one-click confirm
+    (recommended).**
+    - Pros: no pid-reuse risk; the confirm path already exists; agents mostly
+      start servers in terminals or bridges, which are roots.
+    - Cons: CLI-driven setups need one click per seeded service.
+  - **Yes, from the persisted `childPid` checked against the `ps` start time.**
+    - Pros: zero-click for CLI-driven workflows.
+    - Cons: depends on a state file the backend does not own live; a reused
+      pid with a matching environment could misattribute; needs a mapping from
+      operation to environment.
+
 Preview services used to be generated only for containerized environments.
 Local worktree and backend-host services had to be registered by hand and were
 always labelled `user-registered`. This file added local seeding, ownership for

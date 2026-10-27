@@ -3,6 +3,71 @@
 Checked against `main` at `8454d18b8` (2026-10-24). Both outstanding items
 done on `ce205ad34` (2026-10-26); what is left is a live look at a real tab.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Shared strip and the backend fallback title**: items 1 and 2, the parser moved to the protocol package and the fallback title stripped, with tests. Status: done (merged as `9791a425`, #1318).
+2. **Live tab label check**: the first "Needs verification" item, a real tab opened with annotations on its first prompt shows a label made from the request text alone. Status: open.
+3. **Truncated first message**: the second "Needs verification" item, whether any provider stores a long first user message truncated so the closing fence is lost. Status: open.
+
+### 1. Shared strip and the backend fallback title
+
+**Problem.** None left.
+
+**Context.** Decisions 1-5 record the choices.
+
+**Investigation.** Merged on `main` as `9791a425`. The line "done on `ce205ad34`" names the base commit the branch was built on, not the merge.
+- `stripTranscriptAnnotations` is at `packages/protocol/src/transcript-annotations.ts:225`.
+- It is used by the projection's `fallbackTitle` (`apps/backend/src/core/native-agent-transcript-projection.ts:5067-5076`), the Codex bridge fallback (`bridges/codex-bridge/src/session-titles.ts:66`) and the tmux resume list (`apps/backend/src/core/tmux-hooks.ts:1064`).
+- `generateAndSetSessionTitle` (`bridges/claude-bridge/src/services/session-manager-core.ts:1556`) still has no caller, as decision 4 says.
+
+**Decisions.** None: done. The remaining choice, whether the file can close, is under task 2.
+
+### 2. Live tab label check
+
+**Problem.** Only unit tests show a clean tab label; no real provider tab has been looked at.
+
+**Context.** The defect was found while qualifying 0038, whose live run opens a Codex tab from the design dialog.
+
+**Investigation.** The unit tests run the real projection code with Codex and Claude shapes (`native-agent-service-projection.test.ts`), including provider title pushes. What a live look adds is the provider's own stored form of the first message, and the tab-label path in the renderer.
+
+**Decisions.**
+
+- **How and when is it checked?**
+  - **Fold it into 0038's next live design-link run and record the label there (recommended).**
+    - Pros: no separate run; the same scenario that found the defect.
+    - Cons: closure waits for 0038's run.
+  - **A dedicated `dev:test` run with a transcript excerpt on a first Codex prompt.**
+    - Pros: can be done at once.
+    - Cons: spends a live run on a cosmetic fix the unit tests already cover.
+  - **Close the file on the unit tests.**
+    - Pros: the file rates Low and the code path is proved.
+    - Cons: the live look was the stated condition for closing.
+
+### 3. Truncated first message
+
+**Problem.** If a provider or the transcript window trims a long first user message, the closing fence is lost. The strict strip (decision 2) then leaves the envelope in the title.
+
+**Context.** Decision 2 chose the parser's strict `cleanPrompt` on purpose, so a malformed tag cannot hide the user's words.
+
+**Investigation.** An envelope can be large: up to 20 annotations (`MAX_TRANSCRIPT_ANNOTATIONS`, `packages/protocol/src/transcript-annotations.ts:7`) of up to 12,000 characters of text and 2,000 of comment each (`:8-9`), about 280,000 characters. `fallbackTitle` reads `transcript.messages`, the displayed window, so it would see any per-message display trim. This analysis did not confirm whether a trim can apply to a user message's `content`. A short request with a large excerpt is the case to check.
+
+**Decisions.**
+
+- **How is it settled?**
+  - **Add a projection test with a first message at the annotation limits, through the real display bounding, and assert the title (recommended).**
+    - Pros: answers the question deterministically, without a provider; pins the behaviour.
+    - Cons: needs a fixture large enough to reach the bound.
+  - **Relax the strip to drop an unterminated trailing fence for titles only.**
+    - Pros: the title is clean even after a trim.
+    - Cons: reverses decision 2 for a case nobody has seen; a hand-typed tag could then hide the end of a title.
+  - **Leave it until a case is reported.**
+    - Pros: no work.
+    - Cons: the question stays open with no evidence either way.
+
 Found while qualifying design conversation links live
 ([0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)).
 When a conversation's first prompt carries transcript annotations (a design

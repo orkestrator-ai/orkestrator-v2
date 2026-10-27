@@ -2,6 +2,245 @@
 
 Checked against `main` at `93018933` (2026-10-26).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Make Build Pipeline's same-id redispatch at-most-once** (item 3, plus the
+   open question): stop a Claude structured stage prompt running twice after
+   an ambiguous send and a bridge restart. Status: open.
+2. **An `absent` dispatch answer** (item 1): let bridges that can prove an id
+   never arrived say so. Status: open.
+3. **Re-send on `absent`** (item 2): move a recovered `dispatching` request
+   back to `prepared` and send it again under the same id. Status: blocked (on
+   task 2).
+4. **OpenCode same-id deduplication** (Needs verification): does OpenCode
+   deduplicate a `promptAsync` that reuses a message id? Status: open.
+5. **Live restart-resend check per bridge** (Qualification). Status: blocked
+   (on tasks 1 to 3 and provider credentials; batched with 0031).
+
+### 1. Make Build Pipeline's same-id redispatch at-most-once
+
+**Problem.** A Build Pipeline stage prompt whose acknowledgement was lost is
+re-sent under the same request id on every supervisor pass while the stage
+session is not running. For a Claude structured-output prompt that has been
+through a bridge restart, the bridge no longer knows the id, so the build or
+fix turn runs a second time on the same worktree. This is the only item in
+the file that can do harm today (a duplicated turn), not just fail a reviewer
+closed.
+
+**Context.** Found by the 0112 survey (0112 "Needs verification"). The fan-out,
+Multi Review steps and Build Pipeline consolidation already ask `dispatchStatus`
+and park; stage prompts do not. The open question (whether a durable claim
+for structured prompts changes structured dedupe) belongs to this task.
+
+**Investigation.** Still accurate.
+`BuildPipelineSupervisor.dispatchPending`
+(`apps/backend/src/core/build-pipeline-service-supervisor.ts:1723`) never reads
+`dispatchStatus`; on `AmbiguousPromptDispatchError` it returns and keeps
+`pendingPromptAttempt` (`:1844`), and the session pass calls it again whenever
+the status is not `running` (`:568-579`) or after a restart with a sent
+continuation (`:533-539`). The only `dispatchStatus` call in Build Pipeline is
+consolidation (`build-pipeline-review-fanout.ts:854`). The current behaviour is
+pinned by `build-pipeline-service-recovery.test.ts:672` ("retains the attempt
+and retries the same request id after a lost response"). On the Claude side
+the durable claim is still taken only when `outputSchema === undefined`
+(`bridges/claude-bridge/src/routes/session.ts:908`); a structured prompt goes
+straight to `sendPrompt` (`:986`) and is deduplicated only through the
+in-memory `structuredOutputRequestId` (`session-manager-lifecycle.ts:258-261`),
+which is not persisted. So the gap applies to stages whose result transport is
+structured output, not `tool-v1` (a `tool-v1` prompt has no `outputSchema` and
+does take the durable claim). On the open question: a durable claim would make
+a restarted bridge restore the id into `restoredDispatchedRequestIds`, so the
+route refuses it as lost (`restoredDispatchClaimLost`,
+`session-manager-lifecycle.ts:279`) instead of running it; and the claim's
+in-process `duplicate` answer (`routes/session.ts:948-953`) returns
+`already-processed` with no structured payload, so the backend would have to
+read the result through `structured-output` or the workflow result, as it
+already does for consolidation.
+
+**Decisions.**
+
+- **How should `dispatchPending` decide whether to re-send?**
+  - **Ask `dispatchStatus` first, as consolidation does: clear the attempt on
+    `dispatched`/`pending` or a result for the id, fail on `lost`, park within
+    the idle bound on `unknown`, and re-send only on a definite non-send
+    (recommended).**
+    - Pros: same rule as the three other runners (0112 decision 7); works for
+      every provider without bridge changes; leaves room for `absent` later.
+    - Cons: a reviewer-style "fails closed" now applies to stage prompts whose
+      ack was merely lost, so a few pipelines that would have recovered by
+      resending will fail instead until `absent` exists; the pinned test at
+      `:672` has to change.
+  - **Give Claude structured prompts the durable claim and keep the same-id
+    resend.**
+    - Pros: smallest backend change; dedupe then holds across restarts for
+      Claude.
+    - Cons: fixes Claude only (Pi and ACP evict, OpenCode has no durable
+      journal); changes the duplicate answer for structured prompts, which
+      callers must then read differently.
+  - **Both.**
+    - Pros: defence in depth; Claude structured prompts gain `dispatched` and
+      `lost` answers that the parking rule can use.
+    - Cons: the most work and two compatibility paths (an older Claude bridge
+      without structured claims keeps answering `unknown`).
+- **What does "a definite non-send" mean for the re-send branch?**
+  - **Only a `ProviderUnavailableError` or `PromptRejectedError` before the
+    prompt was written, never an ambiguous error (recommended).**
+    - Pros: matches invariant 3 in 0027; no new state.
+    - Cons: needs the attempt to remember which error it last hit, a new
+      optional field on `PipelinePromptAttempt`
+      (`packages/protocol/src/build-pipeline.ts:761`).
+  - **Re-send whenever the provider answers `unknown`.**
+    - Pros: no new field; keeps today's recovery rate.
+    - Cons: `unknown` is exactly the case the survey showed can mean
+      "delivered and forgotten", which is the bug.
+
+### 2. An `absent` dispatch answer
+
+**Problem.** No bridge can say "this id never reached me", so a recovered
+reviewer whose send provably never happened fails after the idle bound
+instead of running.
+
+**Context.** 0112 decision 1 chose to park and fail closed rather than guess.
+`absent` must be an assertion, never a default.
+
+**Investigation.** `ProviderDispatchStatus` is now
+`"dispatched" | "pending" | "unknown" | "lost"`
+(`apps/backend/src/core/agent-provider-contract.ts:346`); "Current state" above
+predates `pending` (added by 0112 decision 9). There is a precedent:
+`ProviderSteerDispatchStatus` already has `absent` (`:351`). The per-bridge
+facts still hold at HEAD: Claude keeps `MAX_DISPATCHED_REQUEST_IDS = 64`
+(`bridges/claude-bridge/src/services/session-preferences.ts:151`); Cursor
+`MAX_PROMPT_JOURNAL = 256` (`bridges/cursor-bridge/src/config.ts:137`); Pi
+`MAX_PROMPT_JOURNAL = 256` with oldest-first eviction
+(`bridges/pi-bridge/src/config.ts:168`, `prompt.ts:953`); ACP
+`MAX_PROMPT_JOURNAL = 512` and `MAX_PERSISTED_PROMPT_JOURNAL_BYTES`
+(`bridges/acp-bridge/src/acp-context.ts:892`, `:906`); OpenCode 64 reservations
+per session (`packages/protocol/src/opencode-message-id.ts:17`). Codex's
+`/dispatch` route (`bridges/codex-bridge/src/index.ts:1403`) reads only the
+in-process journal and never answers `lost`; `reconcileFromThreadTurns`
+(`sessions/dispatch-journal.ts:701`) is reached only through
+`app-server-engine.ts:2776`, which does a `thread/read` with turns.
+
+**Decisions.**
+
+- **Is `absent` worth building at all?**
+  - **Yes, but only after task 1, and only for Cursor first (recommended).**
+    Cursor's journal is fsync'd and evicts settled records only, so
+    "journal complete" is a small flag.
+    - Pros: proves the wire shape and harness on the easiest bridge; the rest
+      can follow on evidence.
+    - Cons: a reviewer on any other provider still fails closed.
+  - **Yes, on every bridge at once.**
+    - Pros: uniform behaviour.
+    - Cons: Codex needs a non-read-only route (attach plus `thread/read`) that
+      breaks the "dispatch reads never re-attach" rule in `AGENTS.md`;
+      OpenCode cannot answer soundly at all.
+  - **No: keep failing closed and close this item.**
+    - Pros: no compatibility work; the failure is rare (a crash between the
+      durable write and the send).
+    - Cons: those reviewers keep failing; the user must retry by hand.
+- **How does a bridge know its journal is complete for a session?**
+  - **A per-session "complete since" marker set when the session is created by
+    this journal and cleared on any eviction, truncation or unclean load
+    (recommended).**
+    - Pros: an explicit assertion; easy to test; survives restarts when
+      persisted with the journal.
+    - Cons: one more persisted field per bridge, with its own downgrade
+      handling.
+  - **Never evict unresolved entries, and answer `absent` when no entry
+    exists.**
+    - Pros: no marker.
+    - Cons: unbounded unresolved entries violate the bounds invariant (11);
+      still wrong after a corrupt load.
+
+### 3. Re-send on `absent`
+
+**Problem.** Without a consumer, `absent` would be dead code (0112 decision 1).
+
+**Context.** The interleaving harness
+(`apps/backend/src/core/review-fanout-interleaving-support.ts`) would need a
+provider that answers `absent` and deduplicates a late delivery of the same id.
+
+**Investigation.** The fan-out's recovery branch
+(`review-fanout.ts:1278-1291`) is the obvious place:
+`recoveredDispatchAcceptance` (`:1897`) would gain an `absent` outcome that
+moves the reviewer back to `prepared` through the same `commit(transition)`
+(`:762`). Multi Review steps (`multi-review-service.ts:4009`) and consolidation
+(`build-pipeline-review-fanout.ts:854-860`) have the same parking branch.
+
+**Decisions.**
+
+- **Which runners re-send on `absent`?**
+  - **All four, together with task 1's Build Pipeline rule, in one change
+    (recommended).**
+    - Pros: one rule everywhere, which is what 0112 decision 5 aimed for.
+    - Cons: a larger change and more tests at once.
+  - **The fan-out only.**
+    - Pros: smallest; the fan-out has the interleaving harness already.
+    - Cons: the three other runners keep failing closed on the same evidence.
+
+### 4. OpenCode same-id deduplication
+
+**Problem.** The provider retries an ambiguous `promptAsync` with the same
+`messageID` (`apps/backend/src/core/opencode-provider.ts:648`, `:684`), trusting
+OpenCode to treat it as the same message. If OpenCode instead starts a second
+loop, OpenCode prompts are not at-most-once either.
+
+**Context.** OpenCode is pinned at 1.19.4 (`apps/backend/package.json:23`). Only
+the client SDK is in `node_modules`; the server ships as a compiled binary in
+the toolchain, so the question cannot be settled from this repository.
+
+**Investigation.** The backend test
+`opencode-provider-dispatch.test.ts:1753` ("a dropped acknowledgement stays
+ambiguous and retries with the same message id") pins the client behaviour
+against a fake, not the server. `dispatchStatus` (`opencode-provider.ts:732`)
+proves delivery only from an exact transcript marker within the newest 64
+messages (`OPEN_CODE_MESSAGE_HISTORY_LIMIT`, `opencode-message-id.ts:9`).
+
+**Decisions.**
+
+- **How to settle it?**
+  - **Read the upstream server source at the pinned tag (the session prompt
+    handler) and record the answer here (recommended).**
+    - Pros: no credentials or live run; exact for 1.19.4.
+    - Cons: needs a re-check on every OpenCode bump (0008 moves to 2.x).
+  - **A live probe: send the same `messageID` twice to a real `opencode serve`
+    in an isolated profile.**
+    - Pros: observes the real behaviour, not a reading of code.
+    - Cons: needs OpenCode credentials and spends a turn; it is a live
+      provider run.
+
+### 5. Live restart-resend check per bridge
+
+**Problem.** The deterministic tests use fakes; nobody has watched a real
+bridge refuse or deduplicate a resend after its own restart.
+
+**Context.** Batched with
+[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+
+**Investigation.** The nearest existing proof is the real-bridge
+`tests/multi-review-claude-bridge-restart.test.ts`, which restarts the real
+Claude bridge process without a live model. No equivalent exists for the other
+bridges.
+
+**Decisions.**
+
+- **Live run, or real-bridge tests?**
+  - **Real-bridge restart tests per bridge (no model needed), with the live run
+    kept only for providers whose dedupe lives in the vendor (OpenCode)
+    (recommended).**
+    - Pros: deterministic, runs in CI, no credentials; the dedupe under test is
+      the bridge's journal, not the model.
+    - Cons: one harness per bridge to write.
+  - **One live run per provider through 0031.**
+    - Pros: covers the whole stack.
+    - Cons: needs every credential; cannot force the race on purpose, so a pass
+      proves little.
+
 Split out of
 [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md),
 whose first item asked the fan-out to re-send a recovered `dispatching`
@@ -105,6 +344,8 @@ Survey of each provider (2026-10-26, file references at `93018933`):
 
 - [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md):
   the recovery rules this builds on.
+- [0723-build-pipeline-resend-without-dispatch-check.md](0723-build-pipeline-resend-without-dispatch-check.md):
+  Build Pipeline's same-id stage re-send (task 1 and code item 3), split out.
 
 ## Replaces
 

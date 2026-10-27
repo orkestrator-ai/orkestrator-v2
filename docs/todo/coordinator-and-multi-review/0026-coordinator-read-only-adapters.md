@@ -5,6 +5,139 @@ on 2026-10-24 against `main` at `8454d18b`, on node mbp3 (macOS, arm64). What
 is left needs a Windows host, a Linux host and live model runs; see
 [Remaining work](#remaining-work).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Claude coordinator on Windows, live**: the read-only scenario on a Windows host, expecting `provider-configured` and hook-only refusals. Status: blocked (no Windows host; Windows builds are not in the release process).
+2. **Claude coordinator on Linux, live**: the read-only scenario with a real model on Linux, with `bwrap`/`socat` present (`enforced`) and with either missing (`provider-configured`). Status: open (no longer blocked: this node is a Linux host with both installed).
+3. **Live research-server call on Pi, Cursor and OpenCode**: one coordinator turn per platform that resolves React's Context7 library ID with the default research setting. Status: open.
+4. **Re-check the tier decisions on pin bumps**: the conditions D4, D6, D8, D9 and the Windows-flag assumption say to revisit. Status: deferred (until the next Cursor, Grok, Codex or Claude bump).
+5. **Close out the file**: what happens to the file once tasks 1 to 3 have evidence. Status: open.
+
+### 1. Claude coordinator on Windows, live
+
+**Problem.** A Windows Claude coordinator has never run with a real model. On Windows the hook allowlist is the whole read-only boundary, so a hole in it would be a real write to the user's checkout with no OS layer behind it (D1's con).
+
+**Context.** Item 1 is code-complete. The tier comes from `defaultCoordinatorHostCapabilities`, which treats Windows as having no sandbox. `releasing.md` says Windows releases are not yet covered, so there is no shipped Windows build for users to hit this today.
+
+**Investigation.** `apps/backend/src/core/coordinator-providers.ts:68` returns `{ claudeSandbox: false }` for any platform other than `darwin` and `linux`. `judge` (`:128`) then gives Claude `provider-configured` with the generic "needs macOS, or Linux…" reason. The launcher sets `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX` from the same probe (`apps/backend/src/core/commands-servers.ts:876`) and clears an inherited one for workers (`:849`). The remaining-work text is slightly out of date. Since 0145, `unavailable` does more than set `failIfUnavailable: false`: it also turns the sandbox off entirely (`enabled: options.commandSandbox !== "unavailable"`, `bridges/claude-bridge/src/services/read-only-policy.ts:521`, and `:526` for `failIfUnavailable`). A Windows run therefore checks the hook alone, not "the sandbox requested without being required". `claudeSandboxRefusal` (`bridges/claude-bridge/src/services/claude-execution-sandbox.ts:74`) returns early on any platform but Linux, so it cannot refuse a Windows turn. Since this file was last updated, #1308 (`2c3147f6`) added inline skill plugins to Claude coordinators. It also added `managedSettings { allowManagedHooksOnly, disableSkillShellExecution }` (`bridges/claude-bridge/src/services/claude-query-config.ts:187`) to close skill-shell and plugin-hook paths the PreToolUse hook never saw. Those paths matter most on Windows, where nothing sits behind the hook, so a Windows run should include a project skill.
+
+**Decisions.**
+
+- **Keep this task open, or retire it until Windows ships?**
+  - **Keep it blocked here until a Windows build exists (recommended).** Leave the item as is and run it when Windows enters the release process.
+    - Pros: the evidence lands on the build users will actually run; avoids a one-off unpackaged Windows setup.
+    - Cons: the hook-only boundary stays unproved live on Windows for as long as that takes.
+  - **Run it now from a source checkout on a borrowed Windows host.**
+    - Pros: evidence sooner, and it would surface any Windows bug in the hook or launcher early.
+    - Cons: `mise run dev:test` and the live suite have never been qualified on Windows, so a failure may be in the harness rather than the boundary.
+  - **Hide Claude as a coordinator on Windows until it is run.**
+    - Pros: no unproved boundary is ever offered.
+    - Cons: reverses D1 with no new evidence against it; Windows is not shipped anyway.
+- **What counts as a pass?**
+  - **The read-only scenario plus a project skill with inline shell and `allowed-tools` (recommended).** The standard scenario, plus a checkout skill that tries to write.
+    - Pros: covers the bypass #1308 found, which has the most impact where the hook is the only layer.
+    - Cons: the live suite has no such step yet, so it needs a manual step or a new test step.
+  - **The read-only scenario only.**
+    - Pros: no harness change; matches how macOS was qualified.
+    - Cons: misses the skill path, which the 2026-10-24 macOS run also predates.
+
+### 2. Claude coordinator on Linux, live
+
+**Problem.** On Linux, Claude is `enforced` only when the bubblewrap probe passes, and no real-model coordinator run has confirmed either branch. A wrong `enforced` would tell the user the OS blocks writes when it does not.
+
+**Context.** The offline `conformance-coordinator-sandbox-live.test.ts` passes on an Arch host (0145, 2026-10-26). CI removes Ubuntu's AppArmor profile, so CI says nothing about stock Ubuntu; that case is owned by [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md). The remaining-work item says it was "not run because this node has no Linux host". That was true of node mbp3.
+
+**Investigation.** The current node is Linux (`7.2.8-9-omarchy`) with `/usr/bin/bwrap` and `/usr/bin/socat`: the same Arch/Omarchy host as 0145's offline evidence. So the `enforced` half is no longer blocked on hardware. The probe is `claudeLinuxSandboxStatus` (`packages/protocol/src/node/claude-linux-sandbox.ts:213`). The bridge re-runs it and refuses a turn that needs a sandbox it cannot start (`claude-execution-sandbox.ts:74`). The checkout write is denied through `filesystem.denyWrite` (`read-only-policy.ts:537`). The live task exists: `mise run test:agent:coordinator` (`mise.toml:271`) takes `--credential-source` and `--scenario` (`apps/desktop/scripts/test-agent-coordinator-live.ts:8`). Claude is on `COORDINATOR_LIVE_PLATFORMS` at `provider-configured` (`apps/desktop/scripts/dev/coordinator-live.ts:39`), so the suite does not itself assert that Claude came up `enforced`. The run has to read the tier from the picker or the summary. The "without" half needs `bwrap` or `socat` missing from the backend's `PATH`. The suite has no switch for that, so it means launching the profile with a reduced `PATH`.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **On this Linux node now, for both halves (recommended).** Run `mise run test:agent:coordinator --credential-source claude --scenario read-only` once normally and once with a backend `PATH` that hides `socat`.
+    - Pros: unblocked today; the host already has offline evidence to compare against; it is cheap.
+    - Cons: one distribution without AppArmor; stock Ubuntu stays with 0145.
+  - **Wait and run it alongside 0145's Ubuntu, Debian and Fedora matrix.**
+    - Pros: one batch covers every Linux variant.
+    - Cons: delays a run that could happen now, and 0145's matrix needs hosts this node does not have.
+- **How to produce the "without `bwrap`/`socat`" case?**
+  - **Hide one program through the backend's `PATH` at profile start (recommended).**
+    - Pros: exercises the real probe and launcher; nothing is uninstalled.
+    - Cons: a manual step outside the suite, so it has to be written up carefully.
+  - **Add a test-only override for the host capability.**
+    - Pros: repeatable in the suite.
+    - Cons: a new process-authority input on a security boundary, which the file's constraints argue against; it would also skip the real probe.
+- **What counts as a pass for the `enforced` half?**
+  - **Scenario passes, the picker shows `enforced`, and a probe write such as `uniq in out` is refused by the sandbox as well as the hook (recommended).**
+    - Pros: shows both layers hold, which is what `enforced` claims.
+    - Cons: the hook refuses `uniq in out` first since D3, so showing the sandbox layer needs the existing `claude-sandbox-write-probe.mjs`, not the scenario alone.
+  - **Scenario passes.**
+    - Pros: the same bar as macOS.
+    - Cons: it cannot tell whether the sandbox or the hook did the refusing.
+
+### 3. Live research-server call on Pi, Cursor and OpenCode
+
+**Problem.** Research servers on these three platforms are covered only by unit tests (plus, for OpenCode, an offline run on the pinned binary). No real model has been seen choosing the tool. If the exact-id allowlists are wrong, the coordinator silently has no Context7.
+
+**Context.** Item 10 (D10, D11, D12). Codex and Claude were shown live on 2026-10-16. The file says this belongs with 0024's per-platform runs.
+
+**Investigation.** The adapters are still present: OpenCode `apps/backend/src/core/opencode-coordinator-research.ts` (with `-live`, `-registration` and unit tests); Cursor `hostResearchCustomTools` (`bridges/cursor-bridge/src/agent-session.ts:447`); Pi's `research` scope (`bridges/pi-bridge/src/mcp.ts:499`). The live suite cannot produce this evidence yet. `COORDINATOR_LIVE_SCENARIOS` is `read-only`, `async`, `family`, `status` and `peer` (`apps/desktop/scripts/dev/coordinator-live.ts:56`), and none of them asks for a research call. The read-only case switches research off on purpose (`settings: { coordinatorWebResearch: "off" }`, `e2e/agent-testing/coordinator-live.spec.ts:945`). Pins are unchanged since the work: Cursor SDK 1.0.40, OpenCode 1.19.4, Pi 1.4.0 (`docker/Dockerfile:195`, `:197`). #1308 also changed the Pi, Cursor and OpenCode coordinator boundaries (skill loading, plus an `orkestrator-skills__load` custom tool on Cursor), after the last read-only evidence.
+
+**Decisions.**
+
+- **Manual turns, or a new live scenario?**
+  - **Add a `research` scenario to the live suite (recommended).** It runs with the default research setting, asks for React's Context7 library ID, and asserts that the tool call is attributed to the research server.
+    - Pros: repeatable on every bump; covers all six platforms at once; fits the suite's per-platform summaries.
+    - Cons: a code change to the harness; Grok has to be expected to fail or be skipped (it loads no research servers, item 8).
+  - **Three manual coordinator turns, recorded in 0024.**
+    - Pros: no code; quickest single proof.
+    - Cons: not repeatable; a model can answer from memory without calling the tool, so the evidence has to come from the transcript row, not the answer.
+- **Re-run the read-only scenario in the same batch?**
+  - **Yes, on all six platforms, because #1308 changed every coordinator boundary after the 2026-10-24 runs (recommended).**
+    - Pros: refreshes evidence that is now stale for the skill-loading paths; costs little extra once profiles are up.
+    - Cons: more live provider spend, and Grok needs the `advisory` setting.
+  - **No, research only.**
+    - Pros: smaller run.
+    - Cons: leaves the post-#1308 boundary unproved live on every platform.
+
+### 4. Re-check the tier decisions on pin bumps
+
+**Problem.** Several decisions rest on facts about one pinned version, and they need revisiting when that version moves: Cursor has no approval callback (D6), Grok's `open_page` survives without `--disable-web-search` (D8), the Codex lock has never tripped (D9), and Claude's Windows sandbox flag is off (Assumptions).
+
+**Context.** The file lists these as "revisit when …" conditions, not as items. Moving a platform to `enforced` needs a test change in `coordinator-conformance.test.ts`, which pins `["claude", "codex", "pi"]` (`apps/backend/src/core/coordinator-conformance.test.ts:80`).
+
+**Investigation.** Current pins: `@cursor/sdk` 1.0.40 (`bridges/cursor-bridge/package.json:15`), Grok 1.0.67 (`docker/Dockerfile:196`), Codex 0.164.0 (`:194`), Claude CLI 2.1.309 and SDK 0.3.309. Item 7 says "Verified against 0.162.1", but Codex was already 0.164.0 when the file was finished: the bump `28590e68` (2026-10-23) predates `95c9cb46` (2026-10-24). `bridges/codex-bridge/src/app-server/live-network-lock.test.ts` already describes 0.164.0 behaviour. `assertHostedNetworkLock` is at `bridges/codex-bridge/src/engine/app-server-engine.ts:1728`. Nothing here is outstanding today.
+
+**Decisions.**
+
+- **Where should these watch items live?**
+  - **Add each to `docs/development/upgrade-agents.md` as a per-agent bump check, then drop it from this file (recommended).**
+    - Pros: whoever bumps a pin sees it at the moment it matters; this file can then close.
+    - Cons: one more step in the bump checklist; moving the items is a doc change outside this file.
+  - **Leave them in this file's decisions.**
+    - Pros: no doc move.
+    - Cons: nobody bumping a pin reads this file, and it keeps the file from ever being Finished.
+
+### 5. Close out the file
+
+**Problem.** Every code item is done. Only live runs remain, and the file cannot be deleted until they are, even though its durable content (decisions D1 to D12, the Codex refused-cell rationale) belongs in `architecture/`.
+
+**Context.** The README rules say to finish the items, set Finished to Yes, move durable behaviour into `architecture/` or `development/`, then delete the file. They also say never to add new todos to an existing file, so the remaining live runs cannot simply be moved into 0024.
+
+**Investigation.** `docs/architecture/coordinator.md` already covers network and research and the qualification rules, and `AGENTS.md` covers the shell allowlist. The per-platform decision rationale (D1 to D12) and the refused-cell constraints are only here. The folder index rates the file Medium, rank 5, Finished: No, which still matches: qualification runs for secondary platforms only.
+
+**Decisions.**
+
+- **When to fold the durable content and delete the file?**
+  - **When tasks 2 and 3 have evidence, move D1 to D12 and the refused-cell constraints into `coordinator.md` and the Codex bridge docs, then delete the file. Move task 1 into a new numbered file for Windows qualification (recommended).**
+    - Pros: follows the README rules; the Windows blocker no longer holds the whole file open.
+    - Cons: one more small todo file; the doc move has to be careful not to lose the options weighed.
+  - **Keep the file until all three live runs, Windows included, are done.**
+    - Pros: no split; one place for everything.
+    - Cons: Windows has no date, so the file and its Medium row may stay open indefinitely.
+
 Coordinator runs against the user's real checkout, so every platform it offers
 must hold the same read-only outcome: creating a file, editing a file, running
 a writing shell command and fetching a URL all fail, and Control MCP discovery

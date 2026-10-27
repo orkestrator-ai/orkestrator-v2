@@ -4,6 +4,115 @@ Checked against `main` at `2459b05c` (2026-10-15). Code items finished on
 branch `todo-0004-composer-model-params-803868a90fcb` (2026-10-25, from
 `20f6de91`).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Codex summary suppression residue**: item 1 says the `parameter:summary` suppression entry is gone; on `main` it is still there. Status: partly done.
+2. **Unoffered held-model preflight**: the optional open half of item 6. Status: deferred (until Codex's 400 proves confusing).
+3. **Cursor extra-axis live qualification**: change a Cursor axis, send, reload, confirm the value returns. Status: open.
+4. **Codex dispatch-model and config-merge live check**: items 5 and 6 plus the Plan-mode merge fix on a real Codex login. Status: open.
+5. **Done items 2 to 5 and the retired qualification line**: decide how to keep the record. Status: done.
+
+### 1. Codex summary suppression residue
+
+**Problem.** The file (item 1 and "Current state") says Codex has no suppression entry and that a renderer test "suppresses no Codex parameter control". Neither is true on `main`, so the doc misstates the shipped table, and the table breaks its own rule that an entry needs a descriptor that produces it.
+
+**Context.** The branch work landed as #1260 (`1e76744d`). Its commit message says it removed the summary entry, and it did remove the bridge plumbing.
+
+**Investigation.** The bridge half is done: no `personality` or summary parameter remains in `bridges/codex-bridge/src/app-server-runtime-lifecycle.ts` or `engine/app-server-engine.ts`, and `maxBudgetUsd` is gone from the Claude bridge. But `packages/protocol/src/native-agent.ts:976` still reads `codex: Object.freeze(["parameter:summary"])`, unchanged at every commit from `1e76744d` to HEAD, although the doc comment above it (:960-965) was rewritten to drop the Codex sentence. The tests still expect suppression: `apps/backend/src/core/native-agent-service-projection.test.ts:3120-3122` (Codex's expected controls omit `parameter:summary`) and `apps/web/src/components/native-agent/AgentNativeTab.test.tsx:6244` and :6290 ("hides unsupported Codex summary in a %s tab"). The renderer test the file names does not exist. Behaviour is harmless (nothing produces the control), but the record is wrong.
+
+**Decisions.**
+
+- **Finish the removal or correct the doc?**
+  - **Remove the entry and flip both tests, as item 1 intended (recommended).**
+    - Pros: matches the recorded decision and the table's own rule; one small change.
+    - Cons: a Codex bridge inside the compatibility window that still advertised `summary` would show it again; check 0034's window first (the removal of the descriptor predates #1260 per `8d579e14`, #688).
+  - **Keep the entry and correct item 1 and "Current state".**
+    - Pros: no code change; defends against an old bridge.
+    - Cons: contradicts the decision in "Assumptions and decisions" and the table comment.
+
+### 2. Unoffered held-model preflight
+
+**Problem.** A Codex session already holding a model the login does not offer fails at Codex with HTTP 400 instead of being refused before send.
+
+**Context.** The dispatch-change case is done (`applySessionHeldDispatchModel`, `apps/backend/src/core/native-agent-service.ts:1173`; test at `native-agent-service-dispatch-model.test.ts:150`). The bridge deliberately does not cache `model/list`.
+
+**Investigation.** No report of the 400 being confusing is recorded. The 400 names the model.
+
+**Decisions.**
+
+- **Build it now or wait?**
+  - **Wait for evidence, as the file says (recommended).**
+    - Pros: no extra round trip per Codex turn; the 400 already names the model.
+    - Cons: a user on a stale held model learns only after sending.
+  - **Add a backend-cached availability answer invalidated on account switch.**
+    - Pros: refuses before journaling, keeping the draft.
+    - Cons: a new cache with its own staleness rules, contradicting the "read every request" choice made for defaults.
+
+### 3. Cursor extra-axis live qualification
+
+**Problem.** The Cursor change-send-reload path for `thinking`, `context` and `cyber` is unproven end to end.
+
+**Context.** Needs a real-stack browser session with a Cursor login; the CLI has no parameter control. Batched in 0031's Cursor row.
+
+**Investigation.** The bridge accepts `parameterValues` (`bridges/cursor-bridge/src/agent-session.ts:734-749`); the projection unit test is at `apps/backend/src/core/native-agent-service-projection.test.ts:2455`. No browser spec covers it.
+
+**Decisions.**
+
+- **What counts as a pass?**
+  - **Value restored after reload and the Cursor run reflects it (for `thinking`, a reasoning part appears) (recommended).**
+    - Pros: proves the value reached the provider, not only backend state.
+    - Cons: needs a model where the axis has a visible effect.
+  - **Value restored after reload only.**
+    - Pros: quick, deterministic.
+    - Cons: duplicates what unit tests already show.
+- **Fold into another Cursor run?**
+  - **Yes, run it with the other Cursor rows in 0031 (recommended).**
+    - Pros: one login and profile for several gates.
+    - Cons: waits on that batch.
+  - **Run alone now.**
+    - Pros: closes this file sooner.
+    - Cons: another separate credentialed session.
+
+### 4. Codex dispatch-model and config-merge live check
+
+**Problem.** Items 5 and 6 and the config-merge fix are proven only by unit and provider tests.
+
+**Context.** The merge fix stops a model or fast pick resetting a Plan session to Build (`updateCodexSessionConfig`, `apps/backend/src/core/http-bridge-codex-config.ts:137`). The pinned Codex is now `0.164.0` (`packages/toolchain/src/manifest.ts:8`), newer than the 0.162.1 the file's live evidence used.
+
+**Investigation.** Code present on `main`. No live run recorded since 2026-10-17.
+
+**Decisions.**
+
+- **How to run it?**
+  - **`dev:test --fixture --credential-source codex`, Plan session, model pick then a read-only check, then a Control MCP dispatch naming another model and a rollout `turn_context.model` check (recommended).**
+    - Pros: covers both paths and the merge defect in one session; follows the file's own procedure.
+    - Cons: needs a ChatGPT login and reading a rollout file.
+  - **CLI-only via `orkestrator` client commands.**
+    - Pros: scriptable.
+    - Cons: the picker path is renderer-driven and would not be covered.
+
+### 5. Done items 2 to 5 and the retired qualification line
+
+**Problem.** Most of "Outstanding work" is struck-through done text, which makes the remaining work harder to see.
+
+**Context.** README rules: update or remove an item in the change that finishes it; move durable behaviour into `architecture/` when a file finishes.
+
+**Investigation.** Items 2-5 are on `main` (#1260). The third qualification line is marked not applicable.
+
+**Decisions.**
+
+- **Keep or move the done text?**
+  - **Keep it until tasks 1, 3 and 4 close, then move the Codex model rules from "Constraints and rationale" into `architecture/agent-engines.md` and delete the file (recommended).**
+    - Pros: the evidence stays next to the open checks that depend on it.
+    - Cons: the file stays long meanwhile.
+  - **Move the durable rules now and shrink the file to the open items.**
+    - Pros: clearer file today.
+    - Cons: two edits to the same material.
+
 Every model axis that only some providers have renders through the generic
 `parameters` descriptors, with its value held in backend session state, and no
 axis needs its own UI. Reasoning and speed, which every provider has, stay
@@ -329,6 +438,8 @@ qualification run and one optional preflight case.
   setting changes need a warm Claude runtime between turns).
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
   (execution policy and approvals).
+- [0727-codex-summary-parameter-still-suppressed.md](0727-codex-summary-parameter-still-suppressed.md):
+  the Codex summary descriptor and suppression entry still on `main`, split from task 1.
 
 ## Replaces
 

@@ -3,6 +3,35 @@
 Checked against `main` at `06297124` (2026-10-23). Finished on 2026-10-26
 against `main` at `93018933`.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the finished file**: every item is done (the folder index marks it Finished: Yes); decide what happens to the file. Status: done.
+
+### 1. Retire the finished file
+
+**Problem.** The file has no outstanding work. Under the README rules a finished file is deleted once its durable behaviour lives in `architecture/` or `development/`.
+
+**Context.** Found by the 2026-10-23 Pi coordinator run ([0054](0054-agent-test-pi-default-model.md)); fixed by `a6ed2a49` (#1290, 2026-10-26).
+
+**Investigation.** The fix is on `main` as described: `LOCAL_BRIDGES` lists the five bridges at `apps/desktop/scripts/dev/bridge-builds.ts:24`, the override variable is at `:38`, `startDevelopment` calls `prepareProfileBridgeBuilds` at `apps/desktop/scripts/dev/lifecycle.ts:563`, and `e2e/agent-testing/bridge-builds-setup.ts` is wired into `playwright.browser.config.ts` and `playwright.coordinator.config.ts` (with its own `bridge-builds-setup.test.ts`). The durable behaviour is already documented, and more completely than here, in `docs/development/agent-testing.md` ("Bridge builds", `:180`-`:210`): it also records that preparation compares Turbo input hashes before and after the build and that a failed plan stops the check even with the override set. `AGENTS.md` repeats the restart rule. What is only in this file is the rationale (decisions 1 to 8: why Turbo, why a separate record file, why all five bridges, why agent-test flavour only). Inbound links: `docs/todo/agent-engines/0062-pi-chatgpt-login-without-saved-default.md` (twice) and `0054` (related list, and its item 11 names 0056 as a reason to keep 0054).
+
+**Decisions.**
+
+- **What to do with the file?**
+  - **Delete it, after moving the rationale into a short "Why" paragraph under "Bridge builds" in `agent-testing.md`, and repoint the 0062 and 0054 links there (recommended).**
+    - Pros: follows the README rule; the reasons sit next to the behaviour a maintainer would change; removes a finished row from the index.
+    - Cons: touches two other todo files' link lines and a development doc in the same change; the real-stack evidence survives only in git history.
+  - **Keep it until 0054 is deleted, then delete both together.**
+    - Pros: one link-cleanup change instead of two; 0054 already chose this path.
+    - Cons: two finished files linger with no end date; 0062 still links here.
+  - **Delete it without moving the rationale.**
+    - Pros: smallest change.
+    - Cons: loses the reasons (for example why the record is not a `status.json` field), which someone changing the guard would need.
+
 A `dev:test` profile launches each local bridge from its built
 `bridges/<bridge>/dist/index.js` (`getBridgePath` in
 `apps/backend/src/core/commands-servers.ts`). Until 2026-10-26 nothing in

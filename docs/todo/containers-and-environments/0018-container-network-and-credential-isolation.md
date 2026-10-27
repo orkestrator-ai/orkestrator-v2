@@ -6,6 +6,262 @@ prototype against `b83ae534` (2026-10-22); the production egress gateway and
 the credential-delivery items against branch
 `todo-0018-container-isolation-e228f2a04b8e` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence exists but is not recorded here).
+2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done.
+3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: open.
+4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch once tasks 1 to 3 pass. Status: blocked (on tasks 1 to 3).
+5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
+6. **Container-made Claude MCP login survival**: a live `claude /mcp` sign-in inside a container survives a keeper push and a restart. Status: open.
+7. **Grok renewal pickup and past-expiry sign-out**: live Grok checks for items 5 and 7 and the past-expiry property. Status: blocked (on a fresh host Grok login).
+8. **OpenCode and Pi past expiry and sign-out**: live OAuth checks for OpenCode and Pi, including item 7's sign-out removal. Status: blocked (on a fresh host OpenCode or Pi OAuth login).
+9. **Stale statements in this file**: a renamed function, a rootless claim that is now out of date, and the CI run that is not recorded. Status: open.
+
+### 1. Gateway on rootful Linux Engine
+
+**Problem.** The egress gateway is on by default for every restricted runtime on a current image. This file says it has been proved only on Docker Desktop, so Linux users run an unqualified default.
+
+**Context.** Item 1's last checkbox and the "Egress gateway on Linux Engine and rootless" qualification entry. The file expects `container-live-qualification.yml` to collect the evidence on `ubuntu-24.04` and `ubuntu-24.04-arm`.
+
+**Investigation.** The workflow has run. Run 40409285999 is the latest pull-request run, at head `e53ea683` on 2026-10-26. Run 40338400817, at head `e8306626` on the 0109 branch (#1307), passed every step on both runners. Its image manifest declared `egress-gateway=1,network-policy=3`, so the suites ran behind the gateway:
+- network (C22 sibling and host isolation): 4/4.
+- firewall (C23 edits, refresh, revocation; `CapEff` 0; `orkroot` tampering refused; gateway restart; policy 3 tuples): 2/2. On a gateway image this is `apps/backend/tests/container-live-firewall.test.ts:178`, with the tamper checks at `:248`-`:294`.
+- readiness, including "a gateway that cannot apply its firewall refuses the start": 9/9.
+- replacement, including "the candidate gets its own gateway on the fixed host port": 11/11.
+
+In run 40409285999 the x64 network suite passed again. The only failure there was `C14 legacy migration with staged provider inputs`, which belongs to the replacement suite and not to the gateway. The weekly scheduled run on `main` (40304582303, 2026-10-26) failed in the lifecycle step. Neither this file nor `docs/development/container-qualification.md` records any of these runs: the doc still lists Linux Engine as "Not covered" (`container-qualification.md:185`). The code paths are unchanged: `egressEnforcement` (`apps/backend/src/core/egress-gateway.ts:77`), gateway creation (`apps/backend/src/core/commands-containers.ts:594`) and the runtime joining it (`commands-containers.ts:615`-`:622`).
+
+**Decisions.**
+
+- **Does the CI evidence count as Linux Engine qualification?**
+  - **Yes, record runs 40338400817 and 40409285999 as the rootful amd64 and arm64 pass (recommended).** Cite them in `container-qualification.md` and tick this half.
+    - Pros: the same suites the Desktop qualification used, on both architectures, against an image built from the branch, with exit statuses on record.
+    - Cons: hosted runners are one kernel and one Engine build, and IPv6, daemon restart and DNS rotation are still not covered (task 3).
+  - **No, require a manual run on a self-managed Linux host.**
+    - Pros: a configuration closer to a user's machine.
+    - Cons: duplicates evidence that already exists, and delays retiring the cap without finding anything new.
+- **What to do about the failing weekly and C14 runs?**
+  - **Treat them as separate from this task and check that some other todo (0019 or 0058) tracks them (recommended).**
+    - Pros: keeps this file's scope; neither failure touches gateway behaviour.
+    - Cons: needs a cross-check that someone owns them.
+  - **Hold this task until the whole workflow is green.**
+    - Pros: one clean run to cite.
+    - Cons: ties network qualification to unrelated migration fixtures.
+
+### 2. Gateway on rootless
+
+**Problem.** Rootless Docker is a supported topology, and the gateway is on there by default too. A rootless kernel without `hash:net,port` would fail closed at boot.
+
+**Context.** Same qualification entry, plus [0109](0109-rootless-linux-runtime-gaps.md), which closed the rootless runtime gaps in #1307 (`1aabf049`).
+
+**Investigation.** Two rootless runs since this file was checked cover parts of it:
+- The 2026-10-25 run on a real rootless Engine 29.9.1 host passed the live firewall suite 2/2, including the policy 3 tuples, with `ip_set`, `xt_set` and `nf_tables` loaded (`container-qualification.md:215`). That answers this file's "a rootless kernel is still unconfirmed" for that kernel. The image was a review build, and whether it carried `egress-gateway=1` is not recorded.
+- The 2026-10-26 rootless review qualification ran with host loopback enabled and an image carrying `staged-inputs=3`. C22 "passed behind the real egress gateway" (`container-qualification.md:312`-`:314`), but that write-up does not list the firewall suite.
+
+Still unproved on rootless with a current image: the firewall suite's gateway-specific checks (tampering, gateway restart) and the default host-loopback-disabled daemon behind a gateway. 0109 decision 4 also notes that existing gateway runtimes need a rebuild after host loopback is enabled.
+
+**Decisions.**
+
+- **What run closes rootless?**
+  - **The live firewall, network and readiness suites, once on a host rootless daemon with a current image and default settings, and the firewall suite again with host loopback enabled (recommended).**
+    - Pros: covers both daemon settings users actually have, and reuses the 0109 disposable-daemon recipe.
+    - Cons: needs a full image build on the rootless host, which the 0109 runs avoided for disk-space reasons.
+  - **Accept the 2026-10-25 and 2026-10-26 evidence as enough.**
+    - Pros: no new run.
+    - Cons: the gateway's tamper and restart checks were never shown on rootless, and the 2026-10-25 image may not have had a gateway.
+- **Add a rootless job to `container-live-qualification.yml`?**
+  - **No, keep rootless as a manual run for now (recommended).**
+    - Pros: hosted runners do not offer a rootless daemon out of the box, and 0109 already has a working manual recipe.
+    - Cons: rootless can regress unnoticed between manual runs.
+  - **Yes, set up a rootless daemon in a CI job.**
+    - Pros: repeated evidence on every change to the suites.
+    - Cons: setup cost and flakiness, and `nosuid`/`nodev` and port-collision behaviour depend on the host.
+
+### 3. IPv6, daemon restart and DNS rotation
+
+**Problem.** Three gateway conditions have not been run on any engine: a daemon with IPv6 enabled, a Docker daemon restart with stopped runtimes and gateways, and real DNS rotation. Each could leave a runtime unrestricted, or unable to start, in a way the current suites would not catch.
+
+**Context.** The file lists all three as owed for the gateway. 0019 owes DNS rotation and IPv6 for its packet matrix too. The constraints require IPv6 to stay dropped unless it is enforced.
+
+**Investigation.** IPv6 is closed twice. The gateway is created with `net.ipv6.conf.all.disable_ipv6=1` (`egress-gateway.ts:157`) and in-container runtimes get the same sysctl (`commands-containers.ts:627`). On top of that, `docker/init-firewall.sh:84`-`:97` sets `ip6tables` DROP, or fails if IPv6 is configured with no `ip6tables`. C22 asserts that IPv6 is `blocked` or `disabled` (`apps/backend/tests/container-live-network.test.ts:210`). No live test restarts the Docker daemon: nothing under `apps/backend/tests` does, and runtimes have no restart policy by design. DNS re-resolution is covered only by the C23 refresh test and the forged-DNS tuple test (`container-live-firewall.test.ts:579`-`:592`), not by a domain whose real addresses rotate.
+
+**Decisions.**
+
+- **How to cover the daemon restart?**
+  - **A manual run on a disposable daemon (rootful or the 0109 rootless one) with a scripted checklist: stop, restart the daemon, start through the backend, verify order and policy (recommended).**
+    - Pros: no CI runner can safely restart its own daemon mid-job, and a disposable daemon cannot touch the production one.
+    - Cons: one-off evidence.
+  - **A live test that restarts the daemon.**
+    - Pros: repeatable.
+    - Cons: on any shared host it kills every other container, including production Orkestrator's.
+- **How to test IPv6?**
+  - **Create the environment network on a daemon with `default-network-opts` enabling IPv6 and confirm C22 still reports `blocked`/`disabled` with no global IPv6 address reachable (recommended).**
+    - Pros: tests the configuration that would actually hand containers IPv6.
+    - Cons: needs a host or runner with IPv6 configured.
+  - **Rely on the sysctl and `ip6tables` DROP by inspection.**
+    - Pros: no run.
+    - Cons: the constraint says "implemented and tested", and a daemon option overriding the sysctl would go unseen.
+- **DNS rotation pass criterion?**
+  - **Run a container for longer than one record TTL against a CDN-backed allowed domain and confirm that new addresses are added and expired ones age out after six hours, without an allow-all window (recommended).**
+    - Pros: the property the firewall design claims.
+    - Cons: takes hours, so it suits a manual or scheduled run.
+  - **Accept the forged-DNS and refresh tests.**
+    - Pros: already pass in CI.
+    - Cons: they never exercise real TTL-driven turnover.
+
+### 4. Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap
+
+**Problem.** The cap keeps a second topology alive, one where a root terminal can change the firewall. Every gateway change has to stay correct for both.
+
+**Context.** "Assumptions and decisions": "to be removed once Linux Engine and rootless pass". `docs/architecture/container-lifecycle.md:529` lists it under rollout switches.
+
+**Investigation.** The override is read in `egressEnforcement` (`egress-gateway.ts:85`), and it is the only consumer besides tests and the live firewall suite's in-container variant. Removing it does not affect older images or policy 1 runtimes. Those still take the in-container path through `networkPolicy < 2 || imageGatewayVersion < 1` (`egress-gateway.ts:84`).
+
+**Decisions.**
+
+- **When to remove it?**
+  - **After tasks 1 and 2 are recorded, without waiting for task 3 (recommended).** Task 3 does not depend on the cap.
+    - Pros: matches the stated condition and drops the root-terminal-can-change-firewall path for current images sooner.
+    - Cons: if task 3 finds an IPv6 or daemon-restart problem, users lose the quick workaround and need a release instead.
+  - **After tasks 1 to 3.**
+    - Pros: the workaround stays until every known condition is proved.
+    - Cons: task 3 has no date, so the dual topology could stay indefinitely.
+- **Keep the in-container firewall live-suite variant afterwards?**
+  - **Yes, keep it for older images (recommended).**
+    - Pros: legacy runtimes still use that path until they are rebuilt.
+    - Cons: the test needs another way to select the topology, such as a policy 2 image.
+  - **No, drop it with the cap.**
+    - Pros: less test code.
+    - Cons: legacy runtimes lose their live coverage.
+
+### 5. Claude host refresh and mid-session pickup
+
+**Problem.** The keeper refreshes the host Claude login through `refreshHostClaudeLogin`, on by default. Nobody has run it against a real login, so a wrong trigger would sign out every container's Claude after about eight hours, or bill a model request.
+
+**Context.** The "Claude host refresh and mid-session pickup, live (high)" entry. The trigger is a `-p` run with an unknown model (`CLAUDE_HOST_REFRESH_MODEL`). The file says to re-check it after each Claude Code upgrade.
+
+**Investigation.** `refreshHostClaudeLogin` (`apps/backend/src/core/claude-host-login-refresh.ts:35`) is unchanged since `c17f1c8d` (2026-10-22). The keeper polls every five minutes and refreshes inside a five-minute lead (`apps/backend/src/core/container-claude-login-keeper.ts:43`-`:48`, `TOKEN_REPLACEMENT_LEAD_MS` at `apps/backend/src/core/agent-accounts-active.ts:178`), so this file's "last four minutes" is a looser test window than the code's. The pins have moved since the check: `CLAUDE_CLI_VERSION=2.1.309` (`docker/Dockerfile:193`), and the Agent SDK is 0.3.309. `docs/development/upgrade-agents.md:621` says the trigger "is still as checked against 2.1.296", so the required re-check after the upgrade was not done.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **A disposable Claude account on a real (non-agent-test) instance, with a container bridge running, timed into the last five minutes (recommended).**
+    - Pros: spends no one's real refresh token, and an agent-test profile refuses this path (`claude-host-login-refresh.ts:40`).
+    - Cons: needs a spare Claude subscription.
+  - **The user's own host login.**
+    - Pros: no extra account.
+    - Cons: a failure signs the user out of every Claude client on the host.
+- **Re-check the trigger against 2.1.309 first?**
+  - **Yes, repeat the fake-login container probe on 2.1.309 before the live run (recommended).**
+    - Pros: cheap, no credentials, and the upgrade guide already demands it.
+    - Cons: a fake token still cannot prove a proactive refresh of a real unexpired token.
+  - **Go straight to the live run.**
+    - Pros: one run.
+    - Cons: a failed live run would not say whether the trigger or the CLI changed.
+
+### 6. Container-made Claude MCP login survival
+
+**Problem.** Item 3 keeps an MCP OAuth login made inside a container through keeper pushes. That has been tested only against real files with synthetic tokens, never with a real `claude /mcp` sign-in.
+
+**Context.** The "Container-made MCP login and renewal pickup, live (medium)" entry. Digests are held in memory only, so a backend restart forgets which refresh tokens came from the host.
+
+**Investigation.** `buildMergeContainerClaudeCredentialCommand` (`apps/backend/src/core/agent-accounts-containers.ts:780`) and its tests in `apps/backend/tests/agent-accounts-containers.test.ts` are present. Nothing live has run.
+
+**Decisions.**
+
+- **Include a backend restart in the run?**
+  - **Yes: sign in, wait for a keeper push, restart the container, restart the backend, push again, then check with `jq 'keys'` (recommended).**
+    - Pros: covers the in-memory digest limitation the decision record admits.
+    - Cons: a longer run on a real MCP server account.
+  - **Only a keeper push and a container restart, as written.**
+    - Pros: the stated procedure.
+    - Cons: misses the case most likely to fail.
+- **Which MCP server?**
+  - **Any OAuth MCP server with a free tier and a disposable account (recommended).**
+    - Pros: no production credentials at risk.
+    - Cons: the token lifetime may be too long to observe a renewal.
+  - **A server the user already uses.**
+    - Pros: realistic.
+    - Cons: risks the user's own login.
+
+### 7. Grok renewal pickup and past-expiry sign-out
+
+**Problem.** Two Grok properties are unproved live. First, whether a pushed host renewal reaches a running session (item 5). Second, that a container signs out on its own past expiry and a bridge restart after a host `grok` run signs it back in. The Codex half passed on 2026-10-21.
+
+**Context.** The "Grok past expiry with a live login (medium)" entry and the Grok half of the MCP/renewal entry. Both have waited since 2026-10-21 because the host Grok login has been expired. [0061](0061-container-qualification-follow-ups.md) also owes the opt-in `e2e/agent-testing/grok-container-login.spec.ts` run.
+
+**Investigation.** The push this file calls `syncContainerGrokLogin` no longer exists by that name. Grok goes through the shared `syncContainerLogin` (`agent-accounts-containers.ts:636`), with its own entry in the provider table (`:516`) and the sign-out drop at `:669`-`:682`. `ContainerLoginFileWatcher` polls every 60 s (`apps/backend/src/core/container-login-file-watcher.ts:43`). The Grok pin is now 1.0.67 (`docker/Dockerfile:196`); the 2026-10-21 container ran 1.0.52.
+
+**Decisions.**
+
+- **Fold this into 0061's `grok-container-login.spec.ts` run?**
+  - **Yes, one session with a fresh host Grok login covers both files, recorded in each (recommended).**
+    - Pros: the precondition is the same and rare, and one login refresh serves both.
+    - Cons: the spec may not cover mid-session pickup, which needs a manual step.
+  - **Run them separately.**
+    - Pros: each file's evidence stands alone.
+    - Cons: needs two fresh logins, or two windows inside one.
+- **What counts as a pass for mid-session pickup?**
+  - **A turn after the push succeeds without a bridge restart. If it fails, record "requires bridge restart" as the documented behaviour (recommended).**
+    - Pros: either result closes the unknown, and the backend already restarts bridges on the next start.
+    - Cons: a negative result may call for new work in a new todo.
+  - **Require pickup without a restart.**
+    - Pros: a stronger guarantee.
+    - Cons: Grok's binary behaviour is outside Orkestrator's control.
+
+### 8. OpenCode and Pi past expiry and sign-out
+
+**Problem.** The access-only OpenCode and Pi copies, the merge push and item 7's sign-out removal have not been run with a real OAuth login. The host has had API keys or an expired Pi login only.
+
+**Context.** The "OpenCode and Pi past expiry with live OAuth logins (medium)" entry. The rotation analysis was made against OpenCode 1.19.0 and Pi 1.2.0 sources.
+
+**Investigation.** The pins have moved to `OPENCODE_CLI_VERSION=1.19.4` and `PI_CLI_VERSION=1.4.0` (`docker/Dockerfile:195`, `:197`). The restriction fails safe: only providers named in `NON_ROTATING_OAUTH_PROVIDERS` (`packages/protocol/src/login-snapshots.ts:226`) keep their refresh token. Any other OAuth provider, including one added upstream since, is staged access-only (`login-snapshots.ts:311`-`:324`). A new provider can therefore cost a sign-out, but cannot leak a rotating token. The merge command is `buildMergeContainerProviderAuthCommand` (`agent-accounts-containers.ts:567`).
+
+**Decisions.**
+
+- **Re-check the rotation analysis against the new pins first?**
+  - **Yes, diff the OAuth plugin and `pi-ai` provider lists between the analysed and pinned versions before the live run (recommended).**
+    - Pros: a static check, and it catches a provider that now reuses its refresh token and could be kept whole.
+    - Cons: the fail-safe default means it changes only usability, not safety.
+  - **Skip it.**
+    - Pros: less work.
+    - Cons: the file's "checked against" claims go stale.
+- **Use an edited `expires` or wait for real expiry?**
+  - **Edit `expires` in the container's copy for the sign-out check, and wait for a real host refresh for the hash check (recommended).**
+    - Pros: minutes instead of hours, and the host-hash property still needs a real host refresh.
+    - Cons: an edited `expires` does not prove the provider rejects the real expired token.
+  - **Wait for real expiry.**
+    - Pros: fully real.
+    - Cons: six to ten hours per provider.
+
+### 9. Stale statements in this file
+
+**Problem.** A few statements no longer match the code or the evidence, which misleads anyone picking up the remaining runs.
+
+**Context.** Found while checking tasks 1 to 8.
+
+**Investigation.**
+- `syncContainerGrokLogin` (line 106 of the original text) is now `syncContainerLogin` (`agent-accounts-containers.ts:636`).
+- "A rootless kernel is still unconfirmed" is out of date: tuples passed on rootless on 2026-10-25 (`container-qualification.md:215`).
+- The Linux Engine CI passes from task 1 are not recorded.
+- The Claude test window says "last four minutes" while the code uses five.
+- The Claude, OpenCode and Pi version claims predate the current pins.
+
+**Decisions.**
+
+- **Fix them now or with the qualification runs?**
+  - **Correct them in the same change that records task 1's evidence (recommended).**
+    - Pros: one edit, made while the evidence is being written up anyway.
+    - Cons: they stay wrong until someone takes task 1.
+  - **Fix them in a standalone documentation change now.**
+    - Pros: immediate accuracy.
+    - Cons: a second edit to the same lines soon after.
+
 Restricted mode limits where a container can connect with an IPv4 ipset
 firewall. Since 2026-10-25 a restricted runtime from a current image is
 enforced from outside: an egress gateway owns its network namespace and the

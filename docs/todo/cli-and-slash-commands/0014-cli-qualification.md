@@ -2,6 +2,171 @@
 
 Checked against `main` at `00a0cb82` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+Code items 1 to 4 and qualification items 2 to 4 are done and on `main`
+(`c23f6be9` #1274, with the harness toolchain install from `a51045a4` #1287).
+The open work is the live run for three providers, two measurements or
+re-runs, one CLI gap the file mentions in passing, and two open questions.
+
+### Tasks
+
+1. **Live `live-session` for Pi, Cursor and Grok, and the completion flip** (qualification item 1). Status: blocked (on API-key credentials; Cursor is unblockable on this Linux host, see below).
+2. **Re-run the slow-admission `--wait` recovery under load** (code item 4, flake 0440). Status: open.
+3. **Lost-response recovery for `environment exec --wait` and `environment start --wait`**: they still exit 4 on a lost response. Status: open (noted in code item 4, never filed).
+4. **Token cost of a live run** (qualification item 5). Status: open (optional measurement).
+5. **Fresh Linux evidence**: the latest Linux CLI run is 2026-09-26. Status: open.
+6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: open.
+7. **Re-run qualified providers after an agent upgrade?** (open question 2, shared with 0031). Status: open (maintainer's call).
+
+### 1. Live `live-session` for Pi, Cursor and Grok, and the completion flip
+
+**Problem.** `PROVIDER_COMPLETION` marks Pi, Cursor and Grok `unqualified` (`apps/backend/src/core/public-api/providers.ts:46-57`), so `run wait` on those providers cannot report completion and scripts cannot use it as a success signal.
+
+**Context.** The scenario can drive all three since code item 1. The procedure is written in the item: flip the entry locally, run local and container, commit the flip only with a passing run, and check the host `~/.pi/agent`, `~/.grok` and Cursor state are untouched. Container input staging through `ORKESTRATOR_AGENT_TEST_HOST_HOME` has never been exercised by a container run.
+
+**Investigation.** Still accurate on `main`. Since 0166 the harness installs each provider's pinned binary (`packages/cli/scenarios/harness.ts:147-168`; Grok pin `1.0.67` in `packages/toolchain/src/manifest.ts:9`, the version 0016's picker run used without the older "Invalid params" failure). Credential presence on this Linux host, checked 2026-10-27 without reading values: `CURSOR_API_KEY` and `XAI_API_KEY` are unset in the shell, but the Orkestrator config holds a saved Cursor API key; `~/.pi/agent/auth.json` has only an OAuth entry (`openai-codex`), which the harness refuses; there is no Grok login. So Cursor could run here if that key is exported for the scenario only; Pi and Grok remain blocked. The scenario's selected-command step is Claude-only (`packages/cli/scenarios/cases.ts:1089`); the other new steps (refusals, `--literal`, `--attach`, `--enqueue`) run on every provider, so these runs also close 0017's per-provider gap.
+
+**Decisions.**
+
+- **Run Cursor now, ahead of Pi and Grok?**
+  - **Yes: export the saved Cursor key into the scenario process only, run local and container, and flip Cursor alone if both pass (recommended).**
+    - Pros: one of three providers qualifies without waiting; the item already allows per-provider flips.
+    - Cons: needs the user's go-ahead to use that key for CLI scenarios (it was approved for `dev:test` profiles); costs live tokens.
+  - **Wait until all three have credentials and run them together.**
+    - Pros: one batch, one evidence entry.
+    - Cons: Cursor stays unqualified for no technical reason.
+- **What counts as a pass for the flip?**
+  - **Local and container both pass every `live-session` stage, with no OpenCode-style false idle in the manifest and host provider state untouched (recommended).**
+    - Pros: matches the qualification rule in "Constraints and rationale"; container proves the staging path never exercised before.
+    - Cons: the container run needs a dev image (`mise run docker:build:dev`) and `--network full`.
+  - **Local only, container as a follow-up.**
+    - Pros: faster first flip.
+    - Cons: `qualified` is provider-wide, so a container-only failure would ship as qualified.
+- **How to unblock Pi?**
+  - **Add a Pi `api_key` entry for a provider the user has a key for (recommended).**
+    - Pros: fits the harness's existing API-key-only rule.
+    - Cons: needs a paid API key for some Pi-fronted provider.
+  - **Let the harness share the OAuth login by path (`PI_BRIDGE_AUTH_FILE`), as 0015 did for its probes.**
+    - Pros: uses the login the host already has.
+    - Cons: a refresh during the run rotates the host's token; the harness refuses OAuth for exactly that reason (cleanup must never discard the only valid refresh token).
+
+### 2. Re-run the slow-admission `--wait` recovery under load
+
+**Problem.** `submitForWait` (`packages/cli/src/client/commands/common.ts:101`) recovers a `transport-uncertain` admission by request key, but it has never been exercised live under the load that produced flake 0440.
+
+**Context.** Flake 0440 (`docs/tests/flaky-tests/backend-services-and-tooling/0000-index.md:57`) stays open until this re-run.
+
+**Investigation.** Unit coverage is in `client-waits.test.ts`; the flake row still reads "not re-run under load". Reproducing needs several concurrent live container runs (load average about 38 originally).
+
+**Decisions.**
+
+- **How to prove it?**
+  - **Run three concurrent `live-session` container scenarios (OpenCode, plus Claude and Codex) and record whether any `--wait` printed the recovery warning and then settled (recommended).**
+    - Pros: reproduces the original conditions; closes the flake with evidence.
+    - Cons: three live container runs at once; the recovery path may simply not trigger, giving a pass that proves nothing.
+  - **Add a deterministic scenario that delays admission past the client timeout with a test hook.**
+    - Pros: always exercises the path through the packaged CLI and real backend.
+    - Cons: a test-only delay hook in the backend; not a live-provider proof.
+
+### 3. Lost-response recovery for `environment exec --wait` and `environment start --wait`
+
+**Problem.** Code item 4 says these "still exit 4 on a lost response". A script that waits on a slow container start gets exit 4 although the operation may be running.
+
+**Context.** Mentioned in passing in a done item; no todo owns it. Per the folder rules new work goes in a new file.
+
+**Investigation.** Confirmed: `submitForWait` is used only by `packages/cli/src/client/commands/session.ts:136`; the environment commands do not call it. The request key is already saved before sending, so the same lookup would apply.
+
+**Decisions.**
+
+- **Close the gap, and where?**
+  - **File a new todo to route every `--wait` mutation through `submitForWait` (recommended).**
+    - Pros: one recovery rule for every waiting command; container start is the command most likely to outlast the 60 s request timeout.
+    - Cons: `environment exec` has its own worker-claim semantics (code item 3), so the lookup must not mistake an unclaimed exec for a lost one.
+  - **Document exit 4 as "check with `run get --request-id`" and leave it.**
+    - Pros: no code.
+    - Cons: every script must implement the recovery the session commands already do.
+
+### 4. Token cost of a live run
+
+**Problem.** Manifests record no usage, so the cost of a qualification run is unknown.
+
+**Context.** Optional; does not affect `mise run test`.
+
+**Investigation.** There is no public usage action (no usage field in `packages/protocol/src/public-api.ts`, no CLI command); usage lives in the backend's usage store (`apps/backend/src/core/commands-registry-usage.ts`). Reading it would need either a registry call outside `public_action` or a new public read.
+
+**Decisions.**
+
+- **How to collect it?**
+  - **Read the scenario data directory's usage store directly in the harness after the run, before cleanup (recommended).**
+    - Pros: no public API change; the harness already owns the data directory.
+    - Cons: couples the harness to a storage layout; counts only what each provider reports.
+  - **Add a content-free usage summary to a public read.**
+    - Pros: scripts get it too.
+    - Cons: a public-contract change for an optional measurement.
+  - **Drop the measurement.**
+    - Pros: closes the item.
+    - Cons: no basis for budgeting live runs (0031 batches many).
+
+### 5. Fresh Linux evidence
+
+**Problem.** The CLI matrix on Linux was last run on 2026-09-26, before SQLite storage, the bridge splits, #1270's no-`PATH` rule and the 0166 harness change.
+
+**Context.** The file records it under "Not run" but lists no item for it.
+
+**Investigation.** This analysis ran on a Linux host, so the credential-free matrix (`mise run test:cli:scenarios`) and `mise run smoke:cli` can run here without credentials; the container matrix needs `mise run docker:build:dev`.
+
+**Decisions.**
+
+- **Add a Linux re-run?**
+  - **Yes, credential-free local and container matrices plus `smoke:cli`, batched with the Cursor run in task 1 (recommended).**
+    - Pros: cheap; covers a month of changes on the second platform.
+    - Cons: Docker on this host must not collide with production containers (the harness owner labels guard this).
+  - **No; rely on CI.**
+    - Pros: no manual run.
+    - Cons: no workflow under `.github/workflows/` runs `test:cli:scenarios` or `smoke:cli`, so CI gives no Linux CLI evidence.
+
+### 6. Ship the Pi, ACP and Cursor bridges in the published package?
+
+**Problem.** `packages/cli/scripts/build.ts:15-44` bundles only the Claude and Codex bridges, so a standalone `orkestrator serve` cannot run Pi, Cursor or Grok in local environments.
+
+**Context.** Pi's vendored SDK is about 174 MB and Cursor's about 45 MB. The published 2.22.3 package is about 10 MB unpacked.
+
+**Investigation.** Unchanged since 2026-10-22. The desktop app ships all bridges through `build.extraResources`; containers use `/opt/*-bridge`.
+
+**Decisions.**
+
+- **What should the npm package carry?**
+  - **Keep it to Claude and Codex, and download other bridges on demand through `toolchain install` (recommended).**
+    - Pros: small package; same hash-verified path as the agent binaries.
+    - Cons: needs bridge artifacts published per release and a new toolchain kind.
+  - **Bundle all five.**
+    - Pros: standalone serve works for every provider immediately.
+    - Cons: a package roughly twenty times larger for users who never use Pi or Cursor.
+  - **Leave it and document the limitation.**
+    - Pros: no work.
+    - Cons: standalone serve (0033's remote hosts) keeps lacking three providers.
+
+### 7. Re-run qualified providers after an agent upgrade?
+
+**Problem.** `docs/development/upgrade-agents.md` lists `test:cli:scenarios` only for bundled native dependencies (`:1687`); a provider bump can break request-specific completion with no CLI re-run.
+
+**Context.** Shared with 0031, whose recommendation (2026-10-25) is no blanket re-run, only the bumped engine's opt-in live specs. Slash commands already have such a rule (`upgrade-agents.md:1607`).
+
+**Investigation.** Still open in 0031. `live-session` is the only test that proves a provider's `qualified` entry.
+
+**Decisions.**
+
+- **Rule for the runbook?**
+  - **On a provider bump, run `live-session` for that provider only (recommended).**
+    - Pros: matches the slash-command rule and 0031's recommendation; protects the `qualified` claim the CLI shows.
+    - Cons: live tokens and a few minutes per bump.
+  - **No rule; rely on users noticing.**
+    - Pros: no runbook cost.
+    - Cons: a broken completion mapping would ship as `qualified`.
+
 Most shipped CLI behaviour has evidence at every layer: unit and contract
 tests, real-backend tests, packaged scenarios on Linux and macOS (local and
 container), live Claude, Codex and OpenCode runs, and a real browser. On

@@ -3,6 +3,90 @@
 Checked against `main` at `00a0cb82` (2026-10-25). Code items done on
 2026-10-26 against `main` at `93018933`; only the live qualification is left.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Resolve an unset Pi row to Pi's saved default**: code item 1. Status: done (`685c892a`, #1293).
+2. **Check other `concreteRow` callers and launch dialogs**: code item 2, including the review P1/P2 fixes. Status: done.
+3. **Live Pi `status` qualification on a ChatGPT login**: the only open item. Status: blocked (needs an `openai` ChatGPT OAuth login with a saved Pi default; see below).
+4. **Close out the file**: delete it once task 3 passes, or decide to accept code-level evidence. Status: open.
+
+### 1. Resolve an unset Pi row to Pi's saved default
+
+**Problem.** A Multi Review from saved defaults pinned a Pi row with no saved model to the first catalogue model, which a ChatGPT-backed Pi login refuses, so every Pi reviewer, the preparation and the Fix failed.
+
+**Context.** Found live by 0024 on 2026-10-25; option (b) chosen (see Assumptions and decisions).
+
+**Investigation.** Done and still in place at HEAD. `AgentModel.sessionDefault` is at `packages/protocol/src/native-agent.ts:183`; `sessionDefaultModel` at `packages/protocol/src/model-id.ts:68` and `reportsSessionDefault` (Pi only) at `model-id.ts:83`. The Pi bridge marks the row in `/global/models` (`bridges/pi-bridge/src/http.ts:321`, `markSessionDefault` at `bridges/pi-bridge/src/models.ts:407-426`) from `defaultModelIds({})` (`bridges/pi-bridge/src/agent-session.ts:198`). The backend keeps the mark (`apps/backend/src/core/commands-servers.ts:595`; `storage-shared-core.ts:1431`, `:1498`). `concreteRow` (`apps/backend/src/core/coordinator-launch-defaults.ts:93`) leaves the row `default` when a Pi catalogue has no connected mark (`:109-117`) and otherwise takes `sessionDefaultModel`. The tests the file lists exist and name 0172 (`coordinator-launch-defaults.test.ts`, `bridges/pi-bridge/src/http.test.ts`, `storage.test.ts`, `apps/web/src/lib/review-launch-options.test.ts`, `e2e/PiLaunchDefaults.spec.ts`).
+
+**Decisions.** None: implemented and reviewed; the trade-offs are recorded under Assumptions and decisions.
+
+### 2. Check other `concreteRow` callers and launch dialogs
+
+**Problem.** The same first-model fallback could exist in Build Pipeline defaults and renderer launch dialogs.
+
+**Context.** Code item 2 and the Multi Review P1/P2 fixes of 2026-10-26.
+
+**Investigation.** Done. `multiReviewDefaultRows` (`coordinator-launch-defaults.ts:135`) is the shared entry for the controller and coordinator launches. Renderer dialogs use `sessionDefaultModel`/`firstModelFor` (for example `apps/web/src/components/build/BuildLaunchDialog.tsx:36`, `:267`, `:541`), and `apps/web/src/lib/agent-launch.test.ts` covers the fallback. No new caller of the old `offered[0]` pattern was found in `coordinator-launch-defaults.ts`.
+
+**Decisions.** None: done; the `launchSelectionReport` `model: null` answer was deliberately left as is.
+
+### 3. Live Pi `status` qualification on a ChatGPT login
+
+**Problem.** The fix has only unit, component and browser-mock evidence; no live run has shown a saved-default Multi Review completing on a login that refuses the first catalogue model.
+
+**Context.** The check is `mise run test:agent:coordinator --credential-source pi --scenario status` with `ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT=1`. 0024 waits on the same run for its Pi review part, so one run closes both.
+
+**Investigation.** The opt-in assertions exist (`e2e/agent-testing/coordinator-live.spec.ts:778-830`): they refresh the real catalogue, require the first Pi row to match `^openai(?:-codex)?/gpt-4$`, require a marked default that differs from it and an unset Orkestrator Pi model, then check every persisted reviewer, review and fix row against the mark (`pi-saved-default-rows`). Two findings:
+
+- This Linux host has a Pi login with a saved default, but its `defaultProvider` is the legacy `openai-codex`, not `openai`. In the pinned pi-ai 1.4.0, `openai`'s catalogue starts with `gpt-4` while `openai-codex`'s starts with `gpt-5.6-luna`. So on a legacy-only login the first Pi row is not `gpt-4` (unless another signed-in provider sorts first), the spec's first-row assertion would fail, and the bug would not reproduce anyway. The qualification really needs an `openai` ChatGPT OAuth login, the same blocker 0062 records ("no `openai` ChatGPT login on any known host").
+- The file says the live failure ran on Pi 1.2.0, but the bridge has pinned `@earendil-works/pi-coding-agent` 1.4.0 since `28590e68` (2026-10-23), before both the run and the fix. The 1.2.0 was probably the host's Pi, not the bridge's; the fix was written and tested against 1.4.0.
+
+**Decisions.**
+
+- **What login should the run use?**
+  - **An `openai` ChatGPT OAuth login with a saved non-first default (recommended).**
+    - Pros: reproduces the original failure shape exactly, so a pass proves the fix; satisfies the spec as written.
+    - Cons: no known host has one today (0062); needs a real subscription and billed turns.
+  - **Relax the spec's first-row assertion so a legacy `openai-codex` login with a saved default qualifies.**
+    - Pros: runnable on this host now; still proves the rows follow the marked default end to end.
+    - Cons: the first row is accepted by that login, so a pass does not show that the refused model is avoided; weakens the guard against the bug the scenario found.
+- **What counts as a pass?**
+  - **Every opt-in check green, including completed reviewers, consolidation and the Fix turn (recommended).**
+    - Pros: matches the file's close-out text; covers the preparation and Fix paths that failed live.
+    - Cons: one flaky provider turn fails the whole qualification.
+  - **Only `pi-saved-default-rows` green.**
+    - Pros: cheap; isolates the code this file changed.
+    - Cons: a row naming the right model does not prove the login accepts it.
+- **Order relative to 0024 and 0062?**
+  - **Run once for 0172, 0024's Pi review part and 0062 items 2 and 3 on the same `openai` login host (recommended).**
+    - Pros: one setup and one set of billed turns closes three files' items.
+    - Cons: couples three files to the availability of one host.
+  - **Run 0172 on its own as soon as any qualifying host appears.**
+    - Pros: smaller run.
+    - Cons: repeats the login setup for the others.
+
+### 4. Close out the file
+
+**Problem.** The file is rated Medium and stays open only for task 3.
+
+**Context.** The README says to delete a file once every item is done and move durable behaviour into `architecture/` or `development/`.
+
+**Investigation.** The durable behaviour (`sessionDefault` as the "a session with no model starts here" mark; unmarked Pi catalogues leave rows to the session) is described in code comments (`model-id.ts:74-81`, `coordinator-launch-defaults.ts:103-108`) and in `AGENTS.md`'s Pi section, but not yet in an architecture doc.
+
+**Decisions.**
+
+- **When to delete the file?**
+  - **After task 3 passes, moving the `sessionDefault` contract into the Pi and model-catalogue architecture docs in the same change (recommended).**
+    - Pros: follows the README; keeps the qualification gate visible until it is met.
+    - Cons: the file may sit open for a long time if no `openai` login host appears.
+  - **Now: accept the code evidence, fold task 3 into 0062 or 0031 and delete this file.**
+    - Pros: removes a file whose code is finished; 0062 already tracks the same login blocker.
+    - Cons: the README forbids adding new todos to an existing file, so 0062 or 0031 would need a new file or a narrowed existing item to carry it; loses the Multi Review-specific pass criteria.
+
 Found by the live coordinator `status` scenario
 ([0024](0024-coordinator-live-conformance.md)). A Multi Review whose rows
 come from the saved defaults (the Multi Review button, or a coordinator's

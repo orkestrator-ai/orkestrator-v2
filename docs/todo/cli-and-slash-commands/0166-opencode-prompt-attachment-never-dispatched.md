@@ -1,5 +1,81 @@
 # OpenCode prompt attachment never reaches the provider
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+The file is Finished: every item is done and merged to `main` in `a51045a4`
+(#1287, 2026-10-26). The only open decision is what to do with the file.
+
+### Tasks
+
+1. **Attachment MIME fix and dropped-prompt outcome**: label non-image files `text/plain` and settle a prompt OpenCode drops after accepting as `failed`. Status: done.
+2. **Regression tests**: dispatch, stream-state and attachment-MIME unit tests for the failing path. Status: done.
+3. **Scenario harness installs pinned binaries**: `live-session` installs the selected provider's pinned toolchain. Status: done.
+4. **OpenCode `live-session` qualification**: attach step passes local and container. Status: done.
+5. **Retire the finished file**: delete it under the folder rules now that its branch has merged. Status: open.
+
+### 1. Attachment MIME fix and dropped-prompt outcome
+
+**Problem.** A text file attached to an OpenCode prompt was sent as `image/png`, failed decoding in the background and was lost; the run settled `unknown`.
+
+**Context.** Found by the 0014 `live-session` run; the fix shipped in #1287.
+
+**Investigation.** On `main`: `openCodeAttachmentMime` at `apps/backend/src/core/opencode-provider-helpers.ts:650`, used by `openCodePromptParts` at `:677`; `imageMimeTypeForFilename` at `apps/backend/src/core/prompt-attachments.ts:31`; `dispatchFailure` kept by `OpenCodeStreamState` (`apps/backend/src/core/opencode-stream-state.ts:528`, set at `:758`) and read by the provider at `apps/backend/src/core/opencode-provider.ts:776`; `OPEN_CODE_DISPATCH_FAILURE_GRACE_MS` is exported from `opencode-turn-outcome.ts`. One small inaccuracy in item 1 and in the MIME decision below: the shipped code returns `text/plain` for **every** `type: "file"` attachment (`opencode-provider-helpers.ts:652`), including one named `.png`; only `type: "image"` attachments keep an image type (from the data URL, then the name). `imageMimeTypeForFilename` is used only through `mimeTypeForFilename` (`prompt-attachments.ts:42`), not by `openCodeAttachmentMime`. Behaviour is still correct, since OpenCode's `text/plain` route turns a real image into an attachment. The durable description in `docs/architecture/agent-engines.md:503` already matches the code.
+
+**Decisions.** None: done and merged; the inaccuracy above is recorded here rather than by rewording the item.
+
+### 2. Regression tests
+
+**Problem.** The failing path had no test.
+
+**Context.** Item 2 of the file.
+
+**Investigation.** Present on `main`: `apps/backend/src/core/opencode-provider-dispatch.test.ts` (imports the grace constant at `:33`), `apps/backend/src/core/prompt-attachments.test.ts:58-60`, and also `apps/backend/src/core/native-agent-service-turn-outcome.test.ts:477`, which the file does not mention.
+
+**Decisions.** None: done.
+
+### 3. Scenario harness installs pinned binaries
+
+**Problem.** Since #1270 agent-test backends have no `PATH` fallback, so every host-provider live scenario failed at once.
+
+**Context.** Item 3; prerequisite for item 4 and for 0014's live runs.
+
+**Investigation.** `toolchainTools` is declared at `packages/cli/scenarios/provider-runtime.ts:46` (built at `:57`) and installed with `toolchain install --tool` in `packages/cli/scenarios/harness.ts:147-168`. `mise run test:cli:scenarios` exists.
+
+**Decisions.** None: done.
+
+### 4. OpenCode `live-session` qualification
+
+**Problem.** The fix needed live proof on the real provider.
+
+**Context.** Qualification item 1; manifests `2026-10-26T00-36-39-580Z-6b222f87` (local) and `2026-10-26T00-38-15-570Z-fa598ef6` (container).
+
+**Investigation.** Recorded as passed on macOS with OpenCode 1.19.4. Not re-run (research only). No later commit touches `opencode-provider-helpers.ts` except `2c3147f6` (coordinator skills), which does not change the attachment path.
+
+**Decisions.** None: done.
+
+### 5. Retire the finished file
+
+**Problem.** The folder rules say a finished file is deleted once durable behaviour has moved; this one was kept "until the Multi Review of its branch".
+
+**Context.** That branch merged as #1287 on 2026-10-26, so the stated condition has passed. Durable behaviour is already in `docs/architecture/agent-engines.md:503-514` (OpenCode attachments and `dispatchFailure`) and `docs/architecture/public-cli.md:471` and `:519`. Inbound links: `0014-cli-qualification.md` and `0017-cli-command-surface.md` link this file, and the folder index row 6 lists it. (Flaky case 0166 in `docs/tests/flaky-tests/agent-bridges/` is an unrelated case that shares the number.)
+
+**Investigation.** Nothing in the file is open; the "no sticky transcript notice" decision is a revisit-if-seen note, not work.
+
+**Decisions.**
+
+- **What to do with the file now?**
+  - **Delete it now (recommended).** Remove the file and its index row, and turn the links in 0014 and 0017 into plain text naming #1287 or point them at `agent-engines.md#opencode`.
+    - Pros: follows the folder rules; the keep condition (branch review) is met; durable docs already cover the behaviour.
+    - Cons: the diagnosis and reproduction evidence leave the tree (still in git history and the #1287 description); two other files need a link edit.
+  - **Keep it until 0014 is finished.** Leave it as the evidence record for 0014's OpenCode row.
+    - Pros: 0014's evidence log keeps a live link.
+    - Cons: contradicts the folder rules; 0014 is blocked on credentials and may stay open for a long time.
+  - **Fold the reproduction notes into `agent-engines.md`, then delete.**
+    - Pros: keeps the "a `session.error` alone does not mean the prompt was dropped" lesson next to the code description.
+    - Cons: architecture docs would carry dated evidence; `agent-engines.md:510-514` already states the rule.
+
 Found 2026-10-25 by the OpenCode `live-session` run in
 [0014-cli-qualification.md](0014-cli-qualification.md) (branch
 `todo-0014-cli-qualification-060fd6539163` on `00a0cb82`).

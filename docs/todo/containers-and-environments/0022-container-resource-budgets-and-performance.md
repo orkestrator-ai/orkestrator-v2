@@ -2,6 +2,150 @@
 
 Checked against `main` at `20f6de91` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Built-in default budget (Code 1)**: choose and apply a default. Status: done.
+2. **Linux Engine arm64 benchmark numbers**: compare the CI report with the targets and record it. Status: partly done (the reports exist in CI and are not recorded; CI misses three targets).
+3. **UI response under multi-environment load**: a real-stack latency measurement with several busy container environments. Status: open (no probe exists).
+4. **Authenticated provider turns under the default**: one real turn through each bridge with the default applied. Status: open.
+5. **In-process tar hasher (deferred)**: replace the per-member `sha256sum` on the source side. Status: deferred (the condition is not met).
+6. **Aggregate diagnostic byte accounting (deferred)**: live per-environment log sizes. Status: deferred.
+
+### 1. Built-in default budget
+
+**Problem.** New runtimes had no containment by default.
+
+**Context.** Decisions 1–8 and 11 set the shape, values, opt-out and reference host.
+
+**Investigation.** Present at HEAD: `builtInResourceDefault` (`packages/protocol/src/container-resources.ts:105`) and `resolveResourceLimits` (`apps/backend/src/core/container-resources.ts:51`). CI reports `appliedLimits` `{cpus: null, memoryMiB: 8192, pids: 4096}` on both 4-CPU runners, as designed.
+
+**Decisions.** None: done.
+
+### 2. Linux Engine arm64 benchmark numbers
+
+**Problem.** The file says arm64 Linux has never been measured.
+
+**Context.** `container-live-qualification.yml:168-174` runs `container-benchmarks.test.ts` on `ubuntu-24.04` and `ubuntu-24.04-arm` and uploads `container-benchmarks-linux-<arch>`. `docs/development/container-qualification.md:547-562` sets the rule: "A change that misses one is fixed, or the reason is recorded, before it merges."
+
+**Investigation.** The reports exist. Three runs on 2026-10-26 uploaded them, all on GitHub runners (4 CPUs, Engine 28.0.4, built-in default): the weekly run 40304582303 on `main` `f1223e0b`, and runs 40338400817 and 40409285999 on the 0109 branch.
+
+| Measure (target) | arm64 weekly / 0109 | x64 weekly / 0109 |
+| --- | --- | --- |
+| Fresh to ready (≤ 3 s) | 2.77 / 2.96 s | **3.04 / 3.40 s** |
+| Docker calls per fresh environment (≤ 21) | **26 / 28** | **26 / 28** |
+| Three concurrent, slowdown (≤ 1.5×) | 1.11 / 1.11× | 1.25 / 1.44× |
+| Warm stop (≤ 1 s) | 0.10 s | 0.13 s |
+| Warm start (≤ 2 s) | 1.63 / 1.90 s | 1.52 / **2.14 s** |
+| 5,000-file copy (≤ 20 s) | 14.0 / 13.0 s | 14.4 / 14.6 s |
+| Calls per minute, view open (≤ 36) | 24 | 24 |
+| Followers after grace (0) | 0 | 0 |
+
+Linux arm64 meets every target except Docker calls. The calls figure rose from the 15 recorded here on 2026-10-25 to 26 after the external egress gateway (`c55807f9`, #1279) and to 28 with 0109 (`1aabf049`). The gateway's own container create, start and inspect calls are the likely cause; the source of the extra two is unconfirmed.
+
+On x64, the 0109 change moved warm start from 1.52 s to 2.14 s and fresh to ready from 3.04 s to 3.40 s. That is consistent with `startDockerContainer`'s extra inspection and network check (`apps/backend/src/core/container-start.ts:185`), but unconfirmed.
+
+No todo records these misses, and the targets were set on a 12-CPU reference host, not a 4-CPU runner.
+
+**Decisions.**
+
+- **How to treat the CI misses?**
+  - **Re-run the harness on the reference host (Linux amd64, 12 CPUs) at HEAD, then either record the reason (gateway calls, 4-CPU runners) and re-baseline the calls target, or fix the regression (recommended).**
+    - Pros: applies the merge-gate rule on the host the targets were set on; separates runner noise from a real regression.
+    - Cons: needs a quiet window on omarchy-hp, which is busy with production work.
+  - **Re-baseline every target to the CI runners.**
+    - Pros: one repeatable reference, run weekly.
+    - Cons: weakens the gate without first explaining the 15 → 28 jump; runner hardware can change under the targets.
+- **Where to record the arm64 numbers?**
+  - **Here and in `container-qualification.md`, citing run 40409285999 and image `sha256:e12b0404…` (recommended).**
+    - Pros: closes the item with evidence that already exists.
+    - Cons: CI artefacts expire, so the numbers must be copied, not linked.
+  - **Wait for a clean weekly run on `main`.**
+    - Pros: measures the merged state rather than a PR branch.
+    - Cons: the 0109 branch is now `main`, so the next weekly run will show the same numbers.
+
+### 3. UI response under multi-environment load
+
+**Problem.** Nobody knows whether the renderer stays responsive while several container environments are busy under their budgets.
+
+**Context.** It needs a real-stack `dev:test` profile with several busy container environments and a browser latency probe.
+
+**Investigation.** There is still no UI latency probe. `e2e/perf/design-canvas-perf.ts` and `e2e/perf/rich-transcripts-perf.ts` measure their own surfaces, and the efficiency harness counts work, not latency.
+
+**Decisions.**
+
+- **Build a probe, or reuse an existing perf harness?**
+  - **Extend the `e2e/perf` pattern with a small Playwright probe that times environment switching and sidebar status updates while N fixture containers run the workload harness (recommended).**
+    - Pros: reuses a known harness shape; produces a number that can be compared over time.
+    - Cons: new harness work; needs Docker and an isolated profile with `--fixture-environments container`.
+  - **Drop the item, since budgets do not cap CPU (decision 2).**
+    - Pros: memory and PID limits do not slow the UI, and CPU is shared fairly.
+    - Cons: decision 2 itself names a busy environment taking CPU from the backend on Linux as the cost, so it stays unmeasured.
+
+### 4. Authenticated provider turns under the default
+
+**Problem.** Bridge and provider footprints under the budget are unmeasured. Only the Claude CLI was measured, against a mock API.
+
+**Context.** Decision 9. The file says the machine had no provider logins. Agent-test profiles now authorise host credentials for Claude, Codex, Cursor, Grok and OpenCode by default (AGENTS.md), and Pi's login may be copied into disposable profiles.
+
+**Investigation.** The workload harness (`apps/backend/scripts/container-workload-budget.ts`) runs workloads in fresh containers, not through bridges.
+
+**Decisions.**
+
+- **How to run it?**
+  - **One trivial turn per platform in container environments of an isolated `dev:test` profile with host credentials, sampling `memory.peak` and PIDs through the existing usage sampler (recommended).**
+    - Pros: exercises the real bridges under the real default; credential use is already authorised for these profiles.
+    - Cons: Grok has no current host login (see 0061 task 4); real provider calls cost money and must use trivial prompts.
+  - **Extend the mock-API harness to the other CLIs.**
+    - Pros: no credentials, repeatable.
+    - Cons: bridges are not in the loop, and only Claude has a Messages-compatible mock.
+- **Batch it with other live runs?**
+  - **Yes, with 0031's live-provider session (recommended).**
+    - Pros: one setup.
+    - Cons: waits for that session.
+  - **Run it on its own.**
+    - Pros: done sooner.
+    - Cons: duplicates the setup.
+
+### 5. In-process tar hasher
+
+**Problem.** The source side of a copy hashes each tar member with its own `sha256sum`.
+
+**Context.** Revisit if `rebuild.medium.copying` misses 20 s on the reference host or the CI runners. It needs its own safety review.
+
+**Investigation.** `copy_stream` is at `docker/orkestrator-migrate.sh:53`. CI shows 13.0–15.0 s, well under 20 s, so the condition is not met.
+
+**Decisions.**
+
+- **Keep deferring?**
+  - **Yes (recommended).**
+    - Pros: measured headroom of 5 s or more everywhere; avoids touching the copy verifier, which 0058 just changed.
+    - Cons: a larger repository could cross 20 s first in the field.
+  - **Build it now.**
+    - Pros: faster rebuilds.
+    - Cons: risk to the corruption and symlink-root checks, with no measured need.
+
+### 6. Aggregate diagnostic byte accounting
+
+**Problem.** There is no live per-environment total of diagnostic log bytes.
+
+**Context.** The total is bounded by construction at 120 MiB per runtime, and measuring it live would need the per-environment `docker exec` that 0020 removes.
+
+**Investigation.** `boundedBackgroundLaunch` users are in `commands-containers.ts`, `commands-registry-servers.ts` and `container-log-bounds.ts`. `ce205ad3` (#1317) changed bridge log streaming but not the bounds.
+
+**Decisions.**
+
+- **Keep deferring?**
+  - **Yes, until a surface needs actual sizes (recommended).**
+    - Pros: the bound already holds; no new polling.
+    - Cons: users cannot see how close a runtime is to the bound.
+  - **Report the static bound in the resources panel instead.**
+    - Pros: cheap, and no `docker exec`.
+    - Cons: a static number tells the user little.
+
 New runtimes now get a built-in default budget for their daemon: no CPU cap,
 memory 8 GiB capped at 75% of the daemon's memory, 4,096 PIDs. It was chosen
 from browser, build, provider-turn and combined workloads measured on Docker
@@ -356,6 +500,7 @@ CI step gives a clean comparison there.
   [workload budgets](../../development/container-qualification.md#workload-budgets).
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Resource
   budgets and usage", "Built-in default" and "Bounded logs".
+- [0729-container-benchmark-target-misses.md](0729-container-benchmark-target-misses.md): the CI benchmark misses (Docker calls, x64 warm start and fresh-to-ready) and the arm64 figures
 
 ## Replaces
 

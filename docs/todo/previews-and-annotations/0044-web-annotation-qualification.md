@@ -2,6 +2,230 @@
 
 Checked against `main` at `ba7cc8d4` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Human review of sign-offs A to C**: a person reviews the three
+   agent-written sign-off records, answers the gate-scope open questions, and
+   then the README catalogue pointer is dropped. Status: open.
+2. **Remote backend on another host**: desktop on one host captures and stages
+   into a backend on another. Status: blocked (on a second machine; batched in
+   0031).
+3. **iOS wrapper review**: run web review inside the `WKWebView` wrapper on a
+   device or simulator. Status: blocked (on a person entering the gateway token
+   against an HTTPS tailnet profile).
+4. **Native focus and keyboard resolve**: OS-level preview focus, Window-menu
+   focus, and Accept and resolve by keyboard. Status: blocked (on a frontmost
+   host and a request in `awaiting-review` inside the Electron spec).
+5. **Linux re-run after #969 and #983**: the first "Needs verification" item.
+   Status: open.
+6. **Quiet-host baselines and targets**: repeat the baselines and decide
+   whether to set targets. Status: open.
+7. **Gateway synthetic-capture parity**: the second "Needs verification" item.
+   Status: partly done (real PNG staged since 2026-10-25; target and evidence
+   fields still synthetic).
+
+Code items 1 to 6, the keychain item and the create-cost item (moved to
+[0124](0124-web-annotation-commit-cost.md)) are done.
+
+### 1. Human review of sign-offs A to C
+
+**Problem.** The feature is on by default, and its only sign-offs were written
+by a worker agent. Until a person reviews them, "qualified" is a claim, not a
+decision.
+
+**Context.** The "Sign-off records, 2026-10-25" section and the four open
+questions (macOS and Linux for the native gate; whether remote is in scope;
+whether unit-level fault tests count for gate A; whether WebKit counts for
+iOS). "Related" asks to drop the README catalogue pointer after sign-off.
+
+**Investigation.** The rollout default is still `enabled`
+(`apps/backend/src/core/web-annotation-rollout.ts:2`, `:122`). The records cite
+evidence from #1250 (`4db5bb2a`). Since then, annotation code changed only in
+`cdaa1bb1` (0124's copy-on-write commits), `182a4031` (test reliability) and
+`1aabf049` (container runtime); none alters the gated flows, but 0124 rewrote
+the storage commit path that milestone A depends on. The pointer still exists
+at `docs/README.md:57`, and `docs/architecture/web-page-annotations.md:6`,
+`:550` and `:601` link here. The capability matrix's "Exercised" table
+(`web-page-annotations.md:549-560`) is current. Needs-input and disruption
+were run on Claude only.
+
+**Decisions.**
+
+- **What does the reviewer accept as the gate?**
+  - **Accept A to C with the open runs recorded as deferrals in the matrix;
+    unit-level fault and migration tests count for gate A; WebKit counts as
+    the engine-level iOS signal only (recommended).**
+    - Pros: matches what the records already say; lets the file shrink to the
+      hardware runs; keeps the iOS wrapper honestly open.
+    - Cons: real-stack migration and rollback have never run; needs-input on
+      five providers is unproved.
+  - **Require real-stack migration, rollback and multi-provider needs-input
+    before sign-off.**
+    - Pros: stronger evidence for an on-by-default feature.
+    - Cons: new test code and live runs; delays sign-off with no reported
+      defect behind it.
+- **Re-run after 0124's storage rewrite before signing?**
+  - **Yes, one `mise run test:agent:electron` and
+    `mise run test:agent:browser:isolated` on current `main` (recommended).**
+    - Pros: 0124 rewrote every annotation commit; cheap, credential-free.
+    - Cons: needs an isolated profile and an Electron-capable host.
+  - **No; 0124's unit tests ran the full-diff assertion on every commit.**
+    - Pros: no extra run.
+    - Cons: the real-stack specs have not run on the new commit path.
+
+### 2. Remote backend on another host
+
+**Problem.** A desktop staging captures into a backend on a different host has
+never been run. Remote-desktop users are the ones who would see a failure.
+
+**Context.** The gateway cases already stage through the same HTTP invoke
+transport; what remains is two hosts. Assumption 11 and open question 2.
+
+**Investigation.** The command is `web_annotation_asset_stage`
+(`packages/protocol/src/web-annotations.ts:1153`, `:1628`). No test spans two
+hosts.
+
+**Decisions.**
+
+- **Run it, or record it as a deferral?**
+  - **Run it in 0031's two-machine session with 0042's tailnet run
+    (recommended).**
+    - Pros: one setup serves both files; same hardware.
+    - Cons: waits on 0031.
+  - **Record it as a deferral in the matrix and drop it here.**
+    - Pros: the transport is already covered; lets the file close sooner.
+    - Cons: a real remote path (latency, upload size over a WAN) stays unseen.
+
+### 3. iOS wrapper review
+
+**Problem.** iOS review is proved only on Playwright WebKit, not in the
+wrapper users run.
+
+**Context.** The wrapper accepts only HTTPS plus a typed gateway token, which
+agents must never handle (assumption 10).
+
+**Investigation.** HTTPS is enforced in
+`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift:32-34`.
+Capture is hidden off desktop (`canCapture`,
+`apps/web/src/components/browser/annotations/AnnotationPanel.tsx:70`).
+
+**Decisions.**
+
+- **Who runs it?**
+  - **A person, on a simulator against a tailnet-served `dev:test` profile,
+    batched in 0031 (recommended).**
+    - Pros: respects the token rule; a simulator is enough for review-only
+      flows.
+    - Cons: needs a macOS host with Xcode and a person.
+  - **Accept the WebKit run and close the item.**
+    - Pros: no hardware.
+    - Cons: WebKit is not the wrapper (native form, data store, handoff).
+
+### 4. Native focus and keyboard resolve
+
+**Problem.** OS-level focus and resolving by keyboard in the native window are
+unproved; keyboard-only users are the ones at risk.
+
+**Context.** "Found on 2026-10-17". The Electron spec deliberately has no live
+provider; its Codex is a shell probe that only records launches
+(`e2e/agent-testing/web-annotations-electron.spec.ts:132`, `:626`). The
+button is "Accept and resolve"
+(`apps/web/src/components/browser/annotations/RequestCard.tsx:635`); Window
+menu focus is in `apps/desktop/electron/window-menu.ts`.
+
+**Investigation.** `awaiting-review` is reached only through a turn outcome
+(`apps/backend/src/core/web-annotation-dispatch.ts`,
+`web-annotation-service-results.ts`), so the spec cannot get there without a
+provider that completes a turn.
+
+**Decisions.**
+
+- **How to reach `awaiting-review` in the native window?**
+  - **Run once by hand on a frontmost macOS host with a live provider
+    (recommended).**
+    - Pros: no test-only product hooks; also covers OS-level focus, which only
+      a key window can show.
+    - Cons: one-off evidence; needs a dedicated desktop.
+  - **Teach the Codex probe to answer a minimal app-server turn so the spec
+    reaches `awaiting-review` with no credentials.**
+    - Pros: permanent keyboard-resolve coverage in CI.
+    - Cons: a fake app-server protocol to maintain across Codex bumps; still
+      does not prove OS focus on a shared desktop.
+
+### 5. Linux re-run after #969 and #983
+
+**Problem.** Linux last ran the native and gateway suites on 2026-09-25,
+before the SQLite and service-split changes.
+
+**Context.** Open question 1 (is macOS required as well as Linux). The
+capability matrix lists "Linux after #969" as not exercised.
+
+**Investigation.** Nothing Linux-specific has run since; this analysis host is
+Linux, so the run needs no extra hardware.
+
+**Decisions.**
+
+- **Run it now, or leave Linux out of the gate?**
+  - **Run `mise run test:agent:electron` and
+    `mise run test:agent:browser:isolated` on a Linux desktop host
+    (recommended).**
+    - Pros: available hardware; closes a matrix gap; combines with task 1's
+      post-0124 re-run.
+    - Cons: Wayland and X11 differ; a shared desktop still cannot prove focus.
+  - **Declare macOS the only required native platform.**
+    - Pros: less work.
+    - Cons: Linux is a supported desktop; leaves the matrix row unproved.
+
+### 6. Quiet-host baselines and targets
+
+**Problem.** The baselines were taken at load ~45, so no target can be set.
+
+**Context.** "Needs verification" item 3 and the 2026-10-25 baselines
+paragraph. The plan says targets come from measurements.
+
+**Investigation.** The baselines come from the Electron spec's `baselines`
+case and `web_annotations_metrics`; 0124 changed create cost since (about
+18-28 ms down to 2.6-3.8 ms at 1,900 notes), so the backend numbers are already
+stale.
+
+**Decisions.**
+
+- **Set targets?**
+  - **Re-measure on a quiet host with 0124's run, and record baselines only,
+    no targets (recommended).**
+    - Pros: one quiet session for both files; avoids a target nobody enforces.
+    - Cons: no regression threshold for capture latency.
+  - **Set targets from the re-measurement and assert them in the spec.**
+    - Pros: a real latency guard.
+    - Cons: timing assertions are the flake source already recorded in 0225.
+
+### 7. Gateway synthetic-capture parity
+
+**Problem.** The gateway spec's target and evidence fields are synthetic, so it
+could drift from what Electron produces.
+
+**Context.** "Needs verification" item 2. A real staged PNG and geometry image
+were added on 2026-10-25.
+
+**Investigation.** The shared helper is `e2e/agent-testing/web-annotations-support.ts`;
+the protocol validator is the common contract both paths pass through.
+
+**Decisions.**
+
+- **How to keep them aligned?**
+  - **Capture one real target and evidence record in the Electron spec and
+    reuse it as the gateway spec's fixture (recommended).**
+    - Pros: the gateway runs on real Electron output; drift becomes a fixture
+      update.
+    - Cons: a fixture to refresh when the capture shape changes.
+  - **Rely on the shared validator and close the item.**
+    - Pros: no work.
+    - Cons: validation checks shape, not that values match a real capture.
+
 Web-page annotations shipped in #845 (`964d71f4`, 2026-09-25). They have
 unit, contract and component tests, plus real-stack specs. Milestones A–C
 have sign-off records written on 2026-10-25 by a worker agent, awaiting human

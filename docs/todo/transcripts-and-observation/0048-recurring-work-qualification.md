@@ -5,6 +5,336 @@ on 2026-10-22 and 2026-10-25; see
 [Live evidence](#live-evidence-2026-10-22-macos) and
 [Live soak](#live-soak-2026-10-25-macos).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: open.
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open.
+3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: open.
+4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: open.
+5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open.
+6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
+7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
+8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open.
+9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
+10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: partly done (driver and a 10-cycle soak exist).
+11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: open.
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (on tasks 1, 3, 5 and 10); the feature-planning row read is done.
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (on tasks 1, 5 and 10).
+14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (one stale comment left).
+15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
+
+### 1. Busy live profile
+
+**Problem.** Recurring work is on by default, but the only live evidence is an idle, credential-free profile. None of the obligations the keyed drivers must keep (result consumption, prompt dispatch, PR terminal effects) has run live, so a missed wakeup under load would show as a stale workflow or a stuck queue for every user.
+
+**Context.** The idle A/B and a 10-cycle soak ran on macOS (Live evidence, Live soak). The file says each busy step needs credentials, a scripted UI or a fault injector that `scripts/recurring-live-ab.ts` lacks. Outage and resume overlap with the live outage workload in [0051](0051-client-reconnect-and-freshness.md). The run is batched for macOS and Docker Desktop in 0031.
+
+**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline-context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `multi-review-service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
+
+**Decisions.**
+
+- **How to drive the busy workload?**
+  - **Extend `recurring-live-ab.ts` with a scripted busy phase using the `orkestrator` CLI and a Playwright client (recommended).** Add phases for turns, queued prompts and workflows through the CLI, and attach 0 to 2 real browser clients.
+    - Pros: reuses the script's ownership checks, guard-line count and A/B arms; repeatable.
+    - Cons: needs credentials and a client driver; the script grows further.
+  - **A one-off manual run with diagnostics snapshots.**
+    - Pros: quickest route to first evidence.
+    - Cons: not repeatable, and the arms are hard to compare fairly.
+- **Run the outage and resume parts here or in 0051?**
+  - **In 0051's outage workload, cited from here (recommended).**
+    - Pros: one fault injector, and no duplicated evidence.
+    - Cons: this file's busy profile depends on 0051's tooling.
+  - **Here, as part of the busy profile.**
+    - Pros: one self-contained run.
+    - Cons: duplicates 0051's harness work.
+
+### 2. Client-side change-to-visible latency
+
+**Problem.** Freshness was measured only from a write to the backend `diff-scan` counter moving. That is a lower bound; the budgets in [recurring-work.md](../../architecture/recurring-work.md#latency-budgets) are about what the user sees.
+
+**Context.** Watched local p95 was 739 to 872 ms against 2 s, and container p95 13.4 s against 20 s, backend-side. The read coordinator, SSE and rendering add latency on top.
+
+**Investigation.** No client-side probe exists in `scripts/recurring-live-ab.ts` or under `e2e/agent-testing/`. The container margin (13.4 s of 20 s) is the tightest, so client overhead matters most there.
+
+**Decisions.**
+
+- **How to measure change-to-visible?**
+  - **A Playwright probe that writes through the CLI and waits for the badge's accessible state to change (recommended).**
+    - Pros: measures what the user sees; reusable for task 4.
+    - Cons: browser timing adds jitter; needs many probes for a stable p95.
+  - **Timestamp the renderer's store update and report it through the metrics endpoint.**
+    - Pros: precise, and no browser driver needed.
+    - Cons: misses paint time and adds renderer instrumentation.
+
+### 3. Container fetch policy live
+
+**Problem.** The container fetch policy and its failure ladder have never run live. New containers never reach the routine policy, so it guards only older records and failed commit captures.
+
+**Context.** Narrowed on 2026-10-25 (decision 6): every new container records its creation commit and compares against it, so a "branch-baseline container" cannot come from normal creation.
+
+**Investigation.** Still accurate. `establishCreatedFromCommit` is at `apps/backend/src/core/commands-local-server-lifecycle.ts:87`, `resolveComparisonRef` at `packages/protocol/src/diff-stats.ts:194`, and the cooldowns at `apps/backend/src/core/container-git-fetch.ts:97` (5 min) and `:99` (30 min). The routine path therefore serves a shrinking population that new users never reach.
+
+**Decisions.**
+
+- **Keep the routine fetch policy?**
+  - **Qualify the recovery fetch and explicit refresh live, then remove the routine policy unless a pre-capture record turns up in real data (recommended).**
+    - Pros: drops a path with no reachable live state for new environments; the failure ladder candidate closes with it.
+    - Cons: an old environment without `createdFromCommit` loses routine freshness; needs a check that such records are rare.
+  - **Keep it and qualify it on an old-format record.**
+    - Pros: no behaviour change for legacy environments.
+    - Cons: needs a hand-made legacy record (decision 6 rejected a fixture side door), and the ladder stays a measured candidate.
+  - **Backfill `createdFromCommit` once by migration, then remove the policy.**
+    - Pros: every environment converges on the commit baseline.
+    - Cons: a migration that guesses a baseline for old records could change their diffs.
+
+### 4. Container app wiring and real-browser QA
+
+**Problem.** The Files panel, coordinator view, validation output and hidden-document reconcile are covered only by deterministic tests. An inactive-environment or two-window regression would show stale data to users.
+
+**Context.** The AGENTS.md inactive-environment cycle applies. 0051 added Files panel `stale`/`degraded` indicators and container `remote` freshness, which need the same real-browser pass.
+
+**Investigation.** No real-stack spec covers these flows today. `mise run test:agent:browser:isolated` and `mise run test:agent:docker` exist and are the natural hosts.
+
+**Decisions.**
+
+- **Where to put the QA?**
+  - **A new isolated agent-testing spec run by `mise run test:agent:browser:isolated`, with container cases under `mise run test:agent:docker` (recommended).**
+    - Pros: repeatable, and covers 0051's indicators in the same pass.
+    - Cons: spec-writing cost; the Docker suite is opt-in.
+  - **A manual pass recorded here.**
+    - Pros: cheap, done once.
+    - Cons: no regression guard.
+
+### 5. Live GitHub
+
+**Problem.** PR monitoring's terminal cadence (5 min plus 30 s jitter, the one accepted slowdown), replacement and reopen discovery, admission under real `gh` latency and rate-limit cooldown are unproved live.
+
+**Context.** Batched in 0031 under "Live GitHub". The rollback is setting `terminalDiscoveryIntervalMs` to 20 s and the jitter to 0.
+
+**Investigation.** `DEFAULT_PR_MONITOR_POLICY` at `apps/backend/src/core/pr-monitor-policy.ts:68` still holds 5 min, 30 s jitter and a 2 min rate-limit cooldown. `external-pr` admission is 2 total and 1 per target (`apps/backend/src/core/work-admission.ts:85`).
+
+**Decisions.**
+
+- **What repository to use?**
+  - **A disposable test repository under the user's account, driven by `gh`, with PRs opened, closed, replaced and reopened by script (recommended).**
+    - Pros: controllable transitions; no risk to real PRs.
+    - Cons: the rate-limit cooldown is hard to trigger without real volume.
+  - **Observe this repository's real PR traffic.**
+    - Pros: realistic latency and volume.
+    - Cons: transitions are not controllable, and timing depends on maintainers.
+- **How to test the rate-limit cooldown?**
+  - **Inject a rate-limit answer at the `gh` boundary in a focused test, and record only the live cadence (recommended).**
+    - Pros: deterministic, no abuse of the API.
+    - Cons: not a live proof of the cooldown.
+  - **Exhaust a real token's limit.**
+    - Pros: genuine evidence.
+    - Cons: disrupts other work on the account.
+
+### 6. Live providers
+
+**Problem.** Provider-side observation (idle backoff, background output) is unproved for several providers.
+
+**Context.** This file defers it entirely to [0049](0049-native-agent-idle-observation.md).
+
+**Investigation.** `NATIVE_QUIET_BACKOFF_TRIAL_MS` is still `[3_000, 5_000, 10_000, 15_000]` at `apps/web/src/lib/native-session-read-policy.ts:24`; 0049 owns its evidence.
+
+**Decisions.**
+
+- **Keep this bullet?**
+  - **Keep it as a pointer and do not duplicate the work (recommended).**
+    - Pros: one owner for provider evidence.
+    - Cons: task 13 cannot close until 0049 also has enough evidence.
+  - **Drop it from this file.**
+    - Pros: shorter list.
+    - Cons: hides a real dependency of the rollback removal.
+
+### 7. macOS watcher paths
+
+**Problem.** The recursive watcher's overflow and polling fallback have not run on macOS, and a packaged app has not been checked. A silent watcher failure would leave a local diff badge stale until the next poll.
+
+**Context.** Under `dev:test` a save was detected at p50 516 to 649 ms. Batched in 0031 under macOS and the Electron window.
+
+**Investigation.** `apps/backend/src/core/worktree-watcher.ts:150` still calls `watch(target, { recursive, persistent: false }, ...)` and degrades when recursion is unavailable (`:19`). The injectable `watch` (`:73`) allows a deterministic failure test; the live gap is the real FSEvents behaviour.
+
+**Decisions.**
+
+- **How to prove burst overflow and the fallback?**
+  - **A live burst (thousands of files written by script) on macOS, plus a packaged-app smoke run (recommended).**
+    - Pros: exercises real FSEvents coalescing.
+    - Cons: needs a macOS host and a packaged build.
+  - **Rely on the injected-watcher unit tests.**
+    - Pros: free.
+    - Cons: does not show how real FSEvents behaves.
+
+### 8. iOS hidden pause and resume
+
+**Problem.** The read coordinator's hidden pause and resume are unproved on iOS, where backgrounding and screen lock suspend the web view more aggressively than desktop browsers.
+
+**Context.** Needs the `apps/ios` wrapper (present: `apps/ios/OrkestratorMobile`) and macOS with Xcode; batched in 0031.
+
+**Investigation.** Nothing new since `00a0cb82`.
+
+**Decisions.**
+
+- **Simulator or device?**
+  - **A real device first (recommended).**
+    - Pros: real suspension and screen-lock semantics.
+    - Cons: needs a provisioned device and tailnet access.
+  - **The simulator.**
+    - Pros: scriptable and easy to repeat.
+    - Cons: lifecycle differs from a device, so a pass proves less.
+
+### 9. Real host suspend and resume
+
+**Problem.** `HostSuspendDetector` re-times every scheduler after a sleep so overdue keys run once; that is proved only with a manual clock.
+
+**Context.** Constraint: missed ticks are never replayed.
+
+**Investigation.** `HostSuspendDetector` is at `apps/backend/src/core/host-suspend-detector.ts:42` with its own test file. No live record.
+
+**Decisions.**
+
+- **How to suspend?**
+  - **A real lid-close or `pmset sleepnow` on macOS, with diagnostics read before and after (recommended).**
+    - Pros: genuine monotonic-clock behaviour.
+    - Cons: suspends the host's other work (production Orkestrator shares it).
+  - **`systemctl suspend` on a spare Linux host.**
+    - Pros: scriptable, isolated from the main host.
+    - Cons: different clock semantics from macOS.
+
+### 10. Long soak and cache gauges
+
+**Problem.** A 10-cycle soak left no leaked footprint, but a slow leak or an RSS that never plateaus would only show over a long run with sessions open. Worktree snapshot and row caches have no gauge.
+
+**Context.** Owed: at least 50 cycles over an hour or more, with agent sessions open. The 2026-10-25 run's final `dev:stop` exited non-zero and left a container.
+
+**Investigation.** The footprint (`soakFootprint`, `scripts/recurring-live-ab-summary.ts:244`) covers schedulers, pools, fetch and signal records, jobs, streams and terminals, not caches. `apps/backend/src/core/recurring-work-metrics.ts` counts `cacheHits`/`cacheMisses` (`:85`) but no cache size. The `dev:stop` failure is already handled: since #1271 the cleanup re-reads status and still resets a profile that reports `stopped` with no live launcher (`scripts/recurring-live-ab.ts:736`). The "needs its own todo against `dev:stop`" note can close unless the failure recurs.
+
+**Decisions.**
+
+- **Add cache-size gauges before the long soak?**
+  - **Yes: expose entry counts for the worktree snapshot and row caches in recurring diagnostics, then soak (recommended).**
+    - Pros: the soak can detect cache leaks; content-free counts.
+    - Cons: a small code change before a qualification run.
+  - **Soak now and use RSS plateau as the cache proxy.**
+    - Pros: no code change.
+    - Cons: the file already says RSS is not a leak gauge under Bun.
+- **Agent sessions in the soak?**
+  - **One credentialed Claude session per environment kind (recommended).**
+    - Pros: covers observation timers and subscriptions.
+    - Cons: real provider cost over an hour.
+  - **Credential-free only.**
+    - Pros: free and repeatable.
+    - Cons: misses the provider observation footprint.
+
+### 11. Multi-client, restarts and an older backend
+
+**Problem.** Two clients with one disconnected, restarts at durable transition boundaries and a mixed-version backend are unproved, so a restart mid-dispatch could duplicate or lose a turn.
+
+**Context.** Overlaps 0051's outage workload (backend restart) and the invariants in AGENTS.md (replay, cursors, dispatch journals).
+
+**Investigation.** No live harness for restarts at chosen boundaries exists. 0051 notes the browser harness's gateway token lapses on a backend restart, so a durable-token or bearer client is needed.
+
+**Decisions.**
+
+- **How to hit durable transition boundaries?**
+  - **Restart through `dev:stop`/`dev:test` at points chosen from diagnostics (a dispatch journaled, a result accepted), using a bearer CLI client (recommended).**
+    - Pros: no test-only backend hooks.
+    - Cons: timing is approximate; several attempts are needed per boundary.
+  - **Add a test-only crash hook at each boundary.**
+    - Pros: exact boundaries.
+    - Cons: new backend surface that must never ship enabled.
+
+### 12. Measured candidates
+
+**Problem.** Twelve cadence and limit changes might save cost but must not change without evidence.
+
+**Context.** The idle A/B decides none. The feature-planning keyed row read was decided from the harness (decision 4).
+
+**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux-interactive.ts`) and B20 (`review-validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020: `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
+
+**Decisions.**
+
+- **Which order to decide them in?**
+  - **By measured cost once the busy profile reports, largest first (recommended).**
+    - Pros: effort goes where the cost is.
+    - Cons: nothing moves until task 1 runs.
+  - **Decide the client-only ones (Docker availability, display clock, design canvas) from browser profiling now.**
+    - Pros: they need no credentials.
+    - Cons: probably small savings; the design canvas item also waits on missed-final-hint qualification.
+- **What to do with the container fetch failure ladder?**
+  - **Close it together with task 3's decision (recommended).**
+    - Pros: no tuning of a path that may be removed.
+    - Cons: none if the routine policy goes.
+  - **Tune it from `git-fetch-container` metrics.**
+    - Pros: as written.
+    - Cons: new containers produce no such metrics.
+
+### 13. Remove the rollback drivers
+
+**Problem.** Every keyed domain keeps a second whole-store driver, and Multi Review keeps `WorkflowDueScheduler`. That doubles upkeep and test surface.
+
+**Context.** Decision 1 is to wait for the busy live profile. `stableJitterMs` has already moved, so deleting `multi-review-scheduler.ts` is self-contained.
+
+**Investigation.** Unchanged. `KEYED_SCHEDULING_ROLLBACK_ENV` and `keyedSchedulingEnabled` are at `apps/backend/src/core/workflow-supervisor.ts:77` and `:79`, with six call sites (task 1). `WorkflowDueScheduler` is at `apps/backend/src/core/multi-review-scheduler.ts:52`, and `stableJitterMs` at `multi-review-scheduling.ts:157`. The desktop allowlist entries are at `apps/desktop/electron/backend-process.ts:71` to `:73`, and observation sharing is read at `apps/backend/src/core/index.ts:699`. The catalogue still describes the adaptive scheduler as Multi Review's rollback (`packages/protocol/src/recurring-work.ts:363`).
+
+**Decisions.**
+
+- **All at once or domain by domain?**
+  - **Domain by domain, lowest risk first (backend activity, native queues, then the workflows, Multi Review last) (recommended).**
+    - Pros: each removal is small; a regression points at one domain.
+    - Cons: several PRs, and the switch stays until the last.
+  - **One removal PR once the evidence is complete.**
+    - Pros: one review, and the switch is gone at once.
+    - Cons: a large diff; a regression has no remaining rollback.
+- **What evidence is enough?**
+  - **The busy profile, live GitHub and the long soak, as decision 1 says (recommended).**
+    - Pros: covers exactly the obligations the keyed drivers keep.
+    - Cons: depends on credentialed runs not yet scheduled.
+  - **Production use since #852 plus the idle evidence.**
+    - Pros: removal can start now.
+    - Cons: decision 1 already rejected it; busy obligations stay unproved.
+
+### 14. Metrics switch decision
+
+**Problem.** None left; decided on 2026-10-25.
+
+**Context.** Decision 2: keep `ORKESTRATOR_RECURRING_METRICS` as a diagnostic kill switch.
+
+**Investigation.** The switch is read at `apps/backend/src/core/recurring-work-metrics.ts:203`. The class comment at `:47` still calls it "the rollback switch", which contradicts decision 2.
+
+**Decisions.**
+
+- **Fix the stale comment?**
+  - **Reword it as a diagnostic kill switch in the next change that touches the file (recommended).**
+    - Pros: no standalone churn.
+    - Cons: the drift stays until then.
+  - **Fix it now in its own change.**
+    - Pros: immediately consistent.
+    - Cons: a one-line PR.
+
+### 15. Provenance comments
+
+**Problem.** Comments citing "recurring-processes step NN" point at deleted plans. They are harmless but misleading.
+
+**Context.** Decision 10: leave them except in touched files.
+
+**Investigation.** 12 files under `apps`, `packages` and `tests` still contain the phrase (decision 10 counted about 60 sites).
+
+**Decisions.**
+
+- **Sweep or leave?**
+  - **Leave them, and remove them as files are touched (recommended).**
+    - Pros: no cross-area churn.
+    - Cons: the drift lingers.
+  - **Sweep them in one change after the rollback drivers go.**
+    - Pros: clean, and many sit in code that removal deletes anyway.
+    - Cons: collides with parallel work.
+
 #852 changed how often the app collects and reads facts: shared worktree
 snapshots, a container fetch policy, lifecycle-aware PR monitoring, the client
 read coordinator, the native observation broker and keyed workflow

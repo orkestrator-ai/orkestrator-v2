@@ -8,6 +8,35 @@ was outside this file's scope is listed in
 [0066-backend-residual-module-state.md](0066-backend-residual-module-state.md).
 Delete this file and its index row once the branch has merged (decision 15).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire this finished file**: all six code steps, the two-backend test and the qualification are done and merged (#1209); only the file's own retirement remains. Status: done.
+
+### 1. Retire this finished file
+
+**Problem.** The file is marked Finished and says to delete it with its index row once the branch merged (decision 15). It still holds rank 8 in the folder index, and a production source comment points readers at it.
+
+**Context.** The README rule: move durable behaviour into `architecture/`, delete the file, remove the row. Residual module state went to [0066](0066-backend-residual-module-state.md) (finished) and then [0133](0133-backend-module-state-beyond-0066.md) (open).
+
+**Investigation.** The branch merged as `8290f2ca` (#1209), after the earlier `diffStats` step in `404b1f3b` (#978). The claims hold at HEAD: `commands-runtime-state.ts` and `agent-account-bridge-state.ts` are gone, and `git grep` finds only the historical comment at `tests/unit/module-import-cycles.test.ts:28`. `BackendRuntime` has the clusters (`apps/backend/src/core/backend-runtime.ts:35` to `:39`, plus `containerStates` and `changeTracking` from 0066), and `backend-runtime.test.ts` has the three 0011 cases (`:68`, `:106`, `:154`) among its eight. The `import/no-mutable-exports` allowlist in `.oxlintrc.json` now has 43 entries, consistent with 0011's 45 less 0066's two. The durable description is in `docs/architecture/backend-runtime.md` (clusters table, the rules for reaching state at call time and passing narrow clusters, construction-option test seams, shutdown order), and it already covers decisions 4 (`EnvironmentLifecycleTaskTracker` kept separate), 6 (seams as options) and 8 (local-server teardown in the backend's awaited shutdown). Inbound references a deletion must update: the class doc comment at `backend-runtime.ts:26` names this file by path, and 0066 and 0133 link to it.
+
+**Decisions.**
+
+- **What to do with this file now that its branch has merged?**
+  - **Delete it now, pointing the source comment at `backend-runtime.md` (recommended).** Change the path in `backend-runtime.ts:26` to `docs/architecture/backend-runtime.md`, repoint the 0066/0133 links, remove the index row.
+    - Pros: follows the README rule; the architecture doc already carries every rule a contributor needs; the source comment then points at living documentation rather than a closed plan.
+    - Cons: the deletion touches a production source file (a comment only), so the change is not documentation-only and needs the code validation path.
+  - **Delete it and leave the source comment until the next edit of `backend-runtime.ts`.**
+    - Pros: a documentation-only change.
+    - Cons: leaves a dangling path in production code.
+  - **Keep it until 0133 is done.**
+    - Pros: one retirement for the whole runtime-state series.
+    - Cons: contradicts the README rule; 0133 is low priority with no date.
+
 `apps/backend/src/core/commands-runtime-state.ts` was the backend's
 process-wide state bag: terminal, local-server and environment-operation maps
 exported as module globals, plus setters that existed so tests could replace

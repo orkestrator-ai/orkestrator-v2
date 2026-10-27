@@ -2,6 +2,126 @@
 
 Checked against `main` at `06297124` (2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Record the Linux Engine CI results**: the follow-up to the answered CI question ("record them in this file then, including the C22 host-level reachability verdict"). Status: partly done (CI has run on both architectures; nothing is recorded here, and `container-qualification.md` still says "Not covered: Linux Engine").
+2. **Rootless host without `cpu` delegation**: check that the budget read-back stays truthful when only `memory pids` are delegated. Status: open.
+3. **Grok C13 resume and C21 rotation**: qualify Grok resume after a rebuild, and Grok login rotation. Status: blocked (on a current host Grok login; the rotation half also on 0061 item 7's live run).
+4. **Claude C21 half with a disposable account**: a real re-authentication through `markContainersForClaudeLoginRefresh`, and a refresh-token rotation through the keeper. Status: blocked (needs a disposable Claude account).
+5. **Daemon-wide restart during launch and rebuild copy**: a Docker restart or Desktop quit at both points. Status: open (needs a dedicated host or VM).
+
+### 1. Record the Linux Engine CI results
+
+**Problem.** Linux Engine evidence from the scheduled job is listed as missing, yet the job has run several times. One of its suites is red, and nobody has recorded it.
+
+**Context.** `.github/workflows/container-live-qualification.yml` runs weekly, on demand and on PRs that touch the suites (decision 23). `docs/development/container-qualification.md:185` still says "Not covered: Linux Engine".
+
+**Investigation.** Runs of "Container live qualification" on 2026-10-26, all on `ubuntu-24.04` and `ubuntu-24.04-arm` with Engine 28.0.4:
+- **Weekly run 40304582303** on `main` `f1223e0b`: failed only "Live lifecycle (C09, C11, C12, C20)". C20 found no `~/.codex/auth.json` because the runner's uid is not 1000. 0109's relay fixes this.
+- **Run 40338400817** (0109 branch): every suite passed, C22 network included.
+- **Run 40409285999** (0109 branch head `e53ea683`, now merged): every suite passed except "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw `/codex-home/config.toml` as `node`, which is unreadable on a non-1000 host; this is a test bug, see [0058](0058-legacy-migration-root-symlink.md)'s analysis.
+
+So the next weekly run on `main` should fail only that C14 case. The benchmark numbers from these runs are analysed in [0022](0022-container-resource-budgets-and-performance.md)'s task analysis. They miss the Docker-calls target (26–28 against ≤ 21), and on x64 also fresh-to-ready and warm start.
+
+**Decisions.**
+
+- **What to record, and where?**
+  - **One evidence section in `container-qualification.md` (run ids, image digests, pass/fail per suite, the C22 verdict) and a one-line pointer here; replace the "Not covered: Linux Engine" line (recommended).**
+    - Pros: the evidence lives in the development doc, as for every other platform; CI artefacts expire, so the facts get copied.
+    - Cons: the numbers change weekly; the doc records one snapshot.
+  - **Record nothing; treat the workflow history as the evidence.**
+    - Pros: no doc churn.
+    - Cons: run logs expire after the retention period, and the README wants evidence in the files.
+- **Fix the red C14 case before recording?**
+  - **Yes: file the C14 precondition fix as a new todo (per 0058's analysis) and record the next green run (recommended).**
+    - Pros: the recorded state is a full pass.
+    - Cons: waits for one more run.
+  - **Record as is, with the failure explained.**
+    - Pros: immediate.
+    - Cons: records a known-red suite as the Linux baseline.
+
+### 2. Rootless host without `cpu` delegation
+
+**Problem.** On a host that delegates `memory pids` but not `cpu`, the budget read-back must not claim a CPU limit it cannot apply.
+
+**Context.** omarchy-hp's rootless daemon delegates `cpu memory pids`, so it cannot show this case. Unit tests already cover a rootless daemon with only memory delegated (`commands-registry-resource-limits.test.ts`, 0061 item 11). The built-in default drops and reports an unenforceable axis (0022 decision 4).
+
+**Investigation.** Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
+
+**Decisions.**
+
+- **How to get such a host?**
+  - **A disposable rootless user service on omarchy-hp with a systemd drop-in `Delegate=memory pids`, as the 0109 review run used for its private daemon (recommended).**
+    - Pros: no new machine; the user's own daemon and configuration stay untouched; the recipe is proven.
+    - Cons: needs the host's free disk (6.2 GB today) for an image; still one host's kernel.
+  - **Wait for a user report from a distribution that ships that delegation by default.**
+    - Pros: a real-world configuration.
+    - Cons: open-ended; a wrong read-back would ship until then.
+  - **Accept the unit tests and retire the item.**
+    - Pros: refusal and reporting are pure functions of `docker info`, which the tests feed.
+    - Cons: assumes Docker reports delegation correctly; this item exists to check that assumption.
+
+### 3. Grok C13 resume and C21 rotation
+
+**Problem.** Grok is the only provider whose session resume after a rebuild is unverified. `RESUME_QUALIFIED_PROVIDERS` (`apps/backend/src/core/container-replacement.ts:991-997`) lists `claude`, `codex`, `opencode`, `cursor` and `pi`, so the product shows Grok's resume as unverified.
+
+**Context.** It needs a current host Grok login. The rotation half needs 0061 item 7's profile-scoped Grok staging, whose live spec is itself blocked on the same login.
+
+**Investigation.** The host still has no `~/.grok/auth.json`, only a lock file from 2026-10-26. The C13 driver is `scripts/qualify-session-resume.sh`. The user's memory also records a Grok ACP "Invalid params" failure at `session/new` on 1.0.41, which succeeded in a direct probe on 1.0.44. A resume run may surface that first.
+
+**Decisions.**
+
+- **How to sequence it?**
+  - **One session: the user signs in to Grok on the host, then runs 0061's `grok-container-login.spec.ts`, then C13 for Grok, then the C21 rotation (recommended).**
+    - Pros: one login serves three gates; follows the dependency order the files state.
+    - Cons: depends on the user's interactive login and a working Grok CLI version.
+  - **Leave Grok as "pending qualification" for good.**
+    - Pros: honest in the product today, and no work.
+    - Cons: Grok users keep seeing unverified resume, and parity stays incomplete.
+
+### 4. Claude C21 half with a disposable account
+
+**Problem.** A real container re-authentication and an Anthropic refresh-token rotation through the keeper have never run end to end. Only the durable `loginGeneration` half ran.
+
+**Context.** Neither can use the host's own login: a rotation would spend the user's real refresh token. The live test is `apps/backend/tests/claude-container-login-live.test.ts` (`ORKESTRATOR_LIVE_CLAUDE_LOGIN=1`).
+
+**Investigation.** `markContainersForClaudeLoginRefresh` is at `apps/backend/src/core/agent-accounts-containers.ts:1460`. [0018](0018-container-network-and-credential-isolation.md)'s analysis notes that Claude Code moved to 2.1.309 (`docker/Dockerfile:193`) without the keeper's refresh trigger being rechecked.
+
+**Decisions.**
+
+- **Is a disposable account worth obtaining?**
+  - **Yes, and run it with 0018's Claude keeper host-refresh run, on a fresh profile with only that account (recommended).**
+    - Pros: covers two credential-isolation gates; this is the default provider.
+    - Cons: needs a second Claude subscription or a test account; its usage cost.
+  - **Keep it blocked and rely on the generation and unit evidence.**
+    - Pros: no account management.
+    - Cons: a Claude Code change to its token refresh would go unnoticed until users hit it.
+
+### 5. Daemon-wide restart during launch and rebuild copy
+
+**Problem.** Daemon-side effects of a restart (containers stopped, `--rm` helpers killed mid-write) are proved only through a proxy that mimics what the CLI sees.
+
+**Context.** The shared Desktop daemon could not be restarted. The file says to run it on a dedicated host or VM.
+
+**Investigation.** The C15 rebuild-fault suite covers a client-side disconnect mid-copy and kills around the commit. `container-qualification.md:185` lists a daemon restart as not covered.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **A new opt-in step in `container-live-qualification.yml` that runs `sudo systemctl restart docker` on the GitHub runner at the two points (recommended).**
+    - Pros: runners are disposable and can be restarted freely; repeatable weekly on both architectures; covers Linux Engine, the reference platform.
+    - Cons: Docker Desktop's quit path stays unproved; a workflow-level fault is coarser than an in-test hook, so the timing needs a fixture that pauses at the right phase.
+  - **A dedicated macOS VM running Docker Desktop.**
+    - Pros: covers the Desktop quit, which the file names.
+    - Cons: needs hardware or a licensed VM; a manual run.
+  - **Keep the proxy evidence.**
+    - Pros: no work.
+    - Cons: the scenario that loses data in other tools (a helper killed mid-write) stays untested.
+
 The container lifecycle (durable operations, persistent storage, staged
 inputs, per-environment networks, resource budgets, bounded logs) shipped in
 #877 with live evidence from Linux Docker Engine 29.7.2 on amd64. The full

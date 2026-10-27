@@ -3,6 +3,222 @@
 Checked against `main` at `06297124` (2026-10-23). The 2026-10-21 live record
 below was taken at `9b3f53a2`, before the 2026-10-23 code changes.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: open.
+2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: open (likely a spec expectation, see below).
+3. **Codex live async question and background shell**: neither has been exercised live. Status: open.
+4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: open.
+5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: open.
+6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code).
+7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: blocked (on current host logins).
+8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: open (depends on the model choosing the tool).
+9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: open.
+10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: open.
+
+All five code items match HEAD. The only later changes in this area are refactors (#1180, #1284) and #1298's stopped-runtime fencing in `native-agent-launch-activity-reconciler.ts`; no behaviour described here moved. 0048 hands its live-provider task to this file. Any live case rerun before [0199](0199-idle-observation-spec-sidebar-probe.md) lands is blind on the sidebar, because the spec's sidebar probe has read `unknown` since the 2026-10-24 marker change. The 2026-10-23 sidebar timings predate that change and are valid.
+
+### 1. Bridge restart while backed off
+
+**Problem.** Claude and Codex groups back off behind their bridges' observation streams, which are on by default. If a bridge restart left the stream down without un-backing the group, a turn started afterwards could look stale past the budget.
+
+**Context.** Code item 1's "still owed". The design says every disconnect and every connect hints the whole group, and that a stream which does not confirm `observe: true` is closed for good.
+
+**Investigation.** The wakeup is `HttpBridgeObservationWakeup` (`apps/backend/src/core/http-bridge-observation-stream.ts:253`); the stream opens `/event/subscribe?observe=1` (`:144`), confirms `"observe":true` (`:177`), and has a 75 s silence watchdog (`:54`). The backoff gate reads `idleBackoffWakeup === "provider-event-stream"` (`native-agent-launch-activity-reconciler.ts:986`), with one 4 s safety step (`STABLE_IDLE_BACKOFF_MS`, `native-agent-observation.ts:83`). The deterministic test covers reconnecting from the cursor after a restart. The live spec has no restart case (cases at `e2e/agent-testing/idle-observation-live.spec.ts:906`-`:1378`). The backend already exposes `stop_local_claude_server_cmd`, `stop_local_codex_server_cmd` and their `start_` pairs, and `design-resume-clients-live.spec.ts:219` uses the Codex pair.
+
+**Decisions.**
+
+- **How to restart the bridge in the live run?**
+  - **Add a `bridge-restart` case to `idle-observation-live.spec.ts` using the `stop_local_*_server_cmd`/`start_local_*_server_cmd` pairs, after the group has reached backoff (recommended).**
+    - Pros: a real process restart; reuses commands already proved by the design spec; records `backendGroupReads` and `backendGroupSkips` around it.
+    - Cons: a new case to maintain; local environments only.
+  - **Kill the bridge process by its recorded PID.**
+    - Pros: closer to a crash than a clean stop.
+    - Cons: needs PID identity checks (AGENTS.md's production-host rules); more fragile.
+- **What counts as a pass?**
+  - **A turn started from outside the view after the restart is seen within 3 s p95, and the group shows a read on the reconnect (recommended).**
+    - Pros: matches the completion budget and the "connect hints the group" design.
+    - Cons: one sample per provider per run; repeat it to get a p95.
+  - **The group stops skipping sweeps until the stream is confirmed again.**
+    - Pros: directly checks the mechanism.
+    - Cons: says nothing about what the user sees.
+
+### 2. Claude background-task output
+
+**Problem.** The background case fails for Claude on 2026-10-21 and 2026-10-23: a running task card appears within 300 ms, but no fresh tool result contains the marker. Until it is explained, background activity on Claude is unqualified.
+
+**Context.** The assertion was tightened in review on 2026-10-21 so that the user's prompt cannot count as output.
+
+**Investigation.** The assertion accepts only `tool-invocation` parts' `toolOutput`, or a fetched `detailRef` (`freshToolResults`, `e2e/agent-testing/idle-observation-live-support.ts:123`, used at `idle-observation-live.spec.ts:588` and asserted at `:1206`-`:1211`). Claude does not put a background shell's stdout into a tool result. Its task notification carries `summary` and `output_file` (`bridges/claude-bridge/src/services/session-manager-prompt-handlers/system-tasks.ts:42`, `:241`, `:242`), and the renderer shows the output as a file link on the task card (`BackgroundTaskOutputFile`, `apps/web/src/components/chat/NativeMessage.agent-parts.tsx:902`). So the marker reaches a tool result only if the model chooses to read the output file. The failure is most likely the spec asking for something Claude never produces, not a stale view. The `contentRevision` for Claude does include a background-task snapshot count (`bridges/claude-bridge/src/routes/session-activity.ts:46`-`:55`), so a task status change is announced.
+
+**Decisions.**
+
+- **How to fix the case?**
+  - **Accept, per provider, the evidence the provider really emits: for Claude, the task reaching `completed` with an `outputFile`, then fetch that file through the existing output-file read and require the marker (recommended).**
+    - Pros: proves the output exists and reached the view without depending on the model's choice; keeps the prompt excluded.
+    - Cons: provider-specific branches in the spec; the file read must stay content-free in artifacts (check the marker, never record the text).
+  - **Prompt the model to read the output when the task finishes.**
+    - Pros: no spec branching.
+    - Cons: depends on model behaviour, the same weakness that leaves other cases unexercised.
+  - **Downgrade the Claude assertion to the task card and status only.**
+    - Pros: passes today.
+    - Cons: no longer proves the output arrived, which is the point of the check.
+
+### 3. Codex live async question and background shell
+
+**Problem.** The Codex `contentRevision` includes the async-question count, but no live run has shown that a question asked on an idle thread wakes a backed-off view.
+
+**Context.** Code item 2's "still owed". On 2026-10-23 Codex ran the background command in the foreground. Background terminal output on an idle Codex thread is not rendered by the bridge at all, so only a settled command's late lines matter.
+
+**Investigation.** The revision string is built at `bridges/codex-bridge/src/app-server-runtime-sessions.ts:1433` (`contentEpoch`, `messageRevision`, `asyncQuestionItemIds.length`). The spec has no async-question case. The background case uses a generic "start as a background task" prompt (`idle-observation-live.spec.ts:1150`), which Codex need not honour.
+
+**Decisions.**
+
+- **How to get an async question live?**
+  - **Add a case that asks Codex to use its question tool with a fixed choice, answered from the page (recommended).**
+    - Pros: a direct test of the async-question revision bump; the paused-interactions specs show the pattern.
+    - Cons: depends on the model calling the tool; may need a retry budget.
+  - **Prove it only with the deterministic lifecycle test (`app-server-runtime-lifecycle.test.ts`).**
+    - Pros: no live dependency.
+    - Cons: leaves the end-to-end wakeup unproved.
+- **Keep the Codex background-shell case?**
+  - **Keep it as "not exercised" when Codex runs in the foreground, and do not count it against the file (recommended).**
+    - Pros: honest; Codex renders no idle background output to announce.
+    - Cons: the case may never produce evidence for Codex.
+  - **Retire it for Codex.**
+    - Pros: less noise in records.
+    - Cons: misses a future Codex release that does background commands.
+
+### 4. Codex short idle gaps
+
+**Problem.** An idle Codex view made 27 reads a minute on 2026-10-23 against Claude's 12, with gaps under 12 s. Something still invalidates it, which costs reads on every idle Codex tab.
+
+**Context.** The same symptom as OpenCode in code item 5.
+
+**Investigation.** No attribution exists yet. The likely candidates are the same as item 6: progressive hydration and discovery renewals that announce, or a `messageRevision` bump on idle. Neither has a per-caller tag.
+
+**Decisions.**
+
+- **How to attribute it?**
+  - **Add a content-free reason tag to every invalidation the backend emits for a session (hydration, discovery deadline, discovery success, catalogue refresh, content revision) and count tags in the idle case (recommended).**
+    - Pros: answers this task and item 6 with one change; stays content-free.
+    - Cons: a protocol or metrics addition, though diagnostic only.
+  - **Bisect by disabling one source at a time in a profile.**
+    - Pros: no permanent code.
+    - Cons: several live runs; slow.
+
+### 5. Remaining Claude and Codex cases at the new cadence
+
+**Problem.** Approval, sub-agents, reconnect, hidden and no-renderer passed on 2026-10-21 at the old 1,500 ms cadence. Claude and Codex now back off to 15 s, so each case's budget must be shown again.
+
+**Context.** Budgets (p95): approval visible within 2 s, background indicator within 4 s, completion within 3 s (`recurring-work.md`).
+
+**Investigation.** All cases still exist in the spec. The 2026-10-23 run covered only `missed-final`, `background` and `detach`.
+
+**Decisions.**
+
+- **Run order?**
+  - **Land 0199, then run every case for Claude and Codex one provider at a time, with tasks 1 to 4 in the same session (recommended).**
+    - Pros: one credentialed session; sidebar results are real; one provider at a time avoids stamp-gap recovery masking a lost announcement (the file's own note).
+    - Cons: a long run (about 20 minutes per provider).
+  - **Run now, without 0199.**
+    - Pros: sooner.
+    - Cons: every sidebar check is blind; the run has to be repeated.
+
+### 6. OpenCode hint rerun (code item 5)
+
+**Problem.** Idle OpenCode views read 27.9 times a minute on 2026-10-21. Two hint sources were fixed in code, but the rerun that would confirm 12 a minute has not happened.
+
+**Context.** Not changed by design: the environment-wide catalogue announce and progressive hydration announcements. D10 records the choice.
+
+**Investigation.** The fixes are in `storeProgressiveDiscovery` and the `unknownEvents` exclusion. The suggested attribution point is `native-agent-transcript-projection.ts`. Task 4's tag would serve both.
+
+**Decisions.**
+
+- **What if the rerun still exceeds 12 a minute?**
+  - **Attribute with task 4's reason tags before changing anything (recommended).**
+    - Pros: changes only the source that is measured as noisy.
+    - Cons: one more run.
+  - **Also suppress hydration announcements for an idle view.**
+    - Pros: likely removes most of the remainder.
+    - Cons: risks hiding an incomplete transcript's completion, which hydration exists to announce.
+
+### 7. Grok and Pi rerun
+
+**Problem.** Grok and Pi have no idle-observation evidence at all, yet both have client quiet backoff on by default (`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`).
+
+**Context.** Both were `needs-auth` on 2026-10-21. Their bridges have no event stream (`idleBackoffWakeup: null`, `native-agent-observation.ts:204` for Pi and `:219` for Grok), so the backend keeps every sweep (D6).
+
+**Investigation.** Nothing has changed in their observation path since. The pinned Grok and Pi are in `packages/toolchain/src/manifest.ts`.
+
+**Decisions.**
+
+- **How to supply logins?**
+  - **Use `dev:test --credential-source grok` for Grok, and copy the Pi login into the disposable profile, as the approved credential practice allows (recommended).**
+    - Pros: an established procedure; no real login is written.
+    - Cons: needs the host logins current first.
+  - **Remove Grok and Pi from the qualified list until they are run.**
+    - Pros: no unqualified backoff on by default.
+    - Cons: gives up a saving the other four providers show is safe; the backend still sweeps every 2 s, so the 15 s staleness bound already holds.
+
+### 8. Unexercised cases
+
+**Problem.** Codex sub-agents and background shells on Codex, Cursor and OpenCode have never produced evidence, because the models chose not to use the tool.
+
+**Context.** The separate live sub-agent card run is in 0031. Cursor reports `ask` as auto-approval, so its approval case cannot park.
+
+**Investigation.** The prompts are generic (`idle-observation-live.spec.ts:1095`, `:1150`).
+
+**Decisions.**
+
+- **Keep chasing them?**
+  - **Record them as "not exercised" and accept that, unless a provider is known to support the tool (recommended).**
+    - Pros: stops spending live runs on model choice; honest records.
+    - Cons: those paths stay unproved live.
+  - **Pin a model per provider known to use the tool (`ORKESTRATOR_AGENT_TEST_IDLE_MODELS`) and retry.**
+    - Pros: may produce evidence.
+    - Cons: more runs, and the result still depends on the model.
+
+### 9. Container environment
+
+**Problem.** Container environments run the bridge from their image. An image built before 2026-10-23 answers without `contentRevision` and ignores `?observe=1`; that must leave the session at the baseline cadence on both sides. No container run exists.
+
+**Context.** Code item 1 and the Qualification list; 0020 covers container state observation.
+
+**Investigation.** The spec hard-codes `containerId: null` (`idle-observation-live.spec.ts:469`), so it cannot run in a container today. The client gate needs `turn.quietObservation` (`quietObservationFlag`), which an older bridge never sets, so the client side is safe by design.
+
+**Decisions.**
+
+- **How to cover it?**
+  - **Add a container variant to the spec, run against the current image and once against an image older than #1182 (recommended).**
+    - Pros: proves both the new path and the older-image fallback.
+    - Cons: needs Docker, plus an old image kept or rebuilt.
+  - **Prove the older-image path with a backend test that uses a fake bridge without observation mode, and run live only on the current image.**
+    - Pros: no old image needed.
+    - Cons: the older-image case is deterministic only (partly covered already by the "older bridge closed for good" test).
+
+### 10. Full detach wait
+
+**Problem.** The observation stream must not keep a Claude or Codex session attached. Only a full detach wait proves it, and the 2026-10-23 run used a shortened, cadence-only wait.
+
+**Context.** Detach happens after 10 minutes idle. The spec's detach case (`:1378`) requires `detached` then `attached` through no-touch runtime discovery.
+
+**Investigation.** No full-wait record exists after the stream was added.
+
+**Decisions.**
+
+- **When to run it?**
+  - **In task 5's session, for Claude and Codex, with the default wait (recommended).**
+    - Pros: the stream is the new risk, and only these two providers have it.
+    - Cons: adds over 10 minutes per provider.
+  - **For every provider.**
+    - Pros: complete.
+    - Cons: Cursor, Pi and Grok have no stream to keep sessions attached, and some lack detach telemetry (`not-exercised`).
+
 An idle native session used to cost a no-touch activity read on every 2 s
 backend sweep for each HTTP-bridge provider, and a 1,500 ms client read for
 Claude and Codex views. The code for all five items is now in place: Claude and

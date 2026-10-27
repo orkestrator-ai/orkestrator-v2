@@ -1,5 +1,109 @@
 # Claude's Linux sandbox fails every command under Ubuntu's AppArmor bwrap profile
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Code items 1-3 (probe, user guidance, interactive refusal)**: the nested-namespace probe, the reason naming the remedy, and the bridge's up-front refusal. Status: done.
+2. **Paired AppArmor CI qualification**: restricted and remediated phases on an Ubuntu 26.04 runner. Status: done.
+3. **Stock AppArmor desktops, live**: Ubuntu 24.04 and 26.04 desktops, with and without the profile change, including the Agent Info tier. Status: blocked (no such desktop available).
+4. **Other platforms**: Debian with AppArmor, Fedora (SELinux) and Docker containers, from "Needs verification". Status: open.
+5. **CLI nested-namespace setting**: the open question, whether a newer CLI drops the nesting or offers a setting that avoids it. Status: deferred (re-checked on every Claude bump).
+
+### 1. Code items 1-3
+
+**Problem.** None left. The probe, reason and refusal are in place.
+
+**Context.** Recorded in "Current state" and decisions D1-D5.
+
+**Investigation.** Still accurate at HEAD.
+- `probeClaudeLinuxSandbox` and the cached `claudeLinuxSandboxStatus` are at `packages/protocol/src/node/claude-linux-sandbox.ts:152` and `:213`; the reasons are at `:164` and `:192`.
+- `claudeSandboxRefusal` is at `bridges/claude-bridge/src/services/claude-execution-sandbox.ts:74-94`. It is called from the prompt route (`bridges/claude-bridge/src/routes/session.ts:885`) and the query plan (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:103`).
+- `claudeReadOnlySandbox` turns the sandbox off for `unavailable` (`bridges/claude-bridge/src/services/read-only-policy.ts:521` and `:526`).
+- The pinned CLI is still 2.1.309 (`docker/Dockerfile:193`; SDK `0.3.309` in `bridges/claude-bridge/package.json:16`).
+
+**Decisions.** None: done and proved by unit tests and CI. The only open choice, how to close the file, is under task 3.
+
+### 2. Paired AppArmor CI qualification
+
+**Problem.** None left.
+
+**Context.** CI run 40259536593 (see the evidence section).
+
+**Investigation.** Both phases are still wired into `.github/workflows/ci.yml:110` (restricted) and `:138` (remediated), with the profile removal at `:124`. The reports are committed under `docs/tests/claude-apparmor/40259536593/`.
+
+**Decisions.** None: done. Because CI reruns the pair on every run, it stays the regression guard for the probe.
+
+### 3. Stock AppArmor desktops, live
+
+**Problem.** The AppArmor branch has run only on a CI runner, never on a graphical Ubuntu desktop where a user would see the picker and Agent Info.
+
+**Context.** `omarchy-hp` has no AppArmor and must not be changed. The run is batched in 0031 ("Stock Linux desktops with AppArmor or SELinux", `docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:202`).
+
+**Investigation.** The CI pair already proves the backend tier the picker and Agent Info read ("This proves the authoritative backend tier"). What only a desktop adds is the rendered picker reason, the Agent Info tier, and Ubuntu 24.04's answer: it ships the same profile but has not been probed. Step 1's commands still match the files: `claude-linux-sandbox.test.ts` exists and `conformance-coordinator-sandbox-live.test.ts` is at `bridges/claude-bridge/src/`.
+
+**Decisions.**
+
+- **Does the desktop run still gate this file?**
+  - **Keep it, but narrow it to Ubuntu 24.04 plus one UI look at the picker and Agent Info (recommended).**
+    - Pros: 24.04 is the most common LTS and the one real unknown; the UI look is small.
+    - Cons: still needs hardware or a VM nobody has here.
+  - **Close it on the CI evidence.**
+    - Pros: the backend tier is proved and CI repeats it.
+    - Cons: 24.04 is unproved; a probe that answers `available` there while the CLI fails would be missed.
+- **Where can it run?**
+  - **A disposable Ubuntu 24.04 desktop VM, or a second CI job on `ubuntu-24.04` for the probe and CLI half (recommended).**
+    - Pros: a CI job needs no hardware and gives repeatable evidence for 24.04's probe answer.
+    - Cons: CI gives no graphical check; the VM still needs someone to drive it.
+  - **Wait for a contributor with a stock Ubuntu desktop.**
+    - Pros: a real user setup.
+    - Cons: no date; the file stays open indefinitely.
+
+### 4. Other platforms
+
+**Problem.** Debian with AppArmor, Fedora (SELinux) and Docker containers have not been observed.
+
+**Context.** Docker is a different case from the others. The image installs no `bubblewrap` or `socat` (no match in `docker/Dockerfile`), so a container probe answers `missing-programs`, and the bridge refuses provider-sandbox turns with that reason (the probe runs inside the container, D3).
+
+**Investigation.** The container behaviour is fully determined by the code and the missing programs. It overlaps 0190, whose container read-only turns fail for the same reason. Debian enables AppArmor by default but does not ship Ubuntu's `bwrap-userns-restrict`; Fedora uses SELinux, which the probe does not name. Both are expected to answer `available` unless local policy differs.
+
+**Decisions.**
+
+- **How are the containers verified?**
+  - **One `docker exec` probe in a real environment, recorded here and reused by 0190 (recommended).**
+    - Pros: cheap; settles both files' container question at once.
+    - Cons: needs a running container environment.
+  - **Accept the code reading.**
+    - Pros: no run.
+    - Cons: 0190 explicitly asks for a real container, so it would stay open anyway.
+- **Do Debian and Fedora stay in scope?**
+  - **Keep them as optional, best-effort entries in 0031 and do not let them gate this file (recommended).**
+    - Pros: neither ships the profile that caused this; they are secondary platforms.
+    - Cons: an SELinux-specific failure would be found by a user first.
+  - **Require both before closing.**
+    - Pros: complete coverage.
+    - Cons: no such hosts here; this blocks closure on low-risk runs.
+
+### 5. CLI nested-namespace setting
+
+**Problem.** It is unknown whether the CLI could avoid the nested namespace altogether.
+
+**Context.** It is re-checked on every Claude bump (`docs/development/upgrade-agents.md:581`).
+
+**Investigation.** The pinned SDK 0.3.309 still offers `allowNestedUserNamespaces` (`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:9179`). Its doc says it "Removes code-execution isolation", so it cannot back `enforced`. Nothing new since the file was written.
+
+**Decisions.**
+
+- **Is this kept as an open question?**
+  - **Keep it as a bump-time check only and do not count it as outstanding work (recommended).**
+    - Pros: already in the runbook; no action is possible until the CLI changes.
+    - Cons: easy to forget if a bump skips the runbook.
+  - **Test `allowNestedUserNamespaces` on the CI runner now.**
+    - Pros: answers whether it avoids the helper's nesting.
+    - Cons: even a yes cannot be used, because it drops isolation.
+
 Found on 2026-10-25 by todo 0030's CI probes on GitHub's `ubuntu-latest`
 runner, which is now Ubuntu 26.04 (kernel 7.0). The code items were done on
 2026-10-26 against `main` at `93018933`. Paired Ubuntu runner qualification

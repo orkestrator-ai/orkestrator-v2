@@ -2,6 +2,181 @@
 
 Checked against `main` at `31d0fb06` (2026-10-17).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Collapse Claude task-to-process maps**: move `backgroundTaskControls`, `backgroundTaskCandidates` and `settlingBackgroundTasks` into runtime state. Status: open.
+2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: open (the file's description of the probe is out of date).
+3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: open.
+4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
+5. **OpenCode steer**: needs OpenCode 2.x and an expected-turn precondition. Status: blocked (OpenCode 2.x; pin is `1.19.4`).
+6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
+7. **Inactive-path steer qualification on Claude and Cursor**: steer, switch away, return, reload. Status: open.
+8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: open.
+9. **Re-measure the first turn**: after task 3. Status: blocked (on task 3).
+
+### 1. Collapse Claude task-to-process maps
+
+**Problem.** Background-task stop and runtime teardown still go through per-control maps that, with one CLI per session, only ever name that session's runtime. The indirection is a source of ownership bugs.
+
+**Context.** Decision 6 in "Warm Claude runtime" kept these maps because they carry the strict-owner stop rule. 0013 (Claude prompt-stream state) touches the same files; 0004 says mid-session parameter changes ride on this item.
+
+**Investigation.** Still accurate. `backgroundTaskControls` is a `Map<string, ClaudeQueryControl>` on the session (`bridges/claude-bridge/src/types/index.ts:782`), filled at `services/session-manager-background-tasks.ts:449` and `services/session-manager-prompt-handlers/system-tasks.ts:162`; `backgroundTaskCandidates` at `session-manager-background-tasks.ts:91-119`. The three maps are referenced 37 times in `session-manager-background-tasks.ts` (792 lines) plus `session-manager-persistence.ts`, `session-manager-prompt-hooks.ts` and `session-manager-prompt-turn-lifecycle.ts`. `stopBackgroundTask` is at `session-manager-background-tasks.ts:623`, `endClaudeRuntime` at `session-manager-prompt-launch.ts:103`. Recent related work: #1264 (`e2130297`, resume cleanup of orphaned tasks).
+
+**Decisions.**
+
+- **How to keep the strict-owner rule once the maps go?**
+  - **Record the owning runtime generation on each task entry inside the runtime, and refuse a stop whose generation differs (recommended).**
+    - Pros: one source of truth; a replaced CLI cannot receive a stop for a task it did not start.
+    - Cons: a generation counter must survive the launch-only retire path.
+  - **Keep a single task-id set on the runtime and rely on "one CLI per session".**
+    - Pros: simplest.
+    - Cons: a retire-and-relaunch window could route a stop to the new process.
+- **Order relative to 0013?**
+  - **Do this first, then 0013's stream-state refactor (recommended).**
+    - Pros: shrinks the state 0013 has to move.
+    - Cons: two changes to the same files in sequence.
+  - **Fold it into 0013.**
+    - Pros: one review.
+    - Cons: a larger, riskier diff in the turn lifecycle.
+
+### 2. Live Claude model catalogue
+
+**Problem.** Every model-catalogue read starts a separate Claude CLI, even when a warm CLI is running, costing a process (about 230-340 MB and seconds) per read.
+
+**Context.** The catalogue route is `bridges/claude-bridge/src/routes/config.ts:12`. AGENTS.md notes `createProbe()` spawns a whole CLI and is cached for commands and MCP.
+
+**Investigation.** Partly out of date. The probe is no longer a `maxTurns: 0` query: `getAvailableModelCatalog` (`services/session-manager-interactions.ts:226`) now uses `controlOnlyQuery` (`services/control-only-query.ts`), whose header records that `maxTurns: 0` was dropped by SDK 0.3.309 and an empty prompt ran real model turns. The read is still a fresh CLI per call, uncached, and never consults a live runtime. `createProbe` is at `services/session-manager-catalog.ts:222`. Command discovery already reads `initializationResult()` from its probe for the version (`services/session-manager-commands.ts:511-514`), so the pattern exists.
+
+**Decisions.**
+
+- **Where should a live runtime's models come from?**
+  - **`supportedModels()` on the live control when `readableControl` returns one, else the control-only probe, cached by CLI version (recommended).**
+    - Pros: zero extra processes in the common warm case; the cache bounds the cold case like `commandInventory`.
+    - Cons: a control read on a draining control must fall back correctly (the `queryControlDraining` rule).
+  - **`initializationResult()` models only.**
+    - Pros: no control round trip.
+    - Cons: the initialize snapshot may predate account or plan changes during a long-lived CLI.
+- **Cache the probe result?**
+  - **Yes, keyed by CLI version and account, invalidated on sign-in change (recommended).**
+    - Pros: the catalogue changes rarely; removes spawns.
+    - Cons: a new model reaches users only on invalidation.
+  - **No cache.**
+    - Pros: always fresh.
+    - Cons: keeps the per-read spawn.
+
+### 3. Warm first Claude turn
+
+**Problem.** The first turn in an environment pays a cold CLI spawn (4.3-5.2 s to first text in the recorded measurements) against about 1 s warm.
+
+**Context.** The file names `startup()` / `WarmQuery`; the memory budget is bounded by decision 2 (three idle CLIs).
+
+**Investigation.** Still unused. Pinned SDK `0.3.309` has `startup()` (`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:9882`), `WarmQuery` (:10269) and a newer `prewarm()` (:2889) that parks a spare process before its session is known and binds it with `SpareProcess.claim` (cwd, model, permission mode, settings overlay); it notes about 230-260 MB while parked and needs `options.cwd` for containerised hosts.
+
+**Decisions.**
+
+- **Which SDK surface?**
+  - **`prewarm()` spare per environment, claimed by the first prompt (recommended).**
+    - Pros: covers the case where no session exists yet; claim options match the live-settings set.
+    - Cons: launch-only settings (plugins, policy) must match at prewarm time or the spare is wasted; extra 250 MB per environment.
+  - **`startup()` / `WarmQuery` when a tab opens.**
+    - Pros: bound to a known session.
+    - Cons: warms only after the user opens a tab, a smaller win.
+- **When to prewarm?**
+  - **On tab open for a Claude tab with no live CLI, released by the existing idle window (recommended).**
+    - Pros: spends memory only where a turn is likely.
+    - Cons: a tab opened and left idle costs one CLI for 10 minutes.
+  - **On environment start.**
+    - Pros: earliest.
+    - Cons: pays for environments never used for Claude.
+
+### 4. Cursor `SendOptions.local.force`
+
+**Problem.** A wedged Cursor agent cannot be forced past.
+
+**Context.** Explicitly low priority; gated on evidence from `recoverActiveRun`.
+
+**Investigation.** `local.force?: boolean` is still in `@cursor/sdk` `1.0.40` (`bridges/cursor-bridge/node_modules/@cursor/sdk/dist/cjs/options.d.ts:281`) and unused; `recoverActiveRun` is at `bridges/cursor-bridge/src/agent-session.ts:1014`. No telemetry exists for wedged recoveries.
+
+**Decisions.**
+
+- **How will wedged agents be noticed?**
+  - **Add a content-free runtime-health counter when `recoverActiveRun` finds a run it cannot re-adopt (recommended).**
+    - Pros: turns "if seen in practice" into a measurable trigger.
+    - Cons: a small code change for a deferred item.
+  - **Wait for a user report.**
+    - Pros: no work.
+    - Cons: the trigger may never be observed.
+
+### 5. OpenCode steer
+
+**Problem.** OpenCode users cannot steer.
+
+**Context.** Needs OpenCode 2.x `delivery: steer`, and even then no expected-turn precondition; 0008 owns the 2.x move.
+
+**Investigation.** Still blocked: the SDK and CLI are pinned at `1.19.4` (`packages/toolchain/src/manifest.ts:10`, `@opencode-ai/sdk`). OpenCode's actions remain `{ compact, undo, redo }` (`packages/protocol/src/native-agent.ts`, OpenCode branch).
+
+**Decisions.** None: blocked on 0008 and an upstream precondition; the file already rules out a coordinator-only workaround.
+
+### 6. Grok steer
+
+**Problem.** Grok users cannot steer.
+
+**Context.** The interjection extension is gated by `GROK_UNSAFE_EXPERIMENTAL_INTERJECTION=1` (`bridges/acp-bridge/src/acp-session.ts:2042`).
+
+**Investigation.** Still blocked. `@agentclientprotocol/sdk` is now `2.0.1` (v1 and v2 schemas under `dist/`), with no steer or mid-turn input surface found in its type declarations. The file's "Grok: `actions: {}`" is stale: Grok now declares `{ compact: true }` (`packages/protocol/src/native-agent.ts:1113`).
+
+**Decisions.** None: blocked upstream; recheck on each ACP SDK or Grok bump.
+
+### 7. Inactive-path steer qualification on Claude and Cursor
+
+**Problem.** Steer recovery after switching away and reloading is unproven for Claude and Cursor.
+
+**Context.** Batched in 0031 (Claude and Cursor rows).
+
+**Investigation.** A real-stack spec exists for Codex only: "queued native steering survives a lost gateway response, inactive environment and reload" (`e2e/agent-testing/browser-gateway.spec.ts:967`, opt-in, `agent: "codex"`).
+
+**Decisions.**
+
+- **Manual run or extend the spec?**
+  - **Parameterise the existing Codex spec by platform and run it for Claude and Cursor (recommended).**
+    - Pros: repeatable; reuses a proven scenario.
+    - Cons: needs Claude and Cursor credentials in the profile; Cursor queue semantics may differ.
+  - **One-off manual run.**
+    - Pros: faster today.
+    - Cons: no regression guard.
+
+### 8. Warm Claude CLI app-path qualification
+
+**Problem.** The warm CLI was qualified only at bridge level; the app path (composer changes, approvals, MCP changes on one process) is not.
+
+**Context.** Decision 3 depends on live settings being restated on every join.
+
+**Investigation.** Bridge tests cover join, window, cap, replacement and reclaim (`session-manager-runtime-idle.test.ts`). No browser or CLI scenario asserts the process id stays the same.
+
+**Decisions.**
+
+- **How to prove "same process"?**
+  - **Expose the runtime generation in the bridge's content-free runtime health and assert it is unchanged across the steps (recommended).**
+    - Pros: observable from the app and CLI; no PID scraping.
+    - Cons: small bridge change.
+  - **Read the PID from `ps` during the run.**
+    - Pros: no code.
+    - Cons: fragile; PID checks conflict with the shared-host rules.
+
+### 9. Re-measure the first turn
+
+**Problem.** The benefit of task 3 needs evidence.
+
+**Context.** The table in "Warm Claude runtime" is the baseline.
+
+**Investigation.** Nothing to measure until task 3 lands.
+
+**Decisions.** None: follows task 3 with the same method (haiku, prompt to first assistant text, bridge level).
+
 Users should be able to redirect or stop a running turn without losing work, on
 every provider whose vendor surface allows it. Steer and the graceful abort
 ladder are live on Claude, Codex, Cursor and Pi. Claude's CLI now stays warm

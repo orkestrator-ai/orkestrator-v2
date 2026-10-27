@@ -2,6 +2,100 @@
 
 Checked against `main` at `8454d18b` (2026-10-24).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+Code items 1 to 10 and both qualification items are done and on `main`
+(`0014505c` #1215, `d723429d` #1223, `a3111c7c` #1207). What is left is one
+upstream-blocked item and two small verification or hygiene points.
+
+### Tasks
+
+1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311).
+2. **Codex cold-settle wait in a slow container** (Needs verification): confirm two 1 s re-reads are enough where plugin loading is slower. Status: open.
+3. **Real v2.21.0 pairings** (Needs verification): mixed-version run against real old builds. Status: open, owned by 0015 item 1.
+4. **Stale OpenCode pin comment**: `opencode-commands.ts` still names 1.19.0 while the pin is 1.19.4. Status: open.
+
+### 1. Claude terminal marker
+
+**Problem.** On a Claude CLI version this bridge home has never run a turn on, the first tab lists terminal-only commands (for example `/focus`) as available; they answer "isn't available here yet" as local output.
+
+**Context.** The bridge works around the missing marker by remembering `terminal_slash_commands` per CLI version (`bridges/claude-bridge/src/services/claude-terminal-commands.ts`, file name at `:23`, `recordTerminalSlashCommands` at `:107`). Documented in `docs/architecture/native-agent-commands.md:225` and `:258`.
+
+**Investigation.** The pin is still Agent SDK `0.3.309` (`bridges/claude-bridge/package.json:16`). Its `SlashCommand` (`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:9678`) is `{ name, description, argumentHint, aliases?, builtin? }`; `terminal_slash_commands` exists only on the init frame (`sdk.d.ts:6220`). The latest published SDK, 0.3.311 (checked on the registry on 2026-10-27), has the same shape, so the item is still blocked. Nothing in `docs/development/upgrade-agents.md` tells a bumper to look for the marker, so the check depends on someone remembering this file.
+
+**Decisions.**
+
+- **Where should the upstream watch live?**
+  - **Move it into the Claude section of `docs/development/upgrade-agents.md` as a per-bump check, then finish and delete this file (recommended).**
+    - Pros: the check happens at the moment it can succeed (every SDK bump); the file stops being kept open by an external dependency; the gap is already described in `native-agent-commands.md`.
+    - Cons: a one-line checklist entry is easier to skim past than an open todo.
+  - **Keep item 11 open here.**
+    - Pros: visible in the folder index.
+    - Cons: the file never finishes on its own work; the index rating already calls it blocked upstream.
+- **Is it worth asking upstream for the marker?**
+  - **Yes, file a feature request for a `terminal` flag on `SlashCommand` (recommended).**
+    - Pros: the only path that closes the first-tab gap without guessing.
+    - Cons: no control over timing.
+  - **No; accept the remembered list permanently.**
+    - Pros: no external dependency.
+    - Cons: the first-tab gap on each new CLI version stays.
+
+### 2. Codex cold-settle wait in a slow container
+
+**Problem.** The settle rule was measured only on a host worktree on Apple Silicon (plugin skills 200 to 400 ms after `initialize`); a slow container could load plugins after the list is judged settled, leaving the picker short of plugin skills until the 30 s TTL read.
+
+**Context.** Decision 9; failure mode is bounded (a stale-looking but healing list, never a guessed row).
+
+**Investigation.** `coldSettleMs: 1_000` and `maxSettleReads: 5` at `bridges/codex-bridge/src/commands/skill-inventory.ts:48` and `:50`. The rule needs two agreeing re-reads, so a slow load that is still changing extends the wait up to five rounds; only a load that pauses for longer than 1 s and then resumes would be missed. No container measurement has been recorded since 2026-10-24.
+
+**Decisions.**
+
+- **Measure, or accept the TTL heal?**
+  - **Accept the TTL heal and close the item (recommended).** The two-agreeing-reads rule already adapts to slow loads, and a miss heals in 30 s.
+    - Pros: no extra live run; the failure is cosmetic and self-healing.
+    - Cons: no container number behind the claim.
+  - **Measure `skills/list` timing in a container with plugins installed, and record it.**
+    - Pros: evidence for the rule on the slower platform.
+    - Cons: needs a container with the host's Codex plugins staged and a live Codex login; costs a run for a self-healing gap.
+
+### 3. Real v2.21.0 pairings
+
+**Problem.** The route retirement rests on the support-window decision plus a 2.16.3 ACP and Cursor run; no real v2.21.0 build has been paired with the current one.
+
+**Context.** Owned by 0015 item 1 and 0034; listed here only as a cross-reference.
+
+**Investigation.** Still open in 0015. Nothing in this file adds to it.
+
+**Decisions.**
+
+- **Keep the cross-reference here?**
+  - **No; leave it only in 0015 (recommended).**
+    - Pros: one owner; lets this file finish once tasks 1, 2 and 4 are settled.
+    - Cons: a reader of this file loses a pointer (the Related section still links 0015).
+  - **Keep it here as well.**
+    - Pros: the retirement's remaining evidence is visible next to it.
+    - Cons: two places to update when 0015 runs.
+
+### 4. Stale OpenCode pin comment
+
+**Problem.** The header comment in `apps/backend/src/core/opencode-commands.ts:9` says its facts come from "the pinned 1.19.0 SDK types", but the pin is `1.19.4` (`apps/backend/package.json:23`).
+
+**Context.** Raised in "Current state" ("not re-checked here"); comment hygiene, not behaviour.
+
+**Investigation.** Re-checked against the installed 1.19.4 v2 SDK: `Command` in `apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts` is unchanged (`{ name, description?, agent?, model?, source?: "command" | "mcp" | "skill", template, subtask?, hints }`), so the comment's type facts still hold. The server-behaviour facts (case-sensitive lookup, dispose semantics) were not re-read against 1.19.4 source.
+
+**Decisions.**
+
+- **How to fix it?**
+  - **Update the comment to "1.19.0, type surface re-checked on 1.19.4" (recommended),** matching the Cursor comment's convention (`bridges/cursor-bridge/src/http.ts:952`).
+    - Pros: honest about what was re-checked; one-line change.
+    - Cons: still leaves the server facts dated to 1.19.0.
+  - **Re-verify the server facts against 1.19.4 and relabel to 1.19.4.**
+    - Pros: fully current comment.
+    - Cons: needs a private `opencode serve` run for a comment.
+
 The native composer's `/` menu lists only commands the provider reported and
 that have a tested executor, and a selected command never turns into ordinary
 prompt text. The core shipped in #827 and is described in

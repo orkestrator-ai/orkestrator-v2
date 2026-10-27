@@ -2,6 +2,91 @@
 
 Checked against `main` at `06297124` (2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the legacy close fallback**: remove the `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from `closeBridgeSessionRetaining`. Status: open (unblocked by 0034).
+2. **Live Cursor close retention**: rerun `close-retention-live.spec.ts` for Cursor and fix the missing first prompt after resume. Status: open (failed 2026-10-23).
+3. **Cursor resume row titles**: check what a real Cursor resume row shows; title rows from the summary if every row reads "Orkestrator". Status: open (needs the task 2 run).
+
+### 1. Retire the legacy close fallback
+
+**Problem.** The backend still carries a compatibility path for bridges that predate `POST /session/:id/close`. It is dead weight inside the support window and a place where a destructive `DELETE` can still be sent.
+
+**Context.** Decided in 0034: the support-window floor is v2.21.0 and every v2.21.0 bridge has the close route (#853). The register row is `docs/architecture/version-compatibility.md:112`, which already says "The window allows it now". Only unpublished source builds predate the route.
+
+**Investigation.** Unchanged since the file was checked (only #1207 touched it). The fallback is `apps/backend/src/core/bridge-session-close.ts:113-131`: on 404/405 it either throws `BridgeCloseUnsupportedError` for Claude (counter `bridge-close.upgrade-required`, :115-121) or sends `DELETE` (counter `bridge-close.legacy-delete`, :122-130). `LEGACY_DELETE_RETAINS_HISTORY` is at :33. Counters are read through `get_compatibility_path_usage` (`apps/backend/src/core/commands-registry-system.ts:66`). Callers and tests to update: `http-bridge-provider-close.test.ts`, `commands-registry-teardown.test.ts`, `apps/web/src/lib/tab-teardown-notice.ts`, `apps/web/src/stores/paneLayoutStore.teardown-notice.test.ts`, `packages/protocol/src/tab-teardown.ts:78-88`, and the browser test "closing a Claude tab on a bridge from before the close route keeps the conversation and asks for a restart" (`e2e/CloseRetention.spec.ts:641`, fixture `e2e/fixtures/close-retention-host.ts:29,205`). The file's item has a tension: it says remove "the `bridge-upgrade-required` path" but also that a 404/405 must still be reported as an old bridge needing a restart, which is exactly what that path does today for Claude.
+
+**Decisions.**
+
+- **What does a 404/405 from the close route do after removal?**
+  - **Treat it the way Claude is treated today, for every platform: keep `BridgeCloseUnsupportedError` and the restart notice, drop only the `DELETE` branch and the table (recommended).**
+    - Pros: never sends a `DELETE` from a close path (invariant 13); the user still gets an actionable message; the renderer marker and its tests stay.
+    - Cons: keeps the marker, notice and one browser test, so less code goes than the item implies.
+  - **Remove the notice too and surface a generic "close not confirmed" pending error.**
+    - Pros: deletes the most code.
+    - Cons: a user on an unpublished old build retries forever with no hint to restart.
+- **Is a counter reading required before removal?**
+  - **Read `get_compatibility_path_usage` on the reachable machines, record the numbers in this file, and remove even if they are non-zero only from source builds (recommended).**
+    - Pros: follows the item; gives evidence for the change.
+    - Cons: counters are process-local, so a quiet reading proves little.
+  - **Remove without reading.**
+    - Pros: faster.
+    - Cons: skips the item's stated check.
+
+### 2. Live Cursor close retention
+
+**Problem.** Closing and resuming a Cursor tab kept the conversation but lost the first user prompt from the resumed transcript, so the user sees an answer with no question.
+
+**Context.** Pi passed on 2026-10-23. The failure was on `@cursor/sdk` 1.0.37; batched with 0031.
+
+**Investigation.** The SDK has moved to `1.0.40` since (#1198, `28590e68`, committed after the failing run at `459d2944`), so the run needs repeating before any fix. The resumed history goes `hydrateHistory` (`bridges/cursor-bridge/src/agent-session.ts:990`) → `appendHistoricTurn` (:1097) → `historicUserTexts` (:1217). In the 1.0.40 typings the only user text on an agent turn is an optional `userMessage?: { text }` (`bridges/cursor-bridge/node_modules/@cursor/sdk/dist/cjs/types/conversation-types.d.ts:7760`); there is no `userMessages` array and no `userMessage` step type (zero `type: "userMessage"` in that file). So two of the three shapes the bridge reads are not in the typed schema, and if the SDK leaves `userMessage` out of a resumed run record, the prompt is lost. The spec's wait is still at `e2e/agent-testing/close-retention-live.spec.ts:315`, and the spec already annotates the resume rows (:307-312).
+
+**Decisions.**
+
+- **How to rerun?**
+  - **Rerun on 1.0.40 with the environment kept, and capture `run.conversation()` for the resumed agent before teardown (recommended).**
+    - Pros: the file's own next step; settles whether the SDK omits the prompt or the bridge misreads it.
+    - Cons: the kept environment and its workspace must be cleaned up by hand afterwards.
+  - **Rerun unchanged first.**
+    - Pros: the SDK bump may have fixed it.
+    - Cons: a second failure still lacks the run record.
+- **If the SDK omits the prompt, where does the text come from?**
+  - **Fall back to the bridge's own persisted transcript copy for that agent, keyed by run id (recommended).**
+    - Pros: the bridge already persists transcripts (`persistBarrier`); no vendor dependency.
+    - Cons: a session evicted by the persistence budget, or created on another machine, still lacks it.
+  - **Render a placeholder user row ("prompt not available from Cursor").**
+    - Pros: honest; trivial.
+    - Cons: the user still loses the text.
+
+### 3. Cursor resume row titles
+
+**Problem.** Every Cursor resume row is probably titled "Orkestrator", which makes the picker useless when there are several.
+
+**Context.** The browser spec's fake assumes the summary describes the conversation; this item is to be checked on the task 2 run.
+
+**Investigation.** Confirmed in code: agents are created with `name: "Orkestrator"` (`bridges/cursor-bridge/src/agent-session.ts:562`), and `listResumableSessions` maps `title` from `item.name` and `detail` from `item.summary` (:861, :866). There is no rename. The backend title (0006) is authoritative for the open tab but is not used for resume rows.
+
+**Decisions.**
+
+- **How to title Cursor resume rows?**
+  - **Use `summary` as the title when `name` is the default "Orkestrator", keeping the name otherwise (recommended).**
+    - Pros: the file's proposed fix; one small bridge change; keeps any future real names.
+    - Cons: depends on Cursor generating useful summaries, still to be seen live.
+  - **Use the backend's projection title for rows the backend knows.**
+    - Pros: consistent with the tab title.
+    - Cons: rows created outside this backend get nothing; needs backend joining of resume rows.
+- **Change before or after the live check?**
+  - **After: read the spec's "resume rows" annotation from the task 2 run first (recommended).**
+    - Pros: decides on evidence.
+    - Cons: waits on credentials.
+  - **Before.**
+    - Pros: the default name is certain from code.
+    - Cons: the summary may also be unhelpful.
+
 The native bridges share one lifecycle contract. Acknowledgements are durable.
 State is published before any side effect. A permanent close fences late work.
 Cancellation works before a prompt is accepted. Recovery state is bounded. And

@@ -6,6 +6,128 @@ branch `todo-0041-control-mcp-voice-4a2c0ccc548b` (2026-10-24, rebased onto
 tooling for 1(a) done on branch `todo-0041-control-mcp-voice-699c0075ce9c`
 (2026-10-25, from `main` at `00a0cb82`).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Live voice qualification (Remaining work 1(a))**: run the scripted voice session through a real realtime voice runtime and record latency, token counts, misresolved targets and session-handle copy errors. Status: blocked (no realtime voice runtime or credentials on the qualification machine; needs a person speaking).
+2. **`delegate` into a coordinator turn (D13)**: an action that starts a coordinator turn from outside. Status: deferred.
+3. **Stateful MCP session with `list_changed` and subscriptions (D14)**. Status: deferred.
+4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: open.
+5. **Stale statements in this file**: D11, the profile size table and the OpenCode conformance note no longer match `main`. Status: open (docs only).
+
+### 1. Live voice qualification (Remaining work 1(a))
+
+**Problem.** The voice profile exists to serve realtime voice agents, but no speaking model has driven it. The two numbers that decide whether the design is right for voice (how often a spoken target resolves to the wrong environment or session, and how often a model mangles a `ses_` handle when copying it back) are unmeasured. Users who wire up a voice client are the only ones affected; the surface is opt-in.
+
+**Context.** Everything else in the script has been run live: reads p95 4.1 ms and 78 ms against a 1 s target, a real Claude command approval confirmed and approved over MCP (1(b), D19), and the relay plus scorer (D20, D21) scored a scripted recording 0 / 0. The file gives a four-step procedure. The assumption that "a voice agent can copy a `ses_` handle exactly; aliases were not added" waits on this measurement.
+
+**Investigation.** The tooling is on `main` (merged in `eb243486`, #1269): `packages/cli/examples/voice-mcp-relay.ts` (default port 34199 at `:200`, `--record` required at `:193`), `packages/cli/examples/voice-qualify.ts` (`--expect-approval` at `:173`, `--score` documented at `:38`) and `voice-recording.ts`. The procedure in `docs/architecture/control-mcp-voice.md` ("Qualifying a voice runtime") matches. `apps/backend/src/core/control-mcp-voice.test.ts` passes alone at HEAD (20 tests, 470 expects), including the voice `tools/list` budget (`CONTROL_MCP_VOICE_TOOLS_BUDGET_BYTES = 8_000`, `packages/protocol/src/control-mcp.ts:170`). The file names no pass threshold for misresolution or copy-error rates; it only says "record".
+
+**Decisions.**
+
+- **Which voice runtime and path?**
+  - **A realtime model that accepts an MCP URL directly, pointed at the local recording relay (recommended).**
+    - Pros: exercises exactly the loopback path the docs recommend (D12) and the relay records it without prompts or tokens.
+    - Cons: needs realtime-model credentials on the qualification machine, which none had on 2026-10-25.
+  - **A hosted voice platform through its own tunnel to the relay.**
+    - Pros: closer to how many users would deploy it.
+    - Cons: needs a public tunnel, which the loopback-only constraint argues against even for a test; the relay then is not the only hop.
+  - **A text model with speech-to-text and text-to-speech glued on.**
+    - Pros: available without realtime credentials.
+    - Cons: transcription errors and model behaviour differ from a realtime model, so the copy-error rate would not be representative.
+- **What counts as a pass?**
+  - **Set thresholds before the run: misresolved targets 0 across at least five repeats, copy errors under 5 % of targeted calls; anything worse opens a new todo for handle aliases (recommended).**
+    - Pros: makes the run decisive; ties the result to the deferred alias decision.
+    - Cons: thresholds are a judgement made without prior data.
+  - **Record the numbers only, as the file says, and decide afterwards.**
+    - Pros: no arbitrary threshold.
+    - Cons: the item could close without any decision about aliases.
+- **Keep the item open indefinitely, or retire it?**
+  - **Keep it blocked until someone has a realtime runtime, and re-rate the file Low meanwhile (recommended).**
+    - Pros: the measurement is the stated purpose of the voice profile; Low matches the README rule that blocked work usually rates low.
+    - Cons: the file stays open with no near-term owner.
+  - **Retire it, accepting the scripted 0 / 0 and the real-client runs on `full` as sufficient.**
+    - Pros: closes the file.
+    - Cons: the scripted run cannot misresolve or mistype by construction, so it proves the scorer, not the voice design.
+
+### 2. `delegate` into a coordinator turn (D13)
+
+**Problem.** A voice agent cannot hand a multi-step goal to a coordinator; it must compose every tool call itself.
+
+**Context.** D13 deferred it because external messages are inbox-only by design, and starting a coordinator turn from outside needs its own authenticated path, capability and loop budget. Remaining work 2 says it needs its own todo file when wanted.
+
+**Investigation.** No `delegate` action exists in `PUBLIC_ACTIONS` (`packages/protocol/src/public-api.ts`). Since this file was written, #1268 (`32317ae6`) added operator `review.*` and `pr.*` actions, which reduces the gap somewhat: a voice or operator credential can now start a Multi Review directly.
+
+**Decisions.**
+
+- **What to do with the deferred item?**
+  - **Remove it from this file and leave a one-line pointer in `control-mcp.md`; open a new todo only when someone asks for it (recommended).**
+    - Pros: lets this file finish when task 1 does; follows the file's own instruction that each needs its own todo.
+    - Cons: the idea is less visible than as an open item.
+  - **Open a new todo file for it now.**
+    - Pros: tracked and rateable.
+    - Cons: a Low file with no requester; the design questions (capability, loop budget) would be guesses without a use case.
+
+### 3. Stateful MCP session with `list_changed` and subscriptions (D14)
+
+**Problem.** The server is stateless and rebuilt per request, so clients get no push of new tools or resource subscriptions.
+
+**Context.** D14 deferred it: the gateway reaches every action from a fixed list, and realtime voice clients fix their tool list at session start.
+
+**Investigation.** `control-mcp-server.ts` still builds a server per request (the design D5 relies on, compiling schemas once per process). Nothing on `main` depends on `list_changed`.
+
+**Decisions.**
+
+- **What to do with the deferred item?**
+  - **Remove it from this file with the same pointer approach as task 2 (recommended).**
+    - Pros: no current consumer; the gateway already covers discovery.
+    - Cons: a future client that relies on `list_changed` would need to rediscover the reasoning in D14.
+  - **Keep it listed as deferred here.**
+    - Pros: no edit.
+    - Cons: blocks retiring the file even after task 1 is done.
+
+### 4. Over-limit Control MCP files
+
+**Problem.** The repository rule caps files at 2,000 lines. D17 split `control-mcp-server.ts` but left `control-mcp-server.test.ts` over the limit "for its own change", and nothing tracks that change.
+
+**Context.** D17 recorded the test file at 2,872 lines on `main` before the split; it avoided splitting a file `main` kept changing.
+
+**Investigation.** At HEAD `apps/backend/src/core/control-mcp-server.test.ts` is 3,078 lines and still growing. New since this file: `apps/backend/src/core/control-mcp-tools.ts` is 2,002 lines, just over the limit, after #1268 added the operator workflow tools (`control-mcp-operator-workflow-tools.ts`, `control-mcp-review-actions.ts`). `control-mcp-server.ts` itself is 650 lines.
+
+**Decisions.**
+
+- **Where should the split be tracked and done?**
+  - **Open a new todo file for splitting both, aligned with each other (tools module and its tests), as the README requires for new work (recommended).**
+    - Pros: follows the "never add new todos to an existing file" rule; the split of the tools module and the test file can follow the same boundaries.
+    - Cons: one more Low file.
+  - **Split them opportunistically in the next change that touches them.**
+    - Pros: no tracking overhead.
+    - Cons: that is what D17 assumed, and the test file has grown by 200 lines since.
+
+### 5. Stale statements in this file
+
+**Problem.** Three statements no longer match `main`, which misleads anyone using this file as the record of decisions.
+
+**Context.** The README allows correcting existing items and recording decisions against them.
+
+**Investigation.**
+- D11 and decision 5 say Multi Review and build pipelines stay coordinator-only. Since `32317ae6` (#1268), Multi Review and PR actions are public actions (`review.launch/list/get/open/address/cancel`, `pr.create/resolve`, `packages/protocol/src/public-api.ts:419-478`) with operator tools, and `docs/architecture/control-mcp.md:79` lists the Multi Review tools in the `full` profile. Build pipelines are still coordinator-only.
+- The profile table (`full` = 82 tools, 76,374 bytes) predates #1268, so the `full` count and size are now higher; they were not re-measured here. The voice profile's budget still holds (task 1).
+- The `mise run test` row says 14 OpenCode conformance cases fail because `conformance-execution-policy.test.ts` expects 1.19.0; at HEAD that test pins `opencode: "1.19.4"` (`apps/backend/src/core/conformance-execution-policy.test.ts:10`), so it is fixed.
+
+**Decisions.**
+
+- **How to correct them?**
+  - **Annotate in place: mark D11 as superseded for Multi Review by #1268, add a dated note under the size table that `full` grew, and mark the OpenCode note fixed (recommended).**
+    - Pros: keeps the history while making the current state clear; cheap.
+    - Cons: the size table still shows old figures until someone re-measures.
+  - **Re-measure `full` and replace the table.**
+    - Pros: accurate numbers.
+    - Cons: the figure moves with every new public action and is not a gate (only voice is budgeted), so it would go stale again.
+
 The goal is to let an external agent, in particular a realtime voice agent,
 do everything the public CLI can do through Control MCP, without loading
 60 or more tool definitions into its context up front. Four parts:

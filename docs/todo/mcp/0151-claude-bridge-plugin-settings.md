@@ -1,5 +1,34 @@
 # Claude bridge loads plugins Claude Code's settings turned off
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the finished file**: every code, qualification and open-question item is done and the branch has merged; decide what happens to the file. Status: done (file retirement open).
+
+### 1. Retire the finished file
+
+**Problem.** The file is marked Finished and says it is "kept until the branch merges for its decisions, then deleted". That condition is now met, so the file is stale weight in the folder and its index row still points readers at it.
+
+**Context.** The README's Todo rules say that when the last item is done, durable behaviour moves into `architecture/` or `development/`, the file is deleted and its index row removed (the number is not reused). The file's value now is its decisions table (why installs stay passed rather than left to the CLI, which settings layers decide, coordinators, the container staging filter, the editor's disabled rows), which a future change to plugin handling would want. Three files link to it: `docs/todo/mcp/0000-index.md`, `docs/todo/mcp/0121-claude-plugin-mcp-servers.md` and `docs/todo/agent-engines/0205-claude-skills-list-turned-off-plugins.md`.
+
+**Investigation.** The change merged to `main` as `35081a81` ("fix(claude): honor plugin enablement across runtimes (#1289)"). Everything the file describes is present at HEAD: `claudeInstalledPluginIdEnablement` (`packages/protocol/src/node/claude-plugin-set.ts:242`), `enabledInstalledPlugins` (`:269`), `claudeContainerPluginSettings` (`:296`), `claudeTurnSettingSources` (`bridges/claude-bridge/src/services/session-manager-runtime.ts:212`, used at `bridges/claude-bridge/src/services/session-manager-prompt-query.ts:111`), the staging filter (`apps/backend/src/core/portable-inputs.ts:235`) and the entrypoint merge (`docker/entrypoint.sh:855-865`). The durable behaviour has already been moved: `docs/architecture/mcp-management.md:178-200` states the enablement rule and cites todo 0151, its evidence table (`:789`) lists the tests and the live run, and `docs/architecture/container-lifecycle.md:642` documents the filtered `settings.json` staging. What is not in `architecture/` is the rationale: the experiment showing the CLI's own installed copy needs a resolvable marketplace (so containers would lose every install under option (b)), the coordinator choice, and the known gap that an old image keeps an old bridge that passes every install. The skills-page follow-up is already its own todo (0205). The only remaining live check, a container session on a rebuilt image, is tracked in 0121, not here.
+
+**Decisions.**
+
+- **What to do with the file now?**
+  - **Move the rationale into `architecture/mcp-management.md` and delete the file (recommended).** Add a short "why" paragraph under "Claude plugins" (marketplace-resolvability finding, coordinator rule, staged `enabledPlugins` only, old-image gap), delete this file, remove its index row and repoint the links in 0121 and 0205 at the architecture section.
+    - Pros: follows the README rule exactly; the decisions survive where the next person changing plugin loading will look; removes a Finished row from the folder index.
+    - Cons: one small docs change touching four files; the full decision table with pros and cons is condensed, so some nuance lives only in git history.
+  - **Delete the file without moving anything more.** Rely on the architecture text already present and on git history (`35081a81`) for the rationale.
+    - Pros: smallest change; the behaviour is already documented.
+    - Cons: the reason installs are still passed (rather than left to the CLI) is not obvious from the behaviour alone and is the first thing someone would try to "simplify".
+  - **Keep the file until 0121's container run completes.** Treat that run as the final proof for this change too.
+    - Pros: the evidence and the change stay together until the last container check.
+    - Cons: contradicts the README (the item is tracked in 0121, so nothing here is open); leaves a Finished file in the index for an unbounded time, since 0121's run needs a rebuilt image.
+
 Found on 2026-10-25 while qualifying
 [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) against
 the pinned Claude CLI (2.1.309). Orkestrator's Claude sessions load plugins,

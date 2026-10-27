@@ -2,6 +2,95 @@
 
 Checked against `main` at `930189337` (2026-10-26), Pi SDK and CLI 1.4.0.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Last-resort model for a ChatGPT login**: start a ChatGPT-backed Pi login with no saved default on a model it runs. Status: done.
+2. **Bridge-level live check on an `openai` ChatGPT login**: run the opt-in live test with a current `openai` OAuth credential. Status: blocked (no `openai` ChatGPT login on any known host).
+3. **Agent-test path live run**: a fresh agent-test profile on a host with an `openai` ChatGPT login and no saved default answers its first Pi prompt. Status: blocked (needs such a host).
+4. **Terminal `pi` on a fresh `openai` ChatGPT login**: confirm whether the terminal starts on the refused `gpt-5.5`. Status: partly done (legacy login answered live; `openai` answered from code only).
+
+### 1. Last-resort model for a ChatGPT login
+
+**Problem.** A user signed in to Pi with ChatGPT and no saved default used to start on the catalogue's first model (`openai/gpt-4`), which the ChatGPT backend refuses, so the first prompt failed.
+
+**Context.** Split from [0054](../cross-cutting/0054-agent-test-pi-default-model.md). The file's decision 1 chose option (d): use pi-ai's `openai-codex` catalogue as the list of models the ChatGPT backend serves.
+
+**Investigation.** Done and still in place. `lastResortModelId` is at `bridges/pi-bridge/src/models.ts:391`, `chatGptLoginModelIds` at `bridges/pi-bridge/src/models.ts:369`, with the two hard-coded provider ids at `bridges/pi-bridge/src/models.ts:349` and `:355`. It is used by `resolveModel` (`bridges/pi-bridge/src/models.ts:313`, call at `:334`) and `hydrateComposer` (`bridges/pi-bridge/src/models.ts:483`, helper at `:510`). Tests: `bridges/pi-bridge/src/models.test.ts:313` (fake runtime) and `:465` (pinned SDK), `bridges/pi-bridge/src/agent-session-default-model.test.ts:295`. Landed in `f1223e0b` (#1283). The pin is still 1.4.0 (`bridges/pi-bridge/package.json:16-17`), and Pi's private table still names `openai: "gpt-5.5"` and `"openai-codex": "gpt-6.1-sol"` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js:10-16`), so the premise holds. The upgrade runbook asks for a recheck on each Pi bump (`docs/development/upgrade-agents.md`, Pi section).
+
+**Decisions.** None: decided and built (decision 1 and 2 in this file); the pinned-SDK test guards the premise on a bump.
+
+### 2. Bridge-level live check on an `openai` ChatGPT login
+
+**Problem.** The fix has run live only on a legacy `openai-codex` login. The current `openai` OAuth login uses a different OAuth client and token scope, so that evidence does not cover it.
+
+**Context.** The file's Qualification steps 1 and 2. The constraint is that the user's `~/.pi` must not be changed for a test.
+
+**Investigation.** The opt-in test exists: `bridges/pi-bridge/src/agent-session-chatgpt-live.test.ts:11` (skipped unless `ORKESTRATOR_PI_CHATGPT_LIVE=1`). It reads `ORKESTRATOR_PI_CHATGPT_AUTH_FILE` or `~/.pi/agent/auth.json` (`:14-15`), copies only the `openai` credential with its refresh token replaced (`:53`), and checks subscription detection and `openai/gpt-4` first (`:79-80`). The command is documented in `docs/development/testing-guide.md:363-386`. This test replaces the hand-written script in Qualification step 2: pointing `ORKESTRATOR_PI_CHATGPT_AUTH_FILE` at the disposable login from step 1 does the same work. This host's `~/.pi/agent/auth.json` still holds only `openai-codex` (the `opencode-go` key the file mentions is no longer there), so the test would stop at its preflight (`:19-27`).
+
+**Decisions.**
+
+- **How to get an `openai` ChatGPT credential?**
+  - **Disposable login, then the opt-in test (recommended).** Run the pinned `pi` `/login` → OpenAI → "Sign in with ChatGPT" under a temporary `HOME` and `PI_CODING_AGENT_DIR`, then run the documented test with `ORKESTRATOR_PI_CHATGPT_AUTH_FILE` pointing at it.
+    - Pros: never touches the user's `~/.pi`; reuses the checked-in test instead of a one-off script; repeatable on every Pi bump.
+    - Cons: needs a person to complete the browser sign-in; a second ChatGPT OAuth grant may appear on the user's account and should be revoked afterwards.
+  - **Wait for a host that already has an `openai` login.**
+    - Pros: no extra sign-in.
+    - Cons: no such host is known; the item stays open indefinitely.
+- **Keep the manual script in Qualification step 2?**
+  - **Replace it with the opt-in test (recommended).** Treat step 2 as "run the opt-in test against the step 1 auth file".
+    - Pros: one procedure; the test already asserts every expectation step 2 lists.
+    - Cons: none beyond editing the step's wording when it is closed.
+  - **Keep both.**
+    - Pros: the script exercises the same calls without bun's test harness.
+    - Cons: two procedures that can drift.
+
+### 3. Agent-test path live run
+
+**Problem.** Nobody has shown that an agent-test profile on an `openai` ChatGPT host with no saved default reaches the fallback and answers.
+
+**Context.** Qualification step 3; depends on [0056](../cross-cutting/0056-agent-test-stale-bridge-builds.md) for a fresh bridge build. The file already allows closing with a caveat if no such host exists.
+
+**Investigation.** The agent-test profile hands the host's Pi credential and saved default to the bridge through `applyPiHostCredentialEnvironment` (`apps/backend/src/core/host-agent-credentials.ts:97-114`): `PI_BRIDGE_AUTH_FILE` points at the host's `auth.json` and `PI_BRIDGE_DEFAULT_MODEL` carries any saved default. This host's `settings.json` still saves `openai-codex` / `gpt-5.5`, so a profile here would start on that refused saved default, not on the fallback. `mise run test:agent:coordinator` exists (`mise.toml:271`). Because the profile reads the host file directly, a disposable login cannot be swapped in without changing the host's `~/.pi`, which the constraints forbid.
+
+**Decisions.**
+
+- **Run it, or close on the bridge-level evidence?**
+  - **Close with the caveat once task 2 passes (recommended).** Record task 2's result as the closest evidence, as Qualification step 3 already permits.
+    - Pros: the profile path adds only credential plumbing that is already unit-tested; avoids changing any host's `~/.pi`.
+    - Cons: the end-to-end agent-test path stays unproved for this login.
+  - **Run it on a host that genuinely has an `openai` login and no saved default.**
+    - Pros: full end-to-end proof.
+    - Cons: no such host is known; changing a host to create one breaks the constraints.
+- **Order relative to task 2?**
+  - **After task 2 (recommended).**
+    - Pros: task 2 is cheaper and decides whether this is needed at all.
+    - Cons: none.
+  - **Independently.**
+    - Pros: none in practice.
+    - Cons: may waste a run that task 2 would have made unnecessary.
+
+### 4. Terminal `pi` on a fresh `openai` ChatGPT login
+
+**Problem.** If the terminal `pi` also starts on `openai/gpt-5.5` and fails, users see the same failure outside the bridge, which the bridge fix does not cover.
+
+**Context.** Needs verification item. The legacy half was answered live on 2026-10-26.
+
+**Investigation.** By code the answer is still yes: `findInitialModel` walks `defaultModelPerProvider` in key order and `openai: "gpt-5.5"` precedes `openai-codex` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js:10-16`, walk at `:416-417` and `:462-463`). The bridge cannot change the terminal's choice without writing `~/.pi/agent/settings.json`, which the constraints forbid.
+
+**Decisions.**
+
+- **What to do with the answer?**
+  - **Confirm in passing during task 2, record it, and report upstream if it fails (recommended).** Run `pi -p` with no `--model` in the same disposable directory.
+    - Pros: costs one extra command on a login that exists anyway; an upstream report is the only fix that reaches the terminal.
+    - Cons: depends on task 2 happening.
+  - **Treat the code reading as sufficient and close it now.**
+    - Pros: closes the item without a login.
+    - Cons: the backend's refusal list can change server-side; the code reading cannot prove the live outcome.
+
 Split out of the open question left by
 [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md).
 A Pi tab with no explicit model starts on Pi's saved default, then on

@@ -2,6 +2,114 @@
 
 Checked against `main` at `930189337` (2026-10-26).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Signals and their diagnostics (Code 1–4)**: Linux Engine exec cost, Claude signal health, the container worktree signal and the revert fetch through the policy. Status: done.
+2. **Linux Engine real stack: terminal Claude spec**: run `container-claude-terminal-signal.spec.ts` on a Linux Engine host. Status: open.
+3. **Linux Engine real stack: profile sample**: run `container-signal-profile-sample.ts` with and without `--demote` on the same profile. Status: open (pairs with 2).
+4. **Auto-mode offer after a restart (noted, unverified)**: whether Claude Code's "make auto mode your default?" offer comes back after a container restart and breaks the Claude CLI tab or the spec. Status: open.
+5. **Retire the file**: what happens to it once tasks 2 and 3 have their evidence. Status: open.
+
+### 1. Signals and their diagnostics
+
+**Problem.** Container state was polled with a `docker exec` every second (Claude) and every 3–15 s (Files panel, diffs).
+
+**Context.** Both signals are opt-in by image capability. Images without them keep the old timers.
+
+**Investigation.** Everything is present at HEAD: `docker/orkestrator-worktree-signal.sh`, `container-worktree-signal.ts` and `ClaudeStatePollManager` (`tmux-poll.ts`). The image fixes are in place: `skipDangerousModePermissionPrompt` (`docker/entrypoint.sh:821-827`) and `ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1` (`docker/Dockerfile:206`). The Claude pin is still `2.1.309` (`docker/Dockerfile:193`).
+
+"Live Claude state signal (B18)", "Live container worktree signal" and "Exec cost" passed again in CI on both architectures in run 40409285999 (2026-10-26, the 0109 branch). They run on every workflow run, so the Linux Engine numbers are repeated weekly.
+
+**Decisions.** None: done, with recurring CI evidence.
+
+### 2. Linux Engine real stack: terminal Claude spec
+
+**Problem.** The end-to-end path (a Claude CLI tab, hooks, ring, backend, sidebar) is proved only on Docker Desktop. On Linux Engine only its pieces are proved.
+
+**Context.** The file gives the exact procedure: `mise run docker:build:dev`, then a `dev:test` profile with `--fixture-environments local,container --credential-source claude --agent-platforms claude`, then `mise run test:agent:docker` with `ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1`. The budgets are working ≤ 4 s and waiting ≤ 3 s.
+
+**Investigation.** The spec exists (`e2e/agent-testing/container-claude-terminal-signal.spec.ts`) and `docker:build:dev` exists (`mise.toml:371`). The obvious Linux host, omarchy-hp (this machine), is not ready:
+- Its root filesystem has 6.2 GB free (98% used), and its newest signal-carrying image is `orkestrator-review-rootless:d03790`, not a `dev-` image of HEAD. A dev image is about 5.6 GB.
+- Its rootful daemon again holds 29 leaked probe networks (see [0241](0241-leaked-reach-probe-networks.md)), which uses up the default address pools, so new environment networks fail.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **omarchy-hp, after 0241's backlog is cleared and disk is freed for one dev image (recommended).**
+    - Pros: a real Linux desktop host with the user's own Claude login; matches the inotify headroom reading already taken there.
+    - Cons: two prerequisites; the host is shared with production work.
+  - **A GitHub runner with Xvfb and a stored Claude credential.**
+    - Pros: repeatable, and needs no personal host.
+    - Cons: a long-lived subscription credential in CI secrets is a credential-isolation risk this repository avoids; it costs usage on every run.
+  - **Accept the piecewise Linux evidence and retire the item.**
+    - Pros: every component has been measured on Linux Engine, and the end-to-end path on Desktop.
+    - Cons: the host-gateway alias, the sidebar and terminal attach on a Linux Engine host are never seen together.
+- **What counts as a pass?**
+  - **Three runs of two turns each within both budgets, a ring per edge, no demotion, as on Desktop (recommended).**
+    - Pros: like-for-like with the recorded Desktop evidence.
+    - Cons: each run spends a little subscription usage.
+  - **One run.**
+    - Pros: cheaper.
+    - Cons: a single pass does not show variance.
+
+### 3. Linux Engine real stack: profile sample
+
+**Problem.** Idle exec rates and Files-panel change-to-visible times are measured only on Desktop.
+
+**Context.** Runs on the profile from task 2, using `apps/backend/scripts/container-signal-profile-sample.ts` with 120 s windows, with and without `--demote`.
+
+**Investigation.** The script exists. The deterministic harness (`recurring-baseline.ts`, scenario `env50-container-c1-pr-signals`) already pins one scan a minute for a quiet signalled container, whatever the platform.
+
+**Decisions.**
+
+- **Run it separately, or in the same session as task 2?**
+  - **The same session, straight after the spec, as was done on Desktop (recommended).**
+    - Pros: one profile and one image; directly comparable with the Desktop table.
+    - Cons: inherits task 2's prerequisites.
+  - **Treat the deterministic harness as enough and drop it.**
+    - Pros: no live run.
+    - Cons: the harness counts execs but does not time change-to-visible through a real client.
+
+### 4. Auto-mode offer after a restart
+
+**Problem.** The spec answers Claude Code's one-time "make auto mode your default?" offer. Whether the offer comes back after a container restart was not checked. If it does, every restarted Claude CLI tab shows a dialog.
+
+**Context.** This is recorded as a con of the "Consent and updater fixed in the image" decision, not as an item.
+
+**Investigation.** The entrypoint writes `skipDangerousModePermissionPrompt` but nothing that records the auto-mode answer. The answer lives in the CLI's own state under `~/.claude`, so whether it survives a restart depends on whether a rebuild or restart keeps that state: provider state is volume-backed on `volume-v1` storage.
+
+**Decisions.**
+
+- **Check it, and how?**
+  - **During task 2's session: restart the container after the first run and look for the offer in a new Claude CLI tab (recommended).**
+    - Pros: free in the same session; it decides whether the image needs another setting.
+    - Cons: one more manual step.
+  - **Pre-seed the answer in the entrypoint now.**
+    - Pros: no dialog whatever the outcome.
+    - Cons: guesses an undocumented Claude Code setting name that can change with any release.
+
+### 5. Retire the file
+
+**Problem.** Every code item is done. Only the Linux real-stack evidence remains.
+
+**Context.** README: delete a file once it is finished, after moving its durable behaviour. `container-lifecycle.md` already documents both signals, and `recurring-work.md` lists their cadences.
+
+**Investigation.** The decisions sections here (transport, cost bounds, grace window, read-only scan) are the rationale that `container-lifecycle.md` would need to keep.
+
+**Decisions.**
+
+- **When to delete it?**
+  - **After tasks 2–4, moving the cost-bound and grace-window rationale into `container-lifecycle.md` (recommended).**
+    - Pros: follows the README; keeps the tuning rationale next to the constants.
+    - Cons: the file stays open while the prerequisites are cleared.
+  - **Move the remaining Linux run into 0031's batch now and delete the file.**
+    - Pros: batches live runs.
+    - Cons: 0031 is an existing file and takes no new items; a new file would be needed.
+
 The backend observes state inside containers by running `docker exec`. Both
 of the largest idle costs now have a container-side change signal with a
 slower safety read, and images built from this change carry both. Claude

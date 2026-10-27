@@ -1,5 +1,64 @@
 # Rich transcripts and transcript artifacts
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Publish the preview worker image**: push the multi-architecture worker image to a registry and pin packaged installs by digest in `published-image.json`. Status: open (tooling ready; needs a maintainer with registry credentials).
+2. **Close phase 9**: the phase checklist still says "Partly" and "No PR opened", although the work shipped in #1103 and the live cycle passed on all six providers. Status: partly done (only the checklist wording is stale).
+
+### 1. Publish the preview worker image
+
+**Problem.** Packaged installs have no published worker image, so `transcript_artifact_prepare_worker` must build the shipped context locally on every machine (a Playwright base pull plus `npm ci`, bounded at 10 minutes) before interactive previews can use container isolation. Users of packaged builds who want container isolation pay that build, and the result is pinned only on that host.
+
+**Context.** The only unticked item in the file. `docker/artifact-preview-worker/publish.sh <repository> [tag]` builds `linux/amd64` and `linux/arm64`, pushes, reads the manifest-list digest back and rewrites the checked-in `published-image.json`, which packaged builds ship. It needs `docker login` and buildx, so an agent cannot run it.
+
+**Investigation.** `docker/artifact-preview-worker/published-image.json` still holds `null` for image, tag, digest and `publishedAt`, unchanged since #1103 (`97af3d45`). `publish.sh` matches the file's description. `apps/backend/src/core/transcript-artifacts/preview-worker-prepare.ts:75` reads the pin and validates the repository and digest (`:81`-`:87`); `:174` pulls `<image>@<digest>` and falls back to the build route on failure. Newly found: nothing ties a published digest to the context the backend ships. A digest published once would be pulled by every later release, even after the worker bundle, the pinned renderer bundles or the `playwright-core` pin (kept in step with the backend by `tests/unit/version-drift.test.ts:1053`) change. A stale pin would run an old worker against a newer backend. No CI workflow publishes the image.
+
+**Decisions.**
+
+- **Who publishes, and when?**
+  - **Publish from the release workflow for every release that changes the worker context, and commit the pin in the release change (recommended).**
+    - Pros: the pin always matches the shipped context; no manual step to forget.
+    - Cons: needs registry credentials in CI and a buildx multi-architecture runner; more release plumbing.
+  - **A maintainer runs `publish.sh` by hand once, as the file says.**
+    - Pros: no CI work; closes the item today.
+    - Cons: the pin goes stale at the next worker change, and nothing detects it.
+- **How should a stale pin be prevented?**
+  - **Record a hash of the staged context in `published-image.json`, and have preparation fall back to the build route on a mismatch (recommended).**
+    - Pros: a stale digest can never be pulled; a drift test can compare the hash with `stage-context.ts` output.
+    - Cons: `publish.sh`, the pin schema and `preview-worker-prepare.ts` all change; reproducible context staging is needed for a stable hash.
+  - **Rely on publishing discipline.**
+    - Pros: no code change.
+    - Cons: a silent mismatch between backend and worker in packaged installs.
+- **Which registry?**
+  - **GitHub Container Registry under the project organisation (recommended).**
+    - Pros: matches the example in `publish.sh`; free for public images; reachable from the default allowlist's GitHub ranges.
+    - Cons: ties the packaged install to GitHub availability for this one pull (the build route remains a fallback).
+  - **Docker Hub.**
+    - Pros: the default registry most hosts can reach.
+    - Cons: anonymous pull rate limits; another account to manage.
+
+### 2. Close phase 9
+
+**Problem.** The phase checklist says phase 9 is "Partly" with "No PR opened", which reads as outstanding work that is not there.
+
+**Context.** The rich-transcript work merged as #1103. The Remaining work list shows every qualification item ticked on 2026-10-20.
+
+**Investigation.** `git log` shows `97af3d45 feat: add rich transcript artifacts (#1103)` on `main`. The live cycle, performance gate, Electron host and engine matrix are all recorded as done. Phase 8's "Done with limits below" refers to limits that are now all ticked or closed with a decision (Mermaid math kept as a diagnostic).
+
+**Decisions.**
+
+- **What should happen to the file once task 1 is done?**
+  - **Delete it, after confirming that the architecture guides already hold the durable content (recommended).** The phase table and real-stack evidence are history; the shipped design lives in `rich-transcripts.md` and `transcript-artifacts-runtime.md`.
+    - Pros: follows the README rule for a finished file; removes a stale "No PR opened" claim.
+    - Cons: the 2026-10-20 evidence narrative goes, unless it is first copied into the runtime guide's qualification sections.
+  - **Correct the phase 9 row now and keep the file until task 1 is done.**
+    - Pros: a small, accurate edit; the file stays the single place tracking the publish step.
+    - Cons: the file remains mostly history for an item that may wait on release plumbing for some time.
+
 Status of the implementation of the rich-transcript specification
 (`docs/temp/rich-transcripts.md`) and the work that remains. The shipped
 design is in [rich-transcripts.md](../../architecture/rich-transcripts.md),

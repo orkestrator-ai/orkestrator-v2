@@ -3,6 +3,35 @@
 Checked against `main` at `2459b05c` (2026-10-15); every item closed and
 re-checked against `8454d18b` (2026-10-24).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the finished file**: every item is done (the folder index marks it Finished: Yes); the policy and register already live in `docs/architecture/version-compatibility.md`, and the one path it created moved to [0078](0078-legacy-prompt-queue-claim-state.md). Status: done.
+
+### 1. Retire the finished file
+
+**Problem.** The file has no outstanding work but is still listed, and twelve other docs link to it, mostly as the place the support window was decided.
+
+**Context.** Closed by `a3111c7c` (#1207, 2026-10-24). The README rule is to move durable behaviour into `architecture/` and delete the file.
+
+**Investigation.** The removals hold: a search of `apps`, `bridges`, `packages`, `tests` and `e2e` for the four claim command names, their camel-case wrappers and `export_build_pipeline_for_downgrade` finds nothing. `get_compatibility_path_usage` is registered at `apps/backend/src/core/commands-registry-system.ts:66`. The durable content (window, floor dates, pairings, data rules, register, usage counters) is in `docs/architecture/version-compatibility.md`. One part of the file is now stale: "Ten path ids" and the recording-site list. `162584a5` (#1247, 2026-10-25, [0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md)) retired `multi-review.reviewer-transcript-fallback`, so `COMPATIBILITY_PATH_IDS` (`apps/backend/src/core/compatibility-path-usage.ts:21`) now holds nine ids and `multi-review-reviewer-transcript.ts` no longer records. Only the decisions (1 to 12, the reasoning behind the window) are not reproduced in the architecture doc. Inbound links: `version-compatibility.md`, 0002, 0015, 0016, 0027, 0031, 0036, 0037, 0039, 0042, 0050, 0078 and 0232.
+
+**Decisions.**
+
+- **What to do with the file?**
+  - **Keep it as the decision record for now, correcting the stale path count, and delete it once 0078 is retired (recommended).**
+    - Pros: `version-compatibility.md` links here for the reasoning behind the window, which a future change to the floor rule will need; 0078 is its only open descendant and also links here; no twelve-file link churn now.
+    - Cons: a finished row stays in the index for at least two months; contradicts the letter of the README rule.
+  - **Move decisions 1 to 4 (how the window is measured, where the floor starts, one window for every pairing, data across the window) into a "Why" section of `version-compatibility.md`, repoint the inbound links there, and delete the file now.**
+    - Pros: follows the README rule; the rationale sits beside the policy it explains.
+    - Cons: edits about a dozen files across eight folders; most inbound links point here only as history, so the churn buys little.
+  - **Delete it now without moving anything.**
+    - Pros: smallest change.
+    - Cons: loses the reasoning for the 60-day floor and breaks a dozen links.
+
 The renderer, backend, bridges and stored data do not always run at the same
 version. The hosted web client follows `main` while users' backends update on
 their own schedule. The desktop app can connect to another machine's backend. A

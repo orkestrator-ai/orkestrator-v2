@@ -237,7 +237,9 @@ export async function reconcilePersistedSessions(): Promise<void> {
         : {}),
       ...(sessionPreferencesUnavailable(storedPreferences)
         ? { dispatchJournalUnavailable: true }
-        : {}),
+        : storedPreferences?.dispatchJournalComplete === true
+          ? { dispatchJournalComplete: true }
+          : {}),
     });
   }
 }
@@ -300,7 +302,11 @@ export async function materializePersistedSessionState(
     ...(preferences?.localTranscript?.length
       ? { localTranscript: localTranscriptFromPreferences(preferences.localTranscript) }
       : {}),
-    ...(sessionPreferencesUnavailable(preferences) ? { dispatchJournalUnavailable: true } : {}),
+    ...(sessionPreferencesUnavailable(preferences)
+      ? { dispatchJournalUnavailable: true }
+      : preferences?.dispatchJournalComplete === true
+        ? { dispatchJournalComplete: true }
+        : {}),
   };
   touchSession(state);
   sessions.set(sessionId, state);
@@ -550,21 +556,10 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
       skip("query-control");
       continue;
     }
-    // The session's CLI is still running; its turns append to `messages`.
+    // The session's CLI is still running: its turns append to `messages`, and
+    // it owns any background work (`runtime.tasks`).
     if (session.claudeRuntime) {
       skip("claude-runtime");
-      continue;
-    }
-    if (session.backgroundTaskControls && session.backgroundTaskControls.size > 0) {
-      skip("background-task-controls");
-      continue;
-    }
-    if (session.backgroundTaskCandidates && session.backgroundTaskCandidates.size > 0) {
-      skip("background-task-candidates");
-      continue;
-    }
-    if (session.settlingBackgroundTasks && session.settlingBackgroundTasks.size > 0) {
-      skip("settling-background-tasks");
       continue;
     }
     if (

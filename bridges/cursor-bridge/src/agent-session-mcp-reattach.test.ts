@@ -82,6 +82,7 @@ const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { useCursorModelsForTests } = await import("./models.js");
 const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
+const { drainPersistence, reopenPersistenceForTests } = await import("./persistence.js");
 
 let restoreAgent: () => void;
 let restoreModels: () => void;
@@ -140,6 +141,10 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  // Attaches schedule state-file writes that can still be queued here. Let the
+  // last one land before the directory goes, or it recreates `state.json`
+  // under a root nothing removes again.
+  await drainPersistence();
   sessions.clear();
   setCursorMcpConfigHomeForTests();
   restoreRuntime();
@@ -153,6 +158,8 @@ afterAll(async () => {
   else process.env.CURSOR_BRIDGE_STATE_DIR = previousStateDir;
   if (previousCredentialFile === undefined) delete process.env.CURSOR_BRIDGE_AUTH_FILE;
   else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
+  // Re-open only once the state directory no longer points here.
+  reopenPersistenceForTests();
   await rm(bridgeStateRoot, { recursive: true, force: true });
 });
 

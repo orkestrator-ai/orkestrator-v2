@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  environmentKey,
+  environmentRef,
+  projectKey,
+  projectRef,
+  type BackendId,
+} from "@orkestrator/protocol/federation";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   connectionList,
@@ -119,7 +126,13 @@ describe("desktop: another machine's workspace in the central region", () => {
     );
     expect(fake.workspaceViews.open).toHaveBeenCalledTimes(1);
 
-    // The realm's own selection is what the sidebar shows as selected.
+    // The realm's own selection updates the shell's recency and ends a search reveal.
+    act(() =>
+      useMachineViewStore
+        .getState()
+        .revealProject(projectKey(projectRef("bk_a" as BackendId, "project-1"))),
+    );
+    const localSelection = useUIStore.getState();
     act(() =>
       fake.emitViewEvent({
         viewId: "view-1",
@@ -128,12 +141,28 @@ describe("desktop: another machine's workspace in the central region", () => {
       }),
     );
     expect(useRemoteWorkspaceStore.getState().active?.environmentId).toBe("env-3");
+    expect(useMachineViewStore.getState().recentKeys.slice(0, 2)).toEqual([
+      environmentKey(environmentRef("bk_a" as BackendId, "env-3")),
+      projectKey(projectRef("bk_a" as BackendId, "project-1")),
+    ]);
+    expect(useMachineViewStore.getState().revealedProject).toBeNull();
+    expect(useUIStore.getState()).toBe(localSelection);
 
     // Back to this window's own workspace: the realm stays open, hidden.
     act(() => useRemoteWorkspaceStore.getState().showLocal());
     await waitFor(() =>
       expect(fake.workspaceViews.setVisible).toHaveBeenLastCalledWith("view-1", false),
     );
+    const recents = useMachineViewStore.getState().recentKeys;
+    act(() =>
+      fake.emitViewEvent({
+        viewId: "view-1",
+        type: "message",
+        message: { type: "selection", projectId: "project-1", environmentId: "hidden" },
+      }),
+    );
+    expect(useMachineViewStore.getState().recentKeys).toBe(recents);
+    expect(useRemoteWorkspaceStore.getState().active).toBeNull();
     expect(fake.workspaceViews.close).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
   });

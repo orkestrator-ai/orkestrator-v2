@@ -144,6 +144,14 @@ for iOS Safari on a device or simulator. Install it with
 `mise exec -- bunx playwright install webkit`. Assertions on Electron-only CSS
 such as `-webkit-app-region` only run under Chromium.
 
+CI runs `MobileAppShellLayout.spec.ts` in Chromium and WebKit, including native
+touch compatibility-event suppression and Chromium's CDP pen input. Other
+component specs and alternate-engine qualification remain opt-in. When an engine
+run finds a bug, also add a unit test that fails without the fix. Touch handling
+is the usual case:
+WebKit and iOS Safari never focus a tapped button, so a dismissal that only
+works through Chromium's focus blur passes in Chromium and fails there.
+
 ### Native browser controls
 
 `e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
@@ -1116,6 +1124,13 @@ diagnostics, so without it the codex bridge suite binds a real port and fails.
 from `apps/backend` is isolated too; Bun loads a preload named in both places
 once. Without it a backend test fell back to `ORKESTRATOR_WORKTREE_DIR` from
 the shell, or to a non-canonical `os.tmpdir()` such as macOS `/tmp`.
+
+Turbo runs in strict environment mode and passes a task only the variables
+`turbo.json` declares. `TMPDIR` is in `globalPassThroughEnv` (not hashed), so
+the workspace and bridge groups use the same temporary directory as the root
+group and the caller: an operator's choice is honoured, and an aggregate run
+with a private `TMPDIR` can be inspected afterwards for leftovers. Before
+2026-10-26 Turbo dropped it and those groups fell back to `/tmp`.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

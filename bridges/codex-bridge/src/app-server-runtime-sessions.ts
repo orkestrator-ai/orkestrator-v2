@@ -112,6 +112,9 @@ export class CodexRuntimeSessions {
       title,
       titleSource: title ? "explicit" : undefined,
     });
+    // Created here with no thread, so every id it is sent passes through the
+    // dispatch journal. Resumed and forked sessions never get this marker.
+    this.ctx.journal.noteFreshSession(session.id);
     return { sessionId: session.id, title };
   }
 
@@ -487,7 +490,9 @@ export class CodexRuntimeSessions {
     input: string,
     expectedTurnId: string,
     requestId: string,
-  ): Promise<"accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "closing"> {
+  ): Promise<
+    "accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "closing" | "unavailable"
+  > {
     const session = this.ctx.registry.getSession(sessionId);
     const context = this.ctx.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
@@ -575,6 +580,14 @@ export class CodexRuntimeSessions {
       return "unknown";
     }
 
+    // `turn/steer` carries the request id to Codex with no dispatch-journal
+    // record, so note it first: `/dispatch` must never answer `absent` for it.
+    // Nothing is sent if that write fails.
+    try {
+      await this.ctx.journal.noteUntracked(requestId);
+    } catch {
+      return "unavailable";
+    }
     const attemptedAt = new Date(this.ctx.now()).toISOString();
     try {
       await this.ctx.options.engine.steerTurn(
@@ -640,6 +653,25 @@ export class CodexRuntimeSessions {
       });
       return "unknown";
     }
+  }
+
+  /**
+   * The read-only proof behind `/dispatch` answering `absent`: this request id
+   * never reached Codex for any session, and a prompt sent under it now would
+   * be its first delivery. Touches nothing and reads no thread.
+   *
+   * Beyond the journal's own proof (`provesNeverJournaled`), the session must
+   * be registered and not closing, and no prompt request for the id may be in
+   * flight: one that has not journaled yet could still send it. Two prompts
+   * for one id on one session never both send either way: each classifies the
+   * id under the session's dispatch lock, after the other has journaled.
+   */
+  promptDispatchAbsent(sessionId: string, requestId: string): boolean {
+    const session = this.ctx.registry.getSession(sessionId);
+    if (!session || this.ctx.closingSessionIds.has(sessionId)) return false;
+    if (this.ctx.promptRequestsInFlight.has(requestId)) return false;
+    if (this.ctx.steerRequests.has(requestId)) return false;
+    return this.ctx.journal.provesNeverJournaled(requestId, sessionId);
   }
 
   /**

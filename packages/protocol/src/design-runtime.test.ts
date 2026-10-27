@@ -6,6 +6,7 @@ import type {
   DesignStyleResult,
   DesignValidationReport,
 } from "./design-canvas.js";
+import { isKeyboardShortcutsChord } from "./keyboard-shortcuts.js";
 import { installDesignRuntime } from "./design-runtime.js";
 
 describe("design runtime sanitizer", () => {
@@ -187,4 +188,28 @@ describe("design runtime editing", () => {
     expect(run({ op: "setMode", mode: "inspect" })).toBe("inspect");
     expect(testWindow.document.documentElement.hasAttribute("data-ork-preview")).toBe(false);
   });
+});
+
+test("serialized design runtime forwards the shared chord once and consumes auto-repeat", () => {
+  const frame = new Window();
+  frame.eval(
+    "window.__forwarded = []; window.parent.postMessage = (message) => window.__forwarded.push(message.channel)",
+  );
+  frame.eval(`(${installDesignRuntime.toString()})(${isKeyboardShortcutsChord.toString()})`);
+  const press = (repeat: boolean) => {
+    const event = new frame.KeyboardEvent("keydown", {
+      key: "Л",
+      code: "KeyK",
+      ctrlKey: true,
+      shiftKey: true,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    frame.document.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  };
+  press(false);
+  press(true);
+  expect(frame.eval("window.__forwarded")).toEqual(["orkestrator-design-shortcuts"]);
 });

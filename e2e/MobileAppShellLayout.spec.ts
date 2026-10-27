@@ -3,6 +3,41 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 const mobileShellTitle =
   "A project and environment name that is far too long for a mobile title bar";
 
+type InputEventRecord = { type: string; pointerType: string; trusted: boolean };
+type InputRecordingWindow = Window & { mobileShellInputEvents: InputEventRecord[] };
+
+async function recordInput(page: Page) {
+  await page.evaluate(() => {
+    const events: InputEventRecord[] = [];
+    (window as unknown as InputRecordingWindow).mobileShellInputEvents = events;
+    for (const type of [
+      "pointerdown",
+      "pointerup",
+      "touchstart",
+      "touchend",
+      "mousedown",
+      "mouseup",
+      "click",
+    ]) {
+      document.addEventListener(
+        type,
+        (event) => {
+          events.push({
+            type: event.type,
+            pointerType: (event as PointerEvent).pointerType ?? "",
+            trusted: event.isTrusted,
+          });
+        },
+        { capture: true },
+      );
+    }
+  });
+}
+
+async function recordedInput(page: Page) {
+  return page.evaluate(() => (window as unknown as InputRecordingWindow).mobileShellInputEvents);
+}
+
 async function touchTap(page: Page, trigger: Locator) {
   const box = await trigger.boundingBox();
   if (!box) throw new Error("Expected a rendered touch target");
@@ -80,10 +115,34 @@ test("long mobile titles stay between controls and support touch and keyboard di
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   await expect(title).toHaveAttribute("aria-expanded", "false");
 
+  // The bubble covers the top of the workspace. Tapping it closes it, and the
+  // tap's click must not fall through to whatever is underneath. Chromium
+  // would also close it by blurring the focused title; WebKit never focuses a
+  // tapped button, so this step is what proves the bubble's own handler.
+  const tooltip = page.getByRole("tooltip");
   await touchTap(page, title);
-  await expect(page.getByRole("tooltip")).toBeVisible();
-  await touchTap(page, page.getByText("Workspace"));
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect(tooltip).toBeVisible();
+  await recordInput(page);
+  await touchTap(page, tooltip);
+  await expect(tooltip).toHaveCount(0);
+  await expect(title).toHaveAttribute("aria-expanded", "false");
+  const input = await recordedInput(page);
+  expect(input.map((event) => event.type)).toEqual([
+    "pointerdown",
+    "touchstart",
+    "pointerup",
+    "touchend",
+  ]);
+  expect(input.every((event) => event.trusted)).toBe(true);
+  await expect(page.getByTestId("mobile-shell-workspace-clicks")).toHaveText("0");
+
+  // A tap below the bubble is outside the tooltip.
+  await touchTap(page, title);
+  await expect(tooltip).toBeVisible();
+  const tooltipBox = await tooltip.boundingBox();
+  if (!tooltipBox) throw new Error("Expected the title tooltip on screen");
+  await page.touchscreen.tap(195, tooltipBox.y + tooltipBox.height + 200);
+  await expect(tooltip).toHaveCount(0);
 
   await title.focus();
   await expect(page.getByRole("tooltip")).toBeVisible();
@@ -101,6 +160,93 @@ test("long mobile titles stay between controls and support touch and keyboard di
   await expect(page.getByRole("tooltip")).toBeVisible();
   await title.press("Escape");
   await expect(page.getByRole("tooltip")).toHaveCount(0);
+});
+
+test("pen input dismisses the title bubble without touch events or click-through", async ({
+  browserName,
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
+  test.skip(browserName !== "chromium", "CDP pen input requires Chromium");
+  await page.goto("/mobile-shell");
+  await page.keyboard.press("Escape");
+  const title = page.getByRole("button", { name: mobileShellTitle });
+  const tooltip = page.getByRole("tooltip");
+  const client = await page.context().newCDPSession(page);
+  const penTap = async (target: Locator) => {
+    const box = await target.boundingBox();
+    if (!box) throw new Error("Expected a rendered pen target");
+    const position = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await client.send("Input.dispatchMouseEvent", {
+      ...position,
+      type: "mousePressed",
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      pointerType: "pen",
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      ...position,
+      type: "mouseReleased",
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      pointerType: "pen",
+    });
+  };
+  try {
+    await penTap(title);
+    await expect(tooltip).toBeVisible();
+    await expect(title).toHaveAttribute("aria-expanded", "true");
+    await penTap(title);
+    await expect(tooltip).toHaveCount(0);
+    await penTap(title);
+    await expect(tooltip).toBeVisible();
+    await recordInput(page);
+    await penTap(tooltip);
+    await expect(tooltip).toHaveCount(0);
+    await expect(title).toHaveAttribute("aria-expanded", "false");
+    const input = await recordedInput(page);
+    expect(input.map((event) => event.type)).toEqual(["pointerdown", "pointerup", "click"]);
+    expect(input.every((event) => event.trusted && event.pointerType === "pen")).toBe(true);
+    await expect(page.getByTestId("mobile-shell-workspace-clicks")).toHaveText("0");
+  } finally {
+    await client.detach();
+  }
+});
+
+test("touch dismissal suppresses compatibility mouse events over an active workspace control", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
+  await page.goto("/mobile-shell");
+  await page.keyboard.press("Escape");
+  await touchTap(page, page.getByRole("button", { name: mobileShellTitle }));
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toBeVisible();
+  const box = await tooltip.boundingBox();
+  if (!box) throw new Error("Expected the title tooltip on screen");
+  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await recordInput(page);
+  await page.touchscreen.tap(point.x, point.y);
+  await expect(tooltip).toHaveCount(0);
+  const input = await recordedInput(page);
+  expect(input.map((event) => event.type)).toEqual([
+    "pointerdown",
+    "touchstart",
+    "pointerup",
+    "touchend",
+  ]);
+  expect(input.every((event) => event.trusted)).toBe(true);
+  const clicks = page.getByTestId("mobile-shell-workspace-clicks");
+  await expect(clicks).toHaveText("0");
+  // The exact same position now hits a live control. This verifies the
+  // suppression assertion would catch a compatibility click falling through.
+  expect(
+    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.textContent, point),
+  ).toBe("Workspace action");
+  await page.touchscreen.tap(point.x, point.y);
+  await expect(clicks).toHaveText("1");
 });
 
 test("the title uses space released when the optional inbox is hidden", async ({

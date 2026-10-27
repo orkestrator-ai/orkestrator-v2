@@ -310,6 +310,9 @@ export async function resumeSessionReserved(
       child,
       revision: 0,
       structured: new Map(),
+      // No `promptJournalComplete`: the conversation `session/load` adopts may
+      // have been prompted by another bridge session or process, so an empty
+      // journal here proves nothing.
       promptJournal: new Map(),
       grokInterjectionJournal: new Map(),
       approvals: new Map(),
@@ -532,6 +535,9 @@ function newSessionState(
     revision: 0,
     structured: new Map(),
     promptJournal: new Map(),
+    // A session `session/new` created (now, or on a deferred session's first
+    // attach) has had no prompt but through this journal.
+    promptJournalComplete: true,
     grokInterjectionJournal: new Map(),
     approvals: new Map(),
     interactions: new Map(),

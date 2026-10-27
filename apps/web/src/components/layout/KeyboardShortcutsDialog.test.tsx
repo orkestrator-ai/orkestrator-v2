@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, test, type Mock } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
+import { listen } from "@/lib/native/events";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 
@@ -10,6 +12,21 @@ function pressShortcut(init: KeyboardEventInit = { metaKey: true }) {
     shiftKey: true,
     ...init,
   });
+}
+
+/**
+ * The handler the dialog subscribed for Electron main's View menu event. The
+ * browser client's transport never emits it. `listen` is the shared mock from
+ * tests/setup.ts.
+ */
+function desktopMenuEvent(): (payload: unknown) => void {
+  const calls = (listen as unknown as Mock<typeof listen>).mock.calls;
+  const handler = calls.findLast(([event]) => event === KEYBOARD_SHORTCUTS_EVENT)?.[1];
+  expect(handler).toBeDefined();
+  return (payload) =>
+    act(() => {
+      handler?.({ payload });
+    });
 }
 
 afterEach(() => {
@@ -132,5 +149,123 @@ describe("KeyboardShortcutsDialog", () => {
       name: "Search keyboard shortcuts",
     });
     expect((reopened as HTMLInputElement).value).toBe("");
+  });
+
+  test("opens on a layout whose K key types no Latin letter", async () => {
+    render(<KeyboardShortcutsDialog platform="mac" />);
+    // Russian ЙЦУКЕН: ⌘⇧ and the physical K key report key "Л".
+    pressShortcut({ metaKey: true, key: "Л" });
+    expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+    pressShortcut({ metaKey: true, key: "Л" });
+    await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
+  });
+
+  test("opens before a focused surface's own handlers can stop or claim the key", async () => {
+    render(
+      <>
+        <div aria-label="Composer" contentEditable role="textbox" tabIndex={0} />
+        <KeyboardShortcutsDialog />
+      </>,
+    );
+    const composer = screen.getByRole("textbox", { name: "Composer" });
+    // A rich editor's keymap, xterm and Monaco all handle keys at or below the
+    // document; none of them may hide the chord from the window listener.
+    const stopAtDocument = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener("keydown", stopAtDocument, true);
+    composer.addEventListener("keydown", stopAtDocument);
+    try {
+      composer.focus();
+      fireEvent.keyDown(composer, { key: "K", code: "KeyK", metaKey: true, shiftKey: true });
+      expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+    } finally {
+      document.removeEventListener("keydown", stopAtDocument, true);
+    }
+  });
+
+  test("a View menu click opens the dialog and never closes it", async () => {
+    render(<KeyboardShortcutsDialog platform="mac" />);
+    const emit = desktopMenuEvent();
+
+    emit("open");
+    const search = await screen.findByRole("textbox", { name: "Search keyboard shortcuts" });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    fireEvent.change(search, { target: { value: "zoom" } });
+    search.blur();
+
+    // A second click keeps the dialog and its search, and refocuses the search.
+    emit("open");
+    expect(screen.getByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+    expect((search as HTMLInputElement).value).toBe("zoom");
+    expect(document.activeElement).toBe(search);
+
+    pressShortcut();
+    await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
+  });
+
+  test("a chord forwarded from a native preview view toggles like a key press", async () => {
+    render(<KeyboardShortcutsDialog platform="mac" />);
+    const emit = desktopMenuEvent();
+
+    emit("toggle");
+    expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+    emit("toggle");
+    await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
+    emit("unknown");
+    expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog"));
+  });
+
+  test("a distinct quick renderer press after a forwarded toggle closes the dialog", async () => {
+    render(<KeyboardShortcutsDialog platform="mac" />);
+    desktopMenuEvent()("toggle");
+    expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+    pressShortcut();
+    await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
+  });
+
+  test.each(["Escape", "toggle", "outside pointer"])(
+    "desktop dismissal notifies native focus restoration after %s",
+    async (dismiss) => {
+      const transport = window.orkestrator;
+      let closed = 0;
+      window.orkestrator = {
+        ...transport,
+        keyboardShortcuts: {
+          closed: async () => {
+            closed++;
+          },
+        },
+      } as Window["orkestrator"];
+      try {
+        render(<KeyboardShortcutsDialog />);
+        const emit = desktopMenuEvent();
+        emit("toggle");
+        const search = await screen.findByRole("textbox", { name: "Search keyboard shortcuts" });
+        if (dismiss === "Escape") fireEvent.keyDown(search, { key: "Escape" });
+        else if (dismiss === "toggle") emit("toggle");
+        else {
+          // DismissableLayer subscribes after the opening pointer has finished.
+          await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+          fireEvent.pointerDown(document.body, { pointerType: "mouse", button: 0 });
+          fireEvent.pointerUp(document.body, { pointerType: "mouse", button: 0 });
+          fireEvent.click(document.body, { button: 0 });
+        }
+        await waitFor(() => expect(closed).toBe(1));
+        expectDomAbsent(screen.queryByRole("dialog"));
+      } finally {
+        cleanup();
+        window.orkestrator = transport;
+      }
+    },
+  );
+
+  test("the browser client, with no native menu, still toggles from the keyboard", async () => {
+    render(<KeyboardShortcutsDialog platform="other" />);
+    pressShortcut({ ctrlKey: true });
+    expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+    pressShortcut({ ctrlKey: true });
+    await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
   });
 });

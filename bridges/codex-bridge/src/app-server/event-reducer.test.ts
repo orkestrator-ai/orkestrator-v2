@@ -1476,6 +1476,24 @@ describe("toTurnError", () => {
     ).toMatchObject({ code: "httpConnectionFailed" });
   });
 
+  test("keeps the upstream HTTP status a variant forwards", () => {
+    expect(
+      toTurnError({
+        message: "unexpected status 401 Unauthorized",
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+      }),
+    ).toMatchObject({ code: "httpConnectionFailed", httpStatusCode: 401 });
+    expect(
+      toTurnError({
+        message: "stream lost",
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+      }).httpStatusCode,
+    ).toBeUndefined();
+    expect(
+      toTurnError({ message: "no", codexErrorInfo: "unauthorized" }).httpStatusCode,
+    ).toBeUndefined();
+  });
+
   test("carries additional details", () => {
     expect(toTurnError({ message: "m", additionalDetails: "stack trace" }).details).toBe(
       "stack trace",

@@ -1,6 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,8 +39,9 @@ function fakeAgentTools(
 
 test("activity transition events name their session and carry the observer stamp", async () => {
   const events: Array<{ event: string; payload: unknown }> = [];
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-activity-stamp-"));
   const backend = new OrkestratorBackend({
-    dataDir: path.join(os.tmpdir(), `ork-backend-activity-stamp-${randomUUID()}`),
+    dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
@@ -84,12 +84,14 @@ test("activity transition events name their session and carry the observer stamp
     },
   ]);
   await backend.shutdown();
+  await fs.rm(dataDir, { recursive: true, force: true });
 });
 
 test("activity transition events omit backend-only provider session identifiers", async () => {
   const events: Array<{ event: string; payload: unknown }> = [];
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-activity-event-"));
   const backend = new OrkestratorBackend({
-    dataDir: path.join(os.tmpdir(), `ork-backend-activity-event-${randomUUID()}`),
+    dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
@@ -125,6 +127,7 @@ test("activity transition events omit backend-only provider session identifiers"
     },
   ]);
   await backend.shutdown();
+  await fs.rm(dataDir, { recursive: true, force: true });
 });
 
 test("probes for an agent-created PR on the backend's own agent-idle edge", async () => {
@@ -206,8 +209,9 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
   const previousObserve = process.env[observeKey];
   const previousKillSwitch = process.env[killSwitchKey];
   const backends: OrkestratorBackend[] = [];
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-interaction-env-"));
   const options = {
-    dataDir: path.join(os.tmpdir(), "ork-backend-interaction-env"),
+    dataDir,
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
@@ -266,6 +270,7 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
     if (previousKillSwitch === undefined) delete process.env[killSwitchKey];
     else process.env[killSwitchKey] = previousKillSwitch;
     await Promise.all(backends.map((backend) => backend.shutdown().catch(() => undefined)));
+    await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
 

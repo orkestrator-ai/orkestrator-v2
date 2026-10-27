@@ -89,3 +89,13 @@ The separate iOS command did not reach compilation or tests: `simctl list device
 - **Owning file alone:** `bun test scripts/opencode-live-compatibility-probe.test.ts` passed three times (31 pass, 0 fail each).
 - **Evidence:** `orkestrator-test-run.xWCOyP/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of this case; the change under test touched only the web renderer, e2e specs and a new script, nothing the probe imports. No implementation, assertion, deadline or skip changed.
+
+
+## Direct-history cursor review validation — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 slots, root used one isolated Bun worker. Other worktrees were validating on the same host.
+- **Failure:** `runOpenCodeLiveCompatibility > a deadline while the CLI version is read leaves nothing to create later` observed `[]` instead of the initial one-entry `ork-opencode-compat-*` list at line 450 (123.02 ms). The no-spawn assertion passed.
+- **Suite counts:** root/support reported 3,518 passed, ten failed and one error across 3,528 tests in 170 files (423.34 s). The remaining failures belong to firewall, copy and disk-report owners.
+- **Isolated rerun:** `mise run test:logged -- --name isolated-3 -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 1.4 s).
+- **Evidence:** `orkestrator-test-run.wESThp/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed recurrence of the shared temporary-root snapshot assertion; cross-worktree creation or cleanup remains plausible but unproven. No probe implementation, assertion, timeout or skip changed.

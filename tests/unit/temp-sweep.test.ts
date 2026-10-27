@@ -100,6 +100,24 @@ describe("sweepStaleTempDirs", () => {
     expect(existsSync(fresh)).toBe(true);
   });
 
+  test("recovers legacy environment-move roots only after a day", () => {
+    const root = createRoot();
+    const prefixes = ["ork-env-move-", "ork-env-move-template-"];
+    const stale = prefixes.map((prefix) => createEntry(root, `${prefix}Ab12Cd`, 25 * HOUR_MS));
+    const fresh = prefixes.map((prefix) => createEntry(root, `${prefix}Ef34Gh`, 2 * HOUR_MS));
+    const removed = sweepStaleTempDirs({
+      prefix: prefixes,
+      maxAgeMs: HOUR_MS,
+      legacyMaxAgeMs: 24 * HOUR_MS,
+      root,
+      now: NOW,
+      isProcessAlive: () => false,
+    });
+    expect(removed.toSorted()).toEqual(stale.toSorted());
+    for (const entry of stale) expect(existsSync(entry)).toBe(false);
+    for (const entry of fresh) expect(existsSync(entry)).toBe(true);
+  });
+
   test("accepts several prefixes in one pass", () => {
     const root = createRoot();
     const first = createEntry(root, `first-${DEAD_PID}-abc123`, 2 * HOUR_MS);

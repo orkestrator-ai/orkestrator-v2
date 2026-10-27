@@ -7,7 +7,10 @@ import type {
   SessionTurnActivity,
 } from "../types/index.js";
 import { eventEmitter } from "./event-emitter.js";
-import { LIVE_BACKGROUND_TASK_STATUSES } from "./session-manager-background-tasks.js";
+import {
+  LIVE_BACKGROUND_TASK_STATUSES,
+  backgroundTaskOwner,
+} from "./session-manager-background-tasks.js";
 import { applySessionPlanMode, recordStructuredOutput, sessions } from "./session-manager-core.js";
 import { recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { MAX_RESULT_INPUT_UUIDS } from "./session-manager-messages.js";
@@ -149,15 +152,12 @@ export function hasLiveTaskOwnedByThisQuery(turn: TurnState): boolean {
   return (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).some(
     (task) =>
       LIVE_BACKGROUND_TASK_STATUSES.has(task.status) &&
-      session.backgroundTaskControls?.get(task.id) === turn.queryIteratorControl,
+      backgroundTaskOwner(session, task.id) === turn.runtime,
   );
 }
 
 export function hasBackgroundTaskCandidateOwnedByThisQuery(turn: TurnState): boolean {
-  const { session } = turn;
-  return Array.from(session.backgroundTaskCandidates?.values() ?? []).includes(
-    turn.queryIteratorControl!,
-  );
+  return (turn.runtime?.tasks.candidates.size ?? 0) > 0;
 }
 
 export function releaseCompletedTurnToBackgroundTasks(

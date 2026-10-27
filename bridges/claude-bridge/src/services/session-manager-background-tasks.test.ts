@@ -4,8 +4,9 @@ import {
   persistedBackgroundTaskMessage,
   reducePersistedBackgroundTaskMessage,
 } from "./session-manager-messages.js";
-import type { BackgroundTaskSnapshot } from "../types/index.js";
+import type { BackgroundTaskSnapshot, SessionState } from "../types/index.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { backgroundTaskOwner } from "./session-manager-background-tasks.js";
 
 import {
   MAX_TERMINAL_BACKGROUND_TASKS,
@@ -61,6 +62,16 @@ function controlSilenceWindow() {
       }
     },
   };
+}
+
+/** The control a stop for `taskId` reaches: its owning CLI's, if one still owns it. */
+function taskControl(session: SessionState, taskId: string) {
+  return backgroundTaskOwner(session, taskId)?.control;
+}
+
+/** Whether the session's CLI owns `taskId` as live work. */
+function ownsTask(session: SessionState, taskId: string): boolean {
+  return backgroundTaskOwner(session, taskId) !== undefined;
 }
 
 /** Whether the session's CLI is still waiting for an owed continuation. */
@@ -499,18 +510,19 @@ describe("background task reducer", () => {
       },
     });
 
-    await waitFor(() => created.backgroundTaskCandidates?.size === 128);
+    await waitFor(() => created.claudeRuntime?.tasks.candidates.size === 128);
+    const runtime = created.claudeRuntime!;
     // The bound sheds the overflow only: everything up to it stays tracked and
     // the already-running background task is untouched.
-    expect(created.backgroundTaskCandidates?.has("bash-candidate-127")).toBe(true);
-    expect(created.backgroundTaskCandidates?.has("bash-candidate-128")).toBe(false);
+    expect(runtime.tasks.candidates.has("bash-candidate-127")).toBe(true);
+    expect(runtime.tasks.candidates.has("bash-candidate-128")).toBe(false);
     expect(created.backgroundTasks?.["pending-bash:bash-real-background"]).toMatchObject({
       status: "running",
     });
 
     call.finish();
     await promptPromise;
-    expect(created.backgroundTaskCandidates).toBeUndefined();
+    expect(runtime.tasks.candidates.size).toBe(0);
   });
 
   test("lets a background notification resume before closing the completed turn", async () => {
@@ -1072,7 +1084,7 @@ describe("background task reducer", () => {
         endedAt: undefined,
         error: undefined,
       });
-      expect(created.backgroundTaskControls?.get("waking")).toBeDefined();
+      expect(taskControl(created, "waking")).toBeDefined();
       expect(inputClosed).toBe(false);
       expect(call.isClosed()).toBe(false);
       await hooks.SubagentStop![0]!.hooks[0]!({
@@ -1117,7 +1129,7 @@ describe("background task reducer", () => {
     call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
     call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-    await waitFor(() => created.settlingBackgroundTasks?.has("parked-wake") === true);
+    await waitFor(() => created.claudeRuntime?.tasks.settling.has("parked-wake") === true);
     call.push({
       type: "system",
       subtype: "task_updated",
@@ -1127,13 +1139,13 @@ describe("background task reducer", () => {
       patch: { status: "completed", end_time: 1, error: "old error" },
     });
     await waitFor(() => created.backgroundTasks?.["parked-wake"]?.status === "completed");
-    expect(created.settlingBackgroundTasks?.has("parked-wake")).toBe(true);
+    expect(created.claudeRuntime?.tasks.settling.has("parked-wake")).toBe(true);
     await hooks.SubagentStart![0]!.hooks[0]!({
       hook_event_name: "SubagentStart",
       agent_id: "parked-wake",
       agent_type: "Explore",
     });
-    expect(created.settlingBackgroundTasks).toBeUndefined();
+    expect(created.claudeRuntime?.tasks.settling.size ?? 0).toBe(0);
     expect(created.backgroundTasks?.["parked-wake"]).toMatchObject({
       status: "running",
       description: "Original work",
@@ -1141,7 +1153,7 @@ describe("background task reducer", () => {
       endedAt: undefined,
       error: undefined,
     });
-    expect(created.backgroundTaskControls?.get("parked-wake")).toBeDefined();
+    expect(taskControl(created, "parked-wake")).toBeDefined();
     pushSuccessfulContinuationResult(call);
     await Bun.sleep(10);
     expect(inputClosed).toBe(false);
@@ -1354,7 +1366,7 @@ describe("background task reducer", () => {
       task_subject: "New work",
     });
     expect(created.backgroundTasks?.["foreground-task"]?.status).toBe("running");
-    expect(created.backgroundTaskControls?.get("foreground-task")).toBe(control);
+    expect(taskControl(created, "foreground-task")).toBe(control);
     await hooks.SubagentStop![0]!.hooks[0]!({
       hook_event_name: "SubagentStop",
       agent_id: "agent-bg",
@@ -2045,7 +2057,7 @@ describe("background task reducer", () => {
       const staleSettlement = created.finishTurnInputIfSettled;
       const baseline = created.claudeUsageBaseline;
       const usage = created.usage;
-      const control = created.backgroundTaskControls?.get("agent-superseded");
+      const control = taskControl(created, "agent-superseded");
       // Force foreground release at this asynchronous boundary so a real
       // follow-up dispatch can exercise both post-await ownership checks.
       created.status = "idle";
@@ -2077,7 +2089,7 @@ describe("background task reducer", () => {
       );
       expect(inputClosed).toBe(false);
       expect(call.isClosed()).toBe(false);
-      expect(created.backgroundTaskControls?.get("agent-superseded")).toBe(control);
+      expect(taskControl(created, "agent-superseded")).toBe(control);
       expect(created.backgroundTasks?.["agent-superseded"]?.status).toBe("running");
       expect(created.claudeUsageBaseline).toBe(baseline);
       expect(created.usage).toBe(usage);
@@ -2190,19 +2202,21 @@ describe("background task reducer", () => {
     // One live provisional task and one still-unresolved candidate, both owned
     // by the query that is about to die.
     expect(created.backgroundTasks?.["pending-bash:dying-background"]?.status).toBe("running");
-    expect(created.backgroundTaskCandidates?.has("dying-candidate")).toBe(true);
+    const runtime = created.claudeRuntime!;
+    expect(runtime.tasks.candidates.has("dying-candidate")).toBe(true);
 
     call.fail(new Error("provider stream disconnected"));
     await expect(promptPromise).rejects.toThrow("provider stream disconnected");
 
     // A handle that can only fail must not be retained: the candidate is
     // dropped and the task it owned is settled rather than wedged at running.
-    expect(created.backgroundTaskCandidates).toBeUndefined();
+    expect(created.claudeRuntime).toBeUndefined();
+    expect(runtime.tasks.candidates.size).toBe(0);
     expect(created.backgroundTasks?.["pending-bash:dying-background"]).toMatchObject({
       status: "killed",
       error: "The Claude session that owned this task ended before it reported a result",
     });
-    expect(created.backgroundTaskControls).toBeUndefined();
+    expect(runtime.tasks.live.size).toBe(0);
   });
 
   test("keeps streaming input open when a Bash launch precedes delayed lifecycle events", async () => {
@@ -2511,8 +2525,8 @@ describe("background task reducer", () => {
     const silence = controlSilenceWindow();
     const { created, call, promptPromise, closedState } =
       await releaseTurnHoldingOneBackgroundTask("silent terminal patch");
-    const owner = created.backgroundTaskControls?.get("bash-task-lf");
-    expect(owner).toBeDefined();
+    const runtime = created.claudeRuntime!;
+    expect(ownsTask(created, "bash-task-lf")).toBe(true);
 
     call.push({
       type: "system",
@@ -2521,7 +2535,7 @@ describe("background task reducer", () => {
       patch: { status: "completed", end_time: 1234 },
     });
     await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.status === "completed");
-    expect(created.backgroundTaskControls?.has("bash-task-lf")).toBe(false);
+    expect(ownsTask(created, "bash-task-lf")).toBe(false);
     expect(awaitingContinuation(created)).toBe(true);
     expect(created.retainedContinuationRequestIds?.has("background-report")).toBe(true);
     expect(closedState.inputClosed).toBe(false);
@@ -2534,7 +2548,7 @@ describe("background task reducer", () => {
     call.finish();
     await promptPromise;
     expect(created.retainedContinuationRequestIds).toBeUndefined();
-    expect(created.backgroundTaskControls?.size ?? 0).toBe(0);
+    expect(runtime.tasks.live.size).toBe(0);
     expect(created.backgroundTasks?.["bash-task-lf"]).toMatchObject({
       status: "completed",
       endedAt: 1234,
@@ -2590,7 +2604,7 @@ describe("background task reducer", () => {
         ...created.backgroundTasks!["bash-task-lf"]!,
         status,
       };
-      expect(created.backgroundTaskControls?.get("bash-task-lf")).toBeDefined();
+      expect(taskControl(created, "bash-task-lf")).toBeDefined();
       call.push({
         type: "system",
         subtype: "task_updated",
@@ -2608,13 +2622,12 @@ describe("background task reducer", () => {
     },
   );
 
-  test("a terminal patch owned by another query does not retain the released query", async () => {
+  test("a terminal patch for a task its CLI does not own does not retain the released query", async () => {
     const { created, call, promptPromise, closedState } = await releaseTurnHoldingOneBackgroundTask(
       "foreign owner terminal patch",
     );
-    const closeOtherQuery = mock(() => {});
     // The task is still live and this turn is released; only ownership differs.
-    created.backgroundTaskControls!.set("bash-task-lf", { close: closeOtherQuery });
+    created.claudeRuntime!.tasks.live.delete("bash-task-lf");
     call.push({
       type: "system",
       subtype: "task_updated",
@@ -2622,8 +2635,6 @@ describe("background task reducer", () => {
       patch: { status: "completed" },
     });
     await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.status === "completed");
-    // That process is ending or gone; it closes itself when its runtime ends.
-    expect(closeOtherQuery).not.toHaveBeenCalled();
     expect(awaitingContinuation(created)).toBe(false);
     expect(created.retainedContinuationRequestIds).toBeUndefined();
     await waitFor(() => closedState.inputClosed);
@@ -2668,11 +2679,10 @@ describe("background task reducer", () => {
     call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
     const provisionalId = "pending-bash:bash-provisional-patch";
-    const owner = created.backgroundTaskControls?.get(provisionalId);
-    expect(owner).toBeDefined();
+    expect(ownsTask(created, provisionalId)).toBe(true);
     expect(created.backgroundTasks?.[provisionalId]?.status).toBe("running");
     expect(created.backgroundTasks?.["concrete-patch-task"]).toBeUndefined();
-    expect(created.backgroundTaskControls?.has("concrete-patch-task")).toBe(false);
+    expect(ownsTask(created, "concrete-patch-task")).toBe(false);
 
     // No tool result, start or progress frame ever assigned the concrete id.
     // The terminal patch must obtain its owner from the provisional record.
@@ -2685,8 +2695,8 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["concrete-patch-task"]?.status === "completed");
     expect(created.backgroundTasks?.[provisionalId]).toBeUndefined();
-    expect(created.backgroundTaskControls?.size ?? 0).toBe(0);
-    expect(created.backgroundTaskCandidates?.size ?? 0).toBe(0);
+    expect(created.claudeRuntime?.tasks.live.size ?? 0).toBe(0);
+    expect(created.claudeRuntime?.tasks.candidates.size ?? 0).toBe(0);
     expect(created.backgroundTasks?.["concrete-patch-task"]).toMatchObject({
       id: "concrete-patch-task",
       toolUseId: "bash-provisional-patch",
@@ -2717,7 +2727,7 @@ describe("background task reducer", () => {
     await waitFor(() => created.status === "running");
     expect(awaitingContinuation(created)).toBe(false);
     expect(created.retainedContinuationRequestIds).toBeUndefined();
-    expect(created.queryControl).toBe(owner);
+    expect(created.queryControl).toBe(created.claudeRuntime?.control);
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
 
@@ -2765,7 +2775,8 @@ describe("background task reducer", () => {
       subtype: "background_tasks_changed",
       tasks: [],
     });
-    await waitFor(() => created.settlingBackgroundTasks !== undefined);
+    await waitFor(() => (created.claudeRuntime?.tasks.settling.size ?? 0) > 0);
+    const runtime = created.claudeRuntime!;
 
     // The edge never arrives. The idle window must release the held input
     // and, once the process is gone, the parked snapshot rather than strand
@@ -2773,7 +2784,7 @@ describe("background task reducer", () => {
     silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     call.finish();
-    await waitFor(() => created.settlingBackgroundTasks === undefined);
+    await waitFor(() => runtime.tasks.settling.size === 0);
     expect(awaitingContinuation(created)).toBe(false);
     expect(created.retainedContinuationRequestIds).toBeUndefined();
     await promptPromise;
@@ -2801,7 +2812,7 @@ describe("background task reducer", () => {
       tasks: [],
     });
     await waitFor(() => created.backgroundTasks?.["agent-midturn"] === undefined);
-    expect(created.settlingBackgroundTasks).toBeUndefined();
+    expect(created.claudeRuntime?.tasks.settling.size ?? 0).toBe(0);
     expect(awaitingContinuation(created)).toBe(false);
     expect(call.isClosed()).toBe(false);
 
@@ -3296,7 +3307,7 @@ describe("background task reducer", () => {
     });
     call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
-    expect(created.backgroundTaskCandidates?.size).toBe(2);
+    expect(created.claudeRuntime?.tasks.candidates.size).toBe(2);
 
     call.push({
       type: "user",
@@ -3320,7 +3331,7 @@ describe("background task reducer", () => {
       description: "Slow suite",
     });
     // The sibling had no background evidence of its own, so only it is released.
-    expect(created.backgroundTaskCandidates).toBeUndefined();
+    expect(created.claudeRuntime?.tasks.candidates.size ?? 0).toBe(0);
     expect(inputClosed).toBe(false);
 
     call.push({
@@ -3370,7 +3381,7 @@ describe("background task reducer", () => {
     });
 
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    expect(created.backgroundTaskCandidates).toBeUndefined();
+    expect(created.claudeRuntime?.tasks.candidates.size ?? 0).toBe(0);
     expect(created.backgroundTasks).toBeUndefined();
     call.finish();
     await promptPromise;
@@ -3421,7 +3432,7 @@ describe("background task reducer", () => {
     });
     call.push({ type: "result", subtype: "success" });
     await waitFor(() => created.status === "idle");
-    const control = created.backgroundTaskControls?.get("first-turn-task");
+    const control = taskControl(created, "first-turn-task");
     expect(control).toBe(created.claudeRuntime?.control);
 
     const secondPrompt = sendPrompt(created.id, "continue while it runs");
@@ -3439,8 +3450,8 @@ describe("background task reducer", () => {
       ],
     });
     await waitFor(() => created.backgroundTasks?.["second-turn-task"] !== undefined);
-    expect(created.backgroundTaskControls?.get("first-turn-task")).toBe(control);
-    expect(created.backgroundTaskControls?.get("second-turn-task")).toBe(control);
+    expect(taskControl(created, "first-turn-task")).toBe(control);
+    expect(taskControl(created, "second-turn-task")).toBe(control);
     expect(created.backgroundTasks?.["first-turn-task"]?.status).toBe("running");
 
     let inputClosed = false;
@@ -3639,7 +3650,8 @@ describe("background task reducer", () => {
     ]);
 
     expect(session.backgroundTasks).toBeUndefined();
-    expect(session.backgroundTaskCandidates).toBeUndefined();
+    // The CLI that held the candidate has gone, and with it the candidate.
+    expect(session.claudeRuntime).toBeUndefined();
   });
 
   test("still accepts a provider label that is the entire tool result", async () => {
@@ -4944,15 +4956,29 @@ describe("stopBackgroundTask", () => {
     expect(getSession(session.id)).toBeUndefined();
   });
 
-  test("deletion closes a control retained only by an unresolved Bash candidate", async () => {
+  test("deletion closes a CLI held only by an unresolved Bash candidate", async () => {
     const session = createSession("candidate-only control");
     track(session.id);
-    const close = mock(async () => {});
-    session.backgroundTaskCandidates = new Map([["candidate-tool", { close }]]);
+    const promptPromise = sendPrompt(session.id, "run a command");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-candidate-only",
+        content: [
+          { type: "tool_use", id: "candidate-tool", name: "Bash", input: { command: "sleep 9" } },
+        ],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => session.status === "idle");
+    const runtime = session.claudeRuntime!;
+    expect(runtime.tasks.candidates.has("candidate-tool")).toBe(true);
 
     expect(deleteSession(session.id)).toBe(true);
-    await waitFor(() => close.mock.calls.length === 1);
-    expect(session.backgroundTaskCandidates).toBeUndefined();
+    await waitFor(() => call.isClosed());
+    expect(runtime.tasks.candidates.size).toBe(0);
+    await promptPromise;
   });
 
   test("releases the control handle once every task has settled", async () => {

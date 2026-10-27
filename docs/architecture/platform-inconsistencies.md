@@ -427,6 +427,26 @@ queue retries its own in-flight id, which the bridge then refuses), so it keeps
 the 410 path. OpenCode has no `lost`; older bridges answer `unknown` and keep
 the Retry card.
 
+`absent` is the one negative answer (0223): the bridge proves the id never
+reached it, so a send under it now is its first delivery. All five HTTP bridges
+answer it, and only while the session's journal is complete: the session was
+created by this bridge (never adopted or resumed), every claim reached disk
+before its handover, the journal loaded cleanly, and nothing was evicted,
+trimmed or skipped since. Claude tracks this as `dispatchJournalComplete` in
+the session preferences (lost once the 64-id bound drops an id); Cursor, Pi and
+ACP as `promptJournalComplete` on the session record (lost on eviction, and for
+ACP when an entry exceeds the journal byte budget); Codex in a `completeness`
+block of its process-wide journal file (fresh-session markers, and a bounded
+filter of every id whose record was ever removed or that was steered), so a
+journal file an older bridge wrote stays untracked for good. OpenCode has no
+durable journal and never answers it. Every marker is written only as `true`
+and is dropped by an older bridge's next write, so a downgrade cannot leave a
+stale one. The workflow runners (review fan-out, Multi Review steps, Build
+Pipeline consolidation and stage prompts) re-send a recovered request under the
+same id only on `absent`; the native-agent parked dispatch keeps its Retry card.
+The threat model is a bridge process restart: journal writes are not fsync'd
+except Cursor's, so an OS crash is out of scope.
+
 ### 3.7 Product workflows
 
 Build pipeline, looped review, and multi-review accept all **five** native

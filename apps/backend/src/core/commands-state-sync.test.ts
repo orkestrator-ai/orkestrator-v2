@@ -112,6 +112,8 @@ async function withCommands<T>(
     return await run(invoke, storage, dataDir, commands, context);
   } finally {
     context.runtime.shutdown();
+    // Closing a terminal disposes its history without awaiting the writes.
+    await context.runtime.terminals.history.settled();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }

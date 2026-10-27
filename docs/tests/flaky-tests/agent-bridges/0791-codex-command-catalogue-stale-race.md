@@ -144,3 +144,13 @@ Evidence: host temporary directory `orkestrator-test-run.unZQTH/bridges.log`
 (compressed on aggregate completion); enclosing log
 `orkestrator-test-run.2JILAH/repository-tests.log`. No catalogue assertion,
 deadline or implementation changed; the original aggregate remains failed.
+
+## Provider non-delivery proof validation, 2026-10-27
+
+The first `mise run test` of the todo 0223 branch failed `a cold app-server
+child > its first answer is stale until a settling re-read confirms the plugin
+skills` again: the settling wait at line 212 timed out (2,104.24 ms). Codex
+reported 2,458 pass, 46 skip and 1 fail across 98 files. The complete owner
+passed alone (30 passed), and the second full run passed the Codex bridge. The
+branch changes the Codex dispatch journal and prompt claim, not the command
+catalogue. Evidence: [1147](../aggregate-validation-runs/1147-provider-non-delivery-proof-0223-validation.md).

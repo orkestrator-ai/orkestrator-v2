@@ -10,7 +10,7 @@ import {
   type PipelineFlowModel,
 } from "./pipeline-flow";
 import { pipelineFlowLayout } from "./pipeline-flow-layout";
-import { build, session, validationRun } from "./pipeline-test-fixture";
+import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const PANEL = [
@@ -38,6 +38,73 @@ function reviewer(slot: number, key: string, start: number, overrides = {}) {
 }
 
 describe("pipelineFlowModel", () => {
+  test.each(["pending", "running", "failed"] as const)(
+    "a %s sessionless retry replaces superseded consolidation history",
+    (status) => {
+      const pipeline = sessionlessReviewerRetry(status);
+      const model = pipelineFlowModel(pipeline);
+      const reviewers = model.nodes.filter((node) => node.title === "Reviewer 1");
+      expect(reviewers).toHaveLength(1);
+      expect(reviewers[0]).toMatchObject({
+        state: status === "pending" ? "not-started" : status,
+        earlierAttempts: 1,
+        placeholder: false,
+      });
+      expect(reviewers[0]!.reviewer).toBe(pipeline.reviewFanout!.reviewers[0]);
+      expect(reviewers[0]!.error).toBe(status === "failed" ? "Retry creation failed" : undefined);
+      expect(model.columns.filter((column) => column.kind === "review")).toHaveLength(1);
+    },
+  );
+
+  test.each(["building", "fixing"] as const)(
+    "an idle current preparation session stays running while %s collects its result",
+    (phase) => {
+      const model = pipelineFlowModel(
+        build({
+          phase,
+          currentSessionIndex: 1,
+          sessions: [
+            session(phase === "building" ? "build" : "fix", "work", 0),
+            session("fix", "prep", 60, {
+              label: REVIEW_PACKAGE_SESSION_LABEL,
+              status: "idle",
+              completedAt: undefined,
+            }),
+          ],
+        }),
+      );
+      expect(model.nodes.find((node) => node.id === "prep")?.state).toBe("running");
+    },
+  );
+
+  for (const dedicated of [true, false]) {
+    test.each(["failed", "incomplete"] as const)(
+      `${dedicated ? "dedicated" : "synthetic"} preparation reflects completed validation with %s commands`,
+      (status) => {
+        const run = validationRun();
+        run.results[0] = { ...run.results[0]!, status, exitCode: status === "failed" ? 1 : null };
+        const model = pipelineFlowModel(
+          build({
+            phase: "reviewing",
+            sessions: [
+              session("build", "work", 0),
+              ...(dedicated
+                ? [session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL })]
+                : []),
+            ],
+            validationRun: run,
+          }),
+        );
+        const prep = model.nodes.find((node) => node.kind === "prepare")!;
+        expect(prep).toMatchObject({ state: "failed", hasValidation: true, placeholder: false });
+        expect(Boolean(prep.session)).toBe(dedicated);
+        const outgoing = model.edges.filter((edge) => edge.from === prep.id);
+        expect(outgoing.length).toBeGreaterThan(0);
+        expect(outgoing.every((edge) => edge.state === "pending")).toBe(true);
+      },
+    );
+  }
+
   test("live sessionless failures retain reviewer retry metadata while consolidating", () => {
     const failed = {
       id: "failed",

@@ -38,6 +38,8 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
+import { pipelineSessionTabOptions } from "@/components/build-pipeline/PipelineFlowView";
+import { build, session } from "@/components/build-pipeline/pipeline-test-fixture";
 import {
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
@@ -961,6 +963,52 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
+  test("a resumed pipeline stage dispatches a manual message under its own request and tab identity", async () => {
+    const stage = session("build", "stage-key", 0, {
+      sdkSessionId: "claude-session",
+      agent: "claude",
+      structuredRequestId: "pipeline-owned-request",
+      structuredResultStatus: "pending",
+    });
+    const pipeline = build({ sessions: [stage] });
+    const options = pipelineSessionTabOptions(pipeline, { title: "Build", session: stage })!;
+    const tabId = options.tabId!;
+    const data: NativeAgentTabData = {
+      ...identity("claude"),
+      sessionId: options.resumeSessionId,
+      requireExistingResumeSession: options.requireExistingResumeSession,
+    };
+    seedEnvTab({ id: tabId, type: "agent-native", nativeAgentData: data, ...options });
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    await screen.findByTestId("shared-native-compose-bar");
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      providerSessionId: stage.sdkSessionId,
+      logicalSessionKey: createSessionKey("env-1", tabId),
+    });
+    act(() => {
+      useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
+        text: "Explain the implementation so far",
+      });
+    });
+    fireEvent.click(await screen.findByTitle("Send"));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const dispatch = dispatchNativeAgentIntentMock.mock.calls[0]![0];
+    expect(dispatch).toMatchObject({
+      agent: "claude",
+      environmentId: "env-1",
+      logicalSessionKey: createSessionKey("env-1", tabId),
+      prompt: "Explain the implementation so far",
+      origin: "interactive-native",
+    });
+    expect(dispatch.requestId).toBeTruthy();
+    expect(dispatch.requestId).not.toBe(stage.structuredRequestId);
+    expect(dispatch.logicalSessionKey).not.toBe(stage.sessionKey);
+    expect(dispatch).not.toHaveProperty("schema");
+    expect(dispatch).not.toHaveProperty("agentMcp");
+    expect(stage.structuredRequestId).toBe("pipeline-owned-request");
+  });
+
   test("hides streaming and completed datasets through the legacy workflow-tab fallback", async () => {
     renderVirtualizedMessages = true;
     const commentary = "The tree is clean. Validation will run as separate commands.";

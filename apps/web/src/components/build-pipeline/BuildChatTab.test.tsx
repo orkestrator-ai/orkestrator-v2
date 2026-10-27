@@ -285,8 +285,9 @@ describe("BuildChatTab backend projection", () => {
 
     const chip = graphNode("Prepare").querySelector("[data-validation-status]")!;
     expect(chip.getAttribute("data-validation-status")).toBe(status);
-    // Checks that did not pass are evidence for the review, not a failed step.
-    expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe("complete");
+    expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe(
+      status === "failed" || status === "incomplete" ? "failed" : "complete",
+    );
   });
 
   test("marks a run-level validation fault as a failed Prepare node with its error", () => {

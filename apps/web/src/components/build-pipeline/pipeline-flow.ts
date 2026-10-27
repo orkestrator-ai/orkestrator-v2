@@ -289,7 +289,14 @@ function sessionState(
     if (isActiveBuildPhase(pipeline.phase)) {
       const kind = PHASE_KIND[pipeline.phase as ResumableBuildPhase];
       const sessionKind = pipelineSessionKind(session);
-      if (session.status === "running" || kind === sessionKind) return "running";
+      if (
+        session.status === "running" ||
+        kind === sessionKind ||
+        (sessionKind === "prepare" &&
+          !session.completedAt &&
+          (pipeline.phase === "building" || pipeline.phase === "fixing"))
+      )
+        return "running";
     }
   }
   if (session.status === "running") {
@@ -497,7 +504,7 @@ export function pipelineFlowModel(
               : "cancelled"
           : outcome === "cancelled"
             ? "cancelled"
-            : run.status === "failed"
+            : outcome === "failed" || outcome === "incomplete"
               ? "failed"
               : "complete";
       if (lastPrepare && columns.at(-1)?.nodeIds.includes(lastPrepare.id)) {
@@ -680,7 +687,7 @@ export function pipelineFlowModel(
     const livePass = continuePass(pipeline.iteration, fanout.reviewers[0]?.id);
     fanout.reviewers.forEach((reviewer, slot) => {
       const existing = livePass.reviewers.get(slot);
-      if (existing && existing.session?.sessionKey === reviewer.sessionKey) return;
+      if (existing?.session && existing.session.sessionKey === reviewer.sessionKey) return;
       const node: PipelineFlowNode = {
         id: `reviewer:${reviewer.id}`,
         kind: "reviewer",

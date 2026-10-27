@@ -53,6 +53,50 @@ export function build(overrides: Partial<BuildPipeline>): BuildPipeline {
   };
 }
 
+/** A retry whose failed sessionless attempt survives on retired consolidation history. */
+export function sessionlessReviewerRetry(status: "pending" | "running" | "failed"): BuildPipeline {
+  return build({
+    phase: "reviewing",
+    reviewers: [
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt" },
+    ],
+    reviewFanout: {
+      reviewers: [
+        {
+          id: "retry",
+          agent: "claude",
+          model: "opus",
+          status,
+          error: status === "failed" ? "Retry creation failed" : undefined,
+        },
+        {
+          id: "survivor",
+          agent: "codex",
+          model: "gpt",
+          status: "completed",
+          sessionKey: "survivor",
+        },
+      ],
+    },
+    sessions: [
+      session("review", "survivor", 60, {
+        label: "Review 2",
+        reviewPassId: "retry",
+        reviewerOutcome: "completed",
+      }),
+      session("review", "discarded", 120, {
+        label: "Consolidation",
+        reviewPassId: "retry",
+        superseded: true,
+        sessionlessReviewers: [
+          { id: "retry", slot: 0, agent: "claude", model: "opus", error: "Creation failed" },
+        ],
+      }),
+    ],
+  });
+}
+
 export function validationRun(overrides: Partial<ValidationRun> = {}): ValidationRun {
   const command = {
     id: "test",

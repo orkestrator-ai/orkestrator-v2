@@ -1,16 +1,17 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
-import { build, session, validationRun } from "./pipeline-test-fixture";
+import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
 import {
   BuildChatTab,
   graphNode,
   inspector,
   renderPipelineTab,
+  retryReviewerMock,
   restoreBuildChatTabMocks,
   selectNode,
 } from "./build-chat-tab-test-support";
@@ -37,6 +38,47 @@ const reviewing = () =>
   });
 
 describe("pipeline inspector controls", () => {
+  test("a second sessionless failure exposes retry after superseded consolidation", async () => {
+    const pipeline = sessionlessReviewerRetry("failed");
+    retryReviewerMock.mockClear();
+    renderPipelineTab(pipeline);
+    selectNode("Reviewer 1");
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Failed");
+    expect(graphNode("Reviewer 1").textContent).toContain("Retry creation failed");
+    const retry = within(inspector()).getByRole("button", { name: "Retry reviewer" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    fireEvent.contextMenu(graphNode("Reviewer 1"));
+    expect(screen.getByRole("menuitem", { name: "Retry reviewer" })).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(retryReviewerMock).toHaveBeenCalledWith(pipeline.id, "retry"));
+  });
+
+  for (const dedicated of [true, false]) {
+    test.each(["failed", "incomplete"] as const)(
+      `${dedicated ? "dedicated" : "synthetic"} Prepare inspector reflects %s validation commands`,
+      (status) => {
+        const run = validationRun();
+        run.results[0] = { ...run.results[0]!, status, exitCode: status === "failed" ? 1 : null };
+        renderPipelineTab(
+          build({
+            phase: "reviewing",
+            sessions: [
+              session("build", "work", 0),
+              ...(dedicated
+                ? [session("fix", "prep", 60, { label: "Package Preparation Session" })]
+                : []),
+            ],
+            validationRun: run,
+          }),
+        );
+        selectNode("Prepare");
+        expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe("failed");
+        expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Failed");
+      },
+    );
+  }
+
   test("only the focused active view publishes its session, including reactivation", () => {
     const pipeline = build({
       phase: "reviewing",

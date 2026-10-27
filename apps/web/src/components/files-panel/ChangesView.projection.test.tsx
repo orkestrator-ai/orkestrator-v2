@@ -121,6 +121,9 @@ describe("ChangesView on the environment change projection", () => {
     const counts = rows.map((row) => within(row).getByTestId("change-row-counts").textContent);
     expect(counts).toEqual(["+5-2", "", "binary", "+?"]);
     expect(rows[0]!.textContent).toContain("M");
+    // The path renders with one separator between directory and filename.
+    expect(within(rows[0]!).getByText("src").textContent).toBe("src");
+    expect(rows[0]!.textContent).toContain("src/a.ts");
     expect(within(rows[1]!).getByTestId("change-row-renamed-from").textContent).toBe(
       "from src/old-name.ts",
     );

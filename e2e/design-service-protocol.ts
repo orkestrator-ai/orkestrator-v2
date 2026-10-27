@@ -24,5 +24,4 @@ export type DesignHostRequest = {
 };
 
 export type DesignHostReply =
-  | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; message: string };
+  { id: number; ok: true; result: unknown } | { id: number; ok: false; message: string };

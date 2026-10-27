@@ -113,8 +113,7 @@ export class AgentMailRepository {
   ) {}
 
   private coordinatorMailResolver:
-    | ((projectId: string) => Promise<{ environmentId: string; tabId: string } | null>)
-    | null = null;
+    ((projectId: string) => Promise<{ environmentId: string; tabId: string } | null>) | null = null;
 
   /** Set by the coordinator service, which can start a main conversation. */
   setCoordinatorMailResolver(resolver: AgentMailRepository["coordinatorMailResolver"]): void {

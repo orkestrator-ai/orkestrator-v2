@@ -71,9 +71,7 @@ export interface RenderedToolCall {
 
 /** The result half of every SDK tool call, before we know which tool it is. */
 type ToolResult =
-  | { status: "success"; value?: unknown }
-  | { status: "error"; error?: unknown }
-  | undefined;
+  { status: "success"; value?: unknown } | { status: "error"; error?: unknown } | undefined;
 
 /**
  * Which tool kinds this renderer has a dedicated card for.

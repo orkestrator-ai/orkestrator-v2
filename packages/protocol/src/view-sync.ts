@@ -107,9 +107,7 @@ export interface ViewSnapshotRequestArgs {
 }
 
 export type ParsedViewSnapshotRequest =
-  | { kind: "absent" }
-  | { kind: "known"; known: ViewRevisionStamp }
-  | { kind: "invalid" };
+  { kind: "absent" } | { kind: "known"; known: ViewRevisionStamp } | { kind: "invalid" };
 
 /** Validates conditional-read arguments at the command boundary. */
 export function parseViewSnapshotRequest(args: unknown): ParsedViewSnapshotRequest {

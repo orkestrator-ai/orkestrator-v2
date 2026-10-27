@@ -683,12 +683,7 @@ export function resetContainerOwnershipCache(): void {
 // ---------------------------------------------------------------------------
 
 export type ReconcileResult =
-  | "none"
-  | "settled"
-  | "adopted"
-  | "needs-attention"
-  | "unreachable"
-  | "deletion-owned";
+  "none" | "settled" | "adopted" | "needs-attention" | "unreachable" | "deletion-owned";
 
 /**
  * Resolves an operation that no live task owns — one left by a backend that

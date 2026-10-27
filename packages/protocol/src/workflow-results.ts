@@ -28,12 +28,7 @@ export const WORKFLOW_RESULT_KINDS = [
 export type WorkflowResultKind = (typeof WORKFLOW_RESULT_KINDS)[number];
 export type WorkflowResultTransport = "tool-v1" | "structured-output-v1" | "planner-block-v1";
 export type WorkflowResultLifecycle =
-  | "open"
-  | "accepted"
-  | "consumed"
-  | "cancelled"
-  | "superseded"
-  | "exhausted";
+  "open" | "accepted" | "consumed" | "cancelled" | "superseded" | "exhausted";
 
 export interface WorkflowResultReceipt {
   version: 1;
@@ -274,10 +269,7 @@ export function workflowResultInstruction(
  * no receipt id, digest, capability material, or diagnostic text.
  */
 export type WorkflowResultSubmissionState =
-  | "preparing"
-  | "correcting"
-  | "received"
-  | "needs-attention";
+  "preparing" | "correcting" | "received" | "needs-attention";
 
 export function isWorkflowResultSubmissionState(
   value: unknown,

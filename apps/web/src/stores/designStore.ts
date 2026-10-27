@@ -11,21 +11,10 @@ import type {
 } from "@orkestrator/protocol/design-operations";
 
 export type DesignSnapshotState =
-  | "absent"
-  | "loading"
-  | "current"
-  | "stale"
-  | "deleted"
-  | "missing"
-  | "invalid";
+  "absent" | "loading" | "current" | "stale" | "deleted" | "missing" | "invalid";
 export type DesignConnectionState = "connected" | "reconnecting" | "offline" | "unauthorized";
 export type DesignIntentPhase =
-  | "draft"
-  | "preparing"
-  | "prepared"
-  | "submitting"
-  | "admitted"
-  | "settled";
+  "draft" | "preparing" | "prepared" | "submitting" | "admitted" | "settled";
 
 /** A user's intent. Only committed snapshots are authoritative; this is a projection. */
 export interface DesignIntent {

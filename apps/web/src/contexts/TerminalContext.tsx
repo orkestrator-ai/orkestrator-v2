@@ -4,14 +4,7 @@ import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 
 // Terminal-specific tab types
 export type TerminalTabType =
-  | "plain"
-  | "claude"
-  | "opencode"
-  | "codex"
-  | "cursor"
-  | "grok"
-  | "pi"
-  | "root";
+  "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "root";
 export type CreatableTabType =
   | TerminalTabType
   | "agent-native"

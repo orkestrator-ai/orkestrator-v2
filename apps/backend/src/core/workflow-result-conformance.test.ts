@@ -156,8 +156,7 @@ describe("workflow result transport conformance", () => {
       arguments: { resultKey, result: { phase: "collecting", title: "T", summary: "" } },
     });
     const acceptedContent = accepted.result?.structuredContent as
-      | { receipt: { receiptId: string } }
-      | undefined;
+      { receipt: { receiptId: string } } | undefined;
     const receipt = acceptedContent?.receipt;
     expect(receipt?.receiptId).toEqual(expect.any(String));
 

@@ -22,15 +22,13 @@ const { GlobalSettings } = await import("../../../apps/web/src/components/settin
 
 function savedActionDefaults(): ActionDefaults {
   const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
-    | { agentSettings?: { actionDefaults?: ActionDefaults } }
-    | undefined;
+    { agentSettings?: { actionDefaults?: ActionDefaults } } | undefined;
   return call?.agentSettings?.actionDefaults ?? {};
 }
 
 function savedAgentSettings() {
   const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
-    | { agentSettings?: Record<string, unknown> }
-    | undefined;
+    { agentSettings?: Record<string, unknown> } | undefined;
   return call?.agentSettings;
 }
 

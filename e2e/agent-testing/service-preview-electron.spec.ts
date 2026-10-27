@@ -1435,8 +1435,7 @@ test("Edit-menu copy and paste reach a service view, and page clipboard access s
   } finally {
     await s().app.evaluate(async ({ clipboard, ClipboardItem }) => {
       const saved = (globalThis as Record<string, unknown>).__servicePreviewClipboard as
-        | Array<Record<string, Blob>>
-        | undefined;
+        Array<Record<string, Blob>> | undefined;
       delete (globalThis as Record<string, unknown>).__servicePreviewClipboard;
       if (saved && saved.length > 0) {
         await clipboard.write(saved.map((entry) => new ClipboardItem(entry)));
@@ -1962,8 +1961,7 @@ test("a legacy URL tab keeps a link and Back through routine re-attaches", async
     const appliedBasis = async () =>
       (
         (await preview<BrowserPreviewState | null>("setVisible", LEGACY_TAB, true)) as
-          | (BrowserPreviewState & { navigation?: number })
-          | null
+          (BrowserPreviewState & { navigation?: number }) | null
       )?.navigation;
 
     await followLink();

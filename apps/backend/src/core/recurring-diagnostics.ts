@@ -41,12 +41,7 @@ export type SignalSourceName = "claude-state-signal" | "container-worktree-signa
  * - `unsupported`: the image has no signal; fallback timers for its life.
  */
 export type SignalHealthState =
-  | "unarmed"
-  | "arming"
-  | "armed"
-  | "confirmed"
-  | "demoted"
-  | "unsupported";
+  "unarmed" | "arming" | "armed" | "confirmed" | "demoted" | "unsupported";
 
 export type SignalDemotionReason =
   /** A safety read found a change no ring announced. */

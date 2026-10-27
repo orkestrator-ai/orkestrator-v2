@@ -1,13 +1,7 @@
 import type { TranscriptActionPart, TranscriptSubagentPart } from "./subagent-transcript.js";
 
 export type CodexCollabAgentStatus =
-  | "pending_init"
-  | "running"
-  | "interrupted"
-  | "completed"
-  | "errored"
-  | "shutdown"
-  | "not_found";
+  "pending_init" | "running" | "interrupted" | "completed" | "errored" | "shutdown" | "not_found";
 
 export interface CodexCollabAgentState {
   status?: CodexCollabAgentStatus;

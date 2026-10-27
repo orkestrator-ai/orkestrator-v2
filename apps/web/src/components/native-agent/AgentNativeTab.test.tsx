@@ -3866,8 +3866,7 @@ describe("AgentNativeTab", () => {
     expect(calls).toEqual(["resume grok-earlier"]);
     // No composer exists yet, so no controls: an all-empty update is refused.
     const resumed = resumeNativeAgentSessionMock.mock.calls[0]?.[0] as
-      | { controls?: unknown }
-      | undefined;
+      { controls?: unknown } | undefined;
     expect(resumed).toBeDefined();
     expect(resumed?.controls).toBeUndefined();
   });
@@ -9245,8 +9244,7 @@ describe("AgentNativeTab", () => {
 
       await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
       const dispatchInput = dispatchNativeAgentIntentMock.mock.calls[0]?.[0] as
-        | { prompt?: string }
-        | undefined;
+        { prompt?: string } | undefined;
       const prompt = dispatchInput?.prompt ?? "";
       expect(prompt).toContain("Please revise this");
       expect(prompt).toContain('"selectedText": "Removed the large coloured left rail"');
@@ -10730,8 +10728,7 @@ describe("AgentNativeTab", () => {
         expect.objectContaining({ duration: Infinity }),
       );
       const warningOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
-        | { onDismiss?: () => void }
-        | undefined;
+        { onDismiss?: () => void } | undefined;
       act(() => warningOptions?.onDismiss?.());
 
       await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledTimes(1));
@@ -10950,8 +10947,7 @@ describe("AgentNativeTab", () => {
       );
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
       const firstOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
-        | { onDismiss?: () => void }
-        | undefined;
+        { onDismiss?: () => void } | undefined;
       act(() => firstOptions?.onDismiss?.());
 
       view.unmount();
@@ -10970,8 +10966,7 @@ describe("AgentNativeTab", () => {
       );
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
       const secondOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
-        | { onDismiss?: () => void }
-        | undefined;
+        { onDismiss?: () => void } | undefined;
       act(() => secondOptions?.onDismiss?.());
 
       seedProjection({ sessionId: "session-b", notices: notice("occurrence-2") });
@@ -10996,8 +10991,7 @@ describe("AgentNativeTab", () => {
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
       const firstOptions = mockToastError.mock.calls.at(-1)?.[1] as
-        | { onDismiss?: () => void }
-        | undefined;
+        { onDismiss?: () => void } | undefined;
       act(() => firstOptions?.onDismiss?.());
       mockToastError.mockClear();
 
@@ -11044,8 +11038,7 @@ describe("AgentNativeTab", () => {
       );
       await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
       const options = mockToastError.mock.calls.at(-1)?.[1] as
-        | { onDismiss?: () => void }
-        | undefined;
+        { onDismiss?: () => void } | undefined;
       act(() => options?.onDismiss?.());
       mockToastError.mockClear();
 

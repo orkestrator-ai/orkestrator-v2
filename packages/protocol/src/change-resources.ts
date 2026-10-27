@@ -120,11 +120,7 @@ export interface ChangeFileRow {
 }
 
 export type ChangeActionKind =
-  | "open-historical-diff"
-  | "open-current-diff"
-  | "refresh"
-  | "restore"
-  | "copy-handoff";
+  "open-historical-diff" | "open-current-diff" | "refresh" | "restore" | "copy-handoff";
 
 export interface ChangeAction {
   kind: ChangeActionKind;
@@ -135,12 +131,7 @@ export interface ChangeAction {
 }
 
 export type ChangeProjectionState =
-  | "loading"
-  | "ready"
-  | "partial"
-  | "stale"
-  | "unavailable"
-  | "deleted";
+  "loading" | "ready" | "partial" | "stale" | "unavailable" | "deleted";
 
 export interface ChangeProjectionFreshness {
   lastAttemptAt: string | null;
@@ -367,8 +358,7 @@ export interface ChangesResolveLiveDetailRequest {
 }
 
 export type ChangesResolveLiveDetailResult =
-  | { kind: "identity"; identity: DiffIdentity }
-  | { kind: "error"; error: ChangeError };
+  { kind: "identity"; identity: DiffIdentity } | { kind: "error"; error: ChangeError };
 
 export interface DiffDisplayOptions {
   whitespace?: "preserve" | "ignore-for-view";

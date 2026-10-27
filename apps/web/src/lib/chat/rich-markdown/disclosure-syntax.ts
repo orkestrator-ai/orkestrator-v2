@@ -167,10 +167,7 @@ export const disclosureFromMarkdownExtension = {
 };
 
 export type DisclosureLineKind =
-  | { kind: "open" }
-  | { kind: "close" }
-  | { kind: "summary"; summary: string }
-  | { kind: "literal" };
+  { kind: "open" } | { kind: "close" } | { kind: "summary"; summary: string } | { kind: "literal" };
 
 const OPEN_LINE = /^<details>[\t ]*$/;
 const CLOSE_LINE = /^<\/details>[\t ]*$/;

@@ -76,8 +76,7 @@ export interface CaptureSaveState {
 }
 
 export type CaptureSaveOutcome =
-  | { ok: true; annotationId: string; captureId: string }
-  | { ok: false; error: string };
+  { ok: true; annotationId: string; captureId: string } | { ok: false; error: string };
 
 export type CaptureSaveInput = CaptureCommitInput;
 

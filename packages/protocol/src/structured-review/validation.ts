@@ -43,8 +43,7 @@ export class ReviewContractValidationError extends Error {
 }
 
 export type ReviewContractParseResult<T> =
-  | { success: true; data: T }
-  | { success: false; error: ReviewContractValidationError };
+  { success: true; data: T } | { success: false; error: ReviewContractValidationError };
 
 type JsonObject = Record<string, unknown>;
 type Issues = ReviewContractValidationIssue[];

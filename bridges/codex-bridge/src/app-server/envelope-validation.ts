@@ -42,10 +42,7 @@ export interface InboundInvalid {
 }
 
 export type InboundMessage =
-  | InboundResponse
-  | InboundNotification
-  | InboundServerRequest
-  | InboundInvalid;
+  InboundResponse | InboundNotification | InboundServerRequest | InboundInvalid;
 
 const PREVIEW_LIMIT = 200;
 

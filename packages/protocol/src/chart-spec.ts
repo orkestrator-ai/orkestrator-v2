@@ -84,11 +84,7 @@ export interface DonutChartSpecV1 extends ChartCommonFields {
 }
 
 export type ChartSpecV1 =
-  | BarChartSpecV1
-  | LineChartSpecV1
-  | AreaChartSpecV1
-  | ScatterChartSpecV1
-  | DonutChartSpecV1;
+  BarChartSpecV1 | LineChartSpecV1 | AreaChartSpecV1 | ScatterChartSpecV1 | DonutChartSpecV1;
 
 const ID_PATTERN = /^[^\u0000-\u001f\u007f]+$/;
 const TEXT_PATTERN = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]*$/;

@@ -38,13 +38,7 @@ import {
 export type LivePlacement = "inline" | "panel" | "fullscreen";
 
 export type LivePhase =
-  | "opening"
-  | "loading"
-  | "ready"
-  | "crashed"
-  | "unresponsive"
-  | "navigation-blocked"
-  | "error";
+  "opening" | "loading" | "ready" | "crashed" | "unresponsive" | "navigation-blocked" | "error";
 
 export interface LiveArtifactTarget {
   /** `richArtifactOccurrenceKey` of the transcript occurrence. */

@@ -333,7 +333,7 @@ drift test checks the manifest, lockfile, backend pin and base-image tag agree.
 
 ## Formatting, Linting and Typechecking
 
-Formatting is `bun fmt` (configured by `.oxfmtrc.json`, oxfmt-compatible output),
+Formatting is `bun fmt` (configured by the `[fmt]` section of `bunfig.toml`),
 linting is oxlint, and typechecking is `bun check` (TypeScript 7, the same
 version as the `typescript` dev dependency). Run them from the repo root with
 `mise run format`, `mise run format:check`, `mise run lint`, `mise run lint:fix`,
@@ -343,8 +343,9 @@ to a `package.json`, because `bun check` runs that script instead of the type
 checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
 are in [`docs/development/linting.md`](docs/development/linting.md).
 
-Format with `bun fmt` (or `mise run format`) only. oxfmt is not a dependency,
-despite the config's file name: do not run `oxfmt`, `npx oxfmt` or Prettier.
+Format with `bun fmt` (or `mise run format`) only: do not run `oxfmt`,
+`npx oxfmt` or Prettier, and do not add an `.oxfmtrc.json` or `.prettierrc`,
+which would take precedence over `bunfig.toml`.
 To format or check only the files you touched, pass them to `bun fmt` or
 `bun fmt --check`.
 

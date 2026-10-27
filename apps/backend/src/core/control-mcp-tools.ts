@@ -322,8 +322,7 @@ async function ownConversationMailbox(
       ? snapshot.workspace.conversations
       : [];
   const own = conversations.find((item) => isRecord(item) && item.id === scope.conversationId) as
-    | JsonRecord
-    | undefined;
+    JsonRecord | undefined;
   return own && typeof own.tabId === "string"
     ? {
         environmentId: `coordinator:${scope.coordinatorId}:${scope.conversationId}`,

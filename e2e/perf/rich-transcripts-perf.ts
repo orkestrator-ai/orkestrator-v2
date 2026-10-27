@@ -471,8 +471,7 @@ async function calibrateRefresh(page: Page): Promise<number> {
 async function scrollControllerCounters(page: Page): Promise<Record<string, number> | null> {
   return page.evaluate(() => {
     const scroller = document.querySelector("[data-virtuoso-scroller]") as
-      | (Element & { orkTranscriptScrollDiagnostics?: () => Record<string, number> })
-      | null;
+      (Element & { orkTranscriptScrollDiagnostics?: () => Record<string, number> }) | null;
     return scroller?.orkTranscriptScrollDiagnostics?.() ?? null;
   });
 }
@@ -778,8 +777,7 @@ async function sampleStats(page: Page, cdp: CDPSession, cycle: number): Promise<
   const heap = await cdp.send("Runtime.getHeapUsage");
   const stats = await page.evaluate(() => window.__richPerf!.stats());
   const scheduler = stats.scheduler as
-    | { settled: number; settledBytes: number; queued: number; inflight: number }
-    | undefined;
+    { settled: number; settledBytes: number; queued: number; inflight: number } | undefined;
   const artifactRequests = stats.artifactRequests as { entries: number; bytes: number } | undefined;
   const viewStore = stats.viewStore as { entries: number } | undefined;
   return {
@@ -848,8 +846,7 @@ async function runCycles(
     await sleep(120);
     const stats = await page.evaluate(() => window.__richPerf!.stats());
     const scheduler = stats.scheduler as
-      | { settled: number; settledBytes: number; queued: number; queuedBytes: number }
-      | undefined;
+      { settled: number; settledBytes: number; queued: number; queuedBytes: number } | undefined;
     if (!scheduler) continue;
     sweepMax.settled = Math.max(sweepMax.settled, scheduler.settled);
     sweepMax.settledBytes = Math.max(sweepMax.settledBytes, scheduler.settledBytes);

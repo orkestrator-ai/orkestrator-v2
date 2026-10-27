@@ -698,10 +698,7 @@ export interface AgentMailConversation {
 
 /** The mail tools whose calls a transcript draws as messages rather than tool rows. */
 export type AgentMailTranscriptTool =
-  | "send_message"
-  | "reply_message"
-  | "read_message"
-  | "get_message";
+  "send_message" | "reply_message" | "read_message" | "get_message";
 
 const AGENT_MAIL_TRANSCRIPT_TOOLS: readonly AgentMailTranscriptTool[] = [
   "send_message",

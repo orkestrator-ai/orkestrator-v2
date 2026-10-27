@@ -5808,8 +5808,7 @@ describe("TerminalContainer", () => {
     act(() => screen.getByRole("button", { name: "Open obscured file" }).click());
     expect(onReveal).toHaveBeenCalledTimes(3);
     const menuClose = listenMock.mock.calls.find(([event]) => event === "menu-close-tab")?.[1] as
-      | (() => void)
-      | undefined;
+      (() => void) | undefined;
     expect(menuClose).toBeDefined();
     const count = usePaneLayoutStore.getState().getAllTabs("env-visible").length;
     act(() => menuClose?.());

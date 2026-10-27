@@ -230,8 +230,7 @@ const READ_TOOL_PATH_KEYS = ["file_path", "filePath", "path", "target_file", "fi
 function firstUserMessageOf(
   messages: readonly unknown[],
   window:
-    | Pick<NativeAgentMessageWindow, "truncated" | "omittedMessages" | "canLoadEarlier">
-    | undefined,
+    Pick<NativeAgentMessageWindow, "truncated" | "omittedMessages" | "canLoadEarlier"> | undefined,
 ): { firstUserMessage?: string; reachesStart: boolean } {
   const reachesStart =
     !window?.truncated || ((window.omittedMessages ?? -1) === 0 && window.canLoadEarlier !== true);

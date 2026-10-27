@@ -108,8 +108,7 @@ export function registerNodeFileTools(
     const conversation = (
       Array.isArray(workspace?.conversations) ? workspace.conversations : []
     ).find((entry) => isRecord(entry) && entry.id === scope.conversationId) as
-      | JsonRecord
-      | undefined;
+      JsonRecord | undefined;
     if (!conversation || typeof conversation.tabId !== "string") {
       throw new Error("This coordinator conversation has no mailbox.");
     }

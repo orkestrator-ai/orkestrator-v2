@@ -414,12 +414,7 @@ export interface BrowserPreviewShowOnPageResult {
    * inside a closed dialog or a collapsed menu), so nothing could be shown.
    */
   outcome:
-    | "shown"
-    | "hidden"
-    | "not-found"
-    | "navigation-required"
-    | "timeout"
-    | "navigation-failed";
+    "shown" | "hidden" | "not-found" | "navigation-required" | "timeout" | "navigation-failed";
   navigated: boolean;
   resolution: WebAnnotationAnchorResolution;
   documentGeneration: number;

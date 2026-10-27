@@ -2060,8 +2060,7 @@ export class DesignService {
 function legacyInput(
   frameId: string,
   update:
-    | Partial<Pick<DesignFrame, "name" | "x" | "y" | "width" | "height" | "html">>
-    | DesignOperation,
+    Partial<Pick<DesignFrame, "name" | "x" | "y" | "width" | "height" | "html">> | DesignOperation,
 ): DesignOperationInput {
   if ("op" in update) {
     switch (update.op) {

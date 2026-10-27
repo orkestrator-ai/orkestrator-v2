@@ -13,13 +13,7 @@
  * not started look the same on the graph, so both are `not-started`.
  */
 export type FlowNodeState =
-  | "not-started"
-  | "running"
-  | "paused"
-  | "complete"
-  | "failed"
-  | "cancelling"
-  | "cancelled";
+  "not-started" | "running" | "paused" | "complete" | "failed" | "cancelling" | "cancelled";
 
 /**
  * What an edge says about the work flowing along it.

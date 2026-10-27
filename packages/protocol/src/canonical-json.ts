@@ -69,8 +69,7 @@ function encode(value: unknown, path: string, depth: number, maxDepth: number): 
 }
 
 export type StrictJsonResult =
-  | { ok: true; value: unknown }
-  | { ok: false; message: string; offset: number; path: string };
+  { ok: true; value: unknown } | { ok: false; message: string; offset: number; path: string };
 
 /**
  * Parse RFC 8259 JSON, rejecting duplicate keys and excessive depth.

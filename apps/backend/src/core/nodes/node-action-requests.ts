@@ -46,13 +46,7 @@ export interface NodeActionTarget {
 }
 
 export type NodeActionState =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "expired"
-  | "executed"
-  | "failed"
-  | "outcome-unknown";
+  "pending" | "approved" | "rejected" | "expired" | "executed" | "failed" | "outcome-unknown";
 
 export interface NodeActionRequest {
   requestId: string;

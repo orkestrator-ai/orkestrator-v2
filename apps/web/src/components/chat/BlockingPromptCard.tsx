@@ -6,13 +6,7 @@ import { cn } from "@/lib/utils";
 import { PromptDeadline, type PromptDeadlineProps } from "./PromptDeadline";
 
 export type BlockingPromptState =
-  | "pending"
-  | "submitting"
-  | "expired"
-  | "withdrawn"
-  | "stale"
-  | "invalid"
-  | "retryable-error";
+  "pending" | "submitting" | "expired" | "withdrawn" | "stale" | "invalid" | "retryable-error";
 
 /** Pause state and control for a card's countdown. */
 export type BlockingPromptCardDeadline = Omit<PromptDeadlineProps, "expiresAt">;

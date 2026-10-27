@@ -112,13 +112,7 @@ export type NavigationTarget =
     };
 
 export type OperationOutcome =
-  | "converged"
-  | "clamped"
-  | "expired"
-  | "unresolved"
-  | "cancelled"
-  | "superseded"
-  | "inactive";
+  "converged" | "clamped" | "expired" | "unresolved" | "cancelled" | "superseded" | "inactive";
 
 /** Bounded, content-free counters. */
 export interface ScrollDiagnostics {

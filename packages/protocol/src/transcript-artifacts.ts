@@ -223,11 +223,7 @@ export interface ArtifactVerificationIdentity {
 }
 
 export type ArtifactVerificationGate =
-  | "schema"
-  | "authoritative-source"
-  | "syntax"
-  | "bounded-render"
-  | "supervised-visual";
+  "schema" | "authoritative-source" | "syntax" | "bounded-render" | "supervised-visual";
 
 export type ArtifactVerificationEvidence =
   | { kind: "html-static"; captures: ArtifactCapture[] }

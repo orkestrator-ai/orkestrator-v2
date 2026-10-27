@@ -168,8 +168,7 @@ export function touchSession(session: SessionState): void {
 }
 
 export function claudeExecutableOptions():
-  | { pathToClaudeCodeExecutable: string }
-  | Record<string, never> {
+  { pathToClaudeCodeExecutable: string } | Record<string, never> {
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
   return executable ? { pathToClaudeCodeExecutable: executable } : {};
 }

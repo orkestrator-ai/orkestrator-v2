@@ -196,8 +196,7 @@ async function main() {
     requestId: runKey,
   });
   const receipt = started.structured.receipt as
-    | { operationId: string; resources: { sessionId?: string } }
-    | undefined;
+    { operationId: string; resources: { sessionId?: string } } | undefined;
   const sessionId = receipt?.resources.sessionId;
   steps.push({
     step: "start_work",

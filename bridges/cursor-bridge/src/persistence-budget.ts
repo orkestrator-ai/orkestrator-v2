@@ -43,9 +43,7 @@ export interface BudgetedSnapshot {
 }
 
 export type PersistenceErrorCode =
-  | "persistence-failed"
-  | "persistence-budget-exceeded"
-  | "persistence-closed";
+  "persistence-failed" | "persistence-budget-exceeded" | "persistence-closed";
 
 /**
  * A mandatory publication did not happen.

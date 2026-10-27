@@ -53,9 +53,7 @@ export const DEFAULT_STEER_JOURNAL_LIMITS: SteerJournalLimits = Object.freeze({
 });
 
 export type SteerRejectionReason =
-  | "steer-capacity-exceeded"
-  | "steer-history-unavailable"
-  | "steer-not-recorded";
+  "steer-capacity-exceeded" | "steer-history-unavailable" | "steer-not-recorded";
 
 export type SteerAdmission =
   | { admitted: true }

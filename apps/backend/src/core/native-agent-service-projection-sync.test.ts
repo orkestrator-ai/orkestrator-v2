@@ -491,8 +491,7 @@ describe("native agent remote projection synchronization", () => {
           targetBytes: 512 * 1024,
         });
         const huge = page.messages.find((message) => (message as { id: string }).id === "huge") as
-          | { parts: unknown[] }
-          | undefined;
+          { parts: unknown[] } | undefined;
         expect(huge?.parts).toHaveLength(300);
       },
     );

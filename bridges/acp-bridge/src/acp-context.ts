@@ -234,11 +234,7 @@ export interface BridgeStatusPart {
 }
 
 export type BridgeMessagePart =
-  | BridgeTextPart
-  | BridgeFilePart
-  | BridgeToolPart
-  | BridgeImagePart
-  | BridgeStatusPart;
+  BridgeTextPart | BridgeFilePart | BridgeToolPart | BridgeImagePart | BridgeStatusPart;
 
 export interface PromptJournalEntry {
   requestId: string;

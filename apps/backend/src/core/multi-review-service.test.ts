@@ -4533,8 +4533,7 @@ async function withService(
         }),
       snapshot: async (workflowId) =>
         (await storage.getMultiReviewWorkflow(workflowId))?.snapshot as
-          | MultiReviewWorkflow
-          | undefined,
+          MultiReviewWorkflow | undefined,
     });
   } finally {
     await service.shutdown();
@@ -6821,8 +6820,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
   // The persisted snapshot is stored untyped; the sibling tests only ever hand
   // it to `toMatchObject`, so narrow it here to read one field back out.
   const cancelling = (await storage.getMultiReviewWorkflow(started.id))?.snapshot as
-    | MultiReviewWorkflow
-    | undefined;
+    MultiReviewWorkflow | undefined;
   const fixSessionId = cancelling?.fixSession?.providerSessionId;
   expect(fixSessionId).toBeDefined();
   // The turn ends terminally rather than returning to idle: still settled.

@@ -14,8 +14,7 @@ export interface FieldError {
 }
 
 export type FieldValidation<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: FieldError[]; omittedErrors: number };
+  { ok: true; value: T } | { ok: false; errors: FieldError[]; omittedErrors: number };
 
 export const DEFAULT_MAX_FIELD_ERRORS = 20;
 

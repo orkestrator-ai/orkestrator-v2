@@ -92,10 +92,7 @@ export function realmCoordinatorDefers(grouping: RealmGrouping | null): boolean 
  * dialog and only selects the environment.
  */
 export type RealmDialog =
-  | "repository-settings"
-  | "delete-project"
-  | "environment-settings"
-  | "environment-rebuild";
+  "repository-settings" | "delete-project" | "environment-settings" | "environment-rebuild";
 
 function realmDialog(value: unknown): RealmDialog | undefined {
   return value === "repository-settings" ||

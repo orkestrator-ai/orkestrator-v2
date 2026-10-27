@@ -125,9 +125,7 @@ export type WebAnnotationLimits = typeof WEB_ANNOTATION_LIMITS;
  * The transport URL a desktop happened to use is never part of it.
  */
 export type WebAnnotationServiceIdentity =
-  | { kind: "service"; serviceId: string }
-  | { kind: "port"; port: number }
-  | { kind: "unknown" };
+  { kind: "service"; serviceId: string } | { kind: "port"; port: number } | { kind: "unknown" };
 
 export interface WebAnnotationPageIdentity {
   service: WebAnnotationServiceIdentity;
@@ -280,12 +278,7 @@ export type WebAnnotationAnchorState =
   | "too-complex";
 
 export type WebAnnotationAnchorRule =
-  | "route-mismatch"
-  | "stable-id"
-  | "semantic-context"
-  | "structural-path"
-  | "text-quote"
-  | "none";
+  "route-mismatch" | "stable-id" | "semantic-context" | "structural-path" | "text-quote" | "none";
 
 /** Explainable resolver result. No numeric confidence score. */
 export interface WebAnnotationAnchorResolution {
@@ -358,10 +351,7 @@ export const EMPTY_WEB_ANNOTATION_REDACTION: WebAnnotationRedactionSummary = Obj
 
 export type WebAnnotationCaptureState = "complete" | "stale" | "missing";
 export type WebAnnotationCaptureProducer =
-  | "desktop-native"
-  | "legacy-import"
-  | "text-only"
-  | "result-capture";
+  "desktop-native" | "legacy-import" | "text-only" | "result-capture";
 
 export interface WebAnnotationCapture {
   id: string;
@@ -448,13 +438,7 @@ export interface WebAnnotationResultCaptureMetadata {
 
 /** How an after-capture relates to the evidence it is compared with. */
 export type WebAnnotationComparisonDifference =
-  | "route"
-  | "service"
-  | "viewport"
-  | "zoom"
-  | "device-scale"
-  | "target"
-  | "unstable";
+  "route" | "service" | "viewport" | "zoom" | "device-scale" | "target" | "unstable";
 
 export interface WebAnnotationComparisonMetadata extends WebAnnotationResultCaptureMetadata {
   /** Annotation content/capture revisions current when the after-capture was taken. */
@@ -514,11 +498,7 @@ export const WEB_ANNOTATION_PROVENANCES = Object.freeze([
 export type WebAnnotationProvenance = (typeof WEB_ANNOTATION_PROVENANCES)[number];
 
 export type WebAnnotationEntryKind =
-  | "comment"
-  | "legacy-comment"
-  | "agent-response"
-  | "result"
-  | "lifecycle";
+  "comment" | "legacy-comment" | "agent-response" | "result" | "lifecycle";
 
 export type WebAnnotationLifecycleEvent =
   | "created"
@@ -933,12 +913,7 @@ export interface WebAnnotationRequestInteraction {
 }
 
 export type WebAnnotationCancelRefusal =
-  | "claimed"
-  | "unconfirmed"
-  | "not-active"
-  | "newer-turn"
-  | "already-finished"
-  | "stop-failed";
+  "claimed" | "unconfirmed" | "not-active" | "newer-turn" | "already-finished" | "stop-failed";
 
 export interface WebAnnotationCancelRefusalRecord {
   code: WebAnnotationCancelRefusal;
@@ -977,11 +952,7 @@ export function webAnnotationQueueOrigin(message: unknown): WebAnnotationQueueOr
 // Results
 
 export type WebAnnotationOutcome =
-  | "addressed"
-  | "partly-addressed"
-  | "not-addressed"
-  | "needs-clarification"
-  | "unreported";
+  "addressed" | "partly-addressed" | "not-addressed" | "needs-clarification" | "unreported";
 
 export type WebAnnotationCheckOutcome = "passed" | "failed" | "not-run" | "unavailable";
 /** `agent-reported` can never impersonate `app-observed` or user acceptance. */
@@ -1036,10 +1007,7 @@ export interface WebAnnotationResultObservation {
 }
 
 export type WebAnnotationFileCheckStatus =
-  | "exists"
-  | "missing"
-  | "outside-workspace"
-  | "unavailable";
+  "exists" | "missing" | "outside-workspace" | "unavailable";
 
 export interface WebAnnotationFileCheck {
   path: string;

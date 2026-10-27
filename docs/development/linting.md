@@ -9,12 +9,14 @@ Bun runtime, and linting is [oxlint](https://oxc.rs) (`.oxlintrc.json`). Both
 run over the whole repo in well under a second, so there is no turbo task and no
 per-package config — always run them from the repo root.
 
-`bun fmt` reads `.oxfmtrc.json` and prints what oxfmt 0.72 prints, so the
-config file keeps its oxfmt name and the oxfmt package is no longer installed.
-Do not move the options into a `[fmt]` section of `bunfig.toml`: without an
-oxfmt config file or dependency, `bun fmt` formats like Prettier (80 columns by
-default) rather than like oxfmt. `bun fmt --doctor` shows which config it
-picked up.
+`bun fmt` is configured by the `[fmt]` section of the root `bunfig.toml`,
+which applies Prettier's defaults plus `printWidth = 100` and the ignore
+patterns below. The repo used to keep an `.oxfmtrc.json`, which `bun fmt` read
+in oxfmt-compatible mode; that file was removed on 2026-10-27 and the code
+reformatted once in Prettier style (mostly union types that now fit on one
+line). Do not reintroduce an `.oxfmtrc.json` or `.prettierrc`: either would
+take precedence over `bunfig.toml` and change the output. `bun fmt --doctor`
+shows which config it picked up.
 
 Typechecking is [`bun check`](https://bun.com/docs/runtime/check), which reports
 the same errors as `tsc` from TypeScript 7 and uses every core. Each package's

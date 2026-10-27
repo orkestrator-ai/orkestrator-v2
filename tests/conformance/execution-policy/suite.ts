@@ -136,8 +136,7 @@ export function runExecutionPolicyConformance(
             }
           }
           const narrowing = narrowings[shape.id as keyof typeof narrowings] as
-            | Narrowing
-            | undefined;
+            Narrowing | undefined;
           if (!narrowing) {
             expect(observed).toEqual(expected);
             return;

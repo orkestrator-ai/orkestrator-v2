@@ -15,8 +15,7 @@ import { cn } from "@/lib/utils";
  * it says so rather than show a countdown that looks clickable.
  */
 export type PromptDeadlineHold =
-  | AgentInteractionHold
-  | { available: false; reason: "hook-outdated" };
+  AgentInteractionHold | { available: false; reason: "hook-outdated" };
 
 const AGENT_NAMES: Record<AgentInteractionProvider, string> = {
   claude: "Claude",

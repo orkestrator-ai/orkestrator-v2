@@ -33,8 +33,7 @@ import path from "node:path";
 import { DesignError } from "./errors.js";
 
 export type DesignExportDestination =
-  | { kind: "local"; worktreePath: string }
-  | { kind: "container"; containerId: string };
+  { kind: "local"; worktreePath: string } | { kind: "container"; containerId: string };
 
 /**
  * Repository-relative `.orkdes` path: up to seven plain folder names and a file

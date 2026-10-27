@@ -7,8 +7,7 @@
 import type { ContainerRuntimeIdentity, RetainedStorageSet } from "./container-lifecycle.js";
 
 export type RecoveryCopyReason =
-  | RetainedStorageSet["reason"]
-  | NonNullable<ContainerRuntimeIdentity["retainedReason"]>;
+  RetainedStorageSet["reason"] | NonNullable<ContainerRuntimeIdentity["retainedReason"]>;
 
 /**
  * One restorable earlier state of an environment: a retained runtime (whose

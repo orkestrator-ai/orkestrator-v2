@@ -205,8 +205,7 @@ export interface RoutableLink {
 }
 
 export type RoutedResult<T> =
-  | { outcome: "ok"; result: T }
-  | { outcome: "unknown"; requestKey: string; outcomeId: string };
+  { outcome: "ok"; result: T } | { outcome: "unknown"; requestKey: string; outcomeId: string };
 
 /**
  * Forward one command to its node. Writes are refused while the node is not

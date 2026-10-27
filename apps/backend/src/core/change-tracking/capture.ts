@@ -39,11 +39,7 @@ export interface ManifestEntry {
 export interface ManifestOmission {
   p: string;
   reason:
-    | "too-large"
-    | "unreadable"
-    | "capture-byte-budget"
-    | "inventory-limit"
-    | "unsupported-kind";
+    "too-large" | "unreadable" | "capture-byte-budget" | "inventory-limit" | "unsupported-kind";
   size: number | null;
   /** size:mtime:ctime:ino, to notice changes between omitted endpoints. */
   stamp: string | null;

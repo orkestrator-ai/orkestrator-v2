@@ -343,19 +343,16 @@ export function openCodeFake(): OpenCodeFake {
   let questionReplyFailure: { error: unknown; applied: boolean } | null = null;
   let messagesResponse: Record<string, unknown> = { data: [] };
   let messagesHandler:
-    | ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
-    | null = null;
+    ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null;
   let abortResponse: Record<string, unknown> = { data: true };
   let abortHandler:
-    | ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
-    | null = null;
+    ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null;
   let deleteResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let updateResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let mcpAddError: unknown = null;
   let mcpAddHandler:
-    | ((parameters: Record<string, unknown>) => Promise<Record<string, unknown>>)
-    | null = null;
+    ((parameters: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null;
   let promptResponse: Record<string, unknown> = { data: true };
 
   function applyPromptToolsAsSessionPermission(parameters: Record<string, unknown>): void {

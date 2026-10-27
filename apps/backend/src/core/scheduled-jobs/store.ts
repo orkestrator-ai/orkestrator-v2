@@ -29,9 +29,7 @@ export interface ScheduledJobStoreOptions {
 }
 
 export type JobMutation<T> =
-  | { result: T }
-  | { result: T; value: ScheduledJob }
-  | { result: T; delete: true };
+  { result: T } | { result: T; value: ScheduledJob } | { result: T; delete: true };
 
 export class ScheduledJobStore {
   constructor(private readonly options: ScheduledJobStoreOptions) {}

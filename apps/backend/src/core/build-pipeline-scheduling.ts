@@ -21,11 +21,7 @@ import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
  * `paused` owes nothing until the user resumes (a command that advances it).
  */
 export type BuildPipelineObligation =
-  | "result-consumption"
-  | "provision"
-  | "review-fanout"
-  | "advance"
-  | "terminal-reconciliation";
+  "result-consumption" | "provision" | "review-fanout" | "advance" | "terminal-reconciliation";
 
 const PROVISIONING_PHASES = new Set([
   "creating-environment",

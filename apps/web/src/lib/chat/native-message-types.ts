@@ -39,12 +39,7 @@ export interface NativeToolDiffMetadata {
 export type NativeToolState = "success" | "failure" | "pending";
 export type NativeAgentState = "active" | "finished" | "failed";
 export type NativeBackgroundTaskStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "killed"
-  | "paused";
+  "pending" | "running" | "completed" | "failed" | "killed" | "paused";
 
 export interface NativeBackgroundTask {
   id: string;

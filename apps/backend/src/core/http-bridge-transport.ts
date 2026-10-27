@@ -53,11 +53,7 @@ const BRIDGE_ATTACH_TIMEOUT_MS = 90_000;
  * the same budget so call sites read as what they do.
  */
 export type BridgeRequestTimeoutKind =
-  | "default"
-  | "session-start"
-  | "attach"
-  | "prompt"
-  | "catalog-refresh";
+  "default" | "session-start" | "attach" | "prompt" | "catalog-refresh";
 
 /**
  * Transport failures that are proven to precede the first written byte.

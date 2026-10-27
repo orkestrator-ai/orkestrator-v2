@@ -59,10 +59,7 @@ export type CoordinatorLifecycleState = "ready" | "paused" | "error";
  * boolean.
  */
 export type CoordinatorProviderTier =
-  | "enforced"
-  | "provider-configured"
-  | "advisory"
-  | "unavailable";
+  "enforced" | "provider-configured" | "advisory" | "unavailable";
 
 /**
  * Weakest tier an installation offers before the user chooses one.

@@ -40,12 +40,7 @@ export const WEB_ANNOTATION_DRAFTS_VERSION = 1;
 export const CONSUMED_DRAFT_IDS = 512;
 
 export type WebAnnotationRecordKind =
-  | "capture"
-  | "entry"
-  | "brief"
-  | "result"
-  | "draft"
-  | "request-text";
+  "capture" | "entry" | "brief" | "result" | "draft" | "request-text";
 
 export interface ManifestCapture {
   id: string;

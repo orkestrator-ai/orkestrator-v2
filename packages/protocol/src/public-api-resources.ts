@@ -455,10 +455,7 @@ export type PublicSettingType =
  * - `applied`: the running environment adopts it immediately.
  */
 export type PublicSettingApplication =
-  | "next-environment"
-  | "next-start"
-  | "next-session"
-  | "applied";
+  "next-environment" | "next-start" | "next-session" | "applied";
 
 export interface PublicSettingDescriptor {
   key: string;

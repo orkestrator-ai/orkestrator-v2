@@ -23,9 +23,7 @@ export type MessageForkKind = "prompt" | "response";
  * everything when it meant to keep nothing.
  */
 export type MessageForkBoundary =
-  | { type: "message"; messageId: string }
-  | { type: "session-start" }
-  | { type: "whole-session" };
+  { type: "message"; messageId: string } | { type: "session-start" } | { type: "whole-session" };
 
 /**
  * Resolves the boundary for one candidate action.

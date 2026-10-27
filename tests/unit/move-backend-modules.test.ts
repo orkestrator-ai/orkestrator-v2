@@ -38,7 +38,7 @@ async function fixture(files: Record<string, string>) {
     path.join(repositoryRoot, "scripts/move-backend-modules.ts"),
     path.join(root, "scripts/move-backend-modules.ts"),
   );
-  await copyFile(path.join(repositoryRoot, ".oxfmtrc.json"), path.join(root, ".oxfmtrc.json"));
+  await copyFile(path.join(repositoryRoot, "bunfig.toml"), path.join(root, "bunfig.toml"));
   for (const [file, source] of Object.entries(files)) await write(root, file, source);
   run(root, ["git", "init", "--quiet"]);
   run(root, ["git", "add", "--", ...Object.keys(files)]);

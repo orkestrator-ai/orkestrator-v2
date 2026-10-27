@@ -77,12 +77,7 @@ export function isGrantingApprovalDecision(
 
 /** Why a pending approval stopped being pending, for the UI and the audit trail. */
 export type ApprovalResolution =
-  | "answered"
-  | "withdrawn"
-  | "timed-out"
-  | "engine-restarted"
-  | "session-closed"
-  | "auto-declined";
+  "answered" | "withdrawn" | "timed-out" | "engine-restarted" | "session-closed" | "auto-declined";
 
 /** One parsed file change in an approval request. */
 export interface ApprovalFileChange {

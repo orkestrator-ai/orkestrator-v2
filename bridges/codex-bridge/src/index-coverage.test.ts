@@ -14,8 +14,7 @@ process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 
 const nativeSetTimeout = globalThis.setTimeout;
 let initialReplayRetentionTimer:
-  | { callback: () => void; cleared: boolean; unref: () => void }
-  | undefined;
+  { callback: () => void; cleared: boolean; unref: () => void } | undefined;
 globalThis.setTimeout = ((
   callback: (...args: unknown[]) => void,
   delay?: number,

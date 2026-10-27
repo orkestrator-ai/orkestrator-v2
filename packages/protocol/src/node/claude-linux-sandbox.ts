@@ -82,8 +82,7 @@ export type ClaudeLinuxSandboxFailure =
   | "nested-user-namespace";
 
 export type ClaudeLinuxSandboxStatus =
-  | { available: true }
-  | { available: false; failure: ClaudeLinuxSandboxFailure; reason: string };
+  { available: true } | { available: false; failure: ClaudeLinuxSandboxFailure; reason: string };
 
 export interface ClaudeLinuxSandboxProbeResult {
   ok: boolean;

@@ -21,8 +21,7 @@ if (
 const database = openBackendDatabase(dataDir);
 try {
   const sessions = database.readStore("native-agent-sessions")?.value as
-    | Record<string, PersistedNativeAgentSession>
-    | undefined;
+    Record<string, PersistedNativeAgentSession> | undefined;
   const key = Object.entries(sessions ?? {}).find(
     ([, session]) =>
       session.environmentId === environmentId &&

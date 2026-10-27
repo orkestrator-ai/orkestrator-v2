@@ -37,8 +37,7 @@ import type { NativeEntry, SourceSpec } from "./types.js";
 export const OVERLAY_SCHEMA_VERSION = 1;
 
 export type OverlayChange =
-  | { kind: "set"; entry: NativeEntry; base: string | null }
-  | { kind: "remove"; base: string };
+  { kind: "set"; entry: NativeEntry; base: string | null } | { kind: "remove"; base: string };
 
 export interface OverlayRecord {
   schemaVersion: typeof OVERLAY_SCHEMA_VERSION;

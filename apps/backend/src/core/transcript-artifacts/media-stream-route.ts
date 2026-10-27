@@ -102,9 +102,7 @@ interface MediaCapability {
 }
 
 export type ParsedMediaRange =
-  | { kind: "none" }
-  | { kind: "range"; start: number; end: number }
-  | { kind: "unsatisfiable" };
+  { kind: "none" } | { kind: "range"; start: number; end: number } | { kind: "unsatisfiable" };
 
 /**
  * One `bytes=` range against a representation of `size` bytes. Suffix

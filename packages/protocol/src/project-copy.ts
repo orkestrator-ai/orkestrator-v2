@@ -138,13 +138,7 @@ export interface ProjectCopyOptions {
 }
 
 export type ProjectCopyStage =
-  | "queued"
-  | "cloning"
-  | "listing"
-  | "copying"
-  | "configuring"
-  | "completed"
-  | "failed";
+  "queued" | "cloning" | "listing" | "copying" | "configuring" | "completed" | "failed";
 
 /** One copy, as the command node records it. Never holds file contents. */
 export interface ProjectCopyRecord {

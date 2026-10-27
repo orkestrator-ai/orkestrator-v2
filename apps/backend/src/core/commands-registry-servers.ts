@@ -277,8 +277,7 @@ export function registerServerCommands(
     if (running && authToken && context.agentTools) {
       const start = commands.get("start_claude_server");
       const reconciled = (await start?.({ containerId: id }, context)) as
-        | { hostPort: number; authToken: string }
-        | undefined;
+        { hostPort: number; authToken: string } | undefined;
       if (reconciled) {
         return {
           running: true,
@@ -468,8 +467,7 @@ export function registerServerCommands(
     if (running && BRIDGE_TOKEN_PATTERN.test(authToken) && context.agentTools) {
       const start = commands.get("start_codex_server");
       const reconciled = (await start?.({ containerId: id }, context)) as
-        | { hostPort: number; authToken: string }
-        | undefined;
+        { hostPort: number; authToken: string } | undefined;
       if (reconciled) {
         return {
           running: true,

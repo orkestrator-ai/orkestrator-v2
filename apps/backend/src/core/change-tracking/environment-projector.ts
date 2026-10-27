@@ -86,8 +86,7 @@ export class EnvironmentChangeProjector {
     { timer: ReturnType<typeof setTimeout>; paths: Set<string> | null }
   >();
   private readonly onWorktreeActivity:
-    | ((environmentId: string, paths: readonly string[] | null) => void)
-    | undefined;
+    ((environmentId: string, paths: readonly string[] | null) => void) | undefined;
 
   constructor(
     private readonly deps: {

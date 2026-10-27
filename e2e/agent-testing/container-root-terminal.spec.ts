@@ -73,8 +73,7 @@ test("Docker fixture root terminal runs as root and follows the network mode", a
   // The environment is found by name in any project, so a profile restarted
   // without re-seeding its fixture (no `testProject` in its status) works too.
   let environment:
-    | { id: string; name: string; containerId?: string; networkAccessMode?: string }
-    | undefined;
+    { id: string; name: string; containerId?: string; networkAccessMode?: string } | undefined;
   for (const project of await invoke<Array<{ id: string }>>("get_projects")) {
     environment = (
       await invoke<

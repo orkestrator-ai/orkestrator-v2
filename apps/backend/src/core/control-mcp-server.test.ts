@@ -491,8 +491,7 @@ describe("Orkestrator control MCP server", () => {
       "Preferred complete Multi Review button action",
     );
     const multiReviewTool = definitions.find((tool) => tool.name === "launch_multi_review") as
-      | { description?: string; inputSchema?: { required?: string[] } }
-      | undefined;
+      { description?: string; inputSchema?: { required?: string[] } } | undefined;
     // Omitted model rows use the saved defaults, the same as the button.
     expect(multiReviewTool?.description).toContain(
       "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults",
@@ -501,8 +500,7 @@ describe("Orkestrator control MCP server", () => {
     const required = (name: string) =>
       (
         definitions.find((tool) => tool.name === name) as
-          | { inputSchema?: { required?: string[] } }
-          | undefined
+          { inputSchema?: { required?: string[] } } | undefined
       )?.inputSchema?.required ?? [];
     for (const field of ["reviewers", "reviewModel", "fixModel", "autoFix", "autoPr"])
       expect(required("start_multi_review")).not.toContain(field);

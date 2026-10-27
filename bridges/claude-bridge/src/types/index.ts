@@ -1126,9 +1126,7 @@ export type ClaudeInteractionResponse =
  * session that raised it going away.
  */
 export type ClaudeInteractionOutcome =
-  | ClaudeInteractionResponse
-  | { action: "timeout"; message: string }
-  | { action: "withdrawn" };
+  ClaudeInteractionResponse | { action: "timeout"; message: string } | { action: "withdrawn" };
 
 /** SSE event types */
 export type SSEEventType =
@@ -1229,12 +1227,7 @@ export interface SSEEvent {
 
 /** Permission mode for Claude Agent SDK */
 export type PermissionMode =
-  | "default"
-  | "acceptEdits"
-  | "bypassPermissions"
-  | "plan"
-  | "dontAsk"
-  | "auto";
+  "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
 /** Prompt options */
 export interface PromptOptions {

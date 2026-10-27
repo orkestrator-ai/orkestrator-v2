@@ -978,8 +978,7 @@ test("queued native steering survives a lost gateway response, inactive environm
   )!;
   const environments: Environment[] = [];
   let sessionIdentity:
-    | { environmentId: string; agent: string; logicalSessionKey: string }
-    | undefined;
+    { environmentId: string; agent: string; logicalSessionKey: string } | undefined;
   try {
     for (const name of ["queued-steer", "queued-other"])
       environments.push(

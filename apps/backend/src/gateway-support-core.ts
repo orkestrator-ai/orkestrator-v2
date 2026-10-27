@@ -2193,11 +2193,7 @@ export function textResponse(
 }
 
 export type GatewayReconcileReason =
-  | "invalid-cursor"
-  | "prior-generation"
-  | "cursor-expired"
-  | "cursor-ahead"
-  | "replay-too-large";
+  "invalid-cursor" | "prior-generation" | "cursor-expired" | "cursor-ahead" | "replay-too-large";
 
 export {
   mkdir,

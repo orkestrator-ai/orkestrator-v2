@@ -22,11 +22,7 @@ export const PUBLIC_ACTION_COMMAND = "public_action";
 
 /** Which kinds of state an action can change. Reads change none. */
 export type PublicActionEffect =
-  | "metadata"
-  | "filesystem"
-  | "external-repository"
-  | "provider-session"
-  | "process";
+  "metadata" | "filesystem" | "external-repository" | "provider-session" | "process";
 
 /**
  * How the outcome of an action can be observed.
@@ -1206,8 +1202,7 @@ export interface PublicActionRequest {
  * transport-level failures use the legacy `{error}` wrapper.
  */
 export type PublicActionResponse<T = unknown> =
-  | Omit<PublicSuccessEnvelope<T>, "connection">
-  | Omit<PublicErrorEnvelope, "connection">;
+  Omit<PublicSuccessEnvelope<T>, "connection"> | Omit<PublicErrorEnvelope, "connection">;
 
 export function publicErrorEnvelope(
   action: string,

@@ -448,8 +448,7 @@ export interface NativeAgentBridgeCommandInvocation {
 }
 
 export type ParsedBridgeCommandInvocation =
-  | { ok: true; invocation?: NativeAgentBridgeCommandInvocation }
-  | { ok: false; error: string };
+  { ok: true; invocation?: NativeAgentBridgeCommandInvocation } | { ok: false; error: string };
 
 /** Validate the optional `command` field of a bridge prompt body. */
 export function parseBridgeCommandInvocation(value: unknown): ParsedBridgeCommandInvocation {

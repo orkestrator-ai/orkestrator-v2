@@ -303,8 +303,7 @@ let currentSidebarOpen = true;
 let currentReviewPrompt: string | undefined;
 let currentDefaultAgent: "claude" | "opencode" | "codex" | undefined = "codex";
 let currentEnabledAgentPlatforms:
-  | Array<"claude" | "codex" | "cursor" | "grok" | "opencode">
-  | undefined;
+  Array<"claude" | "codex" | "cursor" | "grok" | "opencode"> | undefined;
 let currentActionDefaults: ActionDefaults | undefined;
 let currentMultiReviewSettings: AgentSettingsTier["multiReview"];
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";

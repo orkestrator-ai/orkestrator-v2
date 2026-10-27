@@ -153,8 +153,7 @@ describe("shell command line changes", () => {
 
     expect((await bashPart(h, sessionId, "c1")).commandChanges).toEqual(change);
     const patch = h.events.slice(before).find((event) => event.type === "message.patched")?.data as
-      | { messageId: string; revision: number; changedParts: { part: NormalizedPart }[] }
-      | undefined;
+      { messageId: string; revision: number; changedParts: { part: NormalizedPart }[] } | undefined;
     expect(patch?.messageId).toBe(assistant.id);
     expect(patch?.revision).toBe(revision + 1);
     expect(patch?.changedParts.map(({ part }) => part.commandChanges)).toEqual([change]);
@@ -314,8 +313,7 @@ describe("shell command line changes", () => {
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ phase: "running" });
     expect((await bashPart(h, sessionId, "c1")).commandChanges).toEqual(change);
     const patch = h.events.slice(before).find((event) => event.type === "message.patched")?.data as
-      | { messageId: string; changedParts: { part: NormalizedPart }[] }
-      | undefined;
+      { messageId: string; changedParts: { part: NormalizedPart }[] } | undefined;
     expect(patch?.messageId).toBe(commandRow.id);
     expect(patch?.changedParts.map(({ part }) => part.commandChanges)).toEqual([change]);
   });

@@ -1625,8 +1625,7 @@ describe("BrowserTab", () => {
     );
     const lastAttach = () =>
       native.browserPreview.attach.mock.calls.at(-1)?.[0] as
-        | { url: string; navigationBasis?: number }
-        | undefined;
+        { url: string; navigationBasis?: number } | undefined;
     // The first attach has seen no navigation yet; its result gives the first basis.
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
     expect(native.browserPreview.attach.mock.calls[0]?.[0]).not.toHaveProperty("navigationBasis");

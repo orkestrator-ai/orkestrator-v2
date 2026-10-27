@@ -456,8 +456,7 @@ export function hostKind(host: string): "loopback" | "tailnet-address" | "ip-add
 }
 
 export type RoutePlan =
-  | { run: true; host?: string; port?: number }
-  | { run: false; result: RouteResult };
+  { run: true; host?: string; port?: number } | { run: false; result: RouteResult };
 
 /** Decides, before any traffic, which routes can run and why the others cannot. */
 export function planRoutes(input: {

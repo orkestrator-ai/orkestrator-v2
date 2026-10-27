@@ -29,13 +29,7 @@ export type EngineKind = "app-server";
 export type EngineGeneration = number;
 
 export type EngineState =
-  | "stopped"
-  | "starting"
-  | "ready"
-  | "draining"
-  | "restarting"
-  | "backoff"
-  | "failed";
+  "stopped" | "starting" | "ready" | "draining" | "restarting" | "backoff" | "failed";
 
 /**
  * Not every engine can do everything. The bridge gates behaviour on these
@@ -96,10 +90,7 @@ export type EngineTurnStatus = "completed" | "interrupted" | "failed";
  * part list and are counted as unknown-item metrics rather than crashing.
  */
 export type EngineItem =
-  | ThreadItem
-  | CodexCollabToolCallItem
-  | EngineSubagentActivityItem
-  | EnginePlanItem;
+  ThreadItem | CodexCollabToolCallItem | EngineSubagentActivityItem | EnginePlanItem;
 
 /** app-server `subAgentActivity`: lifecycle beats for a child agent thread. */
 export interface EngineSubagentActivityItem {

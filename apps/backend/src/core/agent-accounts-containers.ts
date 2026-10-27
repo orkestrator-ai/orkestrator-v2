@@ -141,9 +141,7 @@ async function readLoginFile(file: string): Promise<string | undefined> {
 }
 
 type HostLoginFile =
-  | { kind: "present"; text: string }
-  | { kind: "absent" }
-  | { kind: "unreadable" };
+  { kind: "present"; text: string } | { kind: "absent" } | { kind: "unreadable" };
 
 /** A host login file, telling a missing one (signed out) from one that cannot be read. */
 async function readHostLoginFile(file: string): Promise<HostLoginFile> {

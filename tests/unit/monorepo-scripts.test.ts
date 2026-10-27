@@ -47,7 +47,7 @@ describe("monorepo orchestration scripts", () => {
   test("Bun fmt check rejects an unformatted file without modifying it", () => {
     const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-format-"));
     try {
-      writeFileSync(path.join(fixture, ".oxfmtrc.json"), read(".oxfmtrc.json"));
+      writeFileSync(path.join(fixture, "bunfig.toml"), read("bunfig.toml"));
       const file = path.join(fixture, "index.ts");
       const unformatted = "export const value={messy:true}\n";
       writeFileSync(file, unformatted);

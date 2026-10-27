@@ -937,8 +937,7 @@ async function hostCursorApiKey(
   if (typeof configured === "string" && configured.trim()) return { apiKey: configured.trim() };
 
   const login = (await readBoundedJson(path.join(productionDataDir, "cursor-sdk", "auth.json"))) as
-    | { apiKey?: unknown; apiKeyExpiresAtMs?: unknown }
-    | undefined;
+    { apiKey?: unknown; apiKeyExpiresAtMs?: unknown } | undefined;
   const minted = typeof login?.apiKey === "string" ? login.apiKey.trim() : "";
   if (!minted) return undefined;
   const expiresAt = login?.apiKeyExpiresAtMs;

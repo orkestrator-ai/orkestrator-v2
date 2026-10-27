@@ -200,8 +200,7 @@ export function shellTaskHooks(session: SessionState): {
         await recordShellCommand(session, input.tool_use_id, command);
     } else if (input.hook_event_name === "PostToolUse") {
       const response = input.tool_response as
-        | { stdout?: unknown; stderr?: unknown; backgroundTaskId?: unknown }
-        | undefined;
+        { stdout?: unknown; stderr?: unknown; backgroundTaskId?: unknown } | undefined;
       const output = [response?.stdout, response?.stderr]
         .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
         .join("\n");

@@ -150,9 +150,7 @@ function rememberDiffBody(id: string, body: Extract<ChangesGetDiffResult, { kind
 }
 
 type DiffBodyState =
-  | { status: "loading" }
-  | { status: "failed" }
-  | { status: "done"; result: ChangesGetDiffResult };
+  { status: "loading" } | { status: "failed" } | { status: "done"; result: ChangesGetDiffResult };
 
 /** Backend-rendered hunks for one diff identity, fetched when first shown. */
 export function ChangeDiffBody({ diffIdentityId }: { diffIdentityId: string }) {

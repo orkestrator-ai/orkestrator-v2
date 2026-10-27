@@ -59,8 +59,7 @@ export interface SshBinaries {
 }
 
 export type SshBinaryLookup =
-  | { ok: true; binaries: SshBinaries }
-  | { ok: false; reason: "not-found" | "unsupported-platform" };
+  { ok: true; binaries: SshBinaries } | { ok: false; reason: "not-found" | "unsupported-platform" };
 
 /** How the askpass shell script launches the bundled helper. */
 export interface AskpassRuntime {

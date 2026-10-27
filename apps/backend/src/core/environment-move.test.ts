@@ -23,6 +23,7 @@ import * as pathSafety from "./path-safety.js";
 import { createProject, StorageService } from "./storage.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { removeFixturesAfterSettlement } from "../../tests/fixture-cleanup.js";
 import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../tests/temp-sweep.js";
 
 // An Arch Linux sweep (0247) found `ork-env-move-*` roots left by runs whose
@@ -70,8 +71,10 @@ afterEach(async () => {
   else process.env.GIT_OPTIONAL_LOCKS = optionalLocks;
   const finished = runtimes.splice(0);
   for (const runtime of finished) runtime.shutdown();
-  await Promise.all(finished.map((runtime) => runtime.terminals.history.settled()));
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  await removeFixturesAfterSettlement(
+    () => Promise.all(finished.map((runtime) => runtime.terminals.history.settled())),
+    roots.splice(0),
+  );
 });
 
 // The project repository with its bare `origin`, and the two submodule source

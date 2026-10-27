@@ -37,10 +37,12 @@ export function listProcesses(options: { commands?: boolean } = {}): Promise<Pro
         }
         const entries: ProcessEntry[] = [];
         for (const line of stdout.split("\n")) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length < 5) continue;
-          const [pid, ppid, pgid, rss] = parts
-            .slice(0, 4)
+          // Only the fixed ps columns are whitespace-delimited. The command
+          // contains literal paths, whose internal whitespace must survive.
+          const columns = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:[ \t]+(.*))?$/.exec(line);
+          if (!columns) continue;
+          const [pid, ppid, pgid, rss] = columns
+            .slice(1, 5)
             .map((value) => Number.parseInt(value, 10));
           if (
             !pid ||
@@ -55,8 +57,8 @@ export function listProcesses(options: { commands?: boolean } = {}): Promise<Pro
             ppid,
             pgid,
             rssKiB: rss,
-            zombie: (parts[4] ?? "").startsWith("Z"),
-            ...(commands ? { command: parts.slice(5).join(" ") } : {}),
+            zombie: (columns[5] ?? "").startsWith("Z"),
+            ...(commands ? { command: columns[6] ?? "" } : {}),
           });
         }
         resolve(entries);
@@ -149,9 +151,19 @@ export async function killTree(
   // the marker are ever scanned: a recycled pid of an unrelated process is
   // never adopted as a new root.
   const ownedGroups = Array.from(new Set(groups.filter((group) => group > 1)));
+  // ps renders tabs rather than emitting them literally: BSD uses an octal
+  // escape, procps uses '?'. Keep the raw marker as well (literal backslashes
+  // in paths must not be decoded or normalized).
+  const renderedMarker = marker?.replace(/\t/g, process.platform === "darwin" ? "\\011" : "?");
   const owned = (entries: readonly ProcessEntry[]) => {
     const marked = marker
-      ? entries.filter((entry) => entry.command?.includes(marker)).map((entry) => entry.pid)
+      ? entries
+          .filter(
+            (entry) =>
+              entry.command?.includes(marker) ||
+              (renderedMarker && entry.command?.includes(renderedMarker)),
+          )
+          .map((entry) => entry.pid)
       : [];
     const tree = new Map(
       collectTree(entries, [...roots, ...marked]).map((entry) => [entry.pid, entry]),

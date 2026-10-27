@@ -1393,6 +1393,7 @@ export class McpManagementService {
    * flight per backend, which is the whole apply-concurrency budget.
    */
   async tick(): Promise<void> {
+    if (this.disposed) return;
     if (this.ticking) {
       // A caller may have supplied newer runtime evidence while the prior pass
       // was already reading. Give that evidence its own pass.

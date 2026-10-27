@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { TerminalHistory } from "./terminal-history.js";
 
-// Inject deferred work at the write-queue boundary so settlement tests need no
-// disk timing, terminal parsing, or sleeps. No collector or timer is started.
+// Queue-boundary tests inject deferred work without relying on disk timing.
 type PendingHistory = {
   sessions: Map<string, { parseTail: Promise<void>; ioTail: Promise<void> }>;
   historyIoTails: Map<string, Promise<void>>;
@@ -54,6 +56,40 @@ describe("TerminalHistory.settled", () => {
       for (const writer of work) writer.resolve();
       queued.resolve();
       await settlement;
+    }
+  });
+
+  test("drains output appended by a collector after shutdown", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-history-shutdown-"));
+    const history = new TerminalHistory();
+    try {
+      history.configure({
+        sessionId: "late",
+        dataDir: root,
+        stableIdentity: "late-output",
+        cols: 80,
+        rows: 24,
+      });
+      history.append("late", "before shutdown\r\n", 1, 1);
+      history.shutdown();
+      const settling = history.settled();
+      history.append("late", "after shutdown", 2, 1);
+      let parsedAfterShutdown = false;
+      void (history as unknown as PendingHistory).sessions.get("late")!.parseTail.then(() => {
+        parsedAfterShutdown = true;
+      });
+      await settling;
+      expect(parsedAfterShutdown).toBe(true);
+      const snapshot = await history.stateSnapshot("late");
+      expect(snapshot?.revision).toBe(2);
+      expect(snapshot?.output).toContain("after shutdown");
+      // Quiesce and drain the final checkpoint just as graceful shutdown does.
+      await history.flush(true);
+      await history.settled();
+    } finally {
+      history.shutdown();
+      await history.settled();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

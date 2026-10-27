@@ -9,6 +9,7 @@ import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { BackendRuntime } from "../src/core/backend-runtime";
+import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
 
 const { createCommandRegistry, __testing } = await import("../src/core/commands");
 
@@ -21,7 +22,7 @@ const originalHome = process.env.HOME;
 // Commands prefer these over HOME (OpenCode's `model.json` is read from
 // `XDG_STATE_HOME`), so the file clears them: every path resolves under the
 // fake HOME, never the host's own state.
-const XDG_KEYS = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+let restoreXdg = () => {};
 const originalXdg = new Map(XDG_KEYS.map((key) => [key, process.env[key]]));
 const originalHomedir = os.homedir;
 const originalDockerLog = process.env.FAKE_DOCKER_LOG;
@@ -444,7 +445,7 @@ beforeAll(async () => {
   }
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
   process.env.HOME = fakeHome;
-  for (const key of XDG_KEYS) delete process.env[key];
+  restoreXdg = isolateXdgEnvironment();
   process.env.FAKE_DOCKER_LOG = commandLog;
   process.env.FAKE_LAUNCHER_LOG = launcherLog;
   // Lets the fake `docker ps` label one row with the owner the registry under
@@ -454,6 +455,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  for (const key of XDG_KEYS) expect(process.env[key]).toBeUndefined();
   registry = createCommandRegistry();
   fixture = createContext();
   await fs.writeFile(commandLog, "");
@@ -490,10 +492,8 @@ afterAll(async () => {
   else process.env.PATH = originalPath;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
-  for (const [key, value] of originalXdg) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
+  restoreXdg();
+  for (const [key, value] of originalXdg) expect(process.env[key]).toBe(value);
   Object.defineProperty(os, "homedir", { configurable: true, value: originalHomedir });
   if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
   else process.env.FAKE_DOCKER_LOG = originalDockerLog;

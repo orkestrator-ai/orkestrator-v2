@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { createFixture, type Fixture } from "./test-support.js";
 
 let fixture: Fixture | undefined;
@@ -50,6 +52,35 @@ describe("McpManagementService.settled", () => {
       first.resolve();
       second.resolve();
       await Promise.all([active, queued, settlement]);
+      advance.mockRestore();
+    }
+  });
+
+  test("disposal stops a follow-up queued after settlement begins", async () => {
+    fixture = createFixture();
+    const { service, root } = fixture;
+    const first = Promise.withResolvers<void>();
+    const advance = spyOn(service as unknown as { advanceTick(): Promise<void> }, "advanceTick")
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementation(async () => {
+        mkdirSync(root, { recursive: true });
+        writeFileSync(path.join(root, "late-apply"), "unexpected");
+      });
+    const active = service.tick();
+    const settlement = service.settled();
+    const queued = service.tick();
+    service.dispose();
+    try {
+      first.resolve();
+      await Promise.all([active, settlement, queued]);
+      await service.tick();
+      expect(advance).toHaveBeenCalledTimes(1);
+      await fixture.cleanup();
+      await service.tick();
+      expect(existsSync(root)).toBe(false);
+    } finally {
+      first.resolve();
+      await Promise.all([active, settlement, queued]);
       advance.mockRestore();
     }
   });

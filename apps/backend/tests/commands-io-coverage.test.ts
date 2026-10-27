@@ -7,6 +7,7 @@ import type { CommandContext } from "../src/core/commands";
 import { MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_SIZE_LABEL } from "../src/core/path-safety";
 import * as realPty from "../src/core/pty";
 import { runCommand } from "../src/core/shell";
+import { removeFixturesAfterSettlement } from "./fixture-cleanup.js";
 
 type ExitEvent = { exitCode: number; signal?: number };
 
@@ -161,12 +162,15 @@ afterEach(async () => {
   const finished = runtimes.splice(0);
   for (const runtime of finished) runtime.shutdown();
   // Closed terminals finish their history writes after the command returns.
-  await Promise.all(finished.map((runtime) => runtime.terminals.history.settled()));
-  spawnedPtys.length = 0;
-  spawnPty.mockClear();
-  await Promise.all(
-    tempDirs.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
+  try {
+    await removeFixturesAfterSettlement(
+      () => Promise.all(finished.map((runtime) => runtime.terminals.history.settled())),
+      tempDirs.splice(0),
+    );
+  } finally {
+    spawnedPtys.length = 0;
+    spawnPty.mockClear();
+  }
 });
 
 afterAll(async () => {

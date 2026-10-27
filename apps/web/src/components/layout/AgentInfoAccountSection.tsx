@@ -49,11 +49,14 @@ export function AgentInfoAccountSection({
   provider,
   open = true,
   refreshKey,
+  onSessionAccount,
 }: {
   environmentId: string;
   provider: string;
   open?: boolean;
   refreshKey?: unknown;
+  /** The session's account, or null while a read is pending or unavailable. */
+  onSessionAccount?: (session: AgentSessionAccount | null) => void;
 }) {
   if (!isAgentAccountPlatform(provider)) return null;
   return (
@@ -63,6 +66,7 @@ export function AgentInfoAccountSection({
       platform={provider}
       open={open}
       refreshKey={refreshKey}
+      onSessionAccount={onSessionAccount}
     />
   );
 }
@@ -72,11 +76,13 @@ function AccountSection({
   platform,
   open,
   refreshKey,
+  onSessionAccount,
 }: {
   environmentId: string;
   platform: AgentAccountPlatform;
   open: boolean;
   refreshKey?: unknown;
+  onSessionAccount?: (session: AgentSessionAccount | null) => void;
 }) {
   const [session, setSession] = useState<AgentSessionAccount | null>(null);
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
@@ -84,6 +90,10 @@ function AccountSection({
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
   const latest = useRef(0);
+  const reportSession = useRef(onSessionAccount);
+  useEffect(() => {
+    reportSession.current = onSessionAccount;
+  }, [onSessionAccount]);
   const machineName = useSessionMachineName();
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
 
@@ -97,6 +107,7 @@ function AccountSection({
 
   const load = useCallback(async () => {
     const read = ++latest.current;
+    reportSession.current?.(null);
     try {
       const [nextSession, nextSnapshot] = await Promise.all([
         getNativeAgentSessionAccount(environmentId, platform),
@@ -105,9 +116,13 @@ function AccountSection({
       if (!mounted.current || latest.current !== read) return;
       setSession(nextSession);
       setSnapshot(nextSnapshot);
+      reportSession.current?.(nextSession);
       setError(null);
     } catch (cause) {
-      if (mounted.current && latest.current === read) setError(messageOf(cause));
+      if (mounted.current && latest.current === read) {
+        reportSession.current?.(null);
+        setError(messageOf(cause));
+      }
     }
   }, [environmentId, platform]);
 

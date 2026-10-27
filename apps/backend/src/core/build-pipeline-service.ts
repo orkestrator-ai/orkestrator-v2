@@ -174,6 +174,10 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     return this.lifecycle.retryStage(pipelineId);
   }
 
+  retryReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
+    return this.lifecycle.retryReviewer(pipelineId, reviewerId);
+  }
+
   retryInteractionFailure(pipelineId: string): Promise<BuildPipeline> {
     return this.lifecycle.retryInteractionFailure(pipelineId);
   }

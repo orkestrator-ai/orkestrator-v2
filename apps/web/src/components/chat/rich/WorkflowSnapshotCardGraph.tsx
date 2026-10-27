@@ -14,7 +14,7 @@ import {
   type WorkflowSnapshotNodeV1,
   type WorkflowStatusV1,
 } from "@orkestrator/protocol/workflow-snapshot";
-import { flowEdgePath, type FlowRect } from "@/components/review/multi-review-flow";
+import { flowEdgePath, type FlowRect } from "@/components/flow-graph/flow-graph-model";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import {
   openWorkflowLinkTarget,

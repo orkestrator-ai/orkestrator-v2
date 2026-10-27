@@ -30,7 +30,6 @@ import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
-import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub } from "./native-agent-service-projection-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -52,7 +51,6 @@ async function withCommands<T>(
     context: CommandContext,
   ) => Promise<T>,
   options: {
-    claudeStatePolls?: ClaudeStatePollManager;
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
     loopedReviews?: CommandContext["loopedReviews"];
@@ -85,7 +83,6 @@ async function withCommands<T>(
     ...options.environment,
   } as Parameters<StorageService["addEnvironment"]>[0]);
   const commands = createCommandRegistry({
-    claudeStatePolls: options.claudeStatePolls,
     tabTeardown: options.tabTeardown,
     modelCatalogRefresh: options.modelCatalogRefresh,
   });
@@ -5379,6 +5376,11 @@ describe("build pipeline commands", () => {
       id,
       stageId,
     }));
+    const retryReviewer = mock(async (id: string, reviewerId: string) => ({
+      operation: "retry-reviewer",
+      id,
+      reviewerId,
+    }));
     const restartCurrentStep = mock(async (id: string) => ({
       operation: "restart-current-step",
       id,
@@ -5399,6 +5401,7 @@ describe("build pipeline commands", () => {
       retryReview,
       retryStage,
       restartStep,
+      retryReviewer,
       restartCurrentStep,
       retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
@@ -5462,6 +5465,27 @@ describe("build pipeline commands", () => {
           id: "pipeline-1",
           stageId: "review-session",
         });
+        await expect(
+          invoke("retry_build_pipeline_reviewer", {
+            pipelineId: "pipeline-1",
+            reviewerId: "reviewer-2",
+          }),
+        ).resolves.toEqual({
+          operation: "retry-reviewer",
+          id: "pipeline-1",
+          reviewerId: "reviewer-2",
+        });
+        expect(retryReviewer).toHaveBeenCalledWith("pipeline-1", "reviewer-2");
+        for (const args of [
+          { pipelineId: " ", reviewerId: "reviewer-2" },
+          { pipelineId: "pipeline-1", reviewerId: " " },
+          { pipelineId: "", reviewerId: "reviewer-2" },
+          { pipelineId: "pipeline-1", reviewerId: "" },
+        ]) {
+          await expect(invoke("retry_build_pipeline_reviewer", args)).rejects.toThrow();
+        }
+        expect(retryReviewer).toHaveBeenCalledTimes(1);
+
         await expect(
           invoke("restart_build_pipeline_current_step", {
             pipelineId: "pipeline-1",
@@ -5616,6 +5640,7 @@ describe("build pipeline commands", () => {
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
+        ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
         ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
         [
           "retry_build_pipeline_interaction_failure",

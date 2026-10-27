@@ -512,7 +512,10 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
     this.leases.clear();
   }
 
-  async start(input: StartLoopedReviewInput): Promise<LoopedReviewWorkflow> {
+  async start(
+    input: StartLoopedReviewInput,
+    workflowId: string = randomUUID(),
+  ): Promise<LoopedReviewWorkflow> {
     if (!isStartLoopedReviewInput(input)) throw new Error("Invalid looped review start request");
     const environment = await this.storage.getEnvironment(input.environmentId);
     if (
@@ -555,7 +558,7 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
     const workflow: LoopedReviewWorkflow = {
       version: LOOPED_REVIEW_WORKFLOW_VERSION,
       controller: "backend",
-      id: randomUUID(),
+      id: workflowId,
       environmentId: input.environmentId,
       projectId: input.projectId,
       agent: input.agent,

@@ -393,6 +393,14 @@ capability `schedules`, granted to the main and side roles; see
 [scheduled-jobs.md](scheduled-jobs.md)), start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
 cancel/address a multi-review, and use durable mailbox read/send/ack operations.
+It can also drive a worker's own surfaces: open a terminal or tmux tab
+(`launch_terminal`), open or navigate a browser preview
+(`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), open
+a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
+fix (`custom_fix_multi_review`), run a looped review, launch feature
+planning, and ask the user to copy uncommitted checkout changes into a worker
+(`request_root_changes`); see
+[`coordinator.md`](coordinator.md#worker-surfaces).
 `launch_multi_review` and `start_multi_review` take optional `autoFix` and
 `autoPr` booleans. Omitted, they use the user's saved Multi Review settings, as
 the button does; a coordinator sets them only when the user asks. With both on

@@ -10,21 +10,21 @@
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { ReviewSeverity } from "@orkestrator/protocol/structured-review";
 import { MULTI_REVIEW_STEP_KINDS } from "@orkestrator/protocol/multi-review";
+import {
+  FLOW_GRAPH_MIN_HEIGHT,
+  FLOW_GRAPH_STACK_BELOW,
+  FLOW_NODE_HEIGHT,
+  flowEdgeState,
+  latestActivityAt,
+  type FlowEdgeState,
+  type FlowNodeState,
+  type FlowRect,
+} from "../flow-graph/flow-graph-model";
 
 type Reviewer = MultiReviewWorkflow["reviewers"][number];
 
-/**
- * One state vocabulary for every node. A queued reviewer and a step that has
- * not started look the same on the graph, so both are `not-started`.
- */
-export type MultiReviewFlowState =
-  | "not-started"
-  | "running"
-  | "paused"
-  | "complete"
-  | "failed"
-  | "cancelling"
-  | "cancelled";
+/** The graph's node states; see {@link FlowNodeState}. */
+export type MultiReviewFlowState = FlowNodeState;
 
 export function reviewerFlowState(status: Reviewer["status"]): MultiReviewFlowState {
   switch (status) {
@@ -41,43 +41,10 @@ export function reviewerFlowState(status: Reviewer["status"]): MultiReviewFlowSt
   }
 }
 
-/**
- * What an edge says about the work flowing along it.
- *
- * - `complete`: the source's output was consumed by a finished target.
- * - `active`: the target is working on it now.
- * - `ready`: the output exists and the target is waiting for its other inputs
- *   (a finished report before consolidation, a report before Fix).
- * - `pending`: nothing has flowed, or the source produced nothing usable.
- * - `failed`: the target failed while working on it.
- */
-export type MultiReviewFlowEdgeState = "complete" | "active" | "ready" | "pending" | "failed";
+/** The graph's edge states; see {@link FlowEdgeState}. */
+export type MultiReviewFlowEdgeState = FlowEdgeState;
 
-/**
- * An edge carries its source's output, so an unfinished source flows nothing,
- * whatever the target is doing. A failed or stopped reviewer therefore never
- * lights the edge into consolidation: its report was not part of it.
- */
-export function multiReviewFlowEdgeState(
-  from: MultiReviewFlowState,
-  to: MultiReviewFlowState,
-  { waitingIsReady }: { waitingIsReady: boolean },
-): MultiReviewFlowEdgeState {
-  if (from !== "complete") return "pending";
-  switch (to) {
-    case "running":
-      return "active";
-    case "complete":
-      return "complete";
-    case "failed":
-      return "failed";
-    case "paused":
-    case "not-started":
-      return waitingIsReady ? "ready" : "pending";
-    default:
-      return "pending";
-  }
-}
+export const multiReviewFlowEdgeState = flowEdgeState;
 
 export interface MultiReviewFlowEdges {
   /** Package → reviewer, one per reviewer in panel order. */
@@ -120,19 +87,6 @@ export function multiReviewFlowEdges(states: {
   };
 }
 
-/**
- * One connector standing for a whole group of edges, for the stacked layout
- * where reviewers share a single line in and a single line out.
- */
-export function summarizeFlowEdges(
-  edges: readonly MultiReviewFlowEdgeState[],
-): MultiReviewFlowEdgeState {
-  for (const state of ["active", "failed", "complete", "ready"] as const) {
-    if (edges.includes(state)) return state;
-  }
-  return "pending";
-}
-
 /** Small label shown where a node that has not run would show its runtime. */
 export function flowPendingLabel(
   kind: "package" | "reviewer" | "step",
@@ -142,60 +96,6 @@ export function flowPendingLabel(
   if (statusLabel.startsWith("Waiting")) return "waiting";
   if (statusLabel === "Ready to start") return "ready";
   return "not started";
-}
-
-/**
- * The node shown in the inspector when the user has not picked one: whatever
- * is running, else what is paused, else the node that was active most
- * recently. The pipeline runs in order, so the furthest stage that has been
- * reached is the most recent; among parallel reviewers the latest timestamp
- * decides, with ties going to the later node. A step that was cancelled
- * before it ever ran has not been reached.
- */
-export function defaultFlowSelection(
-  nodes: readonly {
-    id: string;
-    state: MultiReviewFlowState;
-    /** Pipeline column: package 0, reviewers 1, consolidation 2, fix 3, PR 4. */
-    stage: number;
-    activityAt?: number;
-  }[],
-): string | null {
-  for (const state of ["running", "paused"] as const) {
-    const match = nodes.find((node) => node.state === state);
-    if (match) return match.id;
-  }
-  const reached = nodes.filter(
-    (node) =>
-      node.state !== "not-started" &&
-      !(
-        (node.state === "cancelled" || node.state === "cancelling") &&
-        node.activityAt === undefined
-      ),
-  );
-  if (reached.length === 0) return nodes[0]?.id ?? null;
-  const stage = Math.max(...reached.map((node) => node.stage));
-  let latest = reached.find((node) => node.stage === stage)!;
-  for (const node of reached) {
-    if (node.stage !== stage) continue;
-    if ((node.activityAt ?? -Infinity) >= (latest.activityAt ?? -Infinity)) latest = node;
-  }
-  return latest.id;
-}
-
-/** The latest moment a timing record shows activity, or undefined if none. */
-export function latestActivityAt(
-  ...timings: Array<{ startedAt?: string; completedAt?: string } | undefined>
-): number | undefined {
-  let latest: number | undefined;
-  for (const timing of timings) {
-    for (const value of [timing?.startedAt, timing?.completedAt]) {
-      if (!value) continue;
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed) && (latest === undefined || parsed > latest)) latest = parsed;
-    }
-  }
-  return latest;
 }
 
 /**
@@ -254,8 +154,6 @@ export function multiReviewElapsedSeconds(
 }
 
 const SEVERITY_RANK: Record<ReviewSeverity, number> = { P0: 0, P1: 1, P2: 2 };
-
-export const MULTI_REVIEW_SEVERITIES: readonly ReviewSeverity[] = ["P0", "P1", "P2"];
 
 export function severityCounts(
   issues: readonly { severity: ReviewSeverity }[],
@@ -402,10 +300,6 @@ export function provisionalFindingLabel(finding: MultiReviewMergedFinding): stri
 // Layout
 // ---------------------------------------------------------------------------
 
-/** Below this width the graph stacks into a single column. */
-export const FLOW_GRAPH_STACK_BELOW = 960;
-export const FLOW_GRAPH_MIN_HEIGHT = 460;
-export const FLOW_NODE_HEIGHT = 64;
 /** The package node carries a row of validation chips. */
 export const FLOW_PACKAGE_NODE_HEIGHT = 92;
 
@@ -433,13 +327,6 @@ const COLUMN_GAP_MIN = 40;
 const COLUMN_GAP_MAX = 140;
 
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
-
-export interface FlowRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export interface MultiReviewFlowLayout {
   width: number;
@@ -546,28 +433,4 @@ export function multiReviewFlowLayout({
     fix: single(3),
     pr: single(4),
   };
-}
-
-/**
- * A connector from the right edge of one node to the left edge of the next: a
- * cubic bézier that leaves and arrives horizontally, or a straight line when
- * the two are level.
- */
-export function flowEdgePath(from: FlowRect, to: FlowRect): string {
-  const x1 = from.x + from.width;
-  const y1 = from.y + from.height / 2;
-  const x2 = to.x;
-  const y2 = to.y + to.height / 2;
-  if (y1 === y2) return `M${x1} ${y1} L${x2} ${y2}`;
-  const mid = (x1 + x2) / 2;
-  return `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`;
-}
-
-/** Route a clean report above the skipped Fix node. */
-export function cleanReviewPrEdgePath(from: FlowRect, to: FlowRect): string {
-  const start = from.x + from.width;
-  const y = from.y + from.height / 2;
-  const endY = to.y + to.height / 2;
-  const bypassY = Math.min(from.y, to.y) - 24;
-  return `M${start} ${y} C${start + 24} ${y} ${start + 24} ${bypassY} ${start + 48} ${bypassY} L${to.x - 48} ${bypassY} C${to.x - 24} ${bypassY} ${to.x - 24} ${endY} ${to.x} ${endY}`;
 }

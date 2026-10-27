@@ -6,17 +6,19 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Maximize, Minimize, Minus, Plus } from "lucide-react";
+import { Maximize, Minimize, Minus, Plus, Scan } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
-import type { FlowRect } from "./multi-review-flow";
+import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import type { FlowRect } from "./flow-graph-model";
 import {
   DEFAULT_FLOW_VIEW,
   FLOW_ZOOM_MAX,
   canZoomIn,
   canZoomOut,
   centerFlowRect,
+  fitFlowView,
+  fitStackedFlowZoom,
   flowContentOffset,
   flowViewportHeight,
   pinchFlowZoom,
@@ -26,7 +28,7 @@ import {
   zoomFlowView,
   type FlowSize,
   type FlowView,
-} from "./multi-review-flow-viewport";
+} from "./flow-viewport";
 
 /** Drag-to-pan starts only on the canvas itself, never on a node or a control. */
 const NO_PAN_SELECTOR = '[role="tab"], [data-flow-zoom-controls]';
@@ -75,12 +77,18 @@ export function useFlowViewport({
   content,
   layout = "graph",
   fillHeight = null,
+  minHeight,
+  fitHeight,
 }: {
   viewKey: string;
   measuredWidth: number | null;
   content: FlowSize;
   layout?: "graph" | "stacked";
   fillHeight?: number | null;
+  /** The shortest the wide graph's viewport sizes itself to. */
+  minHeight?: number;
+  /** For the stacked column: the height the page shows it in, which Fit fits it to. */
+  fitHeight?: () => number | null;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(null);
@@ -91,20 +99,20 @@ export function useFlowViewport({
     // scrolls inside it vertically.
     height: stacked
       ? Math.max(1, content.height) * FLOW_ZOOM_MAX
-      : (fillHeight ?? flowViewportHeight(content.height)),
+      : (fillHeight ?? flowViewportHeight(content.height, minHeight)),
   };
   // The remembered zoom applies only at the width it was taken at.
   const zoom =
-    useMultiReviewFlowViewStore((state) => {
+    useFlowGraphViewStore((state) => {
       const remembered = state.views.get(viewKey);
       return remembered && remembered.width === measuredWidth ? remembered.zoom : null;
     }) ?? DEFAULT_FLOW_VIEW.zoom;
   const zoomRef = useRef(zoom);
   /** A scroll position waiting for the render at its zoom. */
   const pendingRef = useRef<FlowView | null>(null);
-  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey });
+  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey, stacked, fitHeight });
   useLayoutEffect(() => {
-    sizesRef.current = { content, viewport, measuredWidth, viewKey };
+    sizesRef.current = { content, viewport, measuredWidth, viewKey, stacked, fitHeight };
   });
 
   const attachViewport = useCallback((element: HTMLDivElement | null) => {
@@ -114,7 +122,7 @@ export function useFlowViewport({
 
   const save = useCallback((view: FlowView) => {
     const { viewKey: key, measuredWidth: width } = sizesRef.current;
-    useMultiReviewFlowViewStore.getState().saveView(key, { ...view, width });
+    useFlowGraphViewStore.getState().saveView(key, { ...view, width });
   }, []);
 
   const currentView = useCallback((): FlowView => {
@@ -163,7 +171,7 @@ export function useFlowViewport({
     const last = lastWidthRef.current;
     lastWidthRef.current = { key: viewKey, width: measuredWidth };
     const element = viewportRef.current;
-    const store = useMultiReviewFlowViewStore.getState();
+    const store = useFlowGraphViewStore.getState();
     const remembered = store.views.get(viewKey);
     const resized =
       last !== null &&
@@ -207,6 +215,25 @@ export function useFlowViewport({
   );
 
   const resetZoom = useCallback(() => zoomTo(DEFAULT_FLOW_VIEW.zoom), [zoomTo]);
+
+  /** Fit: the whole graph in view, from its start. */
+  const fit = useCallback(() => {
+    const {
+      content: size,
+      viewport: box,
+      stacked: column,
+      fitHeight: available,
+    } = sizesRef.current;
+    apply(
+      column
+        ? {
+            zoom: fitStackedFlowZoom(size.height, available?.() ?? null),
+            scrollLeft: 0,
+            scrollTop: 0,
+          }
+        : fitFlowView(size, box),
+    );
+  }, [apply]);
 
   const scrollTo = useCallback(
     (next: FlowView, smooth: boolean) => {
@@ -380,6 +407,7 @@ export function useFlowViewport({
     viewportHandlers,
     zoomBy,
     resetZoom,
+    fit,
     reveal,
     center,
   };
@@ -393,7 +421,8 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * −, the zoom level (which resets to 100%), + and Fullscreen. Over the wide graph's
+ * −, the zoom level (which resets to 100%), +, Fit when the graph offers it
+ * (`onFit`), and Fullscreen. Over the wide graph's
  * bottom-right corner; at the top of the stacked column, where they stay in
  * reach while it scrolls. Touch targets are 44 px wherever the pointer is
  * coarse, and always in the stacked layout, which is the phone layout.
@@ -403,17 +432,23 @@ export function FlowZoomControls({
   onZoomOut,
   onZoomIn,
   onReset,
+  onFit,
   fullscreen,
   onToggleFullscreen,
   placement = "corner",
+  testIdPrefix,
 }: {
   zoom: number;
   onZoomOut: () => void;
   onZoomIn: () => void;
   onReset: () => void;
+  /** Shows a Fit button. Multi Review leaves it out (removed in #1199). */
+  onFit?: () => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   placement?: "corner" | "inline";
+  /** Names the controls for tests: `{prefix}-zoom-level`, `{prefix}-fullscreen`. */
+  testIdPrefix: string;
 }) {
   const percent = Math.round(zoom * 100);
   const touch = placement === "inline";
@@ -449,7 +484,7 @@ export function FlowZoomControls({
         )}
         aria-label={`Zoom ${percent}%, reset to 100%`}
         title="Reset to 100%"
-        data-testid="multi-review-zoom-level"
+        data-testid={`${testIdPrefix}-zoom-level`}
         onClick={onReset}
       >
         {percent}%
@@ -466,6 +501,20 @@ export function FlowZoomControls({
       >
         <Plus className="size-3.5" />
       </Button>
+      {onFit ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={CONTROL_CLASS}
+          aria-label="Fit the whole pipeline"
+          title="Fit the whole pipeline"
+          data-testid={`${testIdPrefix}-fit`}
+          onClick={onFit}
+        >
+          <Scan className="size-3.5" />
+        </Button>
+      ) : null}
       <Button
         type="button"
         variant="ghost"
@@ -474,7 +523,8 @@ export function FlowZoomControls({
         aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
         aria-pressed={fullscreen}
         title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-        data-testid="multi-review-fullscreen"
+        data-testid={`${testIdPrefix}-fullscreen`}
+        data-flow-fullscreen-toggle=""
         onClick={onToggleFullscreen}
       >
         {fullscreen ? <Minimize className="size-3.5" /> : <Maximize className="size-3.5" />}
@@ -498,12 +548,14 @@ export function FlowHeightDivider({
   max,
   onResize,
   onCommit,
+  testIdPrefix,
 }: {
   height: number;
   min: number;
   max: number;
   onResize: (height: number | null) => void;
   onCommit: (height: number | null) => void;
+  testIdPrefix: string;
 }) {
   const dragRef = useRef<{
     pointerId: number;
@@ -550,7 +602,7 @@ export function FlowHeightDivider({
       aria-valuemin={min}
       aria-valuemax={max}
       tabIndex={0}
-      data-testid="multi-review-graph-divider"
+      data-testid={`${testIdPrefix}-graph-divider`}
       title="Drag to resize · double-click to reset"
       className={cn(
         "group absolute inset-x-0 -bottom-1 z-20 flex h-2 cursor-row-resize touch-none items-center outline-hidden",

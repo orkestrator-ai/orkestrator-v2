@@ -58,12 +58,30 @@ export const CODEX_SHARED_ENTRIES = [
 ] as const;
 
 /**
- * Transcript roots created on the host when missing. Without the link, an
- * account's first session would grow a private copy that no other account sees.
+ * Shared entries that are directories, created on the host when missing.
+ * Without the link, the first write from an account (a transcript, a saved
+ * plan) would grow a private copy that no other account sees. An empty
+ * directory reads the same as a missing one to both CLIs; files are not
+ * created, because an empty `settings.json` or `config.toml` is not.
  */
-const REQUIRED_SHARED_DIRECTORIES: Record<AgentAccountPlatform, readonly string[]> = {
-  claude: ["projects"],
-  codex: ["sessions"],
+const SHARED_DIRECTORIES: {
+  claude: readonly (typeof CLAUDE_SHARED_ENTRIES)[number][];
+  codex: readonly (typeof CODEX_SHARED_ENTRIES)[number][];
+} = {
+  claude: [
+    "agents",
+    "commands",
+    "skills",
+    "plugins",
+    "hooks",
+    "rules",
+    "output-styles",
+    "projects",
+    "todos",
+    "file-history",
+    "plans",
+  ],
+  codex: ["skills", "rules", "prompts", "plugins", "sessions", "archived_sessions"],
 };
 
 /** Keys copied from each host `.claude.json` project entry. */
@@ -119,13 +137,54 @@ function isErrno(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === code;
 }
 
+/** Do not follow directory links: their contents are not part of the move. */
+async function hasRelativeSymlink(directory: string): Promise<boolean> {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      if (!path.isAbsolute(await fs.readlink(file))) return true;
+    } else if (entry.isDirectory() && (await hasRelativeSymlink(file))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Move a directory the account created while the host had none up to the
+ * host, so the link that replaces it shares its content with every account.
+ * Never merges: when the host has its own, the account keeps its copy and
+ * `privateSharedEntries` reports it. Best effort, because a failure (another
+ * volume, a CLI recreating the directory) only leaves that copy in place.
+ */
+async function adoptAccountDirectory(link: string, target: string): Promise<void> {
+  const current = await fs.lstat(link).catch(() => null);
+  if (!current?.isDirectory()) return;
+  const targetExists = await fs.lstat(target).then(
+    () => true,
+    () => false,
+  );
+  if (targetExists) return;
+  try {
+    // Moving changes the base of relative links that escape the subtree. Keep
+    // all relative links private conservatively: even an apparently internal
+    // path can escape through another symlink before resolving `..`.
+    if (await hasRelativeSymlink(link)) return;
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.rename(link, target);
+  } catch {
+    // Left in place and reported as private.
+  }
+}
+
 /**
  * Point each shared entry of an account directory at the host's.
  *
  * Idempotent and conservative: a regular file or directory already in the
  * account directory is left alone, because the CLI puts one there when it
- * saves by atomic rename and that content is the account's now. A link whose
- * host target has gone is removed.
+ * saves by atomic rename and that content is the account's now. The exception
+ * is a required directory the host lacks, which is moved to the host first
+ * (`adoptAccountDirectory`). A link whose host target has gone is removed.
  */
 export async function linkSharedEntries(
   accountHome: string,
@@ -136,11 +195,19 @@ export async function linkSharedEntries(
   for (const entry of entries) {
     const target = path.join(hostHome, entry);
     const link = path.join(accountHome, entry);
-    if (requiredDirectories.includes(entry)) {
-      await fs.mkdir(target, { recursive: true });
+    const requiredDirectory = requiredDirectories.includes(entry);
+    if (requiredDirectory) {
+      await adoptAccountDirectory(link, target);
+      try {
+        await fs.mkdir(target, { recursive: true });
+      } catch (error) {
+        // A file or dangling link may occupy the host path. Leave it intact;
+        // only usable directories are shared below.
+        if (!isErrno(error, "EEXIST")) throw error;
+      }
     }
-    const targetExists = await fs.lstat(target).then(
-      () => true,
+    const targetExists = await (requiredDirectory ? fs.stat(target) : fs.lstat(target)).then(
+      (stat) => !requiredDirectory || stat.isDirectory(),
       () => false,
     );
     const current = await fs.lstat(link).catch(() => null);
@@ -162,8 +229,9 @@ export async function linkSharedEntries(
 
 /**
  * Shared entries the account directory now holds as its own file or directory
- * rather than a link to the host's: the CLI saved one by atomic rename, so that
- * account no longer sees the host's copy (or the other accounts' changes).
+ * rather than a link to the host's: the CLI saved one by atomic rename, or
+ * wrote a directory that could not be moved to the host, so that account no
+ * longer sees the host's copy (or the other accounts' changes).
  * Reported, never re-linked here: replacing the file would race a CLI writing
  * it and discard whatever the account saved. Names only, in list order.
  */
@@ -358,7 +426,7 @@ export async function prepareAgentAccountHome(
       accountHome,
       sources.claudeHome,
       CLAUDE_SHARED_ENTRIES,
-      REQUIRED_SHARED_DIRECTORIES.claude,
+      SHARED_DIRECTORIES.claude,
     );
     await syncClaudeAccountSettings(accountHome, sources.claudeJson);
   } else {
@@ -366,7 +434,7 @@ export async function prepareAgentAccountHome(
       accountHome,
       sources.codexHome,
       CODEX_SHARED_ENTRIES,
-      REQUIRED_SHARED_DIRECTORIES.codex,
+      SHARED_DIRECTORIES.codex,
     );
   }
 }

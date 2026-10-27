@@ -148,9 +148,24 @@ the document is hidden or a transport has declared itself disconnected (the
 browser gateway's main stream, or Electron's active connection; see
 `transport-connectivity.ts`), and
 visibility, focus, page-show, online and reconnect signals are coalesced for
-50 ms and reconciled once, critical keys first. Failed reads back off and keep
-the last good value as stale. The coordinator never owns prompt submission,
-approval resolution, workflow progress or queue draining.
+50 ms and reconciled once, critical keys first; that reconcile also restarts
+every quiet backoff, so a backed-off key reads at once if its base cadence is
+overdue. Failed reads back off and keep the last good value as stale. The
+coordinator never owns prompt submission, approval resolution, workflow
+progress or queue draining.
+
+**Data saving** is a client-local preference (Settings > General, stored with
+the client's UI state in `uiStore`) fed to the coordinator as one more
+scheduling input (`setDataSaving`, wired by `lib/data-saving.ts`). Each read
+may name a `dataSaving` variant of its demand; while the preference is on the
+coordinator uses it in place of the base interval or quiet backoff. It never
+slows invalidations, explicit refreshes, resume or reconnect reconciles, and
+it never changes another client's cadence or anything the backend runs. A
+read that sees a change outside the coordinator (an announced revision, a
+checkpoint, a mutation) calls `noteActivity()` to restore its base cadence.
+Variants today: C01 running/blocked/cancelling/recovering 1 s; C02 quiet
+backoff through 10, 15 and 30 s on a watched worktree, 10 s otherwise; C05
+quiet backoff through 8, 15 and 30 s. These are trial values (todo 0052).
 
 ### Rollback switches
 
@@ -216,10 +231,10 @@ None of these is recorded; the IDs are the only names.
 
 | ID | Source | Cadence |
 | --- | --- | --- |
-| C01 | `useNativeAgentSession.ts`, `native-session-read-policy.ts` | Active tab: 500 ms while running, blocked, cancelling or recovering; 1.5 s idle. A qualified provider's quiet idle view backs off through 3, 5, 10 and 15 s (`NATIVE_QUIET_BACKOFF_TRIAL_MS`); qualified today: Cursor, Pi, Grok and OpenCode, plus Claude and Codex while the session is `turn.quietObservation`, and only when the backend advertises observation events. Any invalidation returns it to 1.5 s. Several views of one session share one coordinated read. |
-| C02 | `useFilesPanel.ts` | 5 s while the panel is open and the environment available; immediate on open, tab, target or action. |
+| C01 | `useNativeAgentSession.ts`, `native-session-read-policy.ts` | Active tab: 500 ms while running, blocked, cancelling or recovering; 1.5 s idle. A qualified provider's quiet idle view backs off through 3, 5, 10 and 15 s (`NATIVE_QUIET_BACKOFF_TRIAL_MS`); qualified today: Cursor, Pi, Grok and OpenCode, plus Claude and Codex while the session is `turn.quietObservation`, and only when the backend advertises observation events. Any invalidation returns it to 1.5 s. Several views of one session share one coordinated read. With data saving on, the responsive cadence is 1 s. |
+| C02 | `useFilesPanel.ts` | 5 s while the panel is open and the environment available; immediate on open, tab, target, action or announced revision. With data saving on, backs off through 10, 15 and 30 s on a watched worktree (10 s otherwise). |
 | C03 | `resource-sync.ts` | Resource events coalesce for 50 ms; revision gaps and reconnects trigger a manifest check; 5 min safety manifest check. |
-| C05 | `MultiReviewReviewerTab.tsx` | 4 s while active and running or pending; conditional on a source token. |
+| C05 | `MultiReviewReviewerTab.tsx` | 4 s while active and running or pending; conditional on a source token; immediate on a workflow checkpoint. With data saving on, backs off through 8, 15 and 30 s. |
 | C06 | `ReviewValidationStatus.tsx` | 2 s, completion-scheduled, while the output modal is open and the result queued or running; byte-offset reads. |
 | C07 | `InitializationLogs.tsx` | 1 s while mounted; the backend shares the Docker log tail across clients. |
 | C08 | `SystemUsageIndicator.tsx`, `AgentInfoButton.tsx` | One shared read key: title bar 5 s, process and agent popovers 3 s while open. |
@@ -281,6 +296,15 @@ targets for a live profile; the deterministic harness does not measure them.
 | Workflow progress after a result | Keyed wake; 1 to 1.5 s passes (B14 to B17) | ≤ 3 s | |
 | Lease renewal, approval and auth expiry, watchdogs | 5 s renewal of a 15 s lease (B15, B16); durable deadlines | Unchanged | Critical class |
 | Recovery after a deliberately missed hint | Safety scans and discovery passes | Unchanged or better | Required before reducing any polling |
+
+With data saving on, the client accepts slower backstops for what it shows
+(todo 0052): approval and question visibility (≤ 2 s) and turn completion
+(≤ 3 s) keep their budgets, because both arrive through observation
+invalidations that read at once and the responsive backstop is 1 s. The Files
+panel accepts ≤ 2 s after an announced revision on a watched worktree and
+≤ 11 s on an unwatched target (its 10 s backstop); an explicit action stays
+≤ 1 s. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
+These budgets apply only to the client that turned the preference on.
 
 The container file-list reuse bound stays at 3 s for this reason: with a 5 s
 panel poll, any bound of 5 s or more would serve every other read from the

@@ -19,12 +19,16 @@ import {
   writeCursorSdkCredentials,
 } from "../src/core/cursor-sdk-bridge";
 import type { CommandContext } from "../src/core/commands-context";
+import { LocalServerRuntime } from "../src/core/local-server-runtime";
 
 let dataDir: string;
+/** One backend's local servers per test: the Cursor login slot lives there. */
+let localServers = new LocalServerRuntime();
 const previousEnvKey = process.env.CURSOR_API_KEY;
 
 function contextWith(): CommandContext {
   return {
+    runtime: { localServers },
     storage: {
       getDataDir: () => dataDir,
       loadConfig: async () => ({ global: {}, repositories: {} }),
@@ -37,13 +41,13 @@ async function storeCredentials(value: Record<string, unknown>): Promise<void> {
 }
 
 beforeEach(async () => {
-  cancelCursorSdkLogin();
+  localServers = new LocalServerRuntime();
   dataDir = await mkdtemp(path.join(tmpdir(), "cursor-sdk-bridge-"));
   delete process.env.CURSOR_API_KEY;
 });
 
 afterEach(async () => {
-  cancelCursorSdkLogin();
+  cancelCursorSdkLogin(contextWith());
   await rm(dataDir, { recursive: true, force: true });
   if (previousEnvKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = previousEnvKey;
@@ -213,7 +217,7 @@ describe("interactive login lifecycle", () => {
     const started = startCursorSdkLogin(contextWith(), options);
     await waitFor(() => spawned);
     expect((await cursorSdkLoginProgress(contextWith(), undefined)).state).toBe("pending");
-    cancelCursorSdkLogin();
+    cancelCursorSdkLogin(contextWith());
 
     expect(child.kills).toBe(1);
     await expect(started).rejects.toThrow("cancelled");
@@ -242,7 +246,7 @@ describe("interactive login lifecycle", () => {
       () => "",
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
-    cancelCursorSdkLogin();
+    cancelCursorSdkLogin(contextWith());
 
     expect(await firstMessage).toContain("cancelled");
     expect(await secondMessage).toContain("cancelled");

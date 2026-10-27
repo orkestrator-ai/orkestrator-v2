@@ -324,7 +324,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     const timestamp = nowIso();
     const record: FeaturePlanningRecord = {
       version: FEATURE_PLANNING_RECORD_VERSION,
-      operationId: randomUUID(),
+      operationId: input.operationId ?? randomUUID(),
       featureId: plan.id,
       projectId: plan.projectId,
       kind: input.kind,
@@ -342,12 +342,6 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       throw new Error("A planning request is already running for this feature");
     }
     this.noteRecord(feature.id, feature.planning);
-    // The user's message is persisted by the backend so the transcript and the
-    // record agree even if the caller never comes back.
-    await this.mutatePlanning(feature.id, record.operationId, (plan, current) => {
-      const persisted = this.appendMessage(plan, current, "user", input.userMessage);
-      current.userMessageId = persisted.id;
-    });
     void this.runLocked(plan.id);
     return (await this.read(plan.id)) ?? record;
   }

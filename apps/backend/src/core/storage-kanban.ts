@@ -521,12 +521,18 @@ export class KanbanRepository {
     return result;
   }
 
-  async createFeaturePlan(projectId: string): Promise<FeaturePlan> {
+  async createFeaturePlan(projectId: string, id: string = randomUUID()): Promise<FeaturePlan> {
     return this.mutateFeaturePlans(
       (plans) => {
+        const existing = plans.find((plan) => plan.id === id);
+        if (existing) {
+          if (existing.projectId !== projectId)
+            throw new Error("Feature plan belongs to another project");
+          return existing;
+        }
         const now = nowIso();
         const plan: FeaturePlan = {
-          id: randomUUID(),
+          id,
           projectId,
           title: "new feature",
           status: "collecting",
@@ -727,10 +733,29 @@ export class KanbanRepository {
         const plan = plans.find((candidate) => candidate.id === record.featureId);
         if (!plan) throw new Error(`Feature plan not found: ${record.featureId}`);
         const existing = plan.planning;
+        const messages =
+          record.kind === "story"
+            ? plan.stories.find((story) => story.id === record.storyId)!.messages
+            : plan.messages;
+        if (
+          existing?.operationId === record.operationId ||
+          messages.some((message) => message.id === record.operationId)
+        )
+          return { started: false, feature: plan };
         if (isFeaturePlanningRecord(existing) && !isTerminalFeaturePlanningPhase(existing.phase)) {
           return { started: false, feature: plan };
         }
-        plan.planning = { ...record, projectId: plan.projectId };
+        // Publish the operation and its user message atomically. A legacy
+        // adoption already has a message and must retain that identity.
+        const userMessageId = record.userMessageId ?? record.operationId;
+        if (!messages.some((message) => message.id === userMessageId))
+          messages.push({
+            id: userMessageId,
+            role: "user",
+            content: record.userMessage,
+            createdAt: record.startedAt,
+          });
+        plan.planning = { ...record, projectId: plan.projectId, userMessageId };
         plan.updatedAt = nowIso();
         return { started: true, feature: plan };
       },

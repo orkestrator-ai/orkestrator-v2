@@ -13,18 +13,26 @@ live findings on real providers and a few gaps found on the way.
 
 ## Current state
 
-- **Graph.** `MultiReviewFlowGraph.tsx` draws the nodes as tabs that control
-  the inspector. `multiReviewFlowLayout` (`multi-review-flow.ts`) computes their
-  positions, and edges are hand-drawn SVG béziers. Edge state comes from
-  `multiReviewFlowEdges`. A finished source takes its style from its target:
+- **Shared components.** The graph, viewport, stacked layout, view store and
+  inspector frame are shared with the build pipeline tab and live in
+  `apps/web/src/components/flow-graph/` (`FlowGraph.tsx`, `FlowViewport.tsx`,
+  `flow-viewport.ts`, `flow-graph-model.ts`, `FlowInspector.tsx`) and
+  `stores/flowGraphViewStore.ts`. Multi Review supplies its nodes, its
+  five-column layout and its edges; see
+  [build-pipeline-view.md](../../architecture/build-pipeline-view.md).
+- **Graph.** `MultiReviewFlowGraph.tsx` draws the nodes, through the shared
+  `FlowGraph`, as tabs that control the inspector. `multiReviewFlowLayout`
+  (`multi-review-flow.ts`) computes their positions, and edges are hand-drawn
+  SVG béziers. Edge state comes from `multiReviewFlowEdges`. A finished source takes its style from its target:
   `active`, `complete`, `ready` (output waiting for the next step), `failed`,
   or `pending` when nothing has flowed. Below 960 px the graph stacks into one
   column with straight connectors.
 - **Zoom and pan.** The graph sits in a scrolling viewport up to 720 px tall
-  (`MultiReviewFlowViewport.tsx`, maths in `multi-review-flow-viewport.ts`).
-  −, the zoom level (which resets to 100%), +, Fit and Fullscreen sit in its
-  bottom-right corner; zoom runs from 20% to 200%. Fit only ever zooms out, so
-  it does nothing while the graph already fits. Fullscreen portals the graph
+  (`FlowViewport.tsx`, maths in `flow-viewport.ts`). −, the zoom level (which
+  resets to 100%), + and Fullscreen sit in its bottom-right corner; zoom runs
+  from 20% to 200%. There is no Fit control: it was removed in #1199, and the
+  browser suite asserts it stays gone. The shared viewport still offers Fit as
+  an opt-in (`fitControl`) that the build pipeline graph turns on. Fullscreen portals the graph
   over the whole Multi Review tab (an `@container` ancestor would confine a
   fixed overlay) and the viewport takes the tab's height; the button or an
   Escape no menu or dialog handled leaves it. Dragging the canvas, wheel and
@@ -34,19 +42,19 @@ live findings on real providers and a few gaps found on the way.
   pinch zoom around the pointer, while a plain wheel is left to scrolling so
   the page still scrolls past the graph. A node reached from the keyboard is
   scrolled into view first. Zoom and pan are kept per workflow in
-  `multiReviewFlowViewStore` (renderer only, at most 50 workflows) and reset
+  `flowGraphViewStore` (renderer only, at most 50 workflows) and reset
   when the panel width changes.
 - **Zoom in the stacked layout.** Below 960 px the column has the same
   controls, range and presets, in a sticky row at its top with 44 px touch
   targets. The column scales inside a viewport that scrolls only sideways and
   grows with it, so vertical scrolling stays with the page and the inspector
-  below stays reachable; Fit sizes the column to the height the page shows it
-  in and brings its top into view. It keeps its own view, under the workflow
+  below stays reachable. It keeps its own view, under the workflow
   id plus `stacked`, so each layout restores what it was left at.
-- **Failed nodes.** A failed reviewer or step shows the first line of its
-  error in place of its model, truncated to the node. The whole text is the
-  node's accessible description and its tooltip, which also opens on keyboard
-  focus. Steps take the workflow error, or the Fix session's own once the fix
+- **Failed nodes.** A failed reviewer or step shows its error, joined onto
+  one line, in place of its model, truncated to the node (the shared
+  `FlowGraph`'s `errorFace="joined"`; the build pipeline shows only the first
+  line). The whole text is the node's accessible description and its tooltip,
+  which also opens on keyboard focus. Steps take the workflow error, or the Fix session's own once the fix
   is interactive.
 - **Inspector.** `MultiReviewInspector.tsx`. Every node has a transcript tail.
   Each step is a keyword and its subject; narrative (`say`) lines drop the

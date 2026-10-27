@@ -77,6 +77,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
+import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
@@ -617,6 +618,38 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     };
   }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
+  // An account read only labels the live projection it was requested for.
+  // A stopped bridge reports its next-start account, while an unreachable
+  // projection can retain the previous account's quotas indefinitely.
+  const sessionAccountKey =
+    accountEnvironmentId && accountAgent
+      ? JSON.stringify([
+          sessionIdentity,
+          neutralProjection?.generation,
+          neutralProjection?.connection,
+        ])
+      : undefined;
+  const [sessionAccount, setSessionAccount] = useState<{
+    key: string;
+    account: AgentSessionAccount | null;
+  } | null>(null);
+  const reportSessionAccount = useCallback(
+    (account: AgentSessionAccount | null) => {
+      if (sessionAccountKey) setSessionAccount({ key: sessionAccountKey, account });
+    },
+    [sessionAccountKey],
+  );
+  const usageAccountLabel =
+    sessionAccountKey &&
+    sessionAccount?.key === sessionAccountKey &&
+    sessionAccount.account?.source === "account" &&
+    sessionAccount.account.running &&
+    sessionAccount.account.platform === accountAgent &&
+    neutralProjection?.connection === "connected" &&
+    neutralProjection.platform === accountAgent &&
+    neutralProjection.environmentId === accountEnvironmentId
+      ? sessionAccount.account.account?.label
+      : undefined;
 
   const openForkTab = async (
     sessionId: string,
@@ -974,13 +1007,16 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       ? neutralRateLimits
                       : (usage?.rateLimits ?? neutralRateLimits)
                   }
+                  accountLabel={usageAccountLabel}
                 />
               </div>
 
               <AgentInfoAccountSection
+                key={sessionAccountKey}
                 environmentId={activeSession.environmentId}
                 provider={activeSession.provider}
                 open={open}
+                onSessionAccount={reportSessionAccount}
                 refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
               />
 

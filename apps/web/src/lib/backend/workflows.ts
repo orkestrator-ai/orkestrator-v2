@@ -1007,6 +1007,14 @@ export async function retryBuildPipelineStage(pipelineId: string): Promise<Backe
   });
 }
 
+/** Runs one failed reviewer of the current review pass again. */
+export async function retryBuildPipelineReviewer(
+  pipelineId: string,
+  reviewerId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", { pipelineId, reviewerId });
+}
+
 export async function restartBuildPipelineStep(
   pipelineId: string,
   stageId: string,

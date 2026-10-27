@@ -16,6 +16,7 @@ import {
   codexConnection,
   grokConnection,
   httpProvider,
+  piConnection,
   waitUntil,
   deferred,
   declineResolution,
@@ -149,6 +150,77 @@ describe("provider-neutral interaction adapters", () => {
     expect(writes.map(({ body }) => body)).toEqual([
       { action: "revise", feedback: "Add rollback steps" },
       { action: "accept", answers: { language: ["typescript"] } },
+    ]);
+  });
+
+  test("Grok maps a call without command or file detail to a generic permission", async () => {
+    let approvals: Array<Record<string, unknown>> = [
+      "fetch-allow",
+      "fetch-deny",
+      "fetch-cancel",
+    ].map((id) => ({
+      id,
+      title: "Fetch a page",
+      kind: "permission",
+      requestedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      options: [
+        { optionId: "allow", name: "Allow once", kind: "allow_once" },
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+      ],
+    }));
+    const writes: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      writes.push({ url, body: JSON.parse(String(init.body)) });
+      approvals = approvals.filter((entry) => !url.endsWith(`/${String(entry.id)}`));
+      return Response.json({ resolved: true });
+    }, grokConnection);
+
+    const { requests } = await provider.interactions!.listPendingInteractions("session-1");
+    expect(requests.map(({ kind }) => kind)).toEqual(["permission", "permission", "permission"]);
+    const [allow, deny, cancel] = requests as [
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+    ];
+    expect(allow.presentation).toMatchObject({
+      title: "Fetch a page",
+      confirmLabel: "Continue",
+      declineLabel: "Deny",
+      confirmDisabled: false,
+    });
+    // Nothing to show beyond the title: no command or file lines.
+    expect(allow.presentation.body).toBeUndefined();
+    expect(allow.presentation.questions[0]!.options.map((option) => option.label)).toEqual([
+      "Allow once",
+      "Reject",
+    ]);
+
+    // The bridge would read a session grant as a denial; it is refused here.
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", allow.id, {
+        ...answerResolution(allow),
+        action: "approve-for-session",
+        answer: undefined,
+      }),
+    ).resolves.toMatchObject({ result: "rejected" });
+    expect(writes).toEqual([]);
+
+    for (const [request, resolution] of [
+      [allow, answerResolution(allow)],
+      [deny, declineResolution(deny)],
+      [cancel, { ...declineResolution(cancel), action: "cancel" }],
+    ] as const) {
+      await expect(
+        provider.interactions!.resolveInteraction("session-1", request.id, resolution),
+      ).resolves.toMatchObject({ result: "applied" });
+    }
+    expect(writes).toEqual([
+      { url: expect.stringContaining("/approvals/fetch-allow"), body: { optionId: "allow" } },
+      { url: expect.stringContaining("/approvals/fetch-deny"), body: { decision: "deny" } },
+      { url: expect.stringContaining("/approvals/fetch-cancel"), body: { decision: "cancel" } },
     ]);
   });
 
@@ -509,6 +581,66 @@ describe("provider-neutral interaction adapters", () => {
         url: expect.stringContaining("/interactions/permission-1"),
         body: { action: "cancel" },
       },
+    ]);
+  });
+
+  test("Claude maps a file approval with its paths and answers it exactly", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    let interactions: Array<Record<string, unknown>> = [
+      {
+        id: "file-1",
+        kind: "file-approval",
+        toolName: "Edit",
+        toolUseId: "tu-1",
+        paths: ["/repo/a.ts", "/repo/b.ts"],
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "file-2",
+        kind: "file-approval",
+        toolName: "Write",
+        title: "Claude wants to create notes.md",
+        paths: ["/repo/notes.md"],
+        requestedAt,
+        expiresAt,
+      },
+    ];
+    const upstream: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider(async (url, init) => {
+      if (url.endsWith("/questions")) return Response.json({ questions: [] });
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+      if (url.endsWith("/interactions")) return Response.json({ interactions });
+      const id = decodeURIComponent(url.split("/interactions/")[1] ?? "");
+      upstream.push({ url, body: JSON.parse(String(init.body)) });
+      interactions = interactions.filter((interaction) => interaction.id !== id);
+      return Response.json({ status: "resolved" });
+    });
+
+    const { requests } = await provider.interactions!.listPendingInteractions("session-1");
+    expect(requests.map(({ kind }) => kind)).toEqual(["file-approval", "file-approval"]);
+    const [edit, write] = requests as [AgentInteractionRequest, AgentInteractionRequest];
+    expect(edit.presentation).toMatchObject({
+      title: "Approve file changes",
+      body: "File: /repo/a.ts\nFile: /repo/b.ts",
+      questions: [],
+      confirmLabel: "Approve",
+      declineLabel: "Deny",
+    });
+    expect(edit.blocking).toBe(true);
+    expect(edit.expiresAt).toBe(expiresAt);
+    expect(write.presentation.title).toBe("Claude wants to create notes.md");
+
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", edit.id, answerResolution(edit)),
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", write.id, declineResolution(write)),
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(upstream).toEqual([
+      { url: expect.stringContaining("/interactions/file-1"), body: { action: "accept" } },
+      { url: expect.stringContaining("/interactions/file-2"), body: { action: "decline" } },
     ]);
   });
 
@@ -1137,6 +1269,122 @@ describe("provider-neutral interaction adapters", () => {
     await expect(
       malformedFileChange.provider.interactions!.listPendingInteractions("session-1"),
     ).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  test("Pi approvals map through the Codex shapes and answer with a decision", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    const hold = { available: true };
+    // What `publicApprovals` in `bridges/pi-bridge/src/interactions.ts` serves.
+    let approvals: Array<Record<string, unknown>> = [
+      {
+        approvalId: "pi-command",
+        requestedAt,
+        expiresAt,
+        hold,
+        reason: "Pi requested to run the bash tool.",
+        kind: "command",
+        command: "make release",
+        cwd: "/workspace",
+      },
+      {
+        approvalId: "pi-edit",
+        requestedAt,
+        expiresAt,
+        hold,
+        reason: "Pi requested to run the edit tool.",
+        kind: "file-change",
+        changes: [{ path: "src/a.ts", kind: "update" }],
+      },
+      {
+        approvalId: "pi-write-no-path",
+        requestedAt,
+        expiresAt,
+        hold,
+        reason: "Pi requested to run the write tool.",
+        kind: "file-change",
+        changes: [],
+        actionable: false,
+      },
+    ];
+    const writes: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals, revision: 1 });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [], revision: 1 });
+      writes.push({ url, body: JSON.parse(String(init.body)) });
+      approvals = approvals.filter((entry) => !url.endsWith(`/${String(entry.approvalId)}`));
+      return Response.json({ resolved: true });
+    }, piConnection);
+
+    const { requests } = await provider.interactions!.listPendingInteractions("session-1");
+    expect(requests.map(({ kind }) => kind)).toEqual([
+      "command-approval",
+      "file-approval",
+      "file-approval",
+    ]);
+    const [command, edit, pathless] = requests as [
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+    ];
+    expect(command.presentation).toMatchObject({
+      title: "Approve command",
+      body: "Reason: Pi requested to run the bash tool.\nCommand: make release\nWorking directory: /workspace",
+      confirmDisabled: false,
+    });
+    expect(edit.presentation).toMatchObject({
+      title: "Approve file changes",
+      body: "Reason: Pi requested to run the edit tool.\nChange: update: src/a.ts",
+      confirmDisabled: false,
+    });
+    // Pi has no session-wide grant, so none is offered.
+    expect(edit.presentation.approveForSessionLabel).toBeUndefined();
+    expect(pathless.presentation.confirmDisabled).toBe(true);
+
+    // A change nobody can name, and a session grant Pi cannot honour, are
+    // refused before anything reaches the bridge.
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        pathless.id,
+        answerResolution(pathless),
+      ),
+    ).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", edit.id, {
+        ...answerResolution(edit),
+        action: "approve-for-session",
+        answer: undefined,
+      }),
+    ).resolves.toMatchObject({ result: "rejected" });
+    expect(writes).toEqual([]);
+
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", edit.id, answerResolution(edit)),
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        command.id,
+        declineResolution(command),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        pathless.id,
+        declineResolution(pathless),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
+    // The Pi bridge allows only an explicit `approve`; anything else denies.
+    expect(writes).toEqual([
+      { url: expect.stringContaining("/approvals/pi-edit"), body: { decision: "approve" } },
+      { url: expect.stringContaining("/approvals/pi-command"), body: { decision: "deny" } },
+      {
+        url: expect.stringContaining("/approvals/pi-write-no-path"),
+        body: { decision: "deny" },
+      },
+    ]);
   });
 
   test("OpenCode lists input and authorization without auto-answering and preserves values", async () => {

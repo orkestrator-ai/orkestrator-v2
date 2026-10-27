@@ -121,6 +121,49 @@ describe("requestToolApproval with the gate on", () => {
     });
   });
 
+  // An edit or write is a file approval. It shares the command's timer and
+  // answer path, so these pin that the kind changes neither.
+  for (const { toolName, change } of [
+    { toolName: "edit", change: "update" },
+    { toolName: "write", change: "create" },
+  ]) {
+    test(`parks a ${toolName} as a file approval and runs it once allowed`, async () => {
+      const state = newSessionState();
+      const decision = requestToolApproval(state, "call-1", toolName, { path: "src/a.ts" });
+
+      const { approvals } = publicApprovals(state) as { approvals: Array<Record<string, unknown>> };
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "file-change",
+          changes: [{ path: "src/a.ts", kind: change }],
+          reason: `Pi requested to run the ${toolName} tool.`,
+        }),
+      ]);
+      expect(approvals[0]).not.toHaveProperty("actionable");
+      expect(resolveApproval(state, approvals[0]!.approvalId as string, "allow")).toBe(true);
+
+      expect(await decision).toEqual({ block: false });
+      expect(state.approvals.size).toBe(0);
+    });
+
+    test(`denies a ${toolName} nobody answered before it expired`, async () => {
+      await withFakeTime(async () => {
+        const state = newSessionState();
+        const decision = requestToolApproval(state, "call-1", toolName, { path: "src/a.ts" });
+        const [id] = [...state.approvals.keys()];
+
+        jest.advanceTimersByTime(approvalTimeoutMs() - 1);
+        expect(state.approvals.has(id!)).toBe(true);
+        jest.advanceTimersByTime(1);
+
+        expect(await decision).toEqual({ block: true, reason: EXPIRED });
+        expect(state.approvals.size).toBe(0);
+        // Settled is closed: a late allow approves nothing.
+        expect(resolveApproval(state, id!, "allow")).toBe(false);
+      });
+    });
+  }
+
   test("answers an id it does not know as false rather than throwing", () => {
     const state = newSessionState();
     expect(resolveApproval(state, "never-existed", "allow")).toBe(false);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import { NodeCoordination } from "./node-coordination.js";
@@ -432,3 +432,76 @@ test("multi-target unknown deletion reports earlier completed targets", async ()
   expect(resolved.result?.message).toContain("Second");
   instance.collector.dispose();
 });
+
+for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"]) {
+  test(`approved root-change ${scenario} execution and coordinator outcome mail`, async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const main = await world.main();
+    const { instance } = coordination(world, []);
+    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    // Exercise the approval executor without a Docker or provider dependency.
+    const options = (
+      instance as unknown as {
+        options: { invoke: (command: string, args: Record<string, unknown>) => Promise<unknown> };
+      }
+    ).options;
+    options.invoke = async (command, args) => {
+      calls.push({ command, args });
+      if (scenario === "failed") throw new Error("Changes do not apply");
+      return { files: args.paths };
+    };
+    const notice = spyOn(world.storage, "sendAgentMail");
+    const target = {
+      nodeId: scenario === "remote" ? "bk_remote" : "bk_leaf",
+      nodeName: "Leaf",
+      environmentId: "worker",
+      environmentName: "Worker",
+      projectId: world.projectId,
+      files: ["suggested.ts"],
+    };
+    const input = {
+      requestId: `root-${scenario}`,
+      kind: "apply-root-changes",
+      targets: scenario === "multiple" ? [target, target] : [target],
+      requestedBy: {
+        coordinatorEnvironmentId: main.environmentId,
+        coordinatorTabId: main.tabId,
+        projectId: world.projectId,
+      },
+    };
+    const request = await instance.createActionRequest(input);
+    const duplicate = await instance.createActionRequest(input);
+    expect(duplicate.requestId).toBe(request.requestId);
+    expect(await instance.actions.list()).toHaveLength(1);
+    const resolved = await instance.actions.resolve(
+      request.requestId,
+      "approve",
+      scenario === "fallback" ? {} : { paths: ["selected.ts"] },
+    );
+    expect(resolved.state).toBe(
+      ["remote", "multiple", "failed"].includes(scenario) ? "failed" : "executed",
+    );
+    if (["remote", "multiple"].includes(scenario)) expect(calls).toHaveLength(0);
+    else
+      expect(calls).toEqual([
+        {
+          command: "apply_project_root_changes",
+          args: {
+            environmentId: "worker",
+            projectId: world.projectId,
+            paths: [scenario === "fallback" ? "suggested.ts" : "selected.ts"],
+          },
+        },
+      ]);
+    expect(notice).toHaveBeenCalledTimes(1);
+    expect(notice.mock.calls[0]![1]).toMatchObject({
+      toEnvironmentId: main.environmentId,
+      toTabId: main.tabId,
+      requestId: `node-action:${request.requestId}:${resolved.state}`,
+    });
+    await instance.createActionRequest(input);
+    expect(notice).toHaveBeenCalledTimes(1);
+    notice.mockRestore();
+  });
+}

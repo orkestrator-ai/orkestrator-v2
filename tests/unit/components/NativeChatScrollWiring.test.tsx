@@ -193,6 +193,7 @@ describe("native chat scroll wiring", () => {
   // native tabs, so it needs the same scroll wiring: a stage that streams while
   // the user is on another tab must be scrolled to its tail on return.
   test("the build transcript passes its environmentId to the Virtuoso scroll hook", () => {
+    useBuildPipelineStore.setState({ pipelines: new Map([[buildPipeline.id, buildPipeline]]) });
     render(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: "pipeline-1", taskId: "task-1" }}

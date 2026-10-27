@@ -14,7 +14,7 @@ import {
 } from "../src/core/tmux";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { createEnvironment, deferred, waitFor } from "./tmux-test-harness.js";
+import { createEnvironment, deferred, harnessRuntime, waitFor } from "./tmux-test-harness.js";
 
 describe("ClaudeStatePollManager", () => {
   function createPollHarness(
@@ -794,8 +794,9 @@ describe("ClaudeStatePollManager", () => {
   }, 10_000);
 
   test("the exported lifecycle shutdown is idempotent for an unknown container", () => {
-    expect(() => shutdownClaudeStatePolling("container-never-started")).not.toThrow();
-    expect(() => shutdownClaudeStatePolling("container-never-started")).not.toThrow();
+    const context = { runtime: harnessRuntime() } as unknown as CommandContext;
+    expect(() => shutdownClaudeStatePolling(context, "container-never-started")).not.toThrow();
+    expect(() => shutdownClaudeStatePolling(context, "container-never-started")).not.toThrow();
   });
 });
 

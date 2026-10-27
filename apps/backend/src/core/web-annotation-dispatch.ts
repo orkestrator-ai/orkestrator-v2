@@ -182,16 +182,14 @@ function queueHoldsId(queue: PersistedPromptQueue | null, id: string): boolean {
   return Boolean(queue?.messages.some((message) => isRecord(message) && message.id === id));
 }
 
+/** A live legacy claim or in-flight reservation holds this id: delivery has started. */
 function claimHoldsId(queue: PersistedPromptQueue | null, id: string): boolean {
-  if (!queue) return false;
-  if (
-    queue.inFlight &&
-    (queue.inFlight.requestId === id ||
-      (isRecord(queue.inFlight.message) && queue.inFlight.message.id === id))
-  ) {
-    return true;
-  }
-  return isRecord(queue.outstandingClaim?.message) && queue.outstandingClaim.message.id === id;
+  const inFlight = queue?.inFlight;
+  return Boolean(
+    queue?.outstandingClaim?.message.id === id ||
+    (inFlight &&
+      (inFlight.requestId === id || (isRecord(inFlight.message) && inFlight.message.id === id))),
+  );
 }
 
 /** The queue recorded that this id was removed from `messages` before dispatch. */
@@ -436,7 +434,12 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
       const holds: WebAnnotationDestinationOption["holds"] = [];
       if (composeDraftHoldsQueue(draft?.value)) holds.push("compose-draft");
       if (session?.pendingDispatch || queue?.dispatchError) holds.push("parked-dispatch");
-      if (queue && (queue.messages.length > 0 || queue.inFlight !== undefined))
+      if (
+        queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.messages.length > 0 ||
+          queue.inFlight !== undefined)
+      )
         holds.push("queued-prompts");
       const title =
         candidate.title ?? presentation?.title ?? AGENT_PLATFORM_LABELS[candidate.agent];
@@ -1052,7 +1055,8 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
     const activity = this.turnActivity(environmentId, destination);
     if (activity === "working" || activity === "waiting") return "agent-busy";
     const head = queue?.messages[0];
-    if (queue?.inFlight || (isRecord(head) && head.id !== id)) return "agent-busy";
+    if (queue?.outstandingClaim || queue?.inFlight || (isRecord(head) && head.id !== id))
+      return "agent-busy";
     return null;
   }
 

@@ -19,18 +19,19 @@ import {
 } from "@/contexts";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
+import { useFlowGraphViewStore as useMultiReviewFlowViewStore } from "@/stores/flowGraphViewStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useUIStore } from "@/stores/uiStore";
+import { MultiReviewInspectorHeader } from "./MultiReviewInspector";
 import { MultiReviewTab } from "./MultiReviewTab";
 import {
   MultiReviewFlowGraph,
   type MultiReviewFlowGraphProps,
   type MultiReviewFlowNodeModel,
 } from "./MultiReviewFlowGraph";
-import { useFlowViewport } from "./MultiReviewFlowViewport";
+import { useFlowViewport } from "@/components/flow-graph/FlowViewport";
 import {
   multiReviewFlowLayout,
   type MultiReviewFlowEdgeState,
@@ -40,7 +41,7 @@ import {
   FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
   flowViewportHeight,
   resizedFlowViewportHeight,
-} from "./multi-review-flow-viewport";
+} from "@/components/flow-graph/flow-viewport";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 
@@ -1660,4 +1661,33 @@ describe("provisional findings", () => {
     );
     expect(screen.queryByTestId("multi-review-finding-standing") === null).toBe(true);
   });
+});
+
+test.each([
+  ["reviewer", "clock-3"],
+  ["consolidation", "git-merge"],
+  ["fix", "wrench"],
+  ["pr", "git-pull-request"],
+] as const)("the idle %s inspector keeps its kind icon", (kind, icon) => {
+  const view = render(
+    <MultiReviewInspectorHeader
+      node={{
+        id: "idle-node",
+        kind,
+        title: "Idle step",
+        state: "not-started",
+        statusLabel: "Not started",
+        stalled: false,
+        detail: "",
+        runtime: null,
+        runtimeLabel: "Runtime",
+        canOpen: false,
+        onOpen: () => {},
+        contextMenu: null,
+      }}
+      actions={null}
+    />,
+  );
+  expect(view.container.querySelector(`.lucide-${icon}`) !== null).toBe(true);
+  cleanup();
 });

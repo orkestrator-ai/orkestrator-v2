@@ -10,7 +10,6 @@ import {
 } from "./recurring-work-metrics.js";
 import {
   emptySignalHealthStates,
-  recurringDiagnosticsRegistry,
   type SignalDemotionReason,
   type SignalHealthState,
   type SignalHealthStatus,
@@ -213,10 +212,11 @@ export class ClaudeStatePollManager {
   private readonly now: () => string;
   private readonly nowMs: () => number;
   private readonly metrics: RecurringWorkMetrics;
-  private signalInstaller: ClaudeStateSignalInstaller | null;
+  private readonly signalInstaller: ClaudeStateSignalInstaller | null;
   /** Lifetime counters for {@link status}. */
   private readonly demotions: Partial<Record<SignalDemotionReason, number>> = {};
   private acceptedRings = 0;
+  private stopped = false;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -234,15 +234,8 @@ export class ClaudeStatePollManager {
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
-  /**
-   * The registry installs the Docker-backed installer on the process-wide
-   * manager; the poll module itself never reaches into container setup.
-   */
-  setSignalInstaller(installer: ClaudeStateSignalInstaller | null): void {
-    this.signalInstaller = installer;
-  }
-
   start(containerId: string, context: CommandContext): void {
+    if (this.stopped) return;
     const existing = this.polls.get(containerId);
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
@@ -424,7 +417,9 @@ export class ClaudeStatePollManager {
 
   /** Adopt every running container without waiting for a renderer lease. */
   async reconcile(context: CommandContext): Promise<void> {
+    if (this.stopped) return;
     const environments = await context.storage.loadEnvironments();
+    if (this.stopped) return;
     const running = new Set<string>();
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
@@ -444,6 +439,12 @@ export class ClaudeStatePollManager {
   shutdown(containerId: string): void {
     const poll = this.polls.get(containerId);
     if (poll) this.deactivate(containerId, poll);
+  }
+
+  /** Permanently close admission and retire every poll at backend shutdown. */
+  shutdownAll(): void {
+    this.stopped = true;
+    for (const containerId of Array.from(this.polls.keys())) this.shutdown(containerId);
   }
 
   private deactivate(containerId: string, poll: ClaudeStatePoll): void {
@@ -700,9 +701,6 @@ export class ClaudeStatePollManager {
   }
 }
 
-export const defaultClaudeStatePolls = new ClaudeStatePollManager();
-recurringDiagnosticsRegistry.addSignalSource("claude-state-signal", defaultClaudeStatePolls);
-
 /**
  * Retire state polling for a container that is being stopped or deleted.
  *
@@ -711,8 +709,8 @@ recurringDiagnosticsRegistry.addSignalSource("claude-state-signal", defaultClaud
  * stops the read immediately instead of leaving one `docker exec` aimed at a
  * container that is already going away.
  */
-export function shutdownClaudeStatePolling(containerId: string): void {
-  defaultClaudeStatePolls.shutdown(containerId);
+export function shutdownClaudeStatePolling(context: CommandContext, containerId: string): void {
+  context.runtime.tmux.claudeStatePolls.shutdown(containerId);
 }
 
 export function environmentContainerId(environment: Environment | null | undefined): string {

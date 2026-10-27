@@ -33,6 +33,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
+import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
 import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
@@ -41,21 +42,17 @@ import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { formatTokenCount } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
 import { formatRuntimeParts, runtimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
-import {
-  flowNodeElementId,
-  MultiReviewFlowGraph,
-  type MultiReviewFlowNodeModel,
-} from "./MultiReviewFlowGraph";
+import { MultiReviewFlowGraph, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
+import { FlowInspectorPanel } from "@/components/flow-graph/FlowInspector";
 import {
   MultiReviewFindingsBadge,
   MultiReviewInspectorHeader,
   ReviewerTranscriptTail,
   StepTranscriptTail,
 } from "./MultiReviewInspector";
+import { defaultFlowSelection, latestActivityAt } from "@/components/flow-graph/flow-graph-model";
 import {
-  defaultFlowSelection,
   flowPendingLabel,
-  latestActivityAt,
   mergeReviewerFindings,
   multiReviewElapsedSeconds,
   multiReviewFlowEdges,
@@ -132,6 +129,7 @@ const defaultCommands: MultiReviewCommands = {
 };
 
 interface MultiReviewTabProps {
+  ownsGlobalShortcuts?: boolean;
   data: MultiReviewTabData;
   isActive: boolean;
   hydrateWorkflow?: typeof hydrateMultiReviewWorkflow;
@@ -1756,11 +1754,10 @@ function MultiReviewOverviewTab({
               provisionalCount={provisionalCount}
               className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
             />
-            <section
-              role="tabpanel"
-              id={panelId}
-              aria-labelledby={flowNodeElementId(panelId, selected.node.id)}
-              data-testid="multi-review-inspector"
+            <FlowInspectorPanel
+              panelId={panelId}
+              selectedId={selected.node.id}
+              testId="multi-review-inspector"
               className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
             >
               <div className="col-start-1 row-start-1 min-w-0">
@@ -1768,7 +1765,7 @@ function MultiReviewOverviewTab({
               </div>
               {/* Full width: the badge only overlaps it once stuck. */}
               <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
-            </section>
+            </FlowInspectorPanel>
           </div>
         </div>
       </div>
@@ -1867,6 +1864,17 @@ function MultiReviewOverviewTab({
 }
 
 export function MultiReviewTab(props: MultiReviewTabProps) {
+  if (props.data.pipelinePass) {
+    return (
+      <PipelineReviewTab
+        pipelineId={props.data.workflowId}
+        environmentId={props.data.environmentId}
+        passKey={props.data.pipelinePass}
+        ownsGlobalShortcuts={props.ownsGlobalShortcuts ?? props.isActive}
+        isActive={props.isActive}
+      />
+    );
+  }
   if (props.data.reviewerId) {
     return (
       <MultiReviewReviewerTab

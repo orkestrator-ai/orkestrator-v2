@@ -33,6 +33,7 @@ import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
+import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -111,6 +112,10 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
+
+const DataSavingGatewayFixture = lazy(async () => ({
+  default: (await import("./DataSavingGatewayFixture")).DataSavingGatewayFixture,
+}));
 
 const SidebarDragFixture = lazy(async () => ({
   default: (await import("../../apps/web/src/test/SidebarDragFixture")).SidebarDragFixture,
@@ -1900,6 +1905,7 @@ function fixtureForPath() {
     return <MultiReviewRunningTileFixture />;
   }
   if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
+  if (window.location.pathname === "/pipeline-flow") return <PipelineFlowFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {
@@ -1964,6 +1970,12 @@ function fixtureForPath() {
     installTmuxComposeFocusFixture();
     return <TmuxComposeFocusFixture />;
   }
+  if (window.location.pathname === "/data-saving-gateway")
+    return (
+      <Suspense fallback={null}>
+        <DataSavingGatewayFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }

@@ -173,7 +173,10 @@ class FakeProvider implements BuildPipelineProvider {
     ];
   }
 
-  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
+  async structured<T>(
+    sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T> | null> {
     const phase = this.phases.get(sessionId);
     return {
       ok: true,
@@ -400,6 +403,51 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
+  test("a manual turn in a resumed stage session cannot satisfy the pipeline result request", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session } = await startBuilding(service, storage);
+      const pipelineRequestId = session.structuredRequestId!;
+      expect(pipelineRequestId).toBeString();
+      const manualRequestId = "native-tab-manual-request";
+      // The resumed native tab shares the provider conversation, but dispatches
+      // its own request. Even a valid result on that turn belongs to that turn.
+      await provider.send(session.sdkSessionId, "Explain the implementation so far", {
+        requestId: manualRequestId,
+        mode: "build",
+      });
+      const results = new Map<string, unknown>([[manualRequestId, TEST_REVIEW_PREPARATION]]);
+      const reads: Array<[string, string]> = [];
+      provider.structured = async <T>(sessionId: string, requestId: string) => {
+        reads.push([sessionId, requestId]);
+        return results.has(requestId)
+          ? { ok: true, provider: "claude", requestId, value: results.get(requestId) as T }
+          : null;
+      };
+      await service.advanceNow(started.id);
+      const waiting = await pipeline(storage, started.id);
+      expect(waiting.phase).toBe("building");
+      expect(waiting.sessions[waiting.currentSessionIndex]).toMatchObject({
+        sdkSessionId: session.sdkSessionId,
+        structuredRequestId: pipelineRequestId,
+        structuredResultStatus: "pending",
+      });
+      expect(waiting.reviewPackage).toBeUndefined();
+      expect(reads).toEqual([[session.sdkSessionId, pipelineRequestId]]);
+
+      results.set(pipelineRequestId, TEST_REVIEW_PREPARATION);
+      await service.advanceNow(started.id);
+      const advanced = await pipeline(storage, started.id);
+      expect(advanced.phase).toBe("reviewing");
+      expect(
+        advanced.sessions.find((entry) => entry.sessionKey === session.sessionKey),
+      ).toMatchObject({
+        structuredRequestId: pipelineRequestId,
+        structuredResultStatus: "accepted",
+      });
+      expect(reads.every(([, requestId]) => requestId === pipelineRequestId)).toBe(true);
+    });
+  });
+
   test("lets the environment tier override an inherited speed on an unpinned step", async () => {
     await withService(async (service, storage, provider) => {
       const config = await storage.loadConfig();

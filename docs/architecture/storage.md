@@ -84,9 +84,7 @@ uses. Repositories call each other through the registry, which is how the
 paths that cross stores work: project removal deletes compose drafts
 (`this.repos.drafts`), session removal deletes the session buffer, public
 operations write projects and environments under those stores' leases
-(`this.repos.projects.enqueueEnvironmentMutation`), and the facade's `init`
-runs prompt-queue claim recovery on the prompt-queue store
-(`this.repos.promptQueues`). A lease
+(`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
 the repository that owns its store, with its target, label and timeout
 unchanged.
@@ -357,6 +355,15 @@ prompt-queue dispatch errors) and its readers have no legacy branch. Readers
 that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
+
+One upgrade cannot run once: a backend up to v2.28.0-beta shares this schema
+version and can still write a prompt-queue claim (`outstandingClaim`). So
+`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
+and survive queue writes until settlement or expiry. Expired or malformed
+leases restore their message to the head, and the next save persists that.
+Malformed message ids receive a stable recovery id. A new migration would have made
+every older release refuse the database.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,

@@ -31,7 +31,7 @@ and pure helpers every repository shares, re-exported through
   | --- | --- | --- |
   | `storage-shared-pane-layout.ts` | 233 | Pane-layout bounds and generation checks, `paneLayoutLeaves`, the setup handoff helpers |
   | `storage-shared-agent-activity.ts` | 123 | Per-source and frontend-observer activity reads, the structure fingerprint, the aggregate |
-  | `storage-shared-records.ts` | 232 | Guards for looped and Multi Review workflows, prompt queues and their claim, compose and file drafts, handoffs, build pipelines; the tmux queue-key owner check; build reservation keys |
+  | `storage-shared-records.ts` | 225 | Guards for looped and Multi Review workflows, prompt queues, compose and file drafts, handoffs, build pipelines; the tmux queue-key owner check; build reservation keys |
   | `storage-shared-native-sessions.ts` | 257 | The native session record guard and pre-policy migration, `LoadedNativeAgentSessions`, interaction metadata, the pending dispatch/steer size limits |
   | `storage-shared-model-catalogs.ts` | 357 | Claude, Codex and ACP catalogue normalization and the persisted catalogue cache |
   | `storage-shared-config.ts` | 465 | Config validation, the review-instruction migration, `normalizePersistedConfig`, `defaultConfig`, `defaultRepositoryConfig`, and the OpenCode model helpers' re-export |
@@ -49,12 +49,13 @@ and pure helpers every repository shares, re-exported through
   and interrupts, the environment fences and the publication snapshot. Two
   collaborators took the rest, reached through `StorageRepositories` like the
   agent mail classes (0163, decision 6):
-  - `PromptQueueStore` (`storage-prompt-queue-store.ts`, 194 lines,
+  - `PromptQueueStore` (`storage-prompt-queue-store.ts`,
     `repos.promptQueues`): the prompt-queue lease
     (`enqueuePromptQueueMutation`), `loadPromptQueues`, message validation,
-    `savePromptQueueMutation` with its removed-origin tombstones, and claim
-    recovery (`schedulePromptQueueClaimRecovery`,
-    `recoverExpiredPromptQueueClaims`, the timer).
+    `savePromptQueueMutation` with its removed-origin tombstones and live-claim
+    exclusion. [0078](../cross-cutting/0078-legacy-prompt-queue-claim-state.md)
+    normalizes expired or malformed legacy claims on every load; the startup
+    recovery, timer and usage counter are retired.
   - `NativeAgentDeliveries` (`storage-native-deliveries.ts`, 678 lines,
     `repos.nativeAgentDeliveries`): the dispatch journal
     (`dispatchNativeAgentPromptOnce`, confirm, clear, retire) and the steer
@@ -65,7 +66,7 @@ and pure helpers every repository shares, re-exported through
   `assertReadableNativeAgentSession`, `announceNativeAgentRecord` and
   `scrubPendingNativeAgentDispatchBackups` became public, since the
   deliveries call them. `PromptsRepository`, `NativeAgentSessionsRepository`
-  and the facade (`init` and the delivery forwarders) call the new owners;
+  and the facade's delivery forwarders call the new owners;
   no facade method changed name or signature.
 - No `storage*.ts` source file is over 2,000 lines. Two test files are
   (`storage-agent-mail.test.ts`, 2,292; `storage-writer-guards.test.ts`,

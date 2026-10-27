@@ -6,6 +6,10 @@ import {
   FLOW_GRAPH_STACK_BELOW,
   defaultFlowSelection,
   flowEdgePath,
+  summarizeFlowEdges,
+  type FlowRect,
+} from "@/components/flow-graph/flow-graph-model";
+import {
   flowPendingLabel,
   mergeReviewerFindings,
   multiReviewElapsedSeconds,
@@ -16,8 +20,6 @@ import {
   provisionalFindingLabel,
   reviewerFlowState,
   severityCounts,
-  summarizeFlowEdges,
-  type FlowRect,
   type MultiReviewFlowState,
 } from "./multi-review-flow";
 

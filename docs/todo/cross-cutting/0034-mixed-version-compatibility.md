@@ -63,7 +63,8 @@ older backends wrote) is owned by
   claim: it only carries forward one an older backend left. The persisted
   `outstandingClaim` is still validated, still blocks a second dispatch in
   `reservePromptQueueHeadForDispatch`, and is still restored to the head when
-  it expires (`recoverExpiredPromptQueueClaims`). 0078 retires that read.
+  it expires (`recoverExpiredPromptQueueClaims`). 0078 retires that read
+  (done 2026-10-27: every load now restores a stored claim to the head).
 - **`export_build_pipeline_for_downgrade` removed** with
   `StorageService.exportBuildPipelineForDowngrade`, its result type and its
   two test cases. `LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES` stays: the

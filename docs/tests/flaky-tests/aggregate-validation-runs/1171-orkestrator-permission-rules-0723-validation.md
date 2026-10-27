@@ -105,3 +105,46 @@ watchdog; the final launch used the normal foreground profile supervisor.
 Both disposable profiles (`permission-review-qa` and `permission-final-qa`)
 were stopped and reset after validation. No Docker lifecycle or Electron-only
 scenario suite was needed for these approval-rule changes.
+
+
+## Main merge, 2026-10-27
+
+Merged main `f7edf57f1bcd6ed52b6b2fb68d4864065198ced7` into
+`19b8716087e786bc49512b65aa356c8f85f05b43`. The original conflicts
+were the Claude parked-interactions test and two documentation indexes.
+Both the permission-rule eligibility test and main's per-kind timeout cases
+were retained; both indexes preserve the entries from each parent.
+
+Validation exposed two integration issues, corrected in the merge:
+
+- Main's new `worker-tab-actions.ts` imported pane-layout helpers from
+  `storage-shared-core.ts`, although they live in
+  `storage-shared-pane-layout.ts`. Correcting the import made typechecking,
+  the coordinator-surface owner, desktop backend-process owner, and web
+  store-resource-sync owner pass.
+- The combined registry contains 831 commands, exceeding the metric map's
+  829-command capacity after its three reserved labels. The map's bounded
+  entry budget increased from 832 to 896, retaining its existing byte bound.
+  The complete `gateway-support-extra.test.ts` owner then passed.
+
+`mise run check` and the conflicted Claude test pass. The final default-suite
+run (`mise run test:logged -- --name merge-final-default-tests -- mise run test`)
+finished in 679.8 s, exit 1. Backend: 12,572 passed, 123 skipped,
+21 failed across 769 files. Root/support: 3,532 passed and two failed.
+Desktop retained its two known macOS profile-cleanup failures. Claude retained
+the two missing-`sessionManagerTestHome` import failures already recorded
+above. The gateway budget failure in this run was corrected and its owning
+test rerun afterward; the aggregate result remains failed.
+
+Other backend failures were the documented environment-move, command
+integration/registry, Docker image, and staged-input-relay cases. Three
+aggregate-only deadlines passed when the complete owners ran alone:
+acceptance-sharing (7.0 s), environment-fork (8.1 s), and worktree-watcher
+(2.2 s). Their existing case files and index rows were updated in this merge.
+The Claude lifecycle/persistence, migrate-copy, and profile-cleanup owners
+still failed alone, with the same defects on files identical to both parents.
+
+Evidence: `orkestrator-test-run.QXGTmp` (inner logs and summary) and
+`orkestrator-test-run.hAHYt6` (outer runner) below the host temporary directory.
+No browser, Electron-only, Docker-live, or iOS scenario suite was needed for
+the test/index resolutions, corrected import, and bounded metric capacity.

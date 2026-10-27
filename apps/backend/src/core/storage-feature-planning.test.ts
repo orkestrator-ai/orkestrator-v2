@@ -158,3 +158,25 @@ describe("StorageService feature planning authority", () => {
     expect(updated.planning).toEqual(attached?.planning);
   });
 });
+
+test("planning admission atomically keeps one message and preserves legacy adoption identities", async () => {
+  const { storage } = await createStorage();
+  const plan = await storage.kanban.createFeaturePlan("project-1");
+  await storage.kanban.startFeaturePlanning(record(plan.id));
+  let saved = (await storage.kanban.getFeaturePlan(plan.id))!;
+  expect(saved.planning!.userMessageId).toBe("operation-1");
+  expect(saved.messages.filter((message) => message.role === "user")).toHaveLength(1);
+  await storage.kanban.clearFeaturePlanning(plan.id, "operation-1");
+  expect((await storage.kanban.startFeaturePlanning(record(plan.id))).started).toBe(false);
+  const adopted = await storage.kanban.startFeaturePlanning(
+    record(plan.id, {
+      operationId: "adopted-operation",
+      userMessageId: "operation-1",
+      phase: "running",
+    }),
+  );
+  expect(adopted.started).toBe(true);
+  saved = (await storage.kanban.getFeaturePlan(plan.id))!;
+  expect(saved.planning!.userMessageId).toBe("operation-1");
+  expect(saved.messages.filter((message) => message.role === "user")).toHaveLength(1);
+});

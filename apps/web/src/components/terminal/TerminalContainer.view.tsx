@@ -1266,7 +1266,8 @@ export function TerminalContainer({
           (tab) =>
             tab.type === "multi-review" &&
             tab.multiReviewTabData?.workflowId === options.multiReviewId &&
-            tab.multiReviewTabData?.reviewerId === options.multiReviewReviewerId,
+            tab.multiReviewTabData?.reviewerId === options.multiReviewReviewerId &&
+            tab.multiReviewTabData?.pipelinePass === options.multiReviewPipelinePass,
         );
         if (openTab) {
           const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
@@ -1400,6 +1401,9 @@ export function TerminalContainer({
             environmentId,
             workflowId: options.multiReviewId,
             ...(options.multiReviewReviewerId ? { reviewerId: options.multiReviewReviewerId } : {}),
+            ...(options.multiReviewPipelinePass
+              ? { pipelinePass: options.multiReviewPipelinePass }
+              : {}),
             isLocal: isLocalEnvironment,
           },
         };

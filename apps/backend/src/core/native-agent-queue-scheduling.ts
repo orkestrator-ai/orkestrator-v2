@@ -42,6 +42,8 @@ export function nativeQueueObligation(
   if (!queue) return null;
   const agent = queue.queueKey.split("\0", 1)[0];
   if (!BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent)) return null;
+  // Keep a sole legacy claim due so expiry is discovered at the progress cadence.
+  if (queue.outstandingClaim) return "pending";
   if (queue.inFlight?.steer) return "in-flight";
   if (queue.dispatchError !== undefined) return null;
   if (queue.inFlight !== undefined) return "in-flight";

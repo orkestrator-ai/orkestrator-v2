@@ -369,8 +369,9 @@ A command node attached to another command node operates in leaf mode:
   (never combined with a conditional read, since config changes do not move
   the project manifest). A node older than that ignores the argument and sends
   none; its rows match on what is present and "primary" falls back to `main`.
-  A changed default branch shows after the next reconcile (60 s), since config
-  changes do not trigger a summary re-read.
+  Config resource changes trigger a summary re-read, so changed default branches
+  appear without waiting for the next reconcile. The 60 s reconcile remains a
+  fallback for missed events or changes made without an event.
 - Every resource is node-qualified (`{ nodeId, projectId }`,
   `{ nodeId, environmentId }`), so identical IDs on two nodes never collide.
   Commands from the portal carry the node reference and the command node

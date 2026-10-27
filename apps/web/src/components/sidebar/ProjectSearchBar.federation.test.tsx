@@ -237,6 +237,97 @@ describe("ProjectSearchBar across machines", () => {
     );
   });
 
+  test("arrow keys traverse local and remote projects before Enter reveals the remote project", async () => {
+    const { onSelectProject, onSelectEnvironment, onSelectMachineProject } = renderSearch();
+    const input = await openAndType("orkestrator");
+    const local = await option("orkestrator-v2, project on This computer");
+    const remote = await option("orkestrator-v2, project on mbp3");
+
+    expect(local.getAttribute("aria-selected")).toBe("true");
+    for (const [key, selected, unselected] of [
+      ["ArrowDown", remote, local],
+      ["ArrowUp", local, remote],
+      ["ArrowDown", remote, local],
+    ] as const) {
+      fireEvent.keyDown(input, { key });
+      expect(selected.getAttribute("aria-selected")).toBe("true");
+      expect(unselected.getAttribute("aria-selected")).toBe("false");
+      expect(input.getAttribute("aria-activedescendant")).toBe(selected.id);
+    }
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelectMachineProject).toHaveBeenCalledTimes(1);
+    expect(onSelectMachineProject).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: "bk_mbp3" }),
+      "ork-3",
+    );
+    expect(onSelectProject).not.toHaveBeenCalled();
+    expect(onSelectEnvironment).not.toHaveBeenCalled();
+    expectDomAbsent(screen.queryByRole("combobox"), "palette after remote project selection");
+  });
+
+  test("arrow keys traverse local and remote environments before Enter opens the remote workspace", async () => {
+    const { onSelectProject, onSelectEnvironment, onSelectMachineProject } = renderSearch();
+    const input = await openAndType("orkestrator");
+    await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    const local = await option("main, environment of orkestrator-v2 on This computer");
+    const remote = await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
+
+    expect(local.getAttribute("aria-selected")).toBe("true");
+    for (const [key, selected, unselected] of [
+      ["ArrowDown", remote, local],
+      ["ArrowUp", local, remote],
+      ["ArrowDown", remote, local],
+    ] as const) {
+      fireEvent.keyDown(input, { key });
+      expect(selected.getAttribute("aria-selected")).toBe("true");
+      expect(unselected.getAttribute("aria-selected")).toBe("false");
+      expect(input.getAttribute("aria-activedescendant")).toBe(selected.id);
+    }
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+      nodeId: "bk_mbp3",
+      projectId: "ork-3",
+      environmentId: "run",
+    });
+    expect(onSelectProject).not.toHaveBeenCalled();
+    expect(onSelectEnvironment).not.toHaveBeenCalled();
+    expect(onSelectMachineProject).not.toHaveBeenCalled();
+    expectDomAbsent(screen.queryByRole("combobox"), "palette after remote environment selection");
+  });
+
+  for (const close of ["Escape", "selection"] as const) {
+    test(`closing via ${close} resets the machine filter when the palette reopens`, async () => {
+      renderSearch();
+      const input = await openAndType("orkestrator");
+      await option("orkestrator-v2, project on mbp3");
+      fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: /mbp3/ }));
+      expect(await screen.findByLabelText("Filter results: All, mbp3")).toBeTruthy();
+      expectDomAbsent(
+        screen.queryByRole("option", { name: "orkestrator-v2, project on This computer" }),
+        "local project while scoped to mbp3",
+      );
+
+      if (close === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+      else fireEvent.click(await option("orkestrator-v2, project on mbp3"));
+      expectDomAbsent(screen.queryByRole("combobox"), "closed palette");
+
+      await openAndType("orkestrator");
+      expect(await screen.findByLabelText("Filter results: All")).toBeTruthy();
+      expect(await option("orkestrator-v2, project on This computer")).toBeTruthy();
+      expect(await option("orkestrator-v2, project on mbp3")).toBeTruthy();
+      expect(await option("orkestrator-v2, project on mini, offline")).toBeTruthy();
+      fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
+      expect(
+        (await screen.findByRole("menuitemradio", { name: "All machines" })).getAttribute(
+          "aria-checked",
+        ),
+      ).toBe("true");
+    });
+  }
+
   test("a remote environment opens on its machine and is recorded as recently used", async () => {
     const { onSelectEnvironment } = renderSearch();
     await openAndType("run-desktop");

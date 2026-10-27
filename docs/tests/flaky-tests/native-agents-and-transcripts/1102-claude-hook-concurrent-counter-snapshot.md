@@ -1,5 +1,6 @@
 # 1102 — Claude hook concurrent counter snapshot
 
+- **ID:** 1102
 - **Status:** open
 - **Date observed:** 2026-10-27
 - **Test:** `hook writers serialize counters and retain a completed turn without any config`

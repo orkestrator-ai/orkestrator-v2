@@ -71,6 +71,48 @@ a read and counting reads would not count recovered claims.
 - `native-agent-queue-scheduling.test.ts`: a sole legacy claim remains due.
 - `prompt-queue-drainer.test.ts`: tmux drains and mail respect a live holder.
 
+## Validation — 2026-10-27
+
+Implementation commit: `a733e0155`.
+
+- `mise run test:logged -- --name legacy-final-check -- mise run check`:
+  passed (format, lint and all typechecks).
+- `legacy-final-focused`: all nine regression owners listed above passed
+  together. The logged command used `sh -c 'cd apps/backend && bun test
+  --preload ../../tests/setup-node.ts <explicit owner paths> --parallel=3'`.
+  The owner paths were `src/core/{storage-record-upgrades,storage-prompt-queues,
+  storage-prompt-queue-idempotent,native-agent-prompt-queue-dispatcher,
+  native-agent-queue-scheduling,prompt-queue-drainer,web-annotation-dispatch,
+  native-agent-service-base}.test.ts` and
+  `src/core/public-api/public-api-command-surface.test.ts` (expanded explicitly
+  in the actual command). Exit 0, 9.4 s.
+- `mise run test:logged -- --name legacy-queue-suite -- mise run test`:
+  exit 1 after 1276 s, including host-capacity admission waits. Backend:
+  12,042 passed, 120 skipped, 23 failed; desktop: 1,369 passed, 16 skipped,
+  two failed; root: 3,525 passed, three failed; Claude bridge: 1,698 passed,
+  six skipped, eight failed. Web, web-public, CLI, protocol, toolchain, the
+  other four bridges and the protocol lockfile passed. No queue regression
+  failed in this run.
+- The full run caught a missing required `ID` field in the new flake record.
+  It was corrected; `flake-index-final` passed the complete registry owner
+  (`bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures`).
+- Other full-run failures are in unchanged environment/Git/watch fixtures,
+  shell input-relay and Docker fixtures, and Claude CLI qualification cases
+  that aborted at their deadlines. Isolated logged reruns still fail in
+  `commands-integration.test.ts` (54 passed, one timeout and one late error),
+  `migrate-copy.test.ts` (10 passed, two failed), and `profile-cleanup.test.ts`
+  (20 passed, two failed). These were not classified as flakes or changed.
+- A separate concurrent hook-counter failure passed alone and is recorded in
+  [1102](../../tests/flaky-tests/native-agents-and-transcripts/1102-claude-hook-concurrent-counter-snapshot.md).
+
+Full-run evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UJyfMx/summary.json`
+and its three failing group logs. The outer logged command's artifact is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.syCejJ/legacy-queue-suite.log.gz`.
+Isolated failure artifacts are `orkestrator-test-run.wR63Gv` (commands),
+`orkestrator-test-run.LVlz6O` (copy), and `orkestrator-test-run.UUUJO1` (profiles)
+under the same temporary root.
+
 ## Related
 
 - [0034-mixed-version-compatibility.md](0034-mixed-version-compatibility.md)

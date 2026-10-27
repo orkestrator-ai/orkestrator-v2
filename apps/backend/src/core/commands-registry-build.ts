@@ -84,6 +84,13 @@ export function registerBuildPipelineCommands(
       asNonBlankString(stageId, "stageId"),
     );
   });
+  register("skip_build_pipeline_step", ({ pipelineId, stageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.skipStep(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+    );
+  });
   register("restart_build_pipeline_current_step", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.restartCurrentStep(asNonBlankString(pipelineId, "pipelineId"));

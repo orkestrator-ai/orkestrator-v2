@@ -26,6 +26,7 @@ import {
   selectNode,
   selectedTitle,
   sendMessageMock,
+  skipStepMock,
   stopReviewValidationCommandMock,
   validationResult,
   validationRun,
@@ -47,6 +48,7 @@ describe("BuildChatTab backend projection", () => {
     restartCurrentStepMock.mockClear();
     retryStageMock.mockClear();
     restartStepMock.mockClear();
+    skipStepMock.mockClear();
     retryInteractionFailureMock.mockClear();
     stopReviewValidationCommandMock.mockClear();
     mockToastError.mockClear();
@@ -115,6 +117,57 @@ describe("BuildChatTab backend projection", () => {
     await waitFor(() =>
       expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:validation-long-press"),
     );
+  });
+
+  test("skips running validation from the node menu and the Tests view", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "building",
+      validationRun: validationRun({
+        id: "validation-skip",
+        status: "running",
+        completedAt: undefined,
+        results: [{ ...validationResult("passed"), status: "running", exitCode: null }],
+      }),
+    });
+    render(<BuildChatTab data={tabData} />);
+
+    fireEvent.contextMenu(graphNode("Prepare"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Skip validation" }));
+    await waitFor(() =>
+      expect(skipStepMock).toHaveBeenCalledWith(pipeline.id, "validation:validation-skip"),
+    );
+    expect(mockToastSuccess).toHaveBeenCalledWith("Step skipped");
+
+    skipStepMock.mockClear();
+    useBuildPipelineStore.getState().replacePipeline({
+      ...useBuildPipelineStore.getState().pipelines.get(pipeline.id)!,
+      phase: "building",
+      backendRevision: 18,
+    });
+    selectNode("Prepare");
+    fireEvent.click(screen.getByRole("button", { name: /Stop tests and continue/ }));
+    await waitFor(() =>
+      expect(skipStepMock).toHaveBeenCalledWith(pipeline.id, "validation:validation-skip"),
+    );
+  });
+
+  test("skips the running stage to the next one, but not a finished stage", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "verifying",
+      sessions: [pipeline.sessions[0]!, { ...pipeline.sessions[1]!, status: "running" }],
+    });
+    render(<BuildChatTab data={tabData} />);
+
+    fireEvent.contextMenu(graphNode("Build"));
+    await screen.findByRole("menuitem", { name: "Restart from here" });
+    expect(screen.queryByRole("menuitem", { name: /^Skip/ }) === null).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    fireEvent.contextMenu(graphNode("Verify"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Skip verification" }));
+    await waitFor(() => expect(skipStepMock).toHaveBeenCalledWith(pipeline.id, "verify-session"));
   });
 
   test("renders loading and not-yet-started states from incomplete snapshots", () => {

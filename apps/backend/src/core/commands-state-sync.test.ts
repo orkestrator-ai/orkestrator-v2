@@ -5640,6 +5640,7 @@ describe("build pipeline commands", () => {
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
+        ["skip_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "verify-session" }],
         ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
         ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
         [

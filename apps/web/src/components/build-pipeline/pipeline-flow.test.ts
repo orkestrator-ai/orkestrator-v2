@@ -7,6 +7,7 @@ import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import {
   pipelineFlowModel,
   pipelineReviewPassNodes,
+  pipelineSkipAction,
   type PipelineFlowModel,
 } from "./pipeline-flow";
 import { pipelineFlowLayout } from "./pipeline-flow-layout";
@@ -1050,5 +1051,72 @@ describe("pipelineFlowLayout", () => {
     expect(c2.y).toBeGreaterThan(c1.y + c1.height);
     expect(Math.abs(centre("a") - (c1.y + c2.y + c2.height) / 2)).toBeLessThanOrEqual(1);
     expect(geometry.height).toBeGreaterThanOrEqual(c2.y + c2.height);
+  });
+});
+
+describe("pipelineSkipAction", () => {
+  const skipOf = (pipeline: ReturnType<typeof build>, id: string) =>
+    pipelineSkipAction(
+      pipeline,
+      pipelineFlowModel(pipeline).nodes.find((node) => node.id === id)!,
+    );
+
+  test("offers the running agent stage, not finished ones", () => {
+    const pipeline = build({
+      phase: "addressing",
+      currentSessionIndex: 1,
+      sessions: [
+        session("build", "work", 0),
+        session("address", "address", 60, { status: "running", completedAt: undefined }),
+      ],
+    });
+    expect(skipOf(pipeline, "address")).toEqual({
+      stageId: "address-session",
+      label: "Skip to verification",
+    });
+    expect(skipOf(pipeline, "work")).toBeNull();
+  });
+
+  test("review preparation cannot be skipped", () => {
+    const pipeline = build({
+      phase: "fixing",
+      currentSessionIndex: 1,
+      sessions: [
+        session("build", "work", 0),
+        session("fix", "prep", 60, {
+          label: REVIEW_PACKAGE_SESSION_LABEL,
+          status: "running",
+          completedAt: undefined,
+        }),
+      ],
+    });
+    expect(skipOf(pipeline, "prep")).toBeNull();
+  });
+
+  test("an unsealed validation run is the only skippable step, even while paused", () => {
+    const sessions = [
+      session("build", "work", 0),
+      session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+    ];
+    const running = build({
+      phase: "fixing",
+      currentSessionIndex: 1,
+      sessions,
+      validationRun: validationRun({ id: "run-1", status: "running", completedAt: undefined }),
+    });
+    expect(skipOf(running, "prep")).toEqual({
+      stageId: "validation:run-1",
+      label: "Skip validation",
+    });
+    expect(skipOf(running, "work")).toBeNull();
+
+    const paused = build({
+      ...running,
+      phase: "paused",
+      pausedFromPhase: "fixing",
+      validationRun: validationRun({ id: "run-1", status: "cancelled" }),
+    });
+    expect(skipOf(paused, "prep")?.stageId).toBe("validation:run-1");
+    expect(skipOf({ ...paused, phase: "failed" }, "prep")).toBeNull();
   });
 });

@@ -155,8 +155,17 @@ Actions sit in each node's context menu and in the inspector: open the session
 (Open Fix session on a Fix node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), retry the failed
 step (`retry_build_pipeline_stage`), restart from a step
-(`restart_build_pipeline_step`), view the PR, and pause, resume or cancel the
+(`restart_build_pipeline_step`), skip the running step
+(`skip_build_pipeline_step`), view the PR, and pause, resume or cancel the
 pipeline. The header keeps its controls.
+
+Skipping moves on without the step's result. Skipping validation stops the
+checks and seals the review package with the results they had (a paused,
+already-cancelled run included), and the Tests view's "Stop tests and
+continue" does the same. Skipping an agent step stops its session and opens the
+next one: Build or Fix goes to review preparation, a review or Address to
+Verify, and Verify to the PR. Review preparation and the PR steps cannot be
+skipped. The skipped node reads "Skipped".
 
 The review pass tab is a `multi-review` tab whose data names the pipeline and a
 `pipelinePass`; it renders the same view narrowed to that pass. Layout restore

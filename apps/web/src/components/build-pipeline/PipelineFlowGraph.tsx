@@ -94,7 +94,17 @@ export function pipelineNodeStatusLabel(
     return reviewerStatusLabel(node.reviewer, pipeline.reviewFanout?.reviewers ?? []);
   }
   if (node.placeholder) return "Not started yet";
+  if (node.state === "cancelled" && isSkipped(node, pipeline)) return "Skipped";
   return STATE_LABEL[node.state];
+}
+
+/** The user skipped this step: its session, or the validation run it shows. */
+function isSkipped(node: PipelineFlowNode, pipeline: BuildPipeline): boolean {
+  if (node.hasValidation) {
+    const run = pipeline.validationRun;
+    return run !== undefined && run.id === pipeline.skippedValidationRunId;
+  }
+  return node.session?.skipped === true;
 }
 
 /** `{agent} · {model} · {effort}`, or what describes a node without a session. */

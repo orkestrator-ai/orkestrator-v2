@@ -86,6 +86,17 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
       }
     });
 
+  const skipStage = (stageId: string) =>
+    run(async () => {
+      try {
+        replacePipeline(await backend.skipBuildPipelineStep(pipeline!.id, stageId));
+        onFollow();
+        toast.success("Step skipped");
+      } catch (error) {
+        toast.error("Failed to skip the step", { description: describe(error) });
+      }
+    });
+
   const retryReviewer = (reviewerId: string) =>
     run(async () => {
       try {
@@ -104,6 +115,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
     restartCurrentStage: (label: string | undefined) => void restartCurrentStage(label),
     retryStage: () => void retryStage(),
     restartStage: (stageId: string) => void restartStage(stageId),
+    skipStage: (stageId: string) => void skipStage(stageId),
     retryReviewer: (reviewerId: string) => void retryReviewer(reviewerId),
   };
 }

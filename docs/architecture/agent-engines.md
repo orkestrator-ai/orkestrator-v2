@@ -606,7 +606,24 @@ await client.session.messages({ path: { id } });
 conversation and all of its data, so tab close must never call it: ordinary
 close is `OpenCodeProvider.closeSession` (abort, settle workflow ownership,
 restore reviewer permissions, reject pending requests, forget the session;
-`apps/backend/src/core/opencode-session-close.ts`).
+`apps/backend/src/core/opencode-session-close.ts`). An ordinary
+`OpenCodeProvider.abort` rejects the session's pending requests the same way but
+keeps it registered. Explicit aborts, retaining closes, and automatic retry-action
+aborts all use the workflow-result broker's shared abort path. It starts the
+transport interrupt immediately and reserves the session dispatch lock before
+waiting for that response. Ownership settlement and pending-request rejection
+finish under that lock before a later prompt can dispatch. Once transport abort
+succeeds, rejection runs even if ownership settlement fails; a failed transport
+abort leaves pending requests untouched. The native stop ladder still polls
+status, attempts an available force-stop, and records its notice before surfacing
+an abort cleanup error.
+
+`opencode-provider-abort.live.test.ts` exercises both a permission and a question
+parked in the same turn against the pinned CLI, real v2 SDK, and a scripted local
+model in a disposable profile. It checks HTTP 200 rejection, the HTTP 404 race
+where another responder rejects after the pending read, and stale-card answers.
+Run it with `RUN_LIVE_OPENCODE_COMPATIBILITY=1` and `OPENCODE_CLI_PATH` pointing to
+the pinned executable; it needs no agent credentials or remote model.
 
 **The patched SSE client.** `@opencode-ai/sdk` is patched — see `patches/`,
 wired in through `patchedDependencies` in the root `package.json`. The generated
@@ -867,7 +884,12 @@ and clicking again restarts a fresh window.
   `ask_user_question` timeout the user configured; Pi pauses until its turn
   budget; a Codex question with `autoResolutionMs` until then; MCP prompts
   pause but warn that their server may stop waiting first. OpenCode publishes
-  no deadline, so there is nothing to pause.
+  no deadline, so there is nothing to pause; its requests wait until they are
+  answered, and aborting the turn or closing the tab rejects what is still
+  pending (`rejectPendingOpenCodeRequests` in `opencode-session-close.ts`).
+- The HTTP bridge adapter refuses `approve-for-session` on a card that offers
+  no session grant (`approveForSessionLabel`), before anything reaches the
+  bridge: Pi and the ACP bridges would answer it as a denial.
 - Claude in tmux mode pauses through its hook script: the blocking hooks run
   as `hook.sh <Kind> hold-v1` with a 48 h hook `timeout`, and the script's wait
   loop consumes a hold request file and rewrites its timing file

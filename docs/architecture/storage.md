@@ -320,16 +320,30 @@ verified with `quick_check` before it is renamed into place:
 - `pre-migration-v<from>-<stamp>.sqlite` before an existing database is
   migrated to a newer schema (a failed snapshot aborts the open instead of
   migrating unprotected); the newest two are kept.
-- `hourly-<stamp>.sqlite`, checked a minute after start-up and every five
+- `hourly-<stamp>.sqlite`, checked ten minutes after start-up and every five
   minutes, taken when the newest is an hour old **and** the content changed
   since it: any store's revision, the deletion bookkeeping in `storage_meta`
   or the schema version. Lease heartbeats and writes that change nothing do
   not count. A failed hourly snapshot only logs.
+- The hourly copy and its `quick_check` run in a child process at low
+  priority (`copyDatabaseInChildProcess`): on a large database both take
+  minutes of disk I/O and must never block the backend's event loop. The
+  pre-migration snapshot stays in-process, because the open waits for it.
+- An hourly copy is skipped when the disk has less free space than the
+  database plus as much again (at least 2 GiB). Older hourly snapshots give
+  way so all snapshots together stay under 16 GiB; the newest hourly one is
+  always kept. A failed or skipped copy backs off 15 minutes, doubling per
+  consecutive failure up to six hours (`backups/.hourly-backoff.json`, so the
+  backoff survives a restart).
+- Temporary copies (`.<name>.<pid>.tmp` and their `-journal`, `-wal`, `-shm`)
+  left by a process that died mid-copy are removed at start-up and before each
+  copy; a live process's copy is kept unless untouched for an hour.
 - Rotation keeps the newest six hourly snapshots plus one a day as it ages
   (each the first taken a day or more after the previous one), from the
   youngest at least three days old onwards. So there is always a copy about a
   day old and one about three days old; the one about two days old in between
-  is what becomes the next three-day copy. At most about ten files.
+  is what becomes the next three-day copy. At most about ten files, and
+  within the size cap above.
 - Anything older than seven days is deleted. That is also the privacy cost:
   content deleted from the live database can survive in a snapshot until it
   ages out.

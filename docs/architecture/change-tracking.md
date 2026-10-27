@@ -297,6 +297,19 @@ are swept only after `orphanGraceMs`. Soft-budget pressure releases the
 oldest archived turn endpoints; the hard budget refuses new captures with an
 explicit reason. A removed body answers `body-expired` with retained counts.
 
+Measurements are pruned too. Every re-measurement stores its whole file list
+(an environment's net diff against its base can be thousands of files), so
+superseded ones would otherwise grow `change_measurement_files` without bound.
+`ChangeLedger.pruneSupersededMeasurements` deletes a measurement, its file
+rows and diff identities once two newer ones of the same owner and scope
+exist, unless a selection, an unexpired restore token or a running restore
+still holds it. Readers reach measurements only through selections, so a
+pruned one is never looked up again (a handoff naming one says "not
+retained"). Each publication prunes up to two of its owner's; the retention
+pass (two minutes after start, then hourly) prunes any backlog in batches of
+at most 20,000 file rows, yielding between them, then returns the freed pages
+to the filesystem in steps.
+
 Backups must include both `orkestrator.sqlite` and
 `<dataDir>/change-tracking/` (objects and evidence bodies); metadata alone
 cannot serve historical bodies.

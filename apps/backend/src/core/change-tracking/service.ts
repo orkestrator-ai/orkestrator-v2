@@ -71,6 +71,8 @@ const MUTATING_TOOL_KINDS = new Set([
 ]);
 const EVIDENCE_UNSUPPORTED_RECHECK_MS = 5 * 60_000;
 const RETENTION_INTERVAL_MS = 60 * 60_000;
+/** The first retention pass, soon after start so a backlog is not left for an hour. */
+const FIRST_RETENTION_DELAY_MS = 2 * 60_000;
 
 /** One producer of canonical evidence (a bridge connection). */
 export interface EvidenceSource {
@@ -129,6 +131,7 @@ export class ChangeTrackingService {
   private readonly unsupported = new Map<string, number>();
   private readonly turnFinalizations = new Map<string, Promise<string[]>>();
   private retentionTimer: ReturnType<typeof setInterval> | null = null;
+  private firstRetentionTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly closeListeners: Array<() => void> = [];
   private readonly startListeners: Array<() => void> = [];
   private started = false;
@@ -235,16 +238,21 @@ export class ChangeTrackingService {
     }
     for (const listener of this.startListeners.splice(0)) listener();
     if (!this.options.manualScheduling) {
-      this.retentionTimer = setInterval(() => {
+      const retain = () => {
         void this.retention.run().catch(() => undefined);
         this.registry.sweepIdle();
-      }, RETENTION_INTERVAL_MS);
+      };
+      this.firstRetentionTimer = setTimeout(retain, FIRST_RETENTION_DELAY_MS);
+      this.firstRetentionTimer.unref?.();
+      this.retentionTimer = setInterval(retain, RETENTION_INTERVAL_MS);
       this.retentionTimer.unref?.();
     }
   }
 
   shutdown(): void {
     this.stopped = true;
+    if (this.firstRetentionTimer) clearTimeout(this.firstRetentionTimer);
+    this.firstRetentionTimer = null;
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.retentionTimer = null;
     for (const listener of this.closeListeners.splice(0)) {

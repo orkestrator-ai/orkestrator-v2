@@ -29,6 +29,13 @@ export const SYSTEM_USAGE_POLL_INTERVAL_MS = 5_000;
 /** Cadence for the process list while the popover is open. */
 export const ENVIRONMENT_PROCESS_POLL_INTERVAL_MS = 3_000;
 
+/**
+ * Disk usage of the data directory's volume at which the meter warns: the
+ * backend skips database backups when the disk could not hold one, and a
+ * full disk stalls everything that writes.
+ */
+export const DISK_NEAR_FULL_PERCENT = 95;
+
 const SECRET_FLAG_PATTERN =
   /(--(?:token|api-?key|password|passwd|secret|authorization|auth-token)|-p)(=|\s+)\S+/gi;
 const AUTHORIZATION_HEADER_PATTERN = /\bAuthorization\s+\S+/gi;
@@ -209,15 +216,27 @@ export function SystemUsageMeters({
     >
       {metrics.map(({ key, label, icon: Icon, value }) => {
         const formatted = formatPercent(value);
+        const nearFull =
+          key === "disk" && typeof value === "number" && value >= DISK_NEAR_FULL_PERCENT;
+        const reading = nearFull ? `${formatted}, almost full` : formatted;
+        const warning = nearFull
+          ? ". Free up disk space: database backups are skipped when the disk cannot hold one"
+          : "";
         return (
           <span
             key={key}
             role="img"
-            aria-label={`${label}: ${formatted}`}
+            aria-label={`${label}: ${reading}`}
             title={
-              sampleLabel ? `${label}: ${formatted} (${sampleLabel})` : `${label}: ${formatted}`
+              sampleLabel
+                ? `${label}: ${reading} (${sampleLabel})${warning}`
+                : `${label}: ${reading}${warning}`
             }
-            className="flex items-center gap-0.5 font-mono text-[10px] tabular-nums"
+            data-near-full={nearFull ? "true" : undefined}
+            className={cn(
+              "flex items-center gap-0.5 font-mono text-[10px] tabular-nums",
+              nearFull && "text-destructive",
+            )}
           >
             <Icon className="h-3 w-3" aria-hidden="true" />
             <span>{formatted}</span>

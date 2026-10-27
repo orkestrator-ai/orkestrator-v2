@@ -1116,6 +1116,74 @@ export class ChangeLedger {
     ).n;
   }
 
+  /**
+   * Deletes measurements nothing reads any more, with their file rows and
+   * diff identities, oldest first. A measurement goes once `keepLatest` newer
+   * ones of the same owner and scope exist, unless a resource still selects
+   * it, an unexpired restore token or a running restore holds it. Readers only
+   * reach measurements through selections (and, briefly, the identity of one
+   * just superseded, which `keepLatest` covers), so a pruned one is never
+   * looked up again; the handoff reports one as "not retained".
+   *
+   * Every re-measurement stores its whole file list again (an environment's
+   * net diff can be thousands of files), so without this the table grows
+   * without bound. Bounded work per call: stops after `maxMeasurements` or
+   * once `maxFileRows` file rows are deleted, in one transaction.
+   */
+  pruneSupersededMeasurements(input: {
+    keepLatest: number;
+    nowIso: string;
+    maxMeasurements: number;
+    maxFileRows?: number;
+    owner?: { kind: string; id: string; scope: string };
+  }): { measurements: number; files: number } {
+    return this.transaction(() => {
+      const ownedBy = input.owner ? "WHERE owner_kind = ?4 AND owner_id = ?5 AND scope = ?6" : "";
+      const candidates = this.db
+        .query(
+          `SELECT id FROM (
+             SELECT id, created_seq, ROW_NUMBER() OVER (
+               PARTITION BY owner_kind, owner_id, scope ORDER BY created_seq DESC
+             ) AS newer
+             FROM change_measurements ${ownedBy}
+           )
+           WHERE newer > ?1
+             AND id NOT IN (SELECT measurement_id FROM change_selections WHERE measurement_id IS NOT NULL)
+             AND id NOT IN (SELECT measurement_id FROM change_restore_tokens WHERE expires_at > ?2 AND consumed_at IS NULL)
+             AND id NOT IN (SELECT measurement_id FROM change_restore_operations WHERE state = 'applying')
+           ORDER BY created_seq
+           LIMIT ?3`,
+        )
+        .all(
+          input.keepLatest,
+          input.nowIso,
+          input.maxMeasurements,
+          ...(input.owner ? [input.owner.kind, input.owner.id, input.owner.scope] : []),
+        ) as Array<{ id: string }>;
+      const deleteFiles = this.db.query(
+        "DELETE FROM change_measurement_files WHERE measurement_id = ?",
+      );
+      const deleteIdentities = this.db.query(
+        "DELETE FROM change_diff_identities WHERE measurement_id = ?",
+      );
+      const deleteMeasurement = this.db.query("DELETE FROM change_measurements WHERE id = ?");
+      const pruned = { measurements: 0, files: 0 };
+      for (const { id } of candidates) {
+        if (input.maxFileRows !== undefined && pruned.files >= input.maxFileRows) break;
+        pruned.files += deleteFiles.run(id).changes;
+        deleteIdentities.run(id);
+        deleteMeasurement.run(id);
+        pruned.measurements += 1;
+      }
+      return pruned;
+    });
+  }
+
+  /** Returns up to `maxPages` free database pages to the filesystem; the free pages left. */
+  releaseFreePages(maxPages?: number): number {
+    return this.storage().releaseFreePages(maxPages);
+  }
+
   insertDiffIdentity(identity: DiffIdentity): void {
     this.db
       .query(

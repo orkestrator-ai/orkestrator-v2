@@ -27,3 +27,31 @@
   a saturated host, and the Git child it started was killed with SIGTERM
   when the test ended, which produced the unhandled error. This is not
   confirmed. No assertion, timeout or skip changed.
+
+
+## Remote-bandwidth validation recurrence — 2026-10-27
+
+Branch `todo-0052-remote-client-bandwidth-8f94a6e99ef7`, implementation
+commit `4c70cd01f`, leaves this owning file and its implementation unchanged.
+`mise run test:logged -- --name tests -- mise run test` used the standard
+workspace/root/bridges/protocol reservations (4/1/2/1, two backend workers).
+The workspace group waited 551.9 s for shared host capacity.
+
+The same owner reported two other real-Git fixture deadlines:
+
+- `a worker that takes in newer target history is retargeted to where its
+  branch now leaves it`: five-second test deadline, reported at 8035.20 ms.
+- `a cached candidate cannot consume the worker commits after its PR merges`:
+  before/after hook deadline, reported at 9302.12 ms.
+
+The unchanged complete owner passed alone (exit 0, 20.8 s):
+
+```sh
+mise run test:logged -- --name diff-stats-isolated -- bun test --cwd apps/backend ./src/core/diff-stats-tracking.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is under the host temporary directory at
+`orkestrator-test-run.9oZXtC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The passing runner removes its log. Host contention is a hypothesis for these
+fixture deadlines, not a confirmed shared cause with the original baseline
+fence failure. No assertion, timeout, skip or product implementation changed.

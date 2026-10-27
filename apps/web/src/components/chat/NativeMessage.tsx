@@ -1,4 +1,5 @@
 import { UserCommandCard } from "./UserCommandCard";
+import { PermissionRuleNote } from "./PermissionRuleNote";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -211,6 +212,24 @@ export const NativeMessage = memo(function NativeMessage({
       <div className="px-2 @sm:px-4 py-2" data-user-command-row="true">
         <div className="max-w-3xl mx-auto min-w-0">
           <UserCommandCard command={userCommandPart.userCommand} />
+        </div>
+      </div>
+    );
+  }
+
+  // An approval an Orkestrator permission rule answered: one quiet line.
+  const permissionRulePart =
+    message.parts.length === 1 && message.parts[0]?.type === "permission-rule"
+      ? message.parts[0]
+      : null;
+  if (permissionRulePart) {
+    return (
+      <div className="px-2 @sm:px-4 py-1" data-permission-rule-row="true">
+        <div className="max-w-3xl mx-auto min-w-0">
+          <PermissionRuleNote
+            application={permissionRulePart.application}
+            ruleExists={permissionRulePart.ruleExists}
+          />
         </div>
       </div>
     );

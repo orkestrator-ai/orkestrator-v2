@@ -142,6 +142,17 @@ none. A retried response that a later answer replaces adds nothing.
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
+- The prompt journal is written to `state.json` and awaited before any prompt
+  with a request id reaches Pi, on the idle and the follow-up path alike, and
+  in the same synchronous step as the duplicate check, so one id can never be
+  handed over twice. `/dispatch` answers `absent` only while the session's
+  `promptJournalComplete` holds: set for a session `createSession` built
+  fresh, kept across a restart only when the record carried it and every
+  journal entry loaded, and cleared for good by the 256-record eviction. A
+  resumed or forked session never has it. The one removal that keeps it is
+  `withdrawPromptJournal`, for an attempt that provably never reached Pi (a
+  rollback before the hand-over, or a preflight refusal). The write is not
+  fsync'd: the guarantee covers a bridge restart, not an OS crash.
 - Before a session attaches, `command-preview.ts` lists its templates and
   skills from a resource-only `DefaultResourceLoader`: never an extension
   (`noExtensions`, no inline factories, no `resolveProjectTrust` pass), never

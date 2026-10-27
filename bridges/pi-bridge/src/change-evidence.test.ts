@@ -32,6 +32,7 @@ import {
 import { commandChangeJournalPath } from "./config.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
 import { applySessionEvent } from "./translate.js";
+import { settlePersistenceForTests } from "./persistence.js";
 
 const CHANGE: MeasuredWorkspaceChange = {
   additions: 3,
@@ -79,9 +80,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   setCommandChangeProbeForTests(undefined);
+  // A spool on disk appends after the test returns.
+  await evidence.spool.flush();
   setChangeEvidenceForTests(undefined);
   if (previousStateDirectory === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
   else process.env.PI_BRIDGE_STATE_DIR = previousStateDirectory;
+  await settlePersistenceForTests();
   await rm(stateDirectory, { recursive: true, force: true });
 });
 

@@ -1,3 +1,4 @@
+import { PERMISSION_RULE_HANDLERS } from "./actions-permission-rules.js";
 import type { PublicActionName, PublicCapabilities } from "@orkestrator/protocol/public-api";
 import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
 import { ATTENTION_HANDLERS } from "./actions-attention.js";
@@ -49,6 +50,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...MAIL_HANDLERS,
     ...NODE_HANDLERS,
     ...SCHEDULE_HANDLERS,
+    ...PERMISSION_RULE_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
     ...HOST_HANDLERS,

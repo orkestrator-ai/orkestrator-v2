@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { OomEventWatcher } from "../src/core/container-oom-events";
+import { ContainerOomEvents, OomEventWatcher } from "../src/core/container-oom-events";
 import { spawnParentBoundCommand } from "../src/core/shell";
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 
@@ -32,6 +32,57 @@ async function waitUntil(predicate: () => Promise<boolean> | boolean) {
 }
 
 describe("out-of-memory event watcher", () => {
+  test("the backend owner starts once, passes its namespace and stops only its follower", () => {
+    const children: FakeChild[] = [];
+    const spawn = mock((_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnParentBoundCommand>;
+    });
+    const first = new ContainerOomEvents(spawn);
+    const second = new ContainerOomEvents(spawn);
+    const backoff = installControlledTimeout(1_000, { label: "owned OOM follower backoff" });
+    try {
+      expect(first.count(ID)).toBeNull();
+      first.stop();
+      first.start("first-owner");
+      first.start("ignored-owner");
+      second.start("second-owner");
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(
+        spawn.mock.calls.map(([command, args]) => [
+          command,
+          args.find((arg) => arg.startsWith("label=")),
+        ]),
+      ).toEqual([
+        ["docker", "label=orkestrator-owner=first-owner"],
+        ["docker", "label=orkestrator-owner=second-owner"],
+      ]);
+      children[0]!.stdout.write(`${ID}\t${nanos(1_000)}\n`);
+      expect(first.count(ID)).toBe(1);
+      expect(second.count(ID)).toBe(0);
+      first.stop();
+      first.stop();
+      expect(children[0]!.exitCode).toBe(143);
+      expect(children[1]!.exitCode).toBeNull();
+      expect(first.count(ID)).toBeNull();
+      expect(second.count(ID)).toBe(0);
+      // A stop while restart is queued cancels it; late close events cannot revive it.
+      children[1]!.emit("close", 1);
+      expect(backoff.pendingCount()).toBe(1);
+      second.stop();
+      children[1]!.emit("close", 1);
+      expect(backoff.pendingCount()).toBe(0);
+      backoff.advance();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(second.count(ID)).toBeNull();
+    } finally {
+      first.stop();
+      second.stop();
+      backoff.restore();
+    }
+  });
+
   test("stop terminates the inner events command through the real wrapper", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "oom-follower-"));
     const command = path.join(root, "docker");

@@ -51,3 +51,36 @@ test("environment summaries use finite owner order or the storage index fallback
   }
   expect(toNodeEnvironmentSummary("bk_test" as never, raw)?.order).toBe(0);
 });
+
+test("search fields are bounded, path-free and additive", () => {
+  const project = toNodeProjectSummary(
+    "bk_test" as never,
+    {
+      id: "p",
+      name: "telegram-scraper",
+      localPath: "C:\\Users\\someone\\code\\telegram-scraper\\",
+      defaultBranch: ` ${"b".repeat(400)} `,
+    },
+    0,
+  )!;
+  expect(project.pathName).toBe("telegram-scraper");
+  expect(project.defaultBranch).toHaveLength(256);
+  const environment = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    worktreePath: `/tmp/${"w".repeat(300)}`,
+    createdAt: "2026-10-01T00:00:00.000Z".padEnd(100, "Z"),
+  })!;
+  expect(environment.worktreeName).toHaveLength(128);
+  expect(environment.createdAt).toHaveLength(64);
+  // Older summaries and records without the fields simply omit them.
+  const bare = toNodeProjectSummary("bk_test" as never, { id: "p", localPath: "/" }, 0)!;
+  expect(Object.keys(bare)).not.toContain("pathName");
+  expect(Object.keys(bare)).not.toContain("defaultBranch");
+  const bareEnvironment = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+  })!;
+  expect(Object.keys(bareEnvironment)).not.toContain("worktreeName");
+  expect(Object.keys(bareEnvironment)).not.toContain("createdAt");
+});

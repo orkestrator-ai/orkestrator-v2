@@ -27,6 +27,7 @@ import { helpFor, SERVE_HELP } from "./help.js";
 import type { ClientIo } from "./io.js";
 import { OutputWriter } from "./output.js";
 import { terminalQuestions } from "./questions.js";
+import { permissionCommands } from "./commands/permissions.js";
 import { LocalReceiptStore } from "./receipts.js";
 import { ClientSession } from "./session.js";
 import type { CommandContext, CommandOutcome, CommandSpec, GlobalOptions } from "./spec.js";
@@ -45,6 +46,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...ticketCommands,
   ...mailCommands,
   ...scheduleCommands,
+  ...permissionCommands,
   ...runCommands,
   ...toolchainCommands,
   ...hostCommands,

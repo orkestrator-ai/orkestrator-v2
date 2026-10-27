@@ -14,15 +14,21 @@ export interface ProcessEntry {
   pgid: number;
   rssKiB: number;
   zombie: boolean;
+  /** Full command line; only listed when asked for (`listProcesses({ commands: true })`). */
+  command?: string;
 }
 
 const PS_TIMEOUT_MS = 2_000;
 
-export function listProcesses(): Promise<ProcessEntry[]> {
+export function listProcesses(options: { commands?: boolean } = {}): Promise<ProcessEntry[]> {
+  const commands = options.commands === true;
   return new Promise((resolve) => {
     execFile(
       "ps",
-      ["-A", "-o", "pid=,ppid=,pgid=,rss=,stat="],
+      // `-ww` lifts the column limit so a long command line is not cut short.
+      commands
+        ? ["-A", "-ww", "-o", "pid=,ppid=,pgid=,rss=,stat=,command="]
+        : ["-A", "-o", "pid=,ppid=,pgid=,rss=,stat="],
       { timeout: PS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error) {
@@ -31,10 +37,12 @@ export function listProcesses(): Promise<ProcessEntry[]> {
         }
         const entries: ProcessEntry[] = [];
         for (const line of stdout.split("\n")) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length < 5) continue;
-          const [pid, ppid, pgid, rss] = parts
-            .slice(0, 4)
+          // Only the fixed ps columns are whitespace-delimited. The command
+          // contains literal paths, whose internal whitespace must survive.
+          const columns = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:[ \t]+(.*))?$/.exec(line);
+          if (!columns) continue;
+          const [pid, ppid, pgid, rss] = columns
+            .slice(1, 5)
             .map((value) => Number.parseInt(value, 10));
           if (
             !pid ||
@@ -44,7 +52,14 @@ export function listProcesses(): Promise<ProcessEntry[]> {
             [pid, ppid, pgid, rss].some(Number.isNaN)
           )
             continue;
-          entries.push({ pid, ppid, pgid, rssKiB: rss, zombie: (parts[4] ?? "").startsWith("Z") });
+          entries.push({
+            pid,
+            ppid,
+            pgid,
+            rssKiB: rss,
+            zombie: (columns[5] ?? "").startsWith("Z"),
+            ...(commands ? { command: columns[6] ?? "" } : {}),
+          });
         }
         resolve(entries);
       },
@@ -116,33 +131,66 @@ export interface TreeKillReport {
 /**
  * SIGKILL the tree rooted at `roots` (and groups those processes lead),
  * re-scanning until nothing remains or `verifyMs` elapses.
+ *
+ * `marker` is a string only an owned process can carry on its command line
+ * (a job's private scratch path). Playwright starts Chromium in its own
+ * process group, so a worker killed while it is still launching the browser
+ * (before the supervisor has learnt the browser's pid) orphans it outside
+ * both the tree and the owned groups; it then keeps writing its profile into
+ * the scratch after the scratch was removed (0247). Processes carrying the
+ * marker, with their trees, are owned too. The supervisor must put the marker
+ * on the worker's argv before it can fork: a pre-exec child inherits that argv,
+ * then the browser carries the marker in its profile argument after exec.
+ * Two empty scans guard process-list churn; they cannot establish ownership
+ * of a pre-exec child whose worker was launched without the marker.
  */
 export async function killTree(
   roots: readonly number[],
   groups: readonly number[],
   verifyMs = 3_000,
+  marker?: string,
 ): Promise<TreeKillReport> {
-  // Only the original roots and the owned process groups are ever scanned:
-  // a recycled pid of an unrelated process is never adopted as a new root.
+  // Only the original roots, the owned process groups and processes carrying
+  // the marker are ever scanned: a recycled pid of an unrelated process is
+  // never adopted as a new root.
   const ownedGroups = Array.from(new Set(groups.filter((group) => group > 1)));
+  // ps renders tabs rather than emitting them literally: BSD uses an octal
+  // escape, procps uses '?'. Keep the raw marker as well (literal backslashes
+  // in paths must not be decoded or normalized).
+  const renderedMarker = marker?.replace(/\t/g, process.platform === "darwin" ? "\\011" : "?");
   const owned = (entries: readonly ProcessEntry[]) => {
-    const tree = new Map(collectTree(entries, roots).map((entry) => [entry.pid, entry]));
+    const marked = marker
+      ? entries
+          .filter(
+            (entry) =>
+              entry.command?.includes(marker) ||
+              (renderedMarker && entry.command?.includes(renderedMarker)),
+          )
+          .map((entry) => entry.pid)
+      : [];
+    const tree = new Map(
+      collectTree(entries, [...roots, ...marked]).map((entry) => [entry.pid, entry]),
+    );
     for (const entry of entries) if (ownedGroups.includes(entry.pgid)) tree.set(entry.pid, entry);
     return Array.from(tree.values());
   };
   const seen = new Set<number>();
   const deadline = Date.now() + verifyMs;
   let verified = false;
+  let emptyScans = 0;
   for (;;) {
-    const entries = await listProcesses();
+    const entries = await listProcesses({ commands: marker !== undefined });
     const remaining = owned(entries).filter((entry) => !entry.zombie);
     for (const entry of remaining) seen.add(entry.pid);
     for (const group of ownedGroups) signal(-group, "SIGKILL");
     for (const entry of remaining) signal(entry.pid, "SIGKILL");
     if (remaining.length === 0 && entries.length > 0) {
-      verified = true;
-      break;
-    }
+      emptyScans += 1;
+      if (!marker || emptyScans >= 2) {
+        verified = true;
+        break;
+      }
+    } else emptyScans = 0;
     if (Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }

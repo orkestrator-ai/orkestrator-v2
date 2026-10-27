@@ -46,6 +46,7 @@ coverage/
 .nyc_output/
 /output/qualification-*/
 /output/playwright/
+/output/pipeline-shots/
 /output/agent-testing/
 /output/benchmarks/
 /output/efficiency/

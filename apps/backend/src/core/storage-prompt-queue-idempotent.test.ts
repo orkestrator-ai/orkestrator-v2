@@ -68,6 +68,31 @@ describe("enqueuePromptQueueMessageIfAbsent", () => {
     });
   });
 
+  test("live legacy claims deduplicate retries and block steering across queue edits", async () => {
+    await withStorage(async (storage) => {
+      await createSession(storage);
+      await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
+      const token = seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1");
+      expect(
+        (await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"))).status,
+      ).toBe("present");
+      await expect(
+        storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1", "changed")),
+      ).rejects.toThrow(PROMPT_QUEUE_MESSAGE_CONFLICT);
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
+      await storage.savePromptQueue(KEY, "e1", [message("r1"), { id: "user-1", text: "mine" }]);
+      expect((await storage.getPromptQueue(KEY))?.messages).toEqual([
+        { id: "user-1", text: "mine" },
+      ]);
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ outstandingClaim: { token } });
+      expect((await storage.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
+      await expect(storage.reservePromptQueueSteer(SESSION_KEY, "user-1", "run-1")).rejects.toThrow(
+        "already being delivered",
+      );
+      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
+    });
+  });
+
   test("fingerprints are independent of key order", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
@@ -222,30 +247,24 @@ describe("backend-authored queue items", () => {
     });
   });
 
-  test("legacy claims, their recovery and dispatch reservations are never tombstoned", async () => {
+  test("restored legacy claims and dispatch reservations are never tombstoned", async () => {
     await withStorage(async (storage) => {
       await createSession(storage);
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r2"));
-      // An older backend sharing the data directory claimed r1; queue edits
-      // here carry the claim and must not treat r1 as removed.
+      // An older backend sharing the database claimed r1. Loading restores it
+      // to the head, so a queue edit here never sees r1 leave `messages`.
       seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "r1", { expiresAt: 1 });
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "user-1", text: "mine" });
-      expect((await storage.getPromptQueue(KEY))?.outstandingClaim?.message).toMatchObject({
-        id: "r1",
-      });
+      expect(
+        (await storage.getPromptQueue(KEY))?.messages.map((item) => (item as { id: string }).id),
+      ).toEqual(["r1", "r2", "user-1"]);
       expect((await storage.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
 
-      // Restart recovers the expired claim to the head; dispatch it from there.
-      const restarted = new StorageService(storage.getDataDir());
-      await restarted.init();
-      expect(
-        (await restarted.getPromptQueue(KEY))?.messages.map((item) => (item as { id: string }).id),
-      ).toEqual(["r1", "r2", "user-1"]);
-      await restarted.reservePromptQueueHeadForDispatch(KEY);
-      await restarted.dispatchNativeAgentPromptOnce(SESSION_KEY, "r1", async () => undefined);
-      await restarted.acknowledgePromptQueueDispatch(KEY, "r1");
-      expect((await restarted.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "r1", async () => undefined);
+      await storage.acknowledgePromptQueueDispatch(KEY, "r1");
+      expect((await storage.getPromptQueue(KEY))?.removedOrigins ?? []).toEqual([]);
     });
   });
 

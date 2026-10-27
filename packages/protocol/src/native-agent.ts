@@ -782,9 +782,15 @@ export const DISPATCH_OUTCOME_LOST_KIND = "dispatch-outcome-lost";
  * `lost` is the read-only twin of the prompt route's 410
  * {@link DISPATCH_OUTCOME_LOST_KIND}: an earlier bridge process recorded the id
  * and this one cannot tell whether its turn ran, so it will refuse the id for
- * good. Everything else is `unknown`. Older bridges never answer `lost`.
+ * good. `absent` is the only negative, and an assertion like the other two:
+ * the bridge can prove this id never reached it and that a prompt sent under
+ * it now would be its first delivery. A bridge answers it only while its
+ * journal is complete for the session (loaded cleanly, written before every
+ * handover, nothing evicted or skipped since the session began). Everything
+ * else is `unknown`. Older bridges never answer `lost` or `absent`, and an
+ * older backend reads `absent` as `unknown`.
  */
-export type BridgePromptDispatchStatus = "dispatched" | "unknown" | "lost";
+export type BridgePromptDispatchStatus = "dispatched" | "unknown" | "lost" | "absent";
 
 /** How long a retired dispatch stays visible on its native agent session. */
 export const NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS = 24 * 60 * 60 * 1000;
@@ -1033,6 +1039,12 @@ export interface NativeAgentCapabilities {
     review?: boolean;
     rewindMessages?: boolean;
     branches?: boolean;
+    /**
+     * A conversation can be taken out of the resume list and put back
+     * (Codex `thread/archive` / `thread/unarchive`). Archive keeps the
+     * provider's history; it is never a delete.
+     */
+    archive?: boolean;
   };
   /**
    * The interaction kinds this platform can raise.
@@ -1205,7 +1217,7 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
     attachments: { files: false, images: true },
     // Codex binds its collaboration mode to the thread and persists it.
     composer: { ...capabilities.composer, modeScope: "session" },
-    actions: { compact: true, steer: true, review: true, rewindMessages: true },
+    actions: { compact: true, steer: true, review: true, rewindMessages: true, archive: true },
     // Codex: questions (`request_user_input`), MCP elicitations in both form
     // and url modes, and command/file approvals through
     // `item/permissions/requestApproval`. Every turn runs in Codex's Default
@@ -2382,6 +2394,13 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
+  /**
+   * Rows saying how the last turn ended (`native-terminal:` ids), from the
+   * progressive state view. Shown after `messages` with
+   * `withNativeTerminalMessages` (`native-terminal-rows.ts`); a full
+   * projection carries them in `messages` instead.
+   */
+  terminalMessages?: TMessage[];
   turnBoundaries?: NativeAgentTurnBoundary[];
   slashCommands?: NativeAgentSlashCommand[];
   /** Freshness of {@link slashCommands}; absent from a legacy backend. */
@@ -2479,6 +2498,14 @@ export interface NativeAgentSessionStateView {
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
+  /**
+   * System rows for the provider's terminal state: its turn error and its
+   * `error`/`stopped` notices, which `notices` leaves out. The transcript view
+   * never reads session state, so without these a failed turn's reason never
+   * reached a progressive reader. Absent when there is none, and from older
+   * backends.
+   */
+  terminalMessages?: unknown[];
   shareUrl?: string | null;
   title?: string;
 }

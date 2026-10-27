@@ -310,6 +310,9 @@ export async function resumeSessionReserved(
       child,
       revision: 0,
       structured: new Map(),
+      // No `promptJournalComplete`: the conversation `session/load` adopts may
+      // have been prompted by another bridge session or process, so an empty
+      // journal here proves nothing.
       promptJournal: new Map(),
       grokInterjectionJournal: new Map(),
       approvals: new Map(),
@@ -532,6 +535,9 @@ function newSessionState(
     revision: 0,
     structured: new Map(),
     promptJournal: new Map(),
+    // A session `session/new` created (now, or on a deferred session's first
+    // attach) has had no prompt but through this journal.
+    promptJournalComplete: true,
     grokInterjectionJournal: new Map(),
     approvals: new Map(),
     interactions: new Map(),
@@ -1383,10 +1389,17 @@ export function parkGrokInteraction(
   schedulePersist();
 }
 
-/** What a parked permission request asks to run: the card's kind and its detail. */
+/**
+ * What a parked permission request asks to run: the card's kind and its detail.
+ *
+ * `ruleEligible` marks a request an Orkestrator permission rule (todo 0723) may
+ * answer: a command the agent sent as one shell string (an argv array joined
+ * with spaces loses its quoting), or every path of a file change, and nothing
+ * truncated. The backend auto-answers nothing without it.
+ */
 export type AcpApprovalDetail =
-  | { kind: "command"; command: string; commandTruncated?: true }
-  | { kind: "file-change"; paths: string[]; pathsOmitted?: number }
+  | { kind: "command"; command: string; commandTruncated?: true; ruleEligible?: true }
+  | { kind: "file-change"; paths: string[]; pathsOmitted?: number; ruleEligible?: true }
   | { kind: "permission" };
 
 const MAX_APPROVAL_COMMAND_BYTES = 4_096;
@@ -1435,13 +1448,13 @@ export function permissionDetail(
       : typeof raw === "string"
         ? raw
         : "";
+    const truncated = Buffer.byteLength(command.trim(), "utf8") > MAX_APPROVAL_COMMAND_BYTES;
     return command.trim()
       ? {
           kind: "command",
           command: truncateUtf8(command.trim(), MAX_APPROVAL_COMMAND_BYTES),
-          ...(Buffer.byteLength(command.trim(), "utf8") > MAX_APPROVAL_COMMAND_BYTES
-            ? { commandTruncated: true as const }
-            : {}),
+          ...(truncated ? { commandTruncated: true as const } : {}),
+          ...(typeof raw === "string" && !truncated ? { ruleEligible: true as const } : {}),
         }
       : { kind: "permission" };
   }
@@ -1460,7 +1473,7 @@ export function permissionDetail(
           paths: paths.slice(0, MAX_APPROVAL_PATHS),
           ...(paths.length > MAX_APPROVAL_PATHS
             ? { pathsOmitted: paths.length - MAX_APPROVAL_PATHS }
-            : {}),
+            : { ruleEligible: true as const }),
         }
       : { kind: "permission" };
   }

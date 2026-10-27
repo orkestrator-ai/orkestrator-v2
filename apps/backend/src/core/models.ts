@@ -740,8 +740,44 @@ export interface PersistedNativeAgentSession {
    * stale value reads as absent.
    */
   resumeIdentity?: { providerSessionId: string; resumableSessionId: string };
+  /**
+   * The title the backend chose for `providerSessionId` (generated, or the
+   * first-message fallback when no generator could run), and whether the
+   * provider has accepted it. Unpushed, it outranks the provider's own title,
+   * so a failed push never loses it; Cursor and Grok have no setter, so there
+   * it is always authoritative. Deliberately not validated with the session
+   * record: read it only through {@link nativeAgentSessionBackendTitle}, where
+   * a malformed or stale value reads as absent.
+   */
+  backendTitle?: NativeAgentSessionBackendTitle;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface NativeAgentSessionBackendTitle {
+  providerSessionId: string;
+  title: string;
+  source: "generated" | "fallback";
+  /** The provider confirmed it holds this title. */
+  pushed?: boolean;
+}
+
+/** Bytes a stored backend title may hold; a longer one reads as absent. */
+const MAX_BACKEND_TITLE_LENGTH = 512;
+
+/** The recorded backend title, only while it still describes the mapped session. */
+export function nativeAgentSessionBackendTitle(
+  session: Pick<PersistedNativeAgentSession, "providerSessionId" | "backendTitle">,
+): NativeAgentSessionBackendTitle | undefined {
+  const value: unknown = session.backendTitle;
+  if (!value || typeof value !== "object") return undefined;
+  const { providerSessionId, title, source, pushed } = value as Record<string, unknown>;
+  if (providerSessionId !== session.providerSessionId) return undefined;
+  if (typeof title !== "string" || !title.trim() || title.length > MAX_BACKEND_TITLE_LENGTH) {
+    return undefined;
+  }
+  if (source !== "generated" && source !== "fallback") return undefined;
+  return { providerSessionId, title, source, ...(pushed === true ? { pushed: true } : {}) };
 }
 
 /** The recorded resume identity, only while it still describes the mapped session. */
@@ -793,6 +829,13 @@ export type PersistedAgentInteractionWorkflowSummary = AgentInteractionWorkflowS
  * the backend has no reason to understand any of them.
  */
 export interface PersistedPromptQueue {
+  /** Only older backends write this lease; retain exclusion until settlement or expiry. */
+  outstandingClaim?: {
+    token: string;
+    message: Record<string, unknown>;
+    claimedAt: string;
+    expiresAt: string;
+  };
   queueKey: string;
   environmentId: string;
   messages: unknown[];
@@ -830,21 +873,8 @@ export interface PersistedPromptQueue {
     failedAt: string;
   };
   /**
-   * A durable, exclusive claim on the message an older renderer was handing to
-   * an agent through the removed prompt-queue claim commands. Only backends
-   * older than this one write it now, into a shared data directory. It still
-   * validates, blocks dispatch of the queue while live, and expiry recovery
-   * (`recoverExpiredPromptQueueClaims`) restores the message to the head.
-   */
-  outstandingClaim?: {
-    token: string;
-    message: unknown;
-    claimedAt: string;
-    expiresAt: string;
-  };
-  /**
    * Bounded tombstones for backend-authored items (typed `origin`) that left
-   * `messages` without being reserved or claimed — i.e. removed or replaced
+   * `messages` without being reserved — i.e. removed or replaced
    * before dispatch. Lets the owner tell "removed" from "already sent".
    */
   removedOrigins?: Array<{ requestId: string; removedAt: string }>;

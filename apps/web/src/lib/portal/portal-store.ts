@@ -11,6 +11,7 @@
  * (`invoke_on_node`), which routes them to the owner.
  */
 
+import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   isNodeReadCommand,
@@ -235,12 +236,18 @@ export async function dismissNodeOutcome(outcomeId: string): Promise<void> {
 
 export interface NodeActionRequestView {
   requestId: string;
-  kind: "delete-environment" | "create-project" | "update-project-files" | "reveal-env-value";
+  kind:
+    | "delete-environment"
+    | "create-project"
+    | "update-project-files"
+    | "reveal-env-value"
+    | "apply-root-changes";
   targets: Array<{
     nodeId: string;
     nodeName: string;
     environmentId?: string;
     environmentName?: string;
+    projectId?: string;
     projectName?: string;
     location?: string;
     gitRemote?: string;
@@ -273,6 +280,21 @@ export async function resolveNodeActionRequest(
     decision,
     ...(approval ? { approval } : {}),
   });
+}
+
+/**
+ * The project checkout's uncommitted changes, for the user to pick which go
+ * to a worker when approving an `apply-root-changes` request. Read-only.
+ */
+export async function listProjectRootChanges(projectId: string): Promise<RootChangesListing> {
+  return portalInvoke<RootChangesListing>("list_project_root_changes", { projectId });
+}
+
+export interface RootChangesListing {
+  files: RootChangeFile[];
+  truncated: boolean;
+  conflicts: number;
+  headCommit: string | null;
 }
 
 /** One portal per window: it reads the command node over the portal channel. */

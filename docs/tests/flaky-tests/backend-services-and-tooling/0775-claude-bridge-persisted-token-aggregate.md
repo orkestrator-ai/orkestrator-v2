@@ -20,3 +20,12 @@
 - **Disposition:** open.
 - **Evidence:** the rejection reason from `start_claude_server` was not recorded. The container login sync catches and logs its own failure and returns false (`agent-accounts-containers.ts:771`), so that log line alone should not reject the start; the hypothesis is weaker than it reads. No later commit changes the two cases.
 - **Next step:** on recurrence, record the rejection message. Check whether these two cases inject container runners, so the sync never reaches the fake Docker socket. Related: [0750](../environments-and-containers/0750-container-server-startup-aggregate-timeout.md) (same file).
+
+
+## Direct-history cursor review validation — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, with other worktrees validating on the shared host.
+- **Failures:** `Electron backend command registry > replaces a healthy Claude bridge when its persisted token does not authenticate` and `Electron backend command registry > authenticates the persisted Claude token when a bridge arrives between health checks` exceeded five seconds (5,004.99 and 5,003.48 ms). The latter also reported a between-test rejection: `Container is not running`, `retryable: true`, `retryAfterMs: 500`, from `startContainerServer` through `startContainerClaudeServer`, at the test's line 1912. The log also recorded container-login sync failing against the fake Docker socket.
+- **Owning-file rerun:** `mise run test:logged -- --name servers-owner -- bun test --cwd apps/backend ./tests/commands-registry-servers.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 32.6 s).
+- **Evidence:** `orkestrator-test-run.wESThp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion. Aggregate results are recorded in [1140](../aggregate-validation-runs/1140-direct-history-cursors-0232-validation.md).
+- **Assessment:** credible recurrence. The rejection is now recorded, but the startup timing and fake-Docker interaction remain unproven causes. No implementation, assertion, deadline or skip changed.

@@ -127,21 +127,30 @@ export class OomEventWatcher {
   }
 }
 
-let watcher: OomEventWatcher | null = null;
+/**
+ * The backend's OOM follower, owned by `BackendRuntime` as `containerOom`:
+ * started once the backend knows its Docker owner namespace, stopped with the
+ * backend.
+ */
+export class ContainerOomEvents {
+  private watcher: OomEventWatcher | null = null;
 
-/** Starts the backend's watcher (idempotent). */
-export function startOomEventWatcher(owner: string): void {
-  if (watcher) return;
-  watcher = new OomEventWatcher(owner);
-  watcher.start();
-}
+  constructor(private readonly spawn: Spawn = spawnParentBoundCommand) {}
 
-/** Kills counted for a container, or null when the backend is not following. */
-export function containerOomEvents(containerId: string): number | null {
-  return watcher?.count(containerId) ?? null;
-}
+  /** Starts the backend's watcher (idempotent). */
+  start(owner: string): void {
+    if (this.watcher) return;
+    this.watcher = new OomEventWatcher(owner, this.spawn);
+    this.watcher.start();
+  }
 
-export function shutdownOomEventWatcher(): void {
-  watcher?.stop();
-  watcher = null;
+  /** Kills counted for a container, or null when the backend is not following. */
+  count(containerId: string): number | null {
+    return this.watcher?.count(containerId) ?? null;
+  }
+
+  stop(): void {
+    this.watcher?.stop();
+    this.watcher = null;
+  }
 }

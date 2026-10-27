@@ -382,6 +382,15 @@ export class ProjectsRepository {
       await this.context.saveJson(this.files.projectsFile(), filtered);
     });
     await this.repos.drafts.deleteComposeDraftsByProject(projectId);
+    // A project's permission rules have nothing left to answer for (todo 0723).
+    try {
+      this.repos.permissionRules.store().deleteForProject(projectId);
+    } catch (error) {
+      console.warn(
+        `[backend] permission rule cleanup failed for ${projectId}:`,
+        error instanceof Error ? error.name : "unknown",
+      );
+    }
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 

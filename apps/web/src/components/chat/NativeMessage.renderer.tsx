@@ -1,3 +1,4 @@
+import { PermissionRuleNote } from "./PermissionRuleNote";
 import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { RichMessageContext, useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
@@ -416,6 +417,8 @@ function MessagePartContent({
       return <ArtifactPart part={part} />;
     case "user-command":
       return <UserCommandCard command={part.userCommand} />;
+    case "permission-rule":
+      return <PermissionRuleNote application={part.application} ruleExists={part.ruleExists} />;
     case "task-group":
       return (
         <TaskGroupPart

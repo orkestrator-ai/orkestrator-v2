@@ -8,9 +8,10 @@ See [`docs/architecture/agent-engines.md`](../../docs/architecture/agent-engines
 The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
 [`AGENTS.md`](../../AGENTS.md) also apply.
 
-`session-titles.ts` is the deliberate exception — it still spawns its own hermetic
-`codex exec` with a custom model catalog, read-only sandbox and user config
-ignored, so title generation cannot inherit the user's tools or instructions.
+The bridge generates no session titles: the backend does
+(`apps/backend/src/core/session-title-service.ts`) and renames the thread
+through `POST /session/:id/title`. `session-title-index.ts` only persists
+titles beside Codex's own index.
 
 | File                                    | Purpose                                            |
 | --------------------------------------- | -------------------------------------------------- |
@@ -88,7 +89,11 @@ ends with an error `status` line on its last row saying why
 `error.message`). A refused model fails the turn before anything streams, so
 without it the turn read as idle with an empty reply. The rollout keeps the
 same error on `task_complete`, and the replay adds the same line. The bridge's
-own verdicts (a rejected structured result, a lost rebind) add none.
+own verdicts (a rejected structured result, a lost rebind) add none. A turn
+failed for its login (`unauthorized`, or a 401 `toTurnError` keeps as
+`httpStatusCode`) also raises the thread's `needs-auth` notice
+(`refusedLoginNotice`); never raise it on a failure without a 401, because it
+locks the tab's composer.
 
 ## File changes and change evidence
 
@@ -122,6 +127,17 @@ own verdicts (a rejected structured result, a lost rebind) add none.
   app-server's outbound queue is bounded, so that stalls **every** thread.
 - Never auto-retry an ambiguous dispatch. Only an explicit `-32001` overload means
   the turn definitely did not run; anything else must reconcile via `thread/read`.
+- `/dispatch` answers `absent` only from the journal, never from `thread/read`:
+  the journal must be *tracked* (kept by this version since its file was
+  created; an older bridge's rewrite drops the `completeness` block and
+  untracks it for good), the session created fresh by `createSession` (never
+  resumed, forked or a marker evicted), no record of the id under any session,
+  the id not in the journal's fixed 16 KiB filter of removed and steered ids,
+  and no prompt for it in flight. Every removal of a record, whatever its
+  state, goes into that filter, and `turn/steer` writes the id there before it
+  is sent, so never remove a record or send a request id to app-server any
+  other way. There is no fsync: this holds across a bridge restart, not an OS
+  crash or a deleted state directory.
 - Never report `idle` for `cancelling`/`recovering`. Both map to `running`, which
   is what stops the build pipeline advancing on a turn that may still be executing.
 - Never call `thread/delete`. Closing a session unsubscribes; deleting would
@@ -216,12 +232,33 @@ own verdicts (a rejected structured result, a lost rebind) add none.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.
+- Never offer or send an exec-policy or network-policy amendment
+  (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`). Codex
+  writes an accepted one into `CODEX_HOME/rules/`, where it applies to every
+  later Codex session on the host, and app-server 0.164.0 has no method to
+  list or remove it. `approvals.ts` drops the amendments from the descriptor
+  and the backend ignores `amendments` from an older bridge. The exec-policy
+  prefix alone is forwarded as `proposedCommandPrefix`, a preselection hint
+  for an Orkestrator rule (todo 0723) that no answer carries back.
+- Mark `ruleEligible` only on the v2 command method with app-server's own
+  `command` and `kind` `command` (never `writeStdin`, a `commandActions`
+  fallback or a legacy argv join), a managed-network host, or a file change
+  without `grantRoot`. `live-policy-amendment.test.ts` proves an Orkestrator
+  rule answers the identical command and `CODEX_HOME/rules/` stays empty.
+  `live-policy-amendment.test.ts` proves Approve saves no rule (no credits).
 - Every turn runs in Codex's Default collaboration mode, which refuses
   `request_user_input`. Threads of a watched session (any policy but
   `pipeline`) carry `features.default_mode_request_user_input = true`
   (`codexRequestUserInputConfig`) so the question parks as a card; a pipeline
   keeps the refusal, because nobody would answer it. Verified against 0.164.0
   by `live-request-user-input.test.ts` (no credits).
+- Never publish a parked question as non-blocking. Codex sends a Default-mode
+  question with `isBlocking: false`, but its core awaits the answer with no
+  timeout of its own (`is_blocking` only tells a client it may auto-resolve;
+  the TUI sends an empty answer after two minutes). `describeInteraction`
+  publishes every question `isBlocking: true` and uses the wire flag only for
+  the deadline: `true` waits indefinitely, otherwise the bounded, pausable
+  one, whose expiry cancels with the same empty answer.
 - A pause (`POST …/approvals/:id/hold`, `…/interactions/:id/hold`) only moves the
   parked request's `InteractionDeadline` to its hold ceiling (24 h, or a
   question's `autoResolutionMs`); expiry still declines or cancels. A hold never

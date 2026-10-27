@@ -63,9 +63,9 @@ type StoredPromptQueueRecord = {
  * Moves the head of a stored prompt queue into `outstandingClaim`, the way the
  * removed prompt-queue claim command did (and an older backend sharing
  * the data directory still can): a fresh token, the message, `claimedAt`, and
- * `expiresAt` (default: a five-minute lease), with the revision bumped. A
- * running `StorageService` reads the result on its next load, but only a
- * mutation, `init()` or recovery arms its expiry timer. Returns the token.
+ * `expiresAt` (default: a five-minute lease), with the revision bumped. Every
+ * load of a running `StorageService` restores expired claims to the head
+ * (`restoreLegacyPromptQueueClaims`) and retains live leases. Returns the token.
  */
 export function seedLegacyPromptQueueClaim(
   dataDir: string,

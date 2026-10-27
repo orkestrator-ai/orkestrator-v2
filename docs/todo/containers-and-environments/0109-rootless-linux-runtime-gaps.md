@@ -331,6 +331,8 @@ on `main` too.
   (staged inputs and host access).
 - [Container lifecycle](../../architecture/container-lifecycle.md) ("Portable
   inputs", "Environment networks").
+- [0350-rootless-tests-fail-on-macos.md](0350-rootless-tests-fail-on-macos.md):
+  six of this file's unit tests fail on macOS hosts.
 
 ## Replaces
 

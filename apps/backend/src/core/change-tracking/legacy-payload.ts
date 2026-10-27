@@ -151,6 +151,10 @@ export function measureLegacyPayload(
   };
 }
 
+/**
+ * Process-wide on purpose: a bounded memo of a pure function of its content
+ * key, so every backend would compute the same entry.
+ */
 const compatibilityCache = new Map<string, { additions?: number; deletions?: number }>();
 const COMPATIBILITY_CACHE_MAX = 2_048;
 

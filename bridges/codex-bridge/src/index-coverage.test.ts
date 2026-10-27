@@ -283,25 +283,25 @@ describe("codex bridge private boundary coverage", () => {
     ]);
   });
 
-  test("creates a shutdown handler that clears its timer and title jobs before exiting", async () => {
+  test("creates a shutdown handler that clears its timer before exiting", async () => {
     const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
     const calls: unknown[] = [];
     const handler = __testing.createShutdownHandlerForTesting(
       timer,
       (value: unknown) => calls.push(["clear", value]),
       (code: number) => calls.push(["exit", code]),
-      async () => {
-        calls.push(["shutdown-titles"]);
-      },
       // Stubbed: the real drain waits on the app-server child, which is covered
-      // by the engine-drain tests below. This test is about timer + title order.
+      // by the engine-drain tests below.
       async () => undefined,
     );
 
     handler();
     await Bun.sleep(0);
 
-    expect(calls).toEqual([["clear", timer], ["shutdown-titles"], ["exit", 0]]);
+    expect(calls).toEqual([
+      ["clear", timer],
+      ["exit", 0],
+    ]);
   });
 
   test("drains the Codex engine before exiting", async () => {
@@ -314,9 +314,6 @@ describe("codex bridge private boundary coverage", () => {
       timer,
       () => calls.push(["clear"]),
       (code: number) => calls.push(["exit", code]),
-      async () => {
-        calls.push(["shutdown-titles"]);
-      },
       async () => {
         calls.push(["stop-engine"]);
       },
@@ -339,7 +336,6 @@ describe("codex bridge private boundary coverage", () => {
         timer,
         () => calls.push(["clear"]),
         (code: number) => calls.push(["exit", code]),
-        async () => undefined,
         async () => {
           throw new Error("engine refused to stop");
         },
@@ -364,7 +360,6 @@ describe("codex bridge private boundary coverage", () => {
       timer,
       () => undefined,
       (code: number) => exits.push(code),
-      async () => undefined,
       async () => {
         stopCalls += 1;
       },
@@ -377,38 +372,6 @@ describe("codex bridge private boundary coverage", () => {
     // Draining twice concurrently would race the process-group kill.
     expect(stopCalls).toBe(1);
     expect(exits).toEqual([0]);
-  });
-
-  test("exits after a title-job shutdown failure and reports the error", async () => {
-    const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
-    const calls: unknown[] = [];
-    const warnings: unknown[][] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => warnings.push(args);
-    try {
-      const handler = __testing.createShutdownHandlerForTesting(
-        timer,
-        (value: unknown) => calls.push(["clear", value]),
-        (code: number) => calls.push(["exit", code]),
-        async () => {
-          throw new Error("shutdown failed");
-        },
-        async () => undefined,
-      );
-
-      handler();
-      await Bun.sleep(0);
-    } finally {
-      console.warn = originalWarn;
-    }
-
-    expect(calls).toEqual([
-      ["clear", timer],
-      ["exit", 0],
-    ]);
-    expect(warnings).toEqual([
-      ["[codex-bridge] Failed to stop session-title generation:", expect.any(Error)],
-    ]);
   });
 
   test("starts the bridge with parsed settings and honors the no-server guard", () => {

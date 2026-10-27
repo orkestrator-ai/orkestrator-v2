@@ -108,7 +108,7 @@ export class RecurringDiagnosticsRegistry {
     FetchPolicyName,
     StatusSource<ContainerGitFetchStatus>
   >();
-  private readonly signals = new Map<SignalSourceName, StatusSource<SignalHealthStatus>>();
+  private readonly signals = new Map<SignalSourceName, Set<StatusSource<SignalHealthStatus>>>();
   private readonly suspensionListeners = new Set<SuspensionListener>();
   private droppedSources = 0;
 
@@ -129,11 +129,18 @@ export class RecurringDiagnosticsRegistry {
     };
   }
 
-  /** Registers a named signal source; a later registration replaces it. */
+  /** Aggregates live sources by signal name; unregister removes only this source. */
   addSignalSource(name: SignalSourceName, source: StatusSource<SignalHealthStatus>): () => void {
-    this.signals.set(name, source);
+    const sources = this.signals.get(name) ?? new Set<StatusSource<SignalHealthStatus>>();
+    if (!sources.has(source) && sources.size >= MAX_DIAGNOSTIC_SOURCES) {
+      this.droppedSources += 1;
+      return () => undefined;
+    }
+    sources.add(source);
+    this.signals.set(name, sources);
     return () => {
-      if (this.signals.get(name) === source) this.signals.delete(name);
+      sources.delete(source);
+      if (sources.size === 0 && this.signals.get(name) === sources) this.signals.delete(name);
     };
   }
 
@@ -193,12 +200,29 @@ export class RecurringDiagnosticsRegistry {
       }
     }
     const signals: RecurringWorkDiagnostics["signals"] = [];
-    for (const [name, source] of this.signals) {
-      try {
-        signals.push({ name, status: source.status() });
-      } catch {
-        faultedSources += 1;
+    for (const [name, sources] of this.signals) {
+      const statuses = collect(sources);
+      if (statuses.length === 0) continue;
+      const status: SignalHealthStatus = {
+        containers: 0,
+        states: emptySignalHealthStates(),
+        fallback: 0,
+        demotions: {},
+        rings: 0,
+      };
+      for (const current of statuses) {
+        status.containers += current.containers;
+        status.fallback += current.fallback;
+        status.rings += current.rings;
+        for (const state of Object.keys(status.states) as SignalHealthState[]) {
+          status.states[state] += current.states[state];
+        }
+        for (const reason of Object.keys(current.demotions) as SignalDemotionReason[]) {
+          status.demotions[reason] =
+            (status.demotions[reason] ?? 0) + (current.demotions[reason] ?? 0);
+        }
       }
+      signals.push({ name, status });
     }
     return {
       metrics: metrics.snapshot(),

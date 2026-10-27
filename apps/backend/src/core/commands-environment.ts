@@ -1773,7 +1773,7 @@ export async function stopEnvironmentOnce(
     // The bridges died with the container, and their turns and parked
     // requests with them.
     await settleStoppedRuntimeAgents(environment.id, context);
-    shutdownClaudeStatePolling(containerId);
+    shutdownClaudeStatePolling(context, containerId);
     context.runtime.diffStats.invalidatePendingSync();
     context.runtime.diffStats.service.pause(environment.id);
     context.runtime.prMonitor.invalidatePendingSync();
@@ -1939,7 +1939,7 @@ async function recreateEnvironmentOnceUnfenced(
     // Per-runtime watchers of the replaced container are retired; everything
     // keyed by environment (sessions, parked dispatches, queued prompts)
     // resolves the new runtime on its next use.
-    shutdownClaudeStatePolling(environment.containerId);
+    shutdownClaudeStatePolling(context, environment.containerId);
     context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
     cleanupEnvironmentSetupState(context, environment.id);
     // Setup belongs to a runtime: the new one runs it again (the preserved
@@ -1984,7 +1984,7 @@ async function recreateEnvironmentOnceUnfenced(
     await stopEnvironmentExecWorkers(environment.id, context);
     invalidateDiscovery(environment.id);
     context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
-    shutdownClaudeStatePolling(containerId);
+    shutdownClaudeStatePolling(context, containerId);
     context.runtime.localServers.openCodeAgentTools.cancel(`container:${containerId}`);
     await advanceContainerOperation(context, environment.id, operationId, { phase: "removing" });
   } catch (error) {

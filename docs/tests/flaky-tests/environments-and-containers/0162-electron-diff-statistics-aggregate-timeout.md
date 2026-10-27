@@ -1,7 +1,7 @@
 # `Electron backend command registry > backend-owned diff statistics` scans time out under aggregate load (`apps/backend/tests/commands-integration.test.ts`)
 
 - **ID:** 0162
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-09-25
 - **Tests:** `computes counts for a tracked local environment and announces them`
   (8,100 ms) and `serves the Files panel from the scan the badge already ran`
@@ -410,3 +410,24 @@ The unchanged owning file passed: `mise run test:logged -- --name merge-unit-own
     pass for the file.
 
 - **Consolidation (2026-10-20):** the per-process data directory and the copied origin/worktree template were moved from the owning test files into `apps/backend/tests/command-fixtures.ts`, so every command-fixture file now gets its own data directory (removed in the fixture's `afterAll` after cancelling scheduled cleanup and closing the ledger). The 28 command-fixture files plus the coordinator and worktree-snapshot owners passed together afterwards: 582 passed, 1 skipped, 0 failed.
+
+## Recurrence — 2026-10-27 (build pipeline flow graph, reopened)
+
+- **Status:** open
+- **Failure:** during the build pipeline flow graph branch's validation,
+  `mise run test` timed out in `Electron backend command registry >
+  backend-owned diff statistics > enables git's scan caches on a newly created
+  worktree`. Isolated reruns of the owning file passed on both the branch and
+  origin/main, and the branch touches no worktree, Git or diff-statistics code.
+- **Target-branch reproduction:** a detached worktree of origin/main
+  (`1aabf049e`), the 0162 stress method: 6 concurrent copies of
+  `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts`
+  for 3 rounds next to 24 `yes` CPU burners on an 18-core host (load average
+  up to 112). 16 of 18 runs failed; 12 timed out in this case (5.5–38.1 s
+  against the 5 s budget) and 14 in `injects workspace artifact git excludes
+  into local worktrees before status reads`. The case alone passed on
+  origin/main and on the branch.
+- **Assessment:** the 2026-10-20 per-process data directory removed the
+  shared-ledger contention, but the case still spends nine Git processes and
+  overruns the generic five-second budget under heavy host load. No
+  implementation, assertion, deadline or skip changed.

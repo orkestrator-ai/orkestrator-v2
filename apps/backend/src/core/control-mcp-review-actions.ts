@@ -229,7 +229,25 @@ export function registerControlReviewActions(
           name === "address_multi_review"
             ? "Complete Address findings action: open the root review, persist an idempotent fix handoff, then publish Fix after dispatch. The foreground action selects Fix, while background retry or restart recovery preserves current focus. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's associated workflow first; unassociated workflows in this project remain addressable."
             : `${title}. Complete durable UI action; no workflow or turn is launched. Works in inactive environments and survives reload. Adopt workflows owned by another conversation first. Inspect outcome/ui/recovery for presentation failure.`,
-        inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200), nodeId }).strict(),
+        inputSchema: z
+          .object({
+            workflowId: z.string().trim().min(1).max(200),
+            ...(name === "open_multi_review"
+              ? {
+                  reviewerId: z
+                    .string()
+                    .trim()
+                    .min(1)
+                    .max(200)
+                    .optional()
+                    .describe(
+                      "Open this reviewer's read-only transcript tab instead of the review (reviewer IDs are in get_multi_review). This node only.",
+                    ),
+                }
+              : {}),
+            nodeId,
+          })
+          .strict(),
         annotations: {
           readOnlyHint: false,
           destructiveHint: name === "address_multi_review",
@@ -237,8 +255,11 @@ export function registerControlReviewActions(
           openWorldHint: false,
         },
       },
-      async ({ workflowId, nodeId: requestedNode }) => {
+      async ({ workflowId, nodeId: requestedNode, ...rest }) => {
+        const reviewerId = (rest as { reviewerId?: string }).reviewerId;
         const node = await otherNode(requestedNode);
+        if (node && reviewerId)
+          throw new Error("Reviewer tabs open on this node only; omit nodeId or reviewerId");
         const surface =
           name === "open_multi_review"
             ? "root"
@@ -253,11 +274,47 @@ export function registerControlReviewActions(
                 workflowId,
                 surface,
               })
-            : await invoke<MultiReviewActionResult>(command, { scope, workflowId }),
+            : await invoke<MultiReviewActionResult>(command, {
+                scope,
+                workflowId,
+                ...(reviewerId ? { reviewerId } : {}),
+              }),
           invoke,
           { startsWork: name === "address_multi_review", ...(node ? { nodeId: node } : {}) },
         );
       },
     );
   }
+
+  server.registerTool(
+    "custom_fix_multi_review",
+    {
+      title: "Start a custom fix for a ready Multi Review",
+      description:
+        "The review tab's Custom fix prompt: start the Fix with your instruction and, optionally, another model (fixModel, from get_launch_options) instead of address_multi_review's default fix. The review must be ready (consolidated). Omit fixModel to keep the review's own fix model; set it only when the user asks for a different one. A custom fix never starts an automatic PR. Reuse requestId only to retry the same call; a pending outcome means queued, not delivered.",
+      inputSchema: z
+        .object({
+          requestId: z.string().trim().min(1).max(256),
+          workflowId: z.string().trim().min(1).max(200),
+          instruction: z.string().trim().min(1).max(100_000),
+          fixModel: selection.optional(),
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      response(
+        await invoke<MultiReviewActionResult>("custom_fix_coordinator_multi_review_action", {
+          scope,
+          input,
+        }),
+        invoke,
+        { startsWork: true },
+      ),
+  );
 }

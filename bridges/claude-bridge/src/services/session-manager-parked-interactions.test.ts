@@ -106,41 +106,58 @@ describe("MCP elicitations", () => {
     await promptPromise;
   });
 
-  test("an unanswered elicitation is cancelled after five minutes", async () => {
-    const session = createSession("elicitation-timeout");
-    track(session.id);
-    const { events, stop } = captureEvents();
-    const promptPromise = sendPrompt(session.id, "go");
-    const call = await nextQueryCall();
+  // A url sign-in shares the form's timer; both cancel, never accept.
+  for (const elicitation of [
+    { mode: "form", serverName: "linear", message: "Which team?" },
+    {
+      mode: "url",
+      serverName: "linear",
+      message: "Authorize",
+      url: "https://linear.app/oauth",
+      elicitationId: "e-timeout",
+    },
+  ] as const) {
+    test(`an unanswered ${elicitation.mode} elicitation is cancelled after five minutes`, async () => {
+      const session = createSession(`elicitation-timeout-${elicitation.mode}`);
+      track(session.id);
+      const { events, stop } = captureEvents();
+      const promptPromise = sendPrompt(session.id, "go");
+      const call = await nextQueryCall();
+      const requestId = `r3-${elicitation.mode}`;
 
-    jest.useFakeTimers();
-    try {
-      const result = call.options.onElicitation!(
-        { serverName: "linear", message: "Which team?", mode: "form" },
-        { signal: new AbortController().signal, requestId: "r3" },
+      jest.useFakeTimers();
+      try {
+        const result = call.options.onElicitation!(
+          { ...elicitation },
+          { signal: new AbortController().signal, requestId },
+        );
+        expect(getPendingInteractions(session.id)).toEqual([
+          expect.objectContaining({ id: requestId, kind: `mcp-${elicitation.mode}` }),
+        ]);
+
+        jest.advanceTimersByTime(5 * 60 * 1000 - 1);
+        expect(getPendingInteractions(session.id)).toHaveLength(1);
+        jest.advanceTimersByTime(1);
+        expect(await result).toEqual({ action: "cancel" });
+        expect(call.options.abortController!.signal.aborted).toBe(false);
+        expect(getPendingInteractions(session.id)).toEqual([]);
+      } finally {
+        jest.useRealTimers();
+      }
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "interaction.resolved",
+          sessionId: session.id,
+          data: { requestId, action: "timeout" },
+        }),
       );
-      expect(getPendingInteractions(session.id)).toHaveLength(1);
-
-      jest.advanceTimersByTime(5 * 60 * 1000);
-      expect(await result).toEqual({ action: "cancel" });
-      expect(call.options.abortController!.signal.aborted).toBe(false);
-      expect(getPendingInteractions(session.id)).toEqual([]);
-    } finally {
-      jest.useRealTimers();
-    }
-
-    call.push({ type: "result", subtype: "success" });
-    call.finish();
-    await promptPromise;
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "interaction.resolved",
-        sessionId: session.id,
-        data: { requestId: "r3", action: "timeout" },
-      }),
-    );
-    stop();
-  });
+      stop();
+    });
+  }
 
   test("the CLI withdrawing the request cancels it and removes the card", async () => {
     const session = createSession("elicitation-withdrawn");
@@ -367,33 +384,139 @@ describe("tool approvals under an ask policy", () => {
     await promptPromise;
   });
 
-  test("denies an unanswered approval after five minutes", async () => {
-    const session = createSession("ask-timeout");
+  test("marks exact requests rule-eligible and forwards a Bash suggestion only as a hint", async () => {
+    const session = createSession("ask-rule-eligible");
     track(session.id);
     session.executionPolicy = ASK_POLICY;
     const promptPromise = sendPrompt(session.id, "go");
     const call = await nextQueryCall();
+    const suggestions = [
+      {
+        type: "addRules",
+        behavior: "allow",
+        destination: "localSettings",
+        rules: [{ toolName: "Bash", ruleContent: "npm run test:*" }],
+      },
+    ];
 
-    jest.useFakeTimers();
-    try {
-      const decision = call.options.canUseTool!("Bash", { command: "ls" }, context("req-4"));
-      await Promise.resolve();
-      expect(getPendingInteractions(session.id)).toHaveLength(1);
+    const decisions = [
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm run test -- --watch" },
+        context("req-r1", { suggestions }),
+      ),
+      call.options.canUseTool!("Edit", { file_path: "relative.ts" }, context("req-r2")),
+      call.options.canUseTool!(
+        "mcp__linear__create_issue",
+        { title: "Bug" },
+        context("req-r3", { mcpServer: { name: "linear", source: "user" } }),
+      ),
+      call.options.canUseTool!(
+        "WebFetch",
+        { url: "https://Docs.Example.com/page", prompt: "summarise" },
+        context("req-r4"),
+      ),
+      call.options.canUseTool!("Bash", { command: "x".repeat(40_000) }, context("req-r5")),
+    ];
+    decisions.push(
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm test", dangerouslyDisableSandbox: true },
+        context("req-r6"),
+      ),
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm test", unknownApprovalFlag: true },
+        context("req-r7"),
+      ),
+    );
+    await waitFor(() => getPendingInteractions(session.id).length === 7);
+    const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
+    expect(pending.get("req-r1")).toMatchObject({
+      ruleEligible: true,
+      proposedCommandPrefix: ["npm", "run", "test"],
+    });
+    // A relative path cannot be placed in the workspace.
+    expect(pending.get("req-r2")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r3")).toMatchObject({ ruleEligible: true, mcpServer: "linear" });
+    expect(pending.get("req-r4")).toMatchObject({
+      ruleEligible: true,
+      networkHost: "docs.example.com",
+    });
+    // A truncated command is never matched.
+    expect(pending.get("req-r5")).not.toHaveProperty("ruleEligible");
 
-      jest.advanceTimersByTime(5 * 60 * 1000);
-      expect(await decision).toEqual({
-        behavior: "deny",
-        message: "Approval timed out after 5 minutes",
-      });
-      expect(getPendingInteractions(session.id)).toEqual([]);
-    } finally {
-      jest.useRealTimers();
+    expect(pending.get("req-r6")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r7")).not.toHaveProperty("ruleEligible");
+    for (const id of ["req-r1", "req-r2", "req-r3", "req-r4", "req-r5", "req-r6", "req-r7"]) {
+      respondToInteraction(id, { action: "accept" });
     }
+    // Allow once, even where the SDK suggested a rule.
+    expect(await decisions[0]).toEqual({
+      behavior: "allow",
+      updatedInput: { command: "npm run test -- --watch" },
+    });
+    await Promise.all(decisions);
 
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
   });
+
+  // One timer serves every approval kind; each must deny, never allow.
+  for (const { kind, toolName, input } of [
+    { kind: "command-approval", toolName: "Bash", input: { command: "ls" } },
+    {
+      kind: "file-approval",
+      toolName: "Write",
+      input: { file_path: "/repo/new.ts", content: "x" },
+    },
+    { kind: "permission", toolName: "mcp__linear__create_issue", input: { title: "Bug" } },
+  ]) {
+    test(`denies an unanswered ${kind} after five minutes`, async () => {
+      const session = createSession(`ask-timeout-${kind}`);
+      track(session.id);
+      session.executionPolicy = ASK_POLICY;
+      const { events, stop } = captureEvents();
+      const promptPromise = sendPrompt(session.id, "go");
+      const call = await nextQueryCall();
+      const requestId = `req-4-${kind}`;
+
+      jest.useFakeTimers();
+      try {
+        const decision = call.options.canUseTool!(toolName, input, context(requestId));
+        await Promise.resolve();
+        expect(getPendingInteractions(session.id)).toEqual([
+          expect.objectContaining({ id: requestId, kind, toolName }),
+        ]);
+
+        jest.advanceTimersByTime(5 * 60 * 1000 - 1);
+        expect(getPendingInteractions(session.id)).toHaveLength(1);
+        jest.advanceTimersByTime(1);
+        expect(await decision).toEqual({
+          behavior: "deny",
+          message: "Approval timed out after 5 minutes",
+        });
+        // A timeout denies the call; it does not stop the turn.
+        expect(call.options.abortController!.signal.aborted).toBe(false);
+        expect(getPendingInteractions(session.id)).toEqual([]);
+      } finally {
+        jest.useRealTimers();
+      }
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "interaction.resolved",
+          sessionId: session.id,
+          data: { requestId, action: "timeout" },
+        }),
+      );
+      stop();
+    });
+  }
 
   test("without an ask policy a tool that reaches the callback still runs", async () => {
     const session = createSession("no-ask");

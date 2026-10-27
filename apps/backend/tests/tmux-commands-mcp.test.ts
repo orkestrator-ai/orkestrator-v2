@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import type { CommandContext } from "../src/core/commands";
 import { cleanupEnvironmentTmux, RUNTIME_ROOT_PREFIX, tmuxSessionName } from "../src/core/tmux";
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -8,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   createHandlers,
   deferred,
+  harnessContext,
   invoke,
   waitFor,
   withFakeContainerTmuxRuntime,
@@ -624,7 +624,7 @@ describe("Electron tmux MCP config and session start", () => {
 
       environment.deletionRequestedAt = new Date().toISOString();
       await expect(
-        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
+        cleanupEnvironmentTmux(environment.id, harnessContext(context)),
       ).resolves.toBeUndefined();
 
       namingGate.resolve();

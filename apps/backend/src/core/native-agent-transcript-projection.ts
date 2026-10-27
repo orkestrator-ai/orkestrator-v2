@@ -108,7 +108,6 @@ import {
   type NativeAgentContextUsage,
   type NativeAgentNotice,
   type NativeAgentRetiredDispatch,
-  isNativeInlineErrorMessageId,
   nativeAgentApprovalModes,
   normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
@@ -121,18 +120,20 @@ import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { fileURLToPath } from "node:url";
-import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
-import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
-import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import {
-  parseCoordinatorDelegatedPrompt,
-  stripSystemInstructions,
-} from "@orkestrator/protocol/review-evidence-frames";
+  AGENT_INTERACTION_KINDS,
+  type AgentInteractionSnapshot,
+} from "@orkestrator/protocol/agent-interactions";
+import type { PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
+import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
+import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
   inferredComposerSelectionToPersist,
   lastAssistantModelRef,
 } from "./native-agent-composer-selection.js";
 import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
+import { NativeAgentSessionTitles } from "./native-agent-session-titles.js";
+import { sessionTitleSourceText } from "./session-title-text.js";
 import { heldSessionModel } from "./session-held-model.js";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -192,6 +193,8 @@ import {
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
+import { nativeTerminalMessages } from "./native-terminal-messages.js";
 
 interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
@@ -218,6 +221,29 @@ const IMAGE_MIME_TYPES = new Map([
 ]);
 const READ_TOOL_KEYS = new Set(["read", "readfile", "cursorread", "view", "viewfile"]);
 const READ_TOOL_PATH_KEYS = ["file_path", "filePath", "path", "target_file", "file"] as const;
+
+/**
+ * The first user message a read holds that still has the user's own words,
+ * and whether the read starts at the beginning of the conversation. Only then
+ * is that message the conversation's first, which is what a title names.
+ */
+function firstUserMessageOf(
+  messages: readonly unknown[],
+  window:
+    | Pick<NativeAgentMessageWindow, "truncated" | "omittedMessages" | "canLoadEarlier">
+    | undefined,
+): { firstUserMessage?: string; reachesStart: boolean } {
+  const reachesStart =
+    !window?.truncated || ((window.omittedMessages ?? -1) === 0 && window.canLoadEarlier !== true);
+  for (const candidate of messages) {
+    const message = candidate as { role?: unknown; content?: unknown };
+    if (message.role !== "user" || typeof message.content !== "string") continue;
+    if (sessionTitleSourceText(message.content)) {
+      return { firstUserMessage: message.content, reachesStart };
+    }
+  }
+  return { reachesStart };
+}
 
 function localImagePath(reference: unknown): string | undefined {
   if (typeof reference !== "string" || /[\0\r\n]/.test(reference)) return undefined;
@@ -578,6 +604,20 @@ function displayMessage<T>(raw: T, coordinator: boolean): T {
   return projected as T;
 }
 
+/** The provider cursor before the oldest of `rows` that can name one. */
+function firstNamedCursor(
+  rows: readonly unknown[],
+  cursorBefore: ProviderTranscriptSnapshot["historyCursorBefore"],
+): string | undefined {
+  if (!cursorBefore) return undefined;
+  for (const row of rows) {
+    const id = (row as { id?: unknown } | null)?.id;
+    const cursor = typeof id === "string" ? cursorBefore(id) : undefined;
+    if (cursor) return cursor;
+  }
+  return undefined;
+}
+
 function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string {
   if (snapshot.sourceToken) return snapshot.sourceToken;
   const first = snapshot.messages[0] as { id?: unknown } | undefined;
@@ -734,6 +774,12 @@ export interface NativeAgentTranscriptProjectionHost {
     requestId: string,
     provider: NativeAgentRuntimeProvider,
   ): void;
+  /**
+   * Orkestrator's permission rules (todo 0723): answers the pending requests a
+   * rule covers before any card is built, and offers "Approve and remember"
+   * on the rest. Absent in tests that do not wire it.
+   */
+  permissionRules?: PermissionRuleEnforcer;
 }
 
 /**
@@ -747,6 +793,29 @@ export interface NativeAgentTranscriptProjectionHost {
  * costs a re-read, never user state.
  */
 export class NativeAgentTranscriptProjection {
+  /**
+   * The session's pending requests as a card list: the provider's own list,
+   * minus what a permission rule just answered, with remember offers. A
+   * transient read has no stored session for a rule to belong to.
+   */
+  private pendingInteractions(resolved: {
+    session: PersistedNativeAgentSession;
+    provider: NativeAgentRuntimeProvider;
+    transient: boolean;
+  }): Promise<Pick<AgentInteractionSnapshot, "requests" | "revision">> {
+    const interactions = resolved.provider.interactions;
+    if (!interactions) return Promise.resolve({ requests: [], revision: 0 });
+    const read = interactions.listPendingInteractions(resolved.session.providerSessionId);
+    const rules = this.host.permissionRules;
+    if (!rules || resolved.transient) return read;
+    return read.then((snapshot) =>
+      rules
+        .apply(resolved.session, resolved.provider, snapshot)
+        .then((applied) => applied.snapshot)
+        .catch(() => snapshot),
+    );
+  }
+
   /** Bounded, reconstructible view cache; providers remain authoritative. */
   private readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
   /** Bounded wire revisions for conditional/delta projection reads. */
@@ -810,8 +879,8 @@ export class NativeAgentTranscriptProjection {
   private readonly projectionEpochs = new Map<string, number>();
   /** Session-scoped stop result retained until the next authoritative projection. */
   private readonly stopNotices = new Map<string, string>();
-  /** One best-effort provider title push per backend-derived title. */
-  private readonly pushedSessionTitles = new Map<string, string>();
+  /** The backend's choice of title per session, and its push to the provider. */
+  private readonly sessionTitles: NativeAgentSessionTitles;
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
   private progressiveTranscriptBytes = 0;
@@ -901,6 +970,19 @@ export class NativeAgentTranscriptProjection {
     this.resumeIdentity = new NativeAgentResumeIdentityObserver(this.storage);
     this.options = host.options;
     this.catalogs = host.catalogs;
+    this.sessionTitles = new NativeAgentSessionTitles({
+      storage: {
+        // Optional because narrow test doubles of the storage omit it.
+        recordNativeAgentSessionBackendTitle: (key, title) =>
+          typeof this.storage.recordNativeAgentSessionBackendTitle === "function"
+            ? this.storage.recordNativeAgentSessionBackendTitle(key, title)
+            : Promise.resolve(false),
+      },
+      ...(this.options.sessionTitles ? { generator: this.options.sessionTitles } : {}),
+      onTitleChosen: (sessionKey, title, providerSessionId) =>
+        this.showChosenTitle(sessionKey, title, providerSessionId),
+      now: () => this.host.now(),
+    });
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
       write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
       // Optional because narrow test doubles of the storage omit them.
@@ -931,6 +1013,50 @@ export class NativeAgentTranscriptProjection {
     });
   }
 
+  /**
+   * A title the backend just chose, shown in the cached projections without
+   * waiting for the next provider read: an idle session may not be read again
+   * for a long time.
+   */
+  private showChosenTitle(sessionKey: string, title: string, providerSessionId: string): void {
+    for (const key of [sessionKey, `${sessionKey}\0sync-v1`]) {
+      const entry = this.projectionCache.get(key);
+      if (
+        !entry ||
+        entry.projection.sessionId !== providerSessionId ||
+        entry.projection.title === title
+      )
+        continue;
+      this.commitProjection(
+        key,
+        entry.input,
+        { ...entry.projection, title },
+        entry.generation,
+        this.projectionEpochs.get(key) ?? 0,
+      );
+    }
+  }
+
+  /**
+   * A background recovery of the same conversation keeps the title the view
+   * already shows: it carries only the provider's own, which the read path
+   * may have replaced with the backend's (`sessionTitles.resolve`).
+   */
+  private withShownTitle(
+    key: string,
+    projection: ProjectedProgressiveTranscript,
+  ): ProjectedProgressiveTranscript {
+    const shown = this.progressiveTranscriptCache.get(key)?.value;
+    if (
+      !shown?.title ||
+      shown.title === projection.value.title ||
+      shown.identity.providerSessionId !== projection.value.identity.providerSessionId
+    ) {
+      return projection;
+    }
+    return { ...projection, value: { ...projection.value, title: shown.title } };
+  }
+
   /** Keep a session's stop result until its next authoritative projection. */
   recordStopNotice(sessionKey: string, message: string): void {
     this.stopNotices.set(sessionKey, message);
@@ -941,9 +1067,9 @@ export class NativeAgentTranscriptProjection {
     }
   }
 
-  /** Projection reads still in flight, for shutdown to settle. */
+  /** Projection reads and title choices still in flight, for shutdown to settle. */
   pendingRefreshes(): Promise<unknown>[] {
-    return [...this.projectionRefreshes.values()];
+    return [...this.projectionRefreshes.values(), ...this.sessionTitles.pending()];
   }
 
   /**
@@ -2155,8 +2281,9 @@ export class NativeAgentTranscriptProjection {
      * A page cursor the view adopted says the same as a summary: the provider
      * has already said where the rest of the history is, so its window is
      * short on purpose. One merely offered says nothing — a view that could
-     * not hold the whole window dropped the row the cursor names, and without
-     * this read the history before what it kept is unreachable.
+     * not hold the whole window, and could not name a cursor at a row it kept
+     * either, dropped the row the cursor names, and without this read the
+     * history before what it kept is unreachable.
      */
     if (
       (snapshot.representation === "summary" || directPagingAdopted) &&
@@ -2215,12 +2342,15 @@ export class NativeAgentTranscriptProjection {
             this.commitProgressiveTranscript(
               key,
               input,
-              this.projectProgressiveTranscript(
-                input,
+              this.withShownTitle(
                 key,
-                hydrated,
-                sessionId,
-                initialPromptPresentation,
+                this.projectProgressiveTranscript(
+                  input,
+                  key,
+                  hydrated,
+                  sessionId,
+                  initialPromptPresentation,
+                ),
               ),
             );
             // An idle view reads on a slow cadence. Say the recovered transcript
@@ -2453,13 +2583,28 @@ export class NativeAgentTranscriptProjection {
       snapshot.historyStartIndex === undefined
         ? normalized.messages.length === snapshot.messages.length && droppedProjectedMessages === 0
         : boundedStartIndex !== undefined && boundedStartIndex <= snapshot.historyStartIndex;
+    /*
+     * Otherwise the provider names a cursor for the first row the view kept
+     * (or, for a provider that pages by message, the first kept row a page can
+     * end at). Rows between the view's start and that position come back on
+     * the first page as well, and the client deduplicates them by id; rows the
+     * bound dropped come back after them. If only an OpenCode inline error row
+     * remains, no whole-message boundary can name a cursor: joined paging
+     * must recover its dropped main row. Without this, the client could only
+     * page by minting a joined cursor, a whole transcript read (0232).
+     */
+    const providerHistoryCursor = !snapshot.historyCursor
+      ? undefined
+      : viewStartsAtSnapshot
+        ? snapshot.historyCursor
+        : firstNamedCursor(bounded.messages, snapshot.historyCursorBefore);
     const directHistoryCursor =
-      snapshot.historyCursor && snapshot.historyEpoch !== undefined && viewStartsAtSnapshot
+      providerHistoryCursor && snapshot.historyEpoch !== undefined
         ? encodeDirectHistoryCursor({
             sessionKey,
             providerSessionId,
             historyEpoch: snapshot.historyEpoch,
-            providerCursor: snapshot.historyCursor,
+            providerCursor: providerHistoryCursor,
           })
         : undefined;
     const localPageable =
@@ -2976,6 +3121,29 @@ export class NativeAgentTranscriptProjection {
         resolved.session.providerSessionId,
         resolved.session.initialPromptPresentation,
       );
+      const title = this.sessionTitles.resolve({
+        sessionKey: resolved.key,
+        session: resolved.session,
+        agent: input.agent,
+        ...(projection.value.title ? { providerTitle: projection.value.title } : {}),
+        ...firstUserMessageOf(
+          projection.value.messages,
+          projection.value.historyCursor === undefined
+            ? projection.value.messageWindow
+            : { truncated: true },
+        ),
+        transient: resolved.transient,
+        ...(resolved.provider.setSessionTitle
+          ? {
+              setProviderTitle: (id: string, value: string) =>
+                resolved.provider.setSessionTitle!(id, value),
+            }
+          : {}),
+      });
+      if (title !== projection.value.title) {
+        const { title: _providerTitle, ...rest } = projection.value;
+        projection = { ...projection, value: { ...rest, ...(title ? { title } : {}) } };
+      }
     } catch (error) {
       if (!holdsPreview) scheduleHydration(false);
       throw error;
@@ -3190,9 +3358,7 @@ export class NativeAgentTranscriptProjection {
               )
             : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
       ),
-      resolved.provider.interactions
-        ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
-        : Promise.resolve({ requests: [], revision: 0 }),
+      this.pendingInteractions(resolved),
       advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null),
@@ -3251,6 +3417,21 @@ export class NativeAgentTranscriptProjection {
           !!(stateSnapshot.lastAssistantModelId ?? lastAssistant.modelId),
       },
     );
+    // Body-free: it shows the title already chosen, never chooses one.
+    const stateTitle = this.sessionTitles.resolve({
+      sessionKey: resolved.key,
+      session: resolved.session,
+      agent: input.agent,
+      ...(stateSnapshot.title ? { providerTitle: stateSnapshot.title } : {}),
+      reachesStart: false,
+      transient: resolved.transient,
+      ...(resolved.provider.setSessionTitle
+        ? {
+            setProviderTitle: (id: string, value: string) =>
+              resolved.provider.setSessionTitle!(id, value),
+          }
+        : {}),
+    });
     const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
     // A provider that reports no composer (OpenCode) resolves its model window
     // from the catalogue, which may still be loading on the first state read.
@@ -3333,6 +3514,14 @@ export class NativeAgentTranscriptProjection {
       sessionIncompleteTurnNotice(resolved.session),
       retiredDispatch,
     );
+    // The transcript read never sees session state, so the rows saying how the
+    // turn ended travel here. A kept stop result stays with the full read the
+    // stop answers with, which consumes it.
+    const terminalMessages = nativeTerminalMessages({
+      notices: stateSnapshot.notices,
+      error: stateSnapshot.error,
+      turnStartedAt: stateSnapshot.turnStartedAt,
+    });
     return {
       identity: this.progressiveIdentity(
         input,
@@ -3383,7 +3572,7 @@ export class NativeAgentTranscriptProjection {
       capabilities,
       ...(stateSnapshot.readiness ? { readiness: stateSnapshot.readiness } : {}),
       ...(stateSnapshot.shareUrl === undefined ? {} : { shareUrl: stateSnapshot.shareUrl }),
-      ...(stateSnapshot.title ? { title: stateSnapshot.title } : {}),
+      ...(stateTitle ? { title: stateTitle } : {}),
       ...(queue
         ? {
             queue: {
@@ -3443,6 +3632,7 @@ export class NativeAgentTranscriptProjection {
         : {
             completionBlockedByBackgroundTasks: stateSnapshot.completionBlockedByBackgroundTasks,
           }),
+      ...(terminalMessages.length > 0 ? { terminalMessages } : {}),
     };
   }
 
@@ -4831,9 +5021,7 @@ export class NativeAgentTranscriptProjection {
       const snapshotPromise = resolved.transient
         ? readSnapshot()
         : this.resumeIdentity.read(resolved.session, readSnapshot);
-      const interactionSnapshotPromise = resolved.provider.interactions
-        ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
-        : Promise.resolve({ requests: [], revision: 0 });
+      const interactionSnapshotPromise = this.pendingInteractions(resolved);
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
@@ -5015,88 +5203,34 @@ export class NativeAgentTranscriptProjection {
             )
           : normalized;
       const stopNotice = this.stopNotices.get(sessionKey);
-      const terminalNotices = [
-        ...(snapshot.notices ?? []).filter(
-          (notice) => notice.kind === "error" || notice.kind === "stopped",
-        ),
-        ...(snapshot.error &&
-        !(snapshot.notices ?? []).some(
-          (notice) => notice.kind === "error" && notice.message === snapshot.error,
-        )
-          ? [{ kind: "error" as const, message: snapshot.error }]
-          : []),
-        ...(stopNotice ? [{ kind: "stopped" as const, message: stopNotice }] : []),
-      ];
+      const terminalMessages = nativeTerminalMessages({
+        notices: snapshot.notices,
+        error: snapshot.error,
+        stopNotice,
+        turnStartedAt: snapshot.turnStartedAt,
+      });
       if (stopNotice) this.stopNotices.delete(sessionKey);
-      const messageIds = new Set(
-        transcript.messages.map((message) => (message as { id?: unknown })?.id),
+      // A provider that already says why the turn failed (OpenCode's inline
+      // error row, Codex and Pi's error status line) gets no second row.
+      const messagesWithNotices = withNativeTerminalMessages(
+        transcript.messages,
+        terminalMessages as unknown[],
       );
-      // A provider that already renders its failure inline (OpenCode today)
-      // ends the transcript with an inline error row; a second terminal row
-      // would repeat it.
-      const lastMessageId = (transcript.messages.at(-1) as { id?: unknown } | undefined)?.id;
-      const inlineError = isNativeInlineErrorMessageId(lastMessageId)
-        ? (transcript.messages.at(-1) as { content?: unknown })
-        : undefined;
-      const terminalMessages = terminalNotices
-        .filter(
-          (notice) =>
-            notice.kind !== "error" ||
-            typeof inlineError?.content !== "string" ||
-            (inlineError.content !== notice.message &&
-              !inlineError.content.endsWith(`: ${notice.message}`)),
-        )
-        .map((notice) => ({
-          id: `native-terminal:${notice.kind}:${createHash("sha256")
-            .update(notice.message)
-            .digest("hex")
-            .slice(0, 16)}`,
-          role: "system" as const,
-          content: notice.message,
-          parts: [{ type: "text" as const, content: notice.message }],
-          // Provider terminal metadata does not consistently carry a time.
-          // A fixed value keeps repeated authoritative reads byte-stable.
-          createdAt: "1970-01-01T00:00:00.000Z",
-        }))
-        .filter((message) => {
-          if (messageIds.has(message.id)) return false;
-          messageIds.add(message.id);
-          return true;
-        });
-      const messagesWithNotices = [...transcript.messages, ...terminalMessages];
       const renderedTranscript = { messages: messagesWithNotices, window: transcript.window };
-      const fallbackTitle = transcript.messages.flatMap((candidate) => {
-        const message = candidate as { role?: unknown; content?: unknown };
-        if (message.role !== "user" || typeof message.content !== "string") return [];
-        // Name the session after the user's own words, not provider-only
-        // guidance or the inert reference material quoted after them.
-        const normalized = stripTranscriptAnnotations(stripSystemInstructions(message.content))
-          .replace(/\s+/g, " ")
-          .trim();
-        return normalized ? [normalized.slice(0, 80)] : [];
-      })[0];
-      const snapshotTitle = snapshot.title?.trim();
-      // "Agent Session" is the title this service creates every provider
-      // session with, and "Session 1a2b3c" is Claude's own; neither names the
-      // conversation. Left in place they stay its title in the resume list, so
-      // every OpenCode conversation read "Agent Session" there.
-      const placeholderTitle =
-        snapshotTitle === "Agent Session" ||
-        (input.agent === "claude" && /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
-      const projectionTitle =
-        (!placeholderTitle && snapshotTitle) || fallbackTitle || snapshotTitle;
-      if (
-        projectionTitle &&
-        (!snapshotTitle || placeholderTitle) &&
-        resolved.provider.setSessionTitle &&
-        !resolved.transient &&
-        this.pushedSessionTitles.get(sessionKey) !== projectionTitle
-      ) {
-        this.pushedSessionTitles.set(sessionKey, projectionTitle);
-        void resolved.provider
-          .setSessionTitle(resolved.session.providerSessionId, projectionTitle)
-          .catch(() => undefined);
-      }
+      const projectionTitle = this.sessionTitles.resolve({
+        sessionKey,
+        session: resolved.session,
+        agent: input.agent,
+        ...(snapshot.title ? { providerTitle: snapshot.title } : {}),
+        ...firstUserMessageOf(normalized.messages, normalized.window),
+        transient: resolved.transient,
+        ...(resolved.provider.setSessionTitle
+          ? {
+              setProviderTitle: (id: string, title: string) =>
+                resolved.provider.setSessionTitle!(id, title),
+            }
+          : {}),
+      });
       if (input.representation === "sync-v1") {
         const historyIds = new Set(
           normalized.messages

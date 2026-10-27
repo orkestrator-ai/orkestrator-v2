@@ -369,6 +369,35 @@ describe("useNativeAgentSession observation invalidations", () => {
     await readsExactlyAfter(clock, 500);
   });
 
+  test("with data saving on, a running view polls every second and an announcement still reads at once", async () => {
+    runningObservation = true;
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    const view = await settledSession();
+    await waitFor(() => expect(view.result.current.runtimeProjection?.turn.phase).toBe("running"));
+    await readsExactlyAfter(clock, 1_000);
+    await readsExactlyAfter(clock, 1_000);
+
+    // An approval or a finished turn is announced: read now, not on the grid.
+    const before = stateReads();
+    await act(async () => {
+      announce({
+        environment_id: "env-1",
+        agent: platform,
+        logical_session_key: "env-env-1:tab-1",
+        previous_state: "working",
+        state: "waiting",
+        generation: "observer-1",
+        revision: 1,
+      });
+    });
+    await waitFor(() => expect(stateReads()).toBe(before + 1));
+
+    // Turning it off returns this client to the 500 ms cadence.
+    act(() => coordinator.setDataSaving(false));
+    await readsExactlyAfter(clock, 500);
+  });
+
   test("two mounted views of one session share one read per coordinated round", async () => {
     const { clock } = installFakeReadCoordinator();
     const first = await settledSession();

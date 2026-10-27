@@ -472,8 +472,6 @@ export interface SessionState {
   id: string;
   executionPolicy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   title?: string;
-  /** Whether a title generation request is already in flight */
-  titleGenerationPending?: boolean;
   messages: NormalizedMessage[];
   status: "idle" | "running" | "error";
   /** Backend-authoritative ISO timestamp for the active user turn. */
@@ -687,6 +685,14 @@ export interface SessionState {
    */
   restoredDispatchedRequestIds?: ReadonlySet<string>;
   /**
+   * `dispatchedRequestIds` holds every request id this session ever claimed,
+   * in this process and every earlier one (see the preferences field of the
+   * same name). True only for a session created with no durable journal on
+   * disk, or restored from one that says so; false for good once the bound
+   * drops an id. Only then is a missing id provably never sent.
+   */
+  dispatchJournalComplete?: boolean;
+  /**
    * Local transcript rows that are not in the SDK rollout, such as an idle
    * `/steer` exchange. Eviction and restart rehydrate from disk and then merge
    * these back so the pair does not vanish.
@@ -773,23 +779,6 @@ export interface SessionState {
    */
   finishTurnInputIfSettled?: () => void;
   /**
-   * Control that owns each live background task.
-   *
-   * There is one process per session (`claudeRuntime`), so every entry names
-   * its control; the map is what keeps that control from being closed while a
-   * task still runs after its turn released the foreground.
-   */
-  backgroundTaskControls?: Map<string, ClaudeQueryControl>;
-  /**
-   * Built-in Bash calls whose tool result has not arrived yet.
-   *
-   * These are deliberately not exposed as background tasks: a foreground
-   * command is only a candidate until its provider-authored result says it was
-   * backgrounded. Retaining the owning control here prevents a result frame
-   * that races ahead of that evidence from closing the CLI's stdin.
-   */
-  backgroundTaskCandidates?: Map<string, ClaudeQueryControl>;
-  /**
    * Recent Bash commands and unmatched results by tool-use id.
    *
    * No task message names a shell task's command, and a background
@@ -802,23 +791,6 @@ export interface SessionState {
   >;
   /** Dispatches whose released query is awaiting a background-task continuation. */
   retainedContinuationRequestIds?: Set<string>;
-  /**
-   * Tasks the level signal dropped before their terminal edge explained why.
-   *
-   * The SDK leaves the order of `background_tasks_changed` and
-   * `task_notification` for one transition unspecified. Through Agent SDK
-   * 0.3.284 the level came first; 0.3.292 (still in 0.3.309) documents a
-   * finishing task leaving the level *after* its edge. When the level does come first, the task
-   * leaves the live set with no outcome attached. Parking the
-   * snapshot here keeps liveness honest — the task is gone from
-   * {@link backgroundTasks}, so no stale running indicator can wedge — while
-   * still letting the edge settle it with its original description and start
-   * time instead of a fabricated one.
-   */
-  settlingBackgroundTasks?: Map<
-    string,
-    { task: BackgroundTaskSnapshot; owner: ClaudeQueryControl }
-  >;
   /**
    * Generation of the most recently started turn.
    *
@@ -1124,6 +1096,20 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
   paths?: string[];
   /** `permission` only: the tool input as bounded JSON. */
   input?: string;
+  /**
+   * True only when every detail above is exact (nothing truncated, an absolute
+   * path, a named MCP server), so an Orkestrator permission rule (todo 0723)
+   * may answer it. The backend auto-answers nothing without it.
+   */
+  ruleEligible?: boolean;
+  /** `WebFetch` only: the host of the URL it fetches. */
+  networkHost?: string;
+  /**
+   * The Bash prefix of the SDK's own `canUseTool` suggestion, forwarded only
+   * so the card can preselect the same prefix for an Orkestrator rule. The
+   * suggestion itself is never returned to the SDK.
+   */
+  proposedCommandPrefix?: string[];
 }
 
 /** The values an MCP form answer may carry, as MCP defines them. */

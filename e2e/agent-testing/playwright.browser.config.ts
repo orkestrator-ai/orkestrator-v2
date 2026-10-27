@@ -11,6 +11,7 @@ export default defineConfig({
   testMatch: [
     "browser-gateway.spec.ts",
     "agent-accounts.spec.ts",
+    "permission-rules.spec.ts",
     "design-canvas.spec.ts",
     "design-container-export.spec.ts",
     "design-live.spec.ts",
@@ -30,6 +31,7 @@ export default defineConfig({
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
     "codex-typed-prompts-live.spec.ts",
+    "codex-refused-login-live.spec.ts",
     "slash-command-inactive.spec.ts",
     "slash-command-picker.spec.ts",
     "mcp-apply-inactive.spec.ts",

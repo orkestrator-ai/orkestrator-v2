@@ -70,6 +70,7 @@ export class CodexRuntimeApprovals {
             changes: item.changes.map((change) => ({
               path: change.path,
               kind: change.kind,
+              ...(change.move_path !== undefined ? { movePath: change.move_path } : {}),
             })),
             actionable: true,
           }
@@ -159,7 +160,6 @@ export class CodexRuntimeApprovals {
     sessionId: string,
     approvalId: string,
     decision: ApprovalDecision,
-    amendmentIndex?: number,
   ): "applied" | "unknown" | "wrong-session" | "not-actionable" {
     const entry = this.ctx.pendingApprovals.get(approvalId);
     if (!entry) return "unknown";
@@ -180,7 +180,7 @@ export class CodexRuntimeApprovals {
       return "not-actionable";
     }
 
-    if (this.ctx.options.engine.resolveApproval(approvalId, decision, amendmentIndex)) {
+    if (this.ctx.options.engine.resolveApproval(approvalId, decision)) {
       if (decision === "cancel") {
         void this.ctx.callbacks.abort(sessionId).catch((error: unknown) => {
           console.error("[codex-bridge] Failed to cancel turn after approval response:", error);

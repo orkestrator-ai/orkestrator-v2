@@ -143,6 +143,7 @@ import {
   NativeAgentTranscriptProjection,
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
+import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/enforcer.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -200,6 +201,15 @@ export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
  * object spreads inside the dispatch path carry it forward.
  */
 const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
+
+function hasPendingTabTeardown(
+  environment: Environment | null,
+  logicalSessionKey: string,
+): boolean {
+  return Object.keys(environment?.tabTeardownIntents ?? {}).some(
+    (tabId) => logicalSessionKey === `env-${environment!.id}:${tabId}`,
+  );
+}
 
 export class NativeAgentService {
   /** Orders publication admission against dispatch and Stop for this session only. */
@@ -302,6 +312,8 @@ export class NativeAgentService {
   private readonly catalogs: NativeAgentCatalogCache;
   /** Renderer views of provider sessions and every cache behind them. */
   private readonly projections: NativeAgentTranscriptProjection;
+  /** Orkestrator's permission rules (todo 0723); absent with a narrow storage double. */
+  private readonly permissionRules: PermissionRuleEnforcer | undefined;
   /** Pending approvals and questions: observation records and the monitor sweep. */
   private readonly interactions: NativeAgentInteractionTracker;
   /** Activity sweeps, exact turn edges and the startup-launch scan. */
@@ -532,9 +544,26 @@ export class NativeAgentService {
       dispatchPrompt: (input, prepare) => this.dispatchPromptInternal(input, prepare),
       observedActivity: (key) => this.launches.observedActivity(key),
     });
+    // Optional because narrow test doubles of the storage omit the store.
+    this.permissionRules =
+      typeof storage.permissionRuleStore === "function"
+        ? new PermissionRuleEnforcer({
+            store: () => storage.permissionRuleStore(),
+            getEnvironment: (environmentId) => storage.getEnvironment(environmentId),
+            now: () => this.now(),
+            onApplied: (application) => {
+              if (this.stopped) return;
+              this.storage.announceNativeAgentSessionProjection(application.environmentId, {
+                agent: application.agent,
+                logicalSessionKey: application.logicalSessionKey,
+              });
+            },
+          })
+        : undefined;
     this.projections = new NativeAgentTranscriptProjection({
       storage,
       options,
+      ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
       catalogs: this.catalogs,
       observedActivity: (sessionKey) => this.launches.observedActivity(sessionKey),
       providerGeneration: (input) =>
@@ -588,6 +617,12 @@ export class NativeAgentService {
         this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
       withdrawEnvironmentInteractions: (environmentId) =>
         this.withdrawEnvironmentInteractions(environmentId),
+      ...(this.permissionRules
+        ? {
+            applyPermissionRules: (session, provider) =>
+              this.permissionRules!.applyToWaitingSession(session, provider),
+          }
+        : {}),
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchPromptWithPreparation: (input, prepare) =>
         this.dispatchPromptInternal(input, prepare),
@@ -1489,9 +1524,31 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
-    return this.promptQueues.withSessionMutationIntent(input, () =>
-      this.dispatchIntentUnderIntent(input, preserveExistingPending),
-    );
+    let release: () => void;
+    try {
+      // Reserve before identity/session reads: a close must see even a prompt
+      // whose asynchronous preflight has not reached provider dispatch yet.
+      release = this.environmentFence.beginAgentWork(input.environmentId);
+    } catch (error) {
+      return { outcome: "rejected", error: error instanceof Error ? error.message : String(error) };
+    }
+    try {
+      if (
+        hasPendingTabTeardown(
+          await this.storage.getEnvironment(input.environmentId),
+          input.logicalSessionKey,
+        )
+      )
+        return {
+          outcome: "rejected",
+          error: "This tab has pending teardown; finish closing it before sending more work",
+        };
+      return await this.promptQueues.withSessionMutationIntent(input, () =>
+        this.dispatchIntentUnderIntent(input, preserveExistingPending),
+      );
+    } finally {
+      release();
+    }
   }
 
   private async dispatchIntentUnderIntent(
@@ -1933,7 +1990,14 @@ export class NativeAgentService {
           );
       }
     }
-    await resolved.provider.abort(providerSessionId);
+    // Abort can stop transport and still fail during provider cleanup. Always
+    // check authoritative status and finish the stop ladder before surfacing it.
+    const stopErrors: unknown[] = [];
+    try {
+      await resolved.provider.abort(providerSessionId);
+    } catch (error) {
+      stopErrors.push(error);
+    }
     const graceMs = Math.max(0, this.options.abortGraceMs ?? 5_000);
     const deadline = this.now() + graceMs;
     let status = await resolved.provider.status(providerSessionId).catch(() => "running" as const);
@@ -1945,7 +2009,11 @@ export class NativeAgentService {
     let hardAbortAttempted = false;
     if (!stoppedGracefully && resolved.provider.hardAbort) {
       hardAbortAttempted = true;
-      await resolved.provider.hardAbort(providerSessionId);
+      try {
+        await resolved.provider.hardAbort(providerSessionId);
+      } catch (error) {
+        stopErrors.push(error);
+      }
     }
     await recordingInterrupt;
     const sessionKey = nativeAgentSessionStorageKey(
@@ -1961,7 +2029,9 @@ export class NativeAgentService {
           ? "The turn did not stop within the grace period and a force-stop was requested."
           : "The turn did not stop within the grace period; this provider has no force-stop action.",
     );
-    return this.projections.refreshProjection(input, true);
+    const projection = await this.projections.refreshProjection(input, true);
+    if (stopErrors.length > 0) throw stopErrors[0];
+    return projection;
   }
 
   async stopProjectionBackgroundTask(
@@ -1987,6 +2057,25 @@ export class NativeAgentService {
     }
     await resolved.provider.dismissSuggestedPrompt(resolved.session.providerSessionId);
     return this.projections.refreshProjection(input, true);
+  }
+
+  /**
+   * Take a conversation out of this tab's resume list, or put it back. Never
+   * the tab's own conversation, which is not in its list; the provider keeps
+   * the history either way.
+   */
+  async setProjectionResumableSessionArchived(
+    input: NativeAgentProjectionInput & { resumableSessionId: string; archived: boolean },
+  ): Promise<void> {
+    this.assertProjectionInput(input);
+    if (!nativeCapabilities(input.agent).actions?.archive) {
+      throw new Error(`${input.agent} cannot archive conversations`);
+    }
+    const provider = await this.provider(input);
+    if (!provider.setResumableSessionArchived) {
+      throw new Error(`${input.agent} cannot archive conversations`);
+    }
+    await provider.setResumableSessionArchived(input.resumableSessionId, input.archived);
   }
 
   async listProjectionResumableSessions(
@@ -2633,6 +2722,38 @@ export class NativeAgentService {
   }
 
   /**
+   * The card's "Approve and remember" (todo 0723): answers the request
+   * allow-once and saves the Orkestrator rule the user chose. Only reachable
+   * from a person's click in the renderer; no agent, CLI or MCP surface
+   * creates a rule.
+   */
+  async approveProjectionInteractionAndRemember(
+    input: NativeAgentProjectionInput & { interactionId: string; choice: PermissionRuleChoice },
+  ): Promise<{
+    outcome: AgentInteractionApplyOutcome;
+    rule?: import("@orkestrator/protocol/permission-rules").NativeAgentPermissionRule;
+    ruleSaveWarning?: string;
+  }> {
+    if (!nonBlank(input.interactionId)) {
+      throw new Error("Native agent interaction ID must not be blank");
+    }
+    if (!this.permissionRules) throw new Error("Permission rules are unavailable");
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) {
+      throw new Error("Native agent session was not found");
+    }
+    const result = await this.permissionRules.approveAndRemember(
+      resolved.session,
+      resolved.provider,
+      input.interactionId,
+      input.choice,
+    );
+    this.interactions.forgetPendingInteractions(resolved.key);
+    void this.projections.refreshProjection(input, true).catch(() => undefined);
+    return result;
+  }
+
+  /**
    * Pause or resume an interaction's countdown. The request stays pending, but
    * its deadline moved: cached pending reads are dropped and the projection
    * refreshed so every client sees the new state.
@@ -3030,7 +3151,10 @@ export class NativeAgentService {
     if (composeDraftHoldsQueue(draft?.value)) return "draft";
     if (
       session?.pendingDispatch ||
-      (queue && (queue.inFlight !== undefined || queue.messages.length > 0))
+      (queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.inFlight !== undefined ||
+          queue.messages.length > 0))
     ) {
       return "working";
     }
@@ -3128,7 +3252,12 @@ export class NativeAgentService {
           }
           const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
           const queue = await this.storage.getPromptQueue(queueKey);
-          if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+          if (
+            queue &&
+            (queue.outstandingClaim !== undefined ||
+              queue.inFlight !== undefined ||
+              queue.messages.length > 0)
+          ) {
             heldReason = "queue";
             return { dispatch: false };
           }
@@ -3403,6 +3532,10 @@ export class NativeAgentService {
       this.assertAcceptingWork();
       // A rebuild or reset of this environment's runtime is in progress.
       this.environmentFence.assertAcceptsAgentWork(input.environmentId);
+      if (hasPendingTabTeardown(home, input.logicalSessionKey))
+        throw new PromptRejectedError(
+          "This tab has pending teardown; finish closing it before sending more work",
+        );
       const hasAttachments =
         (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
@@ -3882,6 +4015,8 @@ export class NativeAgentService {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    // Before settling projections: a title run in flight is what they wait on.
+    await this.options.sessionTitles?.shutdown().catch(() => undefined);
     this.unsubscribeObservationWakeups?.();
     this.unsubscribeObservationWakeups = null;
     this.launches.stopTimer();

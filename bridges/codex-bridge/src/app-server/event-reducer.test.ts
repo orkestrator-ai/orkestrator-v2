@@ -143,6 +143,14 @@ describe("thread and turn lifecycle", () => {
     ]);
   });
 
+  test("thread/reverted is adopted, not ignored", () => {
+    expect(reduce("thread/reverted", { threadId: "t1" })).toEqual([
+      { kind: "thread.reverted", threadId: "t1", engineGeneration: 1, handle: "handle-1" },
+    ]);
+    expect(reduce("thread/reverted", {})).toEqual([]);
+    expect(isIgnoredNotification("thread/reverted")).toBe(false);
+  });
+
   test("thread/name/updated without a thread id is dropped", () => {
     expect(reduce("thread/name/updated", { threadName: "orphan" })).toEqual([]);
     expect(reduce("thread/name/updated", undefined)).toEqual([]);
@@ -1466,6 +1474,24 @@ describe("toTurnError", () => {
         codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } },
       }),
     ).toMatchObject({ code: "httpConnectionFailed" });
+  });
+
+  test("keeps the upstream HTTP status a variant forwards", () => {
+    expect(
+      toTurnError({
+        message: "unexpected status 401 Unauthorized",
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+      }),
+    ).toMatchObject({ code: "httpConnectionFailed", httpStatusCode: 401 });
+    expect(
+      toTurnError({
+        message: "stream lost",
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+      }).httpStatusCode,
+    ).toBeUndefined();
+    expect(
+      toTurnError({ message: "no", codexErrorInfo: "unauthorized" }).httpStatusCode,
+    ).toBeUndefined();
   });
 
   test("carries additional details", () => {

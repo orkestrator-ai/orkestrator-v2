@@ -15,9 +15,10 @@ import {
   type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
-import { PROVIDER } from "./config.js";
+import { MAX_REQUEST_ID_BYTES, PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
 import {
+  isPendingRemoval,
   piRunId,
   publicTurnStatus,
   sessionIsBlocked,
@@ -200,21 +201,55 @@ export function publicActivity(state: SessionState): JsonObject {
  * `dispatched` is only ever an explicit positive from this process's own
  * journal. A record that predates a restart is persisted as `ambiguous` and
  * answers `lost`, exactly where the prompt route refuses the id with 410
- * `DISPATCH_OUTCOME_LOST_KIND`: never `dispatched`, and never "not sent" —
- * the caller would run the same turn twice. A local reply is not lost.
- * Everything else is `unknown`.
+ * `DISPATCH_OUTCOME_LOST_KIND`: never `dispatched`. A local reply is not lost.
+ *
+ * `absent` is the one negative, and only where it is provable: the session is
+ * open, its journal is complete (`promptJournalComplete`: created fresh by this
+ * bridge, restored cleanly, nothing evicted since) and holds no record of the
+ * id in any state. Every hand-over to Pi under a request id awaits the journal
+ * write first, so an id that reached Pi in this or an earlier process is on
+ * the journal, and a prompt sent under an absent id is its first delivery. An
+ * id still between the prompt route's body read and its duplicate check may
+ * also answer `absent`; it is safe because the route journals in the same
+ * synchronous step as that check, so only one of it and a re-send can pass.
+ * A non-canonical id (padded, over the route's bound) and an id the steer
+ * journal holds stay `unknown`, as does everything else. Read-only: no
+ * liveness touch, hydration, attach or disk read.
  */
-export function publicDispatch(state: SessionState, requestId: string): JsonObject {
+export function publicDispatch(
+  state: SessionState,
+  requestId: string,
+  closed: boolean,
+): JsonObject {
   const entry = requestId ? state.promptJournal.get(requestId) : undefined;
   const dispatched =
     entry?.state === "accepted" || entry?.state === "completed" || entry?.state === "failed";
   const lost = entry?.state === "ambiguous" && !entry.local;
+  const absent =
+    !entry &&
+    state.promptJournalComplete &&
+    !closed &&
+    !isPendingRemoval(state) &&
+    canonicalRequestId(requestId) &&
+    // A separate namespace the prompt route never consults; defence in depth.
+    !state.steerJournal.has(requestId);
   const dispatch: BridgePromptDispatchStatus = dispatched
     ? "dispatched"
     : lost
       ? "lost"
-      : "unknown";
+      : absent
+        ? "absent"
+        : "unknown";
   return { dispatch };
+}
+
+/** Whether the prompt route would journal this id exactly as given. */
+function canonicalRequestId(requestId: string): boolean {
+  return (
+    requestId.length > 0 &&
+    requestId.trim() === requestId &&
+    Buffer.byteLength(requestId) <= MAX_REQUEST_ID_BYTES
+  );
 }
 
 export function publicSteerDispatch(state: SessionState, requestId: string): JsonObject {

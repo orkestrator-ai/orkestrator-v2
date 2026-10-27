@@ -258,9 +258,10 @@ or a person.
   shared journaled path with `agentInteractionPolicyAction`
   (`build-pipeline-service-interactions.ts`, `looped-review-service.ts`).
 - Codex answers every server request (`app-server/server-request-router.ts`):
-  - exec-policy and network-policy amendments as options
-    (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment` in
-    `app-server/approvals.ts`);
+  - exec-policy and network-policy amendments are never offered or sent
+    (`app-server/approvals.ts`; removed on 2026-10-27 by
+    [0160](0160-codex-saved-rules-list-and-revoke.md), because the rule each
+    saves cannot be listed or revoked);
   - `serverRequest/resolved` withdraws a parked request (`event-reducer.ts`);
   - dynamic `item/tool/call` is answered as a failure, with a transcript
     explanation.
@@ -398,7 +399,8 @@ or a person.
    revoke surface (`NativeAgentPermissionRule`, the `permission-rules`
    routes, `listPermissionRules?` / `removePermissionRule?`) moved to
    [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
-   which also weighs dropping the amendment options instead.
+   which dropped the amendment options instead (2026-10-27): no Orkestrator
+   approval saves a rule now.
 2. **Grok approval kind.** Done 2026-10-22. The bridge derives the kind from
    the ACP `toolCall.kind` (or the kind it recorded for the same call, or a
    known tool name such as `bash`, reading through Grok's `use_tool`
@@ -622,9 +624,11 @@ or a person.
     model as the tool output with no resample in between; the `pipeline`
     control still gets "unavailable in Default mode". With the config
     removed the first case fails, so the test is not passing by accident.
-    Codex sends these questions with `isBlocking: false`, so the session does
-    not show as waiting while one is pending; tracked in
-    [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md).
+    Codex sends these questions with `isBlocking: false` but still waits for
+    the answer; since
+    [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
+    (2026-10-27) the bridge publishes them as blocking, so the session shows
+    as waiting.
     `upgrade-agents.md` now runs the live test on every Codex bump, because
     the feature is marked under development and could be renamed.
 
@@ -657,8 +661,9 @@ or a person.
   ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex mise run test:logged -- --name
   paused-codex-question -- mise run test:agent:paused-interactions`. The
   `codex-question` case must raise a card, stay pending past ten minutes
-  while paused, and finish with the chosen codeword after a reload. It also
-  shows whether Codex has its own timeout on a held question (0161).
+  while paused, and finish with the chosen codeword after a reload. Codex
+  0.164.0 has no timeout of its own on a held question (0161, from source and
+  an 11-minute run against the real app-server).
 - Live Claude tmux pause (item 9): in a Claude tmux tab of a disposable
   profile, raise a PermissionRequest (a Bash `touch`), pause it from the card,
   wait past ten minutes (Claude Code's default 600 s hook limit), then
@@ -878,9 +883,9 @@ All answered on 2026-10-25; the reasoning is in the decisions below.
   network access, reported as such with a note. Should the backend refuse such
   a session, as Cursor refuses `deny`, rather than run it?~~ No (decision 5).
 - ~~Should Orkestrator expose "always allow" at all, given there is no revoke
-  UI yet?~~ Not for Claude (decision 1). Codex's existing amendment options
-  stay until [0160](0160-codex-saved-rules-list-and-revoke.md) either adds a
-  revoke surface or removes them.
+  UI yet?~~ Not for Claude (decision 1). Codex's amendment options were
+  removed by [0160](0160-codex-saved-rules-list-and-revoke.md) on
+  2026-10-27.
 - ~~`previewFormat`: plain or html?~~ `markdown`, shown verbatim (decision 2).
 - ~~Claude MCP OAuth: is the parked `mcp-url` card the intended route for
   that sign-in, or should MCP management own a separate flow?~~ The parked
@@ -1027,6 +1032,9 @@ Decisions made on 2026-10-25 while working through the file.
   [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md),
   [0162-interaction-test-matrix-gaps.md](0162-interaction-test-matrix-gaps.md)
   (split out on 2026-10-25).
+- [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md)
+  (Orkestrator-owned "always allow" rules, applied as allow-once; meets decision 1's
+  list-and-revoke constraint without a provider rule).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
 - [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md)
   (coordinator safety tiers, `coordinator-providers.ts`).

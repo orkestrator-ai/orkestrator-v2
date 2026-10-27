@@ -27,7 +27,8 @@ let fixtureRoot = "";
 let binDirectory = "";
 let commandLog = "";
 let registry: Registry;
-const REGISTRY_DATA_DIR = path.join(os.tmpdir(), "ork-command-registry-data");
+const REGISTRY_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "ork-command-registry-data-"));
+tempDirectories.push(REGISTRY_DATA_DIR);
 const REGISTRY_DOCKER_OWNER = dockerOwnerNamespace(REGISTRY_DATA_DIR);
 
 const DOCKER_SCRIPT = `#!/bin/sh
@@ -209,8 +210,11 @@ beforeEach(async () => {
   delete process.env.FAKE_OPENCODE_TOKEN;
 });
 
-afterEach(() => {
-  for (const runtime of runtimes.splice(0)) runtime.shutdown();
+afterEach(async () => {
+  const finished = runtimes.splice(0);
+  for (const runtime of finished) runtime.shutdown();
+  // Closed terminals finish their history writes after the command returns.
+  await Promise.all(finished.map((runtime) => runtime.terminals.history.settled()));
   mock.restore();
 });
 

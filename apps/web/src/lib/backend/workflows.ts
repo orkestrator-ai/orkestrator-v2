@@ -727,6 +727,17 @@ export async function listNativeAgentResumableSessions(input: {
   return invoke("list_native_agent_resumable_sessions", input);
 }
 
+/** Takes a conversation out of the resume list, or puts it back. Never a delete. */
+export async function setNativeAgentResumableSessionArchived(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  resumableSessionId: string;
+  archived: boolean;
+}): Promise<{ archived: boolean }> {
+  return invoke("set_native_agent_resumable_session_archived", input);
+}
+
 export async function resumeNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
@@ -994,6 +1005,14 @@ export async function retryBuildPipelineStage(pipelineId: string): Promise<Backe
   return invoke<BackendBuildPipeline>("retry_build_pipeline_stage", {
     pipelineId,
   });
+}
+
+/** Runs one failed reviewer of the current review pass again. */
+export async function retryBuildPipelineReviewer(
+  pipelineId: string,
+  reviewerId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", { pipelineId, reviewerId });
 }
 
 export async function restartBuildPipelineStep(

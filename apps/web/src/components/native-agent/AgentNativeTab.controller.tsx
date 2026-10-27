@@ -3,6 +3,8 @@ import { runUserCommand } from "@/lib/backend";
 import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { withUserCommandRows } from "@/lib/chat/user-command-rows";
+import { withPermissionRuleRows } from "@/lib/chat/permission-rule-rows";
+import { usePermissionRuleSession } from "@/hooks/usePermissionRuleSession";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import {
   useCallback,
@@ -174,6 +176,7 @@ import {
   openWebAnnotationThread,
 } from "@/lib/web-annotations/navigation";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
+import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
 import {
   buildPromptWithTranscriptAnnotations,
   MAX_TRANSCRIPT_ANNOTATIONS,
@@ -217,6 +220,7 @@ import { isClaudeAuthenticationFailureMessage, isClaudeNotLoggedInNotice } from 
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
+const EMPTY_PROJECTION_MESSAGES: NativeMessage[] = [];
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
 /** How long a send made before the first session-state read may wait for it. */
 const HELD_SUBMIT_TIMEOUT_MS = 15_000;
@@ -475,6 +479,7 @@ export function SharedNativeAgentController({
     updateControls,
     resolveInteraction,
     holdInteraction,
+    approveInteractionAndRemember,
     enqueue,
     removeQueued,
     steerQueued,
@@ -483,6 +488,7 @@ export function SharedNativeAgentController({
     retryRecoverableDispatch,
     discardRecoverableDispatch,
     listResumable,
+    setResumableArchived,
     resume,
     fork,
     performAction,
@@ -596,6 +602,12 @@ export function SharedNativeAgentController({
     },
     [isDispatching, sessionKey, updateDraft],
   );
+  // Back to the prompt once a comment is entered, so the user can keep
+  // typing or press Enter again to send.
+  const focusComposerAfterAnnotationComment = useCallback(() => {
+    const { text } = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    inputRef.current?.focusAtEnd(text);
+  }, [sessionKey]);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
@@ -682,11 +694,16 @@ export function SharedNativeAgentController({
     return Object.fromEntries(tasks.map((task) => [task.id, task]));
   }, [platform, projection?.backgroundTasks]);
   const decoratedMessages = useMemo(() => {
-    const source = projection?.messages ?? [];
+    // How the last turn ended (a provider error, a stop) arrives with session
+    // state on the progressive path, beside the transcript rather than in it.
+    const source = withNativeTerminalMessages(
+      projection?.messages ?? EMPTY_PROJECTION_MESSAGES,
+      projection?.terminalMessages,
+    );
     return platform === "claude"
       ? applyClaudeBackgroundTaskStates(source, claudeBackgroundTasksById)
       : source;
-  }, [claudeBackgroundTasksById, platform, projection?.messages]);
+  }, [claudeBackgroundTasksById, platform, projection?.messages, projection?.terminalMessages]);
   const normalizedMessages = useMemo(
     () =>
       normalizeNativeMessages(decoratedMessages).flatMap((message) =>
@@ -730,6 +747,25 @@ export function SharedNativeAgentController({
     }
     return ids;
   }, [normalizedMessages]);
+  /*
+   * A tab's first prompt is sent before its provider session has an id, so its
+   * confirmation starts with an empty one. Retain the adopted id on the
+   * optimistic prompt too: acceptance can clear the draft before its echo.
+   */
+  const projectedSessionId = projection?.sessionId;
+  if (
+    optimisticPrompt?.confirmation &&
+    !optimisticPrompt.confirmation.sessionId &&
+    projectedSessionId
+  ) {
+    setOptimisticPrompt({
+      ...optimisticPrompt,
+      sessionId: projectedSessionId,
+      confirmation: { ...optimisticPrompt.confirmation, sessionId: projectedSessionId },
+    });
+  }
+  const activeTranscriptConfirmation =
+    optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
   /**
    * Has an authoritative transcript row appeared that can only be this prompt?
    *
@@ -752,8 +788,8 @@ export function SharedNativeAgentController({
    *   acknowledgement for the session the prompt was sent to.
    */
   const transcriptEchoedOptimistic = useMemo(() => {
-    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
-    if (!confirmation || confirmation.sessionId !== projection?.sessionId) return false;
+    const confirmation = activeTranscriptConfirmation;
+    if (!confirmation?.sessionId || confirmation.sessionId !== projection?.sessionId) return false;
     const priorMessageIds = new Set(confirmation.priorMessageIds);
     let lastPriorMessageIndex = -1;
     for (let index = 0; index < normalizedMessages.length; index += 1) {
@@ -768,19 +804,14 @@ export function SharedNativeAgentController({
         !isClientOnlyNativeMessage(message) &&
         !priorMessageIds.has(message.id),
     );
-  }, [
-    draft.pendingTranscriptConfirmation,
-    normalizedMessages,
-    optimisticPrompt,
-    projection?.sessionId,
-  ]);
+  }, [activeTranscriptConfirmation, normalizedMessages, projection?.sessionId]);
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
   const displayMessages = useMemo(() => {
     const providerBase =
       turnStopMarker &&
-      turnStopMarker.sessionId === projection?.sessionId &&
+      turnStopMarker.sessionId === projectedSessionId &&
       !handoff.displayMessages.some(
         (message) => message.role === "system" && message.content === TURN_STOPPED_BY_USER,
       )
@@ -804,8 +835,8 @@ export function SharedNativeAgentController({
      * splicing it in would make the previous conversation's pending prompt the
      * first row of the resumed one.
      */
-    if (optimisticPrompt.sessionId !== undefined && projection?.sessionId !== undefined) {
-      if (optimisticPrompt.sessionId !== projection.sessionId) return base;
+    if (optimisticPrompt.sessionId !== undefined && projectedSessionId !== undefined) {
+      if (optimisticPrompt.sessionId !== projectedSessionId) return base;
     }
 
     const optimistic = createOptimisticNativeMessage(
@@ -831,7 +862,7 @@ export function SharedNativeAgentController({
   }, [
     handoff.displayMessages,
     optimisticPrompt,
-    projection?.sessionId,
+    projectedSessionId,
     sessionKey,
     transcriptEchoedOptimistic,
     turnStopMarker,
@@ -889,6 +920,8 @@ export function SharedNativeAgentController({
     data.environmentId,
     tabId,
   );
+  // Requests an Orkestrator permission rule answered in this session (todo 0723).
+  const ruleSession = usePermissionRuleSession(data.environmentId, platform, sessionKey);
   /*
    * A shell command the agent ran here that waits on the user (a sign-in link,
    * a code, a password). The user's own `!` commands show theirs on the card.
@@ -910,8 +943,18 @@ export function SharedNativeAgentController({
     );
     const base =
       backgroundTaskRows.length === 0 ? withNotices : [...withNotices, ...backgroundTaskRows];
-    return userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
-  }, [backgroundTaskRows, displayMessages, projection?.backgroundTasks, userCommands]);
+    const withCommands = userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
+    return ruleSession.applications.length === 0
+      ? withCommands
+      : withPermissionRuleRows(withCommands, ruleSession.applications, ruleSession.rules);
+  }, [
+    backgroundTaskRows,
+    displayMessages,
+    projection?.backgroundTasks,
+    ruleSession.applications,
+    ruleSession.rules,
+    userCommands,
+  ]);
   const agentActivityAnnouncement = useNativeAgentActivityAnnouncement(
     transcriptMessages,
     sessionKey,
@@ -1083,12 +1126,9 @@ export function SharedNativeAgentController({
         });
         if (cancelled) return;
         if (!status?.signIn?.kind) throw new Error("Sign-in options are unavailable");
-        const pending =
-          status.state === "signed-in" ? undefined : normalizePendingSignIn(status.pendingSignIn);
+        const pending = normalizePendingSignIn(status.pendingSignIn);
         setSignInDetails(
-          (previous) =>
-            pending ??
-            (status.pendingSignIn === null || status.state === "signed-in" ? null : previous),
+          (previous) => pending ?? (status.pendingSignIn === null ? null : previous),
         );
         if (pending)
           timer = setTimeout(() => void read(), Math.min(2_000, pending.expiresAt - Date.now()));
@@ -1554,7 +1594,7 @@ export function SharedNativeAgentController({
 
   useEffect(() => {
     if (!transcriptEchoedOptimistic) return;
-    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
+    const confirmation = activeTranscriptConfirmation;
     if (!confirmation) return;
     // A dispatch response can be lost after the backend accepted the prompt.
     // The new authoritative transcript row is definitive confirmation, so the
@@ -1566,12 +1606,7 @@ export function SharedNativeAgentController({
     // oxlint-disable-next-line react/set-state-in-effect
     if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
     setOptimisticPrompt(null);
-  }, [
-    clearConfirmedDraft,
-    draft.pendingTranscriptConfirmation,
-    optimisticPrompt,
-    transcriptEchoedOptimistic,
-  ]);
+  }, [activeTranscriptConfirmation, clearConfirmedDraft, transcriptEchoedOptimistic]);
 
   /*
    * A resume, fork adoption or any other session replacement means the
@@ -1957,9 +1992,15 @@ export function SharedNativeAgentController({
         })),
         ...(commandIntent ? { command: commandIntent } : {}),
       };
-      const confirmationSessionId = projection?.sessionId;
+      /*
+       * A new tab's first dispatch only returns once the provider session is
+       * created and its CLI has started, long after the prompt shows as running.
+       * Confirm it from the transcript too: an empty session id is filled in
+       * from the projection once the new session reports one.
+       */
+      const confirmationSessionId = projection?.sessionId ?? "";
       const transcriptConfirmation =
-        dispatchRequestId && confirmationSessionId
+        dispatchRequestId !== undefined
           ? {
               requestId: dispatchRequestId,
               sessionId: confirmationSessionId,
@@ -2012,9 +2053,14 @@ export function SharedNativeAgentController({
           transcriptConfirmedRequestIdRef.current === dispatchRequestId;
         if (outcome.outcome === "accepted" || transcriptConfirmed) {
           transcriptConfirmedRequestIdRef.current = null;
-          clearDraft(sessionKey);
-          consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
-          discardProvisionalDraft();
+          // The transcript echo may already have cleared this prompt, and a
+          // dispatch can take long enough for the next one to be typed since.
+          const ownedDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+          if (ownedDraft?.requestId === dispatchRequestId) {
+            clearDraft(sessionKey);
+            consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
+            discardProvisionalDraft();
+          }
           if (agentHandoffId && !rawCommand) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
         }
@@ -2140,6 +2186,8 @@ export function SharedNativeAgentController({
         activityAt: entry.updatedAt ?? entry.createdAt ?? null,
         ...(entry.status ? { status: entry.status } : {}),
         ...(entry.detail ? { detail: entry.detail } : {}),
+        ...(entry.parentId ? { parentId: entry.parentId } : {}),
+        ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
       })),
     [listResumable],
   );
@@ -3024,6 +3072,7 @@ export function SharedNativeAgentController({
         agentLabel={label}
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
+        {...(adapter.capabilities.actions?.archive ? { onArchive: setResumableArchived } : {})}
         onResume={(providerSessionId) => {
           setResumeDialogOpen(false);
           const sourceSessionId = projection?.sessionId;
@@ -3161,6 +3210,7 @@ export function SharedNativeAgentController({
             interaction={interaction}
             onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
             onHold={(held) => holdInteraction(interaction.id, held)}
+            onApproveAndRemember={(choice) => approveInteractionAndRemember(interaction.id, choice)}
           />
         )),
       ]}
@@ -3225,6 +3275,7 @@ export function SharedNativeAgentController({
       annotationInteractionEnabled={!isSubmitting && !isDispatching}
       onAddAnnotation={addTranscriptAnnotation}
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
+      onAnnotationCommentDone={focusComposerAfterAnnotationComment}
       messageActions={
         adapter.capabilities.fork && !isReadOnlyCoordinator ? renderMessageActions : undefined
       }

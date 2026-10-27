@@ -14,6 +14,7 @@ import {
 import {
   type AgentInteractionProviderCapability,
   type BridgeConnection,
+  type PermissionRuleRequestDetail,
   ProviderUnavailableError,
   type ProviderSessionRegistration,
 } from "./agent-provider-contract.js";
@@ -32,6 +33,11 @@ import {
   truncatedText,
 } from "./agent-provider-runtime.js";
 import { assertOk, boundedJson, bridgeFetch } from "./http-bridge-transport.js";
+import {
+  acpRuleDetail,
+  claudeRuleDetail,
+  codexRuleDetail,
+} from "./permission-rules/request-detail.js";
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 
@@ -85,7 +91,6 @@ function claudeCreatedAt(
     ? requestCreatedAt(expiresAt as number, Date.now())
     : firstSeen();
 }
-const CODEX_APPROVAL_AMENDMENT_QUESTION_ID = "codex-approval-amendment";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
@@ -117,6 +122,8 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     { providerRequestId: string; sessionId: string; family: string; actionable?: boolean }
   >();
   private readonly resolvingInteractions = new Set<string>();
+  /** What a permission rule may match per listed request; pruned with the ids above. */
+  private readonly ruleDetails = new Map<string, PermissionRuleRequestDetail>();
 
   constructor(
     readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi",
@@ -126,6 +133,27 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.interactionTracker.register(sessionId, interaction);
+  }
+
+  permissionRuleDetail(
+    sessionId: string,
+    interactionId: string,
+  ): PermissionRuleRequestDetail | null {
+    if (this.providerInteractionIds.get(interactionId)?.sessionId !== sessionId) return null;
+    return this.ruleDetails.get(interactionId) ?? null;
+  }
+
+  private recordRuleDetail(interactionId: string, detail: PermissionRuleRequestDetail | null) {
+    if (detail) {
+      setBoundedMapEntry(
+        this.ruleDetails,
+        interactionId,
+        detail,
+        MAX_TRACKED_PROVIDER_INTERACTIONS,
+      );
+    } else {
+      this.ruleDetails.delete(interactionId);
+    }
   }
 
   private normalizedId(sessionId: string, providerRequestId: string, category: string): string {
@@ -398,7 +426,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       ...optionalLine("Blocked path", request.blockedPath),
       ...optionalLine("Input", request.input),
     ]);
-    return this.interactionRequest(sessionId, providerRequestId, "approval", request, {
+    const mapped = this.interactionRequest(sessionId, providerRequestId, "approval", request, {
       kind,
       presentation: {
         // The sentence the CLI composed names the operation better than a
@@ -417,6 +445,8 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       },
       ...timing,
     });
+    this.recordRuleDetail(mapped.id, claudeRuleDetail(request, kind));
+    return mapped;
   }
 
   private mapCodexApproval(sessionId: string, raw: unknown): AgentInteractionRequest {
@@ -476,47 +506,10 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
           ? rawChanges.length > 0
           : requestedPermissions.length > 0;
     const actionable = inferredActionable && request.actionable !== false;
-    const amendmentOptions = Array.isArray(request.amendments)
-      ? request.amendments
-          .slice(0, AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion)
-          .flatMap((rawAmendment, amendmentIndex) => {
-            const amendment = asRecord(rawAmendment);
-            const detail = nonEmptyString(amendment?.detail);
-            const amendmentKind = amendment?.kind;
-            const decision = amendment?.decision;
-            const sourceIndex = amendment?.amendmentIndex;
-            if (
-              !amendment ||
-              !detail ||
-              (amendmentKind !== "exec-policy" && amendmentKind !== "network-policy") ||
-              (decision !== "approve-with-execpolicy-amendment" &&
-                decision !== "approve-with-network-amendment") ||
-              (decision === "approve-with-network-amendment" &&
-                (!Number.isSafeInteger(sourceIndex) || (sourceIndex as number) < 0))
-            ) {
-              return [];
-            }
-            const providerValue =
-              decision === "approve-with-network-amendment"
-                ? `${decision}:${sourceIndex as number}`
-                : decision;
-            return [
-              {
-                id: `amendment-${amendmentIndex}`,
-                label:
-                  amendmentKind === "exec-policy"
-                    ? "Approve with command policy"
-                    : "Approve with network policy",
-                providerValue,
-                description: boundedText(detail, "Provider-proposed policy amendment"),
-                amendment: {
-                  kind: amendmentKind,
-                  detail: boundedText(detail, "Provider-proposed policy amendment"),
-                },
-              } satisfies AgentInteractionQuestion["options"][number],
-            ];
-          })
-      : [];
+    // `request.amendments` (bridges before todo 0160, such as an older
+    // container image) is ignored on purpose. Accepting one saves a rule in the
+    // user's Codex home that Orkestrator can neither list nor revoke, so the
+    // card offers plain approval only.
     const body = truncatedJoinedText([
       ...(reason ? [`Reason: ${boundedText(reason, "Reason")}`] : []),
       ...(command ? [`Command: ${boundedText(command, "Command")}`] : []),
@@ -540,22 +533,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
               ? "Approve file changes"
               : "Approve permissions",
         body: body === undefined ? undefined : boundedText(body, "Approval requested"),
-        questions:
-          amendmentOptions.length > 0
-            ? [
-                {
-                  id: CODEX_APPROVAL_AMENDMENT_QUESTION_ID,
-                  prompt: "Broader approval (optional)",
-                  description:
-                    "Choose only if you want Codex to apply the provider-proposed policy amendment.",
-                  required: false,
-                  multiple: false,
-                  secret: false,
-                  allowFreeText: false,
-                  options: amendmentOptions,
-                },
-              ]
-            : [],
+        questions: [],
         confirmLabel: "Approve",
         declineLabel: "Deny",
         confirmDisabled: !actionable,
@@ -569,6 +547,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     });
     const identity = this.providerInteractionIds.get(mapped.id);
     if (identity) identity.actionable = actionable;
+    this.recordRuleDetail(mapped.id, codexRuleDetail(request, kind, actionable));
     return mapped;
   }
 
@@ -674,6 +653,18 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     });
     const identity = this.providerInteractionIds.get(mapped.id);
     if (identity) identity.actionable = !incomplete;
+    // ACP's own option kinds; only an explicit `allow_once` may answer for a rule.
+    const allowOnceIndex = options.findIndex((entry) => asRecord(entry)?.kind === "allow_once");
+    this.recordRuleDetail(
+      mapped.id,
+      incomplete
+        ? null
+        : acpRuleDetail(
+            request,
+            allowOnceIndex === -1 ? null : opaqueOptionId(0, allowOnceIndex),
+            "decision",
+          ),
+    );
     return mapped;
   }
 
@@ -770,10 +761,13 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const requestedAt = request?.requestedAt;
     const expiresAt = request?.expiresAt;
     const kind = request?.kind;
-    // A parked requestUserInput RPC needs an answer even when Codex's Default
-    // mode reports isBlocking:false. This is distinct from transcript async
-    // questions, which do not pass through this adapter and keep running.
-    // Preserve non-blocking MCP elicitations and the legacy omitted-field default.
+    // A parked requestUserInput RPC holds its turn even when Codex's Default
+    // mode reports isBlocking:false: Codex awaits the answer with no timeout of
+    // its own. Current bridges publish such a question as blocking; bridges
+    // before todo 0161 passed the wire's false through, so a question is
+    // blocking whatever it says. Transcript async questions do not pass through
+    // this adapter and keep running. An MCP elicitation keeps the bridge's
+    // flag, and an omitted one is blocking, as before the field existed.
     const isBlocking = kind === "question" || request?.isBlocking !== false;
     if (
       !request ||
@@ -1006,7 +1000,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     for (const [interactionId, identity] of this.providerInteractionIds) {
       if (identity.sessionId === sessionId && !currentIds.has(interactionId)) {
         this.providerInteractionIds.delete(interactionId);
+        this.ruleDetails.delete(interactionId);
       }
+    }
+    for (const interactionId of this.ruleDetails.keys()) {
+      if (!this.providerInteractionIds.has(interactionId)) this.ruleDetails.delete(interactionId);
     }
     return snapshot;
   }
@@ -1026,7 +1024,12 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     if (request.expiresAt !== undefined && request.expiresAt <= Date.now()) {
       return outcome("stale", sessionId, interactionId, snapshot.revision);
     }
-    if (!isAgentInteractionResolution(resolution, request)) {
+    // A session-wide grant only where the card offers one. Pi and the ACP
+    // bridges would read it as a denial, which must not be reported applied.
+    if (
+      !isAgentInteractionResolution(resolution, request) ||
+      (resolution.action === "approve-for-session" && !request.presentation.approveForSessionLabel)
+    ) {
       return outcome("rejected", sessionId, interactionId, snapshot.revision);
     }
     if (this.resolvingInteractions.has(interactionId)) {
@@ -1341,35 +1344,19 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       request.kind === "file-approval" ||
       request.kind === "permission"
     ) {
-      const amendmentAnswer = resolution.answer?.answers.find(
-        (answer) => answer.questionId === CODEX_APPROVAL_AMENDMENT_QUESTION_ID,
-      );
-      const amendmentOptionId = amendmentAnswer?.optionIds?.[0];
-      const amendmentProviderValue = amendmentOptionId
-        ? request.presentation.questions
-            .find((question) => question.id === CODEX_APPROVAL_AMENDMENT_QUESTION_ID)
-            ?.options.find((option) => option.id === amendmentOptionId)?.providerValue
-        : undefined;
-      const networkMatch = amendmentProviderValue?.match(/^approve-with-network-amendment:(\d+)$/);
-      const selectedDecision =
-        amendmentProviderValue === "approve-with-execpolicy-amendment"
-          ? amendmentProviderValue
-          : networkMatch
-            ? "approve-with-network-amendment"
-            : undefined;
+      // Never an amendment decision: see `mapCodexApproval`.
       return {
         path: `${base}/approvals/${encodeURIComponent(providerRequestId)}`,
         method: "POST",
         body: JSON.stringify({
           decision:
             resolution.action === "answer"
-              ? (selectedDecision ?? "approve")
+              ? "approve"
               : resolution.action === "approve-for-session"
                 ? "approve-for-session"
                 : resolution.action === "cancel"
                   ? "cancel"
                   : "deny",
-          ...(networkMatch ? { amendmentIndex: Number(networkMatch[1]) } : {}),
         }),
       };
     }

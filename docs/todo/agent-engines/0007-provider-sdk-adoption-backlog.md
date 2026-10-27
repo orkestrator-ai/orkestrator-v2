@@ -353,7 +353,9 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `PostCompact` hook, and `compact_boundary` is counted as a notice.
     `isSdkCompactBoundaryMessage` (`src/types/index.ts`) is imported by four
     service modules but called only in its own test. Delete it and the imports.
-  - `startup()` / `WarmQuery` and `initializationResult()` are tracked in
+  - `initializationResult()` is adopted: a running CLI's held answer serves the
+    model catalogue and the account (`live-claude-control.ts`). `startup()` /
+    `WarmQuery` were measured and not adopted; the decision is in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md).
     `getSubagentMessages()` and message rewind are tracked in
     [0006-session-titles-and-history.md](0006-session-titles-and-history.md).

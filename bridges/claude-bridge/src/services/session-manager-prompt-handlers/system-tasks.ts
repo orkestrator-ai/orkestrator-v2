@@ -1,9 +1,10 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { BackgroundTaskSnapshot, SessionState } from "../../types/index.js";
+import type { BackgroundTaskSnapshot } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   RUN_SCOPED_TASK_METADATA_RESET,
+  backgroundTaskOwner,
   boundBackgroundTaskHistory,
   carriedTaskMetadata,
   inheritBackgroundTaskHookRun,
@@ -159,17 +160,17 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     [task.id]: task,
   });
   if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
-    (session.backgroundTaskControls ??= new Map()).set(task.id, turn.queryIteratorControl!);
+    turn.runtime?.tasks.live.add(task.id);
   } else {
-    const owner = session.backgroundTaskControls?.get(task.id) ?? correlated.owner;
-    session.backgroundTaskControls?.delete(task.id);
+    const owner = backgroundTaskOwner(session, task.id) ?? correlated.owner;
+    session.claudeRuntime?.tasks.live.delete(task.id);
     // A finishing task sends its terminal patch before the
     // `task_notification` edge, while the CLI is still queueing the
     // notification it will answer. For a released turn this is the
     // same boundary as that edge, so the turn waits for the reply the
     // model promised rather than ending here.
     if (
-      owner === turn.queryIteratorControl &&
+      owner === turn.runtime &&
       turn.turnReleasedToBackgroundTasks &&
       previous !== undefined &&
       LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
@@ -255,12 +256,12 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...session.backgroundTasks,
     [task.id]: task,
   });
-  const owner = session.backgroundTaskControls?.get(task.id) ?? parked?.owner ?? correlated.owner;
-  session.backgroundTaskControls?.delete(task.id);
+  const owner = backgroundTaskOwner(session, task.id) ?? parked?.owner ?? correlated.owner;
+  session.claudeRuntime?.tasks.live.delete(task.id);
   // The notification is injected into the same root loop and may be
   // followed by another assistant/result boundary, which a released turn
   // waits for before it ends.
-  if (owner === turn.queryIteratorControl && turn.turnReleasedToBackgroundTasks) {
+  if (owner === turn.runtime && turn.turnReleasedToBackgroundTasks) {
     waitForContinuationAfterNotification(turn);
   }
   emitBackgroundTasks(turn);
@@ -281,27 +282,29 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
       Object.entries(session.backgroundTasks ?? {}) as Array<[string, BackgroundTaskSnapshot]>
     ).filter(([, task]) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status)),
   ) as Record<string, BackgroundTaskSnapshot>;
-  const previousControls = session.backgroundTaskControls;
-  const replacementControls = new Map<string, NonNullable<SessionState["queryControl"]>>();
+  const { runtime } = turn;
   // The SDK documents this level signal as per-process. Every turn runs
   // on the session's one CLI, so it normally speaks for every live
-  // task; a member owned by another control (a CLI still exiting while
-  // its successor starts) is preserved, and only this query's slice is
-  // replaced.
+  // task; a member another CLI owns is preserved, and only this
+  // process's slice is replaced.
+  const ownedElsewhere = (id: string) => {
+    const owner = backgroundTaskOwner(session, id);
+    return owner !== undefined && owner !== runtime;
+  };
+  const kept = new Set<string>();
   const previouslyLiveOwnedByThisQuery: BackgroundTaskSnapshot[] = [];
   for (const [id, task] of Object.entries(session.backgroundTasks ?? {}) as Array<
     [string, BackgroundTaskSnapshot]
   >) {
     if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
-    const owner = previousControls?.get(id);
-    if ((owner && owner !== turn.queryIteratorControl!) || isHookRunningBackgroundTask(task)) {
+    if (ownedElsewhere(id) || isHookRunningBackgroundTask(task)) {
       replacement[id] = task;
-      if (owner) replacementControls.set(id, owner);
+      kept.add(id);
       continue;
     }
-    // Owned by this query (or by no handle at all, which only this
-    // query can still speak for). Whether it survives depends on the
-    // payload below.
+    // Owned by this process (or by none at all, which only this process
+    // can still speak for). Whether it survives depends on the payload
+    // below.
     previouslyLiveOwnedByThisQuery.push(task);
   }
   for (const entry of taskMessage.tasks) {
@@ -339,14 +342,18 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
       ambient: entry.ambient === true || entry.skip_transcript === true,
     };
     inheritBackgroundTaskHookRun(previous, replacement[id]!);
-    // An id already owned by another live control keeps that owner:
-    // only the process that started a task can stop it, and a control
-    // asked to stop an id it never started answers `ok` without
-    // reaching anything. This query claims genuinely new ids only.
-    replacementControls.set(id, previousControls?.get(id) ?? turn.queryIteratorControl!);
+    // An id another live CLI owns keeps that owner: only the process
+    // that started a task can stop it, and a CLI asked to stop an id it
+    // never started answers `ok` without reaching anything. This process
+    // claims the rest.
+    if (!ownedElsewhere(id)) runtime?.tasks.live.add(id);
+    kept.add(id);
   }
   session.backgroundTasks = boundBackgroundTaskHistory(replacement);
-  session.backgroundTaskControls = replacementControls.size > 0 ? replacementControls : undefined;
+  // What this process no longer lists is no longer its live work.
+  for (const id of Array.from(runtime?.tasks.live ?? [])) {
+    if (!kept.has(id)) runtime!.tasks.live.delete(id);
+  }
   // Anything this query owned that the level no longer lists has
   // stopped running, but the level says nothing about *how* it ended.
   // The edge that does may still be on its way (the SDK leaves the
@@ -360,7 +367,7 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
   );
   if (droppedByThisQuery.length > 0 && turn.turnReleasedToBackgroundTasks) {
     for (const task of droppedByThisQuery) {
-      parkSettlingBackgroundTask(session, task, turn.queryIteratorControl!);
+      parkSettlingBackgroundTask(runtime, task);
     }
     // Mirrors the `task_notification` branch: the earlier result is
     // only the boundary before this transition, not the end of the turn.

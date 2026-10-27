@@ -1519,52 +1519,9 @@ describe("slash commands", () => {
     expect(messages?.[0]?.parts).toEqual([{ type: "text", content: "Move the dropdown" }]);
   });
 
-  test("a coordinator turn titles itself from the prompt, not the preamble", async () => {
-    const preamble =
-      "<orkestrator-coordinator-context>\nProject: project-id\nCoordinator: coordinator-id\n" +
-      "Role: read-only coordinator.\nBranch: main\nCommit: abc123\n" +
-      "</orkestrator-coordinator-context>";
-    const seen: string[] = [];
-    const h = await harness(
-      {},
-      {
-        generateTitle: async (prompt) => {
-          seen.push(prompt);
-          return "Dropdown placement";
-        },
-      },
-    );
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
-
-    await h.runtime.prompt(sessionId, {
-      prompt: `${preamble}\n\nMove the dropdown`,
-      requestId: "req-coordinator-title",
-      attachments: [],
-    });
-    await h.drain();
-
-    // The generated title is what the user ends up seeing, and generating it
-    // spawns a separate `codex exec`. Neither may be handed the authority block
-    // or the internal ids inside it.
-    expect(seen).toEqual(["Move the dropdown"]);
-    expect(seen[0]).not.toContain("Role: read-only coordinator.");
-    expect(seen[0]).not.toContain("project-id");
-    expect(seen[0]).not.toContain("coordinator-id");
-    expect(seen[0]).not.toContain("abc123");
-  });
-
-  test("a design turn titles itself from the brief while preserving guidance for Codex", async () => {
+  test("a design turn preserves its framed guidance for Codex", async () => {
     const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server. Canvas ID: canvas-1")}\n\nMock up the sidebar`;
-    const seen: string[] = [];
-    const h = await harness(
-      {},
-      {
-        generateTitle: async (source) => {
-          seen.push(source);
-          return "Sidebar mockup";
-        },
-      },
-    );
+    const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
     await h.runtime.prompt(sessionId, {
@@ -1573,19 +1530,13 @@ describe("slash commands", () => {
       attachments: [],
     });
     expect(
-      h.events.some(
-        (event) =>
-          event.type === "session.title-updated" && event.data?.title === "Mock up the sidebar",
-      ),
-    ).toBe(true);
-    expect(
       JSON.stringify(
         h.child().requests.find((request) => request.method === "turn/start")?.params.input,
       ),
     ).toContain("Canvas ID: canvas-1");
     await h.drain();
-    expect(seen).toEqual(["Mock up the sidebar"]);
-    expect(h.runtime.getRegistry().getSession(sessionId)?.title).toBe("Sidebar mockup");
+    // The backend names the session; the bridge never does.
+    expect(h.runtime.getRegistry().getSession(sessionId)?.title).toBeUndefined();
   });
 
   test("an attachment-only coordinator turn renders no empty text part", async () => {
@@ -2073,43 +2024,52 @@ describe("interactive approvals", () => {
     });
   });
 
-  test("v2 file-change approvals are enriched from the active item", async () => {
-    const h = await harness();
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(sessionId, {
-      prompt: "go",
-      requestId: "req-1",
-      attachments: [],
-    });
-    h.child().notify("item/started", {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      item: {
-        id: "item-file",
-        type: "fileChange",
-        status: "inProgress",
-        changes: [{ path: "src/index.ts", kind: { type: "update", move_path: null } }],
-      },
-    });
-    await h.drain();
-    h.child().stdout.pushMessage({
-      jsonrpc: "2.0",
-      id: 9010,
-      method: "item/fileChange/requestApproval",
-      params: {
+  test.each([null, "/outside/target", "/workspace/.env"])(
+    "v2 file-change approvals retain rename destination %s",
+    async (destination) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, {
+        prompt: "go",
+        requestId: "req-1",
+        attachments: [],
+      });
+      h.child().notify("item/started", {
         threadId: "thread-1",
         turnId: "turn-1",
-        itemId: "item-file",
-        startedAtMs: 1,
-      },
-    });
-    await h.drain();
+        item: {
+          id: "item-file",
+          type: "fileChange",
+          status: "inProgress",
+          changes: [{ path: "src/index.ts", kind: { type: "update", move_path: destination } }],
+        },
+      });
+      await h.drain();
+      h.child().stdout.pushMessage({
+        jsonrpc: "2.0",
+        id: 9010,
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-file",
+          startedAtMs: 1,
+        },
+      });
+      await h.drain();
 
-    expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
-      actionable: true,
-      changes: [{ path: "src/index.ts", kind: "update" }],
-    });
-  });
+      expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
+        actionable: true,
+        changes: [
+          {
+            path: "src/index.ts",
+            kind: "update",
+            ...(destination ? { movePath: destination } : {}),
+          },
+        ],
+      });
+    },
+  );
 
   test("a pause moves the listed deadline at once and never answers the approval", async () => {
     const { h, sessionId } = await withPendingApproval();

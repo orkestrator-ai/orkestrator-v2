@@ -18,6 +18,9 @@ const identity: NativeAgentViewIdentity = {
 };
 
 function installBackend() {
+  const annotationText = new URLSearchParams(window.location.search).has("annotations")
+    ? "The header needs more spacing"
+    : "";
   let ready = sessionStorage.getItem("held-send-ready") === "true";
   let authenticationRequired = sessionStorage.getItem("held-send-auth-required") === "true";
   let pendingSignIn = JSON.parse(
@@ -81,8 +84,18 @@ function installBackend() {
             token: "transcript-1",
             value: {
               identity,
-              freshness: "empty",
-              messages: [],
+              freshness: annotationText ? "current" : "empty",
+              messages: annotationText
+                ? [
+                    {
+                      id: "annotation-source",
+                      role: "assistant",
+                      content: annotationText,
+                      parts: [{ type: "text", content: annotationText }],
+                      createdAt: "2026-10-27T12:00:00Z",
+                    },
+                  ]
+                : [],
               historyEpoch: "epoch-1",
               historyComplete: true,
             },
@@ -99,6 +112,7 @@ function installBackend() {
         case "dispatch_native_agent_intent":
           dispatchCount += 1;
           sessionStorage.setItem("held-send-count", String(dispatchCount));
+          sessionStorage.setItem("held-send-prompt", String(args?.prompt ?? ""));
           result = { outcome: "accepted", requestId: args?.requestId };
           break;
         case "get_compose_draft":
@@ -124,7 +138,12 @@ function installBackend() {
           result = { accounts: [], active: { claude: "default", codex: "default" } };
           break;
         case "get_native_agent_auth_status":
-          result = { state: "needs-auth", signIn: { kind: "browser-url" }, pendingSignIn };
+          sessionStorage.setItem(
+            "held-auth-reads",
+            String(Number(sessionStorage.getItem("held-auth-reads") ?? "0") + 1),
+          );
+          // A refused API key remains signed in while the replacement is pending.
+          result = { state: "signed-in", signIn: { kind: "browser-url" }, pendingSignIn };
           break;
         case "begin_native_agent_sign_in":
           pendingSignIn = {
@@ -140,6 +159,12 @@ function installBackend() {
           );
           result = pendingSignIn;
           break;
+        case "cancel_native_agent_sign_in":
+          pendingSignIn = null;
+          sessionStorage.removeItem("held-sign-in");
+          sessionStorage.setItem("held-sign-in-cancelled", "true");
+          result = { cancelled: true };
+          break;
         case "open_in_browser":
           throw new Error("Fixture browser opening failed");
         default:
@@ -153,6 +178,16 @@ function installBackend() {
       ready = true;
       authenticationRequired = requireSignIn;
       sessionStorage.setItem("held-send-auth-required", String(requireSignIn));
+      sessionStorage.setItem("held-send-ready", "true");
+      for (const resolve of Array.from(waiting)) resolve(snapshot());
+      waiting.clear();
+    },
+    completeLogin: () => {
+      pendingSignIn = null;
+      sessionStorage.removeItem("held-sign-in");
+      ready = true;
+      authenticationRequired = false;
+      sessionStorage.setItem("held-send-auth-required", "false");
       sessionStorage.setItem("held-send-ready", "true");
       for (const resolve of Array.from(waiting)) resolve(snapshot());
       waiting.clear();
@@ -175,6 +210,7 @@ export function NativeHeldSendFixture() {
         </button>
         <button onClick={() => transport.release()}>Release session state</button>
         <button onClick={() => transport.release(true)}>Require sign in</button>
+        <button onClick={() => transport.completeLogin()}>Complete sign in</button>
         <button onClick={() => setCount(transport.count())}>Read dispatch count</button>
         <output aria-label="Dispatch count">{count}</output>
       </nav>

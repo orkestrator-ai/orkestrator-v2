@@ -1680,6 +1680,8 @@ const REPOSITORIES = [
   "SessionsRepository",
   "ReviewsRepository",
   "NativeAgentSessionsRepository",
+  "NativeAgentDeliveries",
+  "PromptQueueStore",
   "PromptsRepository",
   "BuildPipelinesRepository",
   "DraftsRepository",
@@ -1695,6 +1697,7 @@ const REPOSITORIES = [
   "CoordinatorsRepository",
   "AgentAccountsRepository",
   "ScheduledJobsRepository",
+  "PermissionRulesRepository",
 ];
 
 describe("StorageService store writers", () => {

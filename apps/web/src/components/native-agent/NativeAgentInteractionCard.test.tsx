@@ -217,6 +217,119 @@ describe("NativeAgentInteractionCard", () => {
     expect(screen.getByRole("button", { name: "Cancel turn" })).toBeTruthy();
   });
 
+  test("offers Approve and remember only with a rule offer, showing the exact pattern first", async () => {
+    const base: AgentInteractionRequest = {
+      ...interaction(false),
+      provider: "codex",
+      kind: "command-approval",
+      presentation: {
+        title: "Approve command",
+        body: "Command: npm run test -- --watch",
+        questions: [],
+        confirmLabel: "Approve",
+        declineLabel: "Deny",
+      },
+    };
+    const onResolve = mock(async (resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: resolution.interactionId,
+      sessionId: resolution.sessionId,
+      revision: 2,
+    }));
+    const onApproveAndRemember = mock(async (_choice: unknown) => ({
+      result: "applied" as const,
+      interactionId: "interaction-1",
+      sessionId: "session-1",
+      revision: 2,
+    }));
+    render(
+      <NativeAgentInteractionCard
+        interaction={base}
+        onResolve={onResolve}
+        onApproveAndRemember={onApproveAndRemember}
+      />,
+    );
+    // No offer from the backend: no option.
+    expect(screen.queryByRole("button", { name: "Approve and remember…" }) === null).toBe(true);
+    cleanup();
+
+    render(
+      <NativeAgentInteractionCard
+        interaction={{
+          ...base,
+          presentation: {
+            ...base.presentation,
+            ruleOffer: {
+              kind: "command-prefix",
+              patterns: ["npm run test -- --watch", "npm run test --", "npm run test", "npm run"],
+              suggested: 2,
+            },
+          },
+        }}
+        onResolve={onResolve}
+        onApproveAndRemember={onApproveAndRemember}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve and remember…" }));
+    const panel = screen.getByTestId("remember-rule-panel");
+    expect(panel.textContent).toContain("npm run test -- --watch");
+    expect(panel.textContent).toContain("(narrowest)");
+    // The provider's own proposal is preselected.
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((radio) => radio.checked)).toEqual([false, false, true, false]);
+    fireEvent.click(radios[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "This environment" }));
+    fireEvent.click(screen.getByRole("button", { name: "7 days" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve and remember" }));
+    await waitFor(() => expect(onApproveAndRemember).toHaveBeenCalledTimes(1));
+    expect(onApproveAndRemember.mock.calls[0]![0]).toEqual({
+      pattern: "npm run test -- --watch",
+      scope: "environment",
+      anyProvider: false,
+      expiresInMs: 7 * 24 * 60 * 60 * 1_000,
+    });
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  test("explains why a request can't be remembered", () => {
+    render(
+      <NativeAgentInteractionCard
+        interaction={{
+          ...interaction(false),
+          provider: "codex",
+          kind: "command-approval",
+          presentation: {
+            title: "Approve command",
+            questions: [],
+            ruleOffer: {
+              kind: "command-prefix",
+              patterns: [],
+              suggested: 0,
+              unavailableReason: "This command uses shell operators.",
+            },
+          },
+        }}
+        onResolve={mock(async () => ({
+          result: "applied" as const,
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
+        }))}
+        onApproveAndRemember={mock(async () => ({
+          result: "applied" as const,
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
+        }))}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve and remember…" }));
+    expect(screen.getByTestId("remember-rule-panel").textContent).toContain(
+      "This command uses shell operators.",
+    );
+    expect(screen.queryByRole("button", { name: "Approve and remember" }) === null).toBe(true);
+  });
+
   test("submits an explicitly selected provider amendment with an approval", async () => {
     const request: AgentInteractionRequest = {
       ...interaction(false),

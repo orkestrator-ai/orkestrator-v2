@@ -137,7 +137,7 @@ reviewer, the preparation turn and the Fix fail at once.
      when neither is offered, because a session then starts on the first model.
    - The backend keeps the mark: `fetchAcpNormalizedModelsAtResult`
      (`commands-servers.ts`) and the durable catalogue cache
-     (`normalizeAcpModelCatalogEntries` in `storage-shared-core.ts`).
+     (`normalizeAcpModelCatalogEntries` in `storage-shared-model-catalogs.ts`).
    - `concreteRow` (`coordinator-launch-defaults.ts`) now takes the saved
      model, else `sessionDefaultModel(offered)`. An explicit row, an action
      default and a saved platform model still win; a disconnected mark is

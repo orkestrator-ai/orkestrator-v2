@@ -52,6 +52,12 @@ export const RESOURCE_KINDS = [
    * is the environment id; clients re-read `list_human_prompts`. A hint only.
    */
   "human-prompt",
+  /**
+   * An Orkestrator permission rule was saved, removed or used (todo 0723).
+   * The id is the rule id; clients re-read `list_permission_rules`. A hint
+   * only, like `scheduled-job`.
+   */
+  "permission-rule",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

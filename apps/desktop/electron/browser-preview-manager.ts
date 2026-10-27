@@ -49,6 +49,7 @@ import {
 } from "./browser-preview-capture-pins.js";
 import { captureResponsiveSet } from "./browser-preview-capture-responsive.js";
 import { captureTabId } from "./browser-preview-capture-validation.js";
+import { isKeyboardShortcutsInput } from "./keyboard-shortcuts-menu.js";
 
 type WebContentsViewConstructor = new (
   options?: WebContentsViewConstructorOptions,
@@ -112,6 +113,11 @@ export interface BrowserPreviewManagerOptions {
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
+  /**
+   * Toggle the owning renderer's keyboard shortcuts dialog. A key pressed in a
+   * preview never reaches the renderer's own ⌘⇧K / Ctrl+Shift+K listener.
+   */
+  toggleKeyboardShortcuts: (tabId: string) => void;
   /** Service previews are unavailable without a transport (old backend, feature off). */
   transport?: BrowserPreviewServiceTransport;
   /** Open a service in the default browser through the private preview origin. */
@@ -552,6 +558,24 @@ export class BrowserPreviewManager {
     return this.snapshot(tabId, preview);
   }
 
+  ownsWebContents(id: number): boolean {
+    return [...this.previews.values()].some((preview) => preview.view.webContents.id === id);
+  }
+
+  webContentsIdForTab(tabId: string): number | undefined {
+    return this.previews.get(tabId)?.view.webContents.id;
+  }
+
+  focusWebContents(id: number): boolean {
+    const preview = [...this.previews.values()].find((item) => item.view.webContents.id === id);
+    if (!preview || preview.view.webContents.isDestroyed() || !preview.view.getVisible())
+      return false;
+    const bounds = preview.view.getBounds();
+    if (bounds.width <= 0 || bounds.height <= 0) return false;
+    preview.view.webContents.focus();
+    return true;
+  }
+
   consumeClipboardWriteUserActivation(webContents: WebContents, requestingUrl: string): boolean {
     if (webContents.isDestroyed()) return false;
     const preview = [...this.previews.values()].find(
@@ -789,6 +813,12 @@ export class BrowserPreviewManager {
     const contents = preview.view.webContents;
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("before-input-event", (event, input) => {
+      if (isKeyboardShortcutsInput(input)) {
+        // Also keeps the page and the menu's key equivalent from seeing it.
+        event.preventDefault();
+        if (!input.isAutoRepeat) this.options.toggleKeyboardShortcuts(tabId);
+        return;
+      }
       const isAddressShortcut =
         input.type === "keyDown" &&
         input.key.toLowerCase() === "l" &&

@@ -13,13 +13,19 @@ async function toolPosition(list: Locator, id: string) {
   }, id);
 }
 for (const view of ["native", "reviewer"]) {
-  for (const mixed of [false, true]) {
-    test(`${view}: ${mixed ? "paging before prose" : "a same-minute page growing row zero"} holds the original tool position`, async ({
+  for (const [mixed, bounded] of [
+    [false, false],
+    [true, false],
+    // A view whose own byte bound cut it pages from the cursor it names (0232).
+    ...(view === "native" ? [[true, true]] : []),
+  ]) {
+    test(`${view}: ${mixed ? "paging before prose" : "a same-minute page growing row zero"}${bounded ? " in a byte-bounded view" : ""} holds the original tool position`, async ({
       page,
     }) => {
       const query = new URLSearchParams();
       if (view === "reviewer") query.set("reviewer", "1");
       if (mixed) query.set("mixed", "1");
+      if (bounded) query.set("bounded", "1");
       await page.goto(`/transcript-paging?${query}`);
       const list = page.locator("[data-transcript-scroller]");
       const load = page.getByRole("button", { name: "Load earlier messages", exact: true });

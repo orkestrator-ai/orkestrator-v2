@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS } from "./data-saving-policy";
 import {
   ACTIVE_PROJECTION_REFRESH_MS,
   IDLE_PROJECTION_REFRESH_MS,
@@ -17,6 +18,7 @@ describe("native session read policy", () => {
         intervalMs: ACTIVE_PROJECTION_REFRESH_MS,
         priority: "critical",
         quietBackoffMs: null,
+        dataSaving: { intervalMs: DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS },
       });
     }
     for (const phase of ["idle", "completed", undefined]) {
@@ -93,5 +95,25 @@ describe("native session read policy", () => {
       expect(nativeSessionReadDemand("pi", phase, options).quietBackoffMs).toBeNull();
     }
     expect(nativeSessionReadDemand("cursor", "idle", options).quietBackoffMs).toBeNull();
+  });
+
+  test("data saving slows only the responsive backstop poll", () => {
+    expect(DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS).toBe(1_000);
+    for (const phase of ["running", "blocked", "cancelling", "recovering"]) {
+      const demand = nativeSessionReadDemand("claude", phase, {
+        active: true,
+        observationEvents: true,
+      });
+      // Still critical, so a resume reads it first and never spreads it.
+      expect(demand.priority).toBe("critical");
+      expect(demand.dataSaving).toEqual({ intervalMs: DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS });
+    }
+    // An idle view keeps its cadence and its (qualified) quiet backoff.
+    for (const phase of ["idle", "completed", undefined]) {
+      expect(
+        nativeSessionReadDemand("cursor", phase, { active: true, observationEvents: true })
+          .dataSaving,
+      ).toBeNull();
+    }
   });
 });

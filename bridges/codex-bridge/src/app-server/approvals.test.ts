@@ -75,7 +75,9 @@ describe("describeApproval", () => {
     expect(approval.expiresAt).toBe(301_000);
   });
 
-  test("reads every bounded v2 policy amendment with its source index", () => {
+  test("never offers the policy amendments app-server proposes", () => {
+    // Accepting one saves a rule in the user's Codex home that Orkestrator
+    // cannot list or revoke (todo 0160), so the descriptor carries none.
     const approval = describeWith("item/commandExecution/requestApproval", {
       threadId: "thread-1",
       command: "curl https://one.example",
@@ -86,25 +88,66 @@ describe("describeApproval", () => {
       ],
     });
 
-    expect(approval.amendments).toEqual([
-      {
-        kind: "exec-policy",
-        detail: "allow curl",
-        decision: "approve-with-execpolicy-amendment",
-      },
-      {
-        kind: "network-policy",
-        detail: "allow one.example",
-        decision: "approve-with-network-amendment",
-        amendmentIndex: 0,
-      },
-      {
-        kind: "network-policy",
-        detail: "deny two.example",
-        decision: "approve-with-network-amendment",
-        amendmentIndex: 1,
-      },
-    ]);
+    expect(approval).not.toHaveProperty("amendments");
+    expect(JSON.stringify(approval)).not.toContain("two.example");
+    // The command prefix survives only as a hint for an Orkestrator rule
+    // (todo 0723); no answer can send it back as an amendment.
+    expect(approval.proposedCommandPrefix).toEqual(["allow curl"]);
+    expect(approval.actionable).toBe(true);
+  });
+
+  test("marks only exactly-known operations as rule-eligible", () => {
+    const command = describeWith("item/commandExecution/requestApproval", {
+      threadId: "thread-1",
+      kind: "command",
+      command: "/bin/zsh -lc 'npm test'",
+    });
+    expect(command.ruleEligible).toBe(true);
+    // Older servers omit `kind`; it defaults to `command`.
+    expect(
+      describeWith("item/commandExecution/requestApproval", { command: "npm test" }).ruleEligible,
+    ).toBe(true);
+    // Input to a running terminal is never a command a rule may answer.
+    expect(
+      describeWith("item/commandExecution/requestApproval", {
+        kind: "writeStdin",
+        command: "npm test",
+      }),
+    ).not.toHaveProperty("ruleEligible");
+    // A command rebuilt from commandActions, or a lossy legacy argv join.
+    expect(
+      describeWith("item/commandExecution/requestApproval", {
+        commandActions: [{ type: "unknown", command: "npm test" }],
+      }),
+    ).not.toHaveProperty("ruleEligible");
+    expect(
+      describeWith("execCommandApproval", { command: ["bash", "-lc", "npm test"] }),
+    ).not.toHaveProperty("ruleEligible");
+    // A file change asking for a write root widens the sandbox.
+    expect(describeWith("item/fileChange/requestApproval", { grantRoot: "/" })).not.toHaveProperty(
+      "ruleEligible",
+    );
+    expect(describeWith("item/fileChange/requestApproval", {}).ruleEligible).toBe(true);
+    expect(
+      describeWith("item/permissions/requestApproval", { permissions: { network: {} } }),
+    ).not.toHaveProperty("ruleEligible");
+  });
+
+  test("drops an oversized or malformed prefix proposal", () => {
+    for (const proposal of [
+      [],
+      [""],
+      Array.from({ length: 17 }, () => "a"),
+      ["x".repeat(257)],
+      "npm",
+    ]) {
+      expect(
+        describeWith("item/commandExecution/requestApproval", {
+          command: "npm test",
+          proposedExecpolicyAmendment: proposal,
+        }),
+      ).not.toHaveProperty("proposedCommandPrefix");
+    }
   });
 
   test("uses commandActions when the top-level command is absent", () => {
@@ -229,56 +272,30 @@ describe("buildApprovalResponse", () => {
     expect(buildApprovalResponse(method, "deny", {}).result).toEqual({ decision: "decline" });
   });
 
-  test("returns the exact selected v2 amendment and degrades safely when absent", () => {
+  test("never answers with a policy amendment, even when one was proposed", () => {
     const params = {
       proposedExecpolicyAmendment: ["allow bun test"],
-      proposedNetworkPolicyAmendments: [
-        { host: "one.example", action: "allow" },
-        { host: "two.example", action: "deny" },
-      ],
+      proposedNetworkPolicyAmendments: [{ host: "one.example", action: "allow" }],
     };
+    for (const method of [
+      "item/commandExecution/requestApproval",
+      "item/fileChange/requestApproval",
+    ] as const) {
+      for (const decision of APPROVAL_DECISIONS) {
+        const wire = JSON.stringify(buildApprovalResponse(method, decision, params).result);
+        expect(wire).not.toContain("acceptWithExecpolicyAmendment");
+        expect(wire).not.toContain("applyNetworkPolicyAmendment");
+      }
+    }
     expect(
-      buildApprovalResponse(
-        "item/commandExecution/requestApproval",
-        "approve-with-execpolicy-amendment",
-        params,
-      ).result,
-    ).toEqual({
-      decision: {
-        acceptWithExecpolicyAmendment: { execpolicy_amendment: ["allow bun test"] },
-      },
-    });
-    expect(
-      buildApprovalResponse(
-        "item/commandExecution/requestApproval",
-        "approve-with-network-amendment",
-        params,
-        1,
-      ).result,
-    ).toEqual({
-      decision: {
-        applyNetworkPolicyAmendment: {
-          network_policy_amendment: { host: "two.example", action: "deny" },
-        },
-      },
-    });
-    expect(
-      buildApprovalResponse(
-        "item/commandExecution/requestApproval",
-        "approve-with-network-amendment",
-        params,
-        99,
-      ).result,
+      buildApprovalResponse("item/commandExecution/requestApproval", "approve", params).result,
     ).toEqual({ decision: "accept" });
   });
 
-  test("legacy amendment approvals degrade to approved for session", () => {
-    expect(
-      buildApprovalResponse("execCommandApproval", "approve-with-execpolicy-amendment", {}).result,
-    ).toEqual({ decision: "approved_for_session" });
-    expect(
-      buildApprovalResponse("applyPatchApproval", "approve-with-network-amendment", {}).result,
-    ).toEqual({ decision: "approved_for_session" });
+  test("rejects the retired amendment decisions", () => {
+    // An older backend or a hand-made request must not reach a granting arm.
+    expect(isApprovalDecision("approve-with-execpolicy-amendment")).toBe(false);
+    expect(isApprovalDecision("approve-with-network-amendment")).toBe(false);
   });
 
   test("maps legacy decisions onto ReviewDecision", () => {
@@ -359,10 +376,6 @@ describe("describeApprovalOutcome", () => {
     // An approval needs no transcript note; the command itself is the evidence.
     expect(describeApprovalOutcome(base, "approve", "answered")).toBeNull();
     expect(describeApprovalOutcome(base, "approve-for-session", "answered")).toBeNull();
-    expect(
-      describeApprovalOutcome(base, "approve-with-execpolicy-amendment", "answered"),
-    ).toBeNull();
-    expect(describeApprovalOutcome(base, "approve-with-network-amendment", "answered")).toBeNull();
     expect(describeApprovalOutcome(base, "withdrawn", "withdrawn")).toBeNull();
   });
 
@@ -405,3 +418,17 @@ describe("isApprovalDecision", () => {
     }
   });
 });
+
+test.each(["/outside/target", "/workspace/.env", "src/renamed.ts"])(
+  "legacy patch retains rename destination %s",
+  (destination) => {
+    const request = describeWith("applyPatchApproval", {
+      fileChanges: {
+        "src/allowed.ts": { type: "update", move_path: destination, unified_diff: "" },
+      },
+    });
+    expect(request.changes).toEqual([
+      { path: "src/allowed.ts", kind: "update", movePath: destination },
+    ]);
+  },
+);

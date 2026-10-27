@@ -36,6 +36,7 @@ export interface ProjectionAnnouncer {
   contentInvalidated(resourceKey: string, pathIds: string[] | null, generation: number): void;
 }
 
+/** Process-wide on purpose: the host's Git binary is the same for every backend. */
 let gitVersionPromise: Promise<string> | null = null;
 
 export function installedGitVersion(): Promise<string> {

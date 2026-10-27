@@ -31,6 +31,7 @@ import type {
   CommandRegistryOptions,
   RegistryDependencies,
 } from "./commands-registry-types.js";
+import { registerPermissionRuleCommands } from "./commands-registry-permission-rules.js";
 import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
@@ -304,6 +305,7 @@ export function createCommandRegistry(
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
   registerBackendProfileCommands(register);
+  registerPermissionRuleCommands(register);
   registerNodeCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);

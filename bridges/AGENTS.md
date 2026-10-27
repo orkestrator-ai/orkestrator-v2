@@ -40,15 +40,22 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   **only** where the prompt route would refuse the id with 410
   `dispatch-outcome-lost`: a record an earlier process left without an outcome
   (Claude's `restoredDispatchedRequestIds`, the ACP, Cursor and Pi journals'
-  `ambiguous`), never a local reply, and never over a `dispatched`. No record, a
-  record that may still run (the codex journal's `prepared`), an unreadable
-  journal and a missing route are all `unknown`. The backend confirms a parked
+  `ambiguous`), never a local reply, and never over a `dispatched`. No record
+  in a journal that is not complete (below), a record that may still run (the
+  codex journal's `prepared`), an unreadable journal and a missing route are
+  all `unknown`. The backend confirms a parked
   dispatch on `dispatched` and retires it on `lost` (cleared, never recorded as
   run, the draft's id released); `unknown` leaves it parked. Neither `lost` nor
   `unknown` means "never sent": reporting a lost record that way would have it
-  run the same turn twice. Like `/activity`, it must never touch liveness,
-  hydrate or re-attach. A bridge that reports restart interruptions (Claude,
-  Codex) adds `pending: true` beside `dispatched` while that request's turn is
+  run the same turn twice. `absent` does, and is an assertion too: answer it
+  only while the session's journal is complete — created by this bridge, every
+  claim written to disk before its handover, loaded cleanly, nothing evicted,
+  trimmed or skipped since — and the id has no record of any state. The
+  backend then re-sends a recovered request under the same id (0223), so a
+  wrong `absent` runs a turn twice: when unsure, answer `unknown`. An adopted
+  or resumed session is never complete. Like `/activity`, it must never touch
+  liveness, hydrate or re-attach. A bridge that reports restart interruptions
+  (Claude, Codex) adds `pending: true` beside `dispatched` while that request's turn is
   still in flight and `pending: false` once it finished; the backend lets a
   restart notice naming another request stand aside only for a `pending`
   request, so never report a finished request as pending.
@@ -155,6 +162,22 @@ never a bare `setTimeout`. When touching one:
   can, so it never probes an older bridge; it reads a 404 there as stale.
 - **Never persist a deadline.** It holds a live timer; parked requests do not
   survive a bridge restart, and neither does their pause.
+
+## Permission rule eligibility
+
+Orkestrator's own "always allow" rules
+([`permission-rules.md`](../docs/architecture/permission-rules.md)) are applied
+by the backend, which answers a matching approval with the bridge's ordinary
+allow-once. A bridge's only part is the `ruleEligible` marker on an approval:
+
+- **Mark only exact detail.** Set `ruleEligible: true` only when the command
+  string, every path, the host or the MCP server and tool are exactly what will
+  run: never on a truncated value, a lossy argv join, a relative path the
+  backend cannot place, input to a running terminal, or a request that also
+  widens a sandbox (a write root). Without the marker the backend asks.
+- **Never answer for a rule.** A bridge never applies or stores a rule, and a
+  provider suggestion it forwards (`proposedCommandPrefix`) is a hint for the
+  card only, never sent back to the provider.
 
 ## Native slash commands
 

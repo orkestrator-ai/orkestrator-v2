@@ -45,7 +45,13 @@ lists are the reason these engines are built the way they are. In short:
    tab that was inactive must be able to catch up from the snapshot instead of
    depending on an event it never received.
 5. **Approvals fail closed.** Timeout, disconnect, a malformed answer, or the
-   death of the process that asked all deny. None of them approve.
+   death of the process that asked all deny. None of them approve. No
+   approval saves a durable rule in a provider: the Codex bridge never offers
+   or sends the exec-policy and network-policy amendments app-server
+   proposes, because Codex writes them into the user's Codex home and has no
+   method to list or remove them. "Always allow" exists only as
+   Orkestrator's own rules ([permission-rules.md](permission-rules.md)),
+   which the backend answers with the provider's allow-once.
 6. **Managed executables are pinned and hash-verified.** `packages/toolchain/src/manifest.ts`
    pins each managed binary; the backend passes the resolved path down
    (`CLAUDE_CLI_PATH`, `CODEX_PATH`, `ACP_AGENT_PATH`) so a packaged app never
@@ -169,6 +175,62 @@ until the user resumes it.
 Claude's `DELETE /session/:id` (SDK `deleteSession`) is the only destructive
 operation and nothing in the backend or renderer calls it.
 
+### Removing a conversation from the resume list
+
+Codex is the one platform that offers it (`actions.archive`). The resume
+dialog shows a **Remove from list** button on each row, with an **Undo**
+toast; the backend command `set_native_agent_resumable_session_archived` goes
+to the bridge's `POST /session/list/:threadId/archive` or `/unarchive`, which
+call `thread/archive` / `thread/unarchive`. The rollout is kept: archive is the
+explicit "remove from list", never a delete, and nothing calls
+`thread/delete`. A thread a tab in the same environment still holds is
+refused (409). The resume list leaves archived threads out: `thread/list`
+omits them, and the rollout fallback skips both what app-server lists as
+archived (following every archived-only `thread/list` page) and rollouts under
+`archived_sessions`.
+
+Cursor's resume list hides agents the SDK reports `archived` (Cursor refuses a
+follow-up run on one until it is unarchived, which is cloud-only in the pinned
+SDK), so there is no archive action for Cursor.
+
+## Session titles
+
+The backend owns every native session's title (`native-agent-session-titles.ts`).
+On each projection read it shows, in order: a backend title the provider has
+not accepted yet, the provider's own title unless it is a placeholder ("Agent
+Session", Claude's "Session 1a2b3c"), a backend title the provider already
+holds, the first user message cut to 80 characters, and finally the
+placeholder.
+
+The backend chooses a title once per provider session, when the provider has
+none of its own and the read reaches the start of the conversation:
+
+- Interactive and coordinator sessions get a model-written title from
+  `session-title-service.ts`, keyed by the logins this machine has: the
+  session's own platform first when it is Codex or Claude, then the other.
+  Codex runs `codex exec --ephemeral --ignore-user-config --ignore-rules` with
+  a one-model catalog whose shell is disabled, a read-only sandbox in an empty
+  temporary directory and every tool-bearing feature off; Claude runs
+  `claude --print --safe-mode` with no tools, no MCP, no slash commands, no
+  setting sources and no session persistence (`--bare` would also disable
+  OAuth/Keychain sign-in). Both read the prompt on stdin, framed as untrusted
+  JSON data, without the coordinator preamble, framed guidance or the
+  annotation envelope. A failed strategy rests for ten minutes; at most two
+  run at once. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns generation off,
+  and it never runs under `bun test`.
+- Pipeline and review sessions, and any session no generator could title,
+  keep the first-message fallback.
+
+The chosen title is stored on the session record (`backendTitle`, scoped to the
+provider session) and pushed through `setSessionTitle`: Codex
+`thread/name/set` (and the bridge's own title index), OpenCode
+`session.update`, Pi `setSessionName`, Claude's `/session/:id/rename`. A
+successful push marks it accepted; until then it outranks the provider's own
+title, so a failed push never loses it, and the push is retried at most every
+five minutes. Cursor and Grok have no setter, so their backend title is always
+authoritative. No bridge generates a title, and the Codex bridge no longer
+reports a title it read back from the first prompt.
+
 ## What survives a restart
 
 "Bridge restart" means the bridge process dies and a successor starts on the
@@ -180,7 +242,7 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | --- | --- | --- | --- |
 | Logical tab → provider session mapping | Backend `native-agent-sessions` store | Kept | Kept |
 | Tab teardown intent | Backend `environments` store, `tabTeardownIntents` | Kept | Kept; replayed by `reconcile_tab_teardowns` |
-| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native.ts`), with retry and discard controls | Kept; a prompt the restarted bridge reports `lost` is retired without a click | Kept |
+| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native-deliveries.ts`), with retry and discard controls | Kept; a prompt the restarted bridge reports `lost` is retired without a click | Kept |
 | Last retired dispatch (content-free `requestId`, `retiredAt`) | `retiredDispatch` on the native session record, projected as `retiredDispatch` plus a warning notice | Kept | Kept; replaced by the next one, cleared by the next accepted dispatch, hidden after 24 hours |
 | Compose draft (text, attachments, metadata) | Backend `compose-drafts` store; the renderer copy is a cache | Kept | Kept |
 | Cursor session identity, prompt and steer journals, steer fence, rendered transcript | `CURSOR_BRIDGE_STATE_DIR/state.json` | Kept; unfinished prompts reload as `ambiguous`, transcripts may be shed with an explicit truncation base | Unaffected |
@@ -362,10 +424,20 @@ Codex's reasoning summary (`summary`) and `personality` are not offered.
 `personality` (`supportsPersonality` is always false). Codex's own
 `config.toml` still applies to both.
 
-`session-titles.ts` is the one deliberate exception to all of the above — it
-still spawns a hermetic `codex exec` with a custom model catalog, a read-only
-sandbox, and user config ignored, so title generation cannot inherit the user's
-tools or instructions.
+Session titles are no longer generated here; see [Session titles](#session-titles).
+The bridge keeps only its title index (`session-title-index.ts`), which survives
+a container rebuild that drops Codex's own `session_index.jsonl`.
+
+A rewind made by another client arrives as `thread/reverted`, which names no
+turn: the bridge reads the surviving turns with `thread/read` and trims the
+transcript it serves to them (`sessions/external-revert.ts`). Its own
+`thread/revert` echoes the same notification and finds nothing more to cut.
+A rollout replay follows paginated history's `history_base` retained-prefix
+references (the format qualified against pinned 0.164) and supports legacy
+`thread_rolled_back` markers. A shared turn ID makes steered user rows one turn
+for rollback counting. Revert notifications clear cached rollout paths; reads
+are fenced by context, engine generation and transcript revision so an older
+snapshot cannot remove a newer completed turn.
 
 ### Project Coordinator
 
@@ -536,7 +608,24 @@ await client.session.messages({ path: { id } });
 conversation and all of its data, so tab close must never call it: ordinary
 close is `OpenCodeProvider.closeSession` (abort, settle workflow ownership,
 restore reviewer permissions, reject pending requests, forget the session;
-`apps/backend/src/core/opencode-session-close.ts`).
+`apps/backend/src/core/opencode-session-close.ts`). An ordinary
+`OpenCodeProvider.abort` rejects the session's pending requests the same way but
+keeps it registered. Explicit aborts, retaining closes, and automatic retry-action
+aborts all use the workflow-result broker's shared abort path. It starts the
+transport interrupt immediately and reserves the session dispatch lock before
+waiting for that response. Ownership settlement and pending-request rejection
+finish under that lock before a later prompt can dispatch. Once transport abort
+succeeds, rejection runs even if ownership settlement fails; a failed transport
+abort leaves pending requests untouched. The native stop ladder still polls
+status, attempts an available force-stop, and records its notice before surfacing
+an abort cleanup error.
+
+`opencode-provider-abort.live.test.ts` exercises both a permission and a question
+parked in the same turn against the pinned CLI, real v2 SDK, and a scripted local
+model in a disposable profile. It checks HTTP 200 rejection, the HTTP 404 race
+where another responder rejects after the pending read, and stale-card answers.
+Run it with `RUN_LIVE_OPENCODE_COMPATIBILITY=1` and `OPENCODE_CLI_PATH` pointing to
+the pinned executable; it needs no agent credentials or remote model.
 
 **The patched SSE client.** `@opencode-ai/sdk` is patched — see `patches/`,
 wired in through `patchedDependencies` in the root `package.json`. The generated
@@ -797,7 +886,12 @@ and clicking again restarts a fresh window.
   `ask_user_question` timeout the user configured; Pi pauses until its turn
   budget; a Codex question with `autoResolutionMs` until then; MCP prompts
   pause but warn that their server may stop waiting first. OpenCode publishes
-  no deadline, so there is nothing to pause.
+  no deadline, so there is nothing to pause; its requests wait until they are
+  answered, and aborting the turn or closing the tab rejects what is still
+  pending (`rejectPendingOpenCodeRequests` in `opencode-session-close.ts`).
+- The HTTP bridge adapter refuses `approve-for-session` on a card that offers
+  no session grant (`approveForSessionLabel`), before anything reaches the
+  bridge: Pi and the ACP bridges would answer it as a denial.
 - Claude in tmux mode pauses through its hook script: the blocking hooks run
   as `hook.sh <Kind> hold-v1` with a 48 h hook `timeout`, and the script's wait
   loop consumes a hold request file and rewrites its timing file
@@ -813,7 +907,15 @@ Claude AskUserQuestion option previews are requested as Markdown
 block on the question card (`AgentInteractionOption.preview`, bounded per
 option and per request). Codex questions reach the card because interactive
 threads turn on `default_mode_request_user_input`; pipeline threads keep
-Codex's Default-mode refusal.
+Codex's Default-mode refusal. Codex 0.164.0 sends such a question with
+`isBlocking: false`, yet its core waits for the answer with no timeout of its
+own: the flag only lets a client auto-resolve it (Codex's TUI sends an empty
+answer after two minutes). The bridge therefore publishes every parked
+question as blocking, so the session shows as waiting, and keeps the wire flag
+for the deadline: a Default-mode question gets the bounded, pausable deadline,
+whose expiry cancels with the same empty answer. The backend also reads a
+question from an older bridge that still says `false` as blocking
+(`mapCodexInteraction`).
 
 ## Cursor Agent
 
@@ -1065,6 +1167,18 @@ diagnostics the model can correct within a fixed budget. Acceptance is not
 completion: the controller still owns turn settlement, worktree and package
 checks, validation execution, pool application, stage changes, and PR
 verification, and consumes an accepted result exactly once.
+
+A controller can also register an acceptance check for one result kind
+(`WorkflowResultService.setAcceptanceCheck`). The service runs it on
+`validate_workflow_result` and on submission, and a refusal is a
+`worktree_changed` error with `nextAction: "correct"` that spends no correction
+budget, so the model can repair the environment and retry inside its turn. The
+build pipeline uses this for `verification-result`: the verifier is told which
+Git-visible paths it added or removed, or that HEAD moved, against the baseline
+recorded when the stage started (`build-pipeline-validation-worktree.ts`). The
+check is advisory: one that throws lets the result through, and the supervisor
+still compares the worktree when it reads the result and fails the stage,
+naming the paths, if it changed afterwards.
 
 **Delivery failures that never reach the backend.** A model reaches these tools
 through its client's own wrapper (Cursor's `CallDynamicTool`, for one), and that

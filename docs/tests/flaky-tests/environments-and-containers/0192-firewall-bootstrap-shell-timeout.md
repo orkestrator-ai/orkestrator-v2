@@ -375,3 +375,12 @@ Original command: `mise run test:logged -- --name cleanup-repository -- mise run
 `container firewall policy > policy 2 narrows host access to named ports and records what it applied` timed out after 5,006.54 ms, with subprocess exit code null instead of zero. Root/support reported 3,415 passed, two failed and one between-test error across 162 files (515.96 s); the other failure and error belong to disk report case 0259.
 
 The complete unchanged owner passed: `mise run test:logged -- --name cleanup-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` (exit 0, 37.3 s). This confirms another shell-fixture deadline recurrence without establishing its cause. No firewall implementation, assertion, timeout or skip changed.
+
+## Cross-machine search validation — 2026-10-27
+
+- **Branch:** `search-projects-environments-d964ef18680e-r1` at `c9a8ea863`. It changes web search, protocol node summaries and the backend read model; it touches neither `tests/unit/firewall-policy.test.ts` nor `docker/`.
+- **Original command:** `mise run test` (verification run, 687.4 s), macOS arm64, Bun 1.4.2, 18 logical cores, many other worktrees validating on the host.
+- **Failure:** `container firewall policy > GitHub ranges come from a fresh backend seed, else live, else this container's cache` timed out at 5017.03 ms. Root/support reported 3,525 passed and three failed across 3,528 tests in 170 files (429.61 s); the other two failures are the macOS migrate-copy cases in todo 0320. An earlier full run of the same branch (02:31) timed out the same case at 5046.73 ms.
+- **Evidence:** host temporary directory `orkestrator-test-run.HEHCLU/root-and-agent-support-tests.log.gz` (earlier run: `orkestrator-test-run.kJVVi3/`).
+- **Complete unchanged owner:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed (11.0 s) at load averages 33 / 120 / 165. The verifier also reported the owner passing alone on both the branch and `origin/main` (`863b5782`).
+- **Assessment:** another aggregate-only recurrence of the shell-fixture five-second deadline. No firewall implementation, assertion, timeout or skip changed.

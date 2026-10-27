@@ -8,6 +8,7 @@ import {
   type PipelineSession,
   type ResumableBuildPhase,
   isBuildPipeline,
+  boundedPipelineSessionError,
   isActiveBuildPhase,
   type PendingPipelineInteractionResolution,
 } from "@orkestrator/protocol/build-pipeline";
@@ -283,22 +284,23 @@ export class BuildPipelineInteractions {
     pipeline.error = abortErrors.length
       ? `${errorMessage(error)} Stopping every review agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
       : errorMessage(error);
-    pipeline.failureContext = {
-      phase:
-        error instanceof PreSessionStageStartError
-          ? error.phase
-          : (pipeline.phase as ResumableBuildPhase),
-      kind: "stage-transition",
-      sessionId:
-        pipeline.reviewFanout || error instanceof PreSessionStageStartError
-          ? undefined
-          : sessionForCurrentPhase(pipeline)?.sdkSessionId,
-    };
-    const failedSession =
-      pipeline.reviewFanout || error instanceof PreSessionStageStartError
-        ? undefined
+    const preSessionFailure = error instanceof PreSessionStageStartError;
+    const failedSession = preSessionFailure
+      ? undefined
+      : pipeline.phase === "reviewing" && pipeline.reviewFanout
+        ? pipeline.sessions.find(
+            (session) => session.sessionKey === pipeline.reviewFanout?.consolidation?.sessionKey,
+          )
         : sessionForCurrentPhase(pipeline);
-    if (failedSession) failedSession.status = "error";
+    pipeline.failureContext = {
+      phase: preSessionFailure ? error.phase : (pipeline.phase as ResumableBuildPhase),
+      kind: "stage-transition",
+      sessionId: failedSession?.sdkSessionId,
+    };
+    if (failedSession) {
+      failedSession.status = "error";
+      failedSession.error = boundedPipelineSessionError(pipeline.error);
+    }
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
     delete pipeline.stageRetryRequested;

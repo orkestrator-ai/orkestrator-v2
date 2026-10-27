@@ -19,8 +19,8 @@ beforeEach(() => {
   fixture = createFixture({ env: {} });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 async function grokSnapshot(kind: "backend" | "environment" = "environment") {
@@ -151,7 +151,7 @@ describe("Grok adapter", () => {
 
   test("Grok: GROK_HOME relocates the native file and the compat switches", async () => {
     const custom = mkdtempSync(path.join(tmpdir(), "mcp-grok-home-"));
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { GROK_HOME: custom } });
     fixture.write("home/.claude.json", JSON.stringify({ mcpServers: { a: { command: "x" } } }));
     // The default home's switch no longer applies; the relocated one does.
@@ -185,14 +185,14 @@ describe("Grok adapter", () => {
     );
 
     // The documented environment variable wins over config.toml, both ways.
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { GROK_CLAUDE_MCPS_ENABLED: "1" } });
     fixture.write("home/.claude.json", JSON.stringify({ mcpServers: { a: { command: "x" } } }));
     fixture.write("home/.grok/config.toml", `[compat.claude]\nmcps = false\n`);
     snapshot = await grokSnapshot();
     expect(entry(snapshot, "grok:compat-claude-user", "a").status).toBe("effective");
 
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { GROK_CURSOR_MCPS_ENABLED: "false" } });
     fixture.write("home/.cursor/mcp.json", JSON.stringify({ mcpServers: { c: { command: "x" } } }));
     snapshot = await grokSnapshot();

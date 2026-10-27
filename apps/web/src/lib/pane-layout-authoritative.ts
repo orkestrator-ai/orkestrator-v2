@@ -489,6 +489,18 @@ export function collectPaneDependencyIds(root: unknown): {
             pipelineIds.add(pipelineId);
           }
         }
+        const multi = candidate.multiReviewTabData;
+        if (multi && typeof multi === "object" && !Array.isArray(multi)) {
+          const data = multi as Record<string, unknown>;
+          if (
+            typeof data.pipelinePass === "string" &&
+            data.pipelinePass.trim() &&
+            typeof data.workflowId === "string" &&
+            data.workflowId.trim()
+          ) {
+            pipelineIds.add(data.workflowId);
+          }
+        }
         const review = candidate.loopedReviewTabData;
         if (review && typeof review === "object" && !Array.isArray(review)) {
           const workflowId = (review as Record<string, unknown>).workflowId;
@@ -523,6 +535,7 @@ function collectMultiReviewIds(root: unknown): Set<string> {
         if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
         const data = (tab as Record<string, unknown>).multiReviewTabData;
         if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+        if ((data as Record<string, unknown>).pipelinePass !== undefined) continue;
         const id = (data as Record<string, unknown>).workflowId;
         if (typeof id === "string" && id.trim()) ids.add(id);
       }

@@ -86,10 +86,11 @@ design context. <orke`.
   `apps/web/src/lib/chat/transcript-annotations.ts` re-exports them and keeps
   only the UI label `transcriptAnnotationSourceLabel`, so every web import
   path and the renderer's behaviour are unchanged.
-- The projection's `fallbackTitle` (`apps/backend/src/core/native-agent-transcript-projection.ts`,
-  "Name the session after the user's own words") strips provider system
-  instructions and then annotation envelopes from the first user message
-  before collapsing whitespace and taking 80 characters. A first message that
+- The projection's fallback title (`sessionTitleSourceText` in
+  `apps/backend/src/core/session-title-text.ts` since 0006 moved title
+  generation into the backend, 2026-10-27) strips the coordinator preamble,
+  provider system instructions and then annotation envelopes from the first
+  user message before collapsing whitespace and taking 80 characters. A first message that
   is only annotations yields no fallback, so the next user message is used.
   Test: "titles a session from the request, not the transcript-annotation
   block after it" in `native-agent-service-projection.test.ts`, which also
@@ -100,10 +101,11 @@ design context. <orke`.
   than deriving a title from annotation text.
 - Other title fallbacks checked:
   - Codex bridge `buildFallbackSessionTitle`
-    (`bridges/codex-bridge/src/session-titles.ts`): its tag pass removed the
-    fence but kept the quoted instruction and JSON, so a prompt of only
-    annotations was titled "The user attached the following quoted reference".
-    It now strips the envelope first (test in `session-titles.test.ts`).
+    (now `bridges/codex-bridge/src/session-title-index.ts`, only the resume
+    list's label since 0006): its tag pass removed the fence but kept the
+    quoted instruction and JSON, so a prompt of only annotations was titled
+    "The user attached the following quoted reference". It now strips the
+    envelope first (test in `session-title-index.test.ts`).
   - Claude tmux resume list `titleFromTranscriptHead`
     (`apps/backend/src/core/tmux-hooks.ts`): took the first 80 characters of
     the first user message, the same defect. It now strips the envelope and

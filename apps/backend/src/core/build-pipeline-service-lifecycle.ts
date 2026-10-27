@@ -593,6 +593,7 @@ export class BuildPipelineLifecycle {
               ? ("structured-output-v1" as const)
               : undefined;
         candidate.pendingPromptAttempt = {
+          dispatchVersion: 1,
           id: randomUUID(),
           sessionId: session.sdkSessionId,
           requestId,
@@ -1026,6 +1027,51 @@ export class BuildPipelineLifecycle {
       delete candidate.pauseCause;
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;
+    });
+    if (rejection) throw rejection;
+    await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
+  /**
+   * Runs one failed reviewer of the current review pass again. The rest of
+   * the panel keeps its reports; a pipeline that failed or paused in the
+   * review resumes it.
+   */
+  async retryReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.ctx.mutate(pipelineId, async (candidate) => {
+      const phase =
+        candidate.phase === "paused"
+          ? candidate.pausedFromPhase
+          : candidate.phase === "failed"
+            ? candidate.failureContext?.phase
+            : candidate.phase;
+      if (
+        phase !== "reviewing" ||
+        (candidate.phase === "failed" && candidate.failureContext?.kind === "interactive-request")
+      ) {
+        rejection = new Error("This build is not in a review that can retry a reviewer");
+        return;
+      }
+      try {
+        await this.stageSupervisor.reviewFanout().prepareReviewerRetry(candidate, reviewerId);
+      } catch (error) {
+        rejection = error instanceof Error ? error : new Error(String(error));
+        return;
+      }
+      if (candidate.phase === "failed" || candidate.phase === "paused") {
+        candidate.phase = "reviewing";
+        delete candidate.pausedFromPhase;
+        delete candidate.pauseCause;
+        delete candidate.error;
+        delete candidate.failureContext;
+        delete candidate.reconnectAttempt;
+        delete candidate.stageRetryRequested;
+        delete candidate.completionCommentStatus;
+        delete candidate.completionCommentError;
+      }
+      delete candidate.stallWarning;
     });
     if (rejection) throw rejection;
     await this.stageSupervisor.runLocked(pipelineId);

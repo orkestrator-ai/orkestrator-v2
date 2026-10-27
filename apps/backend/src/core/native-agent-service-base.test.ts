@@ -53,7 +53,7 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { readStoredValue, seedLegacyPromptQueueClaim, seedStore } from "./storage-test-support.js";
 import {
   collaborators,
   interactionInternals,
@@ -3091,6 +3091,35 @@ describe("NativeAgentService", () => {
         expect(delivered).toHaveBeenCalledWith(["cmd-1"], "r-2");
         await service.dispatchPrompt({ ...identity, prompt: "Next", requestId: "r-3" });
         expect(provider.send.mock.calls.at(-1)![1]).toBe("Next");
+      },
+    );
+  });
+
+  test("holds native mail while a legacy claim holder owns the queue", async () => {
+    const provider = createProviderStub("claude");
+    await withService(
+      { prefix: "orkestrator-native-mail-legacy-", provider: async () => provider.provider },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-mail",
+          origin: "interactive-native" as const,
+        };
+        const session = await service.ensureSession(identity);
+        launchInternals(service).observedSessionActivity.set(session.key, {
+          providerSessionId: session.providerSessionId,
+          state: "idle",
+        });
+        const queueKey = `claude\0${identity.logicalSessionKey}`;
+        await storage.enqueuePromptQueueMessage(queueKey, "env-1", { id: "head", text: "claimed" });
+        seedLegacyPromptQueueClaim(storage.getDataDir(), queueKey, "head");
+        expect(await service.mailInjectPresence(identity)).toBe("working");
+        expect(
+          await service.dispatchMailInject({ ...identity, prompt: "mail", requestId: "held-mail" }),
+        ).toEqual({ outcome: "held", reason: "queue" });
+        expect(provider.send).not.toHaveBeenCalled();
+        expect((await storage.getNativeAgentSession(session.key))?.pendingDispatch).toBeUndefined();
       },
     );
   });

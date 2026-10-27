@@ -240,6 +240,7 @@ export class NodeCoordination {
         "update-project-files": (request) => this.projectFiles.executeUpdate(request),
         "reveal-env-value": (request) => this.projectFiles.executeReveal(request),
         "create-project": (request, approval) => this.executeCreateProject(request, approval),
+        "apply-root-changes": (request, approval) => this.executeRootChanges(request, approval),
       },
       notify: (request) => this.notifyRequester(request),
     });
@@ -426,6 +427,7 @@ export class NodeCoordination {
         "create-project",
         "update-project-files",
         "reveal-env-value",
+        "apply-root-changes",
       ].includes(kind)
     ) {
       throw new Error("Unknown request kind.");
@@ -469,6 +471,7 @@ export class NodeCoordination {
       return clean;
     });
     return this.actions.create({
+      ...(typeof args.requestId === "string" ? { requestId: args.requestId } : {}),
       kind,
       targets,
       requestedBy: {
@@ -516,6 +519,30 @@ export class NodeCoordination {
       done.push(`“${target.environmentName ?? target.environmentId}” on ${target.nodeName}`);
     }
     return { code: "deleted", message: `Deleted ${done.join(", ")}.` };
+  }
+
+  /**
+   * Approved: apply the files the user picked (else the coordinator's
+   * suggestion) from this node's checkout to a worker on this node.
+   */
+  private async executeRootChanges(request: NodeActionRequest, approval: NodeActionApproval) {
+    const self = await this.options.nodes.selfIdentity();
+    const [target] = request.targets;
+    if (!target?.environmentId || !target.projectId || request.targets.length !== 1) {
+      throw new Error("The request names one worker environment.");
+    }
+    if (target.nodeId !== self) throw new Error("Only a worker on this node can receive changes.");
+    const paths = approval.paths ?? target.files ?? [];
+    const applied = await this.options.invoke<{ files: string[] }>("apply_project_root_changes", {
+      projectId: target.projectId,
+      environmentId: target.environmentId,
+      paths,
+    });
+    const count = applied.files.length;
+    return {
+      code: "applied",
+      message: `Applied ${count} file${count === 1 ? "" : "s"} to “${target.environmentName ?? target.environmentId}”: ${applied.files.slice(0, 20).join(", ")}${count > 20 ? ", …" : ""}.`,
+    };
   }
 
   /**

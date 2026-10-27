@@ -15,12 +15,13 @@ describe("permissionDetail", () => {
       permissionDetail({
         toolCall: { toolCallId: "1", kind: "execute", rawInput: { command: "bun test" } },
       }),
-    ).toEqual({ kind: "command", command: "bun test" });
+    ).toEqual({ kind: "command", command: "bun test", ruleEligible: true });
     expect(
       permissionDetail({
         toolCall: { toolCallId: "1", kind: "execute", rawInput: { command: ["git", "status"] } },
       }),
     ).toEqual({ kind: "command", command: "git status" });
+    // The argv join loses quoting, so no permission rule may answer it.
   });
 
   test("an edit, delete or move with a path is a file change", () => {
@@ -32,12 +33,12 @@ describe("permissionDetail", () => {
           locations: [{ path: "/w/a.ts" }, { path: "/w/b.ts" }, { path: "/w/a.ts" }],
         },
       }),
-    ).toEqual({ kind: "file-change", paths: ["/w/a.ts", "/w/b.ts"] });
+    ).toEqual({ kind: "file-change", paths: ["/w/a.ts", "/w/b.ts"], ruleEligible: true });
     expect(
       permissionDetail({
         toolCall: { toolCallId: "1", kind: "delete", rawInput: { file_path: "/w/old.ts" } },
       }),
-    ).toEqual({ kind: "file-change", paths: ["/w/old.ts"] });
+    ).toEqual({ kind: "file-change", paths: ["/w/old.ts"], ruleEligible: true });
   });
 
   test("reads the kind and input recorded for the call when the request names only its id", () => {
@@ -46,22 +47,22 @@ describe("permissionDetail", () => {
         { toolCall: { toolCallId: "1", title: "Run" } },
         { kind: "execute", input: { command: "make" } },
       ),
-    ).toEqual({ kind: "command", command: "make" });
+    ).toEqual({ kind: "command", command: "make", ruleEligible: true });
     expect(
       permissionDetail({ toolCall: { toolCallId: "1" } }, { kind: "edit", locationPath: "/w/x" }),
-    ).toEqual({ kind: "file-change", paths: ["/w/x"] });
+    ).toEqual({ kind: "file-change", paths: ["/w/x"], ruleEligible: true });
     expect(
       permissionDetail(
         { toolCall: { kind: "other" } },
         { kind: "execute", input: { command: "make" } },
       ),
-    ).toEqual({ kind: "command", command: "make" });
+    ).toEqual({ kind: "command", command: "make", ruleEligible: true });
     // Without a kind anywhere, a known tool name still classifies it.
     expect(
       permissionDetail({
         toolCall: { toolCallId: "1", rawInput: { _toolName: "bash", command: "ls" } },
       }),
-    ).toEqual({ kind: "command", command: "ls" });
+    ).toEqual({ kind: "command", command: "ls", ruleEligible: true });
   });
 
   test("reads through Grok's use_tool wrapper", () => {
@@ -80,7 +81,7 @@ describe("permissionDetail", () => {
         },
         { kind: "other", name: "use_tool" },
       ),
-    ).toEqual({ kind: "command", command: "rm -rf build" });
+    ).toEqual({ kind: "command", command: "rm -rf build", ruleEligible: true });
   });
 
   test("infers a file change through a generic use_tool kind", () => {
@@ -97,7 +98,7 @@ describe("permissionDetail", () => {
         },
         { kind: "other", name: "use_tool" },
       ),
-    ).toEqual({ kind: "file-change", paths: ["/w/new.ts"] });
+    ).toEqual({ kind: "file-change", paths: ["/w/new.ts"], ruleEligible: true });
   });
 
   test("anything else, or a command or file change without its detail, stays a permission", () => {
@@ -190,6 +191,9 @@ describe("published approvals", () => {
     });
     expect(publicApprovals(state)[2]).toMatchObject({ commandTruncated: true });
     expect(publicApprovals(state)[3]).toMatchObject({ pathsOmitted: 5 });
+    // Incomplete detail is never something a permission rule may answer.
+    expect(publicApprovals(state)[2]).not.toHaveProperty("ruleEligible");
+    expect(publicApprovals(state)[3]).not.toHaveProperty("ruleEligible");
     const incomplete = [...state.approvals.values()].slice(2);
     for (const approval of incomplete) approval.respond("allow");
     expect(responses).toEqual(

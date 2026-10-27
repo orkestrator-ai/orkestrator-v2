@@ -20,6 +20,10 @@ import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { isChangeProjection } from "@orkestrator/protocol/change-resources";
 import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
 import type { Environment } from "@/types";
+import {
+  FILES_PANEL_DATA_SAVING_BACKOFF_MS,
+  FILES_PANEL_DATA_SAVING_UNWATCHED_BACKOFF_MS,
+} from "@/lib/data-saving-policy";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
@@ -741,6 +745,9 @@ export function useFilesPanel() {
   // reconciled once on return. The store is global, so equivalent mounts
   // share one read. The open/tab/target read below and post-mutation reads
   // stay direct.
+  const targetWatched = useWorktreeSnapshotStore((state) =>
+    snapshotEnvironmentId ? state.entries.get(snapshotEnvironmentId)?.watched === true : false,
+  );
   const filesRead = useCoordinatedRead({
     key: { resource: "files-panel", target: environmentSnapshotKey, options: activeTab },
     enabled: isAvailable,
@@ -749,6 +756,13 @@ export function useFilesPanel() {
     demand: {
       active: isOpen && isAvailable && !projectionOwnsChanges,
       intervalMs: AUTO_REFRESH_INTERVAL,
+      // With data saving on: a watched worktree announces every revision, so
+      // its poll only backstops; an unwatched target has only the poll.
+      dataSaving: {
+        quietBackoffMs: targetWatched
+          ? FILES_PANEL_DATA_SAVING_BACKOFF_MS
+          : FILES_PANEL_DATA_SAVING_UNWATCHED_BACKOFF_MS,
+      },
     },
     read: async (context) => {
       if (!context.explicit) return silentRefresh();
@@ -761,6 +775,7 @@ export function useFilesPanel() {
     },
   });
   const refreshExplicitly = filesRead.refresh;
+  const noteFilesActivity = filesRead.noteActivity;
   // Manual refresh shows the loading indicator and always reads afresh.
   const refresh = useCallback(async () => {
     await refreshExplicitly();
@@ -768,6 +783,8 @@ export function useFilesPanel() {
 
   const refreshAllFilesData = useCallback(async () => {
     if (activeSnapshotKeyRef.current !== environmentSnapshotKey) return;
+    // A mutation is user activity: a backed-off poll returns to its cadence.
+    noteFilesActivity();
     // First wait for any snapshot that was already in flight when the mutation
     // began, then take a guaranteed post-mutation snapshot of both views.
     await Promise.all([loadChanges(true), loadFileTree(true)]);
@@ -776,7 +793,14 @@ export function useFilesPanel() {
     // so a slow container scan does not hold the action's result.
     void refreshChangeProjection(false);
     await Promise.all([loadChanges(true), loadFileTree(true), reloadFolders()]);
-  }, [environmentSnapshotKey, loadChanges, loadFileTree, refreshChangeProjection, reloadFolders]);
+  }, [
+    environmentSnapshotKey,
+    loadChanges,
+    loadFileTree,
+    noteFilesActivity,
+    refreshChangeProjection,
+    reloadFolders,
+  ]);
 
   const revertFile = useCallback(
     async (filePath: string) => {
@@ -1192,6 +1216,7 @@ export function useFilesPanel() {
         changesView,
       )
     ) {
+      noteFilesActivity();
       void loadChanges(true);
     }
     if (activeTab === "changes") return;
@@ -1204,6 +1229,7 @@ export function useFilesPanel() {
         treeView,
       )
     ) {
+      noteFilesActivity();
       void loadFileTree(true).then(reloadFolders);
     }
   }, [
@@ -1218,6 +1244,7 @@ export function useFilesPanel() {
     environmentSnapshotKey,
     loadChanges,
     loadFileTree,
+    noteFilesActivity,
     reloadFolders,
     projectionOwnsChanges,
   ]);

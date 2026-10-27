@@ -63,13 +63,27 @@ on another:
   never linked: SQLite creates its `-wal`/`-shm` sidecars next to the path it
   opened, so a linked database would be written from two directories.
 
-`projects` (Claude) and `sessions` (Codex) are created on the host when
-missing, so an account's first session does not grow a private copy.
-`linkSharedEntries` is conservative: a regular file already in the account
-directory is left alone, because a CLI that saves by atomic rename replaces
-the link with one, and that content is the account's now. A link whose host
-target has gone is removed. Such an entry is reported rather than re-linked:
-`privateSharedEntries` lists it, `listAgentAccounts` returns the names as the
+Every shared entry that is a directory (`SHARED_DIRECTORIES`) is created on
+the host when missing, so an account's first transcript, saved plan or skill
+does not grow a private copy. Files are not: an empty `settings.json` or
+`config.toml` is not the same as a missing one. A directory an account already
+created while the host had none (before this rule, or from a CLI racing the
+launch) is moved to the host and linked. It is never merged into a host
+directory that exists. Directories containing relative symlinks are kept
+private, because moving them can change the links' targets. This guard is
+conservative even for apparently internal links, whose resolution may pass
+through other symlinks. A directory that cannot be inspected or moved is also
+kept private, and an empty host directory is created for other accounts.
+If a required host directory is occupied by a regular file or dangling symlink,
+that entry is left intact and not linked; preparation continues with the other
+entries and preserves any private account copy.
+
+`linkSharedEntries` is otherwise conservative: a regular file already in the
+account directory is left alone, because a CLI that saves by atomic rename
+replaces the link with one, and that content is the account's now. A link
+whose host target has gone is removed. Such an entry, and a directory that
+could not be moved, is reported rather than re-linked: `privateSharedEntries`
+lists it, `listAgentAccounts` returns the names as the
 account's `privateEntries`, and its row in Settings says the entry is no longer
 shared with the host login. Re-linking would race a CLI still writing it.
 
@@ -260,12 +274,24 @@ Codex put an `authNotice` on their session read (`GET /session/:id`,
 | Platform | Raised by | Cleared by |
 | --- | --- | --- |
 | Claude | `auth_status` with an `error` (`expired`) or `isAuthenticating` (`needs-auth`); a turn refused with `authentication_failed` (`expired`) | `auth_status` reporting the authentication finished; any real model answer |
-| Codex | `modelProvider/authRecoveryStarted` (`expired`) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`) |
+| Codex | `modelProvider/authRecoveryStarted` (`expired`); a turn failed with `unauthorized` or a forwarded 401 (`needs-auth`, "Codex's login was refused. …") | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`) |
 
 Codex's completion carries no outcome field (codex 0.162 says succeeded,
 failed-permanent or failed-transient only in its message), so the failure check
 reads its text; a real sign-out still locks the composer through readiness. The
 notice is in memory on the bridge: a restarted bridge starts without one.
+
+A login the API refuses outright sends no recovery at all. Codex 0.162 and
+0.164 treat an invalid API key as signed in (`account/read` reports it), retry
+the request and fail the turn with `codexErrorInfo: { httpConnectionFailed:
+{ httpStatusCode: 401 } }`. `toTurnError` keeps that status (`httpStatusCode`),
+and a turn failed with `unauthorized`, or with a 401 on any variant that
+forwards one (`httpConnectionFailed`, `responseStreamConnectionFailed`,
+`responseStreamDisconnected`, `responseTooManyFailedAttempts`), raises the
+`needs-auth` notice (`refusedLoginNotice`, `sessions/auth-recovery-notice.ts`).
+Only a 401: a failure with no status or a 5xx never locks the composer. A
+second refusal keeps the occurrence, so a dismissed notice stays dismissed.
+The in-tab sign-in replaces an API key with a ChatGPT login.
 
 How each tab shows it:
 

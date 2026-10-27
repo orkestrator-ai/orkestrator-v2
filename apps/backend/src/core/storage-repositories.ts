@@ -11,13 +11,16 @@ import { CoordinatorsRepository } from "./storage-coordinators.js";
 import { DraftsRepository } from "./storage-drafts.js";
 import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
+import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
 import { NativeAgentSessionsRepository } from "./storage-native.js";
 import { NodesRepository } from "./storage-nodes.js";
 import { PreviewServicesRepository } from "./storage-preview-services.js";
+import { PromptQueueStore } from "./storage-prompt-queue-store.js";
 import { ProjectsRepository } from "./storage-projects.js";
 import { PromptsRepository } from "./storage-prompts.js";
 import { PublicOperationsRepository } from "./storage-public-operations.js";
 import { ReviewsRepository } from "./storage-reviews.js";
+import { PermissionRulesRepository } from "./storage-permission-rules.js";
 import { ScheduledJobsRepository } from "./storage-scheduled-jobs.js";
 import { SessionsRepository } from "./storage-sessions.js";
 
@@ -36,12 +39,15 @@ import { SessionsRepository } from "./storage-sessions.js";
  */
 export class StorageRepositories {
   readonly scheduledJobs: ScheduledJobsRepository;
+  readonly permissionRules: PermissionRulesRepository;
   readonly files: StorageFiles;
   readonly projects: ProjectsRepository;
   readonly config: ConfigRepository;
   readonly sessions: SessionsRepository;
   readonly reviews: ReviewsRepository;
   readonly nativeAgentSessions: NativeAgentSessionsRepository;
+  readonly nativeAgentDeliveries: NativeAgentDeliveries;
+  readonly promptQueues: PromptQueueStore;
   readonly prompts: PromptsRepository;
   readonly buildPipelines: BuildPipelinesRepository;
   readonly drafts: DraftsRepository;
@@ -60,11 +66,14 @@ export class StorageRepositories {
     const files = new StorageFiles(context.dataDir);
     this.files = files;
     this.scheduledJobs = new ScheduledJobsRepository(context);
+    this.permissionRules = new PermissionRulesRepository(context);
     this.projects = new ProjectsRepository(context, files, this);
     this.config = new ConfigRepository(context, files);
     this.sessions = new SessionsRepository(context, files, this);
     this.reviews = new ReviewsRepository(context, files, this);
     this.nativeAgentSessions = new NativeAgentSessionsRepository(context, files, this);
+    this.nativeAgentDeliveries = new NativeAgentDeliveries(context, files, this);
+    this.promptQueues = new PromptQueueStore(context, files, this);
     this.prompts = new PromptsRepository(context, files, this);
     this.buildPipelines = new BuildPipelinesRepository(context, files, this);
     this.drafts = new DraftsRepository(context, files, this);

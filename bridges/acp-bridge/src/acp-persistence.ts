@@ -418,9 +418,23 @@ export async function loadPersistedState(): Promise<void> {
       // Re-sanitized rather than trusted from disk, like the command rows.
       ...(sessionTitle(candidate.title) ? { title: sessionTitle(candidate.title) } : {}),
     };
+    // `absent` trusts the restored journal to hold every id this session ever
+    // took, so any doubt about the record leaves it incomplete: no flag (an
+    // older bridge, a `session/load` adoption, or a write that already knew
+    // it was incomplete), an entry dropped below, a truncated session id, or
+    // a second record for the same id.
+    let journalComplete =
+      candidate.promptJournalComplete === true &&
+      Array.isArray(candidate.promptJournal) &&
+      candidate.promptJournal.length <= MAX_PROMPT_JOURNAL &&
+      candidate.id.length <= 128 &&
+      !sessions.has(state.id);
     if (Array.isArray(candidate.promptJournal)) {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {
-        if (!isObject(rawEntry) || typeof rawEntry.requestId !== "string") continue;
+        if (!isObject(rawEntry) || typeof rawEntry.requestId !== "string") {
+          journalComplete = false;
+          continue;
+        }
         const journalState = rawEntry.state;
         if (
           journalState !== "prepared" &&
@@ -428,8 +442,11 @@ export async function loadPersistedState(): Promise<void> {
           journalState !== "completed" &&
           journalState !== "failed" &&
           journalState !== "ambiguous"
-        )
+        ) {
+          journalComplete = false;
           continue;
+        }
+        if (rawEntry.requestId.length > 512) journalComplete = false;
         const entry: PromptJournalEntry = {
           requestId: rawEntry.requestId.slice(0, 512),
           state:
@@ -444,6 +461,7 @@ export async function loadPersistedState(): Promise<void> {
         state.promptJournal.set(entry.requestId, entry);
       }
     }
+    if (journalComplete) state.promptJournalComplete = true;
     if (Array.isArray(candidate.grokInterjectionJournal)) {
       let retainedBytes = 0;
       for (const rawEntry of candidate.grokInterjectionJournal.slice(

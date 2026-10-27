@@ -479,6 +479,32 @@ export interface PipelineSession {
    */
   reviewOverlap?: ReviewPanelOverlapV1;
   /**
+   * Issues by severity in the report this session filed. Unlike
+   * {@link reviewReport}, it is kept when the report copy is discarded, so a
+   * superseded review pass still says what it found. Optional: absent for a
+   * session that filed no report and for snapshots written before it existed.
+   */
+  reviewIssueCounts?: PipelineReviewIssueCounts;
+  /**
+   * How a fan-out reviewer's attempt ended. The live fan-out record holds the
+   * reviewer's status only while its pass runs; this keeps the outcome once
+   * that record is retired. Absent while the reviewer runs, for non-reviewer
+   * sessions, and for snapshots written before it existed.
+   */
+  reviewerOutcome?: PipelineReviewerOutcome;
+  /** Identity of a full fan-out launch, shared by its reviewers and consolidation. */
+  reviewPassId?: string;
+  /** Failed reviewers that never acquired a provider session, retained on consolidation. */
+  sessionlessReviewers?: PipelineSessionlessReviewer[];
+  /** This consolidation was discarded by a reviewer retry; its result is no longer usable. */
+  superseded?: boolean;
+  /**
+   * Why this session's attempt failed, at most
+   * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
+   * reviewer or stage that failed, retained when the pipeline moves on.
+   */
+  error?: string;
+  /**
    * Whether the backend is still waiting for this request's schema result or
    * has validated and accepted it.
    *
@@ -488,15 +514,13 @@ export interface PipelineSession {
    */
   structuredResultStatus?: "pending" | "accepted";
   /**
-   * Immutable Git state captured before a writable validation turn starts.
+   * Immutable Git state captured before a writable verification turn starts.
    *
-   * Review and verification may write ignored compiler output and caches, but
-   * the backend refuses to accept their result if HEAD moves or the set of
-   * Git-visible uncommitted paths changes. The baseline is a *set*, not a
-   * cleanliness flag: the build stage is only asked to commit, so a review can
-   * legitimately start on a dirty tree, and only the paths validation itself
-   * adds or removes are a violation. Persisting it keeps the guard valid across
-   * backend restarts.
+   * Verification may write ignored compiler output and caches, but its result
+   * is certified only if HEAD and the set of Git-visible uncommitted paths stay
+   * unchanged. Addressing can leave paths in this baseline; verification must
+   * preserve them. Persisting it keeps the guard valid across backend restarts.
+   * Packaged review reads an immutable package and has no live-worktree baseline.
    */
   validationHeadAtStart?: string;
   validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";
@@ -542,6 +566,70 @@ export interface PipelineSession {
    * ordinary build, so they cannot be the durable classification.
    */
   producedReviewPackagePlan?: boolean;
+}
+
+/** Issue counts by severity, as a review session's report filed them. */
+export interface PipelineReviewIssueCounts {
+  P0: number;
+  P1: number;
+  P2: number;
+}
+
+export type PipelineReviewerOutcome = "completed" | "failed" | "cancelled";
+
+/** Bounded history for a reviewer whose provider session could not be created. */
+export interface PipelineSessionlessReviewer {
+  id: string;
+  slot: number;
+  agent: BuildPipelineAgent;
+  model?: string;
+  reasoningEffort?: string;
+  error: string;
+}
+
+function isPipelineSessionlessReviewer(value: unknown): value is PipelineSessionlessReviewer {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.id) &&
+    value.id.length <= 128 &&
+    isNonNegativeInteger(value.slot) &&
+    value.slot < MAX_BUILD_PIPELINE_REVIEWERS &&
+    BUILD_PIPELINE_AGENTS.includes(value.agent as BuildPipelineAgent) &&
+    (value.model === undefined || (isNonBlankString(value.model) && value.model.length <= 256)) &&
+    (value.reasoningEffort === undefined ||
+      (isNonBlankString(value.reasoningEffort) && value.reasoningEffort.length <= 128)) &&
+    isNonBlankString(value.error) &&
+    value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH
+  );
+}
+
+/** The longest per-session error kept on the record. */
+export const MAX_PIPELINE_SESSION_ERROR_LENGTH = 2_000;
+
+/** Counts a report's issues by severity. */
+export function pipelineReviewIssueCounts(report: {
+  issues: readonly { severity: "P0" | "P1" | "P2" }[];
+}): PipelineReviewIssueCounts {
+  const counts: PipelineReviewIssueCounts = { P0: 0, P1: 0, P2: 0 };
+  for (const issue of report.issues) counts[issue.severity] += 1;
+  return counts;
+}
+
+/** Normalizes an error to nonblank, bounded text for {@link PipelineSession.error}. */
+export function boundedPipelineSessionError(error: string): string {
+  const trimmed = error.trim() || "Provider failed without an error message";
+  return trimmed.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, MAX_PIPELINE_SESSION_ERROR_LENGTH - 1)}…`;
+}
+
+function isPipelineReviewIssueCounts(value: unknown): value is PipelineReviewIssueCounts {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.P0) &&
+    isNonNegativeInteger(value.P1) &&
+    isNonNegativeInteger(value.P2)
+  );
 }
 
 /**
@@ -699,6 +787,8 @@ export interface PipelineReconnectAttempt extends PipelineFailureContext {
 }
 
 export interface PipelinePromptAttempt {
+  /** Version 1 distinguishes newly prepared attempts from legacy ambiguous sends. */
+  dispatchVersion?: 1;
   /** Persist the preparation contract so a restart dispatches the same schema. */
   validationPlan?: boolean;
   id: string;
@@ -710,6 +800,13 @@ export interface PipelinePromptAttempt {
   structuredReview?: boolean;
   resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
   startedAt: string;
+  /**
+   * Written durably just before the send, so a later pass knows the prompt may
+   * have reached the provider and re-sends it under the same id only on the
+   * provider's proof that it did not (`absent`). Only a versioned attempt
+   * without this timestamp is known to be prepared and safe to send immediately.
+   */
+  dispatchingAt?: string;
 }
 
 export interface BuildPipeline {
@@ -1107,6 +1204,21 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.reviewReport === undefined ||
       (value.phase === "review" && isStructuredReviewReport(value.reviewReport))) &&
     (value.reviewOverlap === undefined || isReviewPanelOverlap(value.reviewOverlap)) &&
+    (value.reviewIssueCounts === undefined ||
+      isPipelineReviewIssueCounts(value.reviewIssueCounts)) &&
+    (value.reviewerOutcome === undefined ||
+      value.reviewerOutcome === "completed" ||
+      value.reviewerOutcome === "failed" ||
+      value.reviewerOutcome === "cancelled") &&
+    isOptionalNonBlankString(value.reviewPassId) &&
+    (value.sessionlessReviewers === undefined ||
+      (value.phase === "review" &&
+        Array.isArray(value.sessionlessReviewers) &&
+        value.sessionlessReviewers.length <= MAX_BUILD_PIPELINE_REVIEWERS &&
+        value.sessionlessReviewers.every(isPipelineSessionlessReviewer))) &&
+    (value.superseded === undefined || typeof value.superseded === "boolean") &&
+    (value.error === undefined ||
+      (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||
       value.structuredResultStatus === "pending" ||
       value.structuredResultStatus === "accepted") &&
@@ -1324,7 +1436,9 @@ function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
       value.resultTransport === "tool-v1" ||
       value.resultTransport === "structured-output-v1") &&
     (value.validationPlan === undefined || typeof value.validationPlan === "boolean") &&
-    isIsoDate(value.startedAt)
+    isIsoDate(value.startedAt) &&
+    (value.dispatchVersion === undefined || value.dispatchVersion === 1) &&
+    (value.dispatchingAt === undefined || isIsoDate(value.dispatchingAt))
   );
 }
 

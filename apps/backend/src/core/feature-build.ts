@@ -30,9 +30,12 @@ import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
 import { assertValidPromptImages } from "./prompt-attachments.js";
 import { generateEnvironmentNameWithCodexExec } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
+import type { FeatureBuildTasks } from "./feature-build-tasks.js";
 
 export interface FeatureBuildContext {
   storage: StorageService;
+  /** The backend's in-flight ticket resolutions and title refinements. */
+  runtime: { featureBuilds: FeatureBuildTasks };
   buildPipelines?: BuildPipelineService;
   appRoot?: string;
   resourceRoot?: string;
@@ -46,16 +49,6 @@ const FALLBACK_FEATURE_TITLE = "New Feature";
 const FALLBACK_TITLE_MAX_CHARS = 64;
 const LEADING_STORY_PREFIX =
   /^(when i|whenever i|i would like to|i would like|i want to|i want|i need to|i need|as an|as a|the|an|a)\b[\s:,-]*/i;
-
-const pendingTaskResolutions = new Map<string, Promise<KanbanTask>>();
-const pendingFeatureTitleRefinements = new Map<string, Promise<void>>();
-
-/** Wait for background title refinements scheduled by this process. */
-export async function waitForPendingFeatureTitleRefinements(): Promise<void> {
-  while (pendingFeatureTitleRefinements.size > 0) {
-    await Promise.allSettled(pendingFeatureTitleRefinements.values());
-  }
-}
 
 /** Turn a generated branch-style slug into the requested feature-title style. */
 export function featureTitleFromGeneratedName(name: string): string {
@@ -161,15 +154,9 @@ function scheduleFeatureTitleRefinement(
   provisionalTitle: string,
   context: FeatureBuildContext,
 ): void {
-  if (pendingFeatureTitleRefinements.has(taskId)) return;
-  const work = refineFeatureTitle(storage, taskId, description, provisionalTitle, context).finally(
-    () => {
-      if (pendingFeatureTitleRefinements.get(taskId) === work) {
-        pendingFeatureTitleRefinements.delete(taskId);
-      }
-    },
+  context.runtime.featureBuilds.refineTitle(taskId, () =>
+    refineFeatureTitle(storage, taskId, description, provisionalTitle, context),
   );
-  pendingFeatureTitleRefinements.set(taskId, work);
 }
 
 export async function createFeatureBuild(
@@ -318,24 +305,10 @@ async function resolveTask(
     requestHash?: string;
   },
 ): Promise<KanbanTask> {
-  const key = fields.requestId ? `${fields.projectId}:${fields.requestId}` : undefined;
-  if (key) {
-    const inflight = pendingTaskResolutions.get(key);
-    if (inflight) return inflight;
-  }
-
-  const work = resolveTaskOnce(storage, context, fields);
-  if (key) {
-    pendingTaskResolutions.set(key, work);
-    work
-      .finally(() => {
-        if (pendingTaskResolutions.get(key) === work) {
-          pendingTaskResolutions.delete(key);
-        }
-      })
-      .catch(() => undefined);
-  }
-  return work;
+  if (!fields.requestId) return resolveTaskOnce(storage, context, fields);
+  return context.runtime.featureBuilds.resolveTask(`${fields.projectId}:${fields.requestId}`, () =>
+    resolveTaskOnce(storage, context, fields),
+  );
 }
 
 async function resolveTaskOnce(

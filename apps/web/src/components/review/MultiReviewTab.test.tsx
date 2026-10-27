@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
@@ -29,6 +29,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import type { Environment } from "@/types";
 import { MultiReviewTab, allowsReviewTileActivation } from "./MultiReviewTab";
+import * as pipelineReviewTab from "@/components/build-pipeline/PipelineReviewTab";
 import {
   autoPrLaunchNotice,
   consolidationStep,
@@ -296,6 +297,48 @@ beforeEach(() => {
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
+
+describe("MultiReviewTab pipeline pass routing", () => {
+  test.each([
+    { isActive: true, ownsGlobalShortcuts: undefined, expectedShortcuts: true },
+    { isActive: false, ownsGlobalShortcuts: undefined, expectedShortcuts: false },
+    { isActive: true, ownsGlobalShortcuts: false, expectedShortcuts: false },
+    { isActive: false, ownsGlobalShortcuts: true, expectedShortcuts: true },
+  ])(
+    "forwards pipeline identity and activity: %j",
+    ({ isActive, ownsGlobalShortcuts, expectedShortcuts }) => {
+      const viewer = spyOn(pipelineReviewTab, "PipelineReviewTab").mockImplementation(() => <></>);
+      const hydrateWorkflow = mock(async () => null);
+      try {
+        render(
+          <MultiReviewTab
+            data={{
+              workflowId: "build-pipeline-routing",
+              environmentId: "pipeline-environment",
+              pipelinePass: "review-pass-2",
+              reviewerId: "ignored-standalone-reviewer",
+              isLocal: true,
+            }}
+            isActive={isActive}
+            ownsGlobalShortcuts={ownsGlobalShortcuts}
+            hydrateWorkflow={hydrateWorkflow}
+          />,
+        );
+        expect(viewer).toHaveBeenCalled();
+        expect(viewer.mock.calls.at(-1)?.[0]).toEqual({
+          pipelineId: "build-pipeline-routing",
+          environmentId: "pipeline-environment",
+          passKey: "review-pass-2",
+          isActive,
+          ownsGlobalShortcuts: expectedShortcuts,
+        });
+        expect(hydrateWorkflow).not.toHaveBeenCalled();
+      } finally {
+        viewer.mockRestore();
+      }
+    },
+  );
+});
 
 describe("MultiReviewTab backend snapshot viewer", () => {
   test("reads the PR stage from the launch, its agent and the environment's pull request", () => {

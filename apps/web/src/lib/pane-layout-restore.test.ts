@@ -1083,6 +1083,41 @@ describe("reconcilePersistedLayout", () => {
     expect(tab?.multiReviewTabData).not.toHaveProperty("reviewerId");
   });
 
+  test("restores a build pipeline's review pass against the pipeline, not a Multi Review", () => {
+    const tab = (pipelinePass: unknown, hasBuildPipeline: (id: string) => boolean) => {
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "review-pass",
+              type: "multi-review",
+              multiReviewTabData: {
+                environmentId: "env-1",
+                workflowId: "pipeline-1",
+                pipelinePass,
+              },
+            },
+          ],
+          activeTabId: "review-pass",
+        }),
+        { ...context, hasMultiReview: () => false, hasBuildPipeline },
+      );
+      return (restored?.root as unknown as { tabs?: Array<Record<string, unknown>> } | undefined)
+        ?.tabs?.[0];
+    };
+    expect(tab("review-pass-2", (id) => id === "pipeline-1")?.multiReviewTabData).toEqual({
+      environmentId: "env-1",
+      workflowId: "pipeline-1",
+      pipelinePass: "review-pass-2",
+      isLocal: false,
+    });
+    // A deleted pipeline, or a malformed pass, drops the tab.
+    expect(tab("review-pass-2", () => false)).toBeUndefined();
+    expect(tab("", () => true)).toBeUndefined();
+  });
+
   test("preserves child order and direction while normalizing split sizes", () => {
     const restored = reconcilePersistedLayout(
       saved({

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { MAX_PENDING_EVENTS_PER_TURN, MAX_PENDING_TURNS } from "./app-server-runtime.js";
 import { accountUsageFromLimits } from "./app-server-runtime-base.js";
 import type { EngineEvent } from "./engine/types.js";
-import { persistSessionTitle } from "./session-titles.js";
+import { persistSessionTitle } from "./session-title-index.js";
 
 import {
   ScriptedChild,

@@ -3,21 +3,31 @@
  * turn through the provider's abort path (settling workflow-turn ownership),
  * reject what is still pending for that session (fail closed), keep the
  * conversation, and treat 404 as already gone. OpenCode's `DELETE
- * /session/:id` deletes the conversation and must never be called.
+ * /session/:id` deletes the conversation and must never be called. Ordinary
+ * abort (`OpenCodeProvider.abort`) rejects pending requests the same way.
  */
 import { describe, expect, test } from "bun:test";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import { createNativeAgentProvider } from "./native-agent-provider.js";
-import { openCodeFake, openCodeProvider } from "./agent-provider-test-support.js";
+import {
+  deferred,
+  openCodeFake,
+  openCodeProvider,
+  waitUntil,
+} from "./agent-provider-test-support.js";
+import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 
 const sessionId = "owned-session";
 
 /**
- * Production providers leave interactions for the tab to answer; only close
- * may reject them. The compatibility auto-responder is off so any rejection
- * observed here came from close.
+ * Production providers leave interactions for the tab to answer. The
+ * compatibility auto-responder is off, so observed rejections come from
+ * close or abort rather than policy auto-answer.
  */
-function interactiveProvider(fake: ReturnType<typeof openCodeFake>) {
+function interactiveProvider(
+  fake: ReturnType<typeof openCodeFake>,
+  messageIds = new OpenCodeMessageIdCoordinator(),
+) {
   return createNativeAgentProvider(
     {
       agent: "opencode",
@@ -25,7 +35,11 @@ function interactiveProvider(fake: ReturnType<typeof openCodeFake>) {
       authToken: "test-token",
       directory: "/workspace",
     },
-    { openCodeClient: fake.client, monitorRetryMs: 1 },
+    {
+      openCodeClient: fake.client,
+      monitorRetryMs: 1,
+      openCodeMessageIdCoordinator: messageIds,
+    },
   );
 }
 
@@ -183,6 +197,181 @@ describe("OpenCode close retains the conversation", () => {
       expect(listed.map((entry) => entry.sessionId)).toContain(sessionId);
       // The session can be deliberately re-registered afterwards.
       provider.registerSession?.(sessionId);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});
+
+/**
+ * OpenCode publishes no deadline, so nothing else ever answers what a stopped
+ * turn left pending. Abort rejects it the way close does, but keeps the session
+ * registered: a stopped turn is not a closed tab.
+ */
+describe("OpenCode abort fails closed on pending requests", () => {
+  test("rejects pending permissions and questions of the aborted session only", async () => {
+    const fake = openCodeFake();
+    fake.setPending(
+      [
+        { id: "perm-aborted", sessionID: sessionId },
+        { id: "perm-other", sessionID: "other-session" },
+      ],
+      [
+        { id: "question-aborted", sessionID: sessionId },
+        { id: "question-other", sessionID: "other-session" },
+      ],
+    );
+    const provider = interactiveProvider(fake);
+    try {
+      await provider.abort(sessionId);
+      expect(fake.abortCalls).toEqual([{ sessionID: sessionId, directory: "/workspace" }]);
+      expect(fake.permissionReplies).toEqual([
+        { requestID: "perm-aborted", directory: "/workspace", reply: "reject" },
+      ]);
+      expect(fake.questionRejections).toEqual([
+        { requestID: "question-aborted", directory: "/workspace" },
+      ]);
+      expect(fake.questionReplies).toEqual([]);
+      expect(fake.deleteCalls).toEqual([]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  for (const stop of ["abort", "closeSession"] as const) {
+    test(`${stop} fences a following dispatch through the pending-list response`, async () => {
+      const fake = openCodeFake();
+      const messageIds = new OpenCodeMessageIdCoordinator();
+      const provider = interactiveProvider(fake, messageIds);
+      const abortGate = deferred();
+      fake.setAbortHandler(async () => {
+        await abortGate.promise;
+        return { data: true };
+      });
+      const cleanupGate = deferred();
+      const dispatchQueued = deferred();
+      try {
+        await provider.send(sessionId, "first", { requestId: "first" });
+        fake.setPending(
+          [{ id: "perm-stopped", sessionID: sessionId }],
+          [{ id: "question-stopped", sessionID: sessionId }],
+        );
+        fake.setPendingReadGate(cleanupGate.promise);
+        const stopping = provider[stop]!(sessionId);
+        await waitUntil(() => fake.abortCalls.length === 1);
+
+        const runExclusive = messageIds.runExclusive.bind(messageIds);
+        messageIds.runExclusive = (scope, operation) => {
+          const queued = runExclusive(scope, operation);
+          dispatchQueued.resolve();
+          return queued;
+        };
+        // Materialize the next turn's requests as soon as its prompt reaches
+        // OpenCode. A cleanup outside the lock would read and reject these.
+        const promptAsync = fake.client.session.promptAsync.bind(fake.client.session);
+        fake.client.session.promptAsync = ((...args: Parameters<typeof promptAsync>) => {
+          fake.setPending(
+            [{ id: "perm-next", sessionID: sessionId }],
+            [{ id: "question-next", sessionID: sessionId }],
+          );
+          return promptAsync(...args);
+        }) as typeof promptAsync;
+        const sending = provider.send(sessionId, "second", { requestId: "second" });
+        await dispatchQueued.promise;
+        expect(fake.promptCalls).toHaveLength(1);
+        abortGate.resolve();
+        await waitUntil(() => fake.permissionListCallCount === 1);
+        expect(fake.promptCalls).toHaveLength(1);
+        cleanupGate.resolve();
+        await Promise.all([stopping, sending]);
+        expect(fake.permissionReplies.map((reply) => reply.requestID)).toEqual(["perm-stopped"]);
+        expect(fake.questionRejections.map((reply) => reply.requestID)).toEqual([
+          "question-stopped",
+        ]);
+        expect((await fake.client.permission.list()).data).toMatchObject([{ id: "perm-next" }]);
+        expect((await fake.client.question.list()).data).toMatchObject([{ id: "question-next" }]);
+      } finally {
+        abortGate.resolve();
+        cleanupGate.resolve();
+        await provider.dispose?.();
+      }
+    });
+  }
+
+  for (const failure of ["ownership read", "ownership settlement"] as const) {
+    test(`rejects pending requests even when post-interrupt ${failure} fails`, async () => {
+      const fake = openCodeFake();
+      const provider = interactiveProvider(fake);
+      try {
+        await provider.send(sessionId, "first", { requestId: "first" });
+        fake.setPending(
+          [{ id: "perm-stopped", sessionID: sessionId }],
+          [{ id: "question-stopped", sessionID: sessionId }],
+        );
+        if (failure === "ownership read") fake.setSessionGetError(new Error("read unavailable"));
+        else fake.setUpdateResponse({ error: { message: "settle unavailable" } });
+        await expect(provider.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+        expect(fake.abortCalls).toHaveLength(1);
+        expect(fake.permissionReplies.map((reply) => reply.requestID)).toEqual(["perm-stopped"]);
+        expect(fake.questionRejections.map((reply) => reply.requestID)).toEqual([
+          "question-stopped",
+        ]);
+        expect((await fake.client.permission.list()).data).toEqual([]);
+        expect((await fake.client.question.list()).data).toEqual([]);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+  }
+
+  test("reports an abort whose pending requests cannot be read or rejected", async () => {
+    const readFailure = openCodeFake();
+    readFailure.setPendingReadErrors(null, new Error("unreachable"));
+    const unreadable = interactiveProvider(readFailure);
+    try {
+      await expect(unreadable.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+      // The turn itself was still stopped first.
+      expect(readFailure.abortCalls).toHaveLength(1);
+    } finally {
+      await unreadable.dispose?.();
+    }
+
+    const rejectFailure = openCodeFake();
+    rejectFailure.setPending([], [{ id: "question-aborted", sessionID: sessionId }]);
+    rejectFailure.setQuestionRejectResponse({
+      error: { message: "failed" },
+      response: { status: 500 },
+    });
+    const stuck = interactiveProvider(rejectFailure);
+    try {
+      await expect(stuck.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+    } finally {
+      await stuck.dispose?.();
+    }
+  });
+
+  test("a request answered between the read and the rejection is not a failure", async () => {
+    const fake = openCodeFake();
+    fake.setPending([{ id: "perm-aborted", sessionID: sessionId }], []);
+    fake.setPermissionReplyResponse({ error: { name: "NotFound" }, response: { status: 404 } });
+    const provider = interactiveProvider(fake);
+    try {
+      await expect(provider.abort(sessionId)).resolves.toBeUndefined();
+      expect(fake.permissionReplies).toHaveLength(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("a failed abort rejects nothing", async () => {
+    const fake = openCodeFake();
+    fake.setPending([{ id: "perm-aborted", sessionID: sessionId }], []);
+    fake.setAbortResponse({ error: { message: "failed" }, response: { status: 500 } });
+    const provider = interactiveProvider(fake);
+    try {
+      await expect(provider.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fake.permissionListCallCount).toBe(0);
+      expect(fake.permissionReplies).toEqual([]);
     } finally {
       await provider.dispose?.();
     }

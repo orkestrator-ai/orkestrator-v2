@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -48,6 +49,7 @@ import {
   getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
+  setNativeAgentResumableSessionArchived,
   discardNativeAgentDispatch,
   movePromptQueueMessage,
   performNativeAgentSessionAction,
@@ -57,6 +59,7 @@ import {
   steerNativeAgentQueuedPrompt,
   resolveNativeAgentInteraction,
   holdNativeAgentInteraction,
+  approveNativeAgentInteractionAndRemember,
   resumeNativeAgentSession,
   retryPromptQueueDispatch,
   retryNativeAgentDispatch,
@@ -64,6 +67,7 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
 import {
@@ -1801,6 +1805,10 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.completionBlockedByBackgroundTasks !== undefined
           ? { completionBlockedByBackgroundTasks: current.completionBlockedByBackgroundTasks }
           : {}),
+        // How the last turn ended belongs to session state, like the turn.
+        ...(hasAuthoritativeState && current.terminalMessages
+          ? { terminalMessages: current.terminalMessages }
+          : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
         ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         // Ordered after whatever is on screen, not after `current`: a new
@@ -1933,6 +1941,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.completionBlockedByBackgroundTasks === undefined
           ? {}
           : { completionBlockedByBackgroundTasks: value.completionBlockedByBackgroundTasks }),
+        ...(value.terminalMessages?.length
+          ? { terminalMessages: value.terminalMessages as TMessage[] }
+          : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
         ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         revision: (current?.revision ?? 0) + 1,
@@ -3098,6 +3109,25 @@ export function useNativeAgentSession<TMessage = unknown>({
     [identity, refresh],
   );
 
+  // "Approve and remember" (todo 0723): one approval, then the rule is saved
+  // by the backend. The refresh drops the answered card.
+  const approveInteractionAndRemember = useCallback(
+    async (
+      interactionId: string,
+      choice: PermissionRuleChoiceInput,
+    ): Promise<AgentInteractionApplyOutcome> => {
+      const { outcome, ruleSaveWarning } = await approveNativeAgentInteractionAndRemember({
+        ...identity,
+        interactionId,
+        ...choice,
+      });
+      if (ruleSaveWarning) toast.warning(ruleSaveWarning);
+      await refresh();
+      return outcome;
+    },
+    [identity, refresh],
+  );
+
   const queueKey = useMemo(() => `${platform}\0${sessionKey}`, [platform, sessionKey]);
   const enqueue = useCallback(
     async (prompt: string, options: NativeAgentSendOptions = {}) => {
@@ -3193,6 +3223,12 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
   }, [beginProjectionMutation, identity, refresh]);
   const listResumable = useCallback(() => listNativeAgentResumableSessions(identity), [identity]);
+  const setResumableArchived = useCallback(
+    async (resumableSessionId: string, archived: boolean) => {
+      await setNativeAgentResumableSessionArchived({ ...identity, resumableSessionId, archived });
+    },
+    [identity],
+  );
   const resume = useCallback(
     async (providerSessionId: string, controls?: NativeAgentControlUpdate) => {
       const operationEpoch = beginProjectionMutation();
@@ -3256,11 +3292,16 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (progressive && !historyCursorRef.current) {
         if (historyUnpageableRef.current) return projectionRef.current;
         /*
-         * The progressive transcript can know that history is incomplete long
-         * before the paging cache exists: only a sync-v1 read fills that cache,
-         * and this tab may never have issued one. A click is the request to
-         * mint a cursor even when the live tail itself reported that it could
-         * not page — the joined snapshot is what turns "not shown" into a page.
+         * No direct cursor to page from. With 0232 a pageable provider names one
+         * when the byte-bounded view retains a usable whole-message boundary.
+         * Joined paging still serves an OpenCode view keeping only a failed
+         * message's error row (its main row was byte-omitted), a cursor too
+         * long to wrap, a backend before 0232, or a source with no direct pages
+         * (the Claude bridge's `/messages` fallback, 0050). It mints a joined
+         * cursor from the sync-v1 projection, a whole transcript read, which runs
+         * only on a click. A click is the request to mint one even when the
+         * live tail reported that it could not page — the joined snapshot is
+         * what turns "not shown" into a page. Retirement: version-compatibility.md.
          */
         const update = await getNativeAgentProjectionUpdate<TMessage>({
           ...identity,
@@ -3536,6 +3577,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     updateControls,
     resolveInteraction,
     holdInteraction,
+    approveInteractionAndRemember,
     enqueue,
     removeQueued,
     steerQueued,
@@ -3544,6 +3586,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     retryRecoverableDispatch,
     discardRecoverableDispatch,
     listResumable,
+    setResumableArchived,
     resume,
     fork,
     performAction,

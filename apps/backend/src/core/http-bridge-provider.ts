@@ -42,6 +42,7 @@ import type {
 import {
   EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   isNativeAgentExecutionPolicy,
+  nativeAgentCapabilities,
   parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
@@ -253,9 +254,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * Ask the bridge whether it already holds this request id.
    *
    * Answers `dispatched` only on an explicit positive from the bridge's own
-   * dispatch journal. A missing route, an unknown session, an unparseable body
-   * and a record lost to a bridge restart all read as `unknown`, because none
-   * of them is evidence that the prompt did not run.
+   * dispatch journal, and `absent` only on the bridge's explicit proof that the
+   * id never reached it. A missing route, an unknown session and an
+   * unparseable body all read as `unknown`, because none of them is evidence
+   * that the prompt did not run.
    */
   async dispatchStatus(sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
     const response = await bridgeFetch(
@@ -272,8 +274,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     // The additive flag preserves `dispatched` for older backends, while a
     // newer backend can distinguish a pending turn from a completed one.
     if (body?.dispatch === "dispatched" && body.pending === true) return "pending";
-    // `lost` is additive: a bridge that predates it answers `unknown` there.
-    return body?.dispatch === "dispatched" || body?.dispatch === "lost" ? body.dispatch : "unknown";
+    // `lost` and `absent` are additive: a bridge that predates them answers
+    // `unknown` there.
+    return body?.dispatch === "dispatched" ||
+      body?.dispatch === "lost" ||
+      body?.dispatch === "absent"
+      ? body.dispatch
+      : "unknown";
   }
 
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
@@ -1107,6 +1114,22 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   setSessionTitle(sessionId: string, title: string) {
     return this.catalogAdapter.setSessionTitle(sessionId, title);
+  }
+
+  async setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
+    if (!nativeAgentCapabilities(this.agent).actions?.archive) {
+      throw new PromptRejectedError(`${this.agent} cannot archive conversations`);
+    }
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/list/${encodeURIComponent(resumableSessionId)}/${archived ? "archive" : "unarchive"}`,
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    await assertOkWithErrorDetail(
+      response,
+      `${this.agent} ${archived ? "archive" : "unarchive"} conversation`,
+    );
   }
 
   async stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {

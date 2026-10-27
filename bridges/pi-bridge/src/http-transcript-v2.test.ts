@@ -28,7 +28,8 @@ const { server, start, shutdown } = await import("./server.js");
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState, resetRenderedHistory } = await import("./agent-session.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
-const { loadPersistedState, persistBarrier } = await import("./persistence.js");
+const { loadPersistedState, persistBarrier, settlePersistenceForTests } =
+  await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { applyCommandChanges, applySessionEvent } = await import("./translate.js");
 
@@ -355,6 +356,7 @@ async function republishAndRestore(): Promise<void> {
     await loadPersistedState();
   } finally {
     delete process.env.PI_BRIDGE_STATE_DIR;
+    await settlePersistenceForTests();
     await rm(directory, { recursive: true, force: true });
   }
 }

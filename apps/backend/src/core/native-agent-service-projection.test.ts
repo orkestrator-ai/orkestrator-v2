@@ -1200,7 +1200,9 @@ describe("NativeAgentService", () => {
           await service.ensureSession(identity);
           const projection = await service.getProjection(identity);
           expect(projection?.title).toBe(title);
-          expect(stub.setSessionTitle).toHaveBeenCalledWith("provider-session", title);
+          // Only a title the backend chose is pushed; the placeholder is
+          // already the provider's own.
+          expect(stub.setSessionTitle).not.toHaveBeenCalled();
         },
       );
     },

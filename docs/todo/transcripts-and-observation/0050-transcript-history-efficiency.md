@@ -58,7 +58,10 @@ providers, and a mounted tab across a bridge-only restart.
   and fingerprints the retained projection before it serves a page. So does
   the renderer when the progressive view carries no direct cursor: Load
   earlier messages mints its first cursor from the sync-v1 projection, which
-  mints only v1 cursors ([0232](0232-direct-history-cursor-minting.md)).
+  mints only v1 cursors. Since 2026-10-27 the view carries a direct cursor
+  whenever its provider pages, a byte-bounded one included, so that mint now
+  serves only sources without direct pages, such as the `/messages` fallback
+  ([0232](0232-direct-history-cursor-minting.md)).
 - Workflows. Progress probes read a conditional window of the newest
   `PROGRESS_TRANSCRIPT_WINDOW_MESSAGES` (8) messages through
   `readTranscriptProgressSample` (`apps/backend/src/core/transcript-progress.ts`).

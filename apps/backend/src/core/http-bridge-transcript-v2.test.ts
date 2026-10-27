@@ -6,7 +6,10 @@ import {
 } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
-import { HttpBridgeTranscriptCapabilities } from "./http-bridge-transcript-v2.js";
+import {
+  HttpBridgeTranscriptCapabilities,
+  positionedCursorBefore,
+} from "./http-bridge-transcript-v2.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 
 const messages = [
@@ -110,6 +113,10 @@ describe("bridge transcript v2 negotiation", () => {
     if ("unchanged" in snapshot) throw new Error("expected a snapshot");
     expect(snapshot.representation).toBe("summary");
     expect(snapshot.historyCursor).toBeDefined();
+    // The window's own first row names the snapshot's cursor; a row the
+    // window does not hold names none.
+    expect(snapshot.historyCursorBefore?.("m1")).toBe(snapshot.historyCursor);
+    expect(snapshot.historyCursorBefore?.("prompt")).toBeUndefined();
     const part = (snapshot.messages[0] as { parts: Array<Record<string, unknown>> }).parts[0]!;
     const locator = (part.detail as { locator: string }).locator;
     const detail = await runtime(provider).transcriptDetail!("session-1", locator);
@@ -123,6 +130,42 @@ describe("bridge transcript v2 negotiation", () => {
     expect(requests.map((request) => new URL(request.url).searchParams.get("version"))[0]).toBe(
       "2",
     );
+  });
+
+  test("a cursor before a later row of the window pages exactly the rows before it", () => {
+    const history = Array.from({ length: 12 }, (_, index) => ({
+      id: `r${index}`,
+      role: "assistant",
+      content: `row ${index}`,
+      parts: [],
+      createdAt: "2026-09-27T00:00:00Z",
+    }));
+    const update = bridgeTranscriptSummaryUpdate(history, {
+      ...readOptions,
+      limit: 5,
+      targetBytes: 512 * 1024,
+      pages: true,
+    });
+    if (update.status !== "snapshot") throw new Error("expected a snapshot");
+    const before = positionedCursorBefore(
+      update.value.messages,
+      update.value.startIndex,
+      update.value.historyCursor!,
+    );
+    expect(before("r7")).toBe(update.value.historyCursor);
+    const page = bridgeTranscriptPage(history, {
+      generation: "g",
+      contentEpoch: 1,
+      complete: true,
+      cursor: before("r9")!,
+      limit: 100,
+      targetBytes: 512 * 1024,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((row) => (row as { id: string }).id)).toEqual(
+      history.slice(0, 9).map((row) => row.id),
+    );
+    expect(before("r3")).toBeUndefined();
   });
 
   test("revised rows from before the window reach the provider snapshot as summaries", async () => {

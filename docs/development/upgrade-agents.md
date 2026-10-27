@@ -674,8 +674,9 @@ thread items are:
 `bridges/codex-bridge/src/app-server/process-supervisor.ts` launches the binary
 selected by `CODEX_PATH`. `apps/backend/src/core/commands.ts` also uses the
 managed Codex binary for isolated `codex exec` helpers such as environment-name
-generation; `bridges/codex-bridge/src/session-titles.ts` is another deliberate
-hermetic `codex exec` exception.
+generation; `apps/backend/src/core/session-title-runners.ts` is another
+deliberate hermetic `codex exec` exception (session titles), and its test runs
+the pinned binary's parser over the production argument shape.
 
 ### How to upgrade Codex
 
@@ -834,6 +835,25 @@ hermetic `codex exec` exception.
    question's `providerLimitAt` instead. To prove a paused question outlives
    the default deadline and Codex's own auto-resolution, run the same test
    once with `CODEX_LIVE_QUESTION_ANSWER_DELAY_MS=660000` (about 11 minutes).
+
+   Then check that approving a command still saves no rule, on the same kind
+   of loopback endpoint and without credits:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts
+   ```
+
+   Orkestrator never offers or sends Codex's exec-policy and network-policy
+   amendments (see `bridges/codex-bridge/AGENTS.md`): accepting one writes a
+   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's
+   behaviour: an `untrusted` command approval carries
+   `proposedExecpolicyAmendment`, **Approve** leaves `CODEX_HOME/rules/`
+   empty, and the identical command asks again in the next turn. Its control
+   answers with the amendment itself and finds `rules/default.rules`. If a
+   release adds an app-server method that lists and removes saved rules, add
+   a list-and-revoke surface before offering the amendments again.
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

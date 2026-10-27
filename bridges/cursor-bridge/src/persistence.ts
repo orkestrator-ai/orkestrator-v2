@@ -539,6 +539,8 @@ function toEssential(state: SessionState): EssentialRecord {
         ? { ...entry, state: "ambiguous" as const }
         : entry;
     }),
+    // Only ever `true`, so an older writer that drops it leaves the safe answer.
+    ...(state.promptJournalComplete === true ? { promptJournalComplete: true as const } : {}),
     ...persistedSteerJournal(state),
     composer: state.composer,
     ...(state.usage ? { usage: state.usage } : {}),
@@ -580,9 +582,18 @@ export async function loadPersistedState(): Promise<void> {
       });
     }
   }
+  const restoredIds = new Set<string>();
   for (const entry of parsed.sessions) {
     const restored = restoreSession(entry, fileBytes);
     if (!restored || closing.has(restored.id)) continue;
+    // This bridge never writes one id twice. A file that does has lost one of
+    // the copies' journals, so neither can prove anything is absent.
+    if (restoredIds.has(restored.id)) {
+      restored.promptJournalComplete = false;
+      const previous = sessions.get(restored.id);
+      if (previous) previous.promptJournalComplete = false;
+    }
+    restoredIds.add(restored.id);
     sessions.set(restored.id, restored);
     if (restored.clientSessionKey) clientSessionKeys.set(restored.clientSessionKey, restored.id);
   }
@@ -627,9 +638,23 @@ function restoreSession(entry: unknown, fileBytes: number): SessionState | undef
       if (Array.isArray(pair) && nonBlank(pair[0])) setStructuredResult(state, pair[0], pair[1]);
     }
   }
+  // Whether every journal record came back exactly as this bridge writes it.
+  // Anything skipped, merged or rewritten here means the file may have held an
+  // id the restored journal no longer does.
+  let journalWhole = Array.isArray(entry.promptJournal);
   if (Array.isArray(entry.promptJournal)) {
     for (const journalEntry of entry.promptJournal) {
-      if (!isObject(journalEntry) || !nonBlank(journalEntry.requestId)) continue;
+      if (!isObject(journalEntry) || !nonBlank(journalEntry.requestId)) {
+        journalWhole = false;
+        continue;
+      }
+      if (
+        !isPersistedJournalState(journalEntry.state) ||
+        journalEntry.requestId !== journalEntry.requestId.trim() ||
+        state.promptJournal.has(journalEntry.requestId)
+      ) {
+        journalWhole = false;
+      }
       state.promptJournal.set(journalEntry.requestId, {
         requestId: journalEntry.requestId,
         state: readJournalState(journalEntry.state),
@@ -638,6 +663,10 @@ function restoreSession(entry: unknown, fileBytes: number): SessionState | undef
       });
     }
   }
+  // Never set from the flag alone: the record must say the journal was
+  // complete when written, and it must have come back whole. A journal over
+  // its bound is evicted on its next write, which clears the flag there.
+  if (entry.promptJournalComplete === true && journalWhole) state.promptJournalComplete = true;
   restoreSteerJournal(state, entry.steerJournal, entry.steerFence);
   state.todos = restoreTodos(state);
   seedObservedMcpTools(state);
@@ -769,6 +798,13 @@ function restoreTodos(state: SessionState): SessionState["todos"] {
 
 function readCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+/** The states `toEssential` writes; anything else was not written by this bridge. */
+function isPersistedJournalState(value: unknown): boolean {
+  return (
+    value === "completed" || value === "failed" || value === "ambiguous" || value === "discarded"
+  );
 }
 
 function readJournalState(value: unknown): "completed" | "failed" | "ambiguous" | "discarded" {

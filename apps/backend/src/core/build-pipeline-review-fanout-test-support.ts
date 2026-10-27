@@ -172,8 +172,16 @@ export class FanoutProvider implements BuildPipelineProvider {
 
   registerSession(): void {}
 
+  /**
+   * `send` deduplicates every id for good, so the fake's journal is complete:
+   * an id it never took is provably `absent`. A test models a bridge that
+   * lost completeness (a restart, an eviction) by setting this.
+   */
+  journalIncomplete = false;
+
   async dispatchStatus(_sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
-    return this.sent.some((entry) => entry.requestId === requestId) ? "dispatched" : "unknown";
+    if (this.sent.some((entry) => entry.requestId === requestId)) return "dispatched";
+    return this.journalIncomplete ? "unknown" : "absent";
   }
 
   async createSession(
@@ -273,6 +281,7 @@ export class FanoutProvider implements BuildPipelineProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
+    if (!this.sent.some((entry) => entry.requestId === requestId)) return null;
     const base = { ok: true as const, provider: "claude" as const, requestId };
     if (sessionId.includes("consolidation")) {
       if (this.missingConsolidationResult) return null;

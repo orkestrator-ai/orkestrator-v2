@@ -11,6 +11,7 @@ import { commandChangeHooks } from "./command-changes.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
+  backgroundTaskOwner,
   emitBackgroundTaskSnapshot,
   recordBackgroundTaskLaunch,
   recordShellCommand,
@@ -87,8 +88,8 @@ export async function recordBackgroundTaskHook(
   if (
     // Not gated on the turn generation: the session's CLI keeps running
     // agents an earlier turn started after a follow-up takes the
-    // foreground, and their lifecycle is recorded against the CLI's
-    // control, exactly as its stream-side task messages are.
+    // foreground, and their lifecycle is recorded against the CLI
+    // itself, exactly as its stream-side task messages are.
     sessions.get(sessionId) !== session ||
     session.deleting ||
     turn.abortController.signal.aborted ||
@@ -108,8 +109,8 @@ export async function recordBackgroundTaskHook(
     hookInput.hook_event_name === "TaskCreated" || hookInput.hook_event_name === "TaskCompleted"
       ? hookInput.task_id
       : hookInput.agent_id;
-  const owner = session.backgroundTaskControls?.get(hookTaskId);
-  if (owner && owner !== turn.queryIteratorControl) return {};
+  const owner = backgroundTaskOwner(session, hookTaskId);
+  if (owner && owner !== turn.runtime) return {};
   if (
     hookInput.hook_event_name === "TaskCreated" ||
     hookInput.hook_event_name === "SubagentStart"
@@ -126,7 +127,7 @@ export async function recordBackgroundTaskHook(
             description: hookInput.agent_type,
             subagentType: hookInput.agent_type || undefined,
           },
-      turn.queryIteratorControl,
+      turn.runtime,
       // The hook fires as a run starts, so a terminal record under this id
       // belongs to an earlier run: a SendMessage resume, or a subagent
       // waking from a pause under the same tool-use id.
@@ -148,7 +149,7 @@ export async function recordBackgroundTaskHook(
     // the same continuation.
     const settlesReleasedTurn =
       (turn.turnReleasedToBackgroundTasks || turn.settlingResult) &&
-      session.backgroundTaskControls?.get(taskId) === turn.queryIteratorControl &&
+      backgroundTaskOwner(session, taskId) === turn.runtime &&
       LIVE_BACKGROUND_TASK_STATUSES.has(session.backgroundTasks?.[taskId]?.status ?? "completed");
     if (settlesReleasedTurn) {
       turn.receivedResult = false;

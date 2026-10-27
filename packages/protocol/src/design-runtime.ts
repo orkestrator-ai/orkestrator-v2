@@ -1,3 +1,4 @@
+import { isKeyboardShortcutsChord } from "./keyboard-shortcuts.js";
 import type {
   DesignElement,
   DesignHierarchyPage,
@@ -12,7 +13,7 @@ import type {
  * One sanitizer and one DOM budget serve both, so a frame the backend accepts
  * renders the same way in every client.
  */
-export function installDesignRuntime() {
+export function installDesignRuntime(matchesShortcut?: typeof isKeyboardShortcutsChord) {
   const MAX_HTML_BYTES = 256 * 1024;
   const MAX_ELEMENTS = 5000;
   const forbidden = "script,iframe,frame,object,embed,base,meta,link,portal,applet";
@@ -506,6 +507,13 @@ export function installDesignRuntime() {
   document.addEventListener(
     "keydown",
     (event) => {
+      if (matchesShortcut?.(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat)
+          window.parent.postMessage({ channel: "orkestrator-design-shortcuts" }, "*");
+        return;
+      }
       // Escape always returns control to the editor, never to authored markup.
       if (event.key === "Escape")
         window.parent.postMessage({ channel: "orkestrator-design-escape" }, "*");
@@ -517,5 +525,5 @@ export function installDesignRuntime() {
 /** Only our nonce-bearing bootstrap executes. Authored code has no nonce. */
 export function designBootstrap(nonce: string): string {
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(nonce)) throw new Error("Invalid runtime nonce");
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})();</script></body></html>`;
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})(${isKeyboardShortcutsChord.toString()});</script></body></html>`;
 }

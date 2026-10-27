@@ -43,7 +43,7 @@ const { route, setCancelAckTimeoutForTests, setDeleteCancelTimeoutForTests } =
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
 const { sessions } = await import("./state.js");
-const { setPersistWriteGateForTests } = await import("./persistence.js");
+const { setPersistWriteGateForTests, settlePersistenceForTests } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 type SessionState = ReturnType<typeof newSessionState>;
@@ -473,6 +473,7 @@ describe("cancel during the mandatory journal write", () => {
       pi.finishRun();
       sessions.delete(state.id);
       resetHooks();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -508,6 +509,7 @@ describe("cancel during the mandatory journal write", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.delete(state.id);
       resetHooks();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -552,6 +554,7 @@ describe("cancel during the mandatory journal write", () => {
       pi.finishRun();
       sessions.delete(state.id);
       resetHooks();
+      await settlePersistenceForTests();
       await rm(directory, { recursive: true, force: true });
     }
   });

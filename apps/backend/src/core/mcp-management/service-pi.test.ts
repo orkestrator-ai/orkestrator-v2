@@ -19,8 +19,8 @@ beforeEach(() => {
   fixture = createFixture({ env: {} });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 /** A container target sees both the user and the project file as loaded sources. */
@@ -578,7 +578,7 @@ describe("Pi adapter", () => {
 
   test("Pi: PI_CODING_AGENT_DIR relocates the user file", async () => {
     const custom = mkdtempSync(path.join(tmpdir(), "mcp-pi-dir-"));
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { PI_CODING_AGENT_DIR: custom } });
     const { remove } = await crud(fixture, "pi", "pi:user");
     const file = path.join(custom, "mcp.json");

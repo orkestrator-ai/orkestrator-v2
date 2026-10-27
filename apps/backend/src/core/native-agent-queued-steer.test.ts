@@ -189,7 +189,7 @@ describe("durable queue-to-steer handoff", () => {
       await fixture(async ({ service, storage, perform, setResponse }) => {
         setResponse({ outcome: "unknown" });
         await service.steerQueuedPrompt({ ...identity, messageId: item.id });
-        const internal = storageInternals(storage).repos.nativeAgentSessions as unknown as {
+        const internal = storageInternals(storage).repos.nativeAgentDeliveries as unknown as {
           settlePromptQueueSteerSource: (...args: unknown[]) => Promise<void>;
         };
         const write = spyOn(internal, "settlePromptQueueSteerSource").mockRejectedValueOnce(

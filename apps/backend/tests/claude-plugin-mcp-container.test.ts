@@ -156,7 +156,7 @@ describe.skipIf(!enabled)("Claude plugin discovery in a real container", () => {
       } finally {
         service?.dispose();
         if (containerId) await docker("rm", "--force", containerId);
-        fixture.cleanup();
+        await fixture.cleanup();
       }
     },
     90_000,

@@ -9,11 +9,11 @@ import type {
   MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import type { StorageService } from "./storage.js";
+import { isRecord } from "./storage-shared-core.js";
 import {
   paneLayoutLeaves,
-  isRecord,
   assertPaneLayoutRootWithinBounds,
-} from "./storage-shared-core.js";
+} from "./storage-shared-pane-layout.js";
 
 /** Compare, recompute the semantic intent on the latest tree, and retry.
  * A stale renderer save merges against this write through applyPaneLayoutIntent.

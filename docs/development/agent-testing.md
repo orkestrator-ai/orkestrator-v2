@@ -95,6 +95,23 @@ mise run dev:stop --profile codex-typed-qa
 mise run dev:reset --profile codex-typed-qa
 ```
 
+## Codex refused-login qualification
+
+`e2e/agent-testing/codex-refused-login-live.spec.ts` sends one Codex turn on a
+login the API refuses and checks the tab shows the 401 and the `needs-auth`
+sign-in banner, before and after a reload (todo 0235). Give the profile a
+made-up API key from a throwaway `CODEX_HOME`, never a real login; the key goes
+to OpenAI and is refused.
+
+```bash
+mkdir -m 700 /tmp/qa-refused-codex-home   # holds auth.json: {"auth_mode":"apikey","OPENAI_API_KEY":"sk-proj-<made up>"}
+CODEX_HOME=/tmp/qa-refused-codex-home mise run dev:test --profile codex-refused-qa --fixture --credential-source codex --agent-platforms codex
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=codex-refused-qa ORKESTRATOR_AGENT_TEST_LIVE_REFUSED_LOGIN=1 mise run test:logged -- --name codex-refused-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts codex-refused-login-live.spec.ts --workers=1
+mise run dev:stop --profile codex-refused-qa
+mise run dev:reset --profile codex-refused-qa
+```
+
 ## Claude warm-runtime qualification
 
 `e2e/agent-testing/claude-warm-runtime.spec.ts` exercises real Claude follow-up
@@ -1012,10 +1029,10 @@ token. The whole run takes about 20 minutes.
   the catalogue's first `gpt-4`, which that login refuses).
 
 The approval card is answered with **Approve** alone. The spec never picks an
-optional or amendment option. Codex's "Approve with command policy" writes a
-rule into the profile's isolated Codex home. Earlier profiles shared the host
-home, as recorded in
-[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+optional or amendment option. Codex cards no longer offer one: the old
+"Approve with command policy" wrote a durable rule into the Codex home (the
+profile's isolated one; earlier profiles shared the host home, as recorded in
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)).
 The task remains explicitly opt-in (the environment flag above is required);
 it is not part of the default suite or CI because it spends real provider tokens.
 Two additional cases inject setup failures immediately after creation and

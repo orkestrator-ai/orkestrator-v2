@@ -599,9 +599,9 @@ async function answer(page: Page, request: AgentInteractionRequest, testCase: Ca
     return;
   }
   // Only a required choice (an agent's own options) needs a pick. An optional
-  // question is a broader grant: Codex's "Approve with command policy" writes
-  // a durable execpolicy rule into the provider home, which allow-once must
-  // never do, so neither it nor any option carrying an amendment is chosen.
+  // question is a broader grant (Codex's retired "Approve with command
+  // policy" wrote a durable execpolicy rule into the provider home), which
+  // allow-once must never do, so no option carrying an amendment is chosen.
   const allow = approvalOption(question);
   if (allow) {
     await page

@@ -69,6 +69,14 @@ pushes it. It refuses unless the working tree is clean and `HEAD` is already on
 at its `HEAD`. Either run refuses when the tag already names another commit,
 locally or on origin. Pushing the tag also starts the container image workflow.
 
+Packaged builds ship the preview worker pin checked in at
+`docker/artifact-preview-worker/published-image.json`. If the
+`publish-preview-worker` workflow has an open pin pull request, merge it
+before step 2; otherwise the backend build prints `Preview worker: no
+published image for build context …` and installs of this release build the
+worker image locally instead of pulling it (safe, only slower). See
+[Preview worker](../architecture/transcript-artifacts-runtime.md#preview-worker).
+
 Each run installs dependencies, builds, and uploads to a **draft** release, so
 nothing is visible until `release:publish`. Publishing refuses unless the macOS
 and Linux artifacts and their channel's updater feeds are present: for a beta,

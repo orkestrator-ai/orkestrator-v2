@@ -8,12 +8,18 @@
 import { copyFile, mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
-const target = process.argv[2];
-if (!target) {
+const argument = process.argv[2];
+if (!argument) {
   console.error("usage: bun stage-context.ts <context-dir>");
   process.exit(2);
 }
+const target = path.resolve(argument);
 const here = import.meta.dir;
+// Bun writes each module's path, relative to the working directory, as a
+// comment in the bundle. Staging from the repository root keeps the bundle,
+// and so the context digest a published image is bound to, the same
+// wherever this runs (the backend build, publish.sh, CI, a source checkout).
+process.chdir(path.resolve(here, "../.."));
 const backend = path.resolve(here, "../../apps/backend");
 const moduleDir = path.join(backend, "src/core/transcript-artifacts");
 const { ALL_PINNED_BUNDLES, pinnedBundleCandidates, sha256Hex, writePinnedBundleLicenses } =

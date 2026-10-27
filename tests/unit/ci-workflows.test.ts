@@ -70,4 +70,44 @@ describe("CI workflow contracts", () => {
     expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');
     expect(source).not.toContain("orkestrator-v2:latest");
   });
+
+  test("the preview worker image is published per build context and pinned through a pull request", () => {
+    const source = read(".github/workflows/publish-preview-worker.yml");
+    const parsed = Bun.YAML.parse(source) as {
+      on: { push: { branches: string[]; paths: string[] }; workflow_dispatch: unknown };
+      env: Record<string, string>;
+      jobs: Record<string, { if?: string; permissions?: Record<string, string> }>;
+    };
+    expect(parsed.on.push.branches).toEqual(["main"]);
+    expect("workflow_dispatch" in parsed.on).toBe(true);
+    // Every input of the staged context triggers a run (a missed one only
+    // leaves the pin stale, which installs survive by building locally).
+    expect(parsed.on.push.paths).toEqual(
+      expect.arrayContaining([
+        "docker/artifact-preview-worker/**",
+        "apps/backend/src/core/transcript-artifacts/**",
+        "packages/protocol/src/**",
+        "bun.lock",
+      ]),
+    );
+    // The label the backend checks after a pull is the one the image carries
+    // (the backend's preview-worker-context-digest test pins the same value).
+    expect(parsed.env.CONTEXT_LABEL).toBe("orkestrator.artifact-preview-worker.context");
+    expect(source).toContain(
+      "${{ env.CONTEXT_LABEL }}=${{ needs.context.outputs.context-digest }}",
+    );
+    expect(source).toContain("bun docker/artifact-preview-worker/stage-context.ts");
+    expect(source).toContain("bun docker/artifact-preview-worker/context-digest.ts");
+    expect(source).toContain("bun docker/artifact-preview-worker/write-pin.ts");
+    // Native runners for each architecture, pushed by digest, no emulation.
+    expect(source).toContain("runner: ubuntu-24.04-arm");
+    expect(source).toContain("push-by-digest=true,name-canonical=true,push=true");
+    expect(source).not.toContain("docker/setup-qemu-action@");
+    // An existing image for the context is not rebuilt, and only main is pinned.
+    expect(parsed.jobs.build?.if).toBe("needs.context.outputs.exists != 'true'");
+    expect(source).toContain("github.ref == 'refs/heads/main'");
+    // Only the pin job can write to the repository.
+    for (const [name, job] of Object.entries(parsed.jobs))
+      expect(job.permissions?.contents, name).toBe(name === "publish" ? "write" : "read");
+  });
 });

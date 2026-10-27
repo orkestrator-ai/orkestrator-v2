@@ -669,6 +669,66 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     }
   });
 
+  test("a mutation restores backed-off polling without explicit refresh", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    const { result } = await openPanel();
+    await act(() => clock.advance(15_000));
+    await act(async () => {
+      await result.current.copyExternalFiles([droppedFile("new.txt", [1])], ".");
+    });
+    const afterMutation = snapshotCalls();
+    await act(() => clock.advance(4_999));
+    expect(snapshotCalls()).toEqual(afterMutation);
+    await act(() => clock.advance(1));
+    expect(snapshotCalls().tree).toBe(afterMutation.tree + 1);
+  });
+
+  test("watch coverage changes the backoff while the panel stays open", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    await openPanel();
+    await act(() => clock.advance(15_000));
+    const setWatched = (watched: boolean) =>
+      act(() =>
+        useWorktreeSnapshotStore.setState({
+          entries: new Map([
+            [
+              "environment-1",
+              {
+                environmentId: "environment-1",
+                targetGeneration: 1,
+                comparisonRef: "unrelated-baseline",
+                fileListRevision: 1,
+                treeRevision: 1,
+                freshness: "current",
+                watched,
+              },
+            ],
+          ]),
+        }),
+      );
+    try {
+      setWatched(true);
+      await act(() => clock.advance(60_000));
+      const filesEntry = () =>
+        coordinator.getDiagnostics().entries.find((entry) => entry.id.includes("files-panel"))!;
+      expect(filesEntry().cadenceMs).toBe(30_000);
+      await act(() => clock.advance(filesEntry().timerDueAt! - clock.time));
+      const watchedReads = snapshotCalls();
+      await act(() => clock.advance(29_999));
+      expect(snapshotCalls()).toEqual(watchedReads);
+      await act(() => clock.advance(1));
+      expect(snapshotCalls().tree).toBe(watchedReads.tree + 1);
+      setWatched(false);
+      const unwatchedReads = snapshotCalls();
+      await act(() => clock.advance(10_000));
+      expect(snapshotCalls().tree).toBe(unwatchedReads.tree + 1);
+    } finally {
+      act(() => useWorktreeSnapshotStore.setState({ entries: new Map() }));
+    }
+  });
+
   test("a closed panel keeps no periodic demand", async () => {
     const { clock } = installFakeReadCoordinator();
     useFilesPanelStore.setState({ isOpen: false });

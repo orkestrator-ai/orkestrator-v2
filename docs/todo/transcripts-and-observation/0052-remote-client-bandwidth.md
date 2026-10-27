@@ -216,8 +216,9 @@ verification").
    the remote baseline using the decision-record template.
 2. Done: client-local data-saving preference (D2, D3).
 3. Done: 1 s responsive cadence and quiet backoff for the Files panel and
-   reviewer tab under data saving, reset on user action, invalidation,
-   reconnect and return (D4).
+   reviewer tab under data saving, reset on checkpoints and status changes,
+   invalidation, reconnect and return (D4). Files-panel user actions also reset
+   backoff; a no-op manual reviewer refresh preserves it.
 4. Done: approvals, completion, errors and queue state still arrive through
    invalidations that read at once; data saving only slows backstop polls.
 5. Decided: hidden terminal subscriptions stay attached (D5).
@@ -236,8 +237,12 @@ verification").
 - Terminal output matches the exact snapshot after backpressure and reconnect.
 - `body` mode and HTTP/SSE stay available as rollback during any opt-in trial.
 - The data-saving preference affects only the requesting client; two clients
-  with different preferences keep their own freshness. (Unit-covered: two
-  coordinators keep their own cadence; live check owed.)
+  with different preferences keep their own freshness. (Unit-covered, plus
+  `e2e/DataSavingGateway.spec.ts`: two isolated browser clients use the real
+  setting, persisted UI store, shared coordinator and gateway against synthetic
+  state. Checks reload, hidden/resume, a dropped SSE connection, response bytes
+  and approval/completion budgets; emits content-free measurement JSON.
+  Provider-backed remote-route qualification is still owed.)
 - Returning or reconnecting restores exact state, including pending approvals,
   errors, queued prompts and parked dispatch controls.
 - Offline periods and missed invalidations recover through authoritative reads
@@ -252,6 +257,15 @@ verification").
 - Metrics and artifacts hold no terminal content, prompts, credentials,
   attachment data or file contents. (The harness emits aggregates and
   synthetic workload ids only.)
+
+Regression coverage for the baseline harness lives in
+`apps/backend/src/remote-bandwidth-baseline.test.ts`. It covers capacity
+validation and subscription refusal/close/timeout cleanup, partial final-frame
+arrival across clients and producers, all three transport metrics, raw-frame
+parsing, paced forwarding and a stopped downstream reader with bounded queues
+and gateway desync. Files-panel tests also cover revision/mutation resets and
+watch-coverage changes while open; the reviewer test preserves D4's no-op
+manual-refresh behaviour.
 
 ## Constraints and rationale
 

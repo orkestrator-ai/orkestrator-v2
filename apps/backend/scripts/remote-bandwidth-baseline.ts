@@ -38,7 +38,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
-import { connect as netConnect, createServer, type Server, type Socket } from "node:net";
+import { connect as netConnect, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { constants as zlibConstants, createGunzip } from "node:zlib";
@@ -51,6 +51,12 @@ import {
 } from "@orkestrator/protocol/terminal-websocket";
 
 import { OrkestratorGateway } from "../src/gateway.js";
+import { startThrottle, type Throttle } from "./remote-bandwidth-throttle.js";
+import {
+  TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET,
+  TERMINAL_WEBSOCKET_MAX_CHANNELS,
+  TERMINAL_WEBSOCKET_MAX_SOCKETS,
+} from "../src/terminal-websocket-server.js";
 
 export const BASELINE_SCHEMA = "orkestrator.remote-bandwidth-baseline.v1";
 export const TRANSPORTS = ["body", "on", "websocket"] as const;
@@ -167,7 +173,7 @@ export class UsageError extends Error {}
 
 function positiveInteger(name: string, value: string | undefined, allowZero = false): number {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < (allowZero ? 0 : 1)) {
+  if (!Number.isSafeInteger(parsed) || parsed < (allowZero ? 0 : 1)) {
     throw new UsageError(`${name} needs ${allowZero ? "a non-negative" : "a positive"} integer`);
   }
   return parsed;
@@ -253,94 +259,25 @@ export function parseOptions(argv: readonly string[]): BaselineOptions {
         throw new UsageError(`Unknown option ${flag}`);
     }
   }
+  if (options.transports.includes("websocket")) {
+    for (const sessions of options.sessions) validateSocketCapacity(sessions, options);
+  }
   return options;
 }
 
-// ---------------------------------------------------------------------------
-// Constrained link: one userspace forwarder per client connection.
-
-interface Throttle {
-  port: number;
-  close(): Promise<void>;
-}
-
-async function startThrottle(
-  targetPort: number,
-  rateKbps: number,
-  latencyMs: number,
-): Promise<Throttle> {
-  const bytesPerMs = rateKbps > 0 ? (rateKbps * 1000) / 8 / 1000 : Number.POSITIVE_INFINITY;
-  const sockets = new Set<Socket>();
-  const server: Server = createServer((client) => {
-    const upstream = netConnect(targetPort, "127.0.0.1");
-    sockets.add(client);
-    sockets.add(upstream);
-    const delayed = (target: Socket, chunk: Buffer) => {
-      if (latencyMs === 0) target.write(chunk);
-      else setTimeout(() => !target.destroyed && target.write(chunk), latencyMs);
-    };
-    client.on("data", (chunk: Buffer) => delayed(upstream, chunk));
-    // Server to client: paced at the link rate; a full queue stops reading
-    // the gateway, so its own backpressure limits apply.
-    const queue: Buffer[] = [];
-    let queued = 0;
-    let pumping = false;
-    let nextSendAt = 0;
-    const pump = () => {
-      if (pumping) return;
-      pumping = true;
-      const step = () => {
-        const chunk = queue.shift();
-        if (!chunk || client.destroyed) {
-          pumping = false;
-          return;
-        }
-        queued -= chunk.byteLength;
-        if (queued < 16 * 1024 && upstream.isPaused()) upstream.resume();
-        const now = performance.now();
-        const sendAt = Math.max(now, nextSendAt);
-        nextSendAt = sendAt + chunk.byteLength / bytesPerMs;
-        setTimeout(
-          () => {
-            delayed(client, chunk);
-            step();
-          },
-          Math.max(0, sendAt - now),
-        );
-      };
-      step();
-    };
-    upstream.on("data", (chunk: Buffer) => {
-      // Slice so a large chunk does not monopolise the link.
-      for (let offset = 0; offset < chunk.byteLength; offset += 16 * 1024) {
-        const slice = chunk.subarray(offset, offset + 16 * 1024);
-        queue.push(slice);
-        queued += slice.byteLength;
-      }
-      if (queued > 64 * 1024) upstream.pause();
-      pump();
-    });
-    const closeBoth = () => {
-      client.destroy();
-      upstream.destroy();
-      sockets.delete(client);
-      sockets.delete(upstream);
-    };
-    client.on("close", closeBoth);
-    upstream.on("close", closeBoth);
-    client.on("error", closeBoth);
-    upstream.on("error", closeBoth);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address !== "object") throw new Error("Throttle did not bind");
-  return {
-    port: address.port,
-    close: async () => {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
+function validateSocketCapacity(sessions: number, options: BaselineOptions): void {
+  const clients = options.clients + Number(options.slowClient);
+  if (sessions > TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET) {
+    throw new UsageError(
+      `WebSocket sessions exceed the per-socket limit of ${TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET}`,
+    );
+  }
+  if (
+    clients > TERMINAL_WEBSOCKET_MAX_SOCKETS ||
+    clients * sessions > TERMINAL_WEBSOCKET_MAX_CHANNELS
+  ) {
+    throw new UsageError("WebSocket clients/sessions exceed gateway aggregate capacity");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +309,12 @@ function openSse(
         headers: { authorization: `Bearer ${token}`, "accept-encoding": "gzip" },
       },
       (response: IncomingMessage) => {
+        if (response.statusCode !== 200) {
+          response.destroy();
+          reject(new Error(`SSE startup failed: HTTP ${response.statusCode}`));
+          return;
+        }
+        request.setTimeout(0);
         const socket = response.socket;
         const connection: ClientConnection = {
           wireBytes: () => socket.bytesRead,
@@ -411,6 +354,7 @@ function openSse(
         resolve(connection);
       },
     );
+    request.setTimeout(10_000, () => request.destroy(new Error("SSE startup timed out")));
     request.on("error", reject);
     request.end();
   });
@@ -421,13 +365,31 @@ function openSse(
  * the slow client can really stop reading. Server frames are unfragmented
  * (the terminal gateway sends whole messages); client frames are masked.
  */
-function rawWebSocket(
+export function rawWebSocket(
   port: number,
   onMessage: (data: Buffer, binary: boolean) => void,
+  onFailure: (error: Error) => void = () => undefined,
+  timeoutMs = 10_000,
 ): Promise<{ socket: Socket; send: (text: string) => void }> {
   return new Promise((resolve, reject) => {
     const key = randomBytes(16).toString("base64");
     const socket = netConnect(port, "127.0.0.1");
+    let upgraded = false;
+    let failed = false;
+    const fail = (error: Error) => {
+      if (failed) return;
+      failed = true;
+      clearTimeout(timer);
+      socket.destroy();
+      reject(error);
+      onFailure(error);
+    };
+    const timer = setTimeout(
+      () => fail(new Error("Terminal WebSocket upgrade timed out")),
+      timeoutMs,
+    );
+    socket.on("error", fail);
+    socket.once("close", () => fail(new Error("Terminal WebSocket closed")));
     const send = (text: string) => {
       const payload = Buffer.from(text, "utf8");
       const mask = randomBytes(4);
@@ -442,9 +404,12 @@ function rawWebSocket(
       socket.write(Buffer.concat([header, mask, masked]));
     };
     let buffer = Buffer.alloc(0);
-    let upgraded = false;
     socket.on("data", (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
+      if (buffer.byteLength > 4 * 1024 * 1024) {
+        fail(new Error("Terminal WebSocket frame exceeds baseline parser limit"));
+        return;
+      }
       if (!upgraded) {
         const end = buffer.indexOf("\r\n\r\n");
         if (end === -1) return;
@@ -454,16 +419,24 @@ function rawWebSocket(
           .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
           .digest("base64");
         if (!head.startsWith("HTTP/1.1 101") || !head.includes(accept)) {
-          socket.destroy();
-          reject(new Error("Terminal WebSocket upgrade was refused"));
+          fail(new Error("Terminal WebSocket upgrade was refused"));
           return;
         }
+        clearTimeout(timer);
         upgraded = true;
         resolve({ socket, send });
       }
       for (;;) {
         if (buffer.byteLength < 2) return;
         const opcode = buffer[0]! & 0x0f;
+        if (
+          (buffer[0]! & 0xf0) !== 0x80 ||
+          (buffer[1]! & 0x80) !== 0 ||
+          ![1, 2, 8, 9, 10].includes(opcode)
+        ) {
+          fail(new Error("Unsupported terminal WebSocket frame"));
+          return;
+        }
         let length = buffer[1]! & 0x7f;
         let offset = 2;
         if (length === 126) {
@@ -475,14 +448,25 @@ function rawWebSocket(
           length = Number(buffer.readBigUInt64BE(2));
           offset = 10;
         }
+        if (length > 4 * 1024 * 1024) {
+          fail(new Error("Terminal WebSocket frame exceeds baseline parser limit"));
+          return;
+        }
         if (buffer.byteLength < offset + length) return;
         const payload = buffer.subarray(offset, offset + length);
         buffer = buffer.subarray(offset + length);
-        if (opcode === 1 || opcode === 2) onMessage(Buffer.from(payload), opcode === 2);
-        else if (opcode === 8) socket.end();
+        try {
+          if (opcode === 1 || opcode === 2) onMessage(Buffer.from(payload), opcode === 2);
+          else if (opcode === 8) {
+            fail(new Error("Terminal WebSocket closed by server"));
+            return;
+          }
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error("Invalid terminal WebSocket message"));
+          return;
+        }
       }
     });
-    socket.once("error", reject);
     socket.write(
       [
         "GET /__orkestrator/terminal HTTP/1.1",
@@ -499,12 +483,13 @@ function rawWebSocket(
   });
 }
 
-async function openTerminalSocket(
+export async function openTerminalSocket(
   port: number,
   token: string,
   sessionIds: readonly string[],
   slow: boolean,
   onOutput: (sessionId: string, revision: number, at: number) => void,
+  timeoutMs = 10_000,
 ): Promise<ClientConnection> {
   const channels = new Map<number, { sessionId: string; generation: number; revision: number }>();
   let ackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -527,43 +512,75 @@ async function openTerminalSocket(
     pendingAcks.clear();
   };
   let resolveReady: () => void = () => undefined;
-  const ready = new Promise<void>((resolve) => {
+  let rejectReady: (error: Error) => void = () => undefined;
+  const ready = new Promise<void>((resolve, reject) => {
     resolveReady = resolve;
+    rejectReady = reject;
   });
-  let subscribed = 0;
-  const connection = await rawWebSocket(port, (data, binary) => {
-    const at = performance.now();
-    if (binary) {
-      const frame = decodeTerminalBinaryFrame(data);
-      if (frame.type !== TERMINAL_BINARY_FRAME_TYPE.output) return;
-      const channel = channels.get(frame.channelId);
-      if (!channel) return;
-      channel.generation = frame.generation;
-      channel.revision = Math.max(channel.revision, frame.revision);
-      onOutput(channel.sessionId, frame.revision, at);
-      pendingAcks.add(frame.channelId);
-      ackTimer ??= setTimeout(flushAcks, ACK_DELAY_MS);
-      return;
-    }
-    const control = parseTerminalWebSocketServerControlFrame(data.toString("utf8"));
-    if (control.type === "ready") {
-      sessionIds.forEach((sessionId, requestId) =>
-        send(JSON.stringify({ type: "subscribe", requestId: requestId + 1, sessionId })),
-      );
-    } else if (control.type === "subscribed") {
-      channels.set(control.channelId, {
-        sessionId: control.sessionId,
-        generation: control.targetGeneration,
-        revision: control.targetRevision,
-      });
-      subscribed += 1;
-      if (subscribed === sessionIds.length) resolveReady();
-    }
-  });
+  // The handshake may fail before we await readiness below.
+  void ready.catch(() => undefined);
+  const requested = new Set(sessionIds);
+  const subscribed = new Set<string>();
+  const connection = await rawWebSocket(
+    port,
+    (data, binary) => {
+      const at = performance.now();
+      if (binary) {
+        const frame = decodeTerminalBinaryFrame(data);
+        if (frame.type !== TERMINAL_BINARY_FRAME_TYPE.output) return;
+        const channel = channels.get(frame.channelId);
+        if (!channel) return;
+        channel.generation = frame.generation;
+        channel.revision = Math.max(channel.revision, frame.revision);
+        onOutput(channel.sessionId, frame.revision, at);
+        pendingAcks.add(frame.channelId);
+        ackTimer ??= setTimeout(flushAcks, ACK_DELAY_MS);
+        return;
+      }
+      const control = parseTerminalWebSocketServerControlFrame(data.toString("utf8"));
+      if (control.type === "ready") {
+        sessionIds.forEach((sessionId, requestId) =>
+          send(JSON.stringify({ type: "subscribe", requestId: requestId + 1, sessionId })),
+        );
+      } else if (control.type === "subscribed") {
+        channels.set(control.channelId, {
+          sessionId: control.sessionId,
+          generation: control.targetGeneration,
+          revision: control.targetRevision,
+        });
+        if (!requested.has(control.sessionId)) {
+          rejectReady(new Error("Unexpected terminal subscription"));
+          return;
+        }
+        subscribed.add(control.sessionId);
+        if (subscribed.size === requested.size) resolveReady();
+      } else if (control.type === "error") {
+        rejectReady(new Error(`Terminal WebSocket startup failed: ${control.code}`));
+      }
+    },
+    (error) => {
+      if (ackTimer) clearTimeout(ackTimer);
+      rejectReady(error);
+    },
+    timeoutMs,
+  );
   send = connection.send;
   connection.socket.on("error", () => undefined);
   send(JSON.stringify({ type: "authenticate", version: 1, token }));
-  await ready;
+  const startupTimer = setTimeout(
+    () => rejectReady(new Error("Terminal WebSocket subscriptions timed out")),
+    timeoutMs,
+  );
+  try {
+    if (requested.size === 0) resolveReady();
+    await ready;
+  } catch (error) {
+    if (ackTimer) clearTimeout(ackTimer);
+    connection.socket.destroy();
+    throw error;
+  } finally {
+    clearTimeout(startupTimer);
+  }
   if (slow) connection.socket.pause();
   return {
     wireBytes: () => connection.socket.bytesRead,
@@ -576,6 +593,33 @@ async function openTerminalSocket(
 
 // ---------------------------------------------------------------------------
 // One case
+
+export function aggregateArrivals(
+  emittedAt: ReadonlyMap<string, number>,
+  arrivals: readonly (readonly Arrival[])[],
+  finalKeys: readonly string[],
+  lastEmitAt: number,
+): { firstUpdate: number[]; missing: number; completion: number | null } {
+  const firstUpdate: number[] = [];
+  let missing = 0;
+  let complete = finalKeys.length > 0 && arrivals.length > 0;
+  let completion = 0;
+  for (const record of arrivals) {
+    const seen = new Map<string, number>();
+    for (const arrival of record) if (!seen.has(arrival.key)) seen.set(arrival.key, arrival.at);
+    for (const [key, emitted] of emittedAt) {
+      const at = seen.get(key);
+      if (at === undefined) missing += 1;
+      else firstUpdate.push(at - emitted);
+    }
+    for (const key of finalKeys) {
+      const at = seen.get(key);
+      if (at === undefined) complete = false;
+      else completion = Math.max(completion, at - lastEmitAt);
+    }
+  }
+  return { firstUpdate, missing, completion: complete ? completion : null };
+}
 
 function percentile(values: number[], fraction: number): number | null {
   if (values.length === 0) return null;
@@ -665,6 +709,7 @@ export async function runCase(
   workload: Workload,
   sessions: number,
 ): Promise<CaseResult> {
+  if (transport === "websocket") validateSocketCapacity(sessions, options);
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-bandwidth-"));
   const rendererRoot = path.join(dataDir, "dist");
   await mkdir(rendererRoot, { recursive: true });
@@ -694,6 +739,7 @@ export async function runCase(
   const throttles: Throttle[] = [];
   const connections: ClientConnection[] = [];
   const healthy: ClientConnection[] = [];
+  const timers: Array<ReturnType<typeof setInterval>> = [];
   let slowConnections: ClientConnection[] = [];
   try {
     const info = await gateway.start();
@@ -712,7 +758,11 @@ export async function runCase(
       const record: Arrival[] = [];
       const note = (key: string, at: number) => record.push({ key, at });
       const own: ClientConnection[] = [];
-      own.push(
+      const remember = (connection: ClientConnection) => {
+        own.push(connection);
+        connections.push(connection);
+      };
+      remember(
         await openSse(
           await clientPort(),
           token,
@@ -725,7 +775,7 @@ export async function runCase(
         ),
       );
       if (transport === "websocket") {
-        own.push(
+        remember(
           await openTerminalSocket(
             await clientPort(),
             token,
@@ -736,7 +786,7 @@ export async function runCase(
         );
       } else {
         const include = sessionIds.map((id) => `${TERMINAL_PREFIX}${id}`).join(",");
-        own.push(
+        remember(
           await openSse(
             await clientPort(),
             token,
@@ -750,7 +800,6 @@ export async function runCase(
           ),
         );
       }
-      connections.push(...own);
       if (!slow) arrivals.push(record);
       return own;
     };
@@ -773,29 +822,26 @@ export async function runCase(
     const revisions = new Map(sessionIds.map((id) => [id, 0]));
     let agentRevision = 0;
     let lastEmitAt = 0;
-    let lastKeys: string[] = [];
-    const timers: Array<ReturnType<typeof setInterval>> = [];
+    const finalKeys = new Map<string, string>();
     const started = performance.now();
     if (workload.terminalIntervalMs && workload.terminalChunk) {
       let tick = 0;
       timers.push(
         setInterval(() => {
           tick += 1;
-          const keys: string[] = [];
           for (const sessionId of sessionIds) {
             const revision = revisions.get(sessionId)! + 1;
             revisions.set(sessionId, revision);
             const key = `${sessionId}:${revision}`;
             lastEmitAt = performance.now();
             emittedAt.set(key, lastEmitAt);
-            keys.push(key);
+            finalKeys.set(sessionId, key);
             gateway.emit(`${TERMINAL_PREFIX}${sessionId}`, {
               text: workload.terminalChunk!(random, tick),
               revision,
               generation: 1,
             });
           }
-          lastKeys = keys;
         }, workload.terminalIntervalMs),
       );
     }
@@ -806,7 +852,7 @@ export async function runCase(
           const key = `agent:${agentRevision}`;
           lastEmitAt = performance.now();
           emittedAt.set(key, lastEmitAt);
-          lastKeys = [key];
+          finalKeys.set("agent", key);
           gateway.emit(AGENT_EVENT, workload.agentPayload!(random, agentRevision));
         }, workload.agentIntervalMs),
       );
@@ -824,22 +870,12 @@ export async function runCase(
       gateway as unknown as { metrics: { snapshot(): MetricsSnapshot } }
     ).metrics.snapshot();
 
-    const firstUpdate: number[] = [];
-    let missing = 0;
-    let completion: number | null = null;
-    for (const record of arrivals) {
-      const seen = new Map<string, number>();
-      for (const arrival of record) if (!seen.has(arrival.key)) seen.set(arrival.key, arrival.at);
-      for (const [key, emitted] of emittedAt) {
-        const at = seen.get(key);
-        if (at === undefined) missing += 1;
-        else firstUpdate.push(at - emitted);
-      }
-      for (const key of lastKeys) {
-        const at = seen.get(key);
-        if (at !== undefined) completion = Math.max(completion ?? 0, at - lastEmitAt);
-      }
-    }
+    const { firstUpdate, missing, completion } = aggregateArrivals(
+      emittedAt,
+      arrivals,
+      [...finalKeys.values()],
+      lastEmitAt,
+    );
     const healthyBytes =
       healthy.reduce(
         (sum, connection, index) => sum + connection.wireBytes() - healthyBefore[index]!,
@@ -907,6 +943,7 @@ export async function runCase(
       },
     };
   } finally {
+    for (const timer of timers) clearInterval(timer);
     for (const connection of connections) connection.close();
     await gateway.stop().catch(() => undefined);
     for (const throttle of throttles) await throttle.close().catch(() => undefined);

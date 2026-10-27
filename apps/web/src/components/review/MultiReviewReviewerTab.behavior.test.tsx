@@ -452,17 +452,23 @@ describe("MultiReviewReviewerTab", () => {
     });
     expect(loadTranscript.mock.calls.length).toBe(afterMount + 3);
 
+    // D4: a no-op manual refresh is immediate but preserves the 30 s backoff.
+    fireEvent.click(await openTranscriptRefreshMenu());
+    await waitFor(() => expect(loadTranscript.mock.calls.length).toBe(afterMount + 4));
+    await act(() => clock.advance(REFRESH_INTERVAL_MS));
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 4);
+
     // A checkpoint reads at once and puts the poll back on its interval.
     act(() => {
       useMultiReviewStore.setState({
         workflows: new Map([["multi-1", { ...reviewingWorkflow(), backendRevision: 8 }]]),
       });
     });
-    await waitFor(() => expect(loadTranscript.mock.calls.length).toBe(afterMount + 4));
+    await waitFor(() => expect(loadTranscript.mock.calls.length).toBe(afterMount + 5));
     await act(async () => {
       await clock.advance(REFRESH_INTERVAL_MS);
     });
-    expect(loadTranscript.mock.calls.length).toBe(afterMount + 5);
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 6);
   });
 
   test("queues a manual refresh behind an in-flight transcript poll", async () => {

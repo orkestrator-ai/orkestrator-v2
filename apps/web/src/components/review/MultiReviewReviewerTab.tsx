@@ -695,8 +695,8 @@ export function MultiReviewReviewerTab({
   // tab of a running/pending reviewer, paused while the document is hidden
   // and reconciled once when it becomes visible again. Reads apply into this
   // instance's fenced state, so the key is instance-scoped. With data saving
-  // on it backs off while nothing moves; a checkpoint, a status change or a
-  // user action restores the interval.
+  // on it backs off while nothing moves; a checkpoint or a status change
+  // restores the interval. A no-op manual refresh preserves quiet backoff.
   const pollInstance = useId();
   const gone = transcriptError !== null && isGoneError(transcriptError);
   const settled = Boolean(

@@ -1976,12 +1976,18 @@ export class BuildPipelineSupervisor {
         images: pipeline.taskSnapshot.images,
       };
     }
+    // Address can mutate workspace evidence after review. Check the package
+    // and its artifacts again at every consuming stage, especially verification.
+    if (
+      (phase === "review" || phase === "address" || phase === "verify") &&
+      pipeline.reviewPackage &&
+      "kind" in pipeline.reviewPackage
+    ) {
+      await this.assertReviewPackageIntegrity(pipeline.environmentId, pipeline.reviewPackage);
+    }
     if (phase === "review") {
       if (!pipeline.reviewPackage) {
         throw new Error("Cannot review without an immutable review package");
-      }
-      if ("kind" in pipeline.reviewPackage) {
-        await this.assertReviewPackageIntegrity(pipeline.environmentId, pipeline.reviewPackage);
       }
       return {
         prompt: createDiscoveryPrompt({
@@ -2060,28 +2066,44 @@ export class BuildPipelineSupervisor {
   }
 
   /**
-   * The final message of this round's address stage: what it fixed after the
+   * The latest assistant text of this round's address stage: what it fixed after the
    * recorded validation, what it re-checked, and which failures it excused.
    * Only an address session after the latest review counts, so an earlier
-   * round's report is never mistaken for evidence about this one.
+   * round's report is never mistaken for evidence about this one. Follow-up
+   * replies remain unverified claims, just like the original report.
    */
   private async latestAddressReport(pipeline: BuildPipeline): Promise<string | undefined> {
     let address: PipelineSession | undefined;
+    let foundReview = false;
     for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
       const session = pipeline.sessions[index]!;
-      if (session.phase === "review") break;
-      if (session.phase === "address") {
-        address = session;
+      if (session.iteration !== pipeline.iteration) break;
+      if (session.phase === "review") {
+        foundReview = true;
         break;
       }
+      if (!address && session.phase === "address") address = session;
     }
-    if (!address) return undefined;
-    const transcript = await this.ctx.transcriptCheckpoints.window(
-      pipeline.id,
-      address,
-      LAST_ASSISTANT_TEXT_READ_LIMIT,
-    );
-    return lastAssistantText(transcript.entries.map(({ message }) => message));
+    if (!address || !foundReview) return undefined;
+    // Display transcripts are best-effort. Never substitute an older report
+    // when the latest attempt could not be checkpointed or its tail is missing.
+    if (address.transcriptCheckpointError) return undefined;
+    try {
+      const transcript = await this.ctx.transcriptCheckpoints.window(
+        pipeline.id,
+        address,
+        LAST_ASSISTANT_TEXT_READ_LIMIT,
+      );
+      if (transcript.entries.at(-1)?.index !== transcript.total - 1) return undefined;
+      // window() also includes the first row for handoffs. A disjoint first
+      // row must not become a fallback report when the bounded tail has none.
+      const tailStart = Math.max(0, transcript.total - LAST_ASSISTANT_TEXT_READ_LIMIT);
+      return lastAssistantText(
+        transcript.entries.filter(({ index }) => index >= tailStart).map(({ message }) => message),
+      );
+    } catch {
+      return undefined;
+    }
   }
 
   async finishReview(

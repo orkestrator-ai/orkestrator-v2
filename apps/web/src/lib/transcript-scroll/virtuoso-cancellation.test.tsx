@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
-import { createRef, useLayoutEffect, useState } from "react";
+import { createRef, useCallback, useLayoutEffect, useState } from "react";
 import { Virtuoso, VirtuosoMockContext, type VirtuosoHandle } from "react-virtuoso";
+import { useVirtuosoScrollState } from "@/hooks/useVirtuosoScrollState";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 /**
  * Exercises the pinned, patched react-virtuoso (patches/react-virtuoso@4.18.19.patch)
@@ -220,61 +222,193 @@ describe("patched Virtuoso navigation cancellation", () => {
     expect(writes.tops.length).toBe(before);
   });
 
-  /**
-   * A restored snapshot is an initial location: the library keeps its item
-   * list `visibility: hidden` until that navigation reports its target
-   * reached. A cancellation landing inside the navigation's refresh window
-   * (the scroll controller starting activation on a remounted tab) must still
-   * reveal the list, or the transcript stays blank until it remounts.
-   */
-  async function restoreSnapshot(cancel: boolean) {
+  /** A missing list must fail, rather than count as a visible restored list. */
+  function restoredList(container: HTMLElement) {
+    const list = container.querySelector<HTMLElement>("[data-testid=virtuoso-item-list]");
+    expect(list).not.toBeNull();
+    return list!;
+  }
+
+  function restoreFixture() {
     const handle = createRef<VirtuosoHandle>();
     const writes: Writes = { tops: [] };
-    const restoreStateFrom = {
+    let onFirstWrite = () => {};
+    const firstWrite = new Promise<void>((resolve) => {
+      onFirstWrite = resolve;
+    });
+    const snapshot = {
       ranges: [{ startIndex: 0, endIndex: 199, size: ITEM }],
       scrollTop: 3000,
     };
-    let cancelled = false;
-    render(
-      <VirtuosoMockContext.Provider value={{ viewportHeight: VIEWPORT, itemHeight: ITEM }}>
-        <Virtuoso
-          ref={handle}
-          totalCount={200}
-          restoreStateFrom={restoreStateFrom}
-          itemContent={(index) => <div style={{ height: ITEM }}>row {index}</div>}
-          scrollerRef={(element) => {
-            if (!(element instanceof HTMLElement)) return;
+    function RestoredVirtuoso({
+      virtuosoRef = handle,
+      scrollerRef,
+    }: {
+      virtuosoRef?: React.RefObject<VirtuosoHandle | null>;
+      scrollerRef?: (element: HTMLElement | Window | null) => void;
+    }) {
+      const attachScroller = useCallback(
+        (element: HTMLElement | Window | null) => {
+          if (element instanceof HTMLElement) {
             instrument(element, () => 200, writes);
             const write = element.scrollTo.bind(element);
             element.scrollTo = ((options: ScrollToOptions) => {
               write(options);
-              if (cancel && !cancelled) {
-                cancelled = true;
-                queueMicrotask(() => handle.current!.cancelPendingNavigation());
-              }
+              onFirstWrite();
             }) as typeof element.scrollTo;
-          }}
-          style={{ height: VIEWPORT }}
-        />
-      </VirtuosoMockContext.Provider>,
-    );
-    await wait(1300);
-    const list = document.querySelector<HTMLElement>("[data-testid=virtuoso-item-list]");
-    return { writes, cancelled, visibility: list?.style.visibility ?? null };
+          }
+          scrollerRef?.(element);
+        },
+        [scrollerRef],
+      );
+      return (
+        <VirtuosoMockContext.Provider value={{ viewportHeight: VIEWPORT, itemHeight: ITEM }}>
+          <Virtuoso
+            ref={virtuosoRef}
+            totalCount={200}
+            restoreStateFrom={snapshot}
+            followOutput={false}
+            itemContent={(index) => <div style={{ height: ITEM }}>row {index}</div>}
+            scrollerRef={attachScroller}
+            style={{ height: VIEWPORT }}
+          />
+        </VirtuosoMockContext.Provider>
+      );
+    }
+    return { handle, writes, firstWrite, RestoredVirtuoso };
   }
 
-  test("control: a restored snapshot reveals the list once its initial location is reached", async () => {
-    const { writes, visibility } = await restoreSnapshot(false);
-    expect(writes.tops).toContain(3000);
-    expect(visibility).not.toBe("hidden");
+  // Hold the refresh window open explicitly, so a slow worker cannot complete
+  // the initial navigation before the hidden-state or cancellation assertions.
+  test.each([false, true])(
+    "restored snapshot transitions from hidden to visible (cancel=%s)",
+    async (cancel) => {
+      const refresh = installControlledTimeout(150, { label: "Virtuoso index refresh window" });
+      const fixture = restoreFixture();
+      const view = render(<fixture.RestoredVirtuoso />);
+      try {
+        expect(restoredList(view.container).style.visibility).toBe("hidden");
+        await act(() => fixture.firstWrite);
+        expect(fixture.writes.tops).toContain(3000);
+        expect(refresh.pendingCount()).toBe(1);
+        expect(restoredList(view.container).style.visibility).toBe("hidden");
+        if (cancel) act(() => fixture.handle.current!.cancelPendingNavigation());
+        else
+          act(() => {
+            expect(refresh.advance()).toBe(1);
+          });
+        expect(restoredList(view.container).style.visibility).toBe("");
+        const afterCompletion = fixture.writes.tops.length;
+        // Unsubscribing leaves the fallback timer queued; delivering it must
+        // neither retry the cancelled target nor hide the list again.
+        if (cancel)
+          act(() => {
+            expect(refresh.advance()).toBe(1);
+          });
+        await wait(1300);
+        expect(restoredList(view.container).style.visibility).toBe("");
+        expect(fixture.writes.tops.length).toBe(afterCompletion);
+        refresh.assertDrained();
+      } finally {
+        view.unmount();
+        refresh.restore();
+      }
+    },
+  );
+
+  test("cancelling before any index navigation is pending does not reveal the restored list", async () => {
+    const refresh = installControlledTimeout(150, { label: "Virtuoso index refresh window" });
+    const fixture = restoreFixture();
+    const view = render(<fixture.RestoredVirtuoso />);
+    try {
+      expect(fixture.writes.tops).toHaveLength(0);
+      expect(refresh.pendingCount()).toBe(0);
+      expect(restoredList(view.container).style.visibility).toBe("hidden");
+      act(() => fixture.handle.current!.cancelPendingNavigation());
+      expect(fixture.writes.tops).toHaveLength(0);
+      expect(restoredList(view.container).style.visibility).toBe("hidden");
+      // Cancellation did not complete an initial location that has yet to run.
+      await act(() => fixture.firstWrite);
+      expect(fixture.writes.tops).toContain(3000);
+      expect(restoredList(view.container).style.visibility).toBe("hidden");
+      act(() => {
+        expect(refresh.advance()).toBe(1);
+      });
+      expect(restoredList(view.container).style.visibility).toBe("");
+      refresh.assertDrained();
+    } finally {
+      view.unmount();
+      refresh.restore();
+    }
   });
 
-  test("cancelling the restore navigation inside its refresh window still reveals the list", async () => {
-    const { writes, cancelled, visibility } = await restoreSnapshot(true);
-    expect(cancelled).toBe(true);
-    expect(writes.tops).toContain(3000);
-    expect(visibility).not.toBe("hidden");
-  });
+  test.each(["activation", "deactivation"] as const)(
+    "controller %s reveals a snapshot whose initial navigation is still pending",
+    async (transition) => {
+      const refresh = installControlledTimeout(150, {
+        label: "Virtuoso index refresh window",
+        // Activation starts a new index navigation while the cancelled
+        // restore's unsubscribed fallback timer is still queued.
+        maxPending: 2,
+      });
+      const fixture = restoreFixture();
+      let scrollState: ReturnType<typeof useVirtuosoScrollState>;
+      function ControllerRestore({
+        active,
+        activationHeld,
+      }: {
+        active: boolean;
+        activationHeld: boolean;
+      }) {
+        const state = useVirtuosoScrollState({
+          isActive: active,
+          activation: "latest",
+          explicitTargetPending: activationHeld,
+        });
+        useLayoutEffect(() => {
+          scrollState = state;
+        });
+        return (
+          <fixture.RestoredVirtuoso
+            virtuosoRef={state.virtuosoRef}
+            scrollerRef={state.scrollProps.scrollerRef}
+          />
+        );
+      }
+      const view = render(<ControllerRestore active activationHeld />);
+      try {
+        expect(restoredList(view.container).style.visibility).toBe("hidden");
+        await act(() => fixture.firstWrite);
+        expect(fixture.writes.tops).toContain(3000);
+        expect(refresh.pendingCount()).toBe(1);
+        expect(restoredList(view.container).style.visibility).toBe("hidden");
+        const before = scrollState!.getScrollDiagnostics().libraryCancellations;
+        view.rerender(
+          <ControllerRestore active={transition === "activation"} activationHeld={false} />,
+        );
+        // Activation is scheduled on a frame; retirement runs in the effect.
+        if (transition === "activation") {
+          await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+          expect(scrollState!.getScrollDiagnostics().operationsStarted).toBeGreaterThan(0);
+        } else {
+          expect(scrollState!.scrollProps.controller.active).toBe(false);
+        }
+        expect(scrollState!.getScrollDiagnostics().libraryCancellations).toBeGreaterThan(before);
+        expect(restoredList(view.container).style.visibility).toBe("");
+        const afterTransition = fixture.writes.tops.length;
+        act(() => {
+          expect(refresh.advance()).toBe(transition === "activation" ? 2 : 1);
+        });
+        await wait(1300);
+        expect(restoredList(view.container).style.visibility).toBe("");
+        expect(fixture.writes.tops.length).toBe(afterTransition);
+        refresh.assertDrained();
+      } finally {
+        view.unmount();
+        refresh.restore();
+      }
+    },
+  );
 });
 
 describe("firstItemIndex with the real virtualizer", () => {

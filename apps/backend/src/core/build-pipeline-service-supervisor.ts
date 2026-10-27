@@ -71,6 +71,7 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import {
+  type WorkflowResultError,
   type WorkflowResultKind,
   workflowResultInstruction,
   workflowResultToolName,
@@ -120,6 +121,13 @@ import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
+import {
+  compareValidationWorktree,
+  hasValidationBaseline,
+  validationWorktreeError,
+  validationWorktreeRefusal,
+} from "./build-pipeline-validation-worktree.js";
+import type { WorkflowResultAttempt } from "./workflow-result-service.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -824,62 +832,53 @@ export class BuildPipelineSupervisor {
 
   /**
    * Rejects a validation turn that changed the workspace rather than only
-   * reading it and writing ignored output.
-   *
-   * Scope is exactly what `git status --porcelain` reports plus HEAD: tracked
-   * paths, and untracked paths Git does not ignore. It deliberately does *not*
-   * cover ignored files, anything under `.git/`, or paths outside the worktree —
-   * writes there are invisible to this check, so the disclosure the launcher
-   * shows and the prompts' own instructions have to claim no more than this.
-   *
-   * The comparison is against the baseline path set, not against cleanliness, so
-   * uncommitted work the build stage left behind survives review instead of
-   * failing the pipeline after the fact.
+   * reading it and writing ignored output. See {@link compareValidationWorktree}
+   * for exactly what counts as a change.
    */
   async assertValidationWorktreeUnchanged(
     pipeline: BuildPipeline,
     session: PipelineSession,
   ): Promise<void> {
     const stage = VALIDATION_STAGE_LABELS[session.phase === "review" ? "review" : "verify"];
-    // A snapshot written before the path list existed still carries a status, and
-    // "clean" pins the baseline to the empty set without it. "dirty" does not,
-    // so that one case still fails closed rather than guessing.
-    const baselinePaths =
-      session.validationUncommittedPathsAtStart ??
-      (session.validationWorktreeStatusAtStart === "clean" ? [] : undefined);
-    if (!session.validationHeadAtStart || !baselinePaths) {
-      throw new Error(
-        `${stage} cannot be certified because its starting Git state was not recorded`,
+    // Without a baseline there is nothing to compare, so do not spend a probe.
+    const change = compareValidationWorktree(
+      session,
+      hasValidationBaseline(session)
+        ? await this.reviewWorktreeSnapshot(pipeline)
+        : { status: "unknown", reason: "no baseline" },
+    );
+    const error = validationWorktreeError(stage, change);
+    if (error) throw new Error(error);
+  }
+
+  /**
+   * The same comparison, asked by the workflow result service before it
+   * validates or accepts a verification result, so the verifier can undo a
+   * change while its turn is still running instead of the pipeline failing
+   * after it. Only the attempt the pipeline is currently waiting on is judged.
+   */
+  async verificationResultRefusal(
+    attempt: WorkflowResultAttempt,
+  ): Promise<WorkflowResultError | null> {
+    for (const record of await this.ctx.storage.listBuildPipelines(attempt.projectId)) {
+      const pipeline = record.snapshot;
+      if (
+        record.environmentId !== attempt.environmentId ||
+        !isBuildPipeline(pipeline) ||
+        pipeline.phase !== "verifying"
+      ) {
+        continue;
+      }
+      const session = pipeline.sessions[pipeline.currentSessionIndex];
+      if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey) {
+        continue;
+      }
+      if (!hasValidationBaseline(session)) return null;
+      return validationWorktreeRefusal(
+        compareValidationWorktree(session, await this.reviewWorktreeSnapshot(pipeline)),
       );
     }
-    const current = await this.reviewWorktreeSnapshot(pipeline);
-    if (current.status === "unknown") {
-      throw new Error(
-        `${stage} cannot be certified because the backend could not verify Git state after validation: ${current.reason}`,
-      );
-    }
-    if (current.head !== session.validationHeadAtStart) {
-      throw new Error(
-        `${stage} cannot be certified because validation changed the environment HEAD`,
-      );
-    }
-    const before = new Set(baselinePaths);
-    const currentPaths = current.status === "dirty" ? current.paths : [];
-    const after = new Set(currentPaths);
-    const added = currentPaths.filter((path) => !before.has(path));
-    if (added.length) {
-      throw new Error(
-        `${stage} cannot be certified because validation left ${added.length} uncommitted ${added.length === 1 ? "path that was" : "paths that were"} not there when it started`,
-      );
-    }
-    // Removal matters as much as addition: deleting a path the build stage left
-    // uncommitted destroys work that no commit is holding.
-    const removed = baselinePaths.filter((path) => !after.has(path));
-    if (removed.length) {
-      throw new Error(
-        `${stage} cannot be certified because validation removed ${removed.length} uncommitted ${removed.length === 1 ? "path that was" : "paths that were"} there when it started`,
-      );
-    }
+    return null;
   }
 
   /**

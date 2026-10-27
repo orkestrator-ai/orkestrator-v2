@@ -518,6 +518,15 @@ export function preexistingFailureInstruction(targetBranch: string): string {
   return `Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. If any ticket-required repair remains unmet on this branch, report complete: false. Only failures unrelated to the ticket acceptance criteria may be excused as pre-existing or environmental. For each failure, check whether it involves code this branch changes (git diff origin/${targetBranch}...HEAD). If that does not settle it, rerun only that check against origin/${targetBranch} in a temporary detached worktree outside this checkout (git worktree add --detach), and remove that worktree before reporting. An unrelated failure reproduced on origin/${targetBranch}, or demonstrably caused by a missing tool or an operating-system path difference rather than the code, does not fail verification. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause; without that evidence, report complete: false. List every excused failure in the rationale as pre-existing or environmental, with the target-branch reproduction or demonstrated environmental-cause evidence, and judge all ticket acceptance criteria.`;
 }
 
+/**
+ * The backend certifies verification against the Git-visible state it started
+ * from. The likeliest way to break that by accident is a target-branch
+ * worktree whose dependency links point back here: `ln -s` onto a path that
+ * resolves to an existing directory creates the link *inside* it.
+ */
+export const VERIFICATION_WORKTREE_INSTRUCTION =
+  "Leave this checkout's Git-visible state exactly as you found it: the same HEAD and the same uncommitted and untracked paths, with nothing added or removed (ignored build output and caches are fine). A temporary worktree must not write back into this checkout. Do not link its dependencies to this checkout's `node_modules`; install them in the temporary worktree instead. If you must link, use `ln -sfn` and never link onto a path that resolves to an existing directory, because `ln -s` then creates the link inside that directory. Before submitting, run `git status --porcelain --untracked-files=all` in this checkout and remove anything validation created. The backend compares the worktree before it accepts your verdict and rejects the verdict if anything differs.";
+
 export const VERIFICATION_OUTPUT_CONTRACT =
   'Send interim progress only through the provider\'s commentary or update channel, using ordinary prose sentences. Do not use the final-response channel for an update. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant response the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}';
 
@@ -532,6 +541,7 @@ export function verificationPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
     preexistingFailureInstruction(targetBranch),
+    VERIFICATION_WORKTREE_INSTRUCTION,
     VERIFICATION_OUTPUT_CONTRACT,
   ]
     .filter(Boolean)

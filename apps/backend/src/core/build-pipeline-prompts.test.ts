@@ -582,6 +582,17 @@ describe("build pipeline prompts", () => {
     ).toBeLessThan(prompt.indexOf("make the final assistant response the only JSON object"));
   });
 
+  test("verificationPrompt keeps a temporary worktree from writing back into this checkout", () => {
+    const prompt = verificationPrompt(pipeline(), "", "main");
+
+    expect(prompt).toContain("Leave this checkout's Git-visible state exactly as you found it");
+    expect(prompt).toContain("`ln -s` then creates the link inside that directory");
+    expect(prompt).toContain("git status --porcelain --untracked-files=all");
+    expect(prompt.indexOf("Leave this checkout's Git-visible state")).toBeLessThan(
+      prompt.indexOf("make the final assistant response the only JSON object"),
+    );
+  });
+
   test("fixPrompt leaves failures the branch did not cause alone", () => {
     const prompt = fixPrompt(pipeline(), "", "options.test.ts fails.", "release/2026.07-hotfix");
 

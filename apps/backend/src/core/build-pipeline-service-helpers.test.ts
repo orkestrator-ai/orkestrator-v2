@@ -355,7 +355,7 @@ async function withService(
       >;
     },
   ) => Promise<void>,
-  options: { toolMode?: boolean } = {},
+  options: { toolMode?: boolean; structuredResultDeadlineMs?: number } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
   const storage = new StorageService(dataDir);
@@ -488,6 +488,9 @@ async function withService(
   const service = new RecoveryTestService(storage, invoke, {
     autoAdvance: false,
     provider: async () => provider,
+    ...(options.structuredResultDeadlineMs !== undefined
+      ? { structuredResultDeadlineMs: options.structuredResultDeadlineMs }
+      : {}),
     ...(controls.workflowResults
       ? {
           workflowResults: controls.workflowResults,
@@ -721,6 +724,111 @@ describe("BuildPipelineService", () => {
         error: "Verification cannot be certified because validation changed the environment HEAD",
       });
     });
+  });
+
+  test("names the paths verification validation left behind", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const verifying = await startVerifying(service, storage);
+
+      controls.uncommittedPaths = ["packages/protocol/protocol", "packages/toolchain/toolchain"];
+      await service.advanceNow(verifying.id);
+
+      expect(await pipeline(storage, verifying.id)).toMatchObject({
+        phase: "failed",
+        error:
+          "Verification cannot be certified because validation left 2 uncommitted paths that were not there when it started: packages/protocol/protocol, packages/toolchain/toolchain",
+      });
+    });
+  });
+
+  test("names the paths verification validation removed, bounded", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const left = Array.from({ length: 7 }, (_, index) => `notes/${index}.md`);
+      const { started } = await startBuilding(service, storage);
+      controls.uncommittedPaths = left;
+      for (let pass = 0; pass < 2; pass += 1) await service.advanceNow(started.id);
+      const verifying = await pipeline(storage, started.id);
+      expect(verifying.phase).toBe("verifying");
+      expect(verifying.sessions.at(-1)?.validationUncommittedPathsAtStart).toEqual(left);
+
+      controls.uncommittedPaths = [];
+      await service.advanceNow(started.id);
+
+      expect((await pipeline(storage, started.id)).error).toBe(
+        "Verification cannot be certified because validation removed 7 uncommitted paths that were there when it started: notes/0.md, notes/1.md, notes/2.md, notes/3.md, notes/4.md and 2 more",
+      );
+    });
+  });
+
+  test("lets the verifier undo a stray path before its verdict is accepted", async () => {
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        const results = controls.workflowResults!;
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+        const verdict = { complete: true, rationale: "All criteria pass." };
+        // Earlier stages submit as soon as they are sent; verification is
+        // driven by hand so the worktree can change mid-turn.
+        const autoSubmit = provider.send;
+        let verifyKey = "";
+        provider.send = async (sessionId, prompt, options) => {
+          if (provider.phases.get(sessionId) !== "verify") {
+            return autoSubmit(sessionId, prompt, options);
+          }
+          verifyKey = options.requestId;
+          return FakeProvider.prototype.send.call(provider, sessionId, prompt, options);
+        };
+        const verifying = await startVerifying(service, storage);
+        expect(verifyKey).not.toBe("");
+
+        controls.uncommittedPaths = ["packages/protocol/protocol"];
+        const validation = await results.validate(scope, verifyKey, verdict);
+        expect(validation).toMatchObject({
+          ok: false,
+          error: { code: "worktree_changed", nextAction: "correct" },
+        });
+        expect(validation.ok ? "" : validation.error.message).toContain(
+          "`packages/protocol/protocol`",
+        );
+        expect(await results.submit(scope, verifyKey, verdict)).toMatchObject({
+          ok: false,
+          error: { code: "worktree_changed" },
+        });
+        // A refusal is not a verdict: the stage keeps waiting for one.
+        await service.advanceNow(verifying.id);
+        expect((await pipeline(storage, verifying.id)).phase).toBe("verifying");
+
+        controls.uncommittedPaths = [];
+        expect(await results.submit(scope, verifyKey, verdict)).toMatchObject({ ok: true });
+        await service.advanceNow(verifying.id);
+        expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
+      },
+      { toolMode: true },
+    );
+  });
+
+  test("a verdict that never arrives fails on the worktree change that blocked it", async () => {
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        const structured = provider.structured.bind(provider);
+        provider.structured = async <T>(sessionId: string, requestId: string) =>
+          provider.phases.get(sessionId) === "verify"
+            ? (null as unknown as StructuredOutputResult<T>)
+            : structured<T>(sessionId, requestId);
+        const verifying = await startVerifying(service, storage);
+
+        controls.uncommittedPaths = ["packages/protocol/protocol"];
+        // The first idle pass starts the wait; the second is past a zero deadline.
+        await service.advanceNow(verifying.id);
+        await service.advanceNow(verifying.id);
+
+        expect(await pipeline(storage, verifying.id)).toMatchObject({
+          phase: "failed",
+          error:
+            "Verification cannot be certified because validation left 1 uncommitted path that was not there when it started: packages/protocol/protocol",
+        });
+      },
+      { structuredResultDeadlineMs: 0 },
+    );
   });
 
   test("fails closed when Git state cannot be verified after validation", async () => {

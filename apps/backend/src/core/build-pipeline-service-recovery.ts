@@ -148,7 +148,14 @@ export class BuildPipelineRecovery {
       resolvedRequestId,
     );
     if (!result) {
-      await this.awaitStructuredResult(pipeline, provider, session, "verification");
+      try {
+        await this.awaitStructuredResult(pipeline, provider, session, "verification");
+      } catch (error) {
+        // A verdict the worktree check kept refusing never arrives. Name the
+        // change that blocked it rather than only the missing result.
+        await this.stageSupervisor.assertValidationWorktreeUnchanged(pipeline, session);
+        throw error;
+      }
       return;
     }
     await this.stageSupervisor.assertValidationWorktreeUnchanged(pipeline, session);

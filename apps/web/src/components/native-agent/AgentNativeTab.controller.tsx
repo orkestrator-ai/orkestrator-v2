@@ -738,6 +738,20 @@ export function SharedNativeAgentController({
     }
     return ids;
   }, [normalizedMessages]);
+  /*
+   * A tab's first prompt is sent before its provider session has an id, so its
+   * confirmation starts with an empty one. The draft's copy adopts the id the
+   * projection reports; the optimistic copy is never rewritten, so defer to the
+   * draft's for the same request once it has one.
+   */
+  const activeTranscriptConfirmation = useMemo(() => {
+    const optimistic = optimisticPrompt?.confirmation;
+    const drafted = draft.pendingTranscriptConfirmation;
+    if (!optimistic) return drafted;
+    return !optimistic.sessionId && drafted?.requestId === optimistic.requestId
+      ? drafted
+      : optimistic;
+  }, [draft.pendingTranscriptConfirmation, optimisticPrompt]);
   /**
    * Has an authoritative transcript row appeared that can only be this prompt?
    *
@@ -760,8 +774,8 @@ export function SharedNativeAgentController({
    *   acknowledgement for the session the prompt was sent to.
    */
   const transcriptEchoedOptimistic = useMemo(() => {
-    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
-    if (!confirmation || confirmation.sessionId !== projection?.sessionId) return false;
+    const confirmation = activeTranscriptConfirmation;
+    if (!confirmation?.sessionId || confirmation.sessionId !== projection?.sessionId) return false;
     const priorMessageIds = new Set(confirmation.priorMessageIds);
     let lastPriorMessageIndex = -1;
     for (let index = 0; index < normalizedMessages.length; index += 1) {
@@ -776,12 +790,7 @@ export function SharedNativeAgentController({
         !isClientOnlyNativeMessage(message) &&
         !priorMessageIds.has(message.id),
     );
-  }, [
-    draft.pendingTranscriptConfirmation,
-    normalizedMessages,
-    optimisticPrompt,
-    projection?.sessionId,
-  ]);
+  }, [activeTranscriptConfirmation, normalizedMessages, projection?.sessionId]);
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
@@ -1559,7 +1568,7 @@ export function SharedNativeAgentController({
 
   useEffect(() => {
     if (!transcriptEchoedOptimistic) return;
-    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
+    const confirmation = activeTranscriptConfirmation;
     if (!confirmation) return;
     // A dispatch response can be lost after the backend accepted the prompt.
     // The new authoritative transcript row is definitive confirmation, so the
@@ -1571,12 +1580,7 @@ export function SharedNativeAgentController({
     // oxlint-disable-next-line react/set-state-in-effect
     if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
     setOptimisticPrompt(null);
-  }, [
-    clearConfirmedDraft,
-    draft.pendingTranscriptConfirmation,
-    optimisticPrompt,
-    transcriptEchoedOptimistic,
-  ]);
+  }, [activeTranscriptConfirmation, clearConfirmedDraft, transcriptEchoedOptimistic]);
 
   /*
    * A resume, fork adoption or any other session replacement means the
@@ -1962,9 +1966,15 @@ export function SharedNativeAgentController({
         })),
         ...(commandIntent ? { command: commandIntent } : {}),
       };
-      const confirmationSessionId = projection?.sessionId;
+      /*
+       * A new tab's first dispatch only returns once the provider session is
+       * created and its CLI has started, long after the prompt shows as running.
+       * Confirm it from the transcript too: an empty session id is filled in
+       * from the projection once the new session reports one.
+       */
+      const confirmationSessionId = projection?.sessionId ?? "";
       const transcriptConfirmation =
-        dispatchRequestId && confirmationSessionId
+        dispatchRequestId !== undefined
           ? {
               requestId: dispatchRequestId,
               sessionId: confirmationSessionId,
@@ -2017,9 +2027,14 @@ export function SharedNativeAgentController({
           transcriptConfirmedRequestIdRef.current === dispatchRequestId;
         if (outcome.outcome === "accepted" || transcriptConfirmed) {
           transcriptConfirmedRequestIdRef.current = null;
-          clearDraft(sessionKey);
-          consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
-          discardProvisionalDraft();
+          // The transcript echo may already have cleared this prompt, and a
+          // dispatch can take long enough for the next one to be typed since.
+          const ownedDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+          if (ownedDraft?.requestId === dispatchRequestId) {
+            clearDraft(sessionKey);
+            consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
+            discardProvisionalDraft();
+          }
           if (agentHandoffId && !rawCommand) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
         }

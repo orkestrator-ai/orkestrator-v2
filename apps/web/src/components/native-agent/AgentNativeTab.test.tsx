@@ -5777,6 +5777,74 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("clears a new session's first prompt once its echo lands, before the dispatch returns", async () => {
+    const tabId = "tab-first-prompt-echo-before-response";
+    const sessionKey = createSessionKey("env-1", tabId);
+    // A brand-new tab has no provider session until its first prompt creates
+    // one, and that dispatch only returns after the CLI has started.
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      sessionId: undefined,
+    }));
+    let releaseDispatch = () => {};
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (input) =>
+        new Promise<NativeAgentDispatchOutcome>((resolve) => {
+          releaseDispatch = () => resolve({ outcome: "accepted", requestId: input.requestId });
+        }),
+    );
+
+    render(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ ...identity("claude"), sessionId: undefined }}
+        isActive
+      />,
+    );
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Free up some disk space" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+        ?.sessionId,
+    ).toBe("");
+
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        sessionId: "new-claude-session",
+        turn: { phase: "running" as const },
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "first-prompt-user-row",
+            role: "user" as const,
+            content: "Free up some disk space",
+            parts: [{ type: "text" as const, content: "Free up some disk space" }],
+            createdAt: "2026-10-27T11:57:00.000Z",
+          },
+        ],
+      });
+    });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+
+    // The next prompt typed while the first dispatch is still settling must
+    // survive that dispatch's late acknowledgement.
+    act(() => {
+      useNativeComposeStore.getState().updateDraft(sessionKey, { text: "And clear /tmp" });
+    });
+    await act(async () => {
+      releaseDispatch();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByRole("textbox").textContent).toBe("And clear /tmp"));
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("And clear /tmp");
+  });
+
   test("keeps a prompt typed after an unconfirmed send when the echo finally arrives", async () => {
     const tabId = "tab-late-echo-guard";
     const sessionKey = createSessionKey("env-1", tabId);

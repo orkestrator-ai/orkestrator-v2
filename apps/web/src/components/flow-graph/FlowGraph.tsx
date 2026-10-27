@@ -347,7 +347,7 @@ function FlowNode({
             </span>
           ) : null}
         </span>
-        {/* Row 2: `{agent} · {model} · {effort}`, the only text that truncates. */}
+        {/* Row 2: `{agent} · {model} · {effort}`; this truncates, never the title. */}
         <span data-flow-node-row="detail" className="mt-0.5 flex min-w-0 items-center gap-2">
           {failure && errorFace === "joined" ? (
             <span

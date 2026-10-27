@@ -533,7 +533,7 @@ describe("flow graph nodes", () => {
       // Usage not reported yet is a neutral dash, not "Tokens pending".
       const unreported = screen.getByLabelText("Reviewer 2 runtime and token usage");
       expect(unreported.textContent).toBe("1m 35s · —");
-      expect(screen.queryByText(/Tokens pending/)).toBeNull();
+      expect(screen.queryByText(/Tokens pending/) === null).toBe(true);
       expect(screen.getByLabelText("Review package generation runtime").textContent).toBe(
         "0s · 900 tokens",
       );
@@ -549,7 +549,7 @@ describe("flow graph nodes", () => {
       expect(rows[2]!.contains(runtime)).toBe(true);
       // The running word sits with the clock rather than after the model.
       expect(within(rows[2] as HTMLElement).getByText("reviewing")).toBeTruthy();
-      expect(within(rows[1] as HTMLElement).queryByText("reviewing")).toBeNull();
+      expect(within(rows[1] as HTMLElement).queryByText("reviewing") === null).toBe(true);
       // The accessible name leaves unreported usage unsaid.
       expect(
         screen.getByRole("tab", { name: /^Reviewer 2 ·/ }).getAttribute("aria-label"),

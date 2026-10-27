@@ -1,3 +1,10 @@
+import {
+  environmentKey,
+  environmentRef,
+  projectKey,
+  projectRef,
+  type BackendId,
+} from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   isWorkspaceRealm,
@@ -6,6 +13,7 @@ import {
   type RealmDialog,
 } from "@/lib/federation/workspace-realm";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -82,6 +90,20 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     }
     if (spec.dialog) openDialog(spec.dialog, spec.projectId, spec.environmentId);
     return;
+  }
+  if (spec.projectId) {
+    // Another machine's project or environment was used: the search ranks it
+    // as recent, by its node-qualified key (this window's own selections are
+    // recorded from its selection state).
+    const backendId = spec.connectionId as BackendId;
+    useMachineViewStore
+      .getState()
+      .recordRecent([
+        ...(spec.environmentId
+          ? [environmentKey(environmentRef(backendId, spec.environmentId))]
+          : []),
+        projectKey(projectRef(backendId, spec.projectId)),
+      ]);
   }
   useRemoteWorkspaceStore.getState().open(
     spec.connectionId,

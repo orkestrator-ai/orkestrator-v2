@@ -124,3 +124,81 @@ test("named summary due job reconciles missed events and stops with the model", 
     model.stop();
   }
 });
+
+function searchFieldModel(projects: (args: Record<string, unknown> | undefined) => unknown[]) {
+  const projectArgs: Array<Record<string, unknown> | undefined> = [];
+  const model = new NodeReadModel({
+    nodes: {
+      selfIdentity: async () => "bk_command" as BackendId,
+      selfProfile: async () => ({ displayName: "Command" }),
+      listNodes: async () => ({ nodes: [] }) as never,
+      link: () => null,
+      subscribe: () => () => undefined,
+      recordProfile: async () => undefined,
+    },
+    emit: () => undefined,
+    local: {
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        if (command === "get_projects") {
+          projectArgs.push(args);
+          return projects(args) as T;
+        }
+        return [
+          {
+            id: "e1",
+            projectId: "p1",
+            name: "run-desktop-app",
+            branch: "run-desktop-app",
+            status: "stopped",
+            worktreePath: "/Users/someone/worktrees/telegram-scraper-run",
+            createdAt: "2026-10-01T00:00:00.000Z",
+          },
+        ] as T;
+      },
+    },
+  });
+  return { model, projectArgs };
+}
+
+test("summaries carry the search fields: path names, default branch and creation time", async () => {
+  const { model, projectArgs } = searchFieldModel((args) => [
+    {
+      id: "p1",
+      name: "telegram-scraper",
+      gitUrl: "git@github.com:acme/telegram-scraper.git",
+      localPath: "/Users/someone/code/telegram-scraper/",
+      ...(args?.includeDefaultBranch === true ? { defaultBranch: "develop" } : {}),
+    },
+  ]);
+  try {
+    const self = (await model.summaries(undefined, { includeSelf: true })).self!;
+    expect(projectArgs).toEqual([{ includeDefaultBranch: true }]);
+    expect(self.projects[0]).toMatchObject({
+      name: "telegram-scraper",
+      repositoryHint: "github.com/acme/telegram-scraper",
+      pathName: "telegram-scraper",
+      defaultBranch: "develop",
+    });
+    expect(self.environments[0]).toMatchObject({
+      worktreeName: "telegram-scraper-run",
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    // Only the last path segment leaves the node.
+    expect(JSON.stringify(self)).not.toContain("/Users/someone");
+  } finally {
+    model.stop();
+  }
+});
+
+test("a node that predates includeDefaultBranch still summarizes without it", async () => {
+  // An older node ignores the argument and returns its plain projects.
+  const { model } = searchFieldModel(() => [{ id: "p1", name: "telegram-scraper" }]);
+  try {
+    const self = (await model.summaries(undefined, { includeSelf: true })).self!;
+    expect(self.projects[0]!.name).toBe("telegram-scraper");
+    expect(self.projects[0]!.defaultBranch).toBeUndefined();
+    expect(self.projects[0]!.pathName).toBeUndefined();
+  } finally {
+    model.stop();
+  }
+});

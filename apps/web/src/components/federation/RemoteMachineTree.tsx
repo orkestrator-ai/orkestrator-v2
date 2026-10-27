@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -438,6 +438,17 @@ export function RemoteProjectGroup({
     id: project.key,
     disabled: !sortable,
   });
+  // Chosen in the project search: highlighted like a selected project, and
+  // scrolled into view each time it is chosen.
+  const revealRevision = useMachineViewStore((state) =>
+    state.revealedProject?.key === project.key ? state.revealedProject.revision : null,
+  );
+  const revealed = revealRevision !== null;
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (revealRevision === null) return;
+    rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [revealRevision]);
   const openProject = (board = false) =>
     openMachineWorkspace({
       connectionId: machine.connectionId,
@@ -477,9 +488,18 @@ export function RemoteProjectGroup({
       className={cn("px-2", isDragging && "opacity-50 z-50")}
       data-testid="federated-project"
       data-project={project.key}
+      data-revealed={revealed || undefined}
     >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
-        <div className="relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors hover:bg-hover">
+        <div
+          ref={rowRef}
+          className={cn(
+            "relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors",
+            revealed
+              ? "bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
+              : "hover:bg-hover",
+          )}
+        >
           <ContextMenu>
             <ContextMenuTrigger className="contents">
               <button
@@ -491,6 +511,7 @@ export function RemoteProjectGroup({
                   sortable && "cursor-grab active:cursor-grabbing",
                 )}
                 onClick={() => openProject()}
+                aria-current={revealed ? "true" : undefined}
                 title={`Open ${project.name} on ${machine.name}`}
               >
                 {showMachine ? (

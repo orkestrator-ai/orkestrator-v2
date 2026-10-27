@@ -692,7 +692,9 @@ async function readProjects(
   nodeId: BackendId,
   invoke: SummaryInvoke,
 ): Promise<{ projects: NodeProjectSummary[]; truncated: boolean }> {
-  const raw = await invoke<unknown>("get_projects");
+  // A node older than `includeDefaultBranch` ignores it and sends none; the
+  // search then falls back to "main", as it does for an unconfigured project.
+  const raw = await invoke<unknown>("get_projects", { includeDefaultBranch: true });
   const list = Array.isArray(raw) ? raw : [];
   const projects = list
     .slice(0, MAX_SUMMARY_PROJECTS)

@@ -2,6 +2,7 @@ import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
+import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
@@ -1812,6 +1813,8 @@ function fixtureForPath() {
     );
   }
   if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/project-search-machines")
+    return <ProjectSearchMachinesFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;

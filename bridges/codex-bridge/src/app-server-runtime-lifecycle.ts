@@ -36,7 +36,11 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
-import { nextThreadAuthNotice } from "./sessions/auth-recovery-notice.js";
+import {
+  isRefusedLoginError,
+  nextThreadAuthNotice,
+  refusedLoginNotice,
+} from "./sessions/auth-recovery-notice.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
@@ -127,7 +131,6 @@ export class CodexRuntimeLifecycle {
           : persisted.config,
         title: persisted.title,
         titleSource: persisted.titleSource,
-        titleGenerationAttempted: Boolean(persisted.title),
         lastAcceptedRequestId: persisted.lastAcceptedRequestId,
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
@@ -864,6 +867,12 @@ export class CodexRuntimeLifecycle {
       this.ctx.callbacks.finishCompaction(context);
       return;
     }
+    // Thread-scoped too, and asynchronous: it reads the surviving turns, which
+    // the read loop must never wait for.
+    if (event.kind === "thread.reverted") {
+      void this.ctx.callbacks.reconcileExternalRevert(context);
+      return;
+    }
 
     /**
      * Park turn-scoped events whose turn is not registered yet.
@@ -1142,8 +1151,16 @@ export class CodexRuntimeLifecycle {
       case "turn.completed": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
-        // A turn that finished proves the login works again.
+        // A turn that finished proves the login works again; one the API
+        // refused for its login asks for a sign-in, which app-server's own
+        // recovery never does for a key it holds as signed in.
         if (event.status === "completed") this.setThreadAuthNotice(context, undefined);
+        else if (event.status === "failed" && isRefusedLoginError(event.error)) {
+          this.setThreadAuthNotice(
+            context,
+            refusedLoginNotice(context.authNotice, () => crypto.randomUUID()),
+          );
+        }
         this.discardOutlivingCommandWindows(turn);
         if (turn.stoppedByShutdown && event.status === "interrupted")
           this.completeRecoveredTurn(turn, event.status);

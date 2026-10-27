@@ -244,6 +244,9 @@ export let previousCodexHome: string | undefined;
 
 export let previousCwd: string | undefined;
 
+/** Runtimes built for the current test, stopped before its `codexHome` goes. */
+const runtimes = new Set<AppServerRuntime>();
+
 beforeEach(() => {
   codexHome = mkdtempSync(join(tmpdir(), "ork-runtime-"));
   // The rollout parser resolves CODEX_HOME/CWD from the environment. Without
@@ -255,7 +258,11 @@ beforeEach(() => {
   process.env.CWD = "/tmp/ws";
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Journal and session writes land after the test body returns; stopping the
+  // runtime settles them, so none re-creates `codexHome` after its removal.
+  await Promise.allSettled(Array.from(runtimes, (runtime) => runtime.stop()));
+  runtimes.clear();
   setHydrateMessagesFromPersistedSessionGateForTesting();
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
@@ -267,7 +274,6 @@ afterEach(() => {
 export async function harness(
   handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
   options: {
-    generateTitle?: (prompt: string) => Promise<string>;
     now?: () => number;
     threadIdleMs?: number;
     sessionRetentionMs?: number;
@@ -346,7 +352,6 @@ export async function harness(
     }),
     // Deltas are published on a cadence; zero keeps most tests deterministic.
     ...(options.adaptiveCoalesce ? {} : { coalesceIntervalMs: 0 }),
-    generateTitle: options.generateTitle,
     ...(options.now ? { now: options.now } : {}),
     ...(options.threadIdleMs !== undefined ? { threadIdleMs: options.threadIdleMs } : {}),
     ...(options.sessionRetentionMs !== undefined
@@ -386,6 +391,7 @@ export async function harness(
     ...(options.changeEvidence ? { changeEvidence: options.changeEvidence } : {}),
     ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),
   });
+  runtimes.add(runtime);
   if (options.deferStart !== true) await runtime.start();
 
   /**

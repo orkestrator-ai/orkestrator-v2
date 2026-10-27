@@ -27,6 +27,13 @@ fails the same way.
 - Nothing is lost or run twice: the prompt never reached the CLI, and the
   parked record asks the user to retry or discard. The cost is a confusing
   "could not confirm" card and a Retry that fails until the lock ages out.
+- Seen again on 2026-10-27 by `apps/backend/tests/claude-cold-dispatch-restart.test.ts`
+  (todo 0223), 2 runs in 10: the test SIGKILLs a real Claude bridge right after
+  a claim, and the restarted bridge's next prompt failed with this 500. A
+  workflow re-sending an `absent` request after a restart hits the same window;
+  it stays safe (the failed claim is rolled back, so the next pass reads
+  `absent` again and retries) but is delayed until the lock ages out. The test
+  now waits for the killed turn's writes to release the lock before killing.
 
 ## Outstanding work
 

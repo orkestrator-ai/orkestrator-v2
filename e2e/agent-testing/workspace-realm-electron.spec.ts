@@ -470,6 +470,129 @@ test("a leaf's workspace opens in the window's central region without moving or 
         description:
           "The desktop session did not activate Electron. DOM keyboard handoffs are checked; native focus calls are covered by WorkspaceViews unit tests.",
       });
+    {
+      const realmPage = electronApp
+        .windows()
+        .find((page) => page.url().includes("realm=workspace"));
+      if (!realmPage) throw new Error("The realm page was not attached");
+      const previewUrl = `${rendererUrl}/favicon.ico?shortcuts-native-preview`;
+      await realmPage.evaluate(async (url) => {
+        const api = (
+          window as unknown as {
+            orkestrator: {
+              browserPreview: {
+                attach(input: unknown): Promise<unknown>;
+              };
+            };
+          }
+        ).orkestrator.browserPreview;
+        await api.attach({
+          tabId: "shortcuts-native-qa",
+          url,
+          bounds: { x: 10, y: 80, width: 160, height: 90 },
+          visible: true,
+        });
+      }, previewUrl);
+      await expect
+        .poll(() =>
+          electronApp.evaluate(
+            ({ webContents }, url) =>
+              webContents
+                .getAllWebContents()
+                .some((contents) => contents.getURL() === url && !contents.isLoading()),
+            previewUrl,
+          ),
+        )
+        .toBe(true);
+      const previewPage = electronApp.windows().find((page) => page.url() === previewUrl);
+      if (!previewPage) throw new Error("The native preview page was not attached");
+      await previewPage.evaluate(() => {
+        document.body.innerHTML = '<input aria-label="Preview editor">';
+      });
+      const editor = previewPage.getByRole("textbox", { name: "Preview editor" });
+      const chord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`;
+      try {
+        for (const source of ["menu", "preview", "outside"] as const) {
+          await editor.focus();
+          await electronApp.evaluate(({ webContents }, url) => {
+            const contents = webContents
+              .getAllWebContents()
+              .find((contents) => contents.getURL() === url)!;
+            contents.focus();
+            // Exercise the native focus notification even on shared desktops
+            // where the OS refuses to activate the test application's window.
+            contents.emit("focus");
+          }, previewUrl);
+          if (source === "menu") {
+            await electronApp.evaluate(({ BrowserWindow, Menu }) => {
+              const host = BrowserWindow.getAllWindows()[0]!;
+              const item = Menu.getApplicationMenu()!
+                .items.find((item) => item.label === "View")!
+                .submenu!.items.find((item) => item.label === "Keyboard Shortcuts…")!;
+              item.click({ triggeredByAccelerator: false }, host, host.webContents);
+            });
+          } else
+            await electronApp.evaluate(({ webContents }, url) => {
+              const contents = webContents
+                .getAllWebContents()
+                .find((item) => item.getURL() === url)!;
+              const modifiers: ("meta" | "control" | "shift")[] = [
+                process.platform === "darwin" ? "meta" : "control",
+                "shift",
+              ];
+              contents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
+              contents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
+            }, previewUrl);
+          const dialog = realmPage.getByRole("dialog", { name: "Keyboard shortcuts" });
+          await expect(dialog).toBeVisible();
+          await expect(
+            realmPage.getByRole("textbox", { name: "Search keyboard shortcuts" }),
+          ).toBeFocused();
+          await expect(window.getByTestId("keyboard-shortcuts-dialog")).toHaveCount(0);
+          if (source === "menu") {
+            // The built MenuItem adapts its event-first call to the template's
+            // third event argument. An open dialog distinguishes toggle/open.
+            await electronApp.evaluate(({ BrowserWindow, Menu }) => {
+              const host = BrowserWindow.getAllWindows()[0]!;
+              const item = Menu.getApplicationMenu()!
+                .items.find((item) => item.label === "View")!
+                .submenu!.items.find((item) => item.label === "Keyboard Shortcuts…")!;
+              item.click({ triggeredByAccelerator: true }, host, host.webContents);
+            });
+            await expect(dialog).toHaveCount(0);
+            await realmPage.keyboard.press(chord);
+            await expect(dialog).toBeVisible();
+          }
+          // No product echo interval or fixed test delay: a separate press closes.
+          if (source === "outside")
+            await realmPage
+              .locator('[data-slot="dialog-overlay"]')
+              .click({ position: { x: 2, y: 2 } });
+          else await realmPage.keyboard.press(source === "menu" ? "Escape" : chord);
+          await expect(dialog).toHaveCount(0);
+          if (windowFocused)
+            await expect
+              .poll(() =>
+                electronApp.evaluate(
+                  ({ webContents }, url) => webContents.getFocusedWebContents()?.getURL() === url,
+                  previewUrl,
+                ),
+              )
+              .toBe(true);
+          await previewPage.keyboard.type(source);
+          await expect(editor).toHaveValue(source);
+          await editor.fill("");
+        }
+      } finally {
+        await realmPage.evaluate(async () => {
+          await (
+            window as unknown as {
+              orkestrator: { browserPreview: { destroy(id: string): Promise<void> } };
+            }
+          ).orkestrator.browserPreview.destroy("shortcuts-native-qa");
+        });
+      }
+    }
     // Keyboard focus crosses the native webContents boundary in both directions.
     const panelState = () =>
       electronApp.evaluate(async ({ webContents }) => {

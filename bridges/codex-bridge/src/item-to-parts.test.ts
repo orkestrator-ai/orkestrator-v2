@@ -28,6 +28,11 @@ async function withGitWorkspace<T>(callback: (dir: string) => Promise<T> | T): P
       cwd: dir,
       stdio: "ignore",
     });
+    // `git commit` starts a detached auto-maintenance child. Still writing
+    // under `.git` while the removal below runs, it left the directory behind
+    // (Bun's forced `rmSync` does not report that).
+    execFileSync("git", ["config", "maintenance.auto", "false"], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", ["config", "gc.auto", "0"], { cwd: dir, stdio: "ignore" });
     return await callback(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });

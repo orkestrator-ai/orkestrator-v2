@@ -496,6 +496,12 @@ export interface NativeAgentServiceOptions {
    */
   artifactDispatch?: ArtifactTurnDispatch;
   /**
+   * Writes session titles (`session-title-service.ts`). Absent, every session
+   * keeps the first-message fallback, which is what tests want: no title run
+   * may reach a real agent login.
+   */
+  sessionTitles?: import("./session-title-service.js").SessionTitleGenerator;
+  /**
    * The transcript-artifact publication ledger, read by projection to place
    * each publication beside the call that published it. A getter because the
    * artifact service is constructed after this one; absent or null means no

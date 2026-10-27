@@ -1024,6 +1024,9 @@ export function setPromptJournal(state: SessionState, entry: PromptJournalEntry)
       if (state.promptJournal.size <= MAX_PROMPT_JOURNAL) break;
       if (requestId === entry.requestId || protectedJournalEntry(retained)) continue;
       state.promptJournal.delete(requestId);
+      // A forgotten id would now look never sent, so the journal can no
+      // longer prove absence for this session, ever.
+      state.promptJournalComplete = false;
     }
   }
   schedulePersist();

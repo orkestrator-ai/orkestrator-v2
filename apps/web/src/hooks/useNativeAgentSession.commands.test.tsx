@@ -102,6 +102,11 @@ const dispatchNativeAgentIntentMock = mock(async (input: { requestId: string }) 
   outcome: "accepted" as const,
   requestId: input.requestId,
 }));
+const setResumableArchivedMock = mock(
+  async (_input: Parameters<typeof realBackend.setNativeAgentResumableSessionArchived>[0]) => ({
+    archived: true,
+  }),
+);
 const enqueuePromptQueueMessageMock = mock(async () => ({}));
 
 mock.module("@/lib/backend", () => ({
@@ -125,6 +130,7 @@ mock.module("@/lib/backend", () => ({
   refreshNativeAgentCommands: refreshNativeAgentCommandsMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
+  setNativeAgentResumableSessionArchived: setResumableArchivedMock,
 }));
 
 const { useNativeAgentSession, resetNativeAgentSyncCapabilityForTests, nativeSubmissionText } =
@@ -211,6 +217,7 @@ beforeEach(() => {
   refreshNativeAgentCommandsMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
+  setResumableArchivedMock.mockClear();
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -225,6 +232,30 @@ afterEach(() => {
 });
 
 describe("useNativeAgentSession commands", () => {
+  test("forwards archive and undo with the tab's identity to the backend", async () => {
+    const { result } = renderSession();
+    await act(async () => {
+      await result.current.setResumableArchived("closed-thread", true);
+      await result.current.setResumableArchived("closed-thread", false);
+    });
+    expect(setResumableArchivedMock.mock.calls.map((call) => call[0])).toEqual([
+      {
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-1",
+        resumableSessionId: "closed-thread",
+        archived: true,
+      },
+      {
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-1",
+        resumableSessionId: "closed-thread",
+        archived: false,
+      },
+    ]);
+  });
+
   test("applies the discovery catalogue state beside the command rows", async () => {
     transcriptUpdates = [() => transcriptSnapshot("t-1")];
     stateUpdates = [() => stateSnapshot("s-1")];

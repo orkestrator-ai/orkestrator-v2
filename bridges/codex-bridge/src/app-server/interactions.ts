@@ -36,13 +36,18 @@ export interface InteractionRequest {
   generation: EngineGeneration;
   requestedAt: number;
   /**
-   * The app-server wire hint, preserved independently of user attention.
-   * Default-mode questions can report false while the model waits for the
-   * answer. A parked question RPC still publishes waiting activity; transcript
-   * async questions use a separate path. The deprecated `autoResolutionMs` is
-   * read only when `isBlocking` is absent.
+   * Whether the turn waits on this request: always true for a parked RPC.
+   *
+   * Codex 0.164.0 sends a Default-mode question with the wire's
+   * `isBlocking: false`, yet its core awaits the answer with no timeout of its
+   * own; the flag only lets a client auto-resolve the question (its TUI sends
+   * an empty answer after two minutes). So the wire hint chooses the deadline,
+   * not this field: `true` waits indefinitely, anything else gets the bounded,
+   * pausable one. Transcript async questions are not RPCs and keep running.
+   * Bridges before todo 0161 published the wire hint here, which the backend
+   * still reads as blocking for a question.
    */
-  isBlocking: boolean;
+  isBlocking: true;
   /** Absent for a question that waits indefinitely; moves on pause and resume. */
   expiresAt?: number;
   /** Pause state of the deadline; present exactly when `expiresAt` is. */
@@ -141,16 +146,14 @@ export function describeInteraction(options: {
   const turnId = text(params.turnId) ?? null;
 
   if (options.method === "item/tool/requestUserInput") {
-    // Current app-server versions always send this boolean. Legacy recordings
-    // omitted it: preserve their auto-resolution behavior when present, while
-    // treating a request with neither field as blocking.
+    // Current app-server versions always send this boolean; it picks the
+    // deadline (see `InteractionRequest.isBlocking`). Legacy recordings omitted
+    // it: their `autoResolutionMs` still shortens the deadline when present.
     if (params.isBlocking !== undefined && typeof params.isBlocking !== "boolean") return null;
     const autoResolutionMs =
       typeof params.autoResolutionMs === "number" && params.autoResolutionMs > 0
         ? params.autoResolutionMs
         : undefined;
-    const isBlocking =
-      typeof params.isBlocking === "boolean" ? params.isBlocking : autoResolutionMs === undefined;
     const waitsIndefinitely = params.isBlocking === true;
     const questions = Array.isArray(params.questions)
       ? params.questions.flatMap((raw) => {
@@ -193,7 +196,7 @@ export function describeInteraction(options: {
       itemId: text(params.itemId) ?? null,
       generation: options.generation,
       requestedAt: options.requestedAt,
-      isBlocking,
+      isBlocking: true,
       ...(waitsIndefinitely
         ? {}
         : {

@@ -1639,6 +1639,28 @@ export class TerminalHistory {
     await Promise.allSettled(pending);
   }
 
+  /**
+   * Resolves once no history write, disposal or prune is in flight, including
+   * work one of them queued while it ran. Disposal and completion are not
+   * awaited by their callers, so a test awaits this before removing the data
+   * directory they write into.
+   */
+  async settled(): Promise<void> {
+    let previous = new Set<Promise<unknown>>();
+    while (true) {
+      const pending = new Set<Promise<unknown>>([
+        ...Array.from(this.sessions.values(), (session) => session.parseTail),
+        ...Array.from(this.sessions.values(), (session) => session.ioTail),
+        ...this.historyIoTails.values(),
+        ...this.historyDisposals.values(),
+        ...this.rootPruneTails.values(),
+      ]);
+      if (Array.from(pending).every((promise) => previous.has(promise))) return;
+      await Promise.allSettled(pending);
+      previous = pending;
+    }
+  }
+
   /** Resident collectors, remembered configurations and queue usage; for tests and diagnostics. */
   stats(): {
     sessions: number;

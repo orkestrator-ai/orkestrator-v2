@@ -31,6 +31,7 @@ import type {
   ClaudeModelCatalogEntry,
   CodexModelCatalogEntry,
   OpenCodeModelCatalogEntry,
+  Project,
 } from "./models.js";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
@@ -208,6 +209,21 @@ function normalizedCodexModels(models: readonly CodexModelCatalogEntry[]): Agent
       supportsSpeed: true,
       supportsMode: true,
     };
+  });
+}
+
+/**
+ * Projects with their configured default branch, for a command node's
+ * summary of this node (`includeDefaultBranch`). Additive: a project without
+ * a configured branch is returned unchanged, as an older node returns all.
+ */
+export function withDefaultBranches(
+  projects: readonly Project[],
+  config: Pick<AppConfig, "repositories">,
+): Array<Project & { defaultBranch?: string }> {
+  return projects.map((project) => {
+    const defaultBranch = config.repositories?.[project.id]?.defaultBranch?.trim();
+    return defaultBranch ? { ...project, defaultBranch } : project;
   });
 }
 
@@ -415,9 +431,27 @@ export function registerProjectCommands(
     return { entries };
   });
 
-  register("get_projects", (args, { storage }) =>
-    conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects()),
-  );
+  register("get_projects", async (args, { storage }) => {
+    const includeDefaultBranch =
+      args.includeDefaultBranch === undefined
+        ? false
+        : asRequiredBoolean(args.includeDefaultBranch, "includeDefaultBranch");
+    if (!includeDefaultBranch) {
+      return conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects());
+    }
+    // Each project's default branch lives in the app config, whose changes
+    // do not move the project manifest revision, so this form is never conditional.
+    if (args.knownManifestGeneration !== undefined || args.knownResourceRevision !== undefined) {
+      throw new Error("includeDefaultBranch cannot be combined with a conditional read");
+    }
+    const projects = await storage.loadProjects();
+    try {
+      return withDefaultBranches(projects, await storage.loadConfig());
+    } catch {
+      // Search enrichment is optional; an unreadable config must not hide projects.
+      return projects;
+    }
+  });
   register("add_project", async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);
     return addExistingProject(

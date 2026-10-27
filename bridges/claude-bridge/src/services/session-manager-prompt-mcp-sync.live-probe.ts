@@ -9,6 +9,7 @@
 // which lists the CLI's own MCP tool registry without a token-count request.
 import { runMcpCallProbe } from "./session-manager-prompt-mcp-sync.live-calls.js";
 import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -104,11 +105,27 @@ async function run(
       },
     }),
   };
+  // The CLI writes its MCP logs under `home` while it shuts down, so the
+  // directory is removed only once the process has exited.
+  let exited: Promise<void> = Promise.resolve();
   const control = query({
     prompt,
     options: {
       cwd,
       ...claudeExecutableOptions(),
+      spawnClaudeCodeProcess: (options) => {
+        const child = spawn(options.command, options.args, {
+          cwd: options.cwd,
+          env: options.env,
+          signal: options.signal,
+          stdio: ["pipe", "pipe", "ignore"],
+        });
+        exited = new Promise((resolve) => {
+          child.once("exit", () => resolve());
+          child.once("error", () => resolve());
+        });
+        return child;
+      },
       settingSources: ["user", "project"],
       mcpServers: scenario.inline,
       env: {
@@ -168,6 +185,7 @@ async function run(
     release();
     open.delete(control);
     control.close();
+    await exited;
     await rm(root, { recursive: true, force: true });
   }
 }

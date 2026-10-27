@@ -105,3 +105,37 @@ summary. It exited 1 after 915.81 s including cleanup. The runner confirmed
 cannot establish how the remaining cases behave, and the skipped scheduler
 case remains a coverage limitation. The typed-prompt live-provider spec was
 not reached; the credential-free run does not opt into billed turns.
+
+## Ship verification — 2026-10-27
+
+Branch at `6771e8855`, based on `ce205ad34`; `apps`, `packages` and `tests`
+are still identical to that base. Host load average 21–49 throughout.
+
+- `bun run test:bridge` in `bridges/codex-bridge`: 2,440 passed, 46 skipped,
+  none failed.
+- `mise run test:logged -- --name 0211-verify-suite -- mise run test`: exit 1.
+  Backend 11,431 passed, 101 skipped, 17 failed; desktop two failed
+  (profile-cleanup); root/support 3,526 passed, two failed (migrate-copy).
+  Every other task passed.
+
+Owners rerun alone (`bun test --preload ../../tests/setup-node.ts <file>
+--parallel=1`) on the branch, then on a detached worktree of the base
+`ce205ad34` in the host temporary directory with its own `bun install` (no
+links into the build worktree; removed afterwards):
+
+| Owner | Branch alone | Base alone |
+| --- | --- | --- |
+| `apps/backend/src/core/agent-accounts.test.ts` | passed | not needed |
+| `apps/backend/src/core/public-api/public-api-projects.test.ts` | passed | not needed |
+| `apps/backend/src/core/worktree-snapshots-git.test.ts` | passed | not needed |
+| `apps/backend/src/core/diff-stats-tracking.test.ts` | one retarget timeout; then passed once, failed once | passed |
+| `apps/backend/tests/commands-registry-environments.test.ts` | three timeouts; then passed twice | passed |
+| `apps/backend/src/core/commands-environment-worktree-location.test.ts` | two failed | one failed (alias retargeting) |
+| `apps/backend/tests/commands-integration.test.ts` | one failed (git excludes, 5 s) | one failed (scan caches, 5 s) |
+| `apps/backend/src/core/environment-move.test.ts` | three failed | four failed |
+| `apps/desktop/scripts/dev/profile-cleanup.test.ts` | two failed (1100) | two failed |
+| `tests/unit/migrate-copy.test.ts` | two failed | two failed |
+
+The diff-stats and registry-environments failures come and go on identical
+files under this load; the others fail on the base too. No assertion,
+deadline, skip or implementation was changed.

@@ -48,17 +48,17 @@ Fixed 2026-10-26:
   `<system-reminder>` the user typed or a reworded copy, is left as written.
 - For the three cases that cannot be read back from what was sent, the
   runtime records the live row's text once the turn is accepted
-  (`recordTypedPrompt`, `sessions/typed-prompts.ts`): independent per-turn files
-  under `typed-prompts/<thread>.jsonl.d/<turn-digest>.json` (old JSONL
-  journals stay readable),
+  (`recordTypedPrompt`, `sessions/typed-prompts.ts`): independent per-turn
+  files under `typed-prompts/<thread>.jsonl.d/<turn-digest>.json`, each
   holding the turn id, a sha256 of the sent text item and the typed text.
   It is written only when the sent prompt differs from the typed one for a
   reason other than the plan preamble.
 - `replayPersistedRollout` (`history/rollout.ts`) loads the current turn on demand during
   replay and passes `extractPersistedMessageContent` a `typedPrompt` resolver:
   a user message shows the recorded text only when it belongs to the
-  recorded turn and its joined text hashes to the recorded digest.
-  Attachments still come from the sent text's `<attached-files>` marker.
+  recorded turn and its joined text hashes to the recorded digest. A matched
+  record whose typed text is empty (a recovered-context turn sent with no
+  prompt) keeps an empty **You** row, as live. Attachments still come from the sent text's `<attached-files>` marker.
   Anything else, a thread from the Codex CLI included, shows the rollout's
   text (with the exact plan preamble stripped).
 - A fork copies its parent's records before its first replay
@@ -87,15 +87,24 @@ Fixed 2026-10-26:
      rollout text. Further cases: a record never applies to a steer repeating the wire text in its
      turn, to the same text in another turn or to a rewritten turn; a fork
      keeps its parent's typed prompts. All three tests fail against the old
-     reader; the fork test also fails without `inheritTypedPrompts`.
+     reader; the fork test also fails without `inheritTypedPrompts`. Added in
+     the second review: recovered context with an empty prompt (build and
+     plan mode) and with a typed prompt in plan mode; a failing `mkdir`,
+     `writeFile` or `rename` neither rejects the dispatch nor breaks replay,
+     which falls back to the rollout text; an oversized record falls back to
+     the rollout text; full replay keeps the earliest and latest of more than
+     500 rewritten turns.
    - `history/rollout-typed-prompts.test.ts`: the extraction rules
      (preamble with coordinator context inside it, user reminders kept, an
-     attachment-only plan prompt, attachments kept under a typed answer,
-     exact recorded matches precede synthetic-block heuristics, assistant rows never
+     attachment-only plan prompt, attachments kept under a typed answer, a
+     matched empty typed prompt keeps its row, image framing, exact recorded
+     matches precede synthetic-block heuristics, assistant rows never
      ask).
    - `sessions/typed-prompts.test.ts`: digest matching, what is not
-     recorded, malformed lines, newest-wins, long-history retention and concurrent-process writes, fork
-     inheritance, unusable thread ids. `prompts/slash-commands.test.ts`:
+     recorded, malformed, mismatched and oversized records ignored, more than
+     500 turns readable by a fresh process and a fork, concurrent-process and
+     pending writes across hundreds of threads, a fork waiting for pending
+     parent writes, unusable thread ids. `prompts/slash-commands.test.ts`:
      exact-strip cases.
    - `app-server/live-resume-context.test.ts` (gated by
      `RUN_LIVE_CODEX_APP_SERVER=1`, no credits) gained a second test: the
@@ -208,6 +217,23 @@ composer" decision below.
   place a reload showed the lost thread's history; that history is still
   readable from the old thread, which stays in the resume list. Not adding a
   separate rendering of it here.
+- **Empty typed prompts.** A recovered-context turn can be sent with no
+  typed prompt; live, it shows an empty **You** row. The first reader
+  dropped a matched record with empty text and no attachments, so the reload
+  lost the row. Options: drop it (no text to show) or keep an empty row.
+  Chose to keep it. Why: the rule is that a reload shows the same **You**
+  rows as live, turn ids included; without the row the recovered turn has no
+  user message at all. Cons: an empty row on reload, which is what live
+  showed.
+- **No reader for the single-file journal.** The first review round wrote
+  every record to one `typed-prompts/<thread>.jsonl` and then kept a
+  streaming reader for it after moving to per-turn files. That journal was
+  never on `main`, so no installed bridge has one. Options: keep the reader
+  for safety, or remove it. Chose to remove it (second review). Why: it was
+  dead code with its own bounded-line parser to maintain. The per-turn
+  directory keeps its `.jsonl.d` name, which is harmless. Cons: a build
+  worktree that ran the first round's bridge would reload those turns as
+  sent.
 - **Forks.** The parent's records are copied into the fork's file before the
   fork's first replay; a record for a turn the fork dropped matches nothing.
 - **Session titles** read from the first user message
@@ -252,8 +278,9 @@ composer" decision below.
 ## Review follow-up (2026-10-26)
 
 - Replaced destructive 500-record compaction with independent atomic per-turn
-  files. Existing journals are streamed with bounded line buffers; old entries
-  before the former 4 MiB tail limit remain readable. Forks copy incrementally.
+  files. Forks copy incrementally. (This round also kept a streaming reader
+  for the earlier single-file JSONL journal; the second review removed it,
+  below.)
 - Typed matches are consumed once per turn and checked before synthetic
   filtering. Added same-wire steer and synthetic-template runtime regressions.
 - Added full 1,005-turn replay, fresh-process persistence, fork retention,
@@ -274,3 +301,17 @@ each reproduced on `origin/main` or passing alone, as recorded in
 [1100](../../tests/flaky-tests/electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md)
 and a reopened
 [0187](../../tests/flaky-tests/environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md)).
+
+## Second review follow-up (2026-10-27)
+
+- A matched empty typed prompt keeps its **You** row (see "Empty typed
+  prompts" above).
+- Removed the reader for the never-shipped single-file JSONL journal (see
+  "No reader for the single-file journal").
+- Added recovered context in plan mode and with an empty prompt, each
+  record-write failure, and an oversized record to the runtime tests.
+
+Validation: the Codex bridge suite passed, and format, lint and typecheck
+passed. The default repository suite again failed only in files this change
+does not touch; see the 2026-10-27 sections of
+[1101](../../tests/flaky-tests/aggregate-validation-runs/1101-codex-typed-prompts-0211-validation.md).

@@ -57,3 +57,85 @@ beyond comments. They are five-second deadlines on real Git and bridge
 fixtures under extreme host load (they pass alone or with a longer timeout),
 or deterministic host-dependent failures that reproduce identically on the
 base commit. No assertion, deadline, skip or implementation was loosened.
+
+## Review-fix validation, 2026-10-27
+
+The review fixes are in `8ac5898c6`. Validation uses the default worker
+configuration unless the command below specifies otherwise. The full run was
+`mise run test:logged -- --name repository-tests -- mise run test`; its inner
+logs are in `orkestrator-test-run.kwGUWf` under the host temporary directory.
+The workspace reservation was four workers, the root suite one worker and the
+bridge reservation two workers. The host load average during the run was
+51/85/105 (one/five/fifteen minutes).
+
+The full run exited 1 after 870.2 seconds (867.5 seconds inside the aggregate
+runner). Backend: 12,025 passed, 120 skipped, 46 failed and 32 between-test
+errors. Desktop: 1,369 passed, 16 skipped, two failed. Root/support: 3,526
+passed, two failed. Claude bridge: 1,705 passed, one failed; the other four
+bridges passed. Web, web-public, CLI, protocol, toolchain and the Codex
+protocol-lockfile group passed. All failures were in the unchanged owners
+listed earlier in this case: environment moves, command integration,
+environment/worktree creation, diff statistics, Git snapshots/watchers,
+pinned Docker image identity, staged input relay, profile cleanup, migration
+copy and coordinator sandbox qualification. The affected lifecycle, grant,
+diagnostic and production-construction tests had no failures. The final
+artifact directory contains `summary.json` and bounded compressed group logs.
+
+The following checks passed:
+
+- `mise run test:logged -- --name static-checks -- mise run check`: format,
+  lint and all workspace typechecks (existing unused-import warnings remain).
+- `lifecycle-regressions`: 25 tests in `docker-cleanup-grants.test.ts`,
+  `tmux-runtime.test.ts`, `host-suspend-detector.test.ts`,
+  `backend-runtime-wiring.test.ts` and `tests/container-oom-events.test.ts`.
+  Command: `bun test --cwd apps/backend --preload ../../tests/setup-node.ts
+  <the five explicit ./src/core or ./tests paths> --parallel=2 --only-failures`,
+  through `test:logged`; 2.2 seconds. This covers late reconciliation, direct
+  admission after shutdown, scheduled/in-flight/initial pane captures, both
+  runtime shutdown orders, production constructor wiring, grant capacity and
+  expiry, and OOM follower ownership and stop/start idempotence.
+- `tmux-and-cleanup-owners`: the complete existing `tests/tmux-poll.test.ts`,
+  `tests/tmux-poll-signal.test.ts`, `tests/tmux-interactive.test.ts`,
+  `tests/tmux-commands-interactive.test.ts`, `src/core/backend-runtime.test.ts`
+  and `src/core/commands-environment-cleanup.test.ts`; same backend command
+  shape with `--parallel=2`, 12.7 seconds.
+- A workspace-specific image built with `mise run docker:build:dev --profile
+  backend-state-review`. The real `tests/claude-state-signal-docker.test.ts`
+  passed with `ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-b4cba3e0bc3c`,
+  backend node preload and `--parallel=1`, through `test:logged`; 3.7 seconds.
+  The test removes its exact owned container and temporary state.
+- Five real Electron scenarios passed with `bunx playwright test --config
+  e2e/agent-testing/playwright.electron.config.ts
+  e2e/agent-testing/electron-main.spec.ts --grep 'shares one backend|backend exit wiring'`,
+  through `test:logged`; 80.1 seconds. Each scenario owns and cleans its
+  temporary profiles and processes; no persistent launcher was started.
+
+The root suite repeated the two migration-copy failures above: 3,526 passed,
+two failed in 226.3 seconds. The complete owner rerun, `bun test
+./tests/unit/migrate-copy.test.ts --parallel=1 --only-failures` through
+`test:logged`, also failed identically (10 passed, two failed, 1.9 seconds;
+`orkestrator-test-run.6NIR8F`). Extraction status is `2` instead of `0` for
+both missing-completion cases. The complete profile-cleanup owner rerun,
+`bun test --cwd apps/desktop ./scripts/dev/profile-cleanup.test.ts
+--parallel=1 --only-failures` through `test:logged`, repeated both macOS
+Keychain-warning mismatches (20 passed, two failed, 0.8 seconds;
+`orkestrator-test-run.RwXTny`). These are deterministic failures already
+recorded above and in case 1100, not newly classified flakes.
+
+The bridge group repeated `Claude coordinator sandbox qualification >
+default-sandbox-writes` at 17,013.59 ms. The complete unchanged owner rerun,
+`bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts
+./src/conformance-coordinator-sandbox-live.test.ts --parallel=1 --only-failures`
+through `test:logged`, also failed that case at 17,013.30 ms (eight passed,
+one failed, 98.9 seconds; `orkestrator-test-run.2q7OY8`). The offline fixture
+aborts the pinned CLI at its own deadline. This run does not establish a
+parallel-only flake.
+
+The unchanged environment-move owner also remained non-green alone:
+`bun test --cwd apps/backend --preload ../../tests/setup-node.ts
+./src/core/environment-move.test.ts --parallel=1 --only-failures` through
+`test:logged` returned 18 passed, 20 failed and 18 between-test errors in
+267.8 seconds (`orkestrator-test-run.3ss5D3`). Tests and hooks exceeded their
+five-second deadlines; ensuing continuations encountered removed fixture
+directories. This repeats the deadline failure family above, without
+establishing that the current recurrence passes alone.

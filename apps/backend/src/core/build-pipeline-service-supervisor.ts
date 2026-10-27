@@ -103,6 +103,10 @@ import {
 } from "./build-pipeline-review-fanout.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import {
+  recordPipelineSessionUsage,
+  sharedTranscriptRead,
+} from "./build-pipeline-session-usage.js";
+import {
   hasProgressSnapshot,
   readTranscriptProgressSample,
   type ProgressSample,
@@ -511,6 +515,7 @@ export class BuildPipelineSupervisor {
       backgroundWorkLive,
       retainedContinuationRequestIds,
       interruption,
+      contextUsage,
     } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
@@ -607,10 +612,19 @@ export class BuildPipelineSupervisor {
       // must clear at once. Even then the whole body is read only when a
       // bounded probe shows it moved since that committed copy.
       const persistDue = this.shouldPersistTranscript(session);
+      const transcript = sharedTranscriptRead(provider, session.sdkSessionId);
       const transcriptChanged =
         statusChanged || persistDue || pipeline.stallWarning !== undefined
-          ? await this.refreshMovedTranscript(session, provider)
+          ? await this.refreshMovedTranscript(session, provider, { read: transcript.read })
           : false;
+      // Live usage, so a running node shows what the turn has cost so far.
+      // Like a transcript delta it waits for the persist boundary below.
+      const usageChanged = await recordPipelineSessionUsage(
+        session,
+        provider,
+        contextUsage,
+        transcript.taken(),
+      );
       const previousWarning = pipeline.stallWarning;
       if (transcriptChanged) {
         delete pipeline.stallWarning;
@@ -634,7 +648,7 @@ export class BuildPipelineSupervisor {
       // and this pipeline's control row. A pass that read nothing had no
       // warning to clear, and its stall clock is younger than the persist
       // interval, so no warning can appear on it either.
-      if (statusChanged || warningChanged || (transcriptChanged && persistDue)) {
+      if (statusChanged || warningChanged || ((transcriptChanged || usageChanged) && persistDue)) {
         session.messagesPersistedAt = new Date().toISOString();
         await this.ctx.save(pipeline, record.revision);
       }
@@ -654,12 +668,20 @@ export class BuildPipelineSupervisor {
     // probe says, so the handoff window and request-id recovery below see the
     // final copy. Later idle passes (a structured-result wait, PR detection)
     // read it again only when the provider shows it moved.
+    const transcript = sharedTranscriptRead(provider, session.sdkSessionId);
     const transcriptChanged = await this.refreshMovedTranscript(session, provider, {
       force: wasRunning,
+      read: transcript.read,
     });
+    const usageChanged = await recordPipelineSessionUsage(
+      session,
+      provider,
+      contextUsage,
+      transcript.taken(),
+    );
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
-    if (wasRunning || transcriptChanged) {
+    if (wasRunning || transcriptChanged || usageChanged) {
       // The turn is over, so this is the final transcript. Persist it now
       // rather than leaving the throttled tail to whichever branch runs next —
       // several of them return without saving.

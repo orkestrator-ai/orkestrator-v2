@@ -1,7 +1,7 @@
 # Build pipeline view
 
 Status: Living. Checked against the branch that introduced the pipeline flow
-graph (2026-10-26).
+graph (2026-10-26), and the node-face and live-usage follow-up (2026-10-27).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -14,7 +14,7 @@ Multi Review and the pipeline draw with the same components in
 
 | File | What it owns |
 | --- | --- |
-| `flow-graph-model.ts` | Node and edge state vocabulary (`FlowNodeState`, `FlowEdgeState`, `flowEdgeState`), `summarizeFlowEdges`, `defaultFlowSelection`, `latestActivityAt`, edge paths (`flowEdgePath`, `bypassEdgePath`), `FlowGraphGeometry`. |
+| `flow-graph-model.ts` | Node and edge state vocabulary (`FlowNodeState`, `FlowEdgeState`, `flowEdgeState`), `summarizeFlowEdges`, `defaultFlowSelection`, `latestActivityAt`, edge paths (`flowEdgePath`, `bypassEdgePath`), node heights (`flowNodeHasRuntimeRow`, `flowNodeHeight`), `FlowGraphGeometry`. |
 | `FlowGraph.tsx` | Node faces (state colours, icon, title, runtime, detail or first error line, severity chips, validation chips, an extra row), error tooltips, hand-drawn SVG edges and ports, column labels, the stacked column below 960 px with its sticky zoom controls, keyboard navigation, fullscreen, the height divider. |
 | `FlowViewport.tsx`, `flow-viewport.ts` | Zoom and pan maths and the viewport hook (Ctrl/⌘ + wheel, trackpad and touch pinch, drag to pan, opt-in Fit), the zoom controls and divider. |
 | `FlowInspector.tsx` | The inspector frame: the tab panel the nodes control, and its header (icon, title, status pill, tokens, actions). |
@@ -76,13 +76,66 @@ a transcript.
   older PR on a reused environment is not this pipeline's). The monitor owns
   polling and its bounds; the graph adds no read.
 
-Node colours and edge states follow Multi Review. Faces show the agent and
-model (or the error's first non-blank line, with the whole error in the
-tooltip and, through a visually hidden element, the accessible description;
-Multi Review instead joins every line, `errorFace="joined"`), elapsed time and tokens, and issue counts on review
-nodes. Columns have a fixed width (`pipelineFlowLayout`); a long pipeline
-scrolls sideways and a short one is centred. The graph's own height starts at
-240 px and its divider height is remembered separately from Multi Review's.
+Node colours and edge states follow Multi Review. Columns have a fixed width
+(`pipelineFlowLayout`); a long pipeline scrolls sideways and a short one is
+centred. The graph's own height starts at 240 px and its divider height is
+remembered separately from Multi Review's.
+
+### Node faces
+
+Every node face, in both graphs, is built from rows (`data-flow-node-row`):
+
+1. **Title** — the title, whole, and at most a small badge that gives way to
+   it ("ahead", "queued · #1 of 3", "not started"). The title never shares its
+   row with the clock or the token count, so it is never cut short by them.
+2. **Detail** — `{agent} · {model} · {effort}`, or the subtitle that stands for
+   it ("Local worktree", "No pull request yet"), or a failed node's error
+   (its first non-blank line, with the whole error in the tooltip and,
+   through a visually hidden element, the accessible description; Multi Review
+   instead joins every line, `errorFace="joined"`). This is the only text that
+   truncates: it ends in an ellipsis and keeps its whole text in a tooltip.
+   Severity chips, and the state word of a node that is not running
+   ("paused", "failed", "stopped"), sit at its end.
+3. **Runtime** — `{elapsed} · {tokens}`, with the running state word
+   ("running", "reviewing", "stalled"). Shown whenever the node runs, and kept
+   after it ran when a runtime was recorded.
+
+So a node that has not run (or a placeholder ahead) has two rows, and a
+running node three. **Decision:** a finished node keeps its final duration and
+tokens on row 3 rather than moving them onto row 2. That keeps the runtime in
+one place, a node's height unchanged when it finishes (so nothing on the graph
+moves as a stage completes), and the detail row free for the model and the
+severity chips. The cost is a finished node 18 px taller than a two-row one.
+Validation chips and the PR's checks are further rows under the face.
+
+`flowNodeHeight` turns those rows into the height the wide layouts give a
+node (64 px for two rows, 82 px with the runtime row, plus 28 px of chips or
+20 px of checks), and both `pipelineFlowLayout` and `multiReviewFlowLayout`
+centre a taller node on the same line as its neighbours, so edges still meet
+every node at its vertical centre. Node widths do not change. The stacked
+column lays nodes out by their content, so it needs no heights, and Fit
+measures what was laid out.
+
+A running node whose provider has not reported usage yet shows a dash in place
+of the count ("2m 35s · —"); its accessible name and the inspector leave the
+count out rather than calling it pending.
+
+### Token usage
+
+The graph reads each node's tokens from `PipelineSession.tokenCount` on the
+pipeline record, never from a transcript. The backend writes it for every stage
+session: fan-out reviewers mirror their reviewer record, and every other stage
+(Build, Fix, review-package preparation, a single review, Consolidation,
+Address, Verify, Ship, conflict resolution) is metered by
+`recordPipelineSessionUsage` from the same provider status read that drives
+the stage. The provider's cumulative `contextUsage.sessionTokens` is used
+when the status read carries it (the Claude and Codex bridges update it while
+a turn runs; others report it when their bridge does); a provider that meters from its transcript
+(OpenCode) is metered from the transcript read the pass already made. The count
+only grows, is saved on the transcript persist cadence while the turn runs and
+with the final transcript when it ends, and a meter that fails never fails the
+stage. The validation run of a Prepare node, the Ticket, Setup and the PR run
+no agent and have no tokens.
 
 ## Inspector and actions
 

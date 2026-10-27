@@ -7,7 +7,7 @@ import {
   type FlowNodeModel,
   type FlowStackStage,
 } from "@/components/flow-graph/FlowGraph";
-import { summarizeFlowEdges } from "@/components/flow-graph/flow-graph-model";
+import { flowNodeHeight, summarizeFlowEdges } from "@/components/flow-graph/flow-graph-model";
 import {
   multiReviewFlowLayout,
   type MultiReviewFlowEdges,
@@ -187,6 +187,13 @@ export function MultiReviewFlowGraph({
           width,
           reviewerCount: reviewerNodes.length,
           packageHasChips: Boolean(packageNode.validation?.length),
+          nodeHeights: {
+            package: flowNodeHeight(packageView!),
+            reviewers: reviewerViews.map(flowNodeHeight),
+            consolidation: flowNodeHeight(consolidationView!),
+            fix: flowNodeHeight(fixView!),
+            pr: flowNodeHeight(prView!),
+          },
         });
         const rects = new Map([
           [packageNode.id, geometry.package],

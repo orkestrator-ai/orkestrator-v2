@@ -40,6 +40,52 @@ function overlapping(list: Box[]): number {
 
 const isWide = (page: Page) => page.viewportSize()!.width >= 960;
 
+/** Each face row's name, text and box, top to bottom, plus whether the title is cut short. */
+async function face(page: Page, title: string) {
+  return node(page, title).evaluate((element) => {
+    const titleElement = element.querySelector<HTMLElement>("[data-flow-node-title]")!;
+    return {
+      box: element.getBoundingClientRect().toJSON() as Box,
+      rows: [...element.querySelectorAll<HTMLElement>("[data-flow-node-row]")].map((row) => ({
+        name: row.getAttribute("data-flow-node-row")!,
+        text: row.textContent ?? "",
+        box: row.getBoundingClientRect().toJSON() as Box,
+      })),
+      titleTruncated: titleElement.scrollWidth > titleElement.clientWidth,
+    };
+  });
+}
+
+/**
+ * Every edge leaves a node's right edge and enters another's left edge at
+ * the node's vertical centre, so a taller node still meets its edges square.
+ */
+async function edgeEndsMeetNodeCentres(page: Page): Promise<string[]> {
+  return graph(page).evaluate((canvas) => {
+    const origin = canvas.getBoundingClientRect();
+    const rects = [...canvas.querySelectorAll<HTMLElement>('[role="tab"]')].map((element) => {
+      const box = element.getBoundingClientRect();
+      return {
+        left: box.left - origin.left,
+        right: box.right - origin.left,
+        centre: box.top - origin.top + box.height / 2,
+      };
+    });
+    const misses: string[] = [];
+    for (const path of canvas.querySelectorAll<SVGPathElement>("path[data-flow-edge]")) {
+      const numbers = (path.getAttribute("d") ?? "").match(/-?\d+(\.\d+)?/g)!.map(Number);
+      const [x1, y1] = numbers;
+      const [x2, y2] = numbers.slice(-2);
+      const near = (a: number, b: number) => Math.abs(a - b) <= 1;
+      if (!rects.some((rect) => near(rect.right, x1!) && near(rect.centre, y1!)))
+        misses.push(`${path.dataset.flowEdge} start`);
+      if (!rects.some((rect) => near(rect.left, x2!) && near(rect.centre, y2!)))
+        misses.push(`${path.dataset.flowEdge} end`);
+    }
+    return misses;
+  });
+}
+
 test("draws the pipeline left to right, with definite steps ahead and faded", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=fanout");
   await expect(graph(page).getByRole("tab")).toHaveCount(12);
@@ -373,6 +419,74 @@ test("ticket references show BMP and SVG images, preview, and the changed indica
       .toBeGreaterThan(0);
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
   }
+});
+
+test("a running node keeps its whole title above its model and its clock", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=building");
+  const build = node(page, "Build");
+  await expect(build).toHaveAttribute("data-flow-state", "running");
+  await expect(build.getByLabel("Build runtime and token usage")).toHaveText(
+    /^\d+m \d+s · 48k tokens$/,
+  );
+  const { box, rows, titleTruncated } = await face(page, "Build");
+  expect(rows.map((row) => row.name)).toEqual(["title", "detail", "runtime"]);
+  expect(rows[0]!.text).toBe("Build");
+  expect(titleTruncated).toBe(false);
+  expect(rows[1]!.text).toBe("claude · opus · high");
+  expect(rows[2]!.text).toMatch(/^\d+m \d+s · 48k tokensrunning$/);
+  // Three rows, top to bottom, inside the node.
+  for (const [index, row] of rows.entries()) {
+    expect(row.box.y).toBeGreaterThanOrEqual(box.y);
+    expect(row.box.y + row.box.height).toBeLessThanOrEqual(box.y + box.height + 0.5);
+    if (index > 0) {
+      const above = rows[index - 1]!.box;
+      expect(row.box.y).toBeGreaterThanOrEqual(above.y + above.height - 0.5);
+    }
+  }
+  // Steps ahead keep two rows, with their badge beside a whole title.
+  const verify = await face(page, "Verify");
+  expect(verify.rows.map((row) => [row.name, row.text])).toEqual([
+    ["title", "Verifyahead"],
+    ["detail", "claude · Provider default"],
+  ]);
+  expect(verify.titleTruncated).toBe(false);
+  expect(verify.box.height).toBeLessThan(box.height);
+  // Node widths stay one size, whatever the face holds.
+  expect(Math.abs(verify.box.width - box.width)).toBeLessThanOrEqual(1);
+  expect(overlapping(await boxes(page))).toBe(0);
+  if (isWide(page)) expect(await edgeEndsMeetNodeCentres(page)).toEqual([]);
+});
+
+test("a running node whose provider has not reported usage shows a dash", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=building&usage=none");
+  const build = node(page, "Build");
+  await expect(build.getByLabel("Build runtime and token usage")).toHaveText(/^\d+m \d+s · —$/);
+  await expect(page.getByText("Tokens pending")).toHaveCount(0);
+});
+
+test("finished and running nodes share one face, and edges meet every node's centre", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=loops");
+  const build = await face(page, "Build");
+  expect(build.rows.map((row) => [row.name, row.text])).toEqual([
+    ["title", "Build"],
+    ["detail", "claude · opus"],
+    ["runtime", "10m 0s"],
+  ]);
+  expect(overlapping(await boxes(page))).toBe(0);
+  if (isWide(page)) expect(await edgeEndsMeetNodeCentres(page)).toEqual([]);
+
+  await page.goto("/pipeline-flow?scenario=fanout");
+  // Reviewers of mixed heights: running and failed ones have a runtime row,
+  // queued ones do not.
+  const running = await face(page, "Reviewer 1");
+  const queued = await face(page, "Reviewer 3");
+  expect(running.rows.map((row) => row.name)).toEqual(["title", "detail", "runtime"]);
+  expect(queued.rows.map((row) => row.name)).toEqual(["title", "detail"]);
+  expect(running.titleTruncated).toBe(false);
+  expect(overlapping(await boxes(page))).toBe(0);
+  if (isWide(page)) expect(await edgeEndsMeetNodeCentres(page)).toEqual([]);
 });
 
 test("running package validation keeps Prepare and its display clock live", async ({ page }) => {

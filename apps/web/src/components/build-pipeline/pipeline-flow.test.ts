@@ -10,6 +10,7 @@ import {
   type PipelineFlowModel,
 } from "./pipeline-flow";
 import { pipelineFlowLayout } from "./pipeline-flow-layout";
+import { flowNodeHeight } from "@/components/flow-graph/flow-graph-model";
 import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
@@ -1014,5 +1015,40 @@ describe("pipelineFlowLayout", () => {
     expect(a.y + a.height / 2).toBeCloseTo((b1.y + b2.y + b2.height) / 2, 0);
     expect(geometry.width).toBeGreaterThanOrEqual(c.x + c.width);
     expect(geometry.labels.map((label) => label.text)).toEqual(["A", "B", "C"]);
+  });
+
+  test("centres a running node's taller face on the same line as its neighbours", () => {
+    const running = flowNodeHeight({ state: "running", runtime: null });
+    const idle = flowNodeHeight({ state: "not-started", runtime: null });
+    expect(running).toBeGreaterThan(idle);
+    const geometry = pipelineFlowLayout({
+      width: 1200,
+      columns: [
+        { key: "a", label: "A", nodes: [{ id: "a", height: idle }] },
+        { key: "b", label: "B", nodes: [{ id: "b", height: running }] },
+        {
+          key: "c",
+          label: "C",
+          nodes: [
+            { id: "c1", height: running },
+            { id: "c2", height: idle },
+          ],
+        },
+        { key: "d", label: "D", nodes: [{ id: "d", height: idle }] },
+      ],
+    });
+    const centre = (id: string) => {
+      const rect = geometry.rects.get(id)!;
+      return rect.y + rect.height / 2;
+    };
+    expect(geometry.rects.get("b")!.height).toBe(running);
+    // Straight edges stay straight: a, b and d share one centre line.
+    expect(Math.abs(centre("a") - centre("b"))).toBeLessThanOrEqual(1);
+    expect(Math.abs(centre("b") - centre("d"))).toBeLessThanOrEqual(1);
+    const c1 = geometry.rects.get("c1")!;
+    const c2 = geometry.rects.get("c2")!;
+    expect(c2.y).toBeGreaterThan(c1.y + c1.height);
+    expect(Math.abs(centre("a") - (c1.y + c2.y + c2.height) / 2)).toBeLessThanOrEqual(1);
+    expect(geometry.height).toBeGreaterThanOrEqual(c2.y + c2.height);
   });
 });

@@ -32,13 +32,20 @@ desktop widths against a fixture backend.
    session with `requireExistingResumeSession`. Confirm, per provider, that
    opening a running stage's session attaches read-mostly and that a message
    typed there is not mistaken for the pipeline's own turn.
+5. **Live token usage per provider.** Every stage session now records
+   `tokenCount` while it runs (2026-10-27). Run a Build, a single review,
+   consolidation, Verify and Ship on each harness (Claude, Codex, OpenCode,
+   Cursor, Pi) and check the running node's third row shows a count within one
+   transcript persist interval of the provider's first usage report, and the
+   final count after the turn. Cursor and Pi may only report at turn end; if
+   so they show "—" while running, which is the intended neutral placeholder.
 
 ### Code
 
-5. **Validation history.** The record keeps only the latest validation run, so
+6. **Validation history.** The record keeps only the latest validation run, so
    only the newest Prepare node carries its checks. Keeping a bounded summary
    per run would let older passes show theirs.
-6. **Retry a reviewer after consolidation.** `retry_build_pipeline_reviewer`
+7. **Retry a reviewer after consolidation.** `retry_build_pipeline_reviewer`
    refuses once the pass is consolidated; the stage restart reruns the whole
    panel. A per-reviewer rerun that re-consolidates would need the address
    stage to be invalidated too.

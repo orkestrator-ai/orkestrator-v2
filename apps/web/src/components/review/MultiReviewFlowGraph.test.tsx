@@ -32,6 +32,7 @@ import {
   type MultiReviewFlowNodeModel,
 } from "./MultiReviewFlowGraph";
 import { useFlowViewport } from "@/components/flow-graph/FlowViewport";
+import { flowNodeHeight } from "@/components/flow-graph/flow-graph-model";
 import {
   multiReviewFlowLayout,
   type MultiReviewFlowEdgeState,
@@ -510,7 +511,7 @@ describe("flow graph by phase", () => {
 });
 
 describe("flow graph nodes", () => {
-  test("shows elapsed time and tokens side by side on every running node", () => {
+  test("puts elapsed time and tokens on a running node's own third row", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse("2026-08-14T00:01:35.000Z");
     try {
@@ -529,12 +530,30 @@ describe("flow graph nodes", () => {
       expect(within(runtime).getByText("·").className).toContain("text-flow-edge");
       // The word "tokens" is for screen readers; the node shows the count.
       expect(within(runtime).getByText("tokens").className).toContain("sr-only");
-      expect(screen.getByLabelText("Reviewer 2 runtime and token usage").textContent).toBe(
-        "1m 35s · Tokens pending",
-      );
+      // Usage not reported yet is a neutral dash, not "Tokens pending".
+      const unreported = screen.getByLabelText("Reviewer 2 runtime and token usage");
+      expect(unreported.textContent).toBe("1m 35s · —");
+      expect(screen.queryByText(/Tokens pending/)).toBeNull();
       expect(screen.getByLabelText("Review package generation runtime").textContent).toBe(
         "0s · 900 tokens",
       );
+      // Title, then the model, then the clock: the title never shares its row.
+      const reviewer = screen.getByRole("tab", { name: /^Reviewer 1 ·/ });
+      const rows = [...reviewer.querySelectorAll("[data-flow-node-row]")];
+      expect(rows.map((row) => row.getAttribute("data-flow-node-row"))).toEqual([
+        "title",
+        "detail",
+        "runtime",
+      ]);
+      expect(rows[0]!.textContent).toBe("Reviewer 1 · claude");
+      expect(rows[2]!.contains(runtime)).toBe(true);
+      // The running word sits with the clock rather than after the model.
+      expect(within(rows[2] as HTMLElement).getByText("reviewing")).toBeTruthy();
+      expect(within(rows[1] as HTMLElement).queryByText("reviewing")).toBeNull();
+      // The accessible name leaves unreported usage unsaid.
+      expect(
+        screen.getByRole("tab", { name: /^Reviewer 2 ·/ }).getAttribute("aria-label"),
+      ).not.toContain("pending");
     } finally {
       Date.now = originalNow;
     }
@@ -994,8 +1013,18 @@ describe("zoom and pan", () => {
 
   const zoomLevel = () => screen.getByTestId("multi-review-zoom-level").textContent;
   const viewport = () => document.querySelector<HTMLElement>("[data-flow-viewport]")!;
+  // The panel's reviewers run, so each has the runtime row.
   const geometry = (count: number) =>
-    multiReviewFlowLayout({ width: 1440, reviewerCount: count, packageHasChips: false });
+    multiReviewFlowLayout({
+      width: 1440,
+      reviewerCount: count,
+      packageHasChips: false,
+      nodeHeights: {
+        reviewers: Array.from({ length: count }, () =>
+          flowNodeHeight({ state: "running", runtime: null }),
+        ),
+      },
+    });
 
   test("zooms in and out within bounds and resets to 100%", () => {
     render(<MultiReviewFlowGraph {...panel(4)} />);

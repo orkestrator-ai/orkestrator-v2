@@ -272,6 +272,13 @@ describe("build pipeline multi-model review", () => {
         [1, 2],
       );
       expect(consolidationSession?.structuredResultStatus).toBe("accepted");
+      // Consolidation and the stages before it meter like the reviewers do.
+      expect(consolidationSession?.tokenCount).toBe(12_345);
+      expect(
+        addressing.sessions
+          .filter((session) => session.phase === "build")
+          .map((session) => session.tokenCount),
+      ).toEqual([12_345]);
       expect(addressing.structuredReviewRequestId).toBe(consolidationSession?.structuredRequestId);
       // Everything downstream reads one report, and the fan-out record is gone.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");

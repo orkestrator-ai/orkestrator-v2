@@ -73,6 +73,10 @@ import {
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
+  recordPipelineSessionUsage,
+  sharedTranscriptRead,
+} from "./build-pipeline-session-usage.js";
+import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
   readProviderStatus,
@@ -1017,6 +1021,7 @@ export class BuildPipelineReviewFanout {
       turnSettled,
       backgroundWorkLive,
       interruption,
+      contextUsage,
     } = await readProviderStatus(
       provider,
       consolidation.providerSessionId,
@@ -1036,10 +1041,20 @@ export class BuildPipelineReviewFanout {
     const turnEnded = statusChanged && observedStatus === "idle";
     if (turnEnded) this.settleConsolidationArtifactTurn(pipeline, consolidation);
     if (status !== "running" || persistDue || statusChanged) {
+      const transcript = sharedTranscriptRead(provider, consolidation.providerSessionId);
       const changed = await this.deps.refreshMovedTranscript(session, provider, {
         force: turnEnded,
+        read: transcript.read,
       });
-      if (changed || statusChanged) {
+      // Usage rides the same cadence as the transcript: every terminal look,
+      // and the persist boundary while the turn runs.
+      const usageChanged = await recordPipelineSessionUsage(
+        session,
+        provider,
+        contextUsage,
+        transcript.taken(),
+      );
+      if (changed || statusChanged || usageChanged) {
         session.status = observedStatus;
         session.messagesPersistedAt = reviewFanoutNowIso();
         await this.save(pipeline);

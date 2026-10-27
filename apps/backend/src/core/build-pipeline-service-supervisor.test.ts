@@ -122,6 +122,7 @@ class FakeProvider implements BuildPipelineProvider {
   verificationComplete = true;
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
+  usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
   resolveDefaultModel?: BuildPipelineProvider["resolveDefaultModel"];
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
@@ -1631,6 +1632,60 @@ describe("BuildPipelineService", () => {
         expect(settleTurn).toHaveBeenCalledTimes(1);
         expect(settleTurn).toHaveBeenLastCalledWith(session.sdkSessionId, requestId);
       });
+    });
+  });
+
+  test("records a running stage's live token usage and keeps its final count", async () => {
+    await withService(async (service, storage, provider) => {
+      // The Claude bridge reports cumulative session usage while the turn runs.
+      let observed: ProviderSessionObservation = {
+        status: "running",
+        contextUsage: { usedTokens: 900, sessionTokens: 1_200 },
+      };
+      provider.observeSession = async () => observed;
+      const { started, session } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+
+      const running = await pipeline(storage, started.id);
+      expect(running.phase).toBe("building");
+      expect(running.sessions[0]).toMatchObject({
+        sessionKey: session.sessionKey,
+        status: "running",
+        tokenCount: 1_200,
+      });
+
+      // The turn ends with a larger total; that pass persists the final count.
+      observed = { status: "idle", contextUsage: { usedTokens: 900, sessionTokens: 5_400 } };
+      await service.advanceNow(started.id);
+      const settled = await pipeline(storage, started.id);
+      const build = settled.sessions.find((entry) => entry.sessionKey === session.sessionKey)!;
+      expect(build.status).toBe("idle");
+      expect(build.tokenCount).toBe(5_400);
+    });
+  });
+
+  test("meters a running stage from its transcript when the provider reports usage there", async () => {
+    await withService(async (service, storage, provider) => {
+      // OpenCode reports no usage on its status read; it meters from messages.
+      provider.status = async () => "running";
+      provider.usageFromMessages = () => ({ usedTokens: 10, sessionTokens: 777 });
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+
+      const running = await pipeline(storage, started.id);
+      expect(running.sessions[0]).toMatchObject({ status: "running", tokenCount: 777 });
+    });
+  });
+
+  test("leaves a running stage without a count until the provider reports one", async () => {
+    await withService(async (service, storage, provider) => {
+      provider.status = async () => "running";
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+
+      const running = await pipeline(storage, started.id);
+      expect(running.sessions[0]!.status).toBe("running");
+      expect(running.sessions[0]!.tokenCount).toBeUndefined();
     });
   });
 

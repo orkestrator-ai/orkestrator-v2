@@ -1,7 +1,8 @@
 # Build pipeline view
 
 Status: Living. Checked against the branch that introduced the pipeline flow
-graph (2026-10-26), and the node-face and live-usage follow-up (2026-10-27).
+graph (2026-10-26), the branch that made restarts rewind (2026-10-27), and the
+node-face and live-usage follow-up (2026-10-27).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -41,7 +42,9 @@ a transcript.
   reviewers of one pass share a column, followed by Consolidation; Address,
   Verify, Fix, Ship and conflict resolution are one node each. A repeated pass
   is a new node to the right ("Review 2", "Verify 2", "Fix 2"), never a loop
-  back, so the whole history is on the line.
+  back, so the whole history is on the line. Sessions a restart superseded
+  are one greyed "Previous attempt" node instead (see
+  [Restarting a step](#restarting-a-step)); live numbering skips them.
 - **Ahead.** Steps the pipeline will definitely reach are drawn faded
   (`placeholder`): Build, Prepare (fan-out or a configured preparation model),
   the reviewers or Review, Consolidation (fan-out), Verify, Ship and the PR.
@@ -162,6 +165,83 @@ The review pass tab is a `multi-review` tab whose data names the pipeline and a
 `pipelinePass`; it renders the same view narrowed to that pass. Layout restore
 keeps it while the pipeline exists.
 
+## Restarting a step
+
+"Restart from here" (`restart_build_pipeline_step`) on any live step — Build,
+Fix, Prepare or its validation, a reviewer or consolidation (the whole review
+pass reruns), Review, Address, Verify, Ship or conflict resolution — rewinds
+the pipeline to that step's own round and position and runs it again. The
+backend (`restartLocatedStage` in `build-pipeline-service-lifecycle.ts`, rules
+in `build-pipeline-rewind.ts`):
+
+- **Rewinds the round.** `iteration` becomes the step's own, so the rounds
+  after it are available again: restarting round 1's Verify after round 4
+  failed runs Verify 1, then on failure Fix 2, Verify 2 and so on up to
+  `maxIterations`.
+- **Keeps the code.** The worktree and branch are not reset; the rerun and
+  every later step work on the current code, later rounds' commits included.
+  Rewinding the code itself would be a separate, confirmed action
+  ([0405](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md)).
+- **Invalidates what came after.** Every live session at or after the point
+  (same round and later step, or a later round) gets `supersededBy` (the
+  `PipelineRewind.id`) and `supersededAt`. A rewind into an earlier round also
+  invalidates the review package, validation run, structured review and verdict,
+  because they describe later code; a step whose inputs are gone reruns from
+  the earliest step of its round that rebuilds them (Review prepares the
+  package again; Address without that round's report reruns Review). Verify
+  sessions keep their own verdict (`verificationResult`,
+  `verificationFeedback`, bounded), so a restarted Fix gets the verdict that
+  ended the round before it. Legacy records without that session's verdict use
+  generic feedback when rewinding to an earlier Fix, never the last round's rationale.
+- **Treats superseded sessions as history.** They are never the current
+  session (`sessionForCurrentPhase`), never the source of a fix baseline (a
+  same-round restart still carries the first attempt's baseline), an address
+  handoff, a review report owner or a Multi Review evaluation; all their
+  result slots are closed `superseded`, so a late tool submission is denied.
+- **Records the rewind.** `rewinds` (at most 50) says when, from which phase
+  and round, to which round and step, which session was named and how many
+  sessions were superseded. An invalidated validation run is retained on that
+  rewind and remains readable in its previous-attempt inspector (bounded by the
+  same 50-rewind limit). A repeat of the same request (a double click, a
+  retried command) is a no-op; restarting a superseded step is refused. Validation
+  rewinds record their replacement run ID: repeats naming the original validation
+  run, or the current-step control while its replacement is planned/running,
+  keep that generation. Selecting the live validation node explicitly can restart it again.
+  Validation-only history is placed at its rewind boundary, before replacement
+  reviewers, and its inspector and context menu expose no restart actions.
+- **Works from `failed` and `complete`.** The phase is set and the request
+  persisted in one locked write, so the supervisor and recovery pick it up as
+  for any active pipeline. Consuming the request moves a Kanban ticket back to
+  In progress; a durable pending flag and retry deadline retry Kanban failures at
+  most once every 30 seconds, including across backend reloads, without
+  dispatching the restarted stage again or writing on each intervening tick. The next terminal outcome
+  reconciles it again and its comments dedupe. A Ship after an earlier Ship is told the existing PR URL and updates
+  (or reopens) that PR instead of creating one. Ship fails if the provider finishes
+  with the PR still closed. A pipeline whose PR has merged
+  refuses restarts.
+
+`restart_build_pipeline_current_step`, `retry_build_pipeline_stage` and
+`retry_build_pipeline_review` keep their semantics; restarting the current step
+supersedes only that step's session. Restarting a Build or Fix that also wrote
+the package plan reruns the Build or Fix; the dedicated preparation session
+restarts preparation alone.
+
+**Presentation.** Each rewind's superseded sessions are one greyed, dashed
+"Previous attempt" node (kind `attempt`, column marked `superseded`) where the
+restart rewound to, followed by the rerun to the right. Interleaved rewinds
+collect all sessions with the same rewind ID into one group at its earliest
+session position. The live line routes
+over it (`route: "bypass"`; the stacked column draws the bypass beside it),
+and the attempt branches off the step before it. Its inspector says when and
+from where the restart rewound and lists the steps; "Show steps" expands it
+into greyed nodes titled by round ("Fix · round 2", reviewers of one pass in
+one column, including every retry), each selectable with its transcript readable and a "Superseded by
+a restart" note, and no restart or retry. Expansion is renderer-only view
+state (`flowGraphViewStore.expandedAttempts`, at most 50). Superseded nodes are
+left out of the step count, review-pass numbering, stop placement and the
+followed selection. The record fields are generic (any renderer can group
+sessions by `supersededBy` and read `rewinds`).
+
 `retry_build_pipeline_reviewer` reruns one failed reviewer of the current pass,
 keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
@@ -177,6 +257,8 @@ under its key; the retry gets `…:attempt-2`.
   budget. The graph adds no polling; the live clock ticks only while a node
   runs and the tab is active.
 - New record fields are additive and optional; the pipeline guard accepts
-  records without them.
+  records without them. Records written before rewinds existed load as before
+  and are superseded by their first restart like any other.
 
-Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md).
+Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
+[0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).

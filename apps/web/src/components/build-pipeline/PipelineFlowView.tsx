@@ -10,6 +10,8 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   ClipboardCheck,
   ExternalLink,
   GitPullRequest,
@@ -20,11 +22,14 @@ import {
   Square,
   type LucideIcon,
 } from "lucide-react";
-import { isActiveBuildPhase } from "@orkestrator/protocol/build-pipeline";
+import {
+  isActiveBuildPhase,
+  isSupersededPipelineSession,
+} from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { usePullRequest } from "@/hooks/usePullRequest";
@@ -182,11 +187,26 @@ export function PipelineFlowView({
   const viewKey = passKey ? `${pipeline.id}\u0000${passKey}` : pipeline.id;
   const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(viewKey));
   const setCollapsed = useFlowGraphViewStore((state) => state.setCollapsed);
+  const expandedAttemptKeys = useFlowGraphViewStore((state) => state.expandedAttempts);
+  const setAttemptExpanded = useFlowGraphViewStore((state) => state.setAttemptExpanded);
   const [inspectorTab, setInspectorTab] = useState<Record<string, string>>({});
 
+  // Previous attempts the reader expanded; the rest stay one node each.
+  const expandedAttempts = useMemo(
+    () =>
+      new Set(
+        [
+          ...pipeline.sessions.flatMap((session) =>
+            session.supersededBy ? [session.supersededBy] : [],
+          ),
+          ...(pipeline.rewinds ?? []).map((rewind) => rewind.id),
+        ].filter((id) => expandedAttemptKeys.has(flowAttemptKey(pipeline.id, id))),
+      ),
+    [expandedAttemptKeys, pipeline.id, pipeline.sessions, pipeline.rewinds],
+  );
   const fullModel = useMemo(
-    () => pipelineFlowModel(pipeline, pullRequest),
-    [pipeline, pullRequest],
+    () => pipelineFlowModel(pipeline, pullRequest, { expandedAttempts }),
+    [pipeline, pullRequest, expandedAttempts],
   );
   const model = useMemo(
     () => (passKey ? reviewPassModel(fullModel, passKey) : fullModel),
@@ -216,7 +236,7 @@ export function PipelineFlowView({
     pendingRetry?.id ??
     defaultFlowSelection(
       model.nodes
-        .filter((node) => !node.session?.superseded)
+        .filter((node) => !node.session?.superseded && !node.superseded)
         .map((node) => ({
           id: node.id,
           state: node.placeholder ? "not-started" : node.state,
@@ -244,7 +264,9 @@ export function PipelineFlowView({
 
   const active = isActiveBuildPhase(pipeline.phase);
   const paused = pipeline.phase === "paused";
-  const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
+  // A superseded session is history even while the index still names it.
+  const indexedSession = pipeline.sessions[pipeline.currentSessionIndex];
+  const currentSession = isSupersededPipelineSession(indexedSession) ? undefined : indexedSession;
   const interactionFailure =
     pipeline.phase === "failed" && pipeline.failureContext?.kind === "interactive-request";
   const canRetryStage =
@@ -275,9 +297,35 @@ export function PipelineFlowView({
     });
   };
 
+  const toggleAttempt = (attemptId: string, expanded: boolean) =>
+    setAttemptExpanded(pipeline.id, attemptId, expanded);
+  /** Selects a step of a previous attempt, expanding the attempt to show it. */
+  const showAttemptStep = (attemptId: string, sessionKey: string) => {
+    toggleAttempt(attemptId, true);
+    onPin(sessionKey);
+  };
+
   const actionsFor = (node: PipelineFlowNode): PipelineNodeAction[] => {
     const actions: PipelineNodeAction[] = [];
     const disabled = controls.pending;
+    if (node.kind === "attempt" && node.attemptId) {
+      const attemptId = node.attemptId;
+      actions.push(
+        node.attemptExpanded
+          ? {
+              key: "collapse-attempt",
+              label: "Hide steps",
+              icon: ChevronsDownUp,
+              onSelect: () => toggleAttempt(attemptId, false),
+            }
+          : {
+              key: "expand-attempt",
+              label: "Show steps",
+              icon: ChevronsUpDown,
+              onSelect: () => toggleAttempt(attemptId, true),
+            },
+      );
+    }
     if (node.session && createTab) {
       actions.push({
         key: "open",
@@ -294,7 +342,9 @@ export function PipelineFlowView({
         onSelect: () => openReview(node.passKey!),
       });
     }
-    if (canRetryReviewer && node.reviewer?.status === "failed" && node.state === "failed") {
+    if (node.superseded) {
+      // History: readable, never retried or restarted from.
+    } else if (canRetryReviewer && node.reviewer?.status === "failed" && node.state === "failed") {
       actions.push({
         key: "retry-reviewer",
         label: "Retry reviewer",
@@ -316,7 +366,7 @@ export function PipelineFlowView({
         onSelect: () => controls.retryStage(),
       });
     }
-    if (node.session && !node.placeholder) {
+    if (node.session && !node.placeholder && !node.superseded) {
       actions.push({
         key: "restart",
         label: "Restart from here",
@@ -324,13 +374,19 @@ export function PipelineFlowView({
         disabled,
         onSelect: () => controls.restartStage(node.session!.sdkSessionId),
       });
-    } else if (node.hasValidation && !node.session && pipeline.validationRun) {
+    } else if (
+      node.hasValidation &&
+      !node.session &&
+      !node.superseded &&
+      pipeline.validationRun &&
+      node.id === `validation:${pipeline.validationRun.id}`
+    ) {
       actions.push({
         key: "restart",
         label: "Restart validation",
         icon: RotateCcw,
         disabled,
-        onSelect: () => controls.restartStage(`validation:${pipeline.validationRun!.id}`),
+        onSelect: () => controls.restartStage(node.id),
       });
     }
     if (node.kind === "pr" && pullRequest && shipped) {
@@ -436,8 +492,10 @@ export function PipelineFlowView({
         }
       : null;
 
-  const reached = model.nodes.filter((node) => !node.placeholder && node.state !== "not-started");
-  const summary = `${reached.length} of ${model.nodes.length} steps`;
+  // The live run's steps; a previous attempt is history.
+  const liveNodes = model.nodes.filter((node) => !node.superseded);
+  const reached = liveNodes.filter((node) => !node.placeholder && node.state !== "not-started");
+  const summary = `${reached.length} of ${liveNodes.length} steps`;
   const startMs = Date.parse(pipeline.createdAt);
   const endMs = Math.max(
     ...model.nodes.flatMap((node) =>
@@ -562,9 +620,10 @@ export function PipelineFlowView({
                   now={now}
                   pullRequest={pullRequest}
                   shipped={shipped}
+                  onShowAttemptStep={showAttemptStep}
                 />
               </div>
-            ) : selected.hasValidation && pipeline.validationRun ? (
+            ) : selected.hasValidation && (selected.validationRun ?? pipeline.validationRun) ? (
               <Tabs
                 value={inspectorTab[selected.id] ?? "transcript"}
                 onValueChange={(value) =>
@@ -583,7 +642,7 @@ export function PipelineFlowView({
                 <TabsContent value="tests" className="max-h-[60vh] overflow-y-auto">
                   <ReviewValidationStatus
                     environmentId={environmentId}
-                    run={pipeline.validationRun}
+                    run={selected.validationRun ?? pipeline.validationRun!}
                     now={now}
                   />
                 </TabsContent>
@@ -622,6 +681,15 @@ function InspectorNotes({
 }) {
   const session = node.session;
   const notes: ReactNode[] = [];
+  if (session?.supersededBy) {
+    notes.push(
+      <p key="superseded">
+        Superseded by a restart
+        {session.supersededAt ? ` on ${new Date(session.supersededAt).toLocaleString()}` : ""}. Kept
+        so its transcript stays readable; its result no longer counts.
+      </p>,
+    );
+  }
   if (session?.modelSubstitution?.message) {
     notes.push(
       <p key="substitution" className="text-amber-300/90">
@@ -672,8 +740,10 @@ function InspectorNotes({
     pipeline.verificationFeedback &&
     node.state === "complete"
   ) {
-    // The last verdict's feedback belongs to the newest verification.
-    const newest = [...pipeline.sessions].reverse().find((entry) => entry.phase === "verify");
+    // The last verdict's feedback belongs to the newest live verification.
+    const newest = [...pipeline.sessions]
+      .reverse()
+      .find((entry) => entry.phase === "verify" && !isSupersededPipelineSession(entry));
     if (newest === session) {
       notes.push(
         <p key="verdict">
@@ -694,6 +764,7 @@ function InspectorBody({
   now,
   pullRequest,
   shipped,
+  onShowAttemptStep,
 }: {
   node: PipelineFlowNode;
   pipeline: BuildPipeline;
@@ -701,8 +772,12 @@ function InspectorBody({
   now: number;
   pullRequest: ReturnType<typeof usePipelinePullRequest>;
   shipped: boolean;
+  onShowAttemptStep: (attemptId: string, sessionKey: string) => void;
 }) {
   if (node.kind === "ticket") return <PipelineTicketView pipeline={pipeline} />;
+  if (node.kind === "attempt") {
+    return <PreviousAttempt node={node} pipeline={pipeline} onShowStep={onShowAttemptStep} />;
+  }
   if (node.kind === "pr") {
     return (
       <PipelinePullRequestView
@@ -712,11 +787,12 @@ function InspectorBody({
       />
     );
   }
-  if (node.hasValidation && pipeline.validationRun) {
+  if (node.hasValidation && (node.validationRun ?? pipeline.validationRun)) {
     return (
       <ReviewValidationStatus
         environmentId={environmentId}
-        run={pipeline.validationRun}
+        run={node.validationRun ?? pipeline.validationRun!}
+        stopCommand={node.superseded ? null : undefined}
         now={now}
       />
     );
@@ -762,5 +838,72 @@ function InspectorBody({
           ? "The pipeline paused here, before this step's session started."
           : "This step has no session."}
     </p>
+  );
+}
+
+const RESTART_STEP_LABEL: Record<string, string> = {
+  build: "Build",
+  fix: "Fix",
+  review: "Review",
+  address: "Address",
+  verify: "Verify",
+  pr: "Ship",
+  "resolve-conflicts": "Resolve conflicts",
+};
+
+/** What a previous attempt was and the steps it holds, each one a click away. */
+function PreviousAttempt({
+  node,
+  pipeline,
+  onShowStep,
+}: {
+  node: PipelineFlowNode;
+  pipeline: BuildPipeline;
+  onShowStep: (attemptId: string, sessionKey: string) => void;
+}) {
+  const rewind = pipeline.rewinds?.find((entry) => entry.id === node.attemptId);
+  const keys = new Set(node.attemptSessionKeys ?? []);
+  const sessions = pipeline.sessions.filter((session) => keys.has(session.sessionKey));
+  const step = rewind
+    ? rewind.step.kind === "session"
+      ? RESTART_STEP_LABEL[rewind.step.phase]
+      : rewind.step.kind === "validation"
+        ? "Validation"
+        : "Package preparation"
+    : undefined;
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <p className="text-muted-foreground">
+        {rewind && step
+          ? `On ${new Date(rewind.at).toLocaleString()} a restart rewound the pipeline from round ${rewind.fromIteration + 1} to ${step} of round ${rewind.iteration + 1}. `
+          : "A restart rewound the pipeline to an earlier step. "}
+        These steps ran before it. They are kept so their transcripts stay readable, but their
+        results no longer count; the code they committed is still on the branch.
+      </p>
+      <ul className="flex flex-col gap-1">
+        {node.validationRun && (
+          <li>
+            <button
+              type="button"
+              className="w-full rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              onClick={() => onShowStep(node.attemptId!, `validation:${node.validationRun!.id}`)}
+            >
+              Validation
+            </button>
+          </li>
+        )}
+        {sessions.map((session) => (
+          <li key={session.sessionKey}>
+            <button
+              type="button"
+              className="w-full truncate rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              onClick={() => onShowStep(node.attemptId!, session.sessionKey)}
+            >
+              {session.label} · round {session.iteration + 1}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

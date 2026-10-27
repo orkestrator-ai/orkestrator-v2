@@ -13,6 +13,7 @@ import {
   type ResumableBuildPhase,
   isBuildPipeline,
   isActiveBuildPhase,
+  isSupersededPipelineSession,
   reviewValidationStage,
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
@@ -66,6 +67,7 @@ import {
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { carriesFixBaseline } from "./build-pipeline-rewind.js";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
@@ -375,6 +377,29 @@ export class BuildPipelineSupervisor {
       });
       await this.startStage(pipeline, "build", "building");
       return;
+    }
+
+    if (
+      (pipeline.pendingKanbanReactivation || pipeline.restartRequest) &&
+      (!pipeline.kanbanReactivationRetryAt ||
+        Date.now() >= Date.parse(pipeline.kanbanReactivationRetryAt))
+    ) {
+      // Keep reconciliation durable independently of dispatch. A transient
+      // Kanban failure must neither strand nor dispatch the replacement twice.
+      pipeline.pendingKanbanReactivation = true;
+      try {
+        await this.recovery.updateKanbanLifecycle(pipeline, { status: "in-progress" });
+        delete pipeline.pendingKanbanReactivation;
+        delete pipeline.kanbanReactivationRetryAt;
+      } catch (error) {
+        pipeline.kanbanReactivationRetryAt = new Date(Date.now() + 30_000).toISOString();
+        console.warn(
+          `[build-pipeline] Kanban status for restarted ${pipeline.id}:`,
+          errorMessage(error),
+        );
+      }
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+      record.revision = pipeline.backendRevision;
     }
 
     if (pipeline.restartRequest) {
@@ -931,7 +956,7 @@ export class BuildPipelineSupervisor {
       ) {
         continue;
       }
-      const session = pipeline.sessions[pipeline.currentSessionIndex];
+      const session = sessionForCurrentPhase(pipeline);
       if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey) {
         continue;
       }
@@ -1398,7 +1423,10 @@ export class BuildPipelineSupervisor {
         (session) =>
           session.phase === "fix" &&
           session.iteration === pipeline.iteration &&
-          session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+          session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
+          // A fix superseded by a rewind from a later round ran before those
+          // rounds changed the code; its baseline is not this fix's.
+          carriesFixBaseline(pipeline, session),
       );
       // A retry/restart must compare with the code before the first attempt,
       // including when that attempt's probe was unavailable or already consumed.
@@ -2068,7 +2096,7 @@ export class BuildPipelineSupervisor {
       }
       const sourceSession = [...pipeline.sessions]
         .reverse()
-        .find((session) => session.phase === "review");
+        .find((session) => session.phase === "review" && !isSupersededPipelineSession(session));
       if (!sourceSession) {
         throw new Error("Cannot address issues without the review session");
       }
@@ -2123,7 +2151,17 @@ export class BuildPipelineSupervisor {
       };
     }
     if (phase === "pr") {
-      return { prompt: prPrompt(target), images: [] };
+      // A restart that ships again must update the pull request the earlier
+      // Ship opened, never open a second one. An environment PR without an
+      // earlier Ship belongs to a reused environment, not to this pipeline.
+      const shippedBefore = pipeline.sessions.some((session) => session.phase === "pr");
+      const existingPullRequestUrl = shippedBefore
+        ? ((await this.ctx.storage.getEnvironment(pipeline.environmentId))?.prUrl ?? undefined)
+        : undefined;
+      return {
+        prompt: prPrompt(target, existingPullRequestUrl ? { existingPullRequestUrl } : {}),
+        images: [],
+      };
     }
     return { prompt: resolveConflictsPrompt(target), images: [] };
   }

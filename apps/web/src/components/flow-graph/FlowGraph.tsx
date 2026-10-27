@@ -88,6 +88,11 @@ export interface FlowNodeModel {
    * the work. Steps that only sometimes run are never drawn ahead.
    */
   placeholder?: boolean;
+  /**
+   * History a restart replaced: still selectable and readable, drawn greyed
+   * so the live run stands out.
+   */
+  superseded?: boolean;
   /** One more row on the node's face, e.g. a pull request's checks. */
   extra?: ReactNode;
   canOpen: boolean;
@@ -315,11 +320,13 @@ function FlowNode({
         data-flow-node={node.kind}
         data-flow-state={node.state}
         data-flow-placeholder={node.placeholder ? "" : undefined}
+        data-flow-superseded={node.superseded ? "" : undefined}
         style={style}
         className={cn(
           "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline-2 outline-offset-[3px] outline-transparent focus-visible:outline-primary",
           NODE_STATE_CLASS[node.state],
           node.placeholder && "opacity-55",
+          node.superseded && "border-dashed opacity-60 grayscale",
           selected && "outline-primary/60",
           className,
         )}

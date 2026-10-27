@@ -19,9 +19,9 @@ advisories. Everything left waits on an upstream release or a date.
   (24 in `apps/desktop`, matching Electron 45's `^24.9.0`), oxlint 1.88,
   Playwright 1.64, Monaco 0.57, `sharp` 0.35.5 and the MCP SDK security bumps.
   Root `overrides.dompurify` is 3.4.17. Formatting moved from oxfmt to
-  `bun fmt` (which reads `.oxfmtrc.json`) and typechecking from `tsc --noEmit`
-  to `bun check`. `typescript` stays so editors run the same TypeScript
-  (7.0.2) that `bun check` matches.
+  `bun fmt` (configured by `[fmt]` in `bunfig.toml`) and typechecking from
+  `tsc --noEmit` to `bun check`. `typescript` stays so editors run the same
+  TypeScript (7.0.2) that `bun check` matches.
 - **Lint.** The seven React Compiler rules are errors again (see
   [`linting.md`](../../development/linting.md#severity-policy)).
   `no-unused-vars` is the only warning.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -44,12 +44,16 @@ describe("monorepo orchestration scripts", () => {
     }
   });
 
-  test("Bun fmt check rejects an unformatted file without modifying it", () => {
+  test("Bun fmt check preserves input and formatting honors bunfig printWidth", () => {
     const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-format-"));
     try {
       writeFileSync(path.join(fixture, "bunfig.toml"), read("bunfig.toml"));
       const file = path.join(fixture, "index.ts");
-      const unformatted = "export const value={messy:true}\n";
+      const unformatted =
+        'export const value={firstProperty:"first value",secondProperty:"second value"}\n';
+      // Fits the configured 100 columns, but exceeds the default 80.
+      const formatted =
+        'export const value = { firstProperty: "first value", secondProperty: "second value" };\n';
       writeFileSync(file, unformatted);
       const format = (...args: string[]) =>
         Bun.spawnSync([process.execPath, "fmt", ...args, "index.ts"], {
@@ -60,8 +64,58 @@ describe("monorepo orchestration scripts", () => {
       expect(format("--check").exitCode).toBe(1);
       expect(readFileSync(file, "utf8")).toBe(unformatted);
       expect(format().exitCode).toBe(0);
-      expect(readFileSync(file, "utf8")).toBe("export const value = { messy: true };\n");
+      expect(readFileSync(file, "utf8")).toBe(formatted);
       expect(format("--check").exitCode).toBe(0);
+      // Prove this fixture detects losing the repository's formatter settings.
+      writeFileSync(path.join(fixture, "bunfig.toml"), read("bunfig.toml").split("[fmt]")[0]!);
+      expect(format("--check").exitCode).toBe(1);
+      expect(format().exitCode).toBe(0);
+      expect(readFileSync(file, "utf8")).not.toBe(formatted);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test("Bun fmt honors every bunfig ignore pattern during directory formatting", () => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "orkestrator-format-ignore-"));
+    try {
+      writeFileSync(path.join(fixture, "bunfig.toml"), read("bunfig.toml"));
+      const ignored = [
+        "bridges/codex-bridge/src/app-server/generated/protocol.ts",
+        "docs/example.ts",
+        "notes/example.md",
+      ];
+      const source = "export const value={messy:true}\n";
+      const markdown = "#   Unformatted heading\n";
+      for (const relativePath of [...ignored, "index.ts"]) {
+        const file = path.join(fixture, relativePath);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, relativePath.endsWith(".md") ? markdown : source);
+      }
+      const format = (...args: string[]) =>
+        Bun.spawnSync([process.execPath, "fmt", ...args, "."], {
+          cwd: fixture,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      expect(format().exitCode).toBe(0);
+      expect(readFileSync(path.join(fixture, "index.ts"), "utf8")).toBe(
+        "export const value = { messy: true };\n",
+      );
+      for (const relativePath of ignored) {
+        expect(readFileSync(path.join(fixture, relativePath), "utf8")).toBe(
+          relativePath.endsWith(".md") ? markdown : source,
+        );
+      }
+      expect(format("--check").exitCode).toBe(0);
+      writeFileSync(path.join(fixture, "bunfig.toml"), read("bunfig.toml").split("[fmt]")[0]!);
+      expect(format("--check").exitCode).toBe(1);
+      expect(format().exitCode).toBe(0);
+      for (const relativePath of ignored) {
+        expect(readFileSync(path.join(fixture, relativePath), "utf8")).not.toBe(
+          relativePath.endsWith(".md") ? markdown : source,
+        );
+      }
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }

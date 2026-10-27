@@ -4,9 +4,13 @@
 #
 #   git config blame.ignoreRevsFile .git-blame-ignore-revs
 #
-# Only add commits that are purely mechanical reformatting. A commit with any
-# semantic change in it does not belong here — blame would then hide a real
-# edit rather than a whitespace one.
+# Only add purely mechanical reformatting commits. The bunfig migration below
+# is a documented exception: source edits are mechanical, but formatter config,
+# documentation and fixture config wiring also changed. Inspect that commit
+# directly when tracing those edits; keep future reformats in separate commits.
 
 # style: format the repository with oxfmt
 0b5cbd4a5db9cd3c5804bac5a6441cac74dc1ddc
+
+# chore: migrate formatter config to bunfig (mixed migration exception above)
+c5e244012742592e575a25bb9e98839a3e932acb

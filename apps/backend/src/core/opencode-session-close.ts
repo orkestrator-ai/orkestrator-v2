@@ -19,32 +19,28 @@ import type { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-br
  *    (`rejectPendingOpenCodeRequests`). A read or rejection failure rejects
  *    the close so the durable intent stays.
  *
- * The caller forgets its own registration afterwards.
+ * All three steps share the dispatch lock in the broker. The caller forgets
+ * its own registration afterwards.
  */
 export async function closeOpenCodeSessionRetaining(
-  client: OpencodeClient,
-  directory: string | undefined,
   sessionId: string,
   steps: {
     broker: Pick<OpenCodeWorkflowResultBroker, "abort">;
     endTurn: () => void;
     restoreReviewer: () => Promise<unknown>;
-    requestOptions: () => { signal: AbortSignal };
   },
 ): Promise<void> {
-  const aborted = await steps.broker.abort(sessionId, steps.endTurn, steps.restoreReviewer, {
+  await steps.broker.abort(sessionId, steps.endTurn, steps.restoreReviewer, {
     missingIsGone: true,
+    restoreReviewerWithoutTurn: true,
   });
-  if (aborted === "missing") return;
-  await steps.restoreReviewer();
-  await rejectPendingOpenCodeRequests(client, directory, sessionId, "close", steps.requestOptions);
 }
 
 /**
  * Reject every permission and question still pending for one session, after
- * its turn was stopped by an abort or a close. Neither the pinned SDK (1.19.0:
- * abort returns a boolean) nor the server docs promise that an abort withdraws
- * them, so both paths fail closed: a request answered after its turn was
+ * its turn was stopped by an explicit abort, a retry-action abort, or a close.
+ * Neither the SDK (abort returns a boolean) nor the server docs promise that
+ * an abort withdraws them, so all stop paths fail closed: a request answered after its turn was
  * stopped would grant something to a turn nobody is running any more. A read
  * or rejection failure is a `ProviderUnavailableError`; a 404 on a rejection
  * means the request was answered or withdrawn meanwhile.

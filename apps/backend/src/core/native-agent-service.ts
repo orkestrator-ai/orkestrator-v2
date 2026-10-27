@@ -1933,7 +1933,14 @@ export class NativeAgentService {
           );
       }
     }
-    await resolved.provider.abort(providerSessionId);
+    // Abort can stop transport and still fail during provider cleanup. Always
+    // check authoritative status and finish the stop ladder before surfacing it.
+    const stopErrors: unknown[] = [];
+    try {
+      await resolved.provider.abort(providerSessionId);
+    } catch (error) {
+      stopErrors.push(error);
+    }
     const graceMs = Math.max(0, this.options.abortGraceMs ?? 5_000);
     const deadline = this.now() + graceMs;
     let status = await resolved.provider.status(providerSessionId).catch(() => "running" as const);
@@ -1945,7 +1952,11 @@ export class NativeAgentService {
     let hardAbortAttempted = false;
     if (!stoppedGracefully && resolved.provider.hardAbort) {
       hardAbortAttempted = true;
-      await resolved.provider.hardAbort(providerSessionId);
+      try {
+        await resolved.provider.hardAbort(providerSessionId);
+      } catch (error) {
+        stopErrors.push(error);
+      }
     }
     await recordingInterrupt;
     const sessionKey = nativeAgentSessionStorageKey(
@@ -1961,7 +1972,9 @@ export class NativeAgentService {
           ? "The turn did not stop within the grace period and a force-stop was requested."
           : "The turn did not stop within the grace period; this provider has no force-stop action.",
     );
-    return this.projections.refreshProjection(input, true);
+    const projection = await this.projections.refreshProjection(input, true);
+    if (stopErrors.length > 0) throw stopErrors[0];
+    return projection;
   }
 
   async stopProjectionBackgroundTask(

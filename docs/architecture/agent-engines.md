@@ -538,7 +538,22 @@ close is `OpenCodeProvider.closeSession` (abort, settle workflow ownership,
 restore reviewer permissions, reject pending requests, forget the session;
 `apps/backend/src/core/opencode-session-close.ts`). An ordinary
 `OpenCodeProvider.abort` rejects the session's pending requests the same way but
-keeps it registered.
+keeps it registered. Explicit aborts, retaining closes, and automatic retry-action
+aborts all use the workflow-result broker's shared abort path. It starts the
+transport interrupt immediately and reserves the session dispatch lock before
+waiting for that response. Ownership settlement and pending-request rejection
+finish under that lock before a later prompt can dispatch. Once transport abort
+succeeds, rejection runs even if ownership settlement fails; a failed transport
+abort leaves pending requests untouched. The native stop ladder still polls
+status, attempts an available force-stop, and records its notice before surfacing
+an abort cleanup error.
+
+`opencode-provider-abort.live.test.ts` exercises both a permission and a question
+parked in the same turn against the pinned CLI, real v2 SDK, and a scripted local
+model in a disposable profile. It checks HTTP 200 rejection, the HTTP 404 race
+where another responder rejects after the pending read, and stale-card answers.
+Run it with `RUN_LIVE_OPENCODE_COMPATIBILITY=1` and `OPENCODE_CLI_PATH` pointing to
+the pinned executable; it needs no agent credentials or remote model.
 
 **The patched SSE client.** `@opencode-ai/sdk` is patched — see `patches/`,
 wired in through `patchedDependencies` in the root `package.json`. The generated

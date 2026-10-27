@@ -84,7 +84,6 @@ import {
 } from "./opencode-discovery-metadata.js";
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
-import { rejectPendingOpenCodeRequests } from "./opencode-session-close.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
 import { OpenCodeCatalogCache } from "./opencode-catalog-cache.js";
 import {
@@ -1357,15 +1356,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       sessionId,
       () => this.streamState.endTurn(sessionId),
       () => this.reviewPermissions.restoreIfNeeded(sessionId),
-    );
-    // OpenCode publishes no deadline, so a request the stopped turn left
-    // pending would otherwise wait for an answer that could still grant it.
-    await rejectPendingOpenCodeRequests(
-      this.client,
-      this.connection.directory,
-      sessionId,
-      "abort",
-      () => this.requestOptions(),
     );
   }
 

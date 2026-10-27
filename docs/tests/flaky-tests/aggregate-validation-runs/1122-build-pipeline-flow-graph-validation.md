@@ -60,3 +60,43 @@ Every failing owner is outside the change. Nine fail the same way alone on a
 clean `origin/main` clone, so they predate this branch. The other four passed
 alone, so they are aggregate timing failures under this host load. No
 assertion, deadline, skip or implementation was changed.
+
+## Review-fix validation — 2026-10-27
+
+The review fixes are committed as `444667012`. Format, lint, typecheck, the
+protocol and focused backend/web regressions passed. The final broad web run
+passed **10,007 tests**, skipped 10 and failed none. The diagnostic-bounds owner
+also passed after the new absence assertion was corrected.
+
+- **Initial aggregate:** `mise run test:logged -- --name pipeline-repository-tests -- mise run test`, exit 1 after 823.7 s. Its backend group reported 12,052 passed, 120 skipped and 17 failed. Standard workspace/root/bridges/protocol reservations were 4/1/2/1 slots; backend ran with two workers. The component browser suite was also running on the shared host.
+- **Intermittent watcher failure:** `startWorktreeWatcher > observes a real file write` reported zero changes after 2007.02 ms. `mise run test:logged -- --name unrelated-worktree-watcher-isolated -- bun test --cwd apps/backend ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed the unchanged complete owner in 4.3 s. This is another recurrence of [0091](../environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md).
+- **Intermittent shutdown failure:** `OrkestratorBackend > shuts down idempotently and rejects later command invocations` exceeded its five-second deadline (6035.48 ms), followed by disk-I/O errors from background reconciliation after fixture teardown. `mise run test:logged -- --name unrelated-backend-core-isolated -- bun test --cwd apps/backend ./tests/backend-core.test.ts --parallel=1 --only-failures` passed the unchanged complete owner in 4.3 s. Delayed shutdown under host contention is a hypothesis; the cause is unconfirmed.
+- **Persistent owner failures:** separate single-file invocations with `--parallel=1` reproduced environment-move (8 passed, 30 failed, 27 between-test errors), profile cleanup (20 passed, 2 failed), migration-copy (10 passed, 2 failed), worktree Git (3 passed, 1 failed), worktree-location (7 passed, 2 failed, 1 between-test error), Docker image identity (19 passed, 2 failed), and staged-input relay (5 passed, 4 failed). These owners and their implementation were not changed by the review fixes.
+- **Browser aggregate:** `mise run test:logged -- --name pipeline-browser-suite -- mise run test:browser` finished with 811 passed, 103 skipped and two failures, both `AgentLaunchDialog.spec.ts:18` native branch-suggestion selection (expected `release/2.0`, received `rel`). The full unchanged owner reproduced both failures with `--workers=1`. PipelineFlow, MultiReviewFlow and the new production split-pane focus scenario passed. The public-site browser suite, skipped by the failed chained command, was run separately and passed.
+- **Evidence root:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`. Initial aggregate groups: `orkestrator-test-run.7MUQ6w`; enclosing log: `orkestrator-test-run.NTgZ3E`. Browser aggregate: `orkestrator-test-run.3pBsV4`; isolated native dialog: `orkestrator-test-run.AohqTn`. Persistent isolated owners: `orkestrator-test-run.r4dwNJ`, `orkestrator-test-run.WeMU3u`, `orkestrator-test-run.OpoQSM`, `orkestrator-test-run.wqQwjU`, `orkestrator-test-run.9FHzij`, `orkestrator-test-run.nJK7Oe`, `orkestrator-test-run.IR2rrg`, respectively. Failing logs are compressed; passing owner output was removed by the logged runner.
+
+### Final stable-source aggregate
+
+`mise run test:logged -- --name pipeline-final-repository-tests -- mise run test`
+exited 1; its groups finished in 1052.3 s, including a 154.2 s scheduler wait
+for the earlier workspace run. Web passed 10,007 tests, skipped 10 and failed
+none. Protocol passed 1,944 and skipped two. Backend reported 12,012 passed,
+120 skipped and 55 failed; desktop reported 1,369 passed, 16 skipped and two
+failed; root/support reported 3,526 passed and two migration-copy failures.
+Bridges, CLI, toolchain, web-public and the protocol-lockfile check passed.
+No pipeline regression or command-wiring test failed.
+
+The remaining backend failures include additional unchanged environment,
+worktree, tmux, rename and storage-fixture owners with deadline and disk-I/O
+errors. They were not all rerun independently, so this run does not classify
+all 55 as flakes or establish their cause. Final group evidence is
+`orkestrator-test-run.jGpDAB`; the enclosing log is
+`orkestrator-test-run.fvkjWz`, below the evidence root above.
+
+Live-provider, remote-node, real Docker/Electron and device scenario
+qualification was not run: the changed behaviors were exercised through the
+real UI with fixture backend state, backend service tests and protocol tests.
+
+No assertion, timeout, skip or product code in any unrelated failing owner was
+changed. The aggregate failures remain visible; passing owner reruns do not
+turn a failed aggregate into a pass.

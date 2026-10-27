@@ -23,3 +23,24 @@
 - **Hypothesis:** its real-Git fixture (worker commits, a merged PR) runs past
   the five-second deadline on a saturated host. Not confirmed. No assertion,
   timeout or skip changed.
+
+
+## Review-fix validation recurrence — 2026-10-27
+
+At implementation commit `4c70cd01f`, the unchanged owning file failed a
+different real-Git fixture in the standard `mise run test` run (two backend
+workers, workspace group reservation four slots):
+`V09: aliases of one checkout share physical work > V09: environments aliasing
+one checkout share one watcher and scan; a linked worktree does not`, reported
+at 7015.05 ms. The workspace group had waited 551.9 s for shared host capacity.
+
+The complete unchanged owner passed alone, exit 0 in 6.2 s:
+
+```sh
+mise run test:logged -- --name acceptance-sharing-isolated -- bun test --cwd apps/backend ./src/core/change-tracking/acceptance-sharing.test.ts --parallel=1 --only-failures
+```
+
+Evidence is under the host temporary directory at
+`orkestrator-test-run.9oZXtC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The passing runner removes its log. Contention is a hypothesis; no assertion,
+timeout, skip or implementation was changed.

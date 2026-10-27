@@ -3,9 +3,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { Environment, Project } from "@/types";
 import { useConfigStore } from "@/stores/configStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
 import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { ProjectSearchBar, searchShortcutLabel } from "./ProjectSearchBar";
+
+const initialMachineView = useMachineViewStore.getState();
 
 const project: Project = {
   id: "project-1",
@@ -101,6 +104,7 @@ describe("ProjectSearchBar", () => {
     if (!HTMLElement.prototype.scrollIntoView) {
       HTMLElement.prototype.scrollIntoView = () => {};
     }
+    useMachineViewStore.setState(initialMachineView, true);
     useUIStore.setState({ recentProjectIds: ["project-1"] });
     useConfigStore.setState((state) => ({
       config: {
@@ -117,6 +121,26 @@ describe("ProjectSearchBar", () => {
 
   afterEach(() => {
     cleanup();
+    useMachineViewStore.setState(initialMachineView, true);
+  });
+
+  test("keeps legacy recents as plain IDs until the backend identity is known", async () => {
+    const projects = ["unranked", "legacy", "overlap", "modern"].map((id, order) => ({
+      ...project,
+      id,
+      name: id,
+      order,
+    }));
+    useUIStore.setState({ recentProjectIds: ["legacy", "overlap"] });
+    useMachineViewStore.setState({ recentKeys: ["modern", "overlap"] });
+    renderSearchBar({ projects, environments: [] });
+    await openSearch();
+    expect(screen.getAllByRole("option").map((row) => row.getAttribute("data-testid"))).toEqual([
+      "project-search-item-modern",
+      "project-search-item-overlap",
+      "project-search-item-legacy",
+      "project-search-item-unranked",
+    ]);
   });
 
   test("matches the responsive workspace tab bar height", () => {

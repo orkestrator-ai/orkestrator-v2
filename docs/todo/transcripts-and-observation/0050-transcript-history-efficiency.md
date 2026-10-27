@@ -5,6 +5,153 @@ measurement gaps and the deferred-item measurements closed against `main` at
 `71227437` (2026-10-24); item 3 re-checked, and the hidden-document
 measurement run, against `main` at `930189337` (2026-10-26).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joined `sync-v1` paging half moved to [0232](0232-direct-history-cursor-minting.md), which owns its retirement and register row; it is not repeated here.
+
+1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window; the Claude change is in `v2.33.0-beta` only).
+2. **Inactive Cursor run at a lowered trim threshold**: reach the producer trim while the environment is inactive, then check the bounded window, pages, sub-agent card and controls. Status: open (the pass-through is in place; no Cursor live spec exists).
+3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: blocked (on a bridge fault hook that does not exist).
+4. **Electron and Docker with real providers**: the transcript paths in the Electron window and in container environments; iOS only where the wrapper changes. Status: open.
+5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: open.
+6. **Open questions and verification items**: all answered; one sentence is stale. Status: done (wording only).
+
+### 1. Retire the `/messages` fallback
+
+**Problem.** Every progressive read that gets a 404 or 405 from `/transcript` falls back to a whole `/messages` body. Older Claude bridges need it after a bridge restart; it costs a whole read each time it runs.
+
+**Context.** Item 3, checked on 2026-10-26. The Claude summary route now materialises a persisted session first, so its 404 means the session is missing. The register row (`docs/architecture/version-compatibility.md:113`) sets the condition: the floor at or above the first Stable release with that change.
+
+**Investigation.** The fallback is at `apps/backend/src/core/http-bridge-progressive.ts:92` and counts `bridge-transcript.messages-fallback` only when `/messages` served the session (`:117`; id at `compatibility-path-usage.ts:29`). The Claude change landed in #1296 (`c9f4043b`), covered by `bridges/claude-bridge/src/services/session-manager-transcript-v2.test.ts:383`. Of the local tags, only `v2.33.0-beta` contains it, and no Stable release does yet. The floor is still v2.21.0 (`version-compatibility.md:18`), so retirement is at least 60 days after the first Stable release with #1296. `/messages` itself stays: bounded `messages({ limit })` reads and the `sync-v1` refresh use it.
+
+**Decisions.**
+
+- **Keep the retirement in this file, or hand it to 0034?**
+  - **Hand it to 0034's window-gated removals once the qualification tasks here close, and finish this file then (recommended).**
+    - Pros: this file stops being held open for months by a date; 0034 already tracks floor-gated work, and 0232 follows the same pattern.
+    - Cons: the item's rationale must be carried across, and it adds a row to another file.
+  - **Keep it here as the last item.**
+    - Pros: one place for item 3's history.
+    - Cons: this file cannot finish until the floor moves, whatever happens to its live runs.
+- **What evidence is needed before removal, besides the floor?**
+  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).**
+    - Pros: catches a bridge that is somehow older than the floor suggests (a container image built before #1296).
+    - Cons: needs the counter read from several machines.
+  - **The floor alone.**
+    - Pros: purely mechanical.
+    - Cons: a stale container image could still need the fallback and would then show empty transcripts after a restart.
+
+### 2. Inactive Cursor run at a lowered trim threshold
+
+**Problem.** Cursor bounds its transcript while streaming with no reader, but trimming has never been observed live on an inactive environment. A trim bug would corrupt the window or wedge controls for long Cursor runs.
+
+**Context.** The production threshold is far past a qualification turn. Since 2026-10-26 an agent-test profile passes `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` through. The file gives the exact procedure, and decision 15 covers the choice.
+
+**Investigation.** The bound is `MAX_TRANSCRIPT_BYTES` (`bridges/cursor-bridge/src/config.ts:107`), overridable downwards to 256 KiB (`:108`); `MAX_MESSAGES` is 2,000. The variable is on the allowlist (`apps/desktop/electron/backend-process.ts:49`). The Cursor bridge `build` script exists, so `bun run --cwd bridges/cursor-bridge build` is valid. No Cursor live spec exists in `e2e/agent-testing/`. Decision 15 notes that a container bridge does not inherit the variable, so this run is local-environment only.
+
+**Decisions.**
+
+- **Manual run or a new spec?**
+  - **A manual run following the file's steps, with results recorded here (recommended).**
+    - Pros: closes the qualification soon; the steps are already written; one paid turn.
+    - Cons: not repeatable; the next Cursor SDK bump will not rerun it.
+  - **Write a Cursor live spec first (prompt, inactive switch, `transcriptBounds` and window checks).**
+    - Pros: repeatable, and usable at Cursor bumps.
+    - Cons: a new spec for one qualification; more up-front work.
+- **What counts as a pass?**
+  - **`/runtime-health` shows a trim, the window is `truncated` with pages to the prompt, the sub-agent card settles, and Stop and steer work on return (recommended).**
+    - Pros: matches the item; every check is content-free.
+    - Cons: a sub-agent in the trimmed range may be hard to force with a prompt.
+  - **`transcriptBounds` shows a trim and the window renders.**
+    - Pros: easy to reach.
+    - Cons: misses the controls and sub-agent lifecycle, which are the risky parts.
+
+### 3. Pre-acceptance dispatch window live
+
+**Problem.** If the backend dies after journaling a build-pipeline prompt but before the provider accepts it, the retry under the same request id is proved only by unit tests. A wrong retry would run a stage twice or lose it.
+
+**Context.** In the 2026-10-21 cold-restart runs the provider had always already accepted. The file says a fault hook that holds the bridge's prompt route would make the window deterministic, and that adding it is its own change.
+
+**Investigation.** `pendingPromptAttempt` is used by `apps/backend/src/core/build-pipeline-prompts.ts`, `build-pipeline-review-fanout.ts` and `build-pipeline-service-helpers.ts`. No bridge has an env-driven stall or fault hook on its prompt route; the only `process.env` reads near the routes are unrelated configuration.
+
+**Decisions.**
+
+- **How to make the window reachable?**
+  - **A test-only hold in the backend's bridge client (the dispatch call waits on a fault seam before sending), enabled only in agent-test profiles (recommended).**
+    - Pros: no production bridge route changes; the backend owns the journal being tested; the guard can reuse the agent-test allowlist pattern.
+    - Cons: it holds before the request leaves, not inside the bridge, so it covers "journaled, not sent" rather than "sent, not accepted".
+  - **A stall hook in each bridge's prompt route.**
+    - Pros: covers "sent, not accepted", the truly ambiguous case.
+    - Cons: test-only code in a production dispatch path, in five bridges.
+  - **Retire the live item and rely on the unit tests.**
+    - Pros: no new seam.
+    - Cons: the at-most-once dispatch path stays unproved end to end.
+
+### 4. Electron and Docker with real providers
+
+**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers.
+
+**Context.** Batched with 0031. iOS only where the wrapper changes.
+
+**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging.
+
+**Decisions.**
+
+- **How to cover it?**
+  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).**
+    - Pros: reuses the live spec's checks; the container run exercises the container bridge hop.
+    - Cons: the Electron step is new work; the container run needs a profile started with `--fixture-environments local,container`.
+  - **A manual pass in each, recorded in 0031.**
+    - Pros: no spec changes.
+    - Cons: not repeatable.
+
+### 5. Mounted tab across a bridge-only restart
+
+**Problem.** Item 5 leaves one re-key: the first replay after live streaming renames live Codex rows. A mounted tab holding retained history could show duplicates or lose the reader's place when the bridge restarts under it.
+
+**Context.** Item 5 and decision 3 (replayed row ids).
+
+**Investigation.** The re-key is still there by design (`replayedRowId`). A bridge restart is already scripted in other live specs: `e2e/agent-testing/design-resume-clients-live.spec.ts:219` stops and starts the local Codex server (`stop_local_codex_server_cmd`, `start_local_codex_server_cmd`). `transcript-paging-live.spec.ts` can run a native Codex tab (`ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex`) but has no restart step.
+
+**Decisions.**
+
+- **Where to add the check?**
+  - **Add a bridge-restart step to `transcript-paging-live.spec.ts`'s Codex native case, after the first Load earlier messages, reusing the design spec's restart commands (recommended).**
+    - Pros: the spec already has the retained history, held-place assertion and row-id checks; one paid run covers it.
+    - Cons: lengthens an already long spec; the step is Codex-only.
+  - **A separate small spec.**
+    - Pros: isolated, and quicker to rerun.
+    - Cons: duplicates the paging setup.
+- **What counts as a pass?**
+  - **No duplicate row ids or texts after the restart, and the held place within the spec's existing 8 px, clamp-aware check (recommended).**
+    - Pros: the same "held" definition as 0090.
+    - Cons: a short transcript may only prove the clamp (see 0090).
+  - **No duplicates only.**
+    - Pros: simple.
+    - Cons: ignores the reader's place, which the item names.
+
+### 6. Open questions and verification items
+
+**Problem.** The Open questions section still says "A hidden document is still unmeasured", which the 2026-10-26 run answered.
+
+**Context.** The "Needs verification" items were all checked on 2026-10-24.
+
+**Investigation.** `e2e/perf/hidden-resume-perf.ts` exists, and the 2026-10-26 results section records it. The Claude SDK pin is still `@anthropic-ai/claude-agent-sdk` 0.3.309 (`bridges/claude-bridge/package.json:16`), so item 1's SDK reading still holds. It must be rechecked at the next SDK bump.
+
+**Decisions.**
+
+- **Correct the stale sentence now, or leave it?**
+  - **Correct it in the same change as the next item update (recommended).**
+    - Pros: the file stays accurate; editing an item to record evidence is allowed.
+    - Cons: none of substance.
+  - **Leave it.**
+    - Pros: no edit.
+    - Cons: a reader may think item 7 is still waiting on a measurement.
+
 Agent transcripts are the largest repeated data flow in the app. Providers
 produce them, bridges summarise them, the backend projects them, clients retain
 them, and workflows read them to detect progress. The goal is that an unchanged

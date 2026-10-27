@@ -9,6 +9,35 @@ were done on `todo-0009-storage-repositories-4696a61ea39f` from `00a0cb82`
 [0163-storage-facade-size.md](0163-storage-facade-size.md). Delete this file
 and its index row once the branch has merged (decision 12).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire this finished file**: every code, qualification and follow-up item is done and the branch has merged (#1276); only the file's own retirement remains. Status: done.
+
+### 1. Retire this finished file
+
+**Problem.** The file is marked Finished and says to delete it "once the branch has merged" (decision 12). It still sits in the folder index as rank 10, so a reader picking work has to open it to learn there is nothing left.
+
+**Context.** The README "Maintaining the folders" rules say a finished file is deleted, its durable behaviour moved into `architecture/` and its index row removed. This file was kept only so the review could read its 13 decisions. Follow-ups live in [0163](0163-storage-facade-size.md) (finished) and [0214](0214-storage-files-over-size-limit.md) (open).
+
+**Investigation.** The branch merged as `ddd9ab87` (#1276), after step 1 in `5d207c58` (#1142). Everything the file claims holds at HEAD: `StorageService` has no base class (`apps/backend/src/core/storage.ts:111`), `storage-base.ts` is gone, `PINNED_CHAINS` is an empty list (`tests/unit/inheritance-chains.test.ts:50`), and `storageInternals`/`storageDatabase` exist (`apps/backend/src/core/storage-test-support.ts:178`, `:186`). The writer guard has the cross-repository and raw-writer scans the file describes (`apps/backend/src/core/storage-writer-guards.test.ts:1705`, `:1857`, `:1876`, `:1896`). The durable description is already in `docs/architecture/storage.md` "Code layout" (lines 24 to 95: facade, registry, lease wrappers in the owning repository, test access) and "Concurrency" (the guard rules and the raw-writer scan, around lines 233 to 265). The repository table there is newer than this file: it adds the agent mail collaborators and `ScheduledJobsRepository`. Rationale not yet in `storage.md`: decision 2 (why a registry rather than constructor injection), decision 11 (why the raw-writer guard is static) and decision 13 (why `PINNED_CHAINS` stays empty, which the test's own comment already explains). Inbound links that a deletion must update: `tests/unit/inheritance-chains.test.ts:45` names this file by path, and 0163 and 0214 link to it. Newly noticed, not in scope here: `storage-writer-guards.test.ts` is now 2,478 lines and `storage.test.ts` 4,322, both over the 2,000-line guideline.
+
+**Decisions.**
+
+- **What to do with this file now that its branch has merged?**
+  - **Delete it now, after moving the missing rationale (recommended).** Add one or two sentences for decisions 2 and 11 to `storage.md` "Code layout"/"Concurrency", reword the comment at `inheritance-chains.test.ts:45` so it no longer names a deleted path, drop the links from 0163 and 0214 (or point them at `storage.md`), and remove the index row.
+    - Pros: follows the README rule; the folder index stops listing finished work; the rationale survives where readers of the storage code already look.
+    - Cons: touches a test comment and two sibling files in the same change; the step-by-step validation evidence is only recoverable from git history.
+  - **Delete it as it stands.** Remove the file and row and fix the inbound links, without moving any rationale.
+    - Pros: smallest change.
+    - Cons: the registry and static-guard rationale is lost outside git history, inviting someone to "improve" them back into constructor injection or a run-time check.
+  - **Keep it until 0214 is finished.** Retire 0009, 0163 and 0214 together.
+    - Pros: one retirement change for the whole storage series; 0214 can keep linking here for the guard comparison method.
+    - Cons: breaks the README rule for an unknown period; 0163 already repeats the comparison method, so 0214 does not need this file.
+
 `StorageService` was one class cut by size into a 14-layer `extends` chain, so
 every layer shared `StorageBase`'s protected state and reading one store meant
 reading all of them. The goal was one facade with an unchanged public surface,

@@ -2,6 +2,172 @@
 
 Checked against `main` at `bf49a751` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Apply the required-check ruleset**: once `main` has three green `CI` runs in a row, the maintainer applies the prepared ruleset (item 1). Status: open (the precondition is now met; maintainer action).
+2. **Open CI flakes 0182 and 0672**: the Cursor HTTP readiness timeout and the Chromium page crash in the interactive preview case. Status: open.
+3. **Owner flake cases from the triage**: create the cases the 2026-10-25 triage suggested but did not number. Status: open.
+4. **Failures that are not flakes**: give `workspace-realm-electron.spec.ts:409`, the annotation Notes focus check, the `AgentLaunchDialog` branch suggestion and the 0723 exit-before-stderr race their own bug or todo. Status: open.
+5. **Live hung-`close()` Electron check**: run a real Electron spec whose `close()` hangs and confirm `closeElectronWithin` cleans up. Status: open.
+6. **Watch the workspace group margin and the runner shutdowns** (Needs verification). Status: open (margin currently comfortable).
+7. **Deferred measurement work**: ACP transcript matrix, longest-first bridge scheduling, splitting backend `test:workspace`, and any resumed speed work. Status: deferred (until measured).
+
+Item 1's evidence, items 2 to 6 and 8 to 10, and the flake triage are done; 0145 owns the stock-Ubuntu sandbox qualification.
+
+### 1. Apply the required-check ruleset
+
+**Problem.** `main` has no branch protection or ruleset, so a pull request can merge with failing lint, typecheck or tests. That is how `main` stayed red for days in October.
+
+**Context.** The ruleset is the first `json` block in this file (parsed by `tests/unit/ci-workflows.test.ts`), approved on 2026-10-15; agents prepare it, the maintainer applies it after three consecutive green `CI` runs on `main`. The 0030 branch merged as `182a4031` (#1265, 2026-10-25).
+
+**Investigation.** Checked today with read-only `gh` calls. `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` still returns `[]`, and `branches/main/protection` still answers 404 "Branch not protected". `main` was red again after the branch merged: 36 of the last 40 `ci.yml` runs on `main` failed, every one in "Unit and integration tests", through `6dbfc47f` (run 40379705332, 2026-10-26 18:39). The failures were the same backend set in each run checked (for example "bounded bridge output > the writer writes a quiet producer's first line while its pipe stays open", "Electron backend command registry > starts the in-container Codex bridge …", "an exited container's final boot record > …"), so they were deterministic, not flakes; they stopped with `ce205ad3` (#1317, "keep bridge logs streaming and bounded"). Since then the last four runs are green: `ce205ad3` (40395650750), `9791a425` (40418381691), `1aabf049` (40424122650) and `863b5782` (40431509846). The three-green precondition is therefore met. The three contexts still match `ci.yml`'s job names. Newly noticed in those failure logs: a backend test (apparently `apps/backend/src/core/public-api/public-api-schedules.test.ts`, whose "scheduled audit" prompt is printed just before) reaches the real Codex naming path (`apps/backend/src/core/commands-agent-support.ts:109`) and spawns `codex`, which tries `wss://api.openai.com/v1/responses` and gets 401. It does not fail the test, but the unit suite makes an outbound network call; per the README rules that belongs in a new todo file.
+
+**Decisions.**
+
+- **Apply it now?**
+  - **Yes: the maintainer applies it now, re-running the file's "Check first" commands immediately before (recommended).**
+    - Pros: the precondition is met; every further unguarded day risks another multi-day red stretch like 2026-10-26's.
+    - Cons: if the next run fails for an unrelated flake, merges block until it is rerun; the app's own `gh pr merge` path is refused until checks pass (intended).
+  - **Wait for a longer green streak (for example a week).**
+    - Pros: more confidence that `main` is stable.
+    - Cons: the agreed rule was three; `main` has gone red within a day twice since 2026-10-23, which is exactly what the ruleset prevents.
+- **Where to record the network-calling test?**
+  - **A new todo file for making the schedule test hermetic (stub the naming command), linked from here (recommended).**
+    - Pros: follows the README rule against adding todos to an existing file; a real fix (unit tests must not reach the network) with a clear owner.
+    - Cons: one more small file.
+  - **Leave it, since it does not fail.**
+    - Pros: no work.
+    - Cons: an outbound call from CI is non-hermetic and would leak credentials if the runner ever had a Codex login.
+
+### 2. Open CI flakes 0182 and 0672
+
+**Problem.** Two flakes can still turn a `main` run red once the ruleset is required, blocking merges.
+
+**Context.** 0182 is `authentication > reports an authenticated credential as ready` in `bridges/cursor-bridge/src/http.test.ts`; 0672 is the interactive preview resource-escape case that crashed Chromium twice on CI.
+
+**Investigation.** Both are still `open` in their group indexes. The number 0672 is used by five different case rows in the flake registry (MCP bridge validation, the preview crash, the executable-document policy, the container storage helper and a native-agent reconciliation case), which the file's "Living-doc drift" note already accepts; it makes references such as "flake 0672" ambiguous. The preview case is `apps/backend/src/core/transcript-artifacts/preview-interactive.test.ts:346`.
+
+**Decisions.**
+
+- **How to handle them before the ruleset bites?**
+  - **Investigate 0672 first (a real browser crash, possibly memory on four cores), and add a bounded readiness budget to 0182 only if its case shows a fixed timeout as the cause (recommended).**
+    - Pros: 0672 is the one that took down whole `main` runs; fixes stay evidence-led, as the constraints require.
+    - Cons: a Chromium crash may not reproduce off the runner.
+  - **Rely on rerunning failed jobs.**
+    - Pros: no work.
+    - Cons: the constraints forbid retries as a fix; a required check that flakes trains people to rerun blindly.
+- **Should flake references name the file path rather than the number?**
+  - **Yes, for reused numbers such as 0672, cite the case file name (recommended).**
+    - Pros: unambiguous without renumbering.
+    - Cons: longer references.
+  - **Renumber the duplicates.**
+    - Pros: restores unique ids.
+    - Cons: the file already decided against it because prose references across cases would need rewriting.
+
+### 3. Owner flake cases from the triage
+
+**Problem.** The triage named owners with recurring failures but created no case for them, so their next recurrence has nowhere to be recorded.
+
+**Context.** Named: `media-stream.browser.test.ts`, `cursor-bridge/src/initial-run.test.ts`, `RemoteWorkspaceRegion.test.tsx`, `workspace-setup-preserve.test.ts`, the two desktop shutdown-deadline cases in 0720, and the `review-validation-worker.test.ts` runner-slot case. No numbers were free on that branch (D12).
+
+**Investigation.** Searching the group indexes: the first three appear only inside aggregate-run rows in `aggregate-validation-runs/0000-index.md`, not as their own cases; `workspace-setup-preserve` and "does not hold the local runner slot" appear in no index. None of the six has its own case.
+
+**Decisions.**
+
+- **Create them now or on recurrence?**
+  - **Create each on its next recurrence, with that run's evidence (recommended).**
+    - Pros: AGENTS.md defines a flake by an owner-file rerun; a case created now would have only second-hand evidence.
+    - Cons: the triage's knowledge sits only in this file until then.
+  - **Create all six now from the triage notes.**
+    - Pros: future recurrences have a home at once.
+    - Cons: cases without a captured failure message (the runner-slot one has none) are thin.
+
+### 4. Failures that are not flakes
+
+**Problem.** Some failures the triage found fail alone too, so they are bugs, but they have no owner file.
+
+**Context.** `workspace-realm-electron.spec.ts:409` and the annotation Notes focus check (0740, 0772, 0789, 0790), the `AgentLaunchDialog.spec.ts` branch suggestion (only in 0493), and 0723's likely race at `commands-servers.ts`.
+
+**Investigation.** The 0723 race is still present: the OpenCode server start decides its error in the `exit` listener (`child.once("exit", onExit)`, `apps/backend/src/core/commands-servers.ts:301`) from `stderrTail`, and stderr data can arrive after `exit` (Node and Bun emit `close` after the streams end). The locked-database message at `:292`-`:295` therefore depends on timing. The line number in the file (295) is now the message construction, not the decision.
+
+**Decisions.**
+
+- **Where should these go?**
+  - **One new todo file per failure group (Electron realm and Notes focus; the launch-dialog branch suggestion; the OpenCode exit race) in the folder that owns the code (recommended).**
+    - Pros: each lands next to related work and gets its own rating; the OpenCode race is a product bug (a wrong error message), not test health.
+    - Cons: three small files.
+  - **One combined "known failing specs" file here in cross-cutting.**
+    - Pros: one place to look.
+    - Cons: mixes unrelated owners; rates poorly as a whole.
+- **How to fix the exit race?**
+  - **Decide on `close` (after stdio ends) instead of `exit` (recommended).**
+    - Pros: standard fix; stderr is complete by then.
+    - Cons: `close` can be delayed by a grandchild holding the pipe; needs a bound.
+  - **Wait a short grace after `exit` for more stderr.**
+    - Pros: small change.
+    - Cons: a timing heuristic, which the timer rules discourage.
+
+### 5. Live hung-`close()` Electron check
+
+**Problem.** The cleanup for a hung Electron `close()` is proved by unit tests and a 2 s throwaway run, but not by a real Electron spec whose `close()` hangs.
+
+**Context.** Item 9 (done): `ownProcessGroup` (`e2e/process-cleanup.ts`), the worker fixture in `e2e/agent-testing/electron-fixtures.ts`, and `closeElectronWithin` (`e2e/agent-testing/design-electron-cleanup.ts:79`, 20 s bound).
+
+**Investigation.** `tests/unit/electron-spec-process-ownership.test.ts` still guards the pattern. No spec forces a hang.
+
+**Decisions.**
+
+- **How to make `close()` hang for the check?**
+  - **A temporary local edit that blocks the main process's `before-quit` in one spec, run once with `mise run test:agent:electron`, then reverted, with the leftover-process check recorded (recommended).**
+    - Pros: real Electron, real process tree; no permanent test hook.
+    - Cons: one-off evidence; not repeatable in CI.
+  - **A permanent opt-in spec with a test-only hang switch in the main process.**
+    - Pros: repeatable.
+    - Cons: a production code path that exists only for tests.
+  - **Retire the item, accepting the unit and throwaway-run evidence.**
+    - Pros: no work.
+    - Cons: the original leak was found only in real runs.
+
+### 6. Watch the workspace group margin and the runner shutdowns
+
+**Problem.** The workspace group could approach its 30-minute deadline (`DEFAULT_TEST_GROUP_TIMEOUT_MS`, `scripts/test-all.ts:203`) as the backend grows, and the 2026-10-24 runner shutdowns were never diagnosed.
+
+**Context.** The test job's limit is 45 minutes (`.github/workflows/ci.yml:75`).
+
+**Investigation.** The latest green run (40431509846) took 1,104 s for the workspace group, 152 s for root and 116 s for bridges, faster than the 1,215 to 1,296 s the file recorded, so the margin is about 12 minutes. No runner shutdown appears in the runs checked today.
+
+**Decisions.**
+
+- **Keep these as open verification items?**
+  - **Keep the margin watch, and close the shutdown item if it has not recurred by the time the ruleset has been active for two weeks (recommended).**
+    - Pros: the margin is cheap to read from each run; a non-recurring shutdown with an inferred cause has nothing left to verify.
+    - Cons: if it returns later, the memory-capture idea must be rediscovered from git history.
+  - **Add the `free -m` loop to the CI job now.**
+    - Pros: evidence ready if it recurs.
+    - Cons: noise in every run's log for an event not seen since 2026-10-24.
+
+### 7. Deferred measurement work
+
+**Problem.** Several speed ideas wait for a measurement; without one they risk either never happening or being done blind.
+
+**Context.** ACP's `acp-transcript.test.ts` spawns a bridge in 77 places; ACP alone is about as long as the other four bridges; backend's build-dependent tests could be split; the constraints forbid concurrency changes without measurements.
+
+**Investigation.** Bridges took 116 s in the latest green run, so longest-first scheduling would save little. Nothing has changed in `scripts/test-all.ts` planning since the file was written.
+
+**Decisions.**
+
+- **Keep or retire the deferred items?**
+  - **Keep them deferred and leave the file's "start from the CI timings" note as the trigger (recommended).**
+    - Pros: they are cheap to keep; the CI timings now come from every run.
+    - Cons: the file stays open longer once items 1 to 6 close.
+  - **Move them into a new speed-work todo file when items 1 to 6 close, so this file can finish.**
+    - Pros: lets 0030 be finished and deleted.
+    - Cons: one more file carrying deferred work.
+
 `mise run test` should be fast and green, and stay that way, without weakening
 what it proves. Every test file has exactly one owner, waits are controlled
 rather than slept, and setup matches what each assertion needs. Most of the
@@ -552,6 +718,8 @@ Decisions made on 2026-10-25 for this round, with the options weighed.
   [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md).
 - [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md):
   the product side of the CI sandbox failure.
+- [0731-ci-backend-test-spawns-real-codex.md](0731-ci-backend-test-spawns-real-codex.md):
+  the schedule tests that run the real Codex naming call, split out.
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test

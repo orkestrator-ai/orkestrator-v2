@@ -2,6 +2,39 @@
 
 Checked against `main` at `459d2944` (2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the finished file**: every item is done (the folder index marks it Finished: Yes, and item 11 chose to keep it for its inbound links); decide what happens to it now. Status: done.
+
+### 1. Retire the finished file
+
+**Problem.** The file has no outstanding work. It was kept on purpose (decision 11) because other files link to its live evidence, so it stays in the index with no end date.
+
+**Context.** The fix is #1177; the live Pi coordinator rerun passed on 2026-10-23. The remaining fresh-install question moved to [0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
+
+**Investigation.** The code is on `main` as described: `defaultModelIds` at `bridges/pi-bridge/src/agent-session.ts:198` (fallback from `fallbackDefaultModelId` at `:214`), and `applyPiHostCredentialEnvironment` deletes an inherited `PI_BRIDGE_DEFAULT_MODEL` and sets it from `readPiDefaultModel` at `apps/backend/src/core/host-agent-credentials.ts:103`-`:113` (reader at `:129`). The durable behaviour is in `docs/architecture/agent-engines.md:953`-`:961` and `bridges/pi-bridge/AGENTS.md:32`-`:46`; decision 11's third home, `credentials-and-models.md`, is `docs/development/credentials-and-models.md`, not `architecture/`. The Pi SDK is now pinned at `1.4.0` (`bridges/pi-bridge/package.json:17`), not the 1.2.0 that assumption 9 names; `defaultProvider` is still read by its `dist/core/model-resolver.js`, so the assumption holds, but its version note is stale. Inbound links come from 0002, 0024, 0062, 0172 (`coordinator-and-multi-review`), 0056 and a flaky-test case (0694). Newly found: the number 0054 is used by three files (this one, `design-canvas/0054-design-canvas-accessibility-findings.md` and `previews-and-annotations/0054-preview-cross-service-reads.md`), against the README rule that a number is unique across `todo/`.
+
+**Decisions.**
+
+- **What to do with the file?**
+  - **Keep it until the linking files are next edited for their own work, then delete it with its links in one change (recommended).**
+    - Pros: matches decision 11; no cross-folder link churn now; the live evidence stays one click away for 0062, which still depends on it.
+    - Cons: a finished row stays in the index for an unknown time.
+  - **Delete it now: move the run-3 evidence summary into `agent-engines.md` and repoint the six inbound links.**
+    - Pros: follows the README rule at once.
+    - Cons: edits six files in four folders for no behaviour change; the flaky-test case keeps a dead reference unless also edited.
+- **What about the duplicate number 0054?**
+  - **Leave this file's number and record the clash in a new todo file for whoever owns the todo index rules (recommended).**
+    - Pros: numbers are permanent IDs that many links use; this file is the oldest of the three (`7e051d95`, 2026-10-22), so it is not the one that should move, and renumbering either newer file breaks its links.
+    - Cons: the clash stays; references such as "0054" in prose remain ambiguous.
+  - **Renumber the two newer files to the next free numbers.**
+    - Pros: restores the uniqueness rule.
+    - Cons: breaks every link to them; the README says a file keeps its number.
+
 An agent-test profile authorized for Pi (`dev:test --credential-source pi`)
 shared the host's Pi login but not the host's choice of model, so Pi fell back
 to a model the login may not be allowed to use. Every live Pi run on such a
@@ -260,6 +293,7 @@ live Pi coordinator rerun passed on 2026-10-23. Nothing is left in this file.
 - [0062-pi-chatgpt-login-without-saved-default.md](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md) (the open question this file left)
 - [`bridges/pi-bridge/AGENTS.md`](../../../bridges/pi-bridge/AGENTS.md) (models as provider/model pairs, default model)
 - [credentials-and-models.md](../../development/credentials-and-models.md) § Pi
+- [0732-duplicate-todo-numbers-unguarded.md](0732-duplicate-todo-numbers-unguarded.md): the duplicate 0054 number and the missing guard, split out.
 
 ## Replaces
 

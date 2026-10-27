@@ -3,6 +3,136 @@
 Checked against `main` at `71227437` (2026-10-24), with both rounds of this
 work applied on top; the third round (2026-10-25) was built on `ba7cc8d4`.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Claude coordinator credential handoff on a leaf**: a coordinator on a leaf with a stale credential file answers, and one idle past its token's expiry comes back refreshed. Status: open.
+2. **Cross-machine switching and preferred login**: switch the leaf's Claude account from the overview, Settings and the information panel, and exercise the preferred-login star. Status: open.
+3. **Remote sign-ins from the command node**: add a Claude or Codex account, Cursor sign-in, Grok "Sign in on <leaf>", and a locked-keychain failure, all driven from the command node. Status: open.
+4. **Codex coordinator on an added account**: a real turn on an access-only `auth.json`, without breaking the account's own sessions. Status: open.
+5. **Change propagation**: a switch on the leaf reaches the command node's open overview and the leaf tab's panel within a second. Status: open.
+6. **MBP3 credential diagnosis**: on MBP3, compare `~/.claude/.credentials.json` with the Keychain login and find why `claude auth login` exited 1. Status: open.
+
+All six are live runs; no code item remains, and every symbol the file names still exists at `863b5782`. The only code change since the file was written is `fb1700b5` (#1295, todo 0003's qualification), which touched `apps/backend/src/core/agent-accounts-active.ts` but none of the behaviour below.
+
+### 1. Claude coordinator credential handoff on a leaf
+
+**Problem.** The original failure ("OAuth session expired and could not be refreshed") was on a leaf. The fix has been unit-tested but never shown on a real leaf with a real Keychain login.
+
+**Context.** First-round fix: coordinators get the access token only, and a keeper refreshes the login. Constraint: never copy a refresh token.
+
+**Investigation.** `applyCoordinatorClaudeAccount` is at `apps/backend/src/core/agent-accounts-active.ts:373`, called from `apps/backend/src/core/commands-servers.ts:136`. The keeper is `ContainerClaudeLoginKeeper` (`apps/backend/src/core/container-claude-login-keeper.ts:109`), with `refreshHostIfDue` at `:216` and `refreshLocalLoginIfDue` at `:226`, wired through `setLocalClaudeLoginRefresher` (`apps/backend/src/core/agent-accounts-active.ts:280-290`). The file says these runs are batched in [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md), but 0031's "Two machines or a remote backend" row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:199`) does not list this file, so the batching link is one-way and a person working from 0031 would miss these runs. Todo 0003's qualification already ran on MBP3 as a node (see `0003-agent-accounts-and-sign-in.md` header), so a two-machine set-up has been available.
+
+**Decisions.**
+
+- **Where are these runs tracked?**
+  - **Add this file to 0031's two-machine row (recommended).** One edit to 0031 (outside this task's scope here; for whoever owns 0031).
+    - Pros: matches what this file claims; the two-machine batch is planned from 0031.
+    - Cons: touches another file.
+  - **Leave tracking here only.**
+    - Pros: no cross-file edit.
+    - Cons: the runs stay invisible to anyone batching from 0031.
+- **How to make the credential file stale?**
+  - **Use a disposable account directory on the leaf, not the default login (recommended).** Sign a throwaway login in, back-date or replace its `.credentials.json`, and leave the Keychain entry live.
+    - Pros: never risks signing the user's real login out; mirrors how 0003 used throwaway Keychain entries.
+    - Cons: an added account's hashed Keychain service differs from the default login's, so it is a close, not exact, reproduction.
+  - **Use the leaf's real default login.**
+    - Pros: exact reproduction of the original failure.
+    - Cons: a mistake can sign the user out on that machine.
+
+### 2. Cross-machine switching and preferred login
+
+**Problem.** Switching another machine's account and the preferred-login controls have never run across two real machines.
+
+**Context.** Second- and third-round work; decision "Preferred login across machines" chose option (c), an explicit switch with nothing automatic.
+
+**Investigation.** Commands are registered in `apps/backend/src/core/commands-registry-accounts.ts` (`list_machine_agent_accounts` at `:70`, `set_preferred_agent_identity` at `:75`, `get_native_agent_session_account` at `:104`). "No preferred login" is rendered at `apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx:189`. The composer chip `SessionAccountChip` is gone from the tree, as the file says.
+
+**Decisions.**
+
+- **What counts as a pass for "the next idle prompt runs on the new account"?**
+  - **The information panel's account card and the provider's own account read agree after the prompt (recommended).**
+    - Pros: checks the product's claim and the provider's view; no prompt content needed.
+    - Cons: needs two accounts with distinguishable emails.
+  - **The panel alone.**
+    - Pros: quicker.
+    - Cons: the panel reads the registry, so it can show the new account while the bridge still runs the old one.
+
+### 3. Remote sign-ins from the command node
+
+**Problem.** Adding an account, signing in to Cursor and Grok, and the locked-keychain message have not been shown on a leaf driven from another machine.
+
+**Context.** The browser must open on the client, not on the leaf's desktop. Login URLs and codes must never be logged.
+
+**Investigation.** The CLI browser shim is `ensureBrowserShim` (`apps/backend/src/core/agent-accounts-login.ts:132`). Cursor's sign-in sets `NO_OPEN_BROWSER` when `openBrowser` is false (`apps/backend/src/core/cursor-sdk-bridge.ts:187`), and the SDK side is proved offline by `bridges/cursor-bridge/src/login-no-open-browser.test.ts` against the still-pinned `@cursor/sdk` 1.0.40 (`bridges/cursor-bridge/package.json:15`). The locked-keychain hint is in `loginFailureMessage` (`apps/backend/src/core/agent-accounts-login.ts:107-115`): it matches any failure reason containing "keychain". Grok's sign-in terminal is `open_agent_sign_in_terminal` (`apps/backend/src/core/commands-registry-accounts.ts:89`).
+
+**Decisions.**
+
+- **How to reproduce a locked keychain?**
+  - **Start the leaf's backend from an SSH session without unlocking the login keychain (recommended).**
+    - Pros: matches the suspected MBP3 cause (task 6).
+    - Cons: needs physical or screen access afterwards to unlock it again.
+  - **Lock the keychain explicitly on a running leaf.**
+    - Pros: simple and reversible.
+    - Cons: may produce a different CLI error text from the LaunchAgent case, so the hint's match is tested on the wrong string.
+
+### 4. Codex coordinator on an added account
+
+**Problem.** The access-only `auth.json` was proved offline only; the run stopped at workspace routing discovery, so no model turn ran.
+
+**Context.** Decision "Verification method" left the real turn here. Codex is pinned at 0.164.0 (`packages/toolchain/src/manifest.ts:8`), the version the offline probe used, so the probe's evidence still applies.
+
+**Investigation.** `coordinatorCodexLogin` is at `apps/backend/src/core/agent-accounts-active.ts:450`, built on `restrictCodexAuthSnapshot`. The probe is `scripts/codex-access-only-auth-probe.ts`. This run needs only one machine with an added Codex account, not two.
+
+**Decisions.**
+
+- **Run it on one machine now, or wait for the two-machine batch?**
+  - **One machine, now (recommended).** An isolated `dev:test` profile with an added Codex account.
+    - Pros: not blocked on a second machine; closes the last gap in the offline evidence.
+    - Cons: one more live session spent on a real account.
+  - **With the two-machine batch.**
+    - Pros: one scheduling effort for everything.
+    - Cons: delays a check that has nothing to do with two machines.
+
+### 5. Change propagation
+
+**Problem.** The "within a second" claim for the command node's overview is unmeasured.
+
+**Context.** Each account change emits `agent-accounts-changed`; the overview re-reads only the machine that announced it.
+
+**Investigation.** The event constant is at `packages/protocol/src/agent-accounts.ts:190`, emitted at `apps/backend/src/core/agent-accounts.ts:90-92`, and subscribed at `apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx:719`.
+
+**Decisions.**
+
+- **What counts as a pass?**
+  - **The overview updates without a reload, timed roughly by eye; under a few seconds passes (recommended).**
+    - Pros: tests what a user notices; no instrumentation.
+    - Cons: not a precise measurement.
+  - **Measure the relay latency with timestamps.**
+    - Pros: a real number.
+    - Cons: needs instrumentation that is not there and must not log account data.
+
+### 6. MBP3 credential diagnosis
+
+**Problem.** The root cause on MBP3 (a stale file, and why `claude auth login` exited 1) is still a guess.
+
+**Context.** Only MBP3 can answer it; the likely cause is a locked login keychain under a LaunchAgent started from SSH.
+
+**Investigation.** Nothing in the code can answer this. MBP3 has since served as a node for todo 0003's qualification (`fb1700b5`), so it is reachable. The failure message now names the CLI's reason (`apps/backend/src/core/agent-accounts-login.ts:107`), so a fresh sign-in attempt there would say why it fails.
+
+**Decisions.**
+
+- **Investigate or retire?**
+  - **Run a read-only check on MBP3 (recommended).** Compare the credential file's modification time with the Keychain item's metadata (no secret read), and retry a sign-in to read the new failure message.
+    - Pros: cheap now that MBP3 is reachable; confirms or refutes the keychain hypothesis that task 3 tests.
+    - Cons: the original state may already have changed since 2026-10-24, so it may prove nothing.
+  - **Retire it as superseded by tasks 1 and 3.**
+    - Pros: no further work.
+    - Cons: the original cause stays unknown.
+
 The goal is to see and change which agent login each machine uses, from
 wherever the user is working. How it works now is in
 [agent-accounts.md](../../architecture/agent-accounts.md#machines); this file

@@ -2,6 +2,269 @@
 
 Checked against `main` at `2459b05c` (2026-10-15).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+The "Decided out" list is product decisions, not tasks; only where the current
+pins undercut one of them is it raised below (task 1).
+
+### Tasks
+
+1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: open (the file's pins are out of date).
+2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: open.
+3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: open (decision).
+4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (decision).
+5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (on a provider-neutral tool-card field).
+6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred.
+7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK).
+8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: open.
+9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred.
+10. **Grok MCP elicitation**: UI only once Grok advertises a contract. Status: blocked (upstream Grok).
+11. **Grok `costUsdTicks` qualification**: one billed Grok turn to establish the tick unit. Status: open (needs Grok credentials).
+12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: deferred.
+13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: open (still present).
+
+### 1. Re-check the backlog against current pins
+
+**Problem.** The file's pins and its verification note are stale, so a reader cannot trust which candidates still exist upstream or which "decided out" reasons still hold.
+
+**Context.** The maintenance rule says each SDK bump re-checks this list; several bumps have landed since 2026-10-15 (`28590e68`, #1198, and later) without updating it.
+
+**Investigation.** Current pins: Claude Agent SDK `0.3.309` / CLI `2.1.309`, Codex `0.164.0`, OpenCode `1.19.4`, `@cursor/sdk` `1.0.40`, Pi `1.4.0`, Grok `1.0.67`, `@agentclientprotocol/sdk` `2.0.1` (a major bump) (`packages/toolchain/src/manifest.ts:6-12`, the bridges' `package.json`). At Claude SDK `0.3.309` every listed symbol is still present in `bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` (`pending_permission_requests`, `reinitialize(`, `McpServerProvenance`, `readMcpResource`, `_meta`, `verbatimPrompts`, `additionalDirectories`, `createSdkMcpServer`). One "decided out" reason is imprecise: Codex 0.164.0's generated surface, produced without any experimental flag (`scripts/generate-codex-app-server-protocol.ts:358`), includes `thread/goal/get|set|clear` (`bridges/codex-bridge/src/app-server/generated/protocol-manifest.json`), and those methods have been there since the app-server migration (#151). Goals are gated by the `features.goals` config (`bridges/codex-bridge/src/app-server/process-supervisor.ts:95`), so "no stable goal RPC" should read "feature-flagged".
+
+**Decisions.**
+
+- **How to refresh the file?**
+  - **Update the pins and the verification note in place, and narrow the Codex-goals wording, without reopening any decision (recommended).**
+    - Pros: allowed by the README (correcting an item); cheap; keeps the list trustworthy.
+    - Cons: will drift again unless the bump procedure enforces it.
+  - **Drop the pin list from this file and point at `manifest.ts` and `version-drift.test.ts`.**
+    - Pros: never stale again.
+    - Cons: loses the record of which version each candidate was last checked against.
+- **Reopen Codex goals?**
+  - **No; record that the RPC exists behind `features.goals` and revisit when it leaves the flag (recommended).**
+    - Pros: respects "do not reopen without a new reason"; a feature flag is not a stability promise.
+    - Cons: if users want `/goal`, the gap stays.
+  - **Yes, open a new todo to evaluate it.**
+    - Pros: the original blocker (no RPC) is gone.
+    - Cons: work on a surface the vendor still flags.
+
+### 2. Delete the dead Claude compaction guard
+
+**Problem.** `isSdkCompactBoundaryMessage` is dead code that suggests compaction is detected from SDK frames when it comes from the `PostCompact` hook.
+
+**Context.** Small hygiene item listed under Candidates.
+
+**Investigation.** Still dead. Defined at `bridges/claude-bridge/src/types/index.ts:242`; imported only by `services/session-manager-core.ts:41` and `services/session-manager-session.ts:35` (two modules, not four as the file says) and called only in `src/types/index.test.ts`.
+
+**Decisions.**
+
+- **Delete or keep?**
+  - **Delete the guard, its two imports and its test cases (recommended).**
+    - Pros: removes misleading code; no behaviour change.
+    - Cons: a future frame-based detector would rewrite it.
+  - **Keep it as an exhaustiveness aid.**
+    - Pros: none real: `SYSTEM_SUBTYPE_DISPOSITIONS` already records `compact_boundary`'s fate.
+    - Cons: dead imports stay; lint `no-unused-vars` already flags this kind of residue.
+
+### 3. Claude in-process MCP server
+
+**Problem.** Orkestrator's control tools reach Claude through an HTTP MCP server with a bearer token, an extra loopback hop.
+
+**Context.** The coordinator needs scoped credentials per tab, and other bridges (Pi, Cursor, Codex) reach the same HTTP server.
+
+**Investigation.** Claude injects the HTTP server in `bridges/claude-bridge/src/services/mcp-config.ts:48-119` (`ORKESTRATOR_AGENT_MCP_URL`). `createSdkMcpServer` is in the pinned SDK. Nothing uses it.
+
+**Decisions.**
+
+- **Adopt `createSdkMcpServer()`?**
+  - **Keep HTTP and record why: one server serves every platform, and the backend, not the bridge, enforces per-tab scope (recommended).**
+    - Pros: one authorization path for all six platforms; the bridge never implements tool logic.
+    - Cons: keeps the loopback hop and a bearer token in the Claude process.
+  - **Adopt it for Claude, proxying calls to the backend.**
+    - Pros: no token in the CLI's MCP config.
+    - Cons: the bridge still needs a backend credential to proxy, so the hop moves rather than disappears; Claude-only divergence.
+
+### 4. Claude permission lifecycle surfaces
+
+**Problem.** After a Claude CLI restart or reinitialize, a permission request the CLI still holds is not re-armed in the UI, and permission cards do not show which MCP server asked.
+
+**Context.** Touches the authorization lifecycle governed by 0001 and the deny-by-default invariant.
+
+**Investigation.** `pending_permission_requests` and `Query.reinitialize()` are in SDK `0.3.309`; `McpServerProvenance` appears eight times in `sdk.d.ts`. The bridge references none of them.
+
+**Decisions.**
+
+- **Adopt re-arm?**
+  - **Yes, after 0001's live runs, re-arming as a fresh card that still denies on timeout (recommended).**
+    - Pros: closes a "lost prompt" window after warm-CLI restarts (0005 made those more common).
+    - Cons: risk of showing a card for a request the CLI has already answered; needs careful tests.
+  - **No; treat a restart as denying everything pending.**
+    - Pros: simplest, already safe.
+    - Cons: the user loses the request and the turn may stall.
+- **Show MCP provenance?**
+  - **Add an optional `source` field to the shared interaction contract, populated by Claude first (recommended).**
+    - Pros: normalise-then-generalise; helps users judge an MCP tool request.
+    - Cons: protocol change for one provider initially.
+  - **Leave it out.**
+    - Pros: no work.
+    - Cons: users approve MCP calls without knowing the server.
+
+### 5. MCP Apps widgets
+
+**Problem.** MCP tools that ship a UI (`_meta.ui`) render as plain cards.
+
+**Context.** Needs a provider-neutral tool-card field before either bridge wires it; rendering arbitrary MCP HTML also raises sandboxing questions.
+
+**Investigation.** Claude has `readMcpResource` and `_meta` members in `0.3.309`; nothing in the bridges or renderer reads them.
+
+**Decisions.**
+
+- **Keep deferred or schedule?**
+  - **Keep deferred until a user-visible MCP server needs it (recommended).**
+    - Pros: avoids building a sandboxed widget host speculatively.
+    - Cons: parity with vendor UIs lags.
+  - **Design the neutral tool-card field now.**
+    - Pros: unblocks both bridges.
+    - Cons: design without a consumer; the artefact-preview sandbox would need extending.
+
+### 6. Other unused Claude and Codex surfaces
+
+**Problem.** A set of vendor options and RPCs are unused with no stated consumer.
+
+**Context.** Each needs a product reason before adoption; dynamic tools are answered as failure on purpose.
+
+**Investigation.** Claude `additionalDirectories` / `skills` are referenced only in a comment (`bridges/claude-bridge/src/services/coordinator-skills.ts:6`). Codex uses only `config/mcpServer/reload` among config writes (`bridges/codex-bridge/src/engine/app-server-engine.ts:2161,2175`); `item/tool/call` still fails with a transcript explanation (`bridges/codex-bridge/src/app-server/server-request-router.ts:593-600`); `configRequirements/read` exists in the generated protocol and is not projected.
+
+**Decisions.**
+
+- **Keep these as candidates or move them to "Decided out"?**
+  - **Keep as candidates, recheck on each bump (recommended).**
+    - Pros: some (Codex config requirements, Claude `additionalDirectories` for multi-repo environments) have plausible future consumers.
+    - Cons: the list stays long.
+  - **Move to "Decided out".**
+    - Pros: shorter backlog.
+    - Cons: needs a real product decision for each, which nobody has made.
+
+### 7. Cursor `askQuestion`
+
+**Problem.** Cursor's question tool cannot become a `question` interaction.
+
+**Context.** Upstream gap.
+
+**Investigation.** Still blocked at `@cursor/sdk` `1.0.40`: `askQuestion` is only a member of the `ToolName` string union (`bridges/cursor-bridge/node_modules/@cursor/sdk/dist/cjs/options.d.ts:378`, and `agent/options.d.ts`), with no typed call or answer API.
+
+**Decisions.** None: blocked upstream; recheck on the next Cursor bump.
+
+### 8. Pi compaction controls
+
+**Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction.
+
+**Context.** Shared layer has no compaction-parameter surface yet; other providers would need the same field to avoid Pi-only UI.
+
+**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`).
+
+**Decisions.**
+
+- **What to adopt first?**
+  - **Custom instructions through an optional argument on the shared `compact` action, which Claude and Codex can also honour (recommended).**
+    - Pros: provider-neutral; small; useful.
+    - Cons: needs a composer affordance.
+  - **Abort and auto-toggle first.**
+    - Pros: abort fixes a real "stuck compaction" case.
+    - Cons: abort interacts with the claim and cancel logic in `http.ts:900-912`; the toggle is a Pi-only setting.
+
+### 9. Second ACP agent
+
+**Problem.** Only Grok runs over ACP.
+
+**Context.** The `AcpProviderConfig` record (`bridges/acp-bridge/src/acp-provider-config.ts`) makes a new agent a config record plus a platform id.
+
+**Investigation.** Still accurate. The ACP SDK is now `2.0.1`, so a second agent should be checked against the v2 SDK's protocol versions.
+
+**Decisions.**
+
+- **Keep deferred or schedule?**
+  - **Keep deferred until a user asks for a specific agent (recommended).**
+    - Pros: each platform adds toolchain, credentials and qualification cost.
+    - Cons: the generalisation work sits unused.
+  - **Add Gemini CLI now.**
+    - Pros: proves the generalisation.
+    - Cons: a seventh platform to maintain and qualify.
+
+### 10. Grok MCP elicitation
+
+**Problem.** Grok MCP servers that elicit input have no UI path.
+
+**Context.** Grok's ACP client does not advertise elicitation.
+
+**Investigation.** The ACP bridge has no elicitation handling (no hits under `bridges/acp-bridge/src`). The `2.0.1` ACP SDK does carry elicitation types (`dist/nes/acp.d.ts`, `dist/v1/acp.js`), so the client-side contract now exists; whether Grok `1.0.67` sends it is unchecked.
+
+**Decisions.**
+
+- **Recheck now or wait?**
+  - **Probe Grok 1.0.67 once during the next Grok live run (task 11 or 0031) for an elicitation request (recommended).**
+    - Pros: cheap to fold into an existing run; settles whether it is still blocked.
+    - Cons: needs an MCP server that elicits.
+  - **Wait for Grok release notes.**
+    - Pros: no effort.
+    - Cons: Grok's release notes rarely name ACP changes.
+
+### 11. Grok `costUsdTicks` qualification
+
+**Problem.** Grok turns show no cost because the tick unit is undocumented.
+
+**Context.** Batched with 0031's live provider runs.
+
+**Investigation.** Still ignored (`bridges/acp-bridge/src/usage.ts:87,154`).
+
+**Decisions.**
+
+- **What counts as a pass?**
+  - **Two billed turns of different sizes whose tick ratio matches the billed ratio, recorded in the `usage.ts` comment (recommended).**
+    - Pros: one turn cannot distinguish a scale from an offset.
+    - Cons: twice the spend; billing dashboards may round small amounts.
+  - **One billed turn, as the file says.**
+    - Pros: cheapest.
+    - Cons: a single sample can mislead.
+
+### 12. OpenCode `find.*` and Session V2 features
+
+**Problem.** OpenCode file search is unused, and V2-only features wait.
+
+**Context.** Session V2 is owned by 0008. `find.*` has no consumer: Orkestrator's own file search already covers workspaces.
+
+**Investigation.** No `find.*` call under `apps/backend/src`.
+
+**Decisions.**
+
+- **Keep `find.*` as a candidate?**
+  - **Drop it to "Decided out" with the reason that Orkestrator owns file search (recommended).**
+    - Pros: removes a candidate with no plausible consumer.
+    - Cons: closes a door that costs nothing to leave open.
+  - **Keep it.**
+    - Pros: no decision needed.
+    - Cons: rediscovered on every review for nothing.
+
+### 13. Living-doc drift
+
+**Problem.** Two living docs describe code that has moved.
+
+**Context.** Listed under Related; docs-only fixes.
+
+**Investigation.** Still present. `docs/architecture/agent-engines.md:902-903` still says every other inbound ACP request is refused with `-32601`, although `bridges/acp-bridge/src/acp-client-methods.ts` serves `fs/*` and `terminal/*`; `agent-engines.md:874` also still names Grok `1.0.52` (pin is `1.0.67`). `agent-engines.md:228`, `docs/development/upgrade-agents.md:440` and `:521` still name `services/session-manager.ts`, which is a 12-line barrel.
+
+**Decisions.**
+
+- **When to fix?**
+  - **Now, as a docs-only change (recommended).**
+    - Pros: cheap; only `mise run format:check` needed; stops the next upgrade reading the wrong file.
+    - Cons: none of substance.
+  - **At the next agent bump.**
+    - Pros: one combined edit.
+    - Cons: the stale guidance is what that bump would follow.
+
 This is one list of the vendor SDK and CLI surfaces Orkestrator does not use,
 with the reason for each, and of the product decisions that keep some of them
 out. Every entry has already been reviewed against a vendor release and

@@ -3,6 +3,134 @@
 Checked against `main` at `20f6de91` (2026-10-25). All five code items are
 done; what is left is live qualification.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Outage workload**: a backend restart and a dropped tailnet link with several tabs and terminals open, on the shared `EventSource`, direct fetch and terminal WebSocket paths, showing spread reconnects and terminals returning with the main stream. Status: open.
+2. **Real-browser freshness checks**: the banner after 4 s of a real outage and clearing on reconnect, reads paused meanwhile, no indicator flicker on quiet `unchanged` reads, plus an Electron remote connection. Status: open.
+3. **Terminal recovery under backpressure**: exact recovery after the new socket ladder, on HTTP/SSE and on the WebSocket. Status: open.
+4. **Codex breaker with a real binary**: cooldown and half-open probe against a `codex` that keeps failing to start. Status: open.
+5. **Revisit the reasoned defaults**: the 4 s banner delay and the 5 min and 30 min breaker cooldowns, from task 1's data. Status: blocked (on task 1).
+
+The five code items are done and still match HEAD; nothing in this area has changed since #1257 (`e9b30126`), apart from an unrelated import in the Codex supervisor (#1295).
+
+### 1. Outage workload
+
+**Problem.** Jittered reconnects and the read-coordinator pause are on by default but proved only by fake timers. If clients still retry in lock-step after a backend restart, or terminals stay stuck on fallback, every remote and desktop user sees it after an outage.
+
+**Context.** The file explains why it could not run: a `dev:test` browser session lapses whenever the backend restarts, by design (`docs/development/agent-testing.md`, the session renewal paragraph after `:230`), so a restart lands on the login page. The dropped-link case needs a second machine. 0052 shares the two-machine setup, and 0031 batches two-machine runs.
+
+**Investigation.** The policy and owners are where the file says: `reconnectDelayMs` and `ReconnectBackoff` at `packages/protocol/src/reconnect-backoff.ts:63` and `:90`; `createStreamBackoff` at `apps/web/src/lib/native/web-gateway.ts:162`, with `mainStreamBackoff` (`:173`) and `browserTerminalBackoff` (`:251`); the 2 s first retry and 30 s healthy interval at `:31` and `:40`; the socket ladder at `apps/web/src/lib/native/terminal-websocket-client.ts:116`. No live run has been recorded since 2026-10-25.
+
+**Decisions.**
+
+- **How to survive the backend restart in the harness?**
+  - **Drive a direct (bearer) client against the restarted backend for the stream and terminal checks, and use a fresh `dev:login` link after the restart only to check the browser UI (recommended).**
+    - Pros: needs no change to the login lapse, which is a security property; the bearer client sees the real reconnect ladder.
+    - Cons: the shared same-origin `EventSource` path is exercised only up to the lapse.
+  - **Add a test-only switch that keeps browser sessions across a backend restart on agent-test profiles.**
+    - Pros: covers the same-origin path end to end.
+    - Cons: weakens a deliberate security boundary, even if test-only; another flag to guard.
+- **What counts as "spread out"?**
+  - **Record reconnect attempt times per owner (content-free) and require them to span at least half the jitter window, with no two owners on the same retry tick (recommended).**
+    - Pros: a measurable pass criterion that matches equal jitter.
+    - Cons: needs a small timing probe in the page or client.
+  - **A visual check of server logs.**
+    - Pros: no instrumentation.
+    - Cons: subjective; hard to repeat.
+- **Order relative to other files.**
+  - **Run it in the same two-machine session as 0052's baseline and 0048's outage and resume step (recommended).**
+    - Pros: one setup for three files; the outage is the same event.
+    - Cons: a long, coupled session; one failure can stall all three.
+  - **Run it alone first.**
+    - Pros: a smaller, clearer run.
+    - Cons: repeats the two-machine setup.
+
+### 2. Real-browser freshness checks
+
+**Problem.** The banner, the read pause and the PR, diff-badge and Files indicators are on by default but checked only in component tests. A flickering indicator or a missing banner is user-visible in normal use.
+
+**Context.** The banner delay is `CONNECTION_BANNER_DELAY_MS = 4_000` (`apps/web/src/components/layout/ConnectionStatusBanner.tsx:10`). Disconnects reach the coordinator through `apps/web/src/lib/transport-connectivity.ts:45`. Electron remote connections signal through the connection list, not the gateway stream.
+
+**Investigation.** Unchanged since #1257. `getReadCoordinator().getDiagnostics().disconnected` is the observable the file names. The flicker case (a quiet `unchanged` safety read) can be produced without an outage, so part of this task needs no restart.
+
+**Decisions.**
+
+- **How to split the run?**
+  - **Run the no-flicker checks now in a `dev:test --fixture` profile through `mise run test:agent:browser`, and the banner and pause checks with task 1 (recommended).**
+    - Pros: half the task closes without the outage harness; uses an existing suite.
+    - Cons: two runs.
+  - **One run inside task 1.**
+    - Pros: one session.
+    - Cons: the cheap half waits on the hard one.
+- **How to cover Electron remote?**
+  - **Use `mise run test:agent:electron` with a second backend made unreachable (recommended).**
+    - Pros: exercises the connection-list signal the browser path never uses.
+    - Cons: the Electron suite has no such scenario yet, so a new spec is needed.
+  - **A manual check on a real remote machine.**
+    - Pros: realistic.
+    - Cons: not repeatable; needs a person.
+
+### 3. Terminal recovery under backpressure
+
+**Problem.** Item 1 changed when the terminal socket resets its ladder, but exact recovery under backpressure has not been rerun since. A desync without exact recovery would corrupt what a user sees in a terminal.
+
+**Context.** Transport invariant 5 in `AGENTS.md`: output may be dropped only under bounded backpressure, with an explicit desync signal and exact snapshot recovery.
+
+**Investigation.** The deterministic coverage exists (desync and recovery cases in `apps/backend/tests/gateway-events.test.ts`, for example `:466` and `:2033`). No live run is recorded for either path since the ladder change.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **In a `dev:test --fixture` profile with a fixture terminal flooding output and a throttled client, on HTTP/SSE and then with `orkestrator-terminal-transport` set to `websocket` (recommended).**
+    - Pros: single machine; needs no outage harness; compares the final screen with the snapshot exactly.
+    - Cons: throttling in the browser is synthetic.
+  - **Fold it into task 1's two-machine run.**
+    - Pros: realistic link conditions.
+    - Cons: couples a single-machine check to the hardest run.
+
+### 4. Codex breaker with a real binary
+
+**Problem.** The cooldown and half-open probe are proved only with a fake child. A real failure mode (a binary that exits at once, or hangs in `initialize`) might not trip or close the breaker as designed, leaving a workspace stuck or spawning too often.
+
+**Context.** Decision 1 chose a 5 min cooldown doubling to 30 min (`bridges/codex-bridge/src/app-server/process-supervisor.ts:212`, `:220`, `:221`), with `stop()` waking the sleep (`sleepUnlessAborted`, `:492`, `:1564`).
+
+**Investigation.** Tests are in `process-supervisor.test.ts`. No real-binary run has been recorded. A failing binary can be simulated without credentials by pointing the bridge at a wrapper that exits non-zero.
+
+**Decisions.**
+
+- **How to test it?**
+  - **A gated no-credit test that runs the bridge against a wrapper script that fails N times and then execs the real pinned `codex`, with short cooldowns injected (recommended).**
+    - Pros: exercises real spawn, exit and `initialize` paths; no credits; repeatable, like `live-resume-context.test.ts`.
+    - Cons: the wrapper is still not a real broken install (a full disk, a corrupt binary).
+  - **Break a real install in a disposable profile and wait out the real cooldowns.**
+    - Pros: fully realistic.
+    - Cons: takes 5 to 30 minutes per probe; fragile.
+  - **Accept the fake-child tests and retire the item.**
+    - Pros: no work.
+    - Cons: the spawn and exit handling that matters most stays unproved.
+
+### 5. Revisit the reasoned defaults
+
+**Problem.** The 4 s banner delay and the breaker cooldowns are reasoned guesses. Too short a delay shows the banner on harmless restarts; too long a cooldown leaves a fixed install waiting.
+
+**Context.** Decisions 1 and 6.
+
+**Investigation.** The values are unchanged. Task 1's reconnect-time data is the input.
+
+**Decisions.**
+
+- **Keep this as a task, or fold it into task 1's pass criteria?**
+  - **Fold it into task 1: record the restart-to-reconnect time and, if the first reconnect usually lands under 4 s, keep the delay (recommended).**
+    - Pros: no separate run; a clear rule for keeping or changing the value.
+    - Cons: says nothing new about the breaker cooldowns, which need task 4's data.
+  - **Keep it as a separate tuning task after both runs.**
+    - Pros: considers all the data together.
+    - Cons: another open item for values that may well be fine.
+
 This covers how clients behave across disconnects and staleness: how a
 read-only stream comes back after an outage, and what a view tells the user
 while its data may be behind. Every reconnect owner now uses the shared

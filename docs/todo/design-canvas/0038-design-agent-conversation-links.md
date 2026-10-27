@@ -6,6 +6,81 @@ bridge-restart close done on 2026-10-25 against `main` at `00a0cb82e`; see
 [`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context)
 for how links, link states and Resume now work.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Archived link state**: show "archived" for a link whose conversation the provider has archived. Status: blocked (on native archive semantics, 0006 item 3).
+2. **Live close after the bridge lost the session**: an optional live check of decision 11's fallback, the identity kept on the mapping. Status: partly done (a bridge restart before close is exercised live; the lost-session branch is deterministic only).
+3. **Stale 0082 cross-reference**: the "Codex rerun is owed there" note under Live spec run. Status: done (0082 reran both Codex design specs on 2026-10-26).
+
+### 1. Archived link state
+
+**Problem.** The Ask agent dialog has no "archived" state. If a provider archives a design conversation, the link can still read "can be resumed", and the result of pressing Resume is unknown.
+
+**Context.** This is what is left of code item 3. 0006 owns archive semantics. Its item 3 (Codex `thread/archive` / `unarchive`) already names this file as waiting on it, and its task analysis recommends a shared archive/unarchive session action with a capability bit, Codex and Cursor first. Design conversations are Claude or Codex only (`DESIGN_AGENTS`, used at `apps/web/src/components/design/DesignWorkspaceDialog.tsx:214`).
+
+**Investigation.** Still blocked:
+- Nothing calls `thread/archive`. The pinned protocol has it (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadArchiveParams.ts`), and the reducer ignores `thread/archived` and `thread/unarchived` (`IGNORED_METHODS`, `bridges/codex-bridge/src/app-server/event-reducer.ts:99`, entries at `:160-161`).
+- The pinned Claude Agent SDK (0.3.309) has no session archive concept. So of the two design agents, only Codex could ever report "archived". Cursor's `SDKAgentInfo.archived` does not matter here, because Cursor cannot be a design agent.
+- Link states come from `sessionLinkStates` (`apps/backend/src/core/design/session-links.ts:96`) and are mapped in the client at `apps/web/src/components/design/design-session-links.ts:34-74`. Adding a state means a new kind there plus a backend read.
+- A Codex thread archived outside Orkestrator (in the Codex CLI) would most likely fail `thread/resume` and surface through the existing "a conversation the agent no longer has" error, which is safe. This was not verified.
+
+**Decisions.**
+
+- **How to proceed while 0006 is open?**
+  - **Keep this item blocked here, and add the archived state in the same change that lands 0006 item 3 (recommended).**
+    - Pros: one owner per behaviour; the state is designed against the real archive action, not a guess; the file stays Low and small.
+    - Cons: the file cannot be marked Finished until 0006 moves, which may be never if archive is deprioritised.
+  - **Retire the item now: record in `design-canvas.md` that an archived conversation surfaces as a resume error, and delete this file.**
+    - Pros: the file closes; 0006 item 3's context already records the dependency, so the requirement is not lost.
+    - Cons: depends on the unverified assumption that resuming an archived Codex thread fails cleanly; a future archive action could make "can be resumed" wrong with no open item to catch it.
+- **When archive lands, should an archived link offer Resume (with unarchive) or only Remove?**
+  - **Offer "Unarchive and resume" as the default action, with Remove beside it (recommended).**
+    - Pros: matches the dialog's "the way back is not lost" goal (decision 1); archive is reversible.
+    - Cons: one more action and state to test, and a write to provider state from a design dialog.
+  - **Show "archived" with Remove only.**
+    - Pros: simplest; never changes provider state.
+    - Cons: the user has to leave Orkestrator to unarchive the thread, which defeats the link.
+
+### 2. Live close after the bridge lost the session
+
+**Problem.** Decision 11 makes teardown fall back to the resume identity kept on the mapping when the live read fails. That fallback is proved only by deterministic tests.
+
+**Context.** The file calls the live check optional: run a Codex turn in a design tab, restart the profile's Codex bridge, close the tab, and confirm the link reads "can be resumed".
+
+**Investigation.** `e2e/agent-testing/design-resume-clients-live.spec.ts:219-233` already restarts the Codex bridge before close (`stop_local_codex_server_cmd`, then `start_local_codex_server_cmd`, asserting a new PID) and then closes and resumes. That spec passed on 2026-10-25 (Concurrency review follow-up) and again on 2026-10-26 under 0082. But the comment at `:219-221` notes that current bridges restore registrations from disk, so the live read probably succeeds after the restart and the fallback branch is not reached. The fallback is wired at `apps/backend/src/core/commands-registry-teardown.ts:666` (`resumableSessionIdIfRunning`) and `:680` (`recordDesignLinkSession`), and the identity store is `StorageService.recordNativeAgentSessionResumeIdentity` (`apps/backend/src/core/storage-native.ts:850`), fed by `apps/backend/src/core/native-agent-resume-identity.ts:36`.
+
+**Decisions.**
+
+- **Keep, strengthen or retire the optional live check?**
+  - **Retire it as covered (recommended).** The restart path is live-proved, and the lost-session branch is pinned by `commands-registry-teardown.test.ts` ("a Codex session the bridge lost…") and the projection test that fails without the capture.
+    - Pros: no extra live spend; the branch cannot be reached live without a fault hook anyway.
+    - Cons: the storage write from the read path under the session lease has never run against a real bridge that lost a session.
+  - **Strengthen the live spec: delete the bridge's persisted registration between stop and start, so the restarted bridge really has lost the session.**
+    - Pros: exercises decision 11 end to end.
+    - Cons: needs knowledge of the Codex bridge's state file inside a spec; brittle across bridge versions; adds a test-only fault path to a live spec.
+
+### 3. Stale 0082 cross-reference
+
+**Problem.** "Live spec run" says a Codex rerun is owed in 0082. It is not.
+
+**Context.** 0082 fixed the resumed `<environment_context>` reader on 2026-10-26.
+
+**Investigation.** `todo/transcripts-and-observation/0082-codex-resume-shows-environment-context.md` item 3 records both design specs rerun on 2026-10-26 with pinned Codex 0.164.0, with the exclusion dropped: two clients with 1 user row live and 1 resumed, and the full cycle with 3 live and 3 resumed, 13 design MCP calls and 0 failed.
+
+**Decisions.**
+
+- **How to record it?**
+  - **Strike the "a Codex rerun is owed there" clause and link 0082 item 3 (recommended).**
+    - Pros: the file stops implying open work.
+    - Cons: none beyond a one-line edit.
+  - **Leave it until the file is retired.**
+    - Pros: no edit now.
+    - Cons: misleads anyone triaging the folder.
+
 A design canvas remembers the conversations that worked on it, and **Ask
 agent** and **Use as implementation reference** put revisioned design context
 into a conversation's draft. Links used to point at pane tabs only, so closing

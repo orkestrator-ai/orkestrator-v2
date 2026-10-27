@@ -1,5 +1,41 @@
 # Legacy migration refused with root-symlink
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: every item is done.
+
+1. **Retire the file**: decide what happens to this finished file under the README rules, now that its branch has merged. Status: open.
+
+### 1. Retire the file
+
+**Problem.** The file says to keep it "until the branch merges for its decisions, then deleted". The branch has merged, so the file is now only history. But its new live case has failed in CI on both architectures since it merged, which the file does not record.
+
+**Context.** The fix landed in `53669311` (#1306, "fix/todo 0058 legacy migration symlink"). The README says that once the last item is done, durable behaviour moves to `architecture/` or `development/`, the file is deleted and its index row is removed. [0241](0241-leaked-reach-probe-networks.md) and [0018](0018-container-network-and-credential-isolation.md) link to this file.
+
+**Investigation.**
+- **Fix present.** `docker/orkestrator-migrate.sh:84` uses `END { exit !found }` for the listing check, and `:103` reads the root entry from the whole-stream consumer. Both unit tests exist: `tests/unit/migrate-copy.test.ts:95` and `:170`. The live case is `apps/backend/tests/container-live-replacement.test.ts:214`.
+- **Durable behaviour already moved.** `docs/architecture/container-lifecycle.md:436-451` describes the whole-stream root, the empty-selection rule and the older-image behaviour. `docs/development/container-qualification.md:119` holds the live evidence. What is left only here is the decision rationale (options a/b/c) and the host-pool note.
+- **New finding: the live case fails on GitHub runners.** "C14 legacy migration with staged provider inputs" failed on linux-x64 and linux-arm64 in the "Container live qualification" workflow. That happened on this file's own PR (run 40333566613, 2026-10-26 13:46 UTC) and again on the 0109 PR (run 40409285999, head `e53ea683`). Both runs fail with `cat: /codex-home/config.toml: Permission denied`, at the assertion `exec(containerId, "cat /codex-home/config.toml")` (`container-live-replacement.test.ts:239`). `exec` runs as `node` (`container-live-workspace.ts:98-100`).
+
+  The staged file belongs to the host user and is owner-only. On omarchy-hp the host user is uid 1000, the same as `node`, so the read succeeds there. On a GitHub runner the user has another uid, so `node` cannot read it. This is the same unreadable-staged-input shape that 0109 relays to `/run/orkestrator-inputs`. The fault is in the test's precondition, not the migration: the migration never runs because the test fails first. The other 11 cases in the file pass. The workflow is not a required check for a merge, which is how both PRs merged red.
+
+**Decisions.**
+
+- **What to do with this file?**
+  - **Delete it now, and track the CI failure in a new numbered todo (recommended).** Move the a/b/c rationale into one sentence in `container-lifecycle.md` if it is wanted, delete the file, remove its index row, and fix the links in 0018 and 0241. The new todo would make the C14 staged case read the staged input through the relay (`/run/orkestrator-inputs/codex-home/config.toml` or the imported `~/.codex/config.toml`), so it passes on any host uid.
+    - Pros: follows the README (finished files are deleted; new work never goes into an existing file); the durable text already lives in `architecture/` and `development/`.
+    - Cons: the CI failure is easy to lose unless the new todo is filed in the same change.
+  - **Keep it until the CI case is green.**
+    - Pros: the evidence and the failure stay in one place.
+    - Cons: an existing file may not take new todos; the index would say Finished while CI says otherwise.
+  - **Reopen it (mark Finished: No).**
+    - Pros: honest about the live case being red in CI.
+    - Cons: against the README rule; the bug it tracked is fixed, and the failure belongs to the test fixture and 0109's relay, not to the migration.
+
 Seen on branch `todo-0040-mcp-env-delivery-024e7c80895b` (base `06297124`,
 2026-10-23) while qualifying
 [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md).
@@ -133,6 +169,7 @@ Fixed and qualified on 2026-10-26; every item is done.
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
 - [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md)
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
+- [0728-container-ci-c14-assumes-uid-1000.md](0728-container-ci-c14-assumes-uid-1000.md): the staged-inputs C14 case fails in CI because it reads the staged mount as `node`
 
 ## Replaces
 

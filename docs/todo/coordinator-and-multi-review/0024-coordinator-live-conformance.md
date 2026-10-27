@@ -2,6 +2,213 @@
 
 Checked against `main` at `00a0cb82` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Grok on every scenario**: run `read-only`, `async`, `family`, `status` and `peer` (tiles included) on Grok and decide its tier. Status: blocked (no Grok login on the qualifying hosts).
+2. **Claude on Linux**: the first live run of the suite on a Linux host. Status: open.
+3. **Pi `status` review part**: rerun now that 0172's code fix has landed. Status: open (unblocked).
+4. **`family` and `peer` tile confirmation**: on Codex, OpenCode, Cursor and Pi. Status: open.
+5. **Grok mail approvals**: the Grok `status` approval part, plus a note of which tool-name form the pinned Grok uses. Status: blocked (Grok login).
+6. **Cursor and Grok mailbox identity**: `self` in `list_mailboxes`, `idle` injection starting a turn, Cursor resume with a new `agentMcp`, Grok token rotation. Status: partly done (Cursor launch-and-wake passed; the rest has unit coverage only).
+7. **Stale pin references**: the file's pin notes predate the 2026-10-23 agent bump. Status: open (doc hygiene).
+8. **Completed items still listed**: Code items 1 to 5 and all three Verify entries. Status: done.
+
+### 1. Grok on every scenario
+
+**Problem.** Grok is the only offered coordinator platform with no passing live run on any scenario, and its tier stays `advisory` until its read-only run passes. Grok coordinator users get no live evidence for read-only, delegation, status wakes or mail tiles.
+
+**Context.** The 2026-10-17 read-only probe left the checkout unchanged, but failed because Grok labelled removed tools `denied` without attempting them, and its ticket title did not match (Code item 4). Every later run skipped with `needs-auth`. The Acceptance section requires this run before Grok can move to the unified level.
+
+**Investigation.** Grok is still `advisory` (`apps/backend/src/core/coordinator-providers.ts:165`), and it is on `COORDINATOR_LIVE_PLATFORMS` (`apps/desktop/scripts/dev/coordinator-live.ts:38`). The read-only prompt is the same for every platform. Since the Grok probe it has gained the Cursor lines saying that a step with no tool is `unavailable`, never `denied` (`coordinator-live.ts:207`, network line at `:219`). Those lines may already fix Grok's 2026-10-17 mislabels, but no run has tested that. The pinned Grok is now `1.0.67` (`packages/toolchain/src/manifest.ts:9`, bumped in `28590e68` on 2026-10-23), so the 1.0.52 evidence no longer matches the pin. On this Linux host `grok` is on PATH but `~/.grok` holds no `auth.json`, so a run would skip again. The peer skip fix (`createPeerWatch`) has never run against a real Grok session.
+
+**Decisions.**
+
+- **Where to run Grok?**
+  - **Any host whose user signs Grok in, Linux included (recommended).** Sign in once, then `mise run test:agent:coordinator --credential-source grok`.
+    - Pros: unblocks five scenarios and task 5 in one run; nothing in the suite is macOS-specific for Grok.
+    - Cons: needs a person to sign in; a Grok seat is billed.
+  - **Wait for the macOS node that ran the other platforms.**
+    - Pros: same host as every earlier result.
+    - Cons: that host has been signed out for over a week; the work stays blocked indefinitely.
+- **If read-only passes, what tier should Grok get?**
+  - **Keep `advisory` and record the pass (recommended).**
+    - Pros: matches the qualification rule in `AGENTS.md`: unasked tools (xAI's hosted X search) are not an enforced boundary, so `enforced` would claim one the bridge does not hold.
+    - Cons: Grok users still see the weakest tier label.
+  - **Raise to `provider-configured`.**
+    - Pros: rewards a passing run.
+    - Cons: the reason text says unasked tools stay advisory; raising the tier needs a translation of `capabilityPolicy` that covers them, which does not exist.
+- **If Grok still labels removed tools `denied` with no call?**
+  - **Keep failing it, and add a Grok-specific prompt line only if a rerun repeats it (recommended).**
+    - Pros: the same rule that settled Cursor; the verdict does not depend on luck.
+    - Cons: possibly one more rerun.
+  - **Accept `denied` for tools the profile removed.**
+    - Pros: fewer reruns.
+    - Cons: it reports an attempt nobody made, which is exactly what the suite exists to catch.
+
+### 2. Claude on Linux
+
+**Problem.** The suite has never run on Linux, so Claude's `enforced` tier on Linux (bubblewrap sandbox, `filesystem.denyWrite`, hook allowlist) is unproven on the real stack.
+
+**Context.** Since 0145 (`31accac9`, 2026-10-26) a Linux host whose bubblewrap cannot nest a user namespace qualifies as `provider-configured`, and only one that can is `enforced`. 0026 owes the same Linux run, with and without `bwrap`/`socat`.
+
+**Investigation.** This analysis ran on a Linux host (Omarchy, Arch-based) that has `/usr/bin/bwrap` and `/usr/bin/socat`, so the `enforced` path can be exercised here today. Stock Arch ships no `bwrap-userns-restrict` AppArmor profile, so the probe should pass; the run's summary records the tier it actually got. 0026 tracks the Linux run of Claude's read-only scenario separately, and both files would cite the same run.
+
+**Decisions.**
+
+- **How to run it?**
+  - **One run on this Linux host covering all five scenarios, cited from both 0024 and 0026 (recommended).** `mise run test:agent:coordinator --credential-source claude`, on a quiet host, one profile at a time.
+    - Pros: one billed run closes both files' `enforced` Linux case; this host is available now.
+    - Cons: the host's Claude account is shared with other environments, so it can hit the 429 rate limit seen on 2026-10-18; the without-`bwrap` half (0026) still needs a second host or a PATH without those tools.
+  - **Run read-only only.**
+    - Pros: the cheapest run, and it covers the security claim.
+    - Cons: async, family, status and peer then still have no Linux run.
+- **What counts as a pass on Linux?**
+  - **All scenarios pass and the summary's tier is the one the probe predicts (recommended).**
+    - Pros: proves the probe and the boundary agree.
+    - Cons: a `provider-configured` result needs a separate explanation (AppArmor or a missing tool) before it can be counted.
+  - **Scenarios pass, whatever the tier.**
+    - Pros: simpler.
+    - Cons: an `enforced` claim the sandbox does not hold would go unnoticed, which is the 0145 bug.
+
+### 3. Pi `status` review part
+
+**Problem.** Pi's Multi Review failed in its preparation turn on 2026-10-25, because the saved-default rows resolved to `openai/gpt-4`, which a ChatGPT-backed Pi login refuses. Pi is the only platform whose `ready`/`fix-done` wakes have not passed live.
+
+**Context.** The bug is filed as 0172. Its code fix (`685c892a`, 2026-10-26) marks Pi's `sessionDefault` in the catalogue and prefers it for rows. 0172's only remaining item is this same live run.
+
+**Investigation.** The spec now carries opt-in assertions for this case. `ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT=1` (`e2e/agent-testing/coordinator-live.spec.ts:786`) checks that the first catalogue row is the refused `gpt-4` and that every review row uses the live `sessionDefault`. It also checks that Orkestrator's Pi model setting stays unset, and adds the `pi-saved-default-rows` and `pi-saved-default-completed` checks (`:825`, `:832`). The Pi pin is now `1.4.0` (`manifest.ts:11`), whereas 0172 records the failure on 1.2.0. This host has a Pi `auth.json`.
+
+**Decisions.**
+
+- **How to settle it?**
+  - **One run that closes both 0024 and 0172 (recommended).** `ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT=1 mise run test:agent:coordinator --credential-source pi --scenario status` on a ChatGPT-backed Pi login.
+    - Pros: one billed run, the 0172 assertions included, and both files are updated in the same change.
+    - Cons: it needs a host whose first catalogue model is the refused one; on another login the opt-in assertions fail by design.
+  - **Run without the opt-in variable.**
+    - Pros: works on any Pi login.
+    - Cons: a pass could be luck (an accepted first model) and would not prove 0172's fix.
+- **Run it under `test:logged`?**
+  - **Yes, with `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS` raised for a Multi Review (recommended).**
+    - Pros: follows `AGENTS.md`; the evidence is bounded, and a failure keeps compressed artifacts.
+    - Cons: one more variable to remember; the default 30-minute deadline cut off Codex `status` on 2026-10-25.
+  - **Run the suite directly, as this file suggests.**
+    - Pros: no deadline.
+    - Cons: conflicts with the "always use `test:logged`" rule; output is unbounded and unretained.
+
+### 4. `family` and `peer` tile confirmation
+
+**Problem.** Mail-tile checks have run in `family` and `peer` on Claude only. Codex, OpenCode, Cursor and Pi have tile evidence only from `async` and `status`.
+
+**Context.** The file already calls this confirmation rather than new coverage: every bridge uses the same echo path for all scenarios. It is to be batched with each platform's next full run.
+
+**Investigation.** `evaluateMailTiles` is still at `e2e/agent-testing/coordinator-mail-tiles.ts` and runs over the `family` and `peer` transcripts. The Codex pin moved from 0.162.1 to 0.164.0, and the OpenCode pin to 1.19.4, after the 2026-10-22 `family`/`peer` passes on those platforms. The 2026-10-25 runs were on the new pins but covered only `async` and `status`. Flake 0920 (`queued-before-mail` on a loaded host) is still `open` in the flake registry, so a Codex `async` run may need a rerun.
+
+**Decisions.**
+
+- **When to run it?**
+  - **Batch it with each platform's next full run, as planned (recommended).** `mise run test:agent:coordinator --credential-source <platform>` per platform, one at a time.
+    - Pros: no dedicated spend; it also re-proves `family`/`peer` on the current pins.
+    - Cons: no deadline, so it can drift indefinitely.
+  - **Run `--scenario family --scenario peer` now on all four.**
+    - Pros: closes the item this week.
+    - Cons: four billed runs for coverage the file judges to be confirmation only.
+  - **Retire the item and accept `async`/`status` tile evidence.**
+    - Pros: no cost.
+    - Cons: `peer` tiles, the one scenario with two echoing sides, are then proven on Claude alone.
+
+### 5. Grok mail approvals
+
+**Problem.** The rule that Grok mail tools under `approvals: "ask"` are allowed without a prompt has unit coverage only. If Grok renamed its tools, a Grok worker would sit on a mail permission prompt and its report would never arrive.
+
+**Context.** The `status` approval part is the live check: a mail tool that prompted would be held and the worker's report would never come. The name forms and the bare-`send_message` case stay in unit tests.
+
+**Investigation.** The matcher is `orkestratorToolPermissionOption` (`bridges/acp-bridge/src/acp-session.ts:696`). Its comments cite Grok 1.0.52's `use_tool` wrapper (`:690`) and 1.0.46's `server__tool` naming (`:712`). The pin is now 1.0.67, and no one has checked its naming. The unit tests named in the file still exist (`bridges/acp-bridge/src/acp-mail-permission.test.ts:12`, `:48`, `:119`). OpenCode's exemption was not exercised either, because its worker ended without mailing.
+
+**Decisions.**
+
+- **How to prove it?**
+  - **Fold it into task 1's Grok run, then record the name form from the worker's transcript and update the matcher comment if it changed (recommended).**
+    - Pros: no separate run; it catches a 1.0.52 to 1.0.67 naming change.
+    - Cons: blocked on the same sign-in.
+  - **Capture a direct ACP probe of 1.0.67's permission request shape now (no login needed for the shape).**
+    - Pros: can update the unit fixture before the live run.
+    - Cons: a permission request needs a running turn, which needs a login; likely not possible signed out.
+- **OpenCode's exemption?**
+  - **Leave it to its unit tests, and note it as unexercised (recommended).**
+    - Pros: no prompt engineering to force a mail call.
+    - Cons: one asking platform's mail exemption stays unproven live.
+  - **Change the approval-part prompt to require a mail report.**
+    - Pros: exercises the exemption on every asking platform.
+    - Cons: changes a passing scenario's prompt, so earlier passes need rerunning.
+
+### 6. Cursor and Grok mailbox identity
+
+**Problem.** Four identity behaviours are unproven live on Cursor and Grok: each tab of one environment sees itself as `self`; `idle` injection starts a turn; a Cursor resume with a new `agentMcp` keeps the same SDK agent; and a rotated Grok tab token reloads only that session's child.
+
+**Context.** This came from the retired `agent-mail-cursor-grok.md` plan. The third bullet's launch-and-wake half is done for Cursor (2026-10-18).
+
+**Investigation.** None of the five scenarios (`coordinator-live.ts:56`) checks these, and nothing under `apps/desktop/scripts/dev/coordinator-live*` or `e2e/agent-testing/` calls `list_mailboxes`. `self` is computed in the backend from the tab-scoped credential (`apps/backend/src/core/agent-tools-messaging.ts:169`), so it is provider-neutral once the credential is per tab. Cursor rotation has unit coverage ("a rotated tab MCP token detaches and resumes the same agent", `bridges/cursor-bridge/src/agent-session.test.ts:1084`, plus `agent-session-mcp-reattach.test.ts`). Grok rebuilds a child for a later tab credential ("an already-loaded external session rebuilds with the later tab credential", `bridges/acp-bridge/src/acp-session.test.ts:874`), and it refuses an attach-time rebuild mid-turn (`bridges/acp-bridge/src/acp-http.ts:472`). Sibling-session isolation has no explicit test. `defaultInjectPolicy` accepts `"idle"` (`packages/protocol/src/agent-mail.ts:133`).
+
+**Decisions.**
+
+- **How to cover them?**
+  - **Add a small `identity` scenario to the live suite (two tabs, one `idle`-policy injection, one resume with a rotated `agentMcp`) and run it on Cursor now, Grok later (recommended).**
+    - Pros: repeatable; every platform gets it for free; Cursor is signed in on the qualifying hosts.
+    - Cons: new harness code and tests; rotation has to be driven through backend commands.
+  - **One-off manual check with a `dev:test` profile and the `orkestrator` CLI.**
+    - Pros: no code.
+    - Cons: not repeatable, and there is no checked evidence format.
+  - **Retire `self` and `idle` as provider-neutral, and keep only the two rotation checks.**
+    - Pros: drops two checks the backend owns; less to run.
+    - Cons: `idle` injection starting a turn depends on each bridge's prompt path, so it is not wholly neutral.
+- **Grok sibling isolation?**
+  - **Add a bridge unit test that two sessions keep separate children and credentials across a rotation (recommended).**
+    - Pros: cheap, needs no login, and closes the isolation half before any live run.
+    - Cons: it is a code change outside this research pass.
+  - **Rely on the live check only.**
+    - Pros: tests the real CLI.
+    - Cons: blocked on Grok sign-in.
+
+### 7. Stale pin references
+
+**Problem.** The file states pins that no longer hold, which misleads anyone reading its evidence.
+
+**Context.** The "Current state" section says the Grok "pin is now 1.0.52", and the 2026-10-25 runs are described as "same pins" (Codex 0.162.1, Grok 1.0.52).
+
+**Investigation.** `28590e68` (2026-10-23) set Claude 2.1.309, Codex 0.164.0, Grok 1.0.67, OpenCode 1.19.4 and Pi 1.4.0 (`packages/toolchain/src/manifest.ts:6`). It is an ancestor of `00a0cb82`, so the 2026-10-25 runs used those pins, not the ones stated. The 2026-10-22 runs (`b83ae534`) predate the bump. The Grok matcher's "checked against 1.0.46" is therefore two bumps behind.
+
+**Decisions.**
+
+- **When to correct it?**
+  - **Correct the pin lines in the next change that records a live run (recommended).**
+    - Pros: one edit alongside new evidence; the README allows correcting items.
+    - Cons: the wrong pins stay visible until then.
+  - **Correct them now in a doc-only change.**
+    - Pros: accurate immediately.
+    - Cons: a separate change only for wording.
+
+### 8. Completed items still listed
+
+**Problem.** Code items 1 to 5 and the three Verify entries are all done or resolved, but they still take up most of "Outstanding work".
+
+**Context.** The README says to update or remove an item in the change that finishes it, and to move durable behaviour into `architecture/` or `development/`. Much of this content is already in `agent-testing.md` (the "Live coordinator suite" section) and `coordinator.md`.
+
+**Investigation.** Every Code item says Done or Fixed with tests (for example `acp-policy-denial.test.ts`, `live-refused-calls.test.ts`), and the Cursor label work is closed with four of four passes. The "Constraints and rationale" and "Assumptions and decisions" sections hold the durable reasoning.
+
+**Decisions.**
+
+- **What to do with them?**
+  - **Leave them until the file's last live item closes, then move the rationale to `agent-testing.md`/`coordinator.md` and delete the file (recommended).**
+    - Pros: one move; live-run authors keep the history while rerunning.
+    - Cons: the file stays long.
+  - **Prune the done items now into the architecture docs.**
+    - Pros: the outstanding list shows only open work.
+    - Cons: a large doc move while live work is still adding evidence here.
+
 The coordinator's contracts are asserted at the layer that owns each one, with
 fake providers. The opt-in live suite now shows, per real provider, that the
 read-only boundary holds, that delegation stays asynchronous, and that worker

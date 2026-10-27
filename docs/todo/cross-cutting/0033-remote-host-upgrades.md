@@ -2,6 +2,93 @@
 
 Checked against `main` at `93018933` (2026-10-26).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Remote desktop update between two signed releases**: macOS and AppImage, with agents running; Postpone, unanswered countdown, cancel, toolchain retry, iOS reconnect. Status: open (not started; needs a macOS VM or spare account and a Linux desktop VM).
+2. **Standalone service on launchd and systemd**: install from npm, self-update, broken-release rollback, `engines.bun` refusal, linger. Status: partly done (a systemd install from npm reached ready on 2026-10-26; the rest, and all of launchd, not run).
+3. **Image and `gh` updates**: `host.image.update` against GHCR and `host.gh.update` `latest` and `pinned` on both platforms. Status: open (the GHCR index was inspected; neither task run).
+
+Items 4 and 5 (per-environment Rebuild… and container terminals in the restart impact) are done and need no analysis beyond task 1 exercising their UI on a real release.
+
+### 1. Remote desktop update between two signed releases
+
+**Problem.** Remote host maintenance ships, but no remote-initiated desktop update has been observed between real signed releases, so the countdown, cancel and relaunch paths are unproven for users who rely on them.
+
+**Context.** D2 (60 s countdown with Postpone; unanswered restarts) and D3 (operator token with `confirm: true`) define the behaviour. The living reference is `docs/architecture/host-updates.md`. Runs must not happen on a machine someone works on, after the [0244](0244-second-backend-on-one-host.md) incident.
+
+**Investigation.** Published releases now run to `v2.33.0-beta` (2026-10-26), each with `alpha-mac.yml`, `beta-mac.yml`, `beta-linux.yml`, the arm64 DMG and zip, and the x86_64 AppImage (`gh release view v2.33.0-beta`). The file's example pair (2.30.0-beta to 2.31.0-beta) predates two relevant fixes: `0a2ea7e3` (#1301), first in `v2.32.0-beta`, made Restart relaunch an AppImage from `$APPIMAGE` rather than the vanished mount (`apps/desktop/electron/relaunch.ts`; the 2026-10-26 SIGTRAP) and replaced the blocking `dialog.showErrorBox` with `restart-prompt.ts`; `77b76c3c` (#1302, items 4 and 5) is also first in `v2.32.0-beta`. The CLI side exists: `--when-idle` maps to `drain` in `packages/cli/src/client/commands/host.ts:321`.
+
+**Decisions.**
+
+- **Which release pair?**
+  - **Install `v2.32.0-beta` and update to `v2.33.0-beta`, or the next consecutive pair after that (recommended).**
+    - Pros: the starting release already has the AppImage relaunch fix and items 4 and 5, so the run tests the code users now have.
+    - Cons: the pair is only one release apart in content; a later pair may be needed once Stable ships.
+  - **Use 2.30.0-beta to 2.31.0-beta, as the file suggests.**
+    - Pros: matches the documented procedure.
+    - Cons: the old release's relaunch path is the one that crashed on 2026-10-26; a failure there would say nothing about current code.
+- **Where to run the macOS half?**
+  - **A spare user account on a maintainer Mac (recommended).**
+    - Pros: real Developer ID signature checks by Squirrel.Mac; no nested virtualisation.
+    - Cons: shares the host with the maintainer's own install; a second account has its own data directory, but a second backend on the same host can still take the Control MCP port (0244), so quit the main app first.
+  - **A macOS VM.**
+    - Pros: fully disposable.
+    - Cons: Apple Silicon VMs are limited in number and slow to provision; code-signing behaviour in VMs can differ.
+
+### 2. Standalone service on launchd and systemd
+
+**Problem.** The supervised standalone backend's self-update and rollback have never completed on real releases, and the launchd branch has not run at all.
+
+**Context.** `scripts/qualify-standalone-service.ts` drives all four checks and writes a JSON report; it refuses a host with another Orkestrator unless `--allow-shared-host`, installs with `--skip-start`, and boots with a private HOME and `ORKESTRATOR_CONTROL_MCP_DISABLED=1`.
+
+**Investigation.** The script exists (996 lines) with the options described: `--from` and `--to` defaults 2.30.0-beta and 2.31.0-beta (`scripts/qualify-standalone-service.ts:116`-`:117`), `--broken` default `<to>.990` (`:118`), `--engines-bun` (`:119`), `--engines-to` default 2.30.0-beta (`:121`), `--report` (`:125`), `--allow-shared-host` (`:127`); it branches on `systemd` or `launchd` (`:300`). Unit tests are in `tests/unit/qualify-standalone-service.test.ts`. `mise run build:cli` exists. Its safety guards are first in `v2.32.0-beta`, but the script runs from the checkout, so the release under test does not matter for them.
+
+**Decisions.**
+
+- **Keep the script's default release pair?**
+  - **Pass `--from v2.32.0-beta --to v2.33.0-beta` (without the `v`) for the first full run, and update the defaults in the same change that records the evidence (recommended).**
+    - Pros: tests the current updater and launcher; the private-registry `.990` broken release works for any prerelease `--to`.
+    - Cons: `--engines-to` must still name a release whose `engines.bun` the old Bun fails, which needs checking for the new pair.
+  - **Keep 2.30.0-beta to 2.31.0-beta.**
+    - Pros: the script's defaults, already reasoned through.
+    - Cons: older releases than users now run.
+- **What counts as a pass for linger?**
+  - **The unit is still active after logging out and in once, recorded in the report (recommended).**
+    - Pros: the case users with headless hosts depend on.
+    - Cons: a manual step outside the script.
+  - **Skip linger and rely on `enable-linger` being set.**
+    - Pros: fully scripted.
+    - Cons: proves nothing about session teardown.
+
+### 3. Image and `gh` updates
+
+**Problem.** `host.image.update` and `host.gh.update` have not run against real artefacts, so checksum, archive-layout and version-probe handling are unproven.
+
+**Context.** The 2026-10-26 attempt was skipped because the host's disk was 97% full and pulling retags the configured image. The file gives a headless-backend command with a private `--docker-image` tag and the Control MCP disabled.
+
+**Investigation.** The suggested backend command uses `--runtime-flavor agent-test`, which since `0a2ea7e3` also defaults the Control MCP to an ephemeral port (`controlMcpPortOverride`, `apps/backend/src/core/control-mcp-server.ts:103`), so the explicit `ORKESTRATOR_CONTROL_MCP_DISABLED=1` is now belt and braces rather than required. The image is published for linux/amd64 and linux/arm64. macOS covers the `gh` zip layout; Linux the tar layout.
+
+**Decisions.**
+
+- **Run it in the same VMs as tasks 1 and 2, or separately?**
+  - **In the Linux VM of task 2, after the service run, and in the macOS account of task 1 for the zip layout (recommended).**
+    - Pros: one VM provisioning; each platform's archive layout covered once.
+    - Cons: needs at least 15 GB free in the Linux VM on top of the service run.
+  - **A separate minimal VM per platform.**
+    - Pros: cleaner isolation from the service run.
+    - Cons: twice the setup for a short run.
+- **Pass condition for `gh latest`?**
+  - **`host status --json` shows the newest upstream `gh` under `toolchains/gh-latest/<version>`, marked unqualified, and `host gh pinned --wait` restores the pin (recommended).**
+    - Pros: covers both directions and D1's "opt-in and marked unqualified".
+    - Cons: depends on a `gh` release existing that differs from the pin on the day.
+  - **Only that `gh latest` succeeds.**
+    - Pros: quicker.
+    - Cons: does not prove the return to the pinned version.
+
 Remote clients can now maintain the computer running their backend. They can
 update Orkestrator on:
 - a desktop-hosted backend: the Mac app, or the Linux AppImage;

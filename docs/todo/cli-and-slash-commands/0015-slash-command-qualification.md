@@ -2,6 +2,92 @@
 
 Checked against `main` at `06297124` (2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+Everything except outstanding item 1 is done and recorded below. "Open
+questions" and "Needs verification" both say none, which is still accurate.
+Two findings recorded in the body as "not changed" are still true today and
+have no owning todo.
+
+### Tasks
+
+1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones. Status: open (unblocked).
+2. **Container picker lag under host load** (flake 0710): a container tab's catalogue lags the backend's when the host is heavily loaded. Status: open (tracked as a flake, not as an item here).
+3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: open (found 2026-10-23, never filed).
+
+### 1. Mixed versions against real v2.21.0 builds
+
+**Problem.** The mixed-version matrix uses transport fakes. No real v2.21.0 bridge, renderer bundle or sync-v1 polling backend has been run against the current code, so a wire mismatch only a real build exhibits would go unseen.
+
+**Context.** 0034 fixed the support window at published releases from the floor; `docs/architecture/version-compatibility.md:16-31` still gives the floor as v2.21.0 (it first moves on 2026-12-15). The only catalogue protocol change since v2.21.0 is #1184's `normalizeAvailability`. 0016 (needs verification) defers to this item.
+
+**Investigation.** The v2.21.0 tag exists (2026-10-16) and its GitHub release ships desktop artifacts (`orkestrator-v2-linux-x86_64.AppImage`, `orkestrator-v2-mac-arm64.dmg`, a pacman package). It is **not** on npm: the oldest `orkestrator` npm release is 2.22.3, which is why `scripts/qualify-design-mixed-versions.ts:57` defaults to 2.22.3 for 0036's mixed-version run; that 2.22.3 tarball carries `dist/main.js` plus the Claude and Codex bridges, not a renderer. `version-compatibility.md:25` says nothing before v2.21.0 was published "as a release or on npm", which is true but hides that v2.21.0 itself is absent from npm. The renderer error the item watches for is still `"Invalid native agent projection update response"` at `apps/web/src/lib/backend/workflows.ts:639`. The precedent harness (`qualify-design-mixed-versions.ts`, #1262) already runs a published backend and the current one over one temporary data directory and HOME, which is most of what this run needs. The earlier note that `dev:test` needs a display still holds; this Linux host has one.
+
+**Decisions.**
+
+- **Where do the v2.21.0 builds come from?**
+  - **Build bridges, backend and renderer from the `v2.21.0` tag in a disposable worktree (recommended).**
+    - Pros: exactly the floor release; every component (all five bridges, the web bundle) is available separately for pairing; no reliance on packaged-app internals.
+    - Cons: needs a v2.21.0-compatible toolchain (Bun pin, lockfile install) and a build per component; a tag build is source-equivalent to, not byte-identical with, the release.
+  - **Extract components from the published v2.21.0 AppImage or dmg.**
+    - Pros: the real shipped bytes.
+    - Cons: unpacking an Electron bundle to run its bridges and renderer separately is fiddly and platform-specific; downloaded artifacts must be handled as untrusted.
+  - **Use npm 2.22.3, as 0036 did.**
+    - Pros: reuses `qualify-design-mixed-versions.ts`'s install path directly.
+    - Cons: 2.22.3 is not the floor; it has no renderer, and only two of the five bridges.
+- **Which pairings count as a pass?**
+  - **Three pairings: current backend with v2.21.0 bridges (all that sign in without credentials, plus Claude and Codex with test credentials), v2.21.0 backend with current bridges, and the v2.21.0 renderer against a current backend (recommended).** Pass means catalogue reads give the documented outcome for each pairing, a selected command runs or is refused with a reason (never as prompt text), and no projection update error is logged.
+    - Pros: covers the three unproved surfaces the item names; the outcomes are already written as expectations in the fake matrix.
+    - Cons: the Claude and Codex pairings spend live model turns; the 2.16.3 ACP bridge already failed to create a session against today's Grok CLI ("Invalid params"), so a v2.21.0 Grok pairing may only be readable without a held session.
+  - **Bridges only, both directions.**
+    - Pros: no browser and no old renderer build.
+    - Cons: leaves the renderer and sync-v1 polling, two of the three named gaps, unproved.
+- **Script it or run it by hand?**
+  - **Add a `scripts/qualify-slash-mixed-versions.ts` modelled on the design qualifier (recommended).**
+    - Pros: repeatable each time the floor moves (the item already says to move the target with the floor); evidence as JSON.
+    - Cons: harness code for a qualification that may only run a few times.
+  - **Manual run recorded in this file.**
+    - Pros: least code.
+    - Cons: has to be redone by hand on 2026-12-15 and each later floor move.
+
+### 2. Container picker lag under host load
+
+**Problem.** Under host load average 60 to 72, a container tab's picker opened late or lacked the refreshed row after 5 s (3 of 7 container runs on 2026-10-23, both review container runs).
+
+**Context.** Recorded as flake 0710 (`docs/tests/flaky-tests/native-agents-and-transcripts/0000-index.md:54`, status open), not hidden with a longer wait (decision 9). The folder index already says this file's only item is the mixed-version run.
+
+**Investigation.** Flake 0710 is still open. Nothing in this file needs to change for it; the open question is whether it is a product lag (the tab's catalogue reaching it late through `commandRevision`) or test timing.
+
+**Decisions.**
+
+- **Where should the work live?**
+  - **Leave it to flake 0710 and its owning spec; not a task of this file (recommended).**
+    - Pros: one registry for flakes, per the testing guide; this file can finish on task 1 alone.
+    - Cons: if 0710 turns out to be a real catalogue propagation bug, a product todo will be needed then.
+  - **Open a new todo now for a container catalogue propagation investigation.**
+    - Pros: treats a user-visible lag as product work immediately.
+    - Cons: no evidence yet that it happens outside extreme host load.
+
+### 3. User skills and Grok commands not staged into containers
+
+**Problem.** A container environment's picker lacks the user's own Claude skills (`~/.claude/skills`) and Grok commands (`~/.grok/commands`), although they appear in a host worktree. Users with personal skills see a shorter menu in containers.
+
+**Context.** Recorded in the 2026-10-23 container record as "found on the way, not changed". No other todo mentions it.
+
+**Investigation.** Still true. In `apps/backend/src/core/portable-inputs.ts` the Claude entry (`:213`) stages `commands`, `agents`, `ide` and `plugins` (`:237-240`) but no `skills`; the Grok entry (`:341`) stages `hooks` and `skills` (`:356-357`) but no `commands`. Codex stages `skills` and `prompts`, and Pi stages `agent/skills` and `agent/prompts`, so Claude and Grok are the outliers. Recent commits to the file (#1289, #1298, #1307) did not change this.
+
+**Decisions.**
+
+- **What to do with the finding?**
+  - **File a new todo in this folder to stage `~/.claude/skills` and `~/.grok/commands` as `entries`, with a container picker check (recommended).** Per the folder rules, new work goes into a new file.
+    - Pros: closes a parity gap with Codex and Pi using the existing staging allowlist; small change.
+    - Cons: skills may reference host-only paths or tools that do not exist in the container; each staged entry widens what crosses into the container (contents only, no credentials, but still user files).
+  - **Accept the gap and document it in `native-agent-commands.md`.**
+    - Pros: nothing new crosses the container boundary.
+    - Cons: an unexplained provider-parity difference in the picker.
+
 Every slash-command executor was first qualified from installed SDK
 declarations and source, then exercised through each integration's real
 execution path with transport-level fakes. The live provider probes and the

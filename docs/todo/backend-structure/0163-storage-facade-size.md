@@ -9,6 +9,39 @@ Done on `todo-0163-storage-facade-size-a8e92b2563c1` from `main` at `93018933`
 "Testing"). Delete this file and its index row once the branch has merged
 (decision 9).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire this finished file**: both code items (area fields for six repositories, the agent mail split) and the qualification run are done and merged (#1284); only the file's own retirement remains. Status: done.
+
+### 1. Retire this finished file
+
+**Problem.** The file is marked Finished and says to delete it once its branch merged (decision 9). It still holds rank 5 in the folder index, and `docs/README.md:64` links to it from the `storage.md` row as the place the size follow-up was done.
+
+**Context.** Follow-up from [0009](0009-storage-service-repositories.md); the two storage files still over the limit moved to [0214](0214-storage-files-over-size-limit.md). The README rule is to move durable behaviour into `architecture/`, delete the file and remove its row.
+
+**Investigation.** The branch merged as `b9a06f65` (#1284). The six area fields exist (`apps/backend/src/core/storage.ts:114` to `:119`) and `storage-writer-guards.test.ts` treats their picks as entry points (`apps/backend/src/core/storage-writer-guards.test.ts:1787`, fixtures at `:2164`, `:2188`). Agent mail is five classes, none over 2,000 lines: `storage-agent-mail.ts` 1,229, `-directory` 780, `-injects` 780 (was 746), `-budgets` 356, `-store` 311 (was 299). `storage.ts` has grown from 1,821 to 1,840 lines since the file was written (#1310 and #1312 added agent mail forwarders), so it is 160 lines under the limit and drifting upward, because agent mail still goes through forwarders (decision 2). The durable description is already in `docs/architecture/storage.md`: area fields and the `Pick` pattern in "Code layout" (lines 24 to 46), the agent mail collaborator rows in its table, the area entry rule in "Concurrency", and "patching an area method also patches the repository" in "Testing" (from line 403). The decisions that are not in `storage.md` are 2 (which areas and why agent mail and drafts kept forwarders) and 5 (only caller-free forwarders dropped). Stale reference: decision 10 names `environments-and-containers/0887-container-rebuild-dialog-after-reload.md`, which `main` has since renumbered to [0953](../../tests/flaky-tests/environments-and-containers/0953-container-rebuild-dialog-after-reload.md).
+
+**Decisions.**
+
+- **What to do with this file now that its branch has merged?**
+  - **Delete it now, after a one-line note in `storage.md` (recommended).** Add to "Code layout" which areas still forward and why (decision 2: agent mail kept on the facade to avoid ~800 call-site changes, drafts because its section mixes sessions), update the `docs/README.md:64` row and the links from 0009 and 0214, and remove the index row.
+    - Pros: follows the README rule; whoever next narrows an area (for example agent mail, the main source of facade growth) finds the reasoning beside the code layout.
+    - Cons: the validation evidence (the guard dump comparison) survives only in git history, although 0214 needs to repeat it and describes it in its own words.
+  - **Keep it until 0214 is done.** Retire the storage series together.
+    - Pros: 0214's qualification links here for the before/after guard comparison method.
+    - Cons: contradicts the README rule; 0214 is low priority and may sit open for a long time.
+- **Should the facade's renewed growth be tracked?**
+  - **Note it in `storage.md` and leave it untracked (recommended).** State that new agent mail entry points should go on an area field rather than a forwarder.
+    - Pros: at about 10 lines per feature the file has many months of headroom; a rule stops the growth at the source.
+    - Cons: a rule in prose is not enforced; the file could cross 2,000 lines unnoticed.
+  - **Open a new todo to move agent mail to an area field.** A new numbered file, per the README rule against adding to existing files.
+    - Pros: removes the largest remaining forwarder block (the ~800 call sites) and the growth with it.
+    - Cons: a large mechanical diff for a size-only gain that 0163 rated low.
+
 0009 replaced the `StorageService` inheritance chain with a facade over
 per-store repositories. To keep every public method name and signature (a
 constraint of 0009), the facade forwarded each of its 327 repository methods

@@ -3,6 +3,58 @@
 Checked against `main` at `9906db30` (2026-10-16); code items finished on
 2026-10-26 against `93018933`.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **iOS device or simulator run**: rotate a split with a terminal and a native agent pane across 768 px and open environment settings from the projects drawer, on real iOS WebKit. Status: open (needs a Mac with Xcode or an iPhone/iPad; this host is Linux).
+
+Code items 1 (toolbar settings through `AppDialogHost`) and 2 (focus trap in fullscreen settings), and the Chromium and Playwright WebKit runs, are done; the one WebKit failure moved to [0202](0202-webkit-title-tooltip-outside-tap.md).
+
+### 1. iOS device or simulator run
+
+**Problem.** Every narrow-layout fix is proved in Chromium and in Playwright's WebKit, but not on iOS, which is where users actually cross the breakpoint by rotating. Playwright's WebKit runs on a desktop host with emulated touch, without rotation, the iOS visual viewport, the on-screen keyboard or `WKWebView`.
+
+**Context.** The file's five-step procedure (connect, open a split, rotate, record survival, drawer to settings and back) is under "Still open". The `appendChild` fallback in `apps/web/src/lib/stable-host.ts` is what iOS uses if its WebKit has no `moveBefore`, and Playwright's WebKit 27.2 did not. The iOS and Safari batch lives in [0031](0031-live-provider-and-platform-qualification.md).
+
+**Investigation.** The code the run must exercise is on `main`: `moveBefore` detection at `apps/web/src/lib/stable-host.ts:19`; `AppDialogHost` is now the only renderer of the environment settings dialog besides `apps/web/src/components/browser/ServiceBrowserTab.tsx`, which the file already exempts. `mise run dev:ios` exists (`mise.toml:50`) and `apps/ios/README.md` documents the origin and gateway token. The 2026-10-26 attempt failed only because `xcrun simctl list devices` hung on the Mac it ran on; nothing in the procedure has gone stale. The breakpoint is `(max-width: 767px)`: an iPhone in portrait is always below it, and only the largest iPhones in landscape cross it (wider than 768 CSS px), so a smaller phone needs iPad split view as the file says.
+
+**Decisions.**
+
+- **Which iOS target?**
+  - **The `WKWebView` app in the simulator through `mise run dev:ios`, on an iPad simulator with split view plus a large iPhone simulator for rotation (recommended).**
+    - Pros: covers the shipped iOS shell rather than Safari; simulators rotate and both sizes cross 768 px; screenshots are easy to capture without personal data.
+    - Cons: needs a working Xcode simulator; the last attempt hung in `simctl`; the simulator's keyboard and touch are still not a real device's.
+  - **Safari on a physical iPhone over the tailnet.**
+    - Pros: real touch, keyboard and viewport behaviour.
+    - Cons: tests Safari rather than the `WKWebView` app; only crosses 768 px on a large phone; a device must be on the tailnet.
+  - **Both.**
+    - Pros: strongest evidence.
+    - Cons: doubles the run for a file whose remaining risk is moderate.
+- **What counts as a pass?**
+  - **All five steps pass on one iOS version, with terminal output, scroll offsets, the draft and the caret surviving at least two rotations each way (recommended).**
+    - Pros: matches the file; two rotations catch a host left in the park.
+    - Cons: caret survival is hard to see on a touch keyboard; needs a screen recording.
+  - **Steps 1 to 4 only, leaving the drawer check to Chromium evidence.**
+    - Pros: shorter.
+    - Cons: the drawer's pointer-events failure was a touch bug; it is exactly what iOS could still differ on.
+- **Run it together with 0202's iOS check?**
+  - **Yes: same session, tapping the truncated title and then the workspace after step 5 (recommended).**
+    - Pros: one setup for both files; 0202 needs a before-fix iOS observation anyway.
+    - Cons: couples two files' evidence in one session record.
+  - **No, separate sessions.**
+    - Pros: each file's evidence stands alone.
+    - Cons: two simulator setups.
+- **What happens to the file after a pass?**
+  - **Mark it Finished, then delete it once the stable-host and drawer rules are copied into an architecture doc on the renderer layout (recommended).**
+    - Pros: the "Constraints and rationale" section is durable design (hosts moved not overlaid, park, hidden panes as invisible layers) that otherwise lives only here.
+    - Cons: writing that architecture section is extra work after the run.
+  - **Mark it Finished and keep it.**
+    - Pros: no extra writing.
+    - Cons: contradicts the README rule; the design reasoning stays in a todo file.
+
 Below 768 px the renderer switches to a phone layout: a projects drawer instead
 of the sidebar, and a pane switcher instead of resize handles. A window can
 cross that breakpoint at any time, for example when it is narrowed, when a phone

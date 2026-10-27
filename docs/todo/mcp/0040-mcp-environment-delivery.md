@@ -4,6 +4,113 @@ Checked against `main` at `2459b05c` (2026-10-15). Code items implemented and
 re-checked on branch `todo-0040-mcp-env-delivery-024e7c80895b` (base
 `06297124`, 2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Live container sessions (review gap 9)**: save an environment-private server during a running turn in a container and confirm the turn finishes and the next turn loads it, for Claude, Codex, Cursor and Pi (plus terminal work not being interrupted). Status: open.
+2. **Real-browser pass of the overlay UI**: overlay states, conflict and divergence actions, the refresh dialog and the corrupt-record reset in a real browser against a container fixture. Status: open.
+3. **Remote-browser check**: from a browser on a second machine, the URL location hint and container sign-in reason show and no callback is offered. Status: open (needs two machines).
+4. **Stale notes in this file**: the 0058 observation and the remote-run batching reference are out of date. Status: open (docs only).
+
+### 1. Live container sessions (review gap 9)
+
+**Problem.** Nothing has shown that a container-private save leaves a running provider turn alone and reaches the next turn with real sessions. The design guarantees it by construction (one file write, no restart scheduled, materialisation only after a boot), but the guarantee is unproven for users of container environments, who are the only users of the overlay.
+
+**Context.** This is review gap 9, the one gap the Multi Review left open. The file says container runs batch with [0019](../containers-and-environments/0019-container-platform-qualification.md), and [0121](0121-claude-plugin-mcp-servers.md) asks to batch its container plugin run with this one. Decision 14 says sessions adopt a resolution the way they adopt any external change (Claude next message, Cursor and Pi next turn, Codex, OpenCode and Grok next process start).
+
+**Investigation.** The overlay code is unchanged since it merged as `01d052e0` (#1183): `materialiseEnvironment` is at `apps/backend/src/core/mcp-management/service.ts:1119` and `overlay-service.ts:343`, called from `apps/backend/src/core/commands-environment.ts:1429` after the container boots. The harness is real and wired: `e2e/agent-testing/mcp-apply-live.spec.ts` reads `ORKESTRATOR_AGENT_TEST_MCP_CONTAINER` and `ORKESTRATOR_AGENT_TEST_LIVE_MCP` (`:143-144`), is listed in `e2e/agent-testing/playwright.browser.config.ts:40`, and in container mode keeps tab A busy with a shell `sleep` while the edit is saved and applied, then requires the busy turn to finish (header `:16-18`, step label `:1064`). It also restarts the bridge on the first scope and probes a second tab. It does not check terminal sessions, so the "existing terminal work is not interrupted" half of the item has no automated step. It covers all six platforms by default (`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS`), wider than the four this item names. No recorded container-mode run exists in this file or in 0039.
+
+**Decisions.**
+
+- **How to run it?**
+  - **One run of `mcp-apply-live.spec.ts` in container mode on a fresh `mise run docker:build:dev` image, in an isolated `dev:test` profile with `--fixture-environments local,container`, combined with 0121's container plugin run (recommended).**
+    - Pros: the harness already asserts the busy-turn and next-turn behaviour from server logs, not model replies; one image and one credentialed profile also close 0121.
+    - Cons: needs credentials for every platform under test and a long Docker run; a skipped (signed-out) platform leaves its row open.
+  - **A manual run: one provider at a time, save from the editor while a turn is running.**
+    - Pros: can include a terminal tab and watch it directly.
+    - Cons: not repeatable; evidence is a human reading, not the server's log.
+- **Which platforms must pass for the item to close?**
+  - **The four named (Claude, Codex, Cursor, Pi); record Grok and OpenCode results if the run produces them but do not block on them (recommended).**
+    - Pros: matches the item's scope; Grok and OpenCode have their own qualification in 0039.
+    - Cons: leaves container-private behaviour of two platforms only incidentally proven.
+  - **All six.**
+    - Pros: one complete matrix.
+    - Cons: blocks on Grok and OpenCode sign-in and their own open issues in 0039.
+- **How to cover the terminal half?**
+  - **Add a manual step to the same run: keep a container terminal running a long command while saving, and check it continues (recommended).**
+    - Pros: cheap, and the claim is narrow (nothing is injected or restarted).
+    - Cons: manual evidence only.
+  - **Extend the spec to drive a terminal.**
+    - Pros: repeatable.
+    - Cons: a code change to a large live spec for a property that holds by construction.
+
+### 2. Real-browser pass of the overlay UI
+
+**Problem.** The overlay UI (pending, diverged, conflict, corrupt states and their actions, "Refresh from backend user…" with preview token) is covered only by component tests; nobody has used it in a real browser against a real container.
+
+**Context.** The UI lives in `apps/web/src/components/settings/mcp-servers/McpEnvironmentOverlay.tsx` (refresh entry at `:303`, dialog at `:452`). AGENTS.md requires a real-browser path, reload and inactive-environment check for frontend interaction changes. The file notes that `mise run test:browser` has no MCP settings spec.
+
+**Investigation.** `e2e/agent-testing/mcp-overlay-recovery.spec.ts` exists and is in the browser config (`playwright.browser.config.ts:41`); it is skipped unless `ORKESTRATOR_AGENT_TEST_DOCKER=1` or `ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1` (`:21-25`) and covers only the corrupt-record reset plus a reload. No run of it is recorded. The location hint text is present in both places the file names (`McpServerForm.tsx:460`, `AgentInfoMcpSection.tsx:133`). The struck deletion item notes that no real-stack environment deletion was run; it is covered by unit tests only.
+
+**Decisions.**
+
+- **How much to automate?**
+  - **Run `mcp-overlay-recovery.spec.ts` in the same container profile as task 1, then walk the pending, diverged (edit the file in a container terminal), conflict and refresh paths by hand, with one reload each (recommended).**
+    - Pros: reuses task 1's profile; the hand-walk covers the states the spec does not, at little cost.
+    - Cons: the hand-walked states stay unrepeatable.
+  - **Extend the spec to drive every overlay state.**
+    - Pros: a repeatable regression for the whole UI.
+    - Cons: substantial new Playwright work, and creating divergence and conflicts needs container-side edits and rebuilds inside the test.
+- **Include a real-stack environment deletion in the same pass?**
+  - **Yes, delete the fixture container environment at the end and confirm its overlay record is gone (recommended).**
+    - Pros: one extra step closes the caveat on the struck deletion item.
+    - Cons: inspecting the record directory needs care to stay inside the profile's data directory.
+  - **No, accept the unit coverage.**
+    - Pros: smaller run.
+    - Cons: the caveat stays.
+
+### 3. Remote-browser check
+
+**Problem.** A remote browser, the backend and a container are three different hosts. The editor's location hint and the container sign-in reason exist to stop a remote user assuming `localhost` means their machine, but they have not been seen from a second machine.
+
+**Context.** The file batches remote runs with [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md). Decision 12 says remote backends are not detected on the backend side; the editor shows where the connection is made from instead.
+
+**Investigation.** The text is rendered unconditionally from the environment, not from any remote detection (`McpServerForm.tsx:460`), so what a remote browser sees is the same component output as a local one. 0031's "Two machines or a remote backend" row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:199`) lists 0039 but not this file, so the batching the file relies on would not pick this item up. Its Docker row (`:197`) does list 0040.
+
+**Decisions.**
+
+- **Keep it as a two-machine run, or retire it?**
+  - **Keep it, and add this file to 0031's two-machine row so the batch includes it (recommended).**
+    - Pros: the one real check that a remote user sees the hint and no callback; costs nothing extra if 0039's remote run happens anyway.
+    - Cons: depends on a second machine being set up.
+  - **Retire it as proven by construction.**
+    - Pros: removes a gate that needs special hardware.
+    - Cons: the "no callback is offered" claim depends on the sign-in path, which could change; a single run is the evidence.
+  - **Simulate with a second browser on the same host using the LAN address.**
+    - Pros: no second machine.
+    - Cons: the browser's `localhost` is still the backend host, which is exactly what the check must rule out.
+
+### 4. Stale notes in this file
+
+**Problem.** Two notes in this file no longer match the rest of the docs.
+
+**Context.** The README allows correcting existing items.
+
+**Investigation.** The Evidence "Observation, not investigated here" points at [0058](../containers-and-environments/0058-legacy-migration-root-symlink.md); that file now says "Fixed and qualified on 2026-10-26; every item is done" and its index row is Finished: Yes. The remote-run batching gap is described under task 3.
+
+**Decisions.**
+
+- **When to correct them?**
+  - **Now, in a docs-only change: mark the 0058 observation as fixed and add 0040 to 0031's two-machine row (recommended).**
+    - Pros: cheap; stops the remote check falling through.
+    - Cons: touches 0031, which is outside this file.
+  - **When the qualification runs are recorded.**
+    - Pros: one edit.
+    - Cons: the remote check may be missed by whoever runs 0031's batch first.
+
 MCP scopes used to be truthful only on the backend host: a container's
 provider homes are copies made by the entrypoint, so the editor could not
 offer environment-private configuration, and Cursor's user servers never

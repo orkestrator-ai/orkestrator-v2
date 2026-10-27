@@ -2,6 +2,162 @@
 
 Checked against `main` at `06297124` (2026-10-23).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Code items 1 to 3 (overlap metric, corpus, cache-read capture)**: already struck through as done. Status: done.
+2. **Full versus compact consolidation on more samples, cases and models**: widen the first Claude-only round, including the "Needs verification" question of a non-Claude comparison. Status: partly done.
+3. **Prefix-cache measurement on real reviewer panels**: measure `cacheReadTokens` across a real Claude panel, then Codex. Status: partly done.
+4. **Overlap from real panels**: default two-reviewer panels and panels that record `consolidationOverlap`. Status: partly done.
+5. **What each provider's `cacheReadTokens` means**: the open question; Claude measured, the rest from code only. Status: partly done.
+6. **Deferred product decisions**: presets, lenses, adaptive stopping, a different default panel. Status: deferred (on tasks 2 to 4).
+
+### 1. Code items 1 to 3
+
+**Problem.** None left. The three code items are struck through with evidence.
+
+**Context.** The README says to update or remove an item in the change that finishes it. Struck-through items with evidence are allowed and are how this file records them.
+
+**Investigation.** All still present at HEAD. `consolidationOverlap` is at `apps/backend/src/core/review-fanout-provenance.ts:204` and is stored at `apps/backend/src/core/multi-review-service.ts:4327`, with `build-pipeline-review-fanout.ts:88` importing it for the Consolidation session. `cacheReadTokens` is kept as a running maximum in `refreshReviewerUsage` (`apps/backend/src/core/review-fanout.ts:1563`, max at `:1587`). The nine corpus cases are at `apps/backend/src/core/multi-review-evaluation-corpus.ts:177` to `:525`, and `late-unique` now expects `with-fixes` (`:286`). The only commit touching this code since the check is `b9522a87` (#1176), which is the one that built it.
+
+**Decisions.**
+
+- **What to do with the struck-through items?**
+  - **Keep them until the file is finished (recommended).**
+    - Pros: the evidence lines name the tests a later reader needs; the file's own convention.
+    - Cons: about 30 lines of history in a working document.
+  - **Delete them now and rely on `review-preparation.md`.**
+    - Pros: a shorter file focused on live work.
+    - Cons: the test evidence is not repeated in `architecture/review-preparation.md`, so it would be lost.
+
+### 2. Full versus compact consolidation on more samples, cases and models
+
+**Problem.** #833 shipped the compact envelope on deterministic tests alone. The first live round (Claude `sonnet`, five cases, two samples) found no regression, but it is too small to rule out a small one, and no non-Claude model has consolidated the corpus.
+
+**Context.** Still to do, per the file: at least three samples per prompt, the four untested cases (`clean-panel`, `invalid-and-failed`, `coverage-gaps`, `limit-boundaries`) and one non-Claude model. The "Needs verification" item asks the same question and is answered only for Claude.
+
+**Investigation.** `scripts/multi-review-evaluation.ts` has `prompts`, `score`, `panel` and `live` (dispatch at `:245`). `live` (`:172`) drives only `claude -p` through `claudeConsolidation` (`:138`), accepts 1 to 5 samples and defaults to both variants and model `sonnet`. A non-Claude run therefore means generating prompts with `prompts`, answering by hand and passing them to `score` (`:95`). `invalid-and-failed`, `coverage-gaps` and `limit-boundaries` mostly test acceptance (answers that must be rejected), so a live answer for them measures the model's behaviour at the limits rather than consolidation quality.
+
+**Decisions.**
+
+- **Which non-Claude model, and how?**
+  - **Codex through `codex exec` with an output schema, scripted the same way as `live` (recommended).**
+    - Pros: the next most common reviewer and consolidator; schema enforcement makes answers comparable; repeatable.
+    - Cons: adds a second CLI driver to the script; Codex flags and pinned version need checking against `docs/development/upgrade-agents.md`.
+  - **Answer the prompts by hand in a chat and `score` them.**
+    - Pros: no script change.
+    - Cons: not repeatable, and easy to taint by hand-editing an answer.
+- **How many samples, and on which cases?**
+  - **Three samples on all nine cases for both variants (recommended).**
+    - Pros: meets the file's minimum; the boundary cases still exercise the prompt's rules; 54 calls, under three times the first round's 20.
+    - Cons: the acceptance-only cases add little signal about quality.
+  - **Five samples on the five quality cases only.**
+    - Pros: more statistical weight where quality is actually measured.
+    - Cons: leaves four cases never run live.
+- **What result would reopen the default?**
+  - **Any recall loss, false merge or severity drop in compact that full does not show, in two or more samples (recommended).**
+    - Pros: matches the constraint "ship only if recall does not regress"; tolerates one noisy sample.
+    - Cons: still small numbers; a rare regression could pass.
+  - **Any single regression.**
+    - Pros: strictest.
+    - Cons: model noise alone would trigger it.
+
+### 3. Prefix-cache measurement on real reviewer panels
+
+**Problem.** The stable prompt prefix was meant to make reviewers share prompt-cache reads. On Claude the consolidation measurements suggest it cannot, because Claude Code caches only at message boundaries and each reviewer prompt is a single user message. Real reviewer prompts have never been measured, so whether the prefix saves anything is unknown.
+
+**Context.** The working directory also breaks the hit, because the CLI puts it in context before the prompt. The measurement uses `cacheReadTokens` and `panel`'s `laterCacheReadShareDelta`. The counter is cumulative and includes each reviewer's own tool-loop hits.
+
+**Investigation.** `reviewerPanelSection` (`apps/backend/src/core/multi-review-prompts.ts:59`) is still the only per-reviewer text and is the last section. `laterCacheReadShareDelta` is computed in `summarizePanelValue` (`apps/backend/src/core/multi-review-evaluation.ts:365`, field at `:260`). The Claude bridge passes a `systemPrompt` preset (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:393`) and no explicit cache control, so moving the shared review instructions into a separately cached block would mean either the system-prompt append or a multi-block user message. Codex's consolidation prefix (about 340 tokens) is below OpenAI's 1,024-token cache minimum, but a real reviewer prompt should be well above it. Whether the reviewers of one review share a working directory needs checking before the run, since a different directory alone defeats the Claude hit.
+
+**Decisions.**
+
+- **Measure first, or restructure the prompt first?**
+  - **Measure a real two-reviewer Claude panel and a Codex panel first (recommended).**
+    - Pros: tells us whether the problem is real for reviewer prompts before changing a prompt-injection boundary; cheap.
+    - Cons: the Claude result may only confirm the expected zero, delaying the fix.
+  - **Move the shared instructions into the system-prompt append now.**
+    - Pros: likely to realise the saving on Claude straight away.
+    - Cons: changes where untrusted package content sits relative to instructions; an unmeasured change to a security-relevant layout.
+- **What counts as a measurable saving?**
+  - **Report the spread of `laterCacheReadShareDelta` over at least three panels per provider, not a single delta (recommended).**
+    - Pros: what the file asks for; absorbs tool-loop noise.
+    - Cons: needs several real reviews per provider.
+  - **Add per-first-model-call cache capture in every bridge.**
+    - Pros: isolates the cross-reviewer prefix hit exactly.
+    - Cons: a change in every bridge, which assumption 5 explicitly deferred until the coarse number justifies it.
+
+### 4. Overlap from real panels
+
+**Problem.** The deferred product decisions need overlap counts from the panels people actually run. The four panels measured so far all used one four-reviewer mix on one day, from an app that predated `consolidationOverlap`, so cited-versus-dropped counts were not available.
+
+**Context.** The default panel has two reviewers (`DEFAULT_MULTI_REVIEW_REVIEWER_COUNT` at `packages/protocol/src/agent-settings.ts:58`). `overlapFromModelLabels` (`apps/backend/src/core/multi-review-evaluation.ts:283`) recovers counts from history only when every label in the panel is distinct.
+
+**Investigation.** Every Multi Review consolidated on a build containing #1176 now stores `consolidationOverlap`, and Build Pipeline stores `reviewOverlap` on the Consolidation session, so this data accumulates without further code. Gathering it means exporting stored workflows and running `panel`. Panels that repeat a model in history cannot be counted.
+
+**Decisions.**
+
+- **Where should the data come from?**
+  - **Export the stored workflows from ordinary use over a few weeks, read-only, and run `panel` (recommended).**
+    - Pros: real panels, real changes, no extra spend.
+    - Cons: depends on what people happened to run; slow; needs care that the export stays content-free.
+  - **Run a fixed set of reviews on chosen branches with the default panel.**
+    - Pros: controlled and quick.
+    - Cons: costs provider spend and may not reflect real use.
+- **When is there enough data for task 6?**
+  - **At least ten panels of the default two-reviewer shape and ten of a larger shape, all with `consolidationOverlap` (recommended).**
+    - Pros: a concrete bar; covers the panel most users get.
+    - Cons: an arbitrary number with no power calculation.
+  - **Leave it to judgement when the decisions are taken.**
+    - Pros: flexible.
+    - Cons: invites deciding on four panels again.
+
+### 5. What each provider's `cacheReadTokens` means
+
+**Problem.** Comparing cache reads across providers is only fair if each reports the same thing. Claude is measured; Codex, OpenCode, Pi and Cursor are understood from code only, and the file does not mention Grok at all.
+
+**Context.** The code reading is that Claude, Codex and OpenCode report cumulative session totals, while Pi and Cursor report the latest turn. The stored value is the maximum seen (assumption 5), which is exact for totals and a lower bound for latest-turn providers.
+
+**Investigation.** Pi maps `assistantUsage.cacheRead` (`bridges/pi-bridge/src/prompt.ts:727`) and Cursor maps `usage.cacheReadTokens` (`bridges/cursor-bridge/src/prompt.ts:749`). The ACP bridge also reports cache reads (`bridges/acp-bridge/src/usage.ts`, persisted in `acp-persistence.ts`), so Grok reviewers produce a value whose meaning the file does not record.
+
+**Decisions.**
+
+- **How should the question be closed?**
+  - **Answer it from the task 3 panels: compare each provider's counter against its turn count, and add Grok's semantics from `usage.ts` (recommended).**
+    - Pros: no extra run; the panels already exercise the counters.
+    - Cons: a provider with no reviewer in those panels stays unanswered.
+  - **Run a dedicated two-turn probe per provider.**
+    - Pros: a direct answer for every provider.
+    - Cons: six live setups for a measurement detail.
+
+### 6. Deferred product decisions
+
+**Problem.** Presets (Quick, Balanced, Thorough), review lenses, adaptive stopping and a different default panel are all gated on tasks 2 to 4. Nothing is built, by design.
+
+**Context.** The constraints forbid dormant protocol fields, silent cancellation of reviewers and any lens or stopping rule that regresses corpus recall.
+
+**Investigation.** No preset or lens fields exist in `packages/protocol/src/multi-review-launch.ts` or elsewhere in the protocol, which matches the file. The first overlap data (77% single-source, position 4 adding 9 of 22 while using 5 to 21 million tokens against 0.8 to 5.4 million for the others) hints that a larger panel finds more but at high cost, which bears on presets more than on stopping.
+
+**Decisions.**
+
+- **Which decision should come first once the data exists?**
+  - **Presets that expand into ordinary editable rows (recommended).**
+    - Pros: no new protocol field beyond the preset itself; reversible by the user; the overlap data speaks to it most directly.
+    - Cons: needs per-provider cost data to pick the rows.
+  - **Adaptive stopping.**
+    - Pros: the largest potential saving.
+    - Cons: novelty is unknowable before a report completes, so it needs a confidence rule nobody has measured; highest risk to quality.
+- **Keep these in this file or split them out?**
+  - **Keep them here as deferred until tasks 2 to 4 report (recommended).**
+    - Pros: the gate and the data live together.
+    - Cons: the file stays open long after its code is done.
+  - **Move them to a new low-rated todo file and finish this one once the measurements are in.**
+    - Pros: this file can close on measurement alone.
+    - Cons: separates decisions from the evidence that gates them.
+
 The aim is more review value per token without losing findings. #833 shipped
 two cost changes on the strength of deterministic tests alone: a compact
 consolidation envelope and a stable prompt prefix. It also added

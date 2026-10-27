@@ -2,6 +2,218 @@
 
 Checked against `main` at `00a0cb82` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Runtime drift and advisories on two platforms**: Agent Info's drift counters and advisory notice render and rehydrate after a reload, on macOS and on Linux. Status: open.
+2. **Transcript part coverage**: compaction, image round trip and a long-running tool on Claude or Pi, finished while inactive, then return and reload. Status: open (OpenCode's compaction part only is covered).
+3. **Usage panel on two providers**: turns and account windows survive a reload, for two credential sources in one profile. Status: open.
+4. **Grok tool output**: a Grok shell call's terminal output renders inline and survives a reload. Status: open.
+5. **Codex live and cold row layout**: a multi-agent v2 turn is one assistant row live but two after a cold reload; align or document. Status: open (needs a recorded stream; the current layouts are pinned by a credential-free test).
+6. **Re-qualification rule after agent bumps**: decide whether a feature qualified on one pin must be re-run after an SDK or CLI bump. Status: open (maintainer decision).
+7. **Credentials and run ownership**: record which providers have agent-test credentials and who owns the macOS, iOS and two-machine runs. Status: open.
+8. **Scheduled CI for platform runs**: decide which runs become CI jobs. Status: partly done (a weekly Docker live workflow exists; Electron and macOS are not in CI).
+9. **Keep "Current state" and the batching index current**: the pins and CI list are already stale. Status: open.
+
+### 1. Runtime drift and advisories on two platforms
+
+**Problem.** The Agent Info runtime section's drift counters and advisory notice have only been seen in passing (an OpenCode `server.heartbeat` counter on macOS), not checked on two platforms with a reload.
+
+**Context.** A manual pass in a `mise run dev:test --profile <p> --fixture` profile on macOS and on Linux, each with a provider whose bridge reports unrecognised events.
+
+**Investigation.** The rendering is in `apps/web/src/components/layout/AgentInfoButton.panels.tsx` (summary comment at `:517`, the "1 event this bridge did not recognise" string at `:591`). Each bridge has drift tests (for example `bridges/acp-bridge/src/acp-drift.test.ts`). The 2026-10-25 OpenCode run already produced one counter on macOS, so macOS needs only the advisory notice and the reload check.
+
+**Decisions.**
+
+- **How to produce drift on demand?**
+  - **Use OpenCode, whose `server.heartbeat` is reliably unrecognised, on both platforms (recommended).**
+    - Pros: no fault injection; already observed once; one credential source.
+    - Cons: an advisory notice may not appear without a real advisory; depends on OpenCode keeping that event unhandled.
+  - **Inject a fake unknown event through a bridge test seam.**
+    - Pros: deterministic, and could become an automated browser case.
+    - Cons: a scripted adapter is not live evidence under this file's own constraints.
+- **Which Linux host?**
+  - **A Linux node over ssh with its own isolated profile, leaving its configuration as found (recommended).**
+    - Pros: matches the file; Linux is this repository's main development platform.
+    - Cons: production Orkestrator shares the host, so the profile rules in `AGENTS.md` apply in full.
+  - **Only macOS, treating Linux as covered by unit tests.**
+    - Pros: one run.
+    - Cons: the file asks for two platforms; rendering is the same, but rehydration goes through each host's backend.
+
+### 2. Transcript part coverage
+
+**Problem.** Compaction, retry, status and image parts are not proved to render from the snapshot after a turn finishes in an inactive environment, on Claude or Pi.
+
+**Context.** Replaces the remaining browser QA of `03-transcript-part-coverage.md`. Needs `--credential-source claude --agent-platforms claude` (or Pi).
+
+**Investigation.** No live spec drives a compaction plus image round trip plus long-running tool. The inactive-path procedure is in `docs/development/agent-testing.md` and `AGENTS.md` ("Test the inactive-environment path"). Claude is now pinned at SDK 0.3.309 and CLI 2.1.309 (`bridges/claude-bridge/package.json:16`, `docker/Dockerfile:193`), newer than the 0.3.296 named in Current state.
+
+**Decisions.**
+
+- **Which provider?**
+  - **Claude (recommended).**
+    - Pros: compaction is user-triggerable with `/compact`; image input is a first-class path; the most used native provider.
+    - Cons: spends Claude tokens; compaction of a small fixture conversation may be trivial.
+  - **Pi.**
+    - Pros: covers a newer bridge whose compaction is less exercised.
+    - Cons: Pi fronts the user's own providers; the default-model fallback issue ([0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md)) can block a fresh host.
+- **Manual or scripted?**
+  - **A scripted opt-in spec under `e2e/agent-testing/`, gated like `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE` (recommended).**
+    - Pros: repeatable on every Claude bump (task 6); evidence is exact.
+    - Cons: more work than one manual pass; asserting a compaction part needs a stable locator.
+  - **A manual browser pass.**
+    - Pros: fastest to close the item.
+    - Cons: not repeatable; the next bump has no check.
+
+### 3. Usage panel on two providers
+
+**Problem.** The usage panel (turns and account windows) has not been seen to survive a reload on any two providers.
+
+**Context.** Needs one profile with two credential sources, for example `claude` and `codex`. OpenCode's Agent Info showed no account windows, so it does not count.
+
+**Investigation.** The usage surfaces are `apps/web/src/components/layout/AgentInfoButton.tsx`, `AgentInfoButton.panels.tsx` and `SystemUsageIndicator.tsx`. Both providers' credential routes into a profile are documented in `docs/development/credentials-and-models.md`.
+
+**Decisions.**
+
+- **Which pair?**
+  - **Claude and Codex (recommended).**
+    - Pros: both report account windows (subscription limits); both credentials are known to exist on the primary macOS host.
+    - Cons: Codex's copied ChatGPT token lapses after about ten days, so the run must follow a host Codex refresh.
+  - **Claude and Cursor or Grok.**
+    - Pros: widens coverage to a less-tested provider.
+    - Cons: unclear whether they report account windows at all; a run that shows none does not count.
+
+### 4. Grok tool output
+
+**Problem.** It is unproven that terminal output from a Grok shell call renders inline and survives a reload.
+
+**Context.** Needs `--credential-source grok --agent-platforms grok`, one prompt that runs a shell command, then a reload. The pin is now Grok 1.0.67 (`docker/Dockerfile:196`, ACP SDK 2.0.1 in `bridges/acp-bridge/package.json:14`).
+
+**Investigation.** The ACP bridge advertises `terminal: true` (`bridges/acp-bridge/src/acp-context.ts:1142`). A tool call's terminal content is rendered from a process-local map: `terminalDisplayOutput` (`bridges/acp-bridge/src/acp-client-methods.ts:46`) is read at normalisation time (`bridges/acp-bridge/src/acp-transcript.ts:222`-`:225`), and the map entry is deleted on `releaseTerminal` (`acp-client-methods.ts:257`) and on close (`:264`). If a `tool_call_update` that names the terminal is normalised after Grok releases it, the card shows `[Terminal <id>]` instead of the output. That ordering is exactly what a live run would expose, so the run is more than a formality.
+
+**Decisions.**
+
+- **What counts as a pass?**
+  - **Output text visible in the card live, after a browser reload, and after a bridge restart (`dev:stop` and `dev:test`) (recommended).**
+    - Pros: the restart case is where the process-local map could lose output.
+    - Cons: a profile restart costs a few minutes.
+  - **Live and after a browser reload only, as the file says.**
+    - Pros: matches the file.
+    - Cons: misses the release-then-normalise race above.
+- **If output is lost, where is it fixed?**
+  - **Copy the output into the tool part when the terminal exits or is released, so normalisation never depends on the map (recommended).**
+    - Pros: makes the transcript the source of truth, in line with `AGENTS.md` invariant 1.
+    - Cons: needs a byte bound per part (invariant 11), already present as `MAX_TOOL_OUTPUT_BYTES`.
+  - **Keep released terminals' output in the map for a while.**
+    - Pros: small change.
+    - Cons: still lost on bridge restart; another bounded cache to size.
+
+### 5. Codex live and cold row layout
+
+**Problem.** A Codex multi-agent v2 turn is one assistant row live but two rows after a cold reload, so a reload visibly reshapes the transcript.
+
+**Context.** Live spawns arrive only as `subAgentActivity` items, which are not tool calls, while the rollout's `spawn_agent` calls split the row (`bridges/codex-bridge/src/history/rollout.ts:616`, `:1728`). `bridges/codex-bridge/AGENTS.md` ("One row per model response") defines the live boundary.
+
+**Investigation.** The live boundary rules now also open a row on a new tool call after `thread/tokenUsage/updated`, but neither rule fires on the final agent message after activity-only items, so the description still holds. `apps/backend/tests/codex-subagent-cards.test.ts:161`-`:178` pins both layouts (one live row with intro, four cards and summary; two cold rows). The recorded-fixture checklist in `bridges/codex-bridge/src/testing/fixtures/README.md:65` still has "sub-agent spawn and collaboration" unticked, so no recorded stream exists to decide from. Codex is now pinned at 0.164.0 (`docker/Dockerfile:194`), not 0.162.1.
+
+**Decisions.**
+
+- **How to get the evidence?**
+  - **Record one live sub-agent turn with `CODEX_BRIDGE_RECORD_NOTIFICATIONS` on the current pin, scrub it, and add it as the README's missing fixture (recommended).**
+    - Pros: settles this item and ticks a fixture box; replayable through `replay-recording.ts` for every future bump.
+    - Cons: a recording contains prompts and paths; it must go through `scripts/scrub-codex-recording.ts` and a manual diff read.
+  - **Decide from the existing synthetic fake.**
+    - Pros: no live run.
+    - Cons: the fake was written to the incident's shape, not to 0.164.0's actual stream.
+- **Which layout should win?**
+  - **Split the live row when a `subAgentActivity` item follows a finished response, matching cold (recommended).** Only if the recording shows a `tokenUsage` report between them.
+    - Pros: one row per model response, as invariant 14 requires; reload no longer reshapes the transcript.
+    - Cons: a new boundary rule in the live accumulator, which must not await anything (invariant 9).
+  - **Keep both and document why they differ.**
+    - Pros: no change; cards are identical either way.
+    - Cons: a reload still moves the final answer to a new row, which users can see.
+
+### 6. Re-qualification rule after agent bumps
+
+**Problem.** There is no rule for whether a feature qualified on one provider pin must be re-run after an SDK or CLI bump, and the CLI, slash-command and MCP files raise the same question.
+
+**Context.** The file recommends: no blanket re-run; re-run only the bumped engine's opt-in live specs, and re-qualify a feature only when the changelog touches it. Left to the maintainer.
+
+**Investigation.** `docs/development/upgrade-agents.md` now has one such rule already: slash commands must be re-qualified for every provider whose pin moved, before the upgrade merges (`:1607`), plus the inactive-path check (`:1602`). So the runbook has started answering this per feature rather than generally. Pins moved for every provider since this file was checked (task 9).
+
+**Decisions.**
+
+- **What should the runbook say?**
+  - **Adopt the file's recommendation as a general rule in `upgrade-agents.md`, with slash commands kept as the one mandatory re-qualification (recommended).**
+    - Pros: bounded cost per bump; consistent with the rule already there; qualified rows that name versions stay honest.
+    - Cons: changelog reading is judgement; a silent behaviour change can slip through.
+  - **Re-run every qualified live spec for the bumped engine.**
+    - Pros: strongest guarantee.
+    - Cons: token cost and time on every bump; agent bumps are frequent.
+  - **No rule; per-file decisions.**
+    - Pros: no runbook change.
+    - Cons: the question keeps resurfacing in each file.
+
+### 7. Credentials and run ownership
+
+**Problem.** It is not recorded which providers have agent-test credentials or who owns the macOS, iOS and two-machine runs, so batching cannot be planned.
+
+**Context.** Known on 2026-10-25: the primary macOS host has OpenCode (`opencode`, `opencode-go`), and earlier runs show Claude and Codex there.
+
+**Investigation.** Agent-test profiles can take Claude, Codex, OpenCode, Cursor, Grok and Pi credentials from the host (`--credential-source`), but nothing in the repository records which host actually holds which login, or who runs each platform batch.
+
+**Decisions.**
+
+- **Where to record it?**
+  - **A short table in this file's Current state (provider, host, credential route, last verified), updated by each run (recommended).**
+    - Pros: next to the batching index that uses it; no secrets, only availability.
+    - Cons: goes stale unless each run updates it.
+  - **In `docs/development/credentials-and-models.md`.**
+    - Pros: a living doc rather than a todo.
+    - Cons: that doc describes routes, not which machine has which login; host-specific facts do not belong there.
+
+### 8. Scheduled CI for platform runs
+
+**Problem.** Live and platform runs are manual, so regressions on macOS, Electron and Docker show up only when someone qualifies.
+
+**Context.** The file recommends the credential-free Electron suite first (`terminal-input-resume-electron.spec.ts` took 16 s) and keeping provider suites manual.
+
+**Investigation.** Out of date in the file: CI is now `.github/workflows/ci.yml` (no `lint.yml`), and `container-live-qualification.yml` (added `a0cc3edd`, 2026-10-23) runs the opt-in live Docker suites against a real Linux Engine on both architectures, weekly, on demand, and on pull requests touching those suites. So "Docker live suites on a Docker-capable runner" is done for Linux Engine. No workflow runs Electron or macOS (`ci.yml` uses `ubuntu-latest` only).
+
+**Decisions.**
+
+- **What next for CI?**
+  - **Add `mise run test:agent:electron` to a weekly and on-demand Linux workflow under `xvfb`, mirroring the container workflow's schedule (recommended).**
+    - Pros: credential-free; catches Electron main, preload and IPC regressions; the container workflow is a working template.
+    - Cons: Linux Electron is not macOS evidence; needs a display server in CI.
+  - **A macOS runner for the Electron suite.**
+    - Pros: covers the platform most users run.
+    - Cons: macOS runners cost more and are slower; still no Docker Desktop.
+  - **Keep everything else manual.**
+    - Pros: no CI cost.
+    - Cons: Electron regressions stay invisible between qualifications.
+
+### 9. Keep "Current state" and the batching index current
+
+**Problem.** Live-run planning reads this file first, and parts of its Current state are stale.
+
+**Context.** The file holds the shared prerequisites, and the owning files hold the evidence.
+
+**Investigation.** Current state lists pins Claude SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1, OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52 (ACP SDK 1.8.0), Pi 1.2.0. Today they are Claude SDK 0.3.309 / CLI 2.1.309, Codex 0.164.0, OpenCode 1.19.4, Cursor SDK 1.0.40, Grok 1.0.67 (ACP SDK 2.0.1), Pi 1.4.0 (`docker/Dockerfile:193`-`:197`, the bridges' `package.json` files, `apps/backend/package.json:23`). The CI paragraph names `lint.yml`, which no longer exists, and omits `ci.yml` and `container-live-qualification.yml`.
+
+**Decisions.**
+
+- **How to keep the pins from going stale again?**
+  - **Replace the pin list with a pointer to `docker/Dockerfile` and the bridge manifests, and record pins only in each run's evidence (recommended).**
+    - Pros: nothing to keep in step; evidence still names the versions it proved.
+    - Cons: a reader cannot see all pins at a glance here.
+  - **Update the list now and on every bump.**
+    - Pros: one place to look.
+    - Cons: it went stale within two days; bumps are frequent.
+
 Most features ship with unit, contract and credential-free real-stack coverage
 on Linux. The gate that is missing most often is the same everywhere: a run
 against real providers, or on a platform the repository's CI does not have

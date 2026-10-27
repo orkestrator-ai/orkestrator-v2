@@ -7,6 +7,51 @@ item below is done. The durable description now lives in
 ("Undo hides a turn OpenCode still holds"). Delete this file and its index
 row once the branch has merged; it is kept until then for its decisions.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: every item is done, and the branch it waited for has merged.
+
+1. **Hide reverted messages while `Session.revert` is set** (code item 1). Status: done.
+2. **Backend test over a fake OpenCode server** (code item 2). Status: done.
+3. **Re-run the live OpenCode spec** (qualification). Status: done.
+4. **Whether `session.updated` carries `revert` in 1.19** (needs verification). Status: done.
+5. **What to do with this file**: delete it now that its branch has merged, or keep it. Status: open.
+
+### 1 to 4. Completed items
+
+**Problem.** Undo on an OpenCode tab reported success but left the reverted turn in the transcript, because OpenCode 1.19 keeps reverted messages until the next prompt.
+
+**Context.** Found by the live run in `cross-cutting/0031-live-provider-and-platform-qualification.md`; the file's six decisions record the design.
+
+**Investigation.** The work landed as `eb0357cb` "fix(opencode): keep reverted turns hidden until redo or prompt (#1292)" on 2026-10-26, which is an ancestor of `863b5782`. The code is present: `apps/backend/src/core/opencode-revert.ts` (`openCodeRevertMarker` at `:33`, `withoutRevertedOpenCodeMessages` at `:76`, `openCodeRevertNotice` at `:98`); `apps/backend/src/core/opencode-provider.ts` (`revertMarker` at `:874`, `observeRevertResult` at `:897`, called at `:1325` and `:1334`, the filter in `interactiveSnapshot` at `:991`, the notice at `:1015`); `apps/backend/src/core/opencode-snapshots.ts:310` and `:468`; `apps/backend/src/core/opencode-stream-state.ts:354`. Tests exist: `opencode-revert.test.ts` and `opencode-provider-revert.test.ts`. The durable description is in `docs/architecture/agent-engines.md:593` ("Undo hides a turn OpenCode still holds"), including the "re-check `revert.ts` and `Session.patch` on every OpenCode bump" rule. The folder index row already says Finished: Yes.
+
+**Decisions.** None: the work is merged and verified.
+
+### 5. What to do with this file
+
+**Problem.** The file says to delete it once its branch merges. That has happened, so keeping it leaves a finished file in the todo folder.
+
+**Context.** README "Maintaining the folders": when the last item is done, move durable behaviour into `architecture/`, delete the file and remove its index row. Inbound links: `docs/todo/agent-engines/0000-index.md:31`, and `docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:149` and `:503`. The two flaky-test case files only name the branch, not the file.
+
+**Investigation.** The architecture section covers decisions 1 to 5 (cut rule, partial revert, marker sources, revision and epoch, the advisory). Decision 6 (build-pipeline and Multi Review reads in `opencode-display-transcript.ts` are not filtered; usage and the context gauge still count the reverted turn) is not stated in `agent-engines.md`.
+
+**Decisions.**
+
+- **Delete the file now?**
+  - **Yes: add decision 6's scope note to `agent-engines.md`, then delete the file, its index row and the two links in 0031 in one change (recommended).**
+    - Pros: follows the README rule and the file's own instruction; the branch has merged; the one missing durable point is preserved.
+    - Cons: a small edit to the architecture doc and to 0031 is needed in the same change.
+  - **Delete it as is, without moving decision 6.**
+    - Pros: smallest change.
+    - Cons: loses the reason the build-pipeline transcript and usage ledger ignore the revert, which a later reader may "fix".
+  - **Keep it for its decision record.**
+    - Pros: the option-by-option reasoning stays in one place.
+    - Cons: contradicts the README and the file's own text; a finished file keeps a row in a ranked work list.
+
 Found by the live OpenCode spec run recorded in
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
 ("Live OpenCode spec evidence"). Agent Info's **Undo turn** on an OpenCode

@@ -3,6 +3,74 @@
 Checked against `main` at `ba7cc8d4` (2026-10-25); code work done on
 2026-10-26 on top of `93018933`.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Quiet-host before/after measurement**: repeat the commit profile and the
+   payload bench on a quiet host for `93018933` and for current `main`, record
+   the tables, then delete the file. Status: open.
+
+Code items 1 and 2 are done and on `main` (`cdaa1bb1`, #1285).
+
+### 1. Quiet-host before/after measurement
+
+**Problem.** The only before/after numbers were taken on a shared host at load
+10 to 31 (and 45 for the older table), so the absolute figures are unreliable.
+Nobody is harmed in the meantime; the file stays open only for this.
+
+**Context.** The file's Qualification section gives the exact commands and the
+"copy the script into the older checkout" step. The non-timing bound (6 rows
+serialized, 5 collections copied at 1,900 notes) is already a test, so the
+regression guard does not depend on this run. Rated Low.
+
+**Investigation.** Everything the procedure needs is present at HEAD:
+`scripts/web-annotation-commit-profile.ts`,
+`apps/backend/src/core/web-annotation-payloads.bench.test.ts` (the row-count
+test at `:500`), `tests/setup-node.ts`. The incremental planner is
+`planChangedRows` (`apps/backend/src/core/web-annotation-store-rows.ts:348`),
+with `planRows` (`:209`), `freezeRowValue` (`:310`) and `assertSameRowPlan`
+(`:479`); the metrics are emitted at
+`apps/backend/src/core/web-annotation-metrics.ts:128-132`; the test-only
+assertion option is `verifyRowPlans`
+(`apps/backend/src/core/web-annotation-context.ts:110`). No commit since
+`cdaa1bb1` touches the store, row planner or working manifest, so the
+"after" side is unchanged. The baseline `93018933` is an ancestor of HEAD and
+still reachable. The architecture doc has the "Commit cost" section
+(`docs/architecture/web-page-annotations.md:174`). The file is accurate.
+
+**Decisions.**
+
+- **Is the quiet-host run still worth doing?**
+  - **Run it once, then delete the file (recommended).**
+    - Pros: cheap (two script runs per checkout); gives trustworthy absolute
+      numbers for the architecture doc; closes the file.
+    - Cons: needs a genuinely idle machine, which shared agent hosts rarely
+      are.
+  - **Accept the loaded-host proportions and delete the file now.**
+    - Pros: the row-count test already guards the O(changed rows) property;
+      the 5x to 7x improvement at 1,900 notes is far outside load noise.
+    - Cons: the absolute create cost on a quiet host is never recorded.
+- **Where to run it?**
+  - **A developer laptop with nothing else running, using a temporary
+    worktree of `93018933` (recommended).**
+    - Pros: quiet by construction; no production Orkestrator agents competing.
+    - Cons: different hardware from the earlier 18-core numbers, so compare
+      before and after on the same machine only.
+  - **This shared host when its load is low.**
+    - Pros: same machine family as the earlier tables.
+    - Cons: other agents start work unpredictably mid-run.
+- **Where do the final numbers go?**
+  - **Into the "Commit cost" section of `web-page-annotations.md`, as the file
+    is deleted (recommended).**
+    - Pros: durable; follows the README rule for finished files.
+    - Cons: benchmark numbers age as hardware and code change.
+  - **Only in the commit message.**
+    - Pros: keeps the architecture doc free of numbers.
+    - Cons: hard to find later.
+
 Every write to an environment's web annotations (create, reply, resolve,
 request state changes) used to cost CPU in proportion to everything the
 environment already held. Found while closing

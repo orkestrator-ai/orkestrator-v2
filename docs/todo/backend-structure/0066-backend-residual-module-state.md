@@ -8,6 +8,35 @@ state found while doing this is listed in
 [0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md).
 Delete this file and its index row once the branch has merged (decision 10).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire this finished file**: all seven moves, the allowlist change and the two-backend tests are done and merged (#1253); only the file's own retirement remains. Status: done.
+
+### 1. Retire this finished file
+
+**Problem.** The file is marked Finished and says to delete it with its index row once the branch merged (decision 10). It still holds rank 6 in the folder index, and `docs/README.md:38` links to it from the `backend-runtime.md` row as the place residue is tracked, although the open residue is now in 0133.
+
+**Context.** Follow-up from [0011](0011-backend-runtime-state-ownership.md); further module state is in [0133](0133-backend-module-state-beyond-0066.md). README rule: move durable behaviour into `architecture/`, delete the file, remove the row.
+
+**Investigation.** The branch merged as `f5e5c9a1` (#1253). The claims hold at HEAD: `BackendRuntime` owns `prMonitor` and `containerStates` (`apps/backend/src/core/backend-runtime.ts:39`, `:41`), `backend-runtime.test.ts` has the five new cases (`:177`, `:213`, `:239`, `:272`, `:303`), and neither `commands-container-exec.ts` nor `commands-pr-monitor.ts` is on the `import/no-mutable-exports` allowlist in `.oxlintrc.json`. `docs/architecture/backend-runtime.md` already describes every owner (`terminals.history`, `environments.fence`, `localServers.openCodeHostStart` and `piCatalog`, `prMonitor` with merge cleanup as a construction option, `containerStates`), the construction-option seams and the shutdown order of decision 6 (history timers cleared at `runtime.shutdown()`, collectors kept for the later awaited flush). Two reasons are not in it: decision 5 (the PR monitor's pool is created lazily because the process-wide diagnostics registry caps sources at 32) and decision 4 (it binds the latest caller's storage and emit). Both are the kind of detail a later change would undo by mistake.
+
+**Decisions.**
+
+- **What to do with this file now that its branch has merged?**
+  - **Delete it now, after adding decisions 4 and 5 to `backend-runtime.md` (recommended).** One sentence each in the `prMonitor` row or a note under the table; change `docs/README.md:38` to point at 0133 as the residue file; repoint 0011/0133 links; remove the index row.
+    - Pros: follows the README rule; the README stops pointing at a finished file for open work; the two non-obvious choices survive.
+    - Cons: the validation evidence (the 22 regressions found in the first full run) is only in git history.
+  - **Delete it as it stands.**
+    - Pros: smallest change.
+    - Cons: the lazy-pool reason is lost, and someone hitting the 32-source cap in tests would have to rediscover it.
+  - **Keep it until 0133 is done.**
+    - Pros: 0133 is its direct continuation and links back for the pattern.
+    - Cons: contradicts the README rule; `backend-runtime.md` already documents the pattern 0133 needs.
+
 [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md)
 moved everything in `commands-runtime-state.ts` and
 `agent-account-bridge-state.ts` into `BackendRuntime` clusters

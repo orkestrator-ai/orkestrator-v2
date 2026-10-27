@@ -10,6 +10,84 @@ Desktop 29.7.2, Claude Code 2.1.310, Codex 0.162.1 on PATH and 0.164.0 in the
 profiles), and fixed the four defects it found (see
 [Qualification](#qualification)).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+Both branches named above have merged: the code items as #1208 (`d6ed0717`)
+and the qualification fixes as #1295 (`fb1700b5`). Code items 1 to 5 and the
+four switching gaps are on `main` and are not repeated as tasks.
+
+### Tasks
+
+1. **Approve a real Codex sign-in from the tab**: finish a browser or device-code ChatGPT sign-in and confirm the composer unlocks. Status: open (needs a person).
+2. **Claude usage windows after an account switch**: repeat the Codex switch check for Claude. Status: blocked (on a Claude turn that reports rate-limit windows).
+3. **Close out the file**: what to do with this file once tasks 1 and 2 are settled. Status: open.
+
+### 1. Approve a real Codex sign-in from the tab
+
+**Problem.** Every step of the Codex in-app sign-in has passed live except the approval itself, so the final "composer unlocks after a real login" step is unproven.
+
+**Context.** It needs a person to complete OpenAI's sign-in page or device code. The procedure is in "What is left" item 1 and uses an isolated profile with `--no-agent-credentials`, so no host login is touched.
+
+**Investigation.** The pieces the run depends on are on `main`: the cancel route and `cancel_native_agent_sign_in`, the 10-second re-read for a locked Codex tab (`AgentNativeTab.controller.tsx`, from #1295), and the `account.signedIn` clear of `needs-auth` notices. Codex is now pinned at `0.164.0` (`packages/toolchain/src/manifest.ts:8`), which is what the profiles already ran on 2026-10-26, so the procedure still applies.
+
+**Decisions.**
+
+- **Browser or device-code approval?**
+  - **Browser flow on a local profile, then device code only if a remote browser is at hand (recommended).**
+    - Pros: one person, one machine; the browser path is what desktop users hit.
+    - Cons: the device-code path (what remote and container tabs send) stays unapproved.
+  - **Both flows in one session.**
+    - Pros: closes both paths.
+    - Cons: two real logins to create and sign out of; more exposure of a real account in a test profile.
+- **What counts as a pass?**
+  - **Composer unlocks without a send, one turn answers, then sign-out leaves the profile's `auth.json` gone and the host's untouched (recommended).**
+    - Pros: proves the unlock and that the run left no real login behind.
+    - Cons: one billed turn on the person's account.
+  - **Composer unlocks only.**
+    - Pros: no billed turn.
+    - Cons: does not prove the login actually serves a turn.
+
+### 2. Claude usage windows after an account switch
+
+**Problem.** It is not proven live that a Claude bridge still finishing a turn on account A cannot fold its rate-limit windows into account B's usage card.
+
+**Context.** "Needs verification" records the same gate passing live for Codex on 2026-10-26. Claude sends windows only sparsely, near a limit, so the run could not be done.
+
+**Investigation.** The gate is platform-neutral: `contextUsageWithPlanUsage` (`apps/backend/src/core/plan-usage-cache.ts:205-224`) folds Claude and Codex windows only when the reporting account matches the active one, and `HttpBridgeProvider` passes `this.connection.accountId ?? "unknown"` (`apps/backend/src/core/http-bridge-provider.ts:157`). Claude windows come from `rate_limit_event` (`bridges/claude-bridge/src/services/session-manager-prompt-handlers/leaf.ts:46-49`) and the SDK usage report (`.../assistant.ts:35-58`). The switch-time unit tests in `apps/backend/src/core/agent-accounts.test.ts:975-1044` exercise Codex only; `plan-usage-cache.test.ts:154-220` has Claude cases but none with a mismatched reporting account.
+
+**Decisions.**
+
+- **Keep waiting for a live Claude window, or prove it another way?**
+  - **Add a deterministic Claude case to `agent-accounts.test.ts` (A reports during a switch to B, B's cache stays empty) and retire the live run (recommended).**
+    - Pros: the gate is shared code and Codex already proved the live wiring; a test does not depend on a near-limit account.
+    - Cons: does not prove the Claude bridge's account id reaches the connection in a real launch.
+  - **Keep the live run and wait for a near-limit Claude account.**
+    - Pros: end-to-end evidence.
+    - Cons: may never happen on a test account; keeps the file open indefinitely.
+  - **Drive a near-limit state with a fake bridge emitting `rate_limit_event`.**
+    - Pros: real backend and renderer path.
+    - Cons: a fake bridge only proves what the unit test proves, at higher cost.
+
+### 3. Close out the file
+
+**Problem.** The file is long and almost entirely done; its durable behaviour belongs in `architecture/agent-accounts.md`.
+
+**Context.** README rules: when the last item is done, set **Finished** to Yes, move durable behaviour into `architecture/` or `development/`, delete the file and remove its index row. The follow-up gap found by the runs already has its own file (0235).
+
+**Investigation.** The folder index rates this file Medium with Finished: No (`docs/todo/agent-engines/0000-index.md:18`). `docs/architecture/agent-accounts.md` already covers accounts, switching, login and containers.
+
+**Decisions.**
+
+- **When to close it?**
+  - **Close it as soon as tasks 1 and 2 are settled (with task 2 settled by the unit test), moving the qualification evidence summary into `agent-accounts.md` (recommended).**
+    - Pros: removes a nearly finished file from the ranked list; evidence stays findable.
+    - Cons: the one person-dependent approval decides the timing.
+  - **Move task 1 into 0031's batch now and delete this file.**
+    - Pros: closes the file immediately; 0031 already batches person-dependent live runs.
+    - Cons: the README says never add new todos to an existing file, so 0031 cannot take it; it would need a new numbered file instead.
+
 Each platform should report a normalized sign-in state. Sign-in should happen
 in the app wherever the vendor has an API for it, and losing auth mid-turn
 should show in the tab, not as a spawn failure. Claude and Codex can also hold

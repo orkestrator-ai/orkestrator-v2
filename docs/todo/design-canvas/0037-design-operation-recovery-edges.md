@@ -7,6 +7,40 @@ receipt fallback, was retired on 2026-10-24 once
 [0034](../cross-cutting/0034-mixed-version-compatibility.md) set the support
 window. Nothing is left.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the finished file**: all four items are done (#1179 on 2026-10-23 and #1207 on 2026-10-24), and only the file and its inbound links are left. Status: done.
+
+### 1. Retire the finished file
+
+**Problem.** Every item is done and the index says Finished: Yes. Yet `docs/architecture/design-canvas.md:4-7` still lists this file under "Outstanding work", which tells readers there is open recovery work when there is none.
+
+**Context.** Under the README rules a finished file is deleted once its durable behaviour lives in `architecture/`. The file's "Assumptions and decisions" and "Constraints and rationale" hold the reasoning behind the correlation-id rule, legacy-canvas outcomes and the loopback browser server.
+
+**Investigation.** Every code reference still resolves at HEAD:
+- `settledMatches` is at `apps/backend/src/core/design/records.ts:647`. It is called from `service.ts:834` (through `receiptDigest`) and `service-lifecycle.ts:101`.
+- `intentDigest` is at `records.ts:604`, and the `receiptDigests` index is written at `:630`.
+- `deadOutcome` is used at `service.ts:480` and `:635`.
+- `retainedOutcomes` and `keepRetainedOutcomes` are at `service.ts:632-634` and `:720`.
+- `reusedCorrelation` is at `errors.ts:49`.
+- `launchDesignBrowser` with `chromium.launchServer({ host: "127.0.0.1" })` is at `renderer.ts:75-79`.
+
+The behaviour is already in `design-canvas.md`: correlation binding and digests at `:91-106`, interrupted and legacy-canvas outcomes at `:117-135`, and the loopback browser server and the `SIGSTOP` test at `:204-211`. Two documents link here: `design-canvas.md:6` and `todo/cross-cutting/0034-mixed-version-compatibility.md:367` (0034 also names 0037 in its decision 10 prose). Item 3's one open assumption, that `BrowserServer.kill()` also ends a stopped Chromium on Linux, now holds. The real-Chromium cases at `renderer.test.ts:784` and `:832-833` are skipped only on Windows or when no Chromium is found. `ubuntu-latest` CI resolves `/usr/bin/chromium` (see flake 0246's CI evidence) and runs them in `mise run test:full`. On this Linux x64 host, `bun test --cwd apps/backend ./src/core/design/renderer.test.ts -t "kills a browser whose close hangs|terminates an owned server"` passed both cases (2 pass, 11 expectations, 1.95 s). Not yet copied to `architecture/`: the rejected alternatives (the sidecar outcome file, the supervised render worker, `pgrep` by marker) and the loopback-WebSocket exposure note (any local process that learns the GUID path can drive the browser).
+
+**Decisions.**
+
+- **What to do with the finished file?**
+  - **Delete it now (recommended).** Copy the loopback-endpoint exposure note and the one-line "why not a worker process" reasoning into `design-canvas.md` "Renderer". Drop the file from the Status line at `design-canvas.md:4-7`, repoint 0034's link to `design-canvas.md#operations`, and remove the index row.
+    - Pros: follows the README; fixes the misleading "Outstanding work" line; the behaviour is already documented.
+    - Cons: the full options-and-trade-offs record for items 1–4 survives only in git history (#1179, #1207).
+  - **Keep it as a design record.**
+    - Pros: the rationale stays one click from `design-canvas.md`.
+    - Cons: `todo/` is not a decision archive under the README; the file keeps being counted as outstanding work.
+
 Design edits are recoverable operations: every submitted edit should end in a
 truthful terminal outcome and never run twice
 ([`design-canvas.md`](../../architecture/design-canvas.md), "Operations"). A

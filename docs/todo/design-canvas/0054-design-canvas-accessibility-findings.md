@@ -4,6 +4,44 @@ Checked against `main` at `b83ae534` (2026-10-22). All three items fixed on
 branch `todo-0054-design-a11y-findings-ec88681caf58` (from `main` at
 `ba7cc8d4`, 2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire the finished file**: all three findings (400% zoom layout, label in name, Enter on an unrendered frame's row) shipped in #1244 and are asserted; only the file itself is left. Status: done.
+
+### 1. Retire the finished file
+
+**Problem.** Every item is done and the folder index already says Finished: Yes, but the file is still in `todo/`. The README says a finished file is deleted once its durable behaviour lives in `architecture/` or `development/`.
+
+**Context.** The findings came out of the automated accessibility pass in 0036. The human screen-reader pass is not part of this file and stays in 0036. The ID 0054 is also used by `todo/previews-and-annotations/0054-preview-cross-service-reads.md` and `todo/cross-cutting/0054-agent-test-pi-default-model.md`. All three were created on 2026-10-22 in parallel PRs (#1146, #1148, #1151), which breaks the README rule that numbers are unique across folders. No unit test checks for this.
+
+**Investigation.** The fixes are all at HEAD, unchanged since #1244 (`5a8b11b9`):
+- `SHORT_HEIGHT = 400` and `PENDING_ELEMENT_MS = 10_000` are at `apps/web/src/components/design/DesignCanvasTab.tsx:71` and `:73`, and the compact check at `:113`.
+- `toolsOf` and the **More design tools** trigger are at `apps/web/src/components/design/DesignToolbar.tsx:146` and `:287`.
+- `aria-labelledby` and `data-property` are at `apps/web/src/components/design/DesignStyleField.tsx:224` and `:139`.
+
+The durable behaviour is already in `docs/architecture/design-canvas.md:297-312` (short-pane toolbar, label-in-name, deferred Enter) and `:460` (what the spec covers). The focus-watcher tolerance is recorded in the header of `e2e/DesignCanvasAccessibility.spec.ts:36-37`, and the spec defines the `arrowTo` helper at `:823`. The layer-tree windowing deviation is recorded in 0036's "Constraints and rationale", not in `architecture/`. Three things link to this file and would need updating on deletion: 0036 (Related, the Manual accessibility item, and the Accessibility evidence), `design-canvas.md` (indirectly, through 0036), and the folder index row.
+
+**Decisions.**
+
+- **What to do with the finished file?**
+  - **Delete it now and update the links (recommended).** Remove the file and its index row. Point 0036's three links at `design-canvas.md#client`. Move the windowing deviation and the "Radix menus need `arrowTo` and stable item keys" note into `design-canvas.md` ("Client" or "Tests").
+    - Pros: follows the README; removes one of the three files using ID 0054; nothing durable is lost, because the behaviour is already in `architecture/`.
+    - Cons: the WCAG reasoning (options a/b/c for the toolbar, the 400 px breakpoint choice) survives only in git history and PR #1244 unless it is copied over.
+  - **Keep it until 0036's screen-reader pass is done.** That pass may revisit the label-only names and the announcement wording.
+    - Pros: the human tester has the design rationale next to the checklist.
+    - Cons: breaks the README's delete-when-finished rule; the ID collision stays; 0036 can link to `design-canvas.md` for the same purpose.
+- **Fix the 0054 ID collision?**
+  - **Let deleting this file remove it from this folder and raise the collision with the owners of the other two (recommended).** Their numbers are permanent IDs, and renumbering would break inbound links.
+    - Pros: no link churn in other folders; the design folder no longer contributes to the clash.
+    - Cons: two 0054 files still exist elsewhere until someone decides.
+  - **Also add a unit test that fails on duplicate todo IDs, allowlisting the two that remain.**
+    - Pros: stops parallel PRs from repeating the clash, which this case shows is easy to do.
+    - Cons: cross-cutting work that belongs in a new cross-cutting todo, not here; the allowlist has to be maintained.
+
 The automated accessibility pass of
 [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md#accessibility)
 (`e2e/DesignCanvasAccessibility.spec.ts`) fixed seven focus and announcement
@@ -199,3 +237,4 @@ All on 2026-10-25, macOS 27.0 arm64, Chromium via Playwright 1.64.
   run is optional confirmation, not open work.
 - [design-canvas.md](../../architecture/design-canvas.md#client) describes
   the shipped behaviour.
+- [0732-duplicate-todo-numbers-unguarded.md](../cross-cutting/0732-duplicate-todo-numbers-unguarded.md): the duplicate 0054 number and the missing guard, split out.

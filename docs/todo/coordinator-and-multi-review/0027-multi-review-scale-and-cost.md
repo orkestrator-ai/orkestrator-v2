@@ -13,6 +13,207 @@ Every code item and the killed-Claude-CLI qualification were finished on
 [Gates, fallback, pipeline reminders and measurement](#gates-fallback-pipeline-reminders-and-measurement-2026-10-25).
 Only the scale qualification is left.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Mixed real-provider scale run**: an 8 to 32 reviewer panel across more platforms than Claude and Codex, recording caps, tail latency and peak RSS. Status: open (blocked on Cursor, Grok, OpenCode and Pi credentials in a test profile, and on the harness only knowing Claude and Codex).
+2. **Live step reminder and step continuation**: preparation, consolidation and Fix follow-ups are covered only by deterministic tests. Status: deferred (cannot be forced on a real provider).
+3. **Content-addressed evidence store**: a backend-owned, read-only evidence store. Status: deferred (until measured).
+4. **Provider batch status observation**: one bridge call for many reviewers' settlement and usage. Status: deferred (no bridge exposes it).
+5. **Hierarchical consolidation**: map/reduce merges when evidence exceeds `CONSOLIDATION_MAX_EVIDENCE_BYTES`. Status: deferred (no overflow has been observed, and nothing counts one).
+6. **`queuedAt` reviewer field**: a queue timestamp for the flow graph. Status: deferred (nothing would read it).
+7. **Skip identical renderer refetches**: avoid refetching an unchanged workflow on every `multi-review` announcement. Status: deferred (premise partly out of date, see below).
+8. **File hygiene**: stale wording about 0112, and what happens to this file after task 1. Status: open.
+
+### 1. Mixed real-provider scale run
+
+**Problem.** The fan-out caps, reviewer tail latency and backend memory have one real measurement: 8 reviewers, Claude and Codex only (2026-10-25). Panels can be up to 32 reviewers on any of the six platforms, so a user running a large mixed panel is on behaviour nobody has measured under real rate limits.
+
+**Context.** The only item left in this file. The harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`), and the run is batched with the "Several providers at once (mixed panels)" row of [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) alongside [0025](0025-multi-review-panel-value.md). The folder index rates the file Low because the remaining work is a measurement blocked on credentials.
+
+**Investigation.**
+- The scale case is `e2e/agent-testing/multi-review-live.spec.ts:921` onward. It is Claude and Codex only by type, not just by data: `pick` takes `"claude" | "codex"` (`:935`), reviewers alternate `claude`/`codex` (`:966`), and the per-platform sampling loop names only those two (`:987`). Only `CLAUDE_MODEL` and `CODEX_MODEL` overrides exist (`:73`-`:74`). Extending it is more than "adding their model picks", as the file says: the type, the alternation and the sampling loop all need to change.
+- The protocol accepts any platform as a reviewer (`isAgentPlatform` in `packages/protocol/src/review-fanout.ts:334`), and `REVIEW_FANOUT_MAX_REVIEWERS` is still 32 (`review-fanout.ts:34`). The caps are unchanged (`apps/backend/src/core/review-fanout-scheduler.ts:18`-`:24`).
+- **The harness cannot observe the per-provider cap.** `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` bounds concurrent *operations* within one runner pass (`review-fanout-scheduler.ts:22`, tasks built at `review-fanout.ts:857`), not reviewers whose turn is running on the provider. The spec counts reviewers with `status === "running"` per platform (`multi-review-live.spec.ts:987`) and never asserts it. Only the admission figure is asserted (`:1022`). The 2026-10-25 "at most 4 per platform were running" follows from 8 reviewers alternating over two platforms (4 each), not from the cap. A 32-reviewer panel can have 16 Claude turns running at once without breaking any cap. The scheduler's real figures (`BoundedTaskStats.maxActiveByGroup`, `review-fanout-scheduler.ts:58`) only go to `this.record` (`review-fanout.ts:891`), which is `NOOP_EFFICIENCY_OBSERVER` in production (`multi-review-efficiency.ts:118`).
+- RSS is sampled for the backend pid only (`multi-review-live.spec.ts:955`). Bridges and agent CLIs are separate processes, so peak RSS excludes the processes that grow with panel size.
+- `dev:test` accepts `--credential-source` for all six platforms (`apps/desktop/scripts/dev/arguments.ts:28`, `:98`; `AGENT_PLATFORMS` in `packages/protocol/src/agent-platforms.ts:2`). The blocker is which credentials a given host holds, not the tooling. The pinned versions are Grok 1.0.67, Pi 1.4.0 and OpenCode 1.19.4 (`docker/Dockerfile:195`-`:197`). The earlier runs were on macOS; this Linux host was not checked for credentials (research only).
+
+**Decisions.**
+
+- **How should the scale case prove the per-provider cap?**
+  - **Expose the pass's `BoundedTaskStats` to the test (recommended).** For example, a test-profile efficiency observer that records `maxActiveByGroup` content-free, read back through the profile.
+    - Pros: measures exactly what the cap bounds; content-free; no production surface if it is only on in agent-test profiles.
+    - Cons: new plumbing in the backend for a test; per-pass maxima still miss operations that overlap across passes.
+  - **Keep snapshot sampling and drop the per-platform claim.** Record running counts as a load figure only.
+    - Pros: no code change.
+    - Cons: the item asks that "the caps hold under real rate limits", and this cannot show it for the provider cap.
+  - **Count in-flight requests at each bridge.**
+    - Pros: independent of backend internals.
+    - Cons: touches five bridges, and counts other traffic too.
+- **Which panel and composition count as a pass?**
+  - **8, 16 and 32 reviewers, round-robin over every platform with credentials, at least four platforms (recommended).**
+    - Pros: covers the range the item names; each platform reaches the provider cap at 32; shows how latency and RSS scale.
+    - Cons: three long runs (the case allows 45 minutes each) and real cost.
+  - **32 only.**
+    - Pros: one run; the worst case.
+    - Cons: no scaling curve, and a failure gives no smaller working point.
+  - **Accept the existing 8-reviewer two-platform run and close the item.**
+    - Pros: no further work.
+    - Cons: no other platform has been a reviewer live (see Needs verification), and the cap evidence above is not real.
+- **Should peak RSS include bridges and agent processes?**
+  - **Sum the RSS of the profile backend's process tree (recommended).**
+    - Pros: measures the cost that grows with panel size.
+    - Cons: needs a process-tree walk on macOS and Linux; ownership must be confirmed before reading, following the production-host rules.
+  - **Backend only, as today.**
+    - Pros: simple and already recorded.
+    - Cons: misses most of the memory a large panel uses.
+- **Where and when to run it?**
+  - **With the 0031 mixed-panel batch, after the harness changes above (recommended).**
+    - Pros: one credential set-up serves 0025 and 0027; the harness is fixed first, so the run is worth its cost.
+    - Cons: waits on 0031's scheduling.
+  - **Now, on whichever host has the most credentials.**
+    - Pros: earlier evidence.
+    - Cons: without the cap fix it repeats the current gap; it may cover only three platforms.
+
+### 2. Live step reminder and step continuation
+
+**Problem.** The reminder and restart continuation for preparation, consolidation and Fix have never run on a real provider mid-step. A regression there would fail the whole review rather than one reviewer.
+
+**Context.** Recorded as "Not qualified live" in the 2026-10-17 and 2026-10-18 results. A model forgetting its result tool cannot be forced (1 in 15 preparations on 2026-10-17), and no live restart happened to land mid-step.
+
+**Investigation.** The step paths remain `MultiReviewService.prepareStepFollowUp` and `advanceFixModel` in `apps/backend/src/core/multi-review-service.ts`. `apps/backend/tests/multi-review-claude-bridge-restart.test.ts` drives a real Claude bridge process with a fake CLI through `HttpBridgeProvider` for a step. That is the closest thing to live, and it covers the continuation and the reconnect. The spec's restart case restarts the backend while *reviewers* run. Nothing in it targets preparation or consolidation.
+
+**Decisions.**
+
+- **Is deterministic coverage enough?**
+  - **Yes, keep this out of the outstanding list (recommended).** The real-bridge restart test already crosses the process boundary, and the reminder cannot be triggered honestly.
+    - Pros: no flaky live case built on timing; the contract is already pinned.
+    - Cons: a provider-specific difference in mid-step restarts (for example Codex app-server) is untested live.
+  - **Add a live disruption timed to the preparation or consolidation phase.** The spec already polls `phase`.
+    - Pros: real evidence for the step continuation.
+    - Cons: timing-dependent; another long live case; still cannot cover the reminder.
+
+### 3. Content-addressed evidence store
+
+**Problem.** Each review package and its validation artifacts are verified by hashing on disk twice per evidence generation. A shared, content-addressed, read-only store could cut that cost and share evidence across workflows.
+
+**Context.** Deferred until measured. The file lists the design questions: garbage collection, reference counting, crash recovery, quotas, macOS and Windows, container and local parity.
+
+**Investigation.** No such store exists in `apps/backend/src/core`. The 2026-10-25 benchmark (`multi-review-large-evidence.bench.test.ts`) measured 511 ms per generation for 512 MiB on pinned Bun 1.4.4, with RSS growth under 20 MiB. Container hashing was not measured.
+
+**Decisions.**
+
+- **What measurement would reopen it?**
+  - **Container-side verification time at 256 MiB to 1 GiB, reopening if one generation exceeds a few seconds (recommended).**
+    - Pros: covers the one path not measured; local numbers already look acceptable.
+    - Cons: needs a Docker run of the benchmark, which does not exist yet.
+  - **Retire the item.** Local cost is sub-second per generation.
+    - Pros: removes a large speculative design.
+    - Cons: container cost is unknown and may be much higher.
+
+### 4. Provider batch status observation
+
+**Problem.** Each running reviewer is observed with its own status and transcript reads, so observation calls scale with panel size.
+
+**Context.** Deferred because no bridge serves a batch read of settlement, usage and request reconciliation.
+
+**Investigation.** Still accurate. `activityBatch` (`apps/backend/src/core/agent-provider-contract.ts:707`), served by `HttpBridgeActivityBatchReader` (`http-bridge-provider.ts:498`) over `POST /sessions/activity`, returns activity state only. No bridge has a batch status route. The observation pool is bounded at 8 per pass, so the per-pass cost is capped already.
+
+**Decisions.**
+
+- **Keep it deferred, or retire it?**
+  - **Keep deferred, tied to task 1's per-pass timing at 32 reviewers (recommended).**
+    - Pros: decided by the run that measures it.
+    - Cons: the item stays open.
+  - **Retire now.**
+    - Pros: a batch route on five bridges is a big contract change for an unmeasured gain.
+    - Cons: loses the record if task 1 shows observation passes dominating.
+
+### 5. Hierarchical consolidation
+
+**Problem.** A panel whose reports exceed 640 KiB fails before consolidation dispatch with `ConsolidationBudgetError`, and the user loses the consolidation step.
+
+**Context.** Deferred until real workflows exceed the budget. Merges must keep every source ID.
+
+**Investigation.** `CONSOLIDATION_MAX_EVIDENCE_BYTES` is unchanged (`apps/backend/src/core/review-consolidation-evidence.ts:38`, error class at `:119`). Nothing counts how often the error fires: no metric or counter references it outside that module and the prompt builder (`multi-review-prompts.ts:109`). So the trigger the item waits for cannot be observed.
+
+**Decisions.**
+
+- **How will anyone know the budget is being hit?**
+  - **Add a content-free counter to the existing recurring metrics when overflow throws (recommended).**
+    - Pros: makes the deferral condition measurable; tiny and bounded.
+    - Cons: new metric code (a new todo file, under the README rules).
+  - **Rely on user reports.**
+    - Pros: no code.
+    - Cons: a failed consolidation may be read as a provider fault, so it is never reported as this.
+
+### 6. `queuedAt` reviewer field
+
+**Problem.** None today. The flow graph shows queue position only.
+
+**Context.** Deferred until queue time becomes user-visible. `admissionState` and `queuePosition` shipped for [0029](0029-multi-review-flow-graph.md).
+
+**Investigation.** Both fields exist (`packages/protocol/src/review-fanout.ts:112`, `:117`), and `queuedAt` does not.
+
+**Decisions.**
+
+- **Keep or retire?**
+  - **Retire it (recommended).** Nothing reads it, and adding a field later is cheap.
+    - Pros: removes a speculative item.
+    - Cons: a future queue-time UI starts from scratch, which is small.
+  - **Keep deferred.**
+    - Pros: preserves the note.
+    - Cons: noise in the file with no trigger anyone is watching.
+
+### 7. Skip identical renderer refetches
+
+**Problem.** Every `multi-review` resource announcement makes the renderer fetch the whole workflow, even when it has not changed since the last fetch.
+
+**Context.** The file says a real skip needs a per-workflow revision in resource-change events, because the current revision is a global counter.
+
+**Investigation.** The refetch is `onResourceChanged("multi-review", …)` calling `hydrateMultiReviewWorkflow` (`apps/web/src/lib/store-resource-sync.ts:631`, `apps/web/src/lib/multi-review-persistence.ts:20`). `ResourceChange.revision` is indeed the global sequence (`packages/protocol/src/resource-events.ts:186`). But the premise is partly out of date. Each stored workflow row already carries its own `revision`, incremented on every save (`apps/backend/src/core/storage-reviews.ts:601`), and the renderer receives it (`PersistedLoopedReviewWorkflow.revision`, `apps/web/src/types/index.ts:296`). Build Pipeline already uses that pattern: `get_build_pipeline` takes `knownRevision` and answers unchanged (`apps/backend/src/core/commands-registry-build.ts:137`, `apps/web/src/lib/backend/workflows.ts:1078`).
+
+**Decisions.**
+
+- **How to skip, if this is picked up?**
+  - **A conditional `get_multi_review_workflow` with `knownRevision`, as Build Pipeline has (recommended).**
+    - Pros: no event schema change; reuses a shipped pattern; saves the body transfer and the store replace.
+    - Cons: the round trip still happens; the item stays deferred until refetch cost is measured.
+  - **Add a per-resource revision to `ResourceChange`.**
+    - Pros: skips the round trip entirely.
+    - Cons: a protocol change across every resource kind, for one consumer.
+  - **Leave it.**
+    - Pros: no work; `resource-sync.ts` already coalesces per key.
+    - Cons: a large workflow is re-sent on every staged observation flush.
+
+### 8. File hygiene
+
+**Problem.** Some text in this file is out of date, and the file's end state needs deciding.
+
+**Context.** Under the README rules, items may be corrected in place, and a file is deleted once its last item is done.
+
+**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review-fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to [0223](0223-provider-non-delivery-proof.md). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) is still present, with `stableJitterMs` moved out to `multi-review-scheduling.ts:157` as stated, so its removal still belongs to 0048.
+
+**Decisions.**
+
+- **What to do with the file once task 1 is done?**
+  - **Delete it and move the invariants, error scopes and safety-commit rationale into a living fan-out section of `architecture/review-preparation.md` (recommended).** The Related section says the rationale here has no other home.
+    - Pros: follows the README; the durable design stops living in a todo file.
+    - Cons: a sizeable doc move.
+  - **Keep it as the design record.**
+    - Pros: no move.
+    - Cons: a finished todo file breaks the README rules, and the rationale is hard to find.
+- **Should the stale 0112 wording be corrected now?**
+  - **Yes, in the next change that touches this file (recommended).**
+    - Pros: a reader no longer thinks two recovery bugs ship.
+    - Cons: none of note.
+  - **Leave it as history.**
+    - Pros: preserves the record of the 2026-10-25 state.
+    - Cons: it misleads anyone picking the file up.
+
 Multi Review's control plane covers reviewer admission, observation,
 persistence, evidence verification and consolidation input. Its cost must stay
 bounded, and independent of retained review history, as a panel grows towards

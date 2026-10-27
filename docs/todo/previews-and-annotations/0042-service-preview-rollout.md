@@ -6,6 +6,408 @@ fault tests and single-machine runs against `b83ae534` (2026-10-22); node
 retention, tunnel liveness, compatibility cases and UI items against
 `00a0cb82` (2026-10-25).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Two-machine tailnet run**: the runbook run with a decoy, real-latency
+   baselines, a throttled link, network loss and publication from the second
+   machine. Status: blocked (on a second machine).
+2. **Real private DNS and certificates**: one support row per deployment type,
+   with and without Tailscale Serve (`publicPort`). Status: blocked (on a real
+   private zone and wildcard certificate).
+3. **Shipping Safari and iOS, top-level**: Safari with real certificate trust,
+   the hostile-worker case there, and the iOS handoff on a device or
+   simulator. Status: blocked (on macOS Safari and iOS hardware).
+4. **Docker Desktop on Windows**: binding inspection, Auto ports, recreation
+   and the exec relay. Status: blocked (on a Windows host).
+5. **Remaining compatibility cases**: a streaming or router framework fixture
+   and real-provider OAuth. Status: open.
+6. **Performance thresholds and missing metrics**: set thresholds from task
+   1's baseline; add HMR, reconnect and desktop-ingress measurements. Status:
+   blocked (thresholds on task 1); metric additions open.
+7. **Flip defaults and cohort sign-off**: tunnel and relay defaults, the
+   observation window and who signs off. Status: blocked (on tasks 1, 4 and
+   6).
+8. **Retire the legacy route and compatibility mode**: code item 6 and the
+   support-window and legacy-tab annotation questions. Status: blocked (on
+   task 7 plus the support window).
+9. **Shared legacy partition retention**: the remaining half of code item 4.
+   Status: blocked (on task 8).
+10. **Real-window leftovers**: the pane-layout announcement (item 9), node
+    retention against a real command node, and the narrow toolbar measured in
+    a window (item 11). Status: open.
+11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: open.
+12. **Partition disk use on a long-lived profile**: the "Needs verification"
+    item. Status: partly done (`disk:report` measures it; no long-lived data).
+
+Done and on `main` (`f47398fd`, #1280, 2026-10-25): code items 1 to 3, 5, 7,
+8 and 10, node-partition retention, the real-window retention pass, Reset site
+data with a hostile worker, tunnel liveness (D2) and gated runs (D3).
+
+### 1. Two-machine tailnet run
+
+**Problem.** Every preview run so far is single-machine, so remote-backend
+users have no evidence that the tunnel or private origins behave over a real
+network. It gates the tunnel default and the thresholds.
+
+**Context.** Runbook `docs/development/preview-two-machine-runbook.md` and
+`scripts/preview-latency-baseline.ts` (loopback self-test only). Batched with
+[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md); 0044's
+remote-backend run needs the same two hosts.
+
+**Investigation.** Both files exist. Tunnel liveness now pings every 15 s
+(`PREVIEW_TUNNEL_CLIENT_PING_MS`, `packages/protocol/src/preview-access.ts:149`),
+which the network-loss case should observe. Nothing in the repository can run
+this from one host.
+
+**Decisions.**
+
+- **How to schedule it?**
+  - **One session with 0044's remote-backend run and 0054's DNS probes
+    (recommended).**
+    - Pros: the same two machines and tailnet serve three files; one set of
+      baselines.
+    - Cons: a long session; one failure can stall all three.
+  - **Run it alone first.**
+    - Pros: smaller, easier to debug.
+    - Cons: a second hardware session for the others.
+- **What counts as a pass for latency?**
+  - **D8's proposal: p95 first byte and connect within 1.5x the direct route
+    over the same link, no unbounded queue growth, zero cross-service reach
+    (recommended).**
+    - Pros: relative, so independent of the link's absolute speed.
+    - Cons: an arbitrary factor until the first baseline shows the spread.
+  - **Record numbers only, decide thresholds afterwards.**
+    - Pros: no premature target.
+    - Cons: the run cannot pass or fail, so task 7 still has nothing to use.
+
+### 2. Real private DNS and certificates
+
+**Problem.** Publication has run only with a throwaway CA and a
+browser-local proxy; renewal, expiry, hostname mismatch and unknown Host (421)
+are unproved on real DNS.
+
+**Context.** Publication is never a default (operator domain, certificate,
+key, listen address); each deployment type needs its own support row. 0054's
+remaining probes ride on this run.
+
+**Investigation.** Publication defaults off
+(`apps/backend/src/core/storage-preview-services.ts:127-133`). The harness is
+`apps/backend/src/preview-browser-harness.ts`; the live Serve metadata test is
+`apps/backend/src/tailscale-serve-metadata.test.ts`.
+
+**Decisions.**
+
+- **Which deployment first?**
+  - **Tailscale Serve with a wildcard certificate (`publicPort`)
+    (recommended).**
+    - Pros: the documented path for most users; header transport already
+      proved live.
+    - Cons: depends on Tailscale's certificate and DNS behaviour.
+  - **Split DNS with an operator certificate, no forwarder.**
+    - Pros: fewer moving parts.
+    - Cons: harder for most users to reproduce; less representative.
+
+### 3. Shipping Safari and iOS, top-level
+
+**Problem.** Playwright WebKit is engine signal only; shipping Safari, its
+privacy settings and the iOS handoff have never run.
+
+**Context.** Hostile-worker and compatibility items both end with "Still
+open: shipping Safari". iOS handoff is contract-tested only
+(`tests/unit/ios-mobile-contracts.test.ts:262`). Embedded surfaces are in
+[0046](0046-embedded-service-previews.md).
+
+**Investigation.** `create_preview_handoff_url` and `RemoteWebView`'s
+external-open path are unchanged. No harness drives shipping Safari.
+
+**Decisions.**
+
+- **Manual or automated?**
+  - **Manual checklist in one macOS and iOS session with 0044's wrapper run
+    and 0054's Safari probes (recommended).**
+    - Pros: one setup of real certificate trust; a person can enter the
+      gateway token, which agents must not.
+    - Cons: one-off evidence.
+  - **A `safaridriver` harness for macOS Safari.**
+    - Pros: repeatable.
+    - Cons: new WebDriver harness; still no iOS coverage.
+
+### 4. Docker Desktop on Windows
+
+**Problem.** The relay and Auto mappings are proved on Linux Engine and Docker
+Desktop for macOS, not Windows. It gates the relay default.
+
+**Context.** Also tracked in
+[0019](../containers-and-environments/0019-container-platform-qualification.md).
+
+**Investigation.** The suite is `mise run test:preview:docker`; nothing in it
+is Windows-specific.
+
+**Decisions.**
+
+- **Gate the relay default on Windows?**
+  - **Yes, keep relay off until Windows passes (recommended).**
+    - Pros: a default must hold for every supported desktop.
+    - Cons: macOS and Linux users wait for a Windows host.
+  - **Flip per platform (macOS and Linux first).**
+    - Pros: earlier benefit.
+    - Cons: a platform-specific default the settings model does not have today.
+
+### 5. Remaining compatibility cases
+
+**Problem.** Only Vite 7.3.6 (and the repository's Vite 8) and a plain fixture
+are covered; a streaming or router framework and real OAuth have not run.
+
+**Context.** Synthetic external redirects are covered since 2026-10-23.
+
+**Investigation.** `test-fixtures/` has only `preview-app`, `preview-vite`,
+`agent-project` and `test-diagnostics`; no Next.js, Remix or Astro fixture.
+
+**Decisions.**
+
+- **Which framework?**
+  - **A minimal Next.js app router fixture (recommended).**
+    - Pros: streaming, RSC and router in one; the most common framework; the
+      framework hints already cover Next.js 14 to 16.
+    - Cons: a large dependency tree for a fixture; needs a pinned install
+      like the Vite one.
+  - **A tiny hand-written streaming server.**
+    - Pros: no dependencies; exact control of chunking.
+    - Cons: does not catch real framework assumptions (absolute URLs,
+      `Host` handling).
+- **Real OAuth?**
+  - **Defer and rely on the synthetic redirect cases (recommended).**
+    - Pros: no real provider credentials in a test.
+    - Cons: provider-specific redirect URI checks stay untested.
+  - **One run against a real provider's test tenant.**
+    - Pros: true evidence.
+    - Cons: a credential to manage and a provider dependency.
+
+### 6. Performance thresholds and missing metrics
+
+**Problem.** No thresholds exist, so no cohort can pass, and several things the
+thresholds name are not measured.
+
+**Context.** The Qualification bullet lists first byte, connect, HMR delivery,
+peak queue and decode bytes, socket counts.
+
+**Investigation.** `PreviewHistogramName` is still only `http.connect_ms`,
+`http.first_byte_ms` and `tunnel.open_ms`
+(`apps/backend/src/preview-metrics.ts:20`). The desktop ingress
+(`apps/desktop/electron/preview-transport-manager.ts`,
+`preview-tunnel-client.ts`) records no metrics; there is no HMR-delivery or
+reconnect series anywhere.
+
+**Decisions.**
+
+- **Add the missing series before the two-machine run?**
+  - **Yes: reconnect counts and desktop-ingress connect and first byte; HMR
+    delivery measured by the latency script, not the product (recommended).**
+    - Pros: the run then yields every number thresholds need; the product
+      gains only content-free counters.
+    - Cons: new code and tests before a run that is already blocked.
+  - **Measure everything from the client script only.**
+    - Pros: no product change.
+    - Cons: no production telemetry for the observation window in task 7.
+
+### 7. Flip defaults and cohort sign-off
+
+**Problem.** Tunnel and relay stay off by default; users get the legacy route
+and its shared origin, cookie rewriting and missing WebSockets.
+
+**Context.** "Enabling defaults" and open question 3. "An absence of
+complaints is not a metric." Every flip keeps the rollback drill passing
+(`apps/backend/tests/gateway-preview.test.ts:209`).
+
+**Investigation.** `DEFAULT_PREVIEW_SETTINGS` still has `transport: false`,
+`relay: false` (`apps/backend/src/core/storage-preview-services.ts:129-130`).
+`ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` remain the
+overrides.
+
+**Decisions.**
+
+- **What observation window?**
+  - **Opt-in cohort (maintainer and testers with the setting on) for one
+    Stable release, judged by `PreviewMetrics` error and resource counts
+    (recommended).**
+    - Pros: real use with a rollback; matches the release cadence that the
+      support window already uses.
+    - Cons: a small cohort may miss rare network setups.
+  - **Flip right after the two-machine run.**
+    - Pros: fastest.
+    - Cons: no field data before every desktop switches transport.
+- **Who signs off?**
+  - **The maintainer, recorded in the evidence log (recommended).**
+    - Pros: the D8 recommendation; one accountable person.
+    - Cons: single point of delay.
+  - **Automatic once thresholds pass.**
+    - Pros: no human bottleneck.
+    - Cons: thresholds are not yet trusted enough to ship a default unattended.
+
+### 8. Retire the legacy route and compatibility mode
+
+**Problem.** The legacy loopback route breaks `__Host-` cookies, strips CSP,
+has no WebSocket support and shares one origin across apps. It must stay until
+old clients and stored legacy tabs are past the support window.
+
+**Context.** Open questions 1 and 2 and D8. The register row in
+`docs/architecture/version-compatibility.md:117` sets the removal condition:
+the default has flipped, the floor is at or above the first Stable with that
+default, and stored legacy tabs have a migration.
+
+**Investigation.** Still present: `GatewayProxy.proxyToTarget`
+(`apps/backend/src/gateway-proxy.ts:121`, counting
+`preview.legacy-loopback-route` at `:133`; the name is registered in
+`apps/backend/src/core/compatibility-path-usage.ts:37`), rewrite helpers across
+`gateway-proxy.ts`, `gateway-support-extra.ts` and `gateway-auth.ts`, and
+`ServiceBrowserTab` compatibility mode
+(`apps/web/src/components/browser/ServiceBrowserTab.tsx:259-262`). **Open as
+service** (`legacyUrlServiceMatch`,
+`apps/web/src/lib/preview-service-entry.ts:116`) is the only conversion; there
+is no automatic migration of stored legacy tabs.
+
+**Decisions.**
+
+- **Keep compatibility mode as a fallback after the flip?**
+  - **Keep it, labelled, for one Stable release, then remove it with the
+    route (recommended, D8).**
+    - Pros: a safety net while the new default settles.
+    - Cons: two code paths for one more release.
+  - **Remove it at the flip.**
+    - Pros: less code sooner.
+    - Cons: no fallback if the tunnel fails for a user.
+- **How do stored legacy URL tabs migrate?**
+  - **Convert automatically where `legacyUrlServiceMatch` finds exactly one
+    match; leave the rest as plain URL tabs that open externally
+    (recommended).**
+    - Pros: reuses the strict D4 rule; no guessing.
+    - Cons: ambiguous tabs lose in-app preview.
+  - **Only the manual Open as service.**
+    - Pros: no surprise changes.
+    - Cons: the register's "stored legacy tabs have a migration" is never
+      met.
+- **Annotations on legacy URL tabs?**
+  - **Retire with the route, after offering Open as service (recommended,
+    D8).**
+    - Pros: one annotation path.
+    - Cons: notes on those tabs become read-only history.
+  - **Keep a minimal legacy path for annotations.**
+    - Pros: no loss.
+    - Cons: keeps the route alive for one feature.
+
+### 9. Shared legacy partition retention
+
+**Problem.** Shared per-window legacy partitions of live connections are never
+cleared and are the larger share of disk (93 MB in one profile).
+
+**Context.** Code item 4's remainder: set a retention window once legacy URL
+tabs are retired, and clean only partitions this install created.
+
+**Investigation.** `PreviewPartitionRetention`
+(`apps/desktop/electron/preview-partition-retention.ts`, node methods at
+`:228`, `:257`, `:315`) handles service and node partitions only.
+`browserPreviewPartitionForWindow` is unchanged.
+
+**Decisions.**
+
+- **Wait for task 8 or act now?**
+  - **Wait, as the file says (recommended).**
+    - Pros: clearing a live shared partition would log users out of every
+      legacy tab.
+    - Cons: disk keeps growing until then.
+  - **Clear caches only (GPU, Code Cache) now, keep cookies and storage.**
+    - Pros: recovers most of the measured bytes without logging anyone out.
+    - Cons: new partial-clear code and tests; a new todo file under the
+      README rules.
+
+### 10. Real-window leftovers
+
+**Problem.** Three fixes are proved at unit level only: another client's
+`save_pane_layout` reaching an Electron window (item 9), node retention
+against a real command node, and the narrow toolbar layout (item 11).
+
+**Context.** Item 9's 2026-10-21 miss did not reproduce in unit tests.
+
+**Investigation.** Item 9's guards are in `pane-layout-persistence.ts` and
+`store-resource-sync.ts`; navigation basis is in
+`apps/desktop/electron/ipc.ts:436-445`; the toolbar classes are at
+`apps/web/src/components/browser/browser-tab-hooks.ts:21-23`. The Electron
+spec has no case for any of the three.
+
+**Decisions.**
+
+- **Add Electron spec cases or check by hand?**
+  - **Add two cases to `service-preview-electron.spec.ts`: a second client's
+    layout save reaching the window, and the toolbar's address width at a
+    519 px pane (recommended).**
+    - Pros: permanent; the spec already has a second-backend fixture and
+      narrow-window cases.
+    - Cons: more time in an already 17-test spec.
+  - **One manual pass, recorded in the evidence log.**
+    - Pros: quick.
+    - Cons: no regression coverage.
+- **Node retention against a real command node?**
+  - **Leave it at unit level (recommended).**
+    - Pros: ten unit tests cover the voucher logic; a real multi-node setup
+      costs a two-machine session.
+    - Cons: the 30-minute registry read path is not seen end to end.
+  - **Add it to task 1's session.**
+    - Pros: real evidence for little extra time.
+    - Cons: lengthens an already long run.
+
+### 11. Preview flakes 0620 and 0622
+
+**Problem.** Two Electron preview flakes stay open and can fail
+`mise run test:agent:electron`.
+
+**Context.** Item 12 keeps 0620 open "for one more loaded window"; item 13
+asks for Electron output if 0622 recurs.
+
+**Investigation.** Both are still `open` in
+`docs/tests/flaky-tests/previews-annotations-and-gateway/0000-index.md:29-30`.
+Both index rows record recurrences in later main-merge runs, where the
+complete owner then passed alone. Throttling switches are in `ELECTRON_TEST_SWITCHES`
+(`e2e/agent-testing/electron-launch-switches.ts:29`).
+
+**Decisions.**
+
+- **How to close them?**
+  - **Capture Electron main output on failure for 0622, and replace 0620's
+    focus waits with a check that the picker received the key event
+    (recommended).**
+    - Pros: targets the stated missing evidence; keeps the tests strict.
+    - Cons: test-harness work for flakes that pass on rerun.
+  - **Keep observing.**
+    - Pros: no work.
+    - Cons: both already recurred; observation alone has not closed them.
+
+### 12. Partition disk use on a long-lived profile
+
+**Problem.** Only two snapshots of partition size exist; growth over months is
+unknown.
+
+**Context.** D7 added partition rows to `mise run disk:report`.
+
+**Investigation.** The task exists in `mise.toml`. Two read-only data points
+are recorded (93 MB of shared partitions on one profile, 172 kB on another).
+
+**Decisions.**
+
+- **Keep this as a separate item?**
+  - **Fold it into task 9: take one `disk:report` reading from a long-lived
+    profile when deciding the shared-partition window, then drop it
+    (recommended).**
+    - Pros: the number only matters for that decision; avoids an open-ended
+      measurement.
+    - Cons: no trend data.
+  - **Collect a monthly reading.**
+    - Pros: a real trend.
+    - Cons: a recurring chore with no consumer until task 9.
+
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
 origins or an optional container relay. Every new transport ships off by

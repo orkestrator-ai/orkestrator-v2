@@ -3,6 +3,123 @@
 Checked against `main` at `31d0fb06` (2026-10-17); items 1–3 worked on
 2026-10-26 against `main` at `93018933`.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to [0247](0247-test-temp-dir-leaks-from-full-sweep.md).
+2. **Surface permanently failing cleanup (Code 2)**: a `disk:report` row for ledger entries that stopped retrying. Status: done.
+3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: blocked (needs a macOS host).
+4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: open.
+5. **Retrying exhausted entries (open question)**: should an entry at the attempt cap ever be retried? Status: open.
+6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: open.
+
+The folder index row ("what remains is test temp-dir leaks and surfacing cleanup that keeps failing") is out of date. What remains is task 3's macOS run and the three open questions.
+
+### 1. Test temp-dir leaks
+
+**Problem.** Tests left temporary directories behind on every run.
+
+**Context.** The fixes were made at source (decision 1). The full sweep then found more leaks, which went to 0247, because an existing file takes no new todos.
+
+**Investigation.** Done in `7809191f` (#1299). The remaining leaks are 0247's.
+
+**Decisions.** None: the item is done, and its follow-up work lives in 0247.
+
+### 2. Surface permanently failing cleanup
+
+**Problem.** A ledger entry that stopped retrying was visible only in a single `console.warn`.
+
+**Context.** Decision 2 chose a `disk:report` row over diagnostics or a UI notice.
+
+**Investigation.** All present at HEAD: `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS = 8` (`apps/backend/src/core/environment-cleanup-ledger.ts:77`), `isEnvironmentCleanupExhausted` (`:83-87`), its use in the reconciler (`environment-cleanup-reconciler.ts:92-96`, `:129`) and `environmentCleanupLedgerRow` (`scripts/disk-report.ts:186`).
+
+**Decisions.** None: done; the follow-on choices are tasks 4 and 5.
+
+### 3. Keychain item removed by `dev:reset`
+
+**Problem.** Each development profile leaves a `<title> Safe Storage` item in the macOS login Keychain, and the run host had 292 of them. The new removal code has never run against a real Keychain.
+
+**Context.** The file gives the exact steps: a `dev:test` profile, then `dev:stop`, then `dev:reset`, then `security find-generic-password` checks. omarchy-hp is Linux.
+
+**Investigation.** The code is in place: `removeProfileKeychainItem` (`apps/desktop/scripts/dev/profile-cleanup.ts:161-190`, `delete-generic-password` at `:186`), `keychainRoots` (`:229`, `:316`, `:371`, `:471`) and `runtimeProfileElectronTitle` (`apps/desktop/electron/runtime-profile.ts:178`). The file has not changed since `7809191f`.
+
+**Decisions.**
+
+- **Where to run it, and what counts as a pass?**
+  - **Batch it into the macOS session in [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md), using the file's steps. Pass when the dev item is found before the reset and exits 44 after it, and the production item is unchanged (recommended).**
+    - Pros: one macOS session covers several gates; the pass criteria are already written.
+    - Cons: waits for that session.
+  - **Accept the unit tests and close the item.**
+    - Pros: no macOS host needed.
+    - Cons: the `security` exit codes and Electron's item naming would never be checked live, and the file rates release-sensitive Keychain behaviour.
+- **Also check Linux secret stores (decision 8)?**
+  - **No, leave them out of this file; open a new todo only if a Linux run shows leftovers (recommended).**
+    - Pros: respects the rule against reading the host keyring; keeps this file's scope.
+    - Cons: Linux development profiles may leak keyring items unnoticed.
+  - **Check them on a disposable Linux account.**
+    - Pros: closes the question.
+    - Cons: new work, which needs a new file anyway.
+
+### 4. Failing entry and namespace reuse
+
+**Problem.** If a namespace were reused, a stuck ledger entry could remove state that belongs to its successor.
+
+**Context.** The file says namespaces are fresh per environment.
+
+**Investigation.** That is still true. `parseEnvironmentBranchNamespace` (`apps/backend/src/core/commands-agent-support.ts:218-224`) takes the 12-hex environment-id segment, and the `-rN` and numeric suffixes are retries and collisions within the same environment. No creation path reuses another environment's namespace.
+
+**Decisions.**
+
+- **Add a guard?**
+  - **No; record that namespaces are per environment id and revisit only if that changes (recommended).**
+    - Pros: no code for a case that cannot happen today.
+    - Cons: a future feature that reuses namespaces (for example a restore) has to remember this.
+  - **Refuse creation when an exhausted entry names the namespace.**
+    - Pros: safe against future reuse.
+    - Cons: dead code today, and it would block a user with no remedy offered.
+
+### 5. Retrying exhausted entries
+
+**Problem.** An entry at the cap stays until someone acts, even after a backend upgrade has fixed its cause.
+
+**Context.** Decision 2 rejected a UI notice for a rare state and deferred it to this question.
+
+**Investigation.** The reconciler skips exhausted entries for good (`environment-cleanup-reconciler.ts:92-96`). The attempt counter resets only when an entry is created (`:514`).
+
+**Decisions.**
+
+- **When, if ever, to retry?**
+  - **Reset the attempts once when the backend version changes (recommended).**
+    - Pros: an upgrade is the likeliest fix for a persistent failure; bounded to one more retry cycle per version.
+    - Cons: needs the backend version stored on the entry; a failure the upgrade did not fix logs once more.
+  - **Only on an explicit user action (a Settings > Disk usage button).**
+    - Pros: never surprising.
+    - Cons: needs a backend command and renderer work for a rare state.
+  - **Never.**
+    - Pros: no change.
+    - Cons: entries pile up, and `disk:report` is their only exit.
+
+### 6. Stray sweep of user-chosen folders
+
+**Problem.** A stray build-log directory in a user-chosen worktree folder is never swept.
+
+**Context.** The sweep skips anything modified within the last hour and aborts when the owner set cannot be listed completely.
+
+**Investigation.** `sweepStrayWorkspaceDirectories` lists only `getWorktreeBaseDir(context)` (`environment-cleanup-reconciler.ts:360-370`). A per-environment `worktreeBaseDir` is persisted (`storage-projects.ts:751`) and already used as a deletion root (`environment-cleanup.ts:90`).
+
+**Decisions.**
+
+- **Widen the sweep?**
+  - **Yes, to the distinct `worktreeBaseDir` values that live or ledgered environments recorded, with the same ownership and age rules (recommended).**
+    - Pros: covers folders Orkestrator itself chose, and nothing else.
+    - Cons: a user folder can hold unrelated directories, so the "only build logs" content rule becomes the whole safety margin.
+  - **No, keep it to the backend's root.**
+    - Pros: never touches a user-chosen folder.
+    - Cons: strays there leak forever (a low-cost leak: build logs only).
+
 Deleting an environment, the startup reconciler and the pre-ledger sweeps
 remove only state Orkestrator can prove it owns, and dev tooling and tests
 must not grow disk without bound. The code shipped in #856 (deletion ledger,

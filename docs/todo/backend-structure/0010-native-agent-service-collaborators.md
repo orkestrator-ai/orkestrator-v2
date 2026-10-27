@@ -6,6 +6,35 @@ Planned against `main` at `2459b05c` (2026-10-15). Done on
 [`native-agent-service.md`](../../architecture/native-agent-service.md); delete
 this file and its index row once the branch has merged (see decision 12).
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+1. **Retire this finished file**: all six code steps and the qualification are done and merged (#1180); only the file's own retirement remains. Status: done.
+
+### 1. Retire this finished file
+
+**Problem.** The file is marked Finished and says to delete it with its index row once the branch merged (decision 12). It still holds rank 7 in the folder index.
+
+**Context.** The README rule: move durable behaviour into `architecture/`, delete the file, remove the row. The size follow-up from decision 11 is [0057](0057-native-agent-service-size.md), which stays open.
+
+**Investigation.** The branch merged as `be53bdd8` (#1180). The claims hold at HEAD: none of the six layer files exist (only the older `native-agent-service-shared.ts` and `native-agent-service-projection-artifacts.ts` share the prefix, neither a layer), there is no `abstract` member in `native-agent-service.ts`, and `PINNED_CHAINS` is empty (`tests/unit/inheritance-chains.test.ts:50`). The durable description is in `docs/architecture/native-agent-service.md`: the collaborator table ("Collaborators", line 10, which also lists `NativeAgentObservationBroker`), host wiring and construction order ("Wiring", line 35), `init`/`shutdown` order ("Lifecycle", line 54), the invariants (line 69) and `collaborators(service)` / `forTesting()` ("Tests", line 81). Decisions 4 to 9 are reflected there as outcomes but not as reasons; decision 5 (`scanTasks` stays on the service) and decision 10 (`forTesting()` is production-visible but test-only) are the two a later refactor would most likely undo by mistake. The line counts in "Current state" are out of date: the service is 4,276 lines (was 3,880), the projection 5,589 (was 5,303), the launch reconciler 1,692 (was 1,472) and the interaction tracker 730 (was 861), after 25 later commits. Inbound links that a deletion must update: three flaky-test case files cite this file (`environments-and-containers/0248-*.md`, `0621-*.md`, `native-agents-and-transcripts/0247-*.md`), plus 0009, 0012 and 0057.
+
+**Decisions.**
+
+- **What to do with this file now that its branch has merged?**
+  - **Delete it now, after adding decisions 5 and 10 to `native-agent-service.md` (recommended).** One sentence each in "Collaborators" and "Tests"; repoint the links in 0012 and 0057 at the architecture doc; leave the flaky-test case files' history links or turn them into plain text; remove the index row.
+    - Pros: follows the README rule; the two reasons most likely to be lost survive beside the code they describe.
+    - Cons: the flaky-test cases lose a live link to the change under test (the commit hash still identifies it).
+  - **Delete it as it stands.** Remove file and row and fix the inbound links.
+    - Pros: smallest change; the architecture doc already describes the structure.
+    - Cons: the "why" behind `scanTasks` placement and `forTesting()` is only in git history.
+  - **Keep it until 0057 is done.** Retire the native-agent series together.
+    - Pros: 0057 keeps linking to its decision 11.
+    - Cons: contradicts the README rule; 0057 is low priority and its own opening paragraph already states the context it needs.
+
 `NativeAgentService` was one class cut by size into six `extends` layers held
 together by abstract forward declarations. The goal was one plain class with an
 unchanged public surface that wires collaborators, each owning its state

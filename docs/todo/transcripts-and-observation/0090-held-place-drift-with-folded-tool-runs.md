@@ -4,6 +4,39 @@ Checked against `main` at `71227437` and again at `a5d78cfc`, after the
 #1212 scroll rework (2026-10-24). Resolved on 2026-10-25 against `main` at
 `ba7cc8d4` (branch `todo-0090-held-place-drift`): every item below is done.
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
+### Tasks
+
+The file is Finished: every code, qualification and open-question item is done, and the branch has merged.
+
+1. **Find and fix the 124 px**: a clamp, fixed by a clamp-aware live check. Status: done.
+2. **Rerun the live native cases**: Claude and tool-only Codex passed, including after a reload. Status: done.
+3. **What to do with the file**: decision 5 deferred deletion to review, which has happened. Status: open (the only decision left).
+
+### 3. What to do with the file
+
+**Problem.** Decision 5 kept the file "until this branch is reviewed". The branch merged as #1243 (`66661858`), and `ba7cc8d4` is an ancestor of HEAD, but the file and its index row are still here.
+
+**Context.** The README says that once the last item is done, the durable behaviour moves out and the file is deleted. The file names its durable homes: `transcript-scroll.md` (Semantic anchors and history) and `agent-testing.md` (Live transcript paging).
+
+**Investigation.** The durable notes exist. `docs/architecture/transcript-scroll.md:81` ("Clamped boundaries are a legitimate outcome") and `:142` describe the controller ending `clamped` when nothing can hold the place. `docs/development/agent-testing.md:628` defines "keep" as standing within 8 px of the reachable position. The code is in place: `holdPosition` (`e2e/transcript-hold.ts:11`), `e2e/TranscriptHold.spec.ts`, and the fixture's `paged`, `stops` and `prompt` options (`e2e/fixture/TranscriptPagingFixture.tsx:22`-`:27`). Inbound links that a deletion must update: `0050-transcript-history-efficiency.md:305` and `:570`. Flake case 0483 cites the branch by name, but not this file, so it needs no edit. Not carried over: the mechanism narrative (folding made a tool-only transcript shorter than its viewport) and the rejected options (padding, bottom alignment, a looser limit), which explain why the spec is clamp-aware rather than the product.
+
+**Decisions.**
+
+- **Delete the file now, or keep it?**
+  - **Delete it now, adding a short note to transcript-scroll.md's Tool groups section saying that folding can make a transcript shorter than its viewport and why the product is not padded (recommended).** Update 0050's two links and remove index row 11 in the same change.
+    - Pros: meets decision 5's own condition (review is done); keeps the one rationale a future reader would otherwise lose.
+    - Cons: a small doc edit outside `todo/`; the 2026-10-24 evidence tables go.
+  - **Delete it now with no further doc edits.**
+    - Pros: the smallest change; the durable notes already cover the behaviour.
+    - Cons: the "why not pad or bottom-align" reasoning disappears, inviting the same investigation again.
+  - **Keep it.**
+    - Pros: no edits.
+    - Cons: goes against the README rule and decision 5; a Finished row stays in the ranked index.
+
 "Load earlier messages" must keep the reader's row where it was: the row
 first on screen before the click stays at the same offset after older rows
 land above it. The live paging spec allows 8 px. On 2026-10-24 both native

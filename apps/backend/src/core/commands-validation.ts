@@ -918,6 +918,9 @@ export function asFeaturePlanUpdates(
 
 export function asStartFeaturePlanningInput(args: JsonRecord): StartFeaturePlanningInput {
   const input: StartFeaturePlanningInput = {
+    ...(args.operationId === undefined
+      ? {}
+      : { operationId: asNonBlankString(args.operationId, "operationId") }),
     featureId: asNonBlankString(args.featureId, "featureId"),
     kind: asFeaturePlanningKind(args.kind),
     ...(args.storyId === undefined ? {} : { storyId: asNonBlankString(args.storyId, "storyId") }),

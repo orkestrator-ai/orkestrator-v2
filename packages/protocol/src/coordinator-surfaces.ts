@@ -75,35 +75,6 @@ export type CoordinatorTerminalTabType = (typeof COORDINATOR_TERMINAL_TAB_TYPES)
 export const COORDINATOR_TAB_EDIT_OPERATIONS = Object.freeze(["focus", "close", "move"] as const);
 export type CoordinatorTabEditOperation = (typeof COORDINATOR_TAB_EDIT_OPERATIONS)[number];
 
-/**
- * Whether a URL is one a coordinator may open in a worker's browser tab.
- *
- * Only loopback HTTP(S): the worker's own dev servers and service previews,
- * which the browser tab already resolves through the environment's preview
- * forwarding. A coordinator that wants the open web uses its own research
- * tools, which are policy-gated; the worker browser is not a way around them.
- */
-export function isCoordinatorBrowserUrl(value: string): boolean {
-  if (value === "") return true;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  if (url.username || url.password) return false;
-  const host = url.hostname.toLowerCase();
-  return (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host === "127.0.0.1" ||
-    host === "[::1]" ||
-    host === "::1" ||
-    host === "0.0.0.0"
-  );
-}
-
 /** A file the root checkout has changed, as offered to the user. */
 export interface RootChangeFile {
   path: string;

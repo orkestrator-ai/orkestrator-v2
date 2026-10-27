@@ -71,7 +71,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Open a terminal or tmux tab in a worker",
       description:
-        "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux) with an optional prompt. The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults.",
+        "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux) with an optional prompt (grok supports a bare launch only; prompt, model and reasoningEffort are refused). The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults.",
       inputSchema: z
         .object({
           requestId,
@@ -88,7 +88,7 @@ export function registerCoordinatorSurfaceTools(
             .min(1)
             .max(100_000)
             .optional()
-            .describe("Agent CLIs only: the first prompt."),
+            .describe("Agent CLIs except grok: the first prompt."),
           model: z.string().trim().min(1).max(512).optional(),
           reasoningEffort: z.string().trim().min(1).max(128).optional(),
           title: z.string().trim().min(1).max(200).optional(),

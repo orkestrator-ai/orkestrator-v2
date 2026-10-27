@@ -56,7 +56,7 @@ async function editLayout<T>(
     desired: PaneLayoutMergeInput,
     panes: MutablePaneLayoutLeaf[],
     environment: Environment,
-  ) => { result: T; changed: boolean },
+  ) => { result: T; changed: boolean } | Promise<{ result: T; changed: boolean }>,
 ): Promise<{ result: T; layoutRevision: number }> {
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const environment = await storage.getEnvironment(environmentId);
@@ -88,7 +88,7 @@ async function editLayout<T>(
     assertPaneLayoutRootWithinBounds(desired.root);
     const panes = paneLayoutLeaves(desired.root);
     if (panes.length === 0) throw new Error("The saved layout has no pane");
-    const { result, changed } = edit(desired, panes, environment);
+    const { result, changed } = await edit(desired, panes, environment);
     if (!changed) return { result, layoutRevision: previous?.revision ?? 0 };
     desired.version = PANE_LAYOUT_VERSION;
     assertPaneLayoutRootWithinBounds(desired.root);
@@ -269,14 +269,14 @@ export async function editWorkerTab(
     operation: CoordinatorTabEditOperation;
     toPaneId?: string;
     /** Refuses the close (throws) after reading the tab, before any write. */
-    beforeClose?: (tab: Tab) => void;
+    beforeClose?: (tab: Tab) => void | Promise<void>;
   },
 ): Promise<WorkerTabEditResult> {
   const { result, layoutRevision } = await editLayout<Omit<WorkerTabEditResult, "layoutRevision">>(
     storage,
     input.environmentId,
     { requireReady: false },
-    (desired, panes) => {
+    async (desired, panes) => {
       const found = findTab(panes, (tab) => tab.id === input.tabId);
       if (!found) {
         if (input.operation === "close")
@@ -295,7 +295,7 @@ export async function editWorkerTab(
         };
       }
       if (input.operation === "close") {
-        input.beforeClose?.(tab);
+        await input.beforeClose?.(tab);
         pane.tabs = pane.tabs.filter((candidate) => candidate !== tab);
         if (pane.activeTabId === input.tabId) {
           const fallback = pane.tabs.at(-1)?.id;

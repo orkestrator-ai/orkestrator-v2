@@ -211,6 +211,10 @@ export async function runMultiReviewSurface(
       // the handoff. The supervisor publishes and selects Fix on delivery.
       rootUi = await openMultiReviewTab(context.storage, workflow);
     } catch (error) {
+      if (customFix)
+        throw new Error(
+          `Custom fix could not open the review tab: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
+        );
       return result(
         workflow,
         true,
@@ -229,6 +233,10 @@ export async function runMultiReviewSurface(
         workflow = { ...latest.snapshot, backendRevision: latest.revision };
       const handoffArmed =
         workflow.phase === "interactive" && workflow.addressPromptPending === true;
+      if (customFix && !handoffArmed)
+        throw new Error(
+          `Custom fix handoff could not be queued: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
+        );
       return {
         ...result(
           workflow,

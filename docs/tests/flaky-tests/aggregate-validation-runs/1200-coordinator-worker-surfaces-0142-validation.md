@@ -65,3 +65,61 @@ followed is recorded below.
   (`commands-environment-worktree-location` twice, `coordinator-service`
   once); `coordinator-service` passed in full on an earlier rerun and fails a
   different Git case at the 5 s mark on each loaded run.
+
+
+## Review-fix validation (2026-10-27)
+
+The receipt recovery, tab-close admission, root-change application, and approval
+coverage fixes passed `mise run check`. Focused runs passed all affected owners:
+coordinator surface actions, coordinator review actions, feature-planning
+commands/service/scheduling/storage, looped-review service, native close
+admission, node action requests/coordination, root changes, and the federation
+approval-dialog component.
+
+The new regression cases cover owner death before receipt completion, terminal
+workflow recovery, startup failures with the same request ID, native close
+admission during delayed writes/preflight, retryable teardown failure, exact
+quoted UTF-8 paths, serialized local/container apply, worker-move exclusion,
+and content-free diff failures through stored approval results and notices.
+Container command routing is tested using a Docker substitute backed by real
+Git; no live Docker or Electron scenario was needed for these backend and
+component-test changes.
+
+`mise run test:logged -- --name repository-tests -- mise run test` again
+reported the existing non-green validation pattern. Aggregate group logs are
+in `orkestrator-test-run.2JIWtv` in the host temporary directory; the outer
+logged runner uses `orkestrator-test-run.87v1hq`.
+
+- Root/support repeated the two `migrate-copy` extraction-status mismatches.
+  The unchanged owner repeated them alone: 10 passed, 2 failed (2.1 s).
+- Desktop repeated the two macOS `profile-cleanup` Keychain-warning
+  mismatches. The unchanged owner repeated them alone: 20 passed, 2 failed
+  (1.3 s), matching case 1100.
+- Claude's offline execution-policy `network` fixture hit its 17 s abort
+  deadline. The complete unchanged owner passed alone (4 tests, 25.2 s);
+  this confirmed timing flake is recorded in
+  [1201](../agent-bridges/1201-claude-execution-policy-network-timeout.md).
+- Backend environment moves, Git status/cache setup, worktree-location and
+  change-probe fixtures exceeded their five-second deadlines. The unchanged
+  environment-move owner remained non-green alone (27 passed, 11 deadline
+  failures, 11 follow-on errors, 171.0 s); this is not newly classified as
+  flaky. The move-fence and root-apply regressions passed separately.
+
+No assertion, timeout, or skip was relaxed. These results retain the existing
+validation limitation rather than claiming the whole repository suite is green.
+
+
+The final aggregate completed in 1,007.7 s. Web passed 9,949 tests and protocol
+passed 1,939; backend passed 12,092 with 22 failures and 12 follow-on errors.
+The workspace, root/support, and bridge groups were non-green; the Codex
+lockfile group passed. In addition to the deadlines above, the unchanged
+`tests/docker-image.test.ts` host-address fixtures repeated two failures alone
+(19 passed, 2 failed, 3.1 s). Four unchanged `tests/staged-input-relay.test.ts`
+permission fixtures also failed in the aggregate; they were not rerun and are
+not classified as flaky here.
+
+A final close-failure hardening check added durable pending-teardown refusal
+for native prompts and new coordinator delegations, so a retained tab cannot
+start fresh work while reconciliation still owns its teardown intent. The
+close/coordinator regression run passed (16.9 s), followed by all 30 native
+agent service test files (11.8 s) and another complete `mise run check` (5.0 s).

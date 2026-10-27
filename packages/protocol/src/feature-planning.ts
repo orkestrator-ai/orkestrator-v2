@@ -545,6 +545,7 @@ export interface FeaturePlanningRecord {
 }
 
 export interface StartFeaturePlanningInput {
+  operationId?: string;
   featureId: string;
   kind: FeaturePlanningKind;
   storyId?: string;
@@ -701,6 +702,7 @@ export function isStartFeaturePlanningInput(value: unknown): value is StartFeatu
   const candidate = value as Record<string, unknown>;
   const { maxIdLength, maxUserMessageLength } = FEATURE_PLANNING_LIMITS;
   if (!isBoundedId(candidate.featureId, maxIdLength)) return false;
+  if (!isOptionalBoundedId(candidate.operationId, maxIdLength)) return false;
   if (candidate.kind !== "feature" && candidate.kind !== "story") return false;
   if (candidate.kind === "story" && !isBoundedId(candidate.storyId, maxIdLength)) {
     return false;

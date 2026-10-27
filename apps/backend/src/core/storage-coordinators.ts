@@ -1,3 +1,4 @@
+import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -543,25 +544,41 @@ export class CoordinatorsRepository {
         // nor reopen one that already produced its wake.
         return association;
       }
-      const overlapping = store.workflows.find(
-        (item) =>
-          item.id !== associationId &&
-          item.coordinatorId === association.coordinatorId &&
-          item.conversationId === association.conversationId &&
-          item.kind === "environment" &&
-          item.resourceId === association.resourceId &&
-          item.nodeId === association.nodeId &&
-          item.delegation?.workerTabId === workerTabId &&
-          item.delegation.state === "running",
-      );
-      if (overlapping) {
-        throw new Error("That worker tab already has an outstanding coordinator delegation");
+      const release = association.nodeId
+        ? () => {}
+        : beginWorkerTabDelegation(association.resourceId, workerTabId);
+      try {
+        if (
+          !association.nodeId &&
+          (await this.repos.projects.getEnvironment(association.resourceId))?.tabTeardownIntents?.[
+            workerTabId
+          ]
+        )
+          throw new Error(
+            "This tab has pending teardown; finish closing it before delegating more work",
+          );
+        const overlapping = store.workflows.find(
+          (item) =>
+            item.id !== associationId &&
+            item.coordinatorId === association.coordinatorId &&
+            item.conversationId === association.conversationId &&
+            item.kind === "environment" &&
+            item.resourceId === association.resourceId &&
+            item.nodeId === association.nodeId &&
+            item.delegation?.workerTabId === workerTabId &&
+            item.delegation.state === "running",
+        );
+        if (overlapping) {
+          throw new Error("That worker tab already has an outstanding coordinator delegation");
+        }
+        association.delegation = { requestedAt: at, workerTabId, state: "running" };
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        this.context.changes.announce("coordinator", association.projectId, association.projectId);
+        return association;
+      } finally {
+        release();
       }
-      association.delegation = { requestedAt: at, workerTabId, state: "running" };
-      store.revision += 1;
-      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      this.context.changes.announce("coordinator", association.projectId, association.projectId);
-      return association;
     });
   }
 

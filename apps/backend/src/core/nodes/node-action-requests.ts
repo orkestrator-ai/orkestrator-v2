@@ -162,18 +162,35 @@ export class NodeActionRequests {
   }
 
   async create(input: {
+    requestId?: string;
     kind: NodeActionKind;
     targets: NodeActionTarget[];
     requestedBy: NodeActionRequest["requestedBy"];
     reason?: string;
   }): Promise<NodeActionRequest> {
+    if (input.requestId !== undefined && (!input.requestId.trim() || input.requestId.length > 256))
+      throw new Error("Expected a requestId of 1-256 characters");
     await this.ensureLoaded();
     if (input.targets.length === 0) throw new Error("A request needs at least one target.");
     if (input.targets.length > 64) throw new Error("A request can name at most 64 targets.");
+    if (input.requestId) {
+      const existing = this.requests.find((request) => request.requestId === input.requestId);
+      if (existing) {
+        if (
+          existing.kind !== input.kind ||
+          JSON.stringify(existing.targets) !== JSON.stringify(input.targets) ||
+          JSON.stringify(existing.requestedBy) !== JSON.stringify(input.requestedBy) ||
+          existing.reason !== (input.reason ? input.reason.slice(0, 500) : undefined)
+        )
+          throw new Error("Request ID was reused with a different payload");
+        await this.persist();
+        return structuredClone(existing);
+      }
+    }
     this.expire();
     const now = this.now();
     const request: NodeActionRequest = {
-      requestId: randomUUID(),
+      requestId: input.requestId ?? randomUUID(),
       kind: input.kind,
       targets: input.targets.map((target) => ({ ...target })),
       requestedBy: { ...input.requestedBy },

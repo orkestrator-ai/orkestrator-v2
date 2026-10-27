@@ -12,7 +12,6 @@ import {
   parsePreviewUrlIntent,
 } from "@orkestrator/protocol/preview-services";
 import {
-  isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
   type LoopedReviewAgent,
   type StartLoopedReviewInput,
@@ -32,6 +31,7 @@ import {
   readLaunchModelCatalog,
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
+import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
 import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
@@ -134,6 +134,8 @@ export function registerCoordinatorSurfaceActions(
       throw new Error("command is for plain terminals; agent terminals take prompt and model");
     if (type === "plain" && (prompt || model || reasoningEffort))
       throw new Error("prompt, model and reasoningEffort are for agent terminals");
+    if (type === "grok" && (prompt || model || reasoningEffort))
+      throw new Error("grok terminals do not support prompt, model or reasoningEffort options");
     const payload = {
       environmentId: environment.id,
       type,
@@ -236,11 +238,7 @@ export function registerCoordinatorSurfaceActions(
       throw new Error(`operation must be one of ${COORDINATOR_TAB_EDIT_OPERATIONS.join(", ")}`);
     const toPaneId = optionalText(input.toPaneId, "toPaneId", 200);
     if (operation === "move" && !toPaneId) throw new Error("move needs toPaneId (see list_tabs)");
-    // A close is refused while a turn runs or a person is being asked
-    // something in that tab, and while this or another coordinator waits on
-    // the tab: closing would cut off the report it is waiting for.
-    let refusal: string | null = null;
-    if (operation === "close") {
+    const close = async (tab: JsonRecord) => {
       const delegations = await context.storage.coordinators.listOpenCoordinatorDelegations();
       if (
         delegations.some(
@@ -251,50 +249,54 @@ export function registerCoordinatorSurfaceActions(
             association.delegation?.workerTabId === tabId,
         )
       )
-        refusal = "A coordinator is waiting on this tab's report; it cannot be closed now";
-      const layout = await context.storage.getPaneLayout(environment.id);
-      const native = await nativeTurnPhase(context, environment.id, layout?.root, tabId);
-      if (!refusal && native && native !== "idle" && native !== "error")
-        refusal = "The agent in this tab is busy or waiting on a person; it cannot be closed now";
-    }
-    const edited = await editWorkerTab(context.storage, {
-      environmentId: environment.id,
-      tabId,
-      operation: operation as CoordinatorTabEditOperation,
-      ...(toPaneId ? { toPaneId } : {}),
-      beforeClose: () => {
-        if (refusal) throw new Error(refusal);
-      },
-    });
-    const { closed, ...result } = edited;
-    if (closed) {
-      if (closed.type === "browser") {
-        // The preview view lives in the desktop process; a renderer that has
-        // the worker loaded drops it when the tab leaves the layout.
-      } else {
-        const kind = teardownKind(closed);
-        if (kind) {
-          const sessionId =
-            kind === "terminal" && typeof closed.backendTerminalSessionId === "string"
-              ? closed.backendTerminalSessionId
-              : kind.endsWith("-native") &&
-                  !["claude-native", "codex-native", "opencode-native"].includes(kind)
-                ? ((closed.nativeAgentData as JsonRecord | undefined)?.sessionId as
-                    | string
-                    | undefined)
-                : undefined;
-          // The conversation is retained: teardown closes the provider session
-          // through its retain-history path and never deletes it.
-          await run(context, "teardown_tab", {
-            environmentId: environment.id,
-            tabId,
-            kind,
-            ...(sessionId ? { sessionId } : {}),
-          });
-        }
+        throw new Error("A coordinator is waiting on this tab's report; it cannot be closed now");
+      const native = await nativeTurnPhase(
+        context,
+        environment.id,
+        { kind: "leaf", tabs: [tab] },
+        tabId,
+      );
+      if (native && native !== "idle" && native !== "error")
+        throw new Error(
+          "The agent in this tab is busy or waiting on a person; it cannot be closed now",
+        );
+      const kind = teardownKind(tab);
+      if (kind) {
+        // Retain the tab and resource identity until teardown succeeds. The
+        // teardown command journals its own intent and retains conversation history.
+        const sessionId =
+          kind === "terminal"
+            ? tab.backendTerminalSessionId
+            : kind.endsWith("-native") &&
+                !["claude-native", "codex-native", "opencode-native"].includes(kind)
+              ? (tab.nativeAgentData as JsonRecord | undefined)?.sessionId
+              : undefined;
+        await run(context, "teardown_tab", {
+          environmentId: environment.id,
+          tabId,
+          kind,
+          ...(typeof sessionId === "string" ? { sessionId } : {}),
+        });
       }
+    };
+    const release = operation === "close" ? beginWorkerTabClose(environment.id, tabId) : () => {};
+    let releaseAgentAdmission: (() => void) | undefined;
+    try {
+      if (operation === "close")
+        releaseAgentAdmission = context.runtime.environments.fence.beginTabClose(environment.id);
+      const edited = await editWorkerTab(context.storage, {
+        environmentId: environment.id,
+        tabId,
+        operation: operation as CoordinatorTabEditOperation,
+        ...(toPaneId ? { toPaneId } : {}),
+        beforeClose: close,
+      });
+      const { closed: _closed, ...result } = edited;
+      return { environmentId: environment.id, ...result };
+    } finally {
+      releaseAgentAdmission?.();
+      release();
     }
-    return { environmentId: environment.id, ...result };
   });
 
   register("start_coordinator_looped_review", async (args, context) => {
@@ -334,22 +336,17 @@ export function registerCoordinatorSurfaceActions(
       context,
       caller,
       { requestId, action: "start-looped-review", payload },
-      async (receipt) => {
-        // A retry after a crash between start and receipt reattaches to the
-        // review that attempt started, rather than refusing or starting twice.
-        const active = (await context.storage.listLoopedReviewWorkflows(environment.id)).find(
-          (entry) =>
-            isLoopedReviewWorkflow(entry.snapshot) &&
-            !isLoopedReviewTerminalPhase(entry.snapshot.phase),
-        );
+      async () => {
+        const id = `looped-coordinator-${requestKey(caller, requestId)}`;
+        const existing = await context.storage.getLoopedReviewWorkflow(id);
         let workflowId: string;
         let reused = false;
-        if (
-          active &&
-          isLoopedReviewWorkflow(active.snapshot) &&
-          active.snapshot.createdAt >= receipt.createdAt
-        ) {
-          workflowId = active.id;
+        if (existing) {
+          if (!isLoopedReviewWorkflow(existing.snapshot))
+            throw new Error(
+              "The saved looped review is unreadable; repair it before retrying this requestId",
+            );
+          workflowId = existing.id;
           reused = true;
         } else {
           const config = await context.storage.loadConfig();
@@ -384,7 +381,7 @@ export function registerCoordinatorSurfaceActions(
                 : {}),
             ...(allowance !== undefined ? { allowance: allowance as number } : {}),
           };
-          workflowId = (await service.start(start)).id;
+          workflowId = (await service.start(start, id)).id;
         }
         let ui: JsonRecord;
         try {
@@ -447,33 +444,26 @@ export function registerCoordinatorSurfaceActions(
       context,
       caller,
       { requestId, action: "launch-feature-plan", payload: { featureId, message } },
-      async (receipt) => {
-        let id = featureId;
-        if (!id) {
-          // A retry after a crash finds the plan its first attempt created
-          // (made after the receipt): reattach if planning already started,
-          // or start planning on it if it is still the empty new plan.
-          const mine = (await context.storage.kanban.getFeaturePlans(caller.projectId)).filter(
-            (plan) => plan.createdAt >= receipt.createdAt,
-          );
-          const started = mine.find(
-            (plan) =>
-              (isFeaturePlanningRecord(plan.planning) && plan.planning.userMessage === message) ||
-              plan.messages.some((entry) => entry.role === "user" && entry.content === message),
-          );
-          if (started)
-            return {
-              featureId: started.id,
-              phase: started.planning?.phase ?? null,
-              reused: true,
-            };
-          const empty = mine.find(
-            (plan) => !plan.planning && !plan.messages.some((entry) => entry.role === "user"),
-          );
-          id = empty?.id ?? (await context.storage.kanban.createFeaturePlan(caller.projectId)).id;
-        }
+      async () => {
+        const key = requestKey(caller, requestId);
+        const id =
+          featureId ??
+          (
+            await context.storage.kanban.createFeaturePlan(
+              caller.projectId,
+              `feature-coordinator-${key}`,
+            )
+          ).id;
+        const operationId = `planning-coordinator-${key}`;
+        const plan = await context.storage.kanban.getFeaturePlan(id);
+        if (
+          plan?.planning?.operationId === operationId ||
+          plan?.messages.some((entry) => entry.id === operationId)
+        )
+          return { featureId: id, phase: plan.planning?.phase ?? null, reused: true };
         const planning = await run<JsonRecord>(context, "start_feature_planning", {
           featureId: id,
+          operationId,
           kind: "feature",
           userMessage: message,
         });
@@ -542,6 +532,7 @@ export function registerCoordinatorSurfaceActions(
       async () => {
         const self = await run<JsonRecord>(context, "get_node_status", {});
         const created = await run<JsonRecord>(context, "create_node_action_request", {
+          requestId: `root-changes-coordinator-${requestKey(caller, requestId)}`,
           kind: "apply-root-changes",
           targets: [
             {
@@ -641,8 +632,8 @@ async function nativeTurnPhase(
   };
   const tab = visit(root);
   const platform = (tab?.nativeAgentData as JsonRecord | undefined)?.platform;
-  if (tab?.type !== "agent-native" || typeof platform !== "string" || !context.nativeAgents)
-    return null;
+  if (tab?.type !== "agent-native") return null;
+  if (typeof platform !== "string" || !context.nativeAgents) return "unknown";
   try {
     const projection = await context.nativeAgents.getProjection({
       environmentId,

@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { isLoopedReviewWorkflow } from "@orkestrator/protocol/review-workflow";
+import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type {
   MultiReviewActionResult,
@@ -11,6 +14,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { runCommand } from "./shell.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
 
@@ -105,7 +109,11 @@ beforeEach(async () => {
   Object.assign(home, { status: "running", setupPhase: "ready", projectHome: true });
   await storage.addEnvironment(home);
   homeId = home.id;
-  context = { storage, coordinators: coordinator } as CommandContext;
+  context = {
+    storage,
+    coordinators: coordinator,
+    runtime: { environments: { fence: new EnvironmentMutationFence() } },
+  } as CommandContext;
   commands = createCommandRegistry();
 });
 
@@ -340,7 +348,10 @@ describe("edit_coordinator_worker_tab", () => {
 
 describe("looped review", () => {
   test("starts once with the caller's agent and opens its tab", async () => {
-    const start = mock(async (input: Record<string, unknown>) => ({ ...input, id: "looped-1" }));
+    const start = mock(async (input: Record<string, unknown>, _workflowId?: string) => ({
+      ...input,
+      id: "looped-1",
+    }));
     context = {
       ...context,
       loopedReviews: { start } as unknown as CommandContext["loopedReviews"],
@@ -398,6 +409,7 @@ describe("feature plan launch", () => {
     expect(launched).toMatchObject({ phase: "dispatching", reused: false });
     expect(startPlanning.mock.calls[0]![0]).toEqual({
       featureId: launched.featureId,
+      operationId: expect.stringMatching(/^planning-coordinator-/),
       kind: "feature",
       userMessage: "Add dark mode",
     });
@@ -570,6 +582,34 @@ describe("Multi Review custom fix and reviewer tabs", () => {
     ).rejects.toThrow("different payload");
   });
 
+  for (const blocker of ["tab", "handoff", "readiness"])
+    test(`custom fix retries the same request after ${blocker} failure`, async () => {
+      const workflow = await readyReview();
+      const customFix = mock(async () => ({
+        ...workflow,
+        phase: "interactive",
+        addressPromptPending: true,
+      }));
+      context.multiReviews = { customFix } as unknown as CommandContext["multiReviews"];
+      const input = { requestId: "retry-fix", workflowId: workflow.id, instruction: "Fix tests" };
+      const open =
+        blocker === "tab"
+          ? spyOn(storage, "savePaneLayout").mockRejectedValueOnce(new Error("no room"))
+          : null;
+      if (blocker === "handoff") customFix.mockRejectedValueOnce(new Error("not ready"));
+      if (blocker === "readiness") await storage.updateEnvironment(workerId, { status: "stopped" });
+      await expect(call("custom_fix_coordinator_multi_review_action", { input })).rejects.toThrow(
+        "same requestId",
+      );
+      open?.mockRestore();
+      if (blocker === "readiness") await storage.updateEnvironment(workerId, { status: "running" });
+      expect(await call("custom_fix_coordinator_multi_review_action", { input })).toMatchObject({
+        outcome: "pending",
+      });
+      await call("custom_fix_coordinator_multi_review_action", { input });
+      expect(customFix).toHaveBeenCalledTimes(blocker === "handoff" ? 2 : 1);
+    });
+
   test("opens a reviewer's transcript subtab, and explains one that has not started", async () => {
     const workflow = await readyReview();
     const opened = await call<MultiReviewActionResult>("open_coordinator_multi_review", {
@@ -596,4 +636,326 @@ describe("Multi Review custom fix and reviewer tabs", () => {
       call("open_coordinator_multi_review", { workflowId: workflow.id, reviewerId: "nobody" }),
     ).rejects.toThrow("Reviewer not found");
   });
+});
+
+// Simulate owner death at the receipt-completion boundary while retaining effects.
+async function crashBeforeReceiptCompletion(operation: () => Promise<unknown>) {
+  const complete = spyOn(
+    storage.coordinators,
+    "completeCoordinatorActionReceipt",
+  ).mockRejectedValueOnce(new Error("owner died"));
+  await expect(operation()).rejects.toThrow("owner died");
+  complete.mockRestore();
+}
+async function reclaim<T>(operation: () => Promise<T>): Promise<T> {
+  const kill = spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  });
+  try {
+    return await operation();
+  } finally {
+    kill.mockRestore();
+  }
+}
+
+test("grok refuses unsupported launch options before starting a terminal", async () => {
+  const launch = mock(async () => ({}));
+  commands.set("launch_terminal_job", launch as unknown as CommandHandler);
+  for (const option of [{ prompt: "hello" }, { model: "grok" }, { reasoningEffort: "high" }])
+    await expect(
+      call("launch_coordinator_terminal", {
+        input: { requestId: "grok", environmentId: workerId, tabType: "grok", ...option },
+      }),
+    ).rejects.toThrow("do not support");
+  expect(launch).not.toHaveBeenCalled();
+});
+
+for (const phase of ["running", "waiting", "projection-error", "missing", "idle", "error"]) {
+  test(`native close handles ${phase} safely`, async () => {
+    await saveLayout([
+      { id: "native", type: "agent-native", nativeAgentData: { platform: "codex" } },
+    ]);
+    const teardown = mock(async () => ({}));
+    commands.set("teardown_tab", teardown as unknown as CommandHandler);
+    context.nativeAgents = {
+      getProjection: async () => {
+        if (phase === "projection-error") throw new Error("offline");
+        if (phase === "missing") return null;
+        return {
+          turn: { phase: phase === "waiting" ? "idle" : phase },
+          interactions: phase === "waiting" ? [{}] : [],
+        };
+      },
+    } as unknown as CommandContext["nativeAgents"];
+    const close = call("edit_coordinator_worker_tab", {
+      input: { environmentId: workerId, tabId: "native", operation: "close" },
+    });
+    if (["idle", "error", "missing"].includes(phase)) {
+      await close;
+      expect(teardown).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(close).rejects.toThrow("busy or waiting");
+      expect(teardown).not.toHaveBeenCalled();
+      expect((await leaves()).leaves[0]!.tabs).toHaveLength(1);
+    }
+  });
+}
+
+test("close reserves prompt and delegation admission through delayed durable layout removal", async () => {
+  await saveLayout([{ id: "shell", type: "plain", backendTerminalSessionId: "pty" }]);
+  commands.set("teardown_tab", (async () => ({})) as CommandHandler);
+  let resume!: () => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const original = storage.savePaneLayout.bind(storage);
+  const save = spyOn(storage, "savePaneLayout").mockImplementation(async (...args) => {
+    entered();
+    await gate;
+    return original(...args);
+  });
+  const close = call("edit_coordinator_worker_tab", {
+    input: { environmentId: workerId, tabId: "shell", operation: "close" },
+  });
+  await waiting;
+  expect(() => context.runtime.environments.fence.beginAgentWork(workerId)).toThrow(
+    "tab is being closed",
+  );
+  const association = await storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "race",
+    ...scope,
+    kind: "environment",
+    resourceId: workerId,
+    requestId: "race",
+    createdAt: new Date().toISOString(),
+  });
+  await expect(
+    storage.coordinators.openCoordinatorDelegation(association.id, "shell"),
+  ).rejects.toThrow("being closed");
+  resume();
+  await close;
+  save.mockRestore();
+  const release = context.runtime.environments.fence.beginAgentWork(workerId);
+  release();
+});
+
+test("failed teardown retains the original resource for a same-close retry", async () => {
+  await saveLayout([{ id: "shell", type: "plain", backendTerminalSessionId: "original-pty" }]);
+  const teardown = mock(async () => ({})).mockRejectedValueOnce(
+    new Error("intent persistence failed"),
+  );
+  commands.set("teardown_tab", teardown as unknown as CommandHandler);
+  const close = () =>
+    call("edit_coordinator_worker_tab", {
+      input: { environmentId: workerId, tabId: "shell", operation: "close" },
+    });
+  await expect(close()).rejects.toThrow("intent persistence failed");
+  expect((await leaves()).leaves[0]!.tabs[0]!.backendTerminalSessionId).toBe("original-pty");
+  await close();
+  expect(teardown).toHaveBeenCalledTimes(2);
+  expect((teardown.mock.calls as unknown[])[1]).toEqual([
+    { environmentId: workerId, tabId: "shell", kind: "terminal", sessionId: "original-pty" },
+    context,
+  ]);
+});
+
+test("failed planning startup reuses the same empty plan", async () => {
+  const planning = mock(async () => ({ phase: "dispatching" })).mockRejectedValueOnce(
+    new Error("not ready"),
+  );
+  commands.set("start_feature_planning", planning as unknown as CommandHandler);
+  const launch = () =>
+    call("launch_coordinator_feature_plan", {
+      input: { requestId: "failed-plan", message: "Plan it" },
+    });
+  await expect(launch()).rejects.toThrow("not ready");
+  await launch();
+  expect(await storage.kanban.getFeaturePlans(scope.projectId)).toHaveLength(1);
+  expect(planning.mock.calls[0]).toEqual(planning.mock.calls[1]);
+});
+
+for (const followup of [false, true])
+  for (const terminal of [false, true]) {
+    test(`planning crash recovery reuses ${followup ? "follow-up" : "new plan"} operation while ${terminal ? "complete" : "running"}`, async () => {
+      const plan = followup ? await storage.kanban.createFeaturePlan(scope.projectId) : undefined;
+      const start = mock(async (args: Record<string, unknown>) => {
+        const now = new Date().toISOString();
+        await storage.kanban.startFeaturePlanning({
+          version: 1,
+          operationId: args.operationId as string,
+          featureId: args.featureId as string,
+          projectId: scope.projectId,
+          kind: "feature",
+          userMessage: args.userMessage as string,
+          phase: "dispatching",
+          startedAt: now,
+          updatedAt: now,
+          backendRevision: 0,
+        });
+        return { phase: "dispatching" };
+      });
+      commands.set("start_feature_planning", start as unknown as CommandHandler);
+      const launch = () =>
+        call("launch_coordinator_feature_plan", {
+          input: {
+            requestId: "crash-plan",
+            message: "same message",
+            ...(plan ? { featureId: plan.id } : {}),
+          },
+        });
+      await crashBeforeReceiptCompletion(launch);
+      const saved = (await storage.kanban.getFeaturePlans(scope.projectId))[0]!;
+      if (terminal)
+        await storage.kanban.clearFeaturePlanning(saved.id, saved.planning!.operationId);
+      expect(await reclaim(launch)).toMatchObject({ featureId: saved.id, reused: true });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(
+        (await storage.kanban.getFeaturePlan(saved.id))!.messages.filter(
+          (message) => message.role === "user",
+        ),
+      ).toHaveLength(1);
+    });
+  }
+
+for (const phase of ["preparing", "completed", "cancelled", "failed"]) {
+  test(`looped review recovery reattaches in ${phase}`, async () => {
+    const start = mock(async (input: Record<string, unknown>, id: string) => {
+      const now = new Date().toISOString();
+      const workflow = {
+        ...input,
+        id,
+        version: 2,
+        controller: "backend",
+        phase,
+        ...(phase === "failed"
+          ? {
+              failure: {
+                code: "provider",
+                message: "failed",
+                retryPhase: "preparing",
+                occurredAt: now,
+              },
+            }
+          : {}),
+        createdAt: now,
+        updatedAt: now,
+        backendRevision: 0,
+        startingAllowance: 1,
+        currentAllowance: 1,
+        currentRound: 1,
+        currentPass: 0,
+        rounds: [{ round: 1, allowance: 1, status: "preparing", passes: [], startedAt: now }],
+        sessions: [],
+        activePool: { issues: [], coverageGaps: [] },
+        archivedPools: [],
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        pr: { status: "pending" },
+      };
+      expect(isLoopedReviewWorkflow(workflow)).toBe(true);
+      await storage.saveLoopedReviewWorkflow(id, workerId, 2, workflow, 0);
+      return workflow;
+    });
+    context.loopedReviews = { start } as unknown as CommandContext["loopedReviews"];
+    const launch = () =>
+      call("start_coordinator_looped_review", {
+        input: {
+          requestId: "crashed-review",
+          environmentId: workerId,
+          agent: "codex",
+          model: "default",
+        },
+      });
+    await crashBeforeReceiptCompletion(launch);
+    expect(await reclaim(launch)).toMatchObject({ reused: true });
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+}
+
+test("root-change receipt recovery reuses one approval and delivers one outcome", async () => {
+  const notices: string[] = [];
+  const requests = new NodeActionRequests({
+    load: async () => [],
+    save: async () => {},
+    emit: () => {},
+    executors: { "apply-root-changes": async () => ({ code: "applied", message: "Applied" }) },
+    notify: async (request) => {
+      notices.push(request.requestId);
+    },
+  });
+  commands.set("get_node_status", (async () => ({ nodeId: "self" })) as CommandHandler);
+  commands.set("create_node_action_request", (async (args) =>
+    requests.create(
+      args as unknown as Parameters<NodeActionRequests["create"]>[0],
+    )) as CommandHandler);
+  const launch = () =>
+    call<{ approvalRequestId: string }>("request_coordinator_root_changes", {
+      input: { requestId: "crashed-approval", environmentId: workerId, reason: "Apply my changes" },
+    });
+  await crashBeforeReceiptCompletion(launch);
+  const recovered = await reclaim(launch);
+  expect(await requests.list()).toHaveLength(1);
+  await requests.resolve(recovered.approvalRequestId, "approve");
+  expect(await launch()).toMatchObject({
+    approvalRequestId: recovered.approvalRequestId,
+    replayed: true,
+  });
+  expect(notices).toEqual([recovered.approvalRequestId]);
+});
+
+test("close refuses work already admitted before its safety read", async () => {
+  await saveLayout([{ id: "shell", type: "plain" }]);
+  const release = context.runtime.environments.fence.beginAgentWork(workerId);
+  try {
+    await expect(
+      call("edit_coordinator_worker_tab", {
+        input: { environmentId: workerId, tabId: "shell", operation: "close" },
+      }),
+    ).rejects.toThrow("submission is in progress");
+    expect((await leaves()).leaves[0]!.tabs).toHaveLength(1);
+  } finally {
+    release();
+  }
+});
+
+test("worker browser uses the agent-link policy for empty and wildcard addresses", async () => {
+  for (const url of ["", "http://0.0.0.0:3000/"])
+    await expect(
+      call("open_coordinator_browser", {
+        input: { requestId: "invalid-url", environmentId: workerId, url },
+      }),
+    ).rejects.toThrow();
+  expect(await storage.getPaneLayout(workerId)).toBeNull();
+});
+
+test("persisted pending teardown prevents a new delegation while allowing close retry", async () => {
+  await saveLayout([{ id: "shell", type: "plain", backendTerminalSessionId: "pty-pending" }]);
+  await storage.setTabTeardownIntent(workerId, {
+    tabId: "shell",
+    kind: "terminal",
+    sessionId: "pty-pending",
+    createdAt: new Date().toISOString(),
+  });
+  const association = await storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "pending-close",
+    ...scope,
+    kind: "environment",
+    resourceId: workerId,
+    requestId: "pending-close",
+    createdAt: new Date().toISOString(),
+  });
+  await expect(
+    storage.coordinators.openCoordinatorDelegation(association.id, "shell"),
+  ).rejects.toThrow("pending teardown");
+  const teardown = mock(async () => ({}));
+  commands.set("teardown_tab", teardown as unknown as CommandHandler);
+  expect(
+    await call("edit_coordinator_worker_tab", {
+      input: { environmentId: workerId, tabId: "shell", operation: "close" },
+    }),
+  ).toMatchObject({ changed: true });
+  expect(teardown).toHaveBeenCalledTimes(1);
 });

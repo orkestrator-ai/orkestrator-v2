@@ -471,6 +471,7 @@ export class NodeCoordination {
       return clean;
     });
     return this.actions.create({
+      ...(typeof args.requestId === "string" ? { requestId: args.requestId } : {}),
       kind,
       targets,
       requestedBy: {

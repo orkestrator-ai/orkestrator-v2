@@ -149,7 +149,9 @@ export async function buildRootChangesPatch(
         ...paths,
       ],
       { cwd: root, env, timeoutMs: 120_000 },
-    );
+    ).catch(() => {
+      throw new Error("Could not capture the selected changes; pick fewer files and retry.");
+    });
     if (diff.stdout.length > MAX_ROOT_CHANGE_PATCH_BYTES) {
       throw new Error("The selected changes are larger than 32 MiB; pick fewer files.");
     }
@@ -159,12 +161,56 @@ export async function buildRootChangesPatch(
   }
 }
 
-/** Every changed path in this patch, from its `diff --git` headers. */
+/** Decode Git's C-quoted UTF-8 paths, including octal byte escapes. */
+function gitPath(value: string): string {
+  if (!value.startsWith('"')) return value;
+  const bytes: number[] = [];
+  const escapes: Record<string, number> = {
+    a: 7,
+    b: 8,
+    t: 9,
+    n: 10,
+    v: 11,
+    f: 12,
+    r: 13,
+    '"': 34,
+    "\\": 92,
+  };
+  for (let i = 1; i < value.length - 1; i++) {
+    if (value[i] === "\\") {
+      const octal = /^[0-7]{1,3}/.exec(value.slice(i + 1));
+      if (octal) {
+        bytes.push(parseInt(octal[0], 8));
+        i += octal[0].length;
+      } else {
+        bytes.push(escapes[value[++i]!] ?? 63);
+      }
+    } else {
+      const point = value.codePointAt(i)!;
+      bytes.push(...Buffer.from(String.fromCodePoint(point)));
+      if (point > 0xffff) i++;
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** Paths from no-rename Git diff headers, with UTF-8 and C quoting preserved. */
 export function patchPaths(patch: Buffer): string[] {
   const paths = new Set<string>();
-  for (const line of patch.toString("latin1").split("\n")) {
-    const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (match) paths.add(match[2]!);
+  for (const line of patch.toString("utf8").split("\n")) {
+    if (!line.startsWith("diff --git ")) continue;
+    const header = line.slice(11);
+    if (header.startsWith('"')) {
+      const match = /^"(?:[^"\\]|\\.)*" (.+)$/.exec(header);
+      if (match) paths.add(gitPath(match[1]!).slice(2));
+    } else {
+      // --no-renames produces the same path twice. Splitting at the middle
+      // handles even an unquoted filename containing " b/" or spaces.
+      const first = header.slice(0, (header.length - 1) / 2);
+      const second = header.slice((header.length + 1) / 2);
+      if (first.startsWith("a/") && second.startsWith("b/") && first.slice(2) === second.slice(2))
+        paths.add(second.slice(2));
+    }
   }
   return Array.from(paths);
 }
@@ -207,67 +253,75 @@ export async function applyRootChanges(
   if (input.paths.length > MAX_ROOT_CHANGE_SELECTION) {
     throw new Error(`Pick at most ${MAX_ROOT_CHANGE_SELECTION} files.`);
   }
-  const environment = await context.storage.getEnvironment(input.environmentId);
-  if (!environment || environment.projectId !== input.projectId) {
-    throw new Error("The worker environment is not in this project.");
-  }
-  if (isProjectHomeEnvironment(environment)) {
-    throw new Error("The project checkout cannot receive its own changes.");
-  }
-  if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
-    throw new Error("The worker environment is being deleted.");
-  }
-  const root = await resolveProjectGitRoot(context.storage, input.projectId);
-  const listing = await listRootChanges(root);
-  if (!listing.headCommit) throw new Error("The checkout has no commit to diff against.");
-  const changed = new Map(listing.files.map((file) => [file.path, file]));
-  const selected = Array.from(new Set(input.paths));
-  const unknown = selected.filter((file) => !changed.has(file));
-  if (unknown.length > 0) {
-    throw new Error(
-      `${unknown.length} selected file${unknown.length === 1 ? " is" : "s are"} no longer changed in the checkout; reopen the request to pick again.`,
-    );
-  }
-  const untracked = selected.filter((file) => changed.get(file)!.status === "untracked");
-  const patch = await buildRootChangesPatch(root, selected, untracked);
-  if (patch.length === 0) throw new Error("The selected files have no changes to apply.");
-  const files = patchPaths(patch);
+  // A namespaced durable lock serializes check/apply pairs across approvals
+  // and backend processes; the runtime fence also excludes worker moves.
+  return context.storage.withProjectCreationLock(
+    `root-changes:${input.environmentId}`,
+    async () => {
+      const release = context.runtime.environments.fence.beginMutation(input.environmentId);
+      try {
+        const environment = await context.storage.getEnvironment(input.environmentId);
+        if (!environment || environment.projectId !== input.projectId) {
+          throw new Error("The worker environment is not in this project.");
+        }
+        if (isProjectHomeEnvironment(environment)) {
+          throw new Error("The project checkout cannot receive its own changes.");
+        }
+        if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
+          throw new Error("The worker environment is being deleted.");
+        }
+        const root = await resolveProjectGitRoot(context.storage, input.projectId);
+        const listing = await listRootChanges(root);
+        if (!listing.headCommit) throw new Error("The checkout has no commit to diff against.");
+        const changed = new Map(listing.files.map((file) => [file.path, file]));
+        const selected = Array.from(new Set(input.paths));
+        const unknown = selected.filter((file) => !changed.has(file));
+        if (unknown.length > 0) {
+          throw new Error(
+            `${unknown.length} selected file${unknown.length === 1 ? " is" : "s are"} no longer changed in the checkout; reopen the request to pick again.`,
+          );
+        }
+        const untracked = selected.filter((file) => changed.get(file)!.status === "untracked");
+        const patch = await buildRootChangesPatch(root, selected, untracked);
+        if (patch.length === 0) throw new Error("The selected files have no changes to apply.");
+        const files = patchPaths(patch);
 
-  if (environment.environmentType === "local") {
-    if (!environment.worktreePath) throw new Error("The worker has no worktree.");
-    const release = context.runtime.environments.fence.beginMutation(environment.id);
-    try {
-      for (const args of [
-        ["apply", "--check", "--binary", "-"],
-        ["apply", "--binary", "-"],
-      ]) {
-        await runCommand("git", args, {
-          cwd: environment.worktreePath,
-          stdin: patch,
-          timeoutMs: 120_000,
-        }).catch((error: unknown) => {
-          throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
-        });
+        if (environment.environmentType === "local") {
+          if (!environment.worktreePath) throw new Error("The worker has no worktree.");
+
+          for (const args of [
+            ["apply", "--check", "--binary", "-"],
+            ["apply", "--binary", "-"],
+          ]) {
+            await runCommand("git", args, {
+              cwd: environment.worktreePath,
+              stdin: patch,
+              timeoutMs: 120_000,
+            }).catch((error: unknown) => {
+              throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
+            });
+          }
+          return { files };
+        }
+
+        if (environment.status !== "running" || !environment.containerId) {
+          throw new Error("Start the worker container before applying changes to it.");
+        }
+        for (const args of [
+          ["git", "apply", "--check", "--binary", "-"],
+          ["git", "apply", "--binary", "-"],
+        ]) {
+          await runCommand("docker", containerExecArgs(environment.containerId, args, true), {
+            stdin: patch,
+            timeoutMs: 120_000,
+          }).catch((error: unknown) => {
+            throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
+          });
+        }
+        return { files };
+      } finally {
+        release();
       }
-    } finally {
-      release();
-    }
-    return { files };
-  }
-
-  if (environment.status !== "running" || !environment.containerId) {
-    throw new Error("Start the worker container before applying changes to it.");
-  }
-  for (const args of [
-    ["git", "apply", "--check", "--binary", "-"],
-    ["git", "apply", "--binary", "-"],
-  ]) {
-    await runCommand("docker", containerExecArgs(environment.containerId, args, true), {
-      stdin: patch,
-      timeoutMs: 120_000,
-    }).catch((error: unknown) => {
-      throw new Error(`The changes do not apply to the worker: ${gitFailure(error)}`);
-    });
-  }
-  return { files };
+    },
+  );
 }

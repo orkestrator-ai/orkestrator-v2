@@ -76,6 +76,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
+import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
@@ -616,6 +617,26 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     };
   }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
+  // Which of the machine's accounts the session runs on, as the account
+  // section reads it, so the quota bars can say whose limits they are.
+  const sessionAccountKey =
+    accountEnvironmentId && accountAgent ? `${accountEnvironmentId}\0${accountAgent}` : undefined;
+  const [sessionAccount, setSessionAccount] = useState<{
+    key: string;
+    account: AgentSessionAccount | null;
+  } | null>(null);
+  const reportSessionAccount = useCallback(
+    (account: AgentSessionAccount | null) => {
+      if (sessionAccountKey) setSessionAccount({ key: sessionAccountKey, account });
+    },
+    [sessionAccountKey],
+  );
+  const usageAccountLabel =
+    sessionAccountKey &&
+    sessionAccount?.key === sessionAccountKey &&
+    sessionAccount.account?.source === "account"
+      ? sessionAccount.account.account?.label
+      : undefined;
 
   const openForkTab = async (
     sessionId: string,
@@ -973,6 +994,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       ? neutralRateLimits
                       : (usage?.rateLimits ?? neutralRateLimits)
                   }
+                  accountLabel={usageAccountLabel}
                 />
               </div>
 
@@ -980,6 +1002,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 environmentId={activeSession.environmentId}
                 provider={activeSession.provider}
                 open={open}
+                onSessionAccount={reportSessionAccount}
                 refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
               />
 

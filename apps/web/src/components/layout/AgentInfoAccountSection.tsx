@@ -49,11 +49,14 @@ export function AgentInfoAccountSection({
   provider,
   open = true,
   refreshKey,
+  onSessionAccount,
 }: {
   environmentId: string;
   provider: string;
   open?: boolean;
   refreshKey?: unknown;
+  /** Each read of the account this session runs on, for views that name it. */
+  onSessionAccount?: (session: AgentSessionAccount | null) => void;
 }) {
   if (!isAgentAccountPlatform(provider)) return null;
   return (
@@ -63,6 +66,7 @@ export function AgentInfoAccountSection({
       platform={provider}
       open={open}
       refreshKey={refreshKey}
+      onSessionAccount={onSessionAccount}
     />
   );
 }
@@ -72,11 +76,13 @@ function AccountSection({
   platform,
   open,
   refreshKey,
+  onSessionAccount,
 }: {
   environmentId: string;
   platform: AgentAccountPlatform;
   open: boolean;
   refreshKey?: unknown;
+  onSessionAccount?: (session: AgentSessionAccount | null) => void;
 }) {
   const [session, setSession] = useState<AgentSessionAccount | null>(null);
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
@@ -84,6 +90,10 @@ function AccountSection({
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
   const latest = useRef(0);
+  const reportSession = useRef(onSessionAccount);
+  useEffect(() => {
+    reportSession.current = onSessionAccount;
+  }, [onSessionAccount]);
   const machineName = useSessionMachineName();
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
 
@@ -105,6 +115,7 @@ function AccountSection({
       if (!mounted.current || latest.current !== read) return;
       setSession(nextSession);
       setSnapshot(nextSnapshot);
+      reportSession.current?.(nextSession);
       setError(null);
     } catch (cause) {
       if (mounted.current && latest.current === read) setError(messageOf(cause));

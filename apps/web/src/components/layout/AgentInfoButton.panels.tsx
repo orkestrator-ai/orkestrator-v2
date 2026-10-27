@@ -1054,7 +1054,15 @@ function useAccountNow(rows: AccountRow[]): number {
   return nowMs;
 }
 
-function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyTokenPoint[] }) {
+function AccountSection({
+  rows,
+  daily,
+  accountLabel,
+}: {
+  rows: AccountRow[];
+  daily: DailyTokenPoint[];
+  accountLabel?: string;
+}) {
   const nowMs = useAccountNow(rows);
 
   if (rows.length === 0 && daily.length === 0) return null;
@@ -1065,6 +1073,9 @@ function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyToken
         <section className="space-y-3" aria-label="Account usage">
           <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
             Account
+            {accountLabel ? (
+              <span className="normal-case tracking-normal"> ({accountLabel})</span>
+            ) : null}
           </div>
           {rows.map((row) => (
             <AccountRowView key={row.key} row={row} nowMs={nowMs} />
@@ -1109,6 +1120,7 @@ export function UsagePanel({
   usage,
   modelId,
   rateLimits,
+  accountLabel,
 }: {
   usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
@@ -1118,6 +1130,11 @@ export function UsagePanel({
    * provider answered and reported no limits, which retires stale ones.
    */
   rateLimits?: AgentRateLimitWindow[];
+  /**
+   * The account the session runs on, which the limits belong to. It can
+   * differ from the machine's default account until the session next idles.
+   */
+  accountLabel?: string;
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
   const { rows: accountRows, daily: dailyTokens } = buildAccountRows({
@@ -1127,7 +1144,7 @@ export function UsagePanel({
   });
   const account =
     accountRows.length > 0 || dailyTokens.length > 0 ? (
-      <AccountSection rows={accountRows} daily={dailyTokens} />
+      <AccountSection rows={accountRows} daily={dailyTokens} accountLabel={accountLabel} />
     ) : null;
 
   if (!usage) {

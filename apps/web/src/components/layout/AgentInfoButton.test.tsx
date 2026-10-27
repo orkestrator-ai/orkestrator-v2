@@ -1060,6 +1060,44 @@ describe("AgentInfoButton usage panel", () => {
     });
   }
 
+  test("names the account the session runs on beside the quota heading", async () => {
+    seedUsage(usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }));
+    const summary = (id: string, label: string, isActive: boolean) => ({
+      id,
+      platform: "claude",
+      label,
+      isDefault: id === "default",
+      isActive,
+      signedIn: true,
+      identity: {},
+    });
+    const running = summary("default", "Work", false);
+    const active = summary("personal", "Personal", true);
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_projection") return mockNativeProjectionRead();
+      if (command === "list_agent_accounts") {
+        return { accounts: [running, active], active: { claude: "personal" } };
+      }
+      if (command === "get_native_agent_session_account") {
+        return {
+          platform: "claude",
+          source: "account",
+          account: running,
+          running: true,
+          pendingActive: active,
+        };
+      }
+      return undefined;
+    });
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const quota = within(screen.getByRole("region", { name: "Account usage" }));
+    expect(await quota.findByText("(Work)")).toBeTruthy();
+    expect(quota.queryByText("(Personal)")).toBe(null);
+  });
+
   test("shows live system percentages in one row and reveals full names on tap", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_system_usage"

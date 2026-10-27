@@ -119,7 +119,7 @@ export function claudeRuntimeIsIdle(runtime: ClaudeRuntime): boolean {
   if (session.status === "running" || session.abortController) return false;
   // A rewind runs on the live CLI's control channel.
   if (session.rewindInProgress || session.deleting) return false;
-  if (claudeRuntimeOwnsLiveWork(session, runtime)) return false;
+  if (claudeRuntimeOwnsLiveWork(runtime)) return false;
   return !sessionHasPendingInteractions(session.id);
 }
 

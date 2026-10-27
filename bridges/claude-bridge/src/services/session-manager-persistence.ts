@@ -541,21 +541,10 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
       skip("query-control");
       continue;
     }
-    // The session's CLI is still running; its turns append to `messages`.
+    // The session's CLI is still running: its turns append to `messages`, and
+    // it owns any background work (`runtime.tasks`).
     if (session.claudeRuntime) {
       skip("claude-runtime");
-      continue;
-    }
-    if (session.backgroundTaskControls && session.backgroundTaskControls.size > 0) {
-      skip("background-task-controls");
-      continue;
-    }
-    if (session.backgroundTaskCandidates && session.backgroundTaskCandidates.size > 0) {
-      skip("background-task-candidates");
-      continue;
-    }
-    if (session.settlingBackgroundTasks && session.settlingBackgroundTasks.size > 0) {
-      skip("settling-background-tasks");
       continue;
     }
     if (

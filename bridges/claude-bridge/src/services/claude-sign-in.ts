@@ -10,6 +10,7 @@
  * into a sign-in card.
  */
 import { controlOnlyQuery } from "./control-only-query.js";
+import { liveInitializationResult, readFromLiveClaude } from "./live-claude-control.js";
 import type { AccountInfo, Query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAuthStatus,
@@ -97,7 +98,29 @@ export function normalizeClaudeAccount(account: AccountInfo): NativeAgentAuthSta
   };
 }
 
+/**
+ * The account a running CLI signed in with, read from its initialize answer.
+ *
+ * Only a signed-in answer counts. That answer is from the CLI's launch, so it
+ * cannot show a login made since: a `needs-auth` one would keep the composer
+ * locked after the user signed in from a terminal, which only a probe sees.
+ * A login revoked since is caught by the turn that fails on it
+ * (`noteClaudeAuthenticationFailure`).
+ */
+function liveSignedInAccount(): Promise<NativeAgentAuthStatus | undefined> {
+  return readFromLiveClaude((control) =>
+    liveInitializationResult(control)?.then((result) => {
+      const account = result?.account;
+      if (!account || typeof account !== "object") return undefined;
+      const status = normalizeClaudeAccount(account as AccountInfo);
+      return status.state === "signed-in" ? status : undefined;
+    }),
+  );
+}
+
 async function probeAccount(): Promise<NativeAgentAuthStatus> {
+  const live = await liveSignedInAccount();
+  if (live) return live;
   let probe: Query | undefined;
   try {
     probe = controlOnlyQuery({

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { controlOnlyQuery } from "./control-only-query.js";
+import { readFromLiveClaude } from "./live-claude-control.js";
 import type { McpServerStatus, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAccountUsageWindow,
@@ -352,32 +353,48 @@ function claudeWindowId(label: string): string {
   return slug || "window";
 }
 
+/** Plan windows from one control's `/usage` answer, or undefined when it has none. */
+async function planUsageFrom(
+  control: ClaudeQueryControl,
+): Promise<ReturnType<typeof rateLimitsFromStructuredUsage>> {
+  const getStructuredUsage = control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+  if (!getStructuredUsage) {
+    // A missing experimental accessor is not evidence that the account is
+    // unmetered. Throw so the backend reports unavailable rather than an
+    // authoritative empty plan.
+    throw new Error("Claude's plan usage API is unavailable in this CLI version");
+  }
+  const structuredUsage = await getStructuredUsageWithTimeout(
+    getStructuredUsage,
+    control,
+    PLAN_USAGE_PROBE_TIMEOUT_MS,
+  );
+  return rateLimitsFromStructuredUsage(structuredUsage);
+}
+
 /**
  * Read Claude's plan-allocation windows without a session.
  *
- * The settings pane is global, so there is no live turn to borrow a control
- * from. `createProbe()` spawns a whole Claude CLI, exactly as the auth and
- * slash-command reads do, and `refreshStructuredRateLimits`' parser turns the
+ * The settings pane is global, so there is no session to read them from. A
+ * CLI already running on this bridge answers when there is one; otherwise
+ * `createProbe()` spawns a whole Claude CLI, exactly as the auth and
+ * slash-command reads do. `refreshStructuredRateLimits`' parser turns the
  * experimental `/usage` payload into the same windows a session would report.
  */
 export async function readClaudePlanUsage(): Promise<NativeAgentAccountUsageWindow[]> {
+  let rateLimits = await readFromLiveClaude(
+    (control) =>
+      control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+        ? planUsageFrom(control)
+        : undefined,
+    PLAN_USAGE_PROBE_TIMEOUT_MS,
+  );
   let probe: Query | undefined;
   try {
-    probe = createProbe();
-    const control = probe as unknown as ClaudeQueryControl;
-    const getStructuredUsage = control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-    if (!getStructuredUsage) {
-      // A missing experimental accessor is not evidence that the account is
-      // unmetered. Throw so the backend reports unavailable rather than an
-      // authoritative empty plan.
-      throw new Error("Claude's plan usage API is unavailable in this CLI version");
+    if (rateLimits === undefined) {
+      probe = createProbe();
+      rateLimits = await planUsageFrom(probe as unknown as ClaudeQueryControl);
     }
-    const structuredUsage = await getStructuredUsageWithTimeout(
-      getStructuredUsage,
-      control,
-      PLAN_USAGE_PROBE_TIMEOUT_MS,
-    );
-    const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
     if (rateLimits === undefined) {
       throw new Error("Claude did not report plan usage");
     }

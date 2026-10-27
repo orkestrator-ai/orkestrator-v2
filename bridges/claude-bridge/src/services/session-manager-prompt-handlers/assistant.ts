@@ -196,10 +196,10 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
 
   // A foreground Bash call can become background work after a timeout or
   // Ctrl+B. Keep that possibility hidden from the task snapshot, but
-  // retain this query's control until the correlated provider result
-  // tells us whether it actually happened.
+  // hold the CLI until the correlated provider result tells us whether it
+  // actually happened.
   for (const toolUseId of bashToolUseIdsFromAssistantMessage(message)) {
-    registerBackgroundTaskCandidate(session, toolUseId, turn.queryIteratorControl!);
+    registerBackgroundTaskCandidate(turn.runtime, toolUseId);
   }
 
   // Establish liveness from the invocation itself. The provider can emit
@@ -208,7 +208,7 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   // kills the just-launched process. The provisional id is replaced by
   // the provider task id as soon as either later edge supplies it.
   for (const launch of provisionalBackgroundTaskLaunchesFromAssistantMessage(message)) {
-    recordBackgroundTaskLaunch(session, launch, turn.queryIteratorControl!);
+    recordBackgroundTaskLaunch(session, launch, turn.runtime);
   }
 
   // Update active Task tracking - add new Tasks

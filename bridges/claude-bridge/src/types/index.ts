@@ -773,23 +773,6 @@ export interface SessionState {
    */
   finishTurnInputIfSettled?: () => void;
   /**
-   * Control that owns each live background task.
-   *
-   * There is one process per session (`claudeRuntime`), so every entry names
-   * its control; the map is what keeps that control from being closed while a
-   * task still runs after its turn released the foreground.
-   */
-  backgroundTaskControls?: Map<string, ClaudeQueryControl>;
-  /**
-   * Built-in Bash calls whose tool result has not arrived yet.
-   *
-   * These are deliberately not exposed as background tasks: a foreground
-   * command is only a candidate until its provider-authored result says it was
-   * backgrounded. Retaining the owning control here prevents a result frame
-   * that races ahead of that evidence from closing the CLI's stdin.
-   */
-  backgroundTaskCandidates?: Map<string, ClaudeQueryControl>;
-  /**
    * Recent Bash commands and unmatched results by tool-use id.
    *
    * No task message names a shell task's command, and a background
@@ -802,23 +785,6 @@ export interface SessionState {
   >;
   /** Dispatches whose released query is awaiting a background-task continuation. */
   retainedContinuationRequestIds?: Set<string>;
-  /**
-   * Tasks the level signal dropped before their terminal edge explained why.
-   *
-   * The SDK leaves the order of `background_tasks_changed` and
-   * `task_notification` for one transition unspecified. Through Agent SDK
-   * 0.3.284 the level came first; 0.3.292 (still in 0.3.309) documents a
-   * finishing task leaving the level *after* its edge. When the level does come first, the task
-   * leaves the live set with no outcome attached. Parking the
-   * snapshot here keeps liveness honest — the task is gone from
-   * {@link backgroundTasks}, so no stale running indicator can wedge — while
-   * still letting the edge settle it with its original description and start
-   * time instead of a fabricated one.
-   */
-  settlingBackgroundTasks?: Map<
-    string,
-    { task: BackgroundTaskSnapshot; owner: ClaudeQueryControl }
-  >;
   /**
    * Generation of the most recently started turn.
    *

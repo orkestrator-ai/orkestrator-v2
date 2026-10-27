@@ -149,11 +149,11 @@ describe("BuildChatTab presentation", () => {
         />,
       );
       const runtime = screen.getByLabelText("Reviewer 1 runtime and token usage");
-      expect(runtime.textContent).toBe("5s · Tokens pending");
+      expect(runtime.textContent).toBe("5s · —");
 
       now += 1_000;
       act(() => tick?.());
-      expect(runtime.textContent).toBe("6s · Tokens pending");
+      expect(runtime.textContent).toBe("6s · —");
     } finally {
       cleanup();
       Date.now = originalNow;

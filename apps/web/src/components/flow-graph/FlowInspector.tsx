@@ -14,10 +14,9 @@ const PILL_CLASS: Record<FlowNodeState, string> = {
   cancelled: "border-border text-muted-foreground",
 };
 
+/** Usage the provider has not reported yet is left out, as on the node. */
 function tokensInWords(runtime: RuntimeParts | null): string | null {
-  if (runtime?.tokens) return `${runtime.tokens} tokens`;
-  if (runtime?.tokensPending) return "Tokens pending";
-  return null;
+  return runtime?.tokens ? `${runtime.tokens} tokens` : null;
 }
 
 /** Icon, name, status pill and token count of the selected node, with its actions. */

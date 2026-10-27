@@ -80,16 +80,81 @@ for (const count of [1, 2, 4, 8]) {
   });
 }
 
-test("shows elapsed time and tokens side by side on running nodes", async ({ page }) => {
+/** Each node's face rows by name, and whether its title is cut short. */
+async function faces(page: Page) {
+  return pipeline(page)
+    .getByRole("tab")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const title = node.querySelector<HTMLElement>("[data-flow-node-title]")!;
+        const rows = [...node.querySelectorAll<HTMLElement>("[data-flow-node-row]")];
+        return {
+          name: node.getAttribute("aria-label")!.split(",")[0]!,
+          state: node.getAttribute("data-flow-state"),
+          rows: rows.map((row) => row.getAttribute("data-flow-node-row")),
+          rowsInOrder: rows.every(
+            (row, index) =>
+              index === 0 ||
+              row.getBoundingClientRect().top >=
+                rows[index - 1]!.getBoundingClientRect().bottom - 0.5,
+          ),
+          titleTruncated: title.scrollWidth > title.clientWidth,
+        };
+      }),
+    );
+}
+
+test("puts a running node's elapsed time and tokens on its own third row", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
   const runtime = page.getByLabel("Reviewer 2 runtime and token usage");
   await expect(runtime).toHaveText(/^\d+m \d+s · 81k tokens$/);
   const before = await runtime.textContent();
   await expect.poll(() => runtime.textContent(), { timeout: 4_000 }).not.toBe(before);
+  const reviewer = page.getByRole("tab", { name: /^Reviewer 2 ·/ });
+  await expect(reviewer.locator('[data-flow-node-row="runtime"]')).toContainText("reviewing");
+  await expect(reviewer.locator('[data-flow-node-row="title"]')).toHaveText(/^Reviewer 2 · \w+$/);
+  for (const face of await faces(page)) {
+    // Running nodes have three rows; queued ones two; none loses its title.
+    if (face.state === "running")
+      expect(face.rows, face.name).toEqual(["title", "detail", "runtime"]);
+    if (face.state === "not-started") expect(face.rows, face.name).toEqual(["title", "detail"]);
+    expect(face.rowsInOrder, face.name).toBe(true);
+    expect(face.titleTruncated, face.name).toBe(false);
+  }
+  expect(overlapping(await nodeBoxes(page))).toEqual([]);
+  if (page.viewportSize()!.width >= 960) {
+    // Edges still meet each node, tall or short, at its vertical centre.
+    const misses = await pipeline(page).evaluate((canvas) => {
+      const origin = canvas.getBoundingClientRect();
+      const rects = [...canvas.querySelectorAll('[role="tab"]')].map((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          left: box.left - origin.left,
+          right: box.right - origin.left,
+          centre: box.top - origin.top + box.height / 2,
+        };
+      });
+      const near = (a: number, b: number) => Math.abs(a - b) <= 1;
+      return [...canvas.querySelectorAll<SVGPathElement>("path[data-flow-edge]")].flatMap(
+        (path) => {
+          const numbers = (path.getAttribute("d") ?? "").match(/-?\d+(\.\d+)?/g)!.map(Number);
+          const [x2, y2] = numbers.slice(-2);
+          const startMet = rects.some(
+            (rect) => near(rect.right, numbers[0]!) && near(rect.centre, numbers[1]!),
+          );
+          const endMet = rects.some((rect) => near(rect.left, x2!) && near(rect.centre, y2!));
+          return startMet && endMet ? [] : [path.dataset.flowEdge];
+        },
+      );
+    });
+    expect(misses).toEqual([]);
+  }
   // The long model name is truncated inside the node rather than widening it.
   const queued = page.getByRole("tab", { name: /^Reviewer 4 ·/ });
   const detail = queued.getByText(/^deepseek-v4\.1-flash/);
   expect(await detail.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  // Its whole text is in the tooltip.
+  expect(await detail.getAttribute("title")).toBe(await detail.textContent());
 });
 
 test("uses the graph at desktop width and stacks on narrow screens", async ({ page }) => {

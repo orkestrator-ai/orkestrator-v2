@@ -13,6 +13,7 @@ import { MULTI_REVIEW_STEP_KINDS } from "@orkestrator/protocol/multi-review";
 import {
   FLOW_GRAPH_MIN_HEIGHT,
   FLOW_GRAPH_STACK_BELOW,
+  FLOW_NODE_CHIPS_ROW_HEIGHT,
   FLOW_NODE_HEIGHT,
   flowEdgeState,
   latestActivityAt,
@@ -301,7 +302,7 @@ export function provisionalFindingLabel(finding: MultiReviewMergedFinding): stri
 // ---------------------------------------------------------------------------
 
 /** The package node carries a row of validation chips. */
-export const FLOW_PACKAGE_NODE_HEIGHT = 92;
+export const FLOW_PACKAGE_NODE_HEIGHT = FLOW_NODE_HEIGHT + FLOW_NODE_CHIPS_ROW_HEIGHT;
 
 const MAX_CONTENT_WIDTH = 1440;
 const PAD_X = 16;
@@ -312,7 +313,7 @@ const REVIEWER_GAP_MAX = 36;
 const REVIEWER_GAP_MIN = 12;
 /**
  * Package, reviewer, consolidation, fix and PR widths that fit each node's
- * name beside a typical `{elapsed} · {tokens}` without truncating.
+ * name and a typical `{elapsed} · {tokens}` row without truncating.
  */
 const COLUMN_NEEDS = [236, 266, 230, 160, 160] as const;
 /** The same columns at full width, as designed. */
@@ -340,6 +341,19 @@ export interface MultiReviewFlowLayout {
   pr: FlowRect;
 }
 
+/**
+ * Each node's height when it is not the plain two-row face (see
+ * `flowNodeHeight`): a running node, and one that ran, add a runtime row.
+ */
+export interface MultiReviewNodeHeights {
+  package?: number;
+  /** By reviewer, top to bottom. */
+  reviewers?: readonly number[];
+  consolidation?: number;
+  fix?: number;
+  pr?: number;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -355,16 +369,19 @@ function clamp(value: number, min: number, max: number): number {
  * width when it does not fit beside them. Reviewers stack in the second
  * column; their spacing tightens to keep up to five inside the minimum height,
  * and past that the canvas grows rather than overlapping nodes. The other
- * nodes centre on the reviewer stack.
+ * nodes centre on the reviewer stack. A taller node (one with a runtime row)
+ * keeps its centre on that line, so the edges into and out of it stay level.
  */
 export function multiReviewFlowLayout({
   width,
   reviewerCount,
   packageHasChips,
+  nodeHeights = {},
 }: {
   width: number;
   reviewerCount: number;
   packageHasChips: boolean;
+  nodeHeights?: MultiReviewNodeHeights;
 }): MultiReviewFlowLayout {
   const canvasWidth = Math.max(width, FLOW_GRAPH_STACK_BELOW);
   const span = Math.min(canvasWidth, MAX_CONTENT_WIDTH) - PAD_X * 2;
@@ -397,37 +414,52 @@ export function multiReviewFlowLayout({
   const contentWidth = Math.max(canvasWidth, Math.ceil(xs.at(-1)! + widths.at(-1)! + PAD_X));
 
   const count = Math.max(0, Math.floor(reviewerCount));
+  const reviewerHeights = Array.from(
+    { length: count },
+    (_, index) => nodeHeights.reviewers?.[index] ?? FLOW_NODE_HEIGHT,
+  );
+  const reviewersHeight = reviewerHeights.reduce((total, value) => total + value, 0);
   const fittingGap =
     count > 1
-      ? (FLOW_GRAPH_MIN_HEIGHT - NODE_TOP - PAD_BOTTOM - count * FLOW_NODE_HEIGHT) / (count - 1)
+      ? (FLOW_GRAPH_MIN_HEIGHT - NODE_TOP - PAD_BOTTOM - reviewersHeight) / (count - 1)
       : REVIEWER_GAP_MAX;
   const reviewerGap = Math.floor(clamp(fittingGap, REVIEWER_GAP_MIN, REVIEWER_GAP_MAX));
-  const stackHeight = count * FLOW_NODE_HEIGHT + Math.max(0, count - 1) * reviewerGap;
-  const packageHeight = packageHasChips ? FLOW_PACKAGE_NODE_HEIGHT : FLOW_NODE_HEIGHT;
+  const stackHeight = reviewersHeight + Math.max(0, count - 1) * reviewerGap;
+  const packageHeight =
+    nodeHeights.package ?? (packageHasChips ? FLOW_PACKAGE_NODE_HEIGHT : FLOW_NODE_HEIGHT);
+  const singleHeights = [
+    nodeHeights.consolidation ?? FLOW_NODE_HEIGHT,
+    nodeHeights.fix ?? FLOW_NODE_HEIGHT,
+    nodeHeights.pr ?? FLOW_NODE_HEIGHT,
+  ];
   const height = Math.max(
     FLOW_GRAPH_MIN_HEIGHT,
-    NODE_TOP + Math.max(stackHeight, packageHeight) + PAD_BOTTOM,
+    NODE_TOP + Math.max(stackHeight, packageHeight, ...singleHeights) + PAD_BOTTOM,
   );
   const centerY = NODE_TOP + (height - NODE_TOP - PAD_BOTTOM) / 2;
   const stackTop = Math.round(centerY - stackHeight / 2);
   const centred = (rectHeight: number) => Math.round(centerY - rectHeight / 2);
-  const single = (index: number): FlowRect => ({
-    x: xs[index]!,
-    y: centred(FLOW_NODE_HEIGHT),
-    width: widths[index]!,
-    height: FLOW_NODE_HEIGHT,
-  });
+  const single = (index: number): FlowRect => {
+    const rectHeight = singleHeights[index - 2]!;
+    return { x: xs[index]!, y: centred(rectHeight), width: widths[index]!, height: rectHeight };
+  };
+  const reviewerTops: number[] = [];
+  let reviewerY = stackTop;
+  for (const reviewerHeight of reviewerHeights) {
+    reviewerTops.push(reviewerY);
+    reviewerY += reviewerHeight + reviewerGap;
+  }
 
   return {
     width: contentWidth,
     height,
     columns: { prepare: xs[0]!, review: xs[1]!, consolidate: xs[2]!, fix: xs[3]!, pr: xs[4]! },
     package: { x: xs[0]!, y: centred(packageHeight), width: widths[0]!, height: packageHeight },
-    reviewers: Array.from({ length: count }, (_, index) => ({
+    reviewers: reviewerHeights.map((reviewerHeight, index) => ({
       x: xs[1]!,
-      y: stackTop + index * (FLOW_NODE_HEIGHT + reviewerGap),
+      y: reviewerTops[index]!,
       width: widths[1]!,
-      height: FLOW_NODE_HEIGHT,
+      height: reviewerHeight,
     })),
     consolidation: single(2),
     fix: single(3),

@@ -12,10 +12,6 @@ import {
   type FlowRect,
 } from "@/components/flow-graph/flow-graph-model";
 
-/** The prepare node carries a row of validation chips. */
-export const PIPELINE_CHIPS_NODE_HEIGHT = 92;
-/** The PR node carries a row for its checks. */
-export const PIPELINE_PR_NODE_HEIGHT = 84;
 /** The shortest the graph sizes itself to, so the inspector keeps the room. */
 export const PIPELINE_FLOW_MIN_HEIGHT = 240;
 
@@ -31,7 +27,7 @@ export interface PipelineLayoutColumn {
   key: string;
   label: string;
   title?: string;
-  /** Node ids top to bottom, with each node's height. */
+  /** Node ids top to bottom, with each node's height (see `flowNodeHeight`). */
   nodes: readonly { id: string; height: number }[];
 }
 

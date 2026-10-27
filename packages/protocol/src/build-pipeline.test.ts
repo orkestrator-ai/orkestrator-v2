@@ -1756,6 +1756,11 @@ describe("build pipeline protocol", () => {
       isBuildPipeline(withSession({ completedAt: "2026-07-29T00:01:00.000Z", tokenCount: 12_345 })),
     ).toBe(true);
 
+    expect(isBuildPipeline(withSession({ usageFinalizationPolls: 12 }))).toBe(true);
+    for (const polls of [-1, 1.5, 13, Number.NaN, "1", null]) {
+      expect(isBuildPipeline(withSession({ usageFinalizationPolls: polls }))).toBe(false);
+    }
+
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.
     expect(isBuildPipeline(withSession({ structuredWaitStartedAt: "soon" }))).toBe(false);

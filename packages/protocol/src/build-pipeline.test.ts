@@ -131,6 +131,27 @@ function snapshotWithInteractions({
 }
 
 describe("build pipeline protocol", () => {
+  test("validates durable skip intents and validation run markers", () => {
+    for (const phase of ["build", "fix", "review", "address", "verify"]) {
+      expect(isBuildPipeline({ ...snapshot(), skipRequest: { phase } })).toBe(true);
+    }
+    for (const skipRequest of [
+      null,
+      {},
+      "review",
+      { phase: "pr" },
+      { phase: "resolve-conflicts" },
+      { phase: "building" },
+      { phase: "review", extra: true },
+    ]) {
+      expect(isBuildPipeline({ ...snapshot(), skipRequest })).toBe(false);
+    }
+    expect(isBuildPipeline({ ...snapshot(), skippedValidationRunId: "run-1" })).toBe(true);
+    for (const skippedValidationRunId of [null, "", 1, true, {}]) {
+      expect(isBuildPipeline({ ...snapshot(), skippedValidationRunId })).toBe(false);
+    }
+  });
+
   test("accepts a backend-owned snapshot and exposes the current version", () => {
     expect(BUILD_PIPELINE_VERSION).toBe(2);
     expect(isBuildPipeline(snapshot())).toBe(true);
@@ -2127,6 +2148,41 @@ describe("review package preparation session", () => {
     expect(
       reviewValidationStage({ validationRun: { ...validationRun, status: "cancelled" } }, "fixing"),
     ).toBe("review-package");
+    for (const phase of ["building", "fixing"] as const) {
+      const cancelled = { ...validationRun, status: "cancelled" as const };
+      expect(
+        reviewValidationStage(
+          { validationRun: cancelled, skippedValidationRunId: cancelled.id },
+          phase,
+        ),
+      ).toBe("validation");
+      expect(
+        reviewValidationStage(
+          { validationRun: cancelled, skippedValidationRunId: "old-run" },
+          phase,
+        ),
+      ).toBe("review-package");
+      expect(
+        reviewValidationStage(
+          {
+            validationRun: cancelled,
+            skippedValidationRunId: cancelled.id,
+            reviewRetryRequested: true,
+          },
+          phase,
+        ),
+      ).toBe("review-package");
+      expect(
+        reviewValidationStage(
+          {
+            validationRun: cancelled,
+            skippedValidationRunId: cancelled.id,
+            reviewPackage: {} as BuildPipeline["reviewPackage"],
+          },
+          phase,
+        ),
+      ).toBeNull();
+    }
     expect(reviewValidationStage({ validationRun, reviewRetryRequested: true }, "building")).toBe(
       "review-package",
     );

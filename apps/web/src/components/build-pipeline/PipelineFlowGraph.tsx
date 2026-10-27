@@ -90,11 +90,11 @@ export function pipelineNodeStatusLabel(
         ? "Closed"
         : "Open";
   }
+  if (node.state === "cancelled" && isSkipped(node, pipeline)) return "Skipped";
   if (node.reviewer && node.state !== "complete") {
     return reviewerStatusLabel(node.reviewer, pipeline.reviewFanout?.reviewers ?? []);
   }
   if (node.placeholder) return "Not started yet";
-  if (node.state === "cancelled" && isSkipped(node, pipeline)) return "Skipped";
   return STATE_LABEL[node.state];
 }
 
@@ -172,17 +172,19 @@ export function pipelineNodeView({
   const issues = issueTotal(node.issueCounts);
   const liveReviewers = pipeline.reviewFanout?.reviewers ?? [];
   const statusWord: FlowNodeModel["statusWord"] =
-    node.reviewer && node.state !== "complete"
-      ? reviewerStatusWord(node.reviewer)
-      : node.state === "running"
-        ? { text: "running", tone: "running" }
-        : node.state === "paused"
-          ? { text: "paused", tone: "warning" }
-          : node.state === "failed"
-            ? { text: "failed", tone: "destructive" }
-            : node.state === "cancelled"
-              ? { text: "stopped", tone: "muted" }
-              : undefined;
+    node.state === "cancelled" && isSkipped(node, pipeline)
+      ? { text: "skipped", tone: "muted" }
+      : node.reviewer && node.state !== "complete"
+        ? reviewerStatusWord(node.reviewer)
+        : node.state === "running"
+          ? { text: "running", tone: "running" }
+          : node.state === "paused"
+            ? { text: "paused", tone: "warning" }
+            : node.state === "failed"
+              ? { text: "failed", tone: "destructive" }
+              : node.state === "cancelled"
+                ? { text: "stopped", tone: "muted" }
+                : undefined;
   return {
     id: node.id,
     kind: node.kind,

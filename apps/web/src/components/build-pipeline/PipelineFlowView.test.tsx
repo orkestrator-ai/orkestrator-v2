@@ -38,6 +38,106 @@ const reviewing = () =>
   });
 
 describe("pipeline inspector controls", () => {
+  test.each([true, false])(
+    "skipped validation shows Skipped with a dedicated session: %s",
+    (dedicated) => {
+      const run = validationRun({ status: "cancelled" });
+      const pipeline = build({
+        phase: "reviewing",
+        sessions: [
+          session("build", "work", 0),
+          ...(dedicated
+            ? [session("fix", "prep", 60, { label: "Package Preparation Session" })]
+            : []),
+        ],
+        validationRun: run,
+        skippedValidationRunId: run.id,
+      });
+      renderPipelineTab(JSON.parse(JSON.stringify(pipeline)));
+      expect(graphNode("Prepare").getAttribute("data-flow-state")).toBe("cancelled");
+      expect(graphNode("Prepare").textContent).toContain("skipped");
+      selectNode("Prepare");
+      expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Skipped");
+    },
+  );
+
+  test("skipped agent sessions show Skipped after snapshot reload", () => {
+    renderPipelineTab(
+      JSON.parse(
+        JSON.stringify(
+          build({
+            phase: "verifying",
+            currentSessionIndex: 1,
+            sessions: [
+              session("build", "work", 0, { skipped: true }),
+              session("verify", "verify", 120, { status: "running", completedAt: undefined }),
+            ],
+          }),
+        ),
+      ),
+    );
+    expect(graphNode("Build").getAttribute("data-flow-state")).toBe("cancelled");
+    expect(graphNode("Build").textContent).toContain("skipped");
+    selectNode("Build");
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Skipped");
+  });
+
+  test.each(["reviewers", "consolidation"] as const)(
+    "retired fan-out history shows skipped %s and preserves completed reviewers",
+    (stage) => {
+      const interrupted = stage === "reviewers";
+      const pipeline = build({
+        phase: "verifying",
+        currentSessionIndex: interrupted ? 2 : 3,
+        reviewers: [
+          { agent: "claude", model: "opus" },
+          { agent: "codex", model: "gpt" },
+        ],
+        sessions: [
+          session("review", "review-1", 60, {
+            label: "Review 1",
+            reviewPassId: "pass-1",
+            reviewerOutcome: "completed",
+            skipped: interrupted,
+          }),
+          session("review", "review-2", 60, {
+            label: "Review 2",
+            reviewPassId: "pass-1",
+            reviewerOutcome: interrupted ? "cancelled" : "completed",
+            skipped: interrupted,
+          }),
+          ...(!interrupted
+            ? [
+                session("review", "merge", 120, {
+                  label: "Consolidation",
+                  reviewPassId: "pass-1",
+                  skipped: true,
+                }),
+              ]
+            : []),
+          session("verify", "verify", 180, { status: "running", completedAt: undefined }),
+        ],
+      });
+      renderPipelineTab(JSON.parse(JSON.stringify(pipeline)));
+      for (const title of ["Reviewer 1", "Reviewer 2"]) {
+        expect(graphNode(title).getAttribute("data-flow-state")).toBe(
+          interrupted ? "cancelled" : "complete",
+        );
+        if (interrupted) expect(graphNode(title).textContent).toContain("skipped");
+        selectNode(title);
+        expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe(
+          interrupted ? "Skipped" : "Complete",
+        );
+      }
+      if (!interrupted) {
+        expect(graphNode("Consolidation").getAttribute("data-flow-state")).toBe("cancelled");
+        expect(graphNode("Consolidation").textContent).toContain("skipped");
+        selectNode("Consolidation");
+        expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Skipped");
+      }
+    },
+  );
+
   test("a second sessionless failure exposes retry after superseded consolidation", async () => {
     const pipeline = sessionlessReviewerRetry("failed");
     retryReviewerMock.mockClear();

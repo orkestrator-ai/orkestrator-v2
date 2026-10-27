@@ -1084,8 +1084,15 @@ export class BuildPipelineLifecycle {
       );
       const isCurrent =
         named !== undefined &&
+        !named.superseded &&
         named.phase === stagePhase &&
-        (named === session || (fanoutReview && named.iteration === candidate.iteration));
+        (fanoutReview
+          ? Boolean(named.sessionKey) &&
+            (candidate.reviewFanout!.reviewers.some(
+              (reviewer) => reviewer.sessionKey === named.sessionKey,
+            ) ||
+              candidate.reviewFanout!.consolidation?.sessionKey === named.sessionKey)
+          : named === session);
       if (!isCurrent) {
         rejection = new Error("This step has already finished");
         return;
@@ -1097,9 +1104,11 @@ export class BuildPipelineLifecycle {
         stagePhase === "resolve-conflicts"
       ) {
         rejection = new Error(
-          stagePhase === "pr" || stagePhase === "resolve-conflicts"
-            ? "The pull request step cannot be skipped"
-            : "Review preparation cannot be skipped: the review needs the package it prepares",
+          stagePhase === "resolve-conflicts"
+            ? "Conflict resolution cannot be skipped"
+            : stagePhase === "pr"
+              ? "The pull request step cannot be skipped"
+              : "Review preparation cannot be skipped: the review needs the package it prepares",
         );
         return;
       }
@@ -1112,7 +1121,23 @@ export class BuildPipelineLifecycle {
         new Set(candidate.pendingResultConsumptions ?? []),
       );
       await this.stopCurrentStage(candidate);
-      if (!fanoutReview) {
+      if (fanoutReview) {
+        const fanout = candidate.reviewFanout!;
+        // Keep the interrupted pass visible after the supervisor retires its
+        // live state. Skipping the panel discards all of its reviewer results;
+        // skipping only consolidation preserves the settled reviewer outcomes.
+        const skippedKeys = new Set(
+          fanout.reviewers
+            .filter((reviewer) => !fanout.consolidation || reviewer.status === "cancelled")
+            .map((reviewer) => reviewer.sessionKey),
+        );
+        if (fanout.consolidation) skippedKeys.add(fanout.consolidation.sessionKey);
+        for (const entry of candidate.sessions) {
+          if (!entry.sessionKey || !skippedKeys.has(entry.sessionKey)) continue;
+          entry.skipped = true;
+          entry.completedAt ??= new Date().toISOString();
+        }
+      } else {
         named.skipped = true;
         named.completedAt ??= new Date().toISOString();
       }

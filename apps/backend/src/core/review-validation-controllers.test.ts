@@ -18,6 +18,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
+import { rewritePipeline } from "./build-pipeline-review-fanout-test-support.js";
 
 async function harness() {
   const directory = await mkdtemp(path.join(tmpdir(), "validation-controllers-"));
@@ -522,6 +523,45 @@ test("skipping a paused validation seals the cancelled run instead of preparing 
     );
   } finally {
     await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("a replacement controller recovers a persisted skipped validation run", async () => {
+  const h = await harness();
+  const { service, pipelineId, read } = await pipelineWithRunningValidation(h, "task-skip-recover");
+  let restored: BuildPipelineService | undefined;
+  try {
+    const runId = (await read()).validationRun!.id;
+    await service.pause(pipelineId);
+    await service.shutdown();
+    // Durable state after admitting the skip, before the supervisor seals it.
+    await rewritePipeline(h.storage, pipelineId, (pipeline) => {
+      pipeline.phase = pipeline.pausedFromPhase!;
+      delete pipeline.pausedFromPhase;
+      delete pipeline.pauseCause;
+      pipeline.skippedValidationRunId = runId;
+    });
+    const sendsBeforeRecovery = h.sends.length;
+    restored = new BuildPipelineService(h.storage, h.invoke, {
+      autoAdvance: false,
+      provider: async () => h.provider,
+    });
+    await restored.init();
+    await restored.advanceNow(pipelineId);
+    const recovered = await read();
+    expect(recovered.phase).toBe("reviewing");
+    expect(recovered.reviewPackage?.id).toBe(runId);
+    expect(recovered.skippedValidationRunId).toBe(runId);
+    expect(recovered.validationRun?.status).toBe("cancelled");
+    expect(h.sends).toHaveLength(sendsBeforeRecovery + 1);
+    expect(h.sends.at(-1)!.options.schema).not.toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
+    expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(
+      1,
+    );
+  } finally {
+    await service.shutdown();
+    await restored?.shutdown();
     await h.cleanup();
   }
 });

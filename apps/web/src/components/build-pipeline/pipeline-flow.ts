@@ -288,6 +288,7 @@ function reviewerSessionState(
   pipeline: BuildPipeline,
   live: ReviewerRecord | undefined,
 ): FlowNodeState {
+  if (session.skipped) return "cancelled";
   if (live && live.sessionKey === session.sessionKey) return reviewerFlowState(live.status);
   switch (session.reviewerOutcome) {
     case "completed":

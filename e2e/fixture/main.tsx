@@ -1,3 +1,4 @@
+import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
@@ -1907,6 +1908,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-refresh-shimmer") {
     return <NativeRefreshShimmerFixture />;
   }
+  if (window.location.pathname === "/native-resume-session") return <NativeResumeSessionFixture />;
   if (window.location.pathname === "/native-held-send") {
     return (
       <Suspense fallback={null}>

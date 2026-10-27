@@ -1039,6 +1039,12 @@ export interface NativeAgentCapabilities {
     review?: boolean;
     rewindMessages?: boolean;
     branches?: boolean;
+    /**
+     * A conversation can be taken out of the resume list and put back
+     * (Codex `thread/archive` / `thread/unarchive`). Archive keeps the
+     * provider's history; it is never a delete.
+     */
+    archive?: boolean;
   };
   /**
    * The interaction kinds this platform can raise.
@@ -1211,7 +1217,7 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
     attachments: { files: false, images: true },
     // Codex binds its collaboration mode to the thread and persists it.
     composer: { ...capabilities.composer, modeScope: "session" },
-    actions: { compact: true, steer: true, review: true, rewindMessages: true },
+    actions: { compact: true, steer: true, review: true, rewindMessages: true, archive: true },
     // Codex: questions (`request_user_input`), MCP elicitations in both form
     // and url modes, and command/file approvals through
     // `item/permissions/requestApproval`. Every turn runs in Codex's Default

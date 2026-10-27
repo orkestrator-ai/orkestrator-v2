@@ -32,11 +32,7 @@ import {
 } from "./transcript-routes.js";
 import { createCodexChangeEvidence } from "./change-evidence.js";
 import { isCodexApprovalMode } from "./codex-approval-mode.js";
-import {
-  generateSessionTitleWithCodexExec,
-  normalizeExplicitSessionTitle,
-  shutdownSessionTitleGeneration,
-} from "./session-titles.js";
+import { normalizeExplicitSessionTitle } from "./session-title-index.js";
 import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides, codexCoordinatorSkillExtraRoots } from "./codex-config.js";
@@ -173,9 +169,6 @@ const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
 let bridgeAuthToken =
   process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
 let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
-/** Overridden in tests so title generation does not spawn a real `codex exec`. */
-type SessionTitleGenerator = (prompt: string) => Promise<string>;
-let sessionTitleGeneratorForTesting: SessionTitleGenerator | null = null;
 interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;
   beforeBufferedDrain?: () => Promise<void> | void;
@@ -184,10 +177,6 @@ interface SseRouteTestHooks {
   maxBufferedReplayEvents?: number;
 }
 let sseRouteTestHooks: SseRouteTestHooks | null = null;
-function setSessionTitleGeneratorForTesting(generator: SessionTitleGenerator | null): void {
-  sessionTitleGeneratorForTesting = generator;
-}
-const codexPathOverride = process.env.CODEX_PATH || "codex";
 /**
  * The bridge's own version, reported through /global/health. Held at 1.0.0 so the
  * health payload stays a purely additive change for existing clients.
@@ -432,7 +421,6 @@ function createShutdownHandler(
   timer: ReturnType<typeof setInterval>,
   clearTimer: (timer: ReturnType<typeof setInterval>) => void = clearInterval,
   exit: (code: number) => void = (code) => process.exit(code),
-  shutdownTitles: () => Promise<void> = shutdownSessionTitleGeneration,
   /**
    * Drains the persistent app-server child. Without this a `docker stop` or a
    * backend-issued SIGTERM would leave an orphan holding the same CODEX_HOME —
@@ -446,14 +434,11 @@ function createShutdownHandler(
     if (shuttingDown) return;
     shuttingDown = true;
     clearTimer(timer);
-    void Promise.allSettled([
-      shutdownTitles().catch((error) => {
-        console.warn("[codex-bridge] Failed to stop session-title generation:", error);
-      }),
-      stopEngine().catch((error) => {
+    void stopEngine()
+      .catch((error) => {
         console.warn("[codex-bridge] Failed to stop the Codex engine:", error);
-      }),
-    ]).finally(() => exit(0));
+      })
+      .finally(() => exit(0));
   };
 }
 
@@ -813,10 +798,6 @@ const appServerRuntime = new AppServerRuntime({
   emit,
   loadCachedModels: () => modelCatalogCache.get(),
   persistModels: writePersistedBridgeCache,
-  generateTitle: (prompt) =>
-    sessionTitleGeneratorForTesting
-      ? sessionTitleGeneratorForTesting(prompt)
-      : generateSessionTitleWithCodexExec(codexPathOverride, prompt),
   // This module owns the sweep timer so shutdown can clear it alongside the rest.
   sweepIntervalMs: 0,
   // One probe per process: it serializes snapshots per repository across every
@@ -972,7 +953,6 @@ export const __testing = {
   isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
   sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
   serializeSseEventDataForTesting: serializeSseEventData,
-  setSessionTitleGeneratorForTesting,
   setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
     sseRouteTestHooks = hooks;
   },
@@ -1275,6 +1255,26 @@ app.post("/session/:id/commands/refresh", async (c) => {
 app.get("/session/list", async (c) => {
   return c.json(await appServerRuntime.listSessions());
 });
+
+/**
+ * Removes a conversation from the resume list (`thread/archive`) or restores
+ * it. The id is a resume-list id (a Codex thread id), never a bridge session.
+ * Archive keeps the rollout; nothing here deletes a thread.
+ */
+for (const action of ["archive", "unarchive"] as const) {
+  app.post(`/session/list/:threadId/${action}`, async (c) => {
+    const threadId = c.req.param("threadId").trim();
+    if (!threadId || threadId.length > 256) return c.json({ error: "threadId is invalid" }, 400);
+    const outcome = await appServerRuntime.setResumableArchived(threadId, action === "archive");
+    if (outcome === "in-use") {
+      return c.json({ error: "This conversation is open in a tab" }, 409);
+    }
+    if (outcome === "failed") {
+      return c.json({ error: `Codex could not ${action} this conversation` }, 502);
+    }
+    return c.json({ archived: outcome === "archived" });
+  });
+}
 
 app.post("/session/create", async (c) => {
   const body = await c.req.json().catch(() => ({}));

@@ -674,8 +674,9 @@ thread items are:
 `bridges/codex-bridge/src/app-server/process-supervisor.ts` launches the binary
 selected by `CODEX_PATH`. `apps/backend/src/core/commands.ts` also uses the
 managed Codex binary for isolated `codex exec` helpers such as environment-name
-generation; `bridges/codex-bridge/src/session-titles.ts` is another deliberate
-hermetic `codex exec` exception.
+generation; `apps/backend/src/core/session-title-runners.ts` is another
+deliberate hermetic `codex exec` exception (session titles), and its test runs
+the pinned binary's parser over the production argument shape.
 
 ### How to upgrade Codex
 

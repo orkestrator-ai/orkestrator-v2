@@ -8,9 +8,10 @@ See [`docs/architecture/agent-engines.md`](../../docs/architecture/agent-engines
 The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
 [`AGENTS.md`](../../AGENTS.md) also apply.
 
-`session-titles.ts` is the deliberate exception — it still spawns its own hermetic
-`codex exec` with a custom model catalog, read-only sandbox and user config
-ignored, so title generation cannot inherit the user's tools or instructions.
+The bridge generates no session titles: the backend does
+(`apps/backend/src/core/session-title-service.ts`) and renames the thread
+through `POST /session/:id/title`. `session-title-index.ts` only persists
+titles beside Codex's own index.
 
 | File                                    | Purpose                                            |
 | --------------------------------------- | -------------------------------------------------- |

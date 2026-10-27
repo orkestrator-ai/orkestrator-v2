@@ -274,7 +274,6 @@ afterEach(async () => {
 export async function harness(
   handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
   options: {
-    generateTitle?: (prompt: string) => Promise<string>;
     now?: () => number;
     threadIdleMs?: number;
     sessionRetentionMs?: number;
@@ -353,7 +352,6 @@ export async function harness(
     }),
     // Deltas are published on a cadence; zero keeps most tests deterministic.
     ...(options.adaptiveCoalesce ? {} : { coalesceIntervalMs: 0 }),
-    generateTitle: options.generateTitle,
     ...(options.now ? { now: options.now } : {}),
     ...(options.threadIdleMs !== undefined ? { threadIdleMs: options.threadIdleMs } : {}),
     ...(options.sessionRetentionMs !== undefined

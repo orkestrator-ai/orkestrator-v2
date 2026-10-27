@@ -122,16 +122,14 @@ import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-cat
 import { fileURLToPath } from "node:url";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
-import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
-import {
-  parseCoordinatorDelegatedPrompt,
-  stripSystemInstructions,
-} from "@orkestrator/protocol/review-evidence-frames";
+import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
   inferredComposerSelectionToPersist,
   lastAssistantModelRef,
 } from "./native-agent-composer-selection.js";
 import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
+import { NativeAgentSessionTitles } from "./native-agent-session-titles.js";
+import { sessionTitleSourceText } from "./session-title-text.js";
 import { heldSessionModel } from "./session-held-model.js";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -219,6 +217,29 @@ const IMAGE_MIME_TYPES = new Map([
 ]);
 const READ_TOOL_KEYS = new Set(["read", "readfile", "cursorread", "view", "viewfile"]);
 const READ_TOOL_PATH_KEYS = ["file_path", "filePath", "path", "target_file", "file"] as const;
+
+/**
+ * The first user message a read holds that still has the user's own words,
+ * and whether the read starts at the beginning of the conversation. Only then
+ * is that message the conversation's first, which is what a title names.
+ */
+function firstUserMessageOf(
+  messages: readonly unknown[],
+  window:
+    | Pick<NativeAgentMessageWindow, "truncated" | "omittedMessages" | "canLoadEarlier">
+    | undefined,
+): { firstUserMessage?: string; reachesStart: boolean } {
+  const reachesStart =
+    !window?.truncated || ((window.omittedMessages ?? -1) === 0 && window.canLoadEarlier !== true);
+  for (const candidate of messages) {
+    const message = candidate as { role?: unknown; content?: unknown };
+    if (message.role !== "user" || typeof message.content !== "string") continue;
+    if (sessionTitleSourceText(message.content)) {
+      return { firstUserMessage: message.content, reachesStart };
+    }
+  }
+  return { reachesStart };
+}
 
 function localImagePath(reference: unknown): string | undefined {
   if (typeof reference !== "string" || /[\0\r\n]/.test(reference)) return undefined;
@@ -825,8 +846,8 @@ export class NativeAgentTranscriptProjection {
   private readonly projectionEpochs = new Map<string, number>();
   /** Session-scoped stop result retained until the next authoritative projection. */
   private readonly stopNotices = new Map<string, string>();
-  /** One best-effort provider title push per backend-derived title. */
-  private readonly pushedSessionTitles = new Map<string, string>();
+  /** The backend's choice of title per session, and its push to the provider. */
+  private readonly sessionTitles: NativeAgentSessionTitles;
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
   private progressiveTranscriptBytes = 0;
@@ -916,6 +937,19 @@ export class NativeAgentTranscriptProjection {
     this.resumeIdentity = new NativeAgentResumeIdentityObserver(this.storage);
     this.options = host.options;
     this.catalogs = host.catalogs;
+    this.sessionTitles = new NativeAgentSessionTitles({
+      storage: {
+        // Optional because narrow test doubles of the storage omit it.
+        recordNativeAgentSessionBackendTitle: (key, title) =>
+          typeof this.storage.recordNativeAgentSessionBackendTitle === "function"
+            ? this.storage.recordNativeAgentSessionBackendTitle(key, title)
+            : Promise.resolve(false),
+      },
+      ...(this.options.sessionTitles ? { generator: this.options.sessionTitles } : {}),
+      onTitleChosen: (sessionKey, title, providerSessionId) =>
+        this.showChosenTitle(sessionKey, title, providerSessionId),
+      now: () => this.host.now(),
+    });
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
       write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
       // Optional because narrow test doubles of the storage omit them.
@@ -946,6 +980,50 @@ export class NativeAgentTranscriptProjection {
     });
   }
 
+  /**
+   * A title the backend just chose, shown in the cached projections without
+   * waiting for the next provider read: an idle session may not be read again
+   * for a long time.
+   */
+  private showChosenTitle(sessionKey: string, title: string, providerSessionId: string): void {
+    for (const key of [sessionKey, `${sessionKey}\0sync-v1`]) {
+      const entry = this.projectionCache.get(key);
+      if (
+        !entry ||
+        entry.projection.sessionId !== providerSessionId ||
+        entry.projection.title === title
+      )
+        continue;
+      this.commitProjection(
+        key,
+        entry.input,
+        { ...entry.projection, title },
+        entry.generation,
+        this.projectionEpochs.get(key) ?? 0,
+      );
+    }
+  }
+
+  /**
+   * A background recovery of the same conversation keeps the title the view
+   * already shows: it carries only the provider's own, which the read path
+   * may have replaced with the backend's (`sessionTitles.resolve`).
+   */
+  private withShownTitle(
+    key: string,
+    projection: ProjectedProgressiveTranscript,
+  ): ProjectedProgressiveTranscript {
+    const shown = this.progressiveTranscriptCache.get(key)?.value;
+    if (
+      !shown?.title ||
+      shown.title === projection.value.title ||
+      shown.identity.providerSessionId !== projection.value.identity.providerSessionId
+    ) {
+      return projection;
+    }
+    return { ...projection, value: { ...projection.value, title: shown.title } };
+  }
+
   /** Keep a session's stop result until its next authoritative projection. */
   recordStopNotice(sessionKey: string, message: string): void {
     this.stopNotices.set(sessionKey, message);
@@ -956,9 +1034,9 @@ export class NativeAgentTranscriptProjection {
     }
   }
 
-  /** Projection reads still in flight, for shutdown to settle. */
+  /** Projection reads and title choices still in flight, for shutdown to settle. */
   pendingRefreshes(): Promise<unknown>[] {
-    return [...this.projectionRefreshes.values()];
+    return [...this.projectionRefreshes.values(), ...this.sessionTitles.pending()];
   }
 
   /**
@@ -2231,12 +2309,15 @@ export class NativeAgentTranscriptProjection {
             this.commitProgressiveTranscript(
               key,
               input,
-              this.projectProgressiveTranscript(
-                input,
+              this.withShownTitle(
                 key,
-                hydrated,
-                sessionId,
-                initialPromptPresentation,
+                this.projectProgressiveTranscript(
+                  input,
+                  key,
+                  hydrated,
+                  sessionId,
+                  initialPromptPresentation,
+                ),
               ),
             );
             // An idle view reads on a slow cadence. Say the recovered transcript
@@ -3007,6 +3088,29 @@ export class NativeAgentTranscriptProjection {
         resolved.session.providerSessionId,
         resolved.session.initialPromptPresentation,
       );
+      const title = this.sessionTitles.resolve({
+        sessionKey: resolved.key,
+        session: resolved.session,
+        agent: input.agent,
+        ...(projection.value.title ? { providerTitle: projection.value.title } : {}),
+        ...firstUserMessageOf(
+          projection.value.messages,
+          projection.value.historyCursor === undefined
+            ? projection.value.messageWindow
+            : { truncated: true },
+        ),
+        transient: resolved.transient,
+        ...(resolved.provider.setSessionTitle
+          ? {
+              setProviderTitle: (id: string, value: string) =>
+                resolved.provider.setSessionTitle!(id, value),
+            }
+          : {}),
+      });
+      if (title !== projection.value.title) {
+        const { title: _providerTitle, ...rest } = projection.value;
+        projection = { ...projection, value: { ...rest, ...(title ? { title } : {}) } };
+      }
     } catch (error) {
       if (!holdsPreview) scheduleHydration(false);
       throw error;
@@ -3282,6 +3386,21 @@ export class NativeAgentTranscriptProjection {
           !!(stateSnapshot.lastAssistantModelId ?? lastAssistant.modelId),
       },
     );
+    // Body-free: it shows the title already chosen, never chooses one.
+    const stateTitle = this.sessionTitles.resolve({
+      sessionKey: resolved.key,
+      session: resolved.session,
+      agent: input.agent,
+      ...(stateSnapshot.title ? { providerTitle: stateSnapshot.title } : {}),
+      reachesStart: false,
+      transient: resolved.transient,
+      ...(resolved.provider.setSessionTitle
+        ? {
+            setProviderTitle: (id: string, value: string) =>
+              resolved.provider.setSessionTitle!(id, value),
+          }
+        : {}),
+    });
     const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
     // A provider that reports no composer (OpenCode) resolves its model window
     // from the catalogue, which may still be loading on the first state read.
@@ -3422,7 +3541,7 @@ export class NativeAgentTranscriptProjection {
       capabilities,
       ...(stateSnapshot.readiness ? { readiness: stateSnapshot.readiness } : {}),
       ...(stateSnapshot.shareUrl === undefined ? {} : { shareUrl: stateSnapshot.shareUrl }),
-      ...(stateSnapshot.title ? { title: stateSnapshot.title } : {}),
+      ...(stateTitle ? { title: stateTitle } : {}),
       ...(queue
         ? {
             queue: {
@@ -5069,38 +5188,20 @@ export class NativeAgentTranscriptProjection {
         terminalMessages as unknown[],
       );
       const renderedTranscript = { messages: messagesWithNotices, window: transcript.window };
-      const fallbackTitle = transcript.messages.flatMap((candidate) => {
-        const message = candidate as { role?: unknown; content?: unknown };
-        if (message.role !== "user" || typeof message.content !== "string") return [];
-        // Name the session after the user's own words, not provider-only
-        // guidance or the inert reference material quoted after them.
-        const normalized = stripTranscriptAnnotations(stripSystemInstructions(message.content))
-          .replace(/\s+/g, " ")
-          .trim();
-        return normalized ? [normalized.slice(0, 80)] : [];
-      })[0];
-      const snapshotTitle = snapshot.title?.trim();
-      // "Agent Session" is the title this service creates every provider
-      // session with, and "Session 1a2b3c" is Claude's own; neither names the
-      // conversation. Left in place they stay its title in the resume list, so
-      // every OpenCode conversation read "Agent Session" there.
-      const placeholderTitle =
-        snapshotTitle === "Agent Session" ||
-        (input.agent === "claude" && /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
-      const projectionTitle =
-        (!placeholderTitle && snapshotTitle) || fallbackTitle || snapshotTitle;
-      if (
-        projectionTitle &&
-        (!snapshotTitle || placeholderTitle) &&
-        resolved.provider.setSessionTitle &&
-        !resolved.transient &&
-        this.pushedSessionTitles.get(sessionKey) !== projectionTitle
-      ) {
-        this.pushedSessionTitles.set(sessionKey, projectionTitle);
-        void resolved.provider
-          .setSessionTitle(resolved.session.providerSessionId, projectionTitle)
-          .catch(() => undefined);
-      }
+      const projectionTitle = this.sessionTitles.resolve({
+        sessionKey,
+        session: resolved.session,
+        agent: input.agent,
+        ...(snapshot.title ? { providerTitle: snapshot.title } : {}),
+        ...firstUserMessageOf(normalized.messages, normalized.window),
+        transient: resolved.transient,
+        ...(resolved.provider.setSessionTitle
+          ? {
+              setProviderTitle: (id: string, title: string) =>
+                resolved.provider.setSessionTitle!(id, title),
+            }
+          : {}),
+      });
       if (input.representation === "sync-v1") {
         const historyIds = new Set(
           normalized.messages

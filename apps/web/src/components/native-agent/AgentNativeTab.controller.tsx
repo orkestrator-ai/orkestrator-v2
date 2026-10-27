@@ -485,6 +485,7 @@ export function SharedNativeAgentController({
     retryRecoverableDispatch,
     discardRecoverableDispatch,
     listResumable,
+    setResumableArchived,
     resume,
     fork,
     performAction,
@@ -2144,6 +2145,8 @@ export function SharedNativeAgentController({
         activityAt: entry.updatedAt ?? entry.createdAt ?? null,
         ...(entry.status ? { status: entry.status } : {}),
         ...(entry.detail ? { detail: entry.detail } : {}),
+        ...(entry.parentId ? { parentId: entry.parentId } : {}),
+        ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
       })),
     [listResumable],
   );
@@ -3028,6 +3031,7 @@ export function SharedNativeAgentController({
         agentLabel={label}
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
+        {...(adapter.capabilities.actions?.archive ? { onArchive: setResumableArchived } : {})}
         onResume={(providerSessionId) => {
           setResumeDialogOpen(false);
           const sourceSessionId = projection?.sessionId;

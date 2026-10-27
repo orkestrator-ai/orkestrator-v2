@@ -32,13 +32,15 @@ import {
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
 
 import { createMessageId, createSessionId, type NormalizedMessage } from "./messages/types.js";
+import { externalRevertCut } from "./sessions/external-revert.js";
 
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
+  clearTranscriptPathCache,
 } from "./history/rollout.js";
-import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-titles.js";
+import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-title-index.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 
@@ -109,7 +111,6 @@ export class CodexRuntimeSessions {
       config: this.lifecycle.toEngineConfig(body),
       title,
       titleSource: title ? "explicit" : undefined,
-      titleGenerationAttempted: Boolean(title),
     });
     // Created here with no thread, so every id it is sent passes through the
     // dispatch journal. Resumed and forked sessions never get this marker.
@@ -139,7 +140,6 @@ export class CodexRuntimeSessions {
       id: sessionId,
       threadId: null,
       config,
-      titleGenerationAttempted: true,
     });
 
     let thread: EngineThread;
@@ -272,7 +272,6 @@ export class CodexRuntimeSessions {
       config: { ...parent.config },
       title: parent.title ? `${parent.title} (fork)` : "Forked session",
       titleSource: "explicit",
-      titleGenerationAttempted: true,
       confirmedModelsByTurn: { ...parent.confirmedModelsByTurn },
       structuredOutputTurns: parent.structuredOutputTurns?.map((entry) => ({ ...entry })),
     });
@@ -1046,6 +1045,8 @@ export class CodexRuntimeSessions {
     const beforeTurnId = context.messages[index]?.turnId;
     if (index < 0 || !beforeTurnId) return "unavailable";
     await this.ctx.options.engine.revertThread(session.threadId, beforeTurnId);
+    clearTranscriptPathCache();
+    invalidateTranscriptCatalogCache();
     context.messages.splice(index);
     context.error = undefined;
     this.ctx.registry.setPhase(context, "idle");
@@ -1055,6 +1056,66 @@ export class CodexRuntimeSessions {
       this.ctx.options.emit({ type: "session.reconcile-required", sessionId: id });
     }
     return "rewound";
+  }
+
+  /**
+   * Adopts a rewind made by another client (`thread/reverted`): trims the
+   * transcript this bridge serves to the turns app-server still has. Our own
+   * `rewindMessages` has already trimmed, so its echo finds nothing to cut.
+   * Never throws: it runs detached from the notification that started it.
+   */
+  async reconcileExternalRevert(context: ThreadContext): Promise<void> {
+    clearTranscriptPathCache();
+    invalidateTranscriptCatalogCache();
+    const engineHandle = context.engineHandle;
+    const generation = context.engineGeneration;
+    const revisions = [...context.bridgeSessionIds].map((id) => {
+      const session = this.ctx.registry.getSession(id);
+      return { id, session, revision: session?.messageRevision };
+    });
+    let turns: { id: string }[] | undefined;
+    try {
+      turns = (await this.ctx.options.engine.readThread(context.threadId, { includeTurns: true }))
+        ?.turns;
+    } catch (error) {
+      console.warn(
+        `[codex-bridge] Could not read turns after a revert of thread ${context.threadId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return;
+    }
+    // Detached or replaced while reading: the next attach rehydrates from the
+    // rollout, which records the rollback itself. A turn running now may have
+    // started after the read and be missing from it, so nothing is cut under
+    // one. The revision fence also rejects a turn that started and finished
+    // during the read; the transcript catches up on the next hydration.
+    if (!turns || this.ctx.registry.getThread(context.threadId) !== context) return;
+    if (
+      phaseToExternalStatus(context.phase) === "running" ||
+      context.dispatchInFlight ||
+      context.engineHandle !== engineHandle ||
+      context.engineGeneration !== generation ||
+      revisions.some(
+        ({ id, session, revision }) =>
+          this.ctx.registry.getSession(id) !== session || session?.messageRevision !== revision,
+      )
+    )
+      return;
+    const cut = externalRevertCut(
+      context.messages,
+      turns.map((turn) => turn.id),
+      false,
+    );
+    if (cut === undefined) return;
+    context.messages.splice(cut);
+    for (const id of context.bridgeSessionIds) {
+      const session = this.ctx.registry.getSession(id);
+      if (session) this.ctx.registry.bumpContentEpoch(session);
+    }
+    this.ctx.callbacks.bumpMessageRevision(context);
+    for (const id of context.bridgeSessionIds) {
+      this.ctx.options.emit({ type: "session.reconcile-required", sessionId: id });
+    }
   }
 
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
@@ -1068,8 +1129,6 @@ export class CodexRuntimeSessions {
     for (const entry of siblings) {
       entry.title = title;
       entry.titleSource = "explicit";
-      entry.titleGenerationAttempted = true;
-      entry.titleGenerationToken = undefined;
     }
     if (session.threadId) {
       await this.ctx.options.engine.setThreadName(session.threadId, title);
@@ -1350,7 +1409,9 @@ export class CodexRuntimeSessions {
       status: phaseToExternalStatus(phase),
       ...(session.config.policy ? { policy: session.config.policy } : {}),
       phase,
-      title: session.title,
+      // A title read back from the first prompt is a resume-list label, not a
+      // title: leaving it out lets the backend name the session.
+      title: session.titleSource === "prompt" ? undefined : session.title,
       error,
       // Structured so a workflow can continue the turn without matching text.
       // The notice clears when the next turn is accepted, and the error check

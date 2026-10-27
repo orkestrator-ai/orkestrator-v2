@@ -1989,6 +1989,25 @@ export class NativeAgentService {
     return this.projections.refreshProjection(input, true);
   }
 
+  /**
+   * Take a conversation out of this tab's resume list, or put it back. Never
+   * the tab's own conversation, which is not in its list; the provider keeps
+   * the history either way.
+   */
+  async setProjectionResumableSessionArchived(
+    input: NativeAgentProjectionInput & { resumableSessionId: string; archived: boolean },
+  ): Promise<void> {
+    this.assertProjectionInput(input);
+    if (!nativeCapabilities(input.agent).actions?.archive) {
+      throw new Error(`${input.agent} cannot archive conversations`);
+    }
+    const provider = await this.provider(input);
+    if (!provider.setResumableSessionArchived) {
+      throw new Error(`${input.agent} cannot archive conversations`);
+    }
+    await provider.setResumableSessionArchived(input.resumableSessionId, input.archived);
+  }
+
   async listProjectionResumableSessions(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentResumeEntry[]> {
@@ -3882,6 +3901,8 @@ export class NativeAgentService {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    // Before settling projections: a title run in flight is what they wait on.
+    await this.options.sessionTitles?.shutdown().catch(() => undefined);
     this.unsubscribeObservationWakeups?.();
     this.unsubscribeObservationWakeups = null;
     this.launches.stopTimer();

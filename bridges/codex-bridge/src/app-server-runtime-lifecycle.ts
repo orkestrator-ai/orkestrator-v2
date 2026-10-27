@@ -131,7 +131,6 @@ export class CodexRuntimeLifecycle {
           : persisted.config,
         title: persisted.title,
         titleSource: persisted.titleSource,
-        titleGenerationAttempted: Boolean(persisted.title),
         lastAcceptedRequestId: persisted.lastAcceptedRequestId,
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
@@ -866,6 +865,12 @@ export class CodexRuntimeLifecycle {
     // the thread busy forever.
     if (event.kind === "thread.compacted") {
       this.ctx.callbacks.finishCompaction(context);
+      return;
+    }
+    // Thread-scoped too, and asynchronous: it reads the surviving turns, which
+    // the read loop must never wait for.
+    if (event.kind === "thread.reverted") {
+      void this.ctx.callbacks.reconcileExternalRevert(context);
       return;
     }
 

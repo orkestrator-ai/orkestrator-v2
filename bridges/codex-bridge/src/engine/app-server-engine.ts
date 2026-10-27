@@ -2460,7 +2460,7 @@ export class AppServerEngine implements CodexEngine {
       cwd,
       limit: options.limit ?? 100,
       ...(options.cursor ? { cursor: options.cursor } : {}),
-      ...(options.includeArchived === undefined ? {} : { archived: options.includeArchived }),
+      ...(options.onlyArchived === undefined ? {} : { archived: options.onlyArchived }),
     });
 
     const threads = (response.data ?? [])
@@ -2578,6 +2578,14 @@ export class AppServerEngine implements CodexEngine {
     );
     this.unsupportedItemCount += unsupportedItemTypes.length;
     for (const event of events) this.emit(event);
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/archive", { threadId });
+  }
+
+  async unarchiveThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/unarchive", { threadId });
   }
 
   async setThreadName(threadId: string, name: string): Promise<boolean> {

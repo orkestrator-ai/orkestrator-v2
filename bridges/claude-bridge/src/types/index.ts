@@ -472,8 +472,6 @@ export interface SessionState {
   id: string;
   executionPolicy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   title?: string;
-  /** Whether a title generation request is already in flight */
-  titleGenerationPending?: boolean;
   messages: NormalizedMessage[];
   status: "idle" | "running" | "error";
   /** Backend-authoritative ISO timestamp for the active user turn. */

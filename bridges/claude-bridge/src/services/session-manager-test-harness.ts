@@ -189,9 +189,6 @@ export const {
   getPromptDispatchRecordCountForTesting,
   seedSettledPromptDispatchForTesting,
   persistSessionMetadata,
-  sanitizeSessionTitle,
-  buildSessionTitlePrompt,
-  runClaudeTitleCommand,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------

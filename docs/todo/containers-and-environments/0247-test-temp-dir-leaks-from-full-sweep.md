@@ -3,7 +3,7 @@
 Checked against `main` at `ce205ad34` plus the 0247 branch at `8268be981`
 (2026-10-26) and at `0c77d9b46` and `39980f699` (2026-10-27, the
 verification follow-up), and at `4231a3ed2` plus the second follow-up below
-(2026-10-27).
+(2026-10-27), and at `4116c6a7d` for the ship verification (2026-10-27).
 
 [0023](0023-environment-and-disk-cleanup.md) fixed the test temp-directory
 leaks it listed. Its 2026-10-26 sweep then ran the bridge and backend suites
@@ -858,3 +858,39 @@ retained one sibling Git deadline (20 passed, one failed, one between-test
 error, 31.41 s; `orkestrator-test-run.dwZUzT`). The newly registered reset
 case passed again; [1110](../../tests/flaky-tests/coordinator-and-multi-review/1110-diff-stats-reset-baseline-deadline.md)
 retains this result and the matching sibling timeout on the pinned base.
+
+## Ship verification (2026-10-27)
+
+The build pipeline's Verify stage failed three times on `5a6189006`. Re-run
+here on the same revision (`origin/main` at `863b57821`, three commits ahead
+of the merge base, merging cleanly): `mise run format:check`, `mise run lint`
+(existing warnings only) and `mise run typecheck` passed.
+`mise run test:logged -- --name ship-0247-full -- mise run test` exited 1
+after 857.6 s at load average 25 to 111 (`orkestrator-test-run.p9g81z`
+below the host temporary directory). Bridges and the Codex lockfile group
+passed; web, web-public, protocol, toolchain and CLI passed.
+
+- **Caused by this branch, fixed:** `flaky test register > coordinator-and-multi-review
+  index lists every case file and stores a status for each row`. `5a6189006`
+  gave 1110 the status line `open; cause unconfirmed, ...`, and the register
+  requires the bare index value. The line is now `open` (the qualifier is
+  already in its Classification and index row); the register and
+  suite-ownership tests pass (15 of 15). This failed every root group run,
+  which is why Verify could not pass.
+- **Pre-existing, reproduced on a clean `origin/main` clone** (own
+  `bun install`, separate temporary directory, removed afterwards):
+  `pruneProfiles` (2, the macOS `keychainWarning`) and `migrate-copy` (2,
+  extraction status), both failing identically there alone; and the
+  `environment-move.test.ts` deadline family. That owner alone failed on main
+  2, 2 and 5 of 38 and on the branch 7, 3 and 6 of 38 at load 4 to 19, each
+  name registered (0291, 0248, 0621, 0695, 1106).
+- **Load-related, passed alone on the branch:** `commands-integration.test.ts`
+  (0187; 55 of 55), `commands-registry-environments.test.ts` (0384; 68 of 68),
+  `coordinator-service.test.ts` (three project-coordinator Git deadlines;
+  69 of 69) and `worktree-snapshots-git.test.ts` (0957, 0091; 4 of 4). The
+  eight between-test errors were Git children of timed-out move cases.
+
+`commands-process-coverage.test.ts` also passed 68 of 68 with all four
+`XDG_*` variables pointed at a directory holding a different
+`opencode/model.json`. The aggregate is still not green, and the Arch
+sweep remains outstanding.

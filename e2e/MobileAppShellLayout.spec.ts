@@ -80,10 +80,34 @@ test("long mobile titles stay between controls and support touch and keyboard di
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   await expect(title).toHaveAttribute("aria-expanded", "false");
 
+  // The bubble covers the top of the workspace. Tapping it closes it, and the
+  // tap's click must not fall through to whatever is underneath. Chromium
+  // would also close it by blurring the focused title; WebKit never focuses a
+  // tapped button, so this step is what proves the bubble's own handler.
+  const tooltip = page.getByRole("tooltip");
   await touchTap(page, title);
-  await expect(page.getByRole("tooltip")).toBeVisible();
-  await touchTap(page, page.getByText("Workspace"));
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect(tooltip).toBeVisible();
+  await page.evaluate(() => {
+    const clicks = { count: 0 };
+    (window as unknown as { mobileShellClicks: typeof clicks }).mobileShellClicks = clicks;
+    document.addEventListener("click", () => clicks.count++, { capture: true });
+  });
+  await touchTap(page, tooltip);
+  await expect(tooltip).toHaveCount(0);
+  await expect(title).toHaveAttribute("aria-expanded", "false");
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { mobileShellClicks: { count: number } }).mobileShellClicks.count,
+    ),
+  ).toBe(0);
+
+  // A tap below the bubble is outside the tooltip.
+  await touchTap(page, title);
+  await expect(tooltip).toBeVisible();
+  const tooltipBox = await tooltip.boundingBox();
+  if (!tooltipBox) throw new Error("Expected the title tooltip on screen");
+  await page.touchscreen.tap(195, tooltipBox.y + tooltipBox.height + 200);
+  await expect(tooltip).toHaveCount(0);
 
   await title.focus();
   await expect(page.getByRole("tooltip")).toBeVisible();

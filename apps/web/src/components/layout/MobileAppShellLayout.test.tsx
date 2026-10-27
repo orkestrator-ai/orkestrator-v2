@@ -211,6 +211,31 @@ describe("MobileAppShellLayout", () => {
     expect(titleButton.getAttribute("aria-expanded")).toBe("false");
   });
 
+  // WebKit and iOS Safari never focus a tapped button, so no blur closes the
+  // tooltip there; the bubble has to close itself (todo 0202).
+  test("closes the title tooltip from a touch or pen tap on the bubble", async () => {
+    renderLayout();
+    const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+
+    touchTap(titleButton);
+    const tooltip = await screen.findByRole("tooltip");
+    fireEvent.pointerDown(tooltip, { pointerType: "touch" });
+    fireEvent.touchStart(tooltip);
+    expect(screen.queryByRole("tooltip")).toBe(tooltip);
+    // `fireEvent` returns false when a handler cancelled the event, which is
+    // what stops the tap's click from reaching the workspace underneath.
+    expect(fireEvent.touchEnd(tooltip)).toBe(false);
+    await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
+    expect(titleButton.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.pointerDown(titleButton, { pointerType: "pen" });
+    fireEvent.pointerUp(titleButton, { pointerType: "pen" });
+    fireEvent.click(titleButton);
+    const penTooltip = await screen.findByRole("tooltip");
+    fireEvent(penTooltip, new PointerEvent("click", { bubbles: true, pointerType: "pen" }));
+    await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
+  });
+
   test("preserves Radix keyboard activation, Escape, hover, blur, and outside dismissal", async () => {
     renderLayout();
     const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });

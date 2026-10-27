@@ -277,6 +277,23 @@ export function MobileAppShellLayout({
             side="bottom"
             sideOffset={6}
             className="max-w-[calc(100vw-1rem)] break-words text-center"
+            // A tap on the bubble is not outside the tooltip, so Radix keeps it
+            // open. Chromium only closed it because the focused title blurred;
+            // WebKit and iOS Safari never focus a tapped button. Close it when
+            // the touch ends, not when it starts: the bubble must still be
+            // mounted so cancelling `touchend` also cancels the tap's mouse
+            // events and click, which would otherwise land on the workspace
+            // control under the bubble. Pen input has no touch events, and its
+            // click still targets the bubble.
+            onTouchEnd={(event) => {
+              event.preventDefault();
+              setTitleTooltipOpen(false);
+            }}
+            onClick={(event) => {
+              if ((event.nativeEvent as PointerEvent).pointerType === "pen") {
+                setTitleTooltipOpen(false);
+              }
+            }}
           >
             {title}
           </TooltipContent>

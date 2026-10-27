@@ -37,7 +37,8 @@ import {
   claimPromptDispatch,
   getPromptDispatchState,
   restoredDispatchClaimLost,
-  persistedDispatchClaimLost,
+  dispatchJournalProvesAbsent,
+  persistedDispatchStatus,
   respondToPlanApproval,
   getPendingPlanApprovals,
   respondToInteraction,
@@ -905,7 +906,10 @@ session.post("/:id/prompt", async (c) => {
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
     });
-    if (requestId && outputSchema === undefined) {
+    // Structured turns take the same durable claim: Build Pipeline re-sends a
+    // stage prompt under its id, and without the journal a restarted bridge
+    // would run it again.
+    if (requestId) {
       const dispatchState = await claimPromptDispatch(id, requestId, () => {
         let resolveStarted: (() => void) | undefined;
         let rejectStarted: ((error: unknown) => void) | undefined;
@@ -930,6 +934,7 @@ session.post("/:id/prompt", async (c) => {
             parameterValues,
             ...(agentMcp ? { agentMcp } : {}),
             ...(providerPrompt !== undefined ? { providerPrompt } : {}),
+            ...(outputSchema !== undefined ? { outputSchema } : {}),
             requestId,
           },
           {
@@ -982,7 +987,8 @@ session.post("/:id/prompt", async (c) => {
       attachmentsCount: attachments?.length ?? 0,
     });
 
-    // Start processing in background (don't await)
+    // Start processing in background (don't await). Only a plain prompt with
+    // no request id gets here; every other one took the claim above.
     sendPrompt(id, prompt, {
       model,
       attachments,
@@ -997,8 +1003,6 @@ session.post("/:id/prompt", async (c) => {
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
       ...(providerPrompt !== undefined ? { providerPrompt } : {}),
-      outputSchema,
-      requestId,
     }).catch((error) => {
       console.error("[session] Error processing prompt:", error);
     });
@@ -1268,7 +1272,10 @@ session.get("/:id/runtime-health", (c) => {
  * exactly the prompt route's 410 `DISPATCH_OUTCOME_LOST_KIND`: an id an
  * earlier process claimed (restored from disk without an outcome, or still in
  * the durable journal of a session this process has not registered yet) that
- * this one will refuse for good. Neither says "never sent". Everything else is
+ * this one will refuse for good. Neither says "never sent". `absent` does, and
+ * only while the session's journal is complete (`dispatchJournalProvesAbsent`,
+ * `persistedDispatchStatus`): every id it ever claimed is still journaled, and
+ * each claim reached disk before its turn could start. Everything else is
  * `unknown`, because it cannot distinguish "never sent" from "sent to a bridge
  * process that has since restarted" — and reporting the second as never-sent
  * would have the caller dispatch the same turn twice.
@@ -1286,11 +1293,12 @@ session.get("/:id/dispatch", async (c) => {
   if (state === "processing" || state === "already-processed")
     return answer("dispatched", state === "processing");
   if (state === "new") {
-    return answer(restoredDispatchClaimLost(peekSession(id), requestId) ? "lost" : "unknown");
+    const resident = peekSession(id);
+    if (restoredDispatchClaimLost(resident, requestId)) return answer("lost");
+    return answer(dispatchJournalProvesAbsent(resident, requestId) ? "absent" : "unknown");
   }
   // An error is not evidence of anything, so it answers `unknown`.
-  const lost = await persistedDispatchClaimLost(id, requestId).catch(() => false);
-  return answer(lost ? "lost" : "unknown");
+  return answer(await persistedDispatchStatus(id, requestId).catch(() => "unknown" as const));
 });
 
 // Get pending questions for a session

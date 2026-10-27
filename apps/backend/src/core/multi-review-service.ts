@@ -3994,6 +3994,16 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         .dispatchStatus?.(session.providerSessionId, request.requestId)
         .catch(() => "unknown" as const);
       await this.assertFence(workflow.id, token);
+      if (acceptance === "absent") {
+        // Proven never delivered: back to `prepared`, as after a send refused
+        // before the prompt was written, so the next pass sends it again under
+        // the same id.
+        delete request.idleResultPolls;
+        this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
+        request.state = "prepared";
+        await this.save(workflow, token);
+        return;
+      }
       if (acceptance !== "dispatched" && acceptance !== "pending") {
         const scope = `${request.requestId}\0idle`;
         if (!this.countPoll(workflow.id, scope)) return;

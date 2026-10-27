@@ -28,7 +28,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "abort-idle-acknowledged": yes,
     "transcript-cursor-grammar": yes,
     "create-ack-recoverable": yes,
-    "dispatch-probe-unknown": yes,
+    "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": yes,
   },
@@ -40,7 +40,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "abort-idle-acknowledged": yes,
     "transcript-cursor-grammar": yes,
     "create-ack-recoverable": yes,
-    "dispatch-probe-unknown": yes,
+    "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": no(
       "runtime-health publishes no bounded-state occupancy or limits (steer journal and queue sizes are internal)",
@@ -60,7 +60,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "create-ack-recoverable": no(
       "nothing is published at create: the bridge id is derived from the client key (session-client-<sdk uuid>) and the SDK rollout is the durable record",
     ),
-    "dispatch-probe-unknown": yes,
+    "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": no("runtime-health publishes no bounded-state occupancy or limits"),
   },
@@ -78,7 +78,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "create-ack-recoverable": no(
       "nothing is published at create: the id is sha256(cwd, clientSessionKey) and no Codex thread exists until the first prompt",
     ),
-    "dispatch-probe-unknown": yes,
+    "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": no("runtime-health publishes no bounded-state occupancy or limits"),
   },
@@ -92,7 +92,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "abort-idle-acknowledged": yes,
     "transcript-cursor-grammar": yes,
     "create-ack-recoverable": yes,
-    "dispatch-probe-unknown": yes,
+    "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": no(
       "no steer route: Grok interjections are journaled prompts, and there is no /steer/dispatch probe",
     ),

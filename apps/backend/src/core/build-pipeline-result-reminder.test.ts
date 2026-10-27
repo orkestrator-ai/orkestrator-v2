@@ -371,12 +371,61 @@ test.each(["structured", "received", "needs-attention", "restart-spent"] as cons
   },
 );
 
+test("consolidation re-sends a recovered dispatch the provider proves never arrived, once", async () => {
+  await withPipeline(
+    async ({ service, createService, storage, provider, read }) => {
+      provider.runningConsolidation = true;
+      const started = await service.start(startInput(fourReviewers()));
+      let current = await read(started.id);
+      for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+        await service.advanceNow(started.id);
+        current = await read(started.id);
+      }
+      const original = current.reviewFanout!.consolidation!;
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        const request = pipeline.reviewFanout!.consolidation!;
+        request.requestId = "never-arrived";
+        request.state = "dispatching";
+        request.continuationPrompt = "Continue the consolidation";
+      });
+      await service.shutdown();
+      const restored = createService();
+      try {
+        await restored.init();
+        const before = provider.sent.length;
+        // `absent`: back to prepared without sending in the same pass.
+        await restored.advanceNow(started.id);
+        expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("prepared");
+        expect(provider.sent).toHaveLength(before);
+        await restored.advanceNow(started.id);
+        const resent = provider.sent.filter((entry) => entry.requestId === "never-arrived");
+        expect(resent).toHaveLength(1);
+        expect(resent[0]?.sessionId).toBe(original.providerSessionId);
+        expect(resent[0]?.prompt).toContain("Continue the consolidation");
+        expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("sent");
+        // The old owner's send finally lands: the provider's duplicate.
+        await provider.send(original.providerSessionId, "Continue the consolidation", {
+          requestId: "never-arrived",
+        });
+        expect(provider.sent.filter((entry) => entry.requestId === "never-arrived")).toHaveLength(
+          1,
+        );
+      } finally {
+        await restored.shutdown();
+      }
+    },
+    { toolMode: true },
+  );
+});
+
 test.each([false, true])(
   "consolidation parks an unaccepted recovered dispatch (continuation %s)",
   async (continuation) => {
     await withPipeline(
       async ({ service, createService, storage, provider, read }) => {
         provider.runningConsolidation = true;
+        // A provider that cannot prove the id never arrived.
+        provider.journalIncomplete = true;
         const started = await service.start(startInput(fourReviewers()));
         let current = await read(started.id);
         for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {

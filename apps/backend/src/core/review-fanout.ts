@@ -1273,8 +1273,7 @@ export class ReviewFanoutRunner {
       // A durable intent is not acceptance. In particular, session status may
       // still describe the request replaced by this continuation. Providers
       // without request-scoped proof stay parked within the idle-poll bound;
-      // neither unknown nor a retired (lost) ID is safe to resend, and no
-      // provider can yet prove an id never reached it (0223).
+      // neither unknown nor a retired (lost) ID is safe to resend.
       const acceptance = await this.recoveredDispatchAcceptance(provider, reviewer);
       await host.assertFence();
       if (acceptance === "lost") {
@@ -1284,6 +1283,18 @@ export class ReviewFanoutRunner {
           reviewer,
           "The reviewer dispatch was lost in a provider restart and cannot be resent safely",
         );
+      }
+      if (acceptance === "absent") {
+        // The provider proves the id never reached it: a send that never
+        // happened, so back to `prepared` exactly as a send refused before the
+        // prompt was written. The next pass re-runs admission and sends it again
+        // under the same id; a late delivery of the first attempt is then the
+        // provider's duplicate.
+        reviewer.dispatchState = "prepared";
+        delete reviewer.idleResultPolls;
+        host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0idle`);
+        await this.commit();
+        return "continue";
       }
       if (acceptance !== "dispatched") {
         return this.recordStall(
@@ -1892,7 +1903,7 @@ export class ReviewFanoutRunner {
    * its own turn: the tool-transport slot is keyed by the request and written
    * with that attempt's capability, and a structured result names its request.
    * A report submitted before a provider restart retired the id is used rather
-   * than discarded with the turn it came from.
+   * than discarded with the turn it came from, and outranks an `absent` answer.
    */
   private async recoveredDispatchAcceptance(
     provider: BuildPipelineProvider,

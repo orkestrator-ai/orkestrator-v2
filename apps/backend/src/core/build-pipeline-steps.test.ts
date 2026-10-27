@@ -135,9 +135,17 @@ class RecordingProvider implements BuildPipelineProvider {
     return id;
   }
 
+  /** Request ids this provider took; any other id provably never reached it. */
+  private readonly taken = new Set<string>();
+
+  async dispatchStatus(_sessionId: string, requestId: string) {
+    return this.taken.has(requestId) ? ("dispatched" as const) : ("absent" as const);
+  }
+
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
     const error = this.sendErrors.shift();
     if (error) throw error;
+    this.taken.add(options.requestId);
     this.sentModes.push(options.mode);
     this.sent.push({
       agent: this.agent,

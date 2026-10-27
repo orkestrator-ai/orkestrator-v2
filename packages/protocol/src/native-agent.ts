@@ -782,9 +782,15 @@ export const DISPATCH_OUTCOME_LOST_KIND = "dispatch-outcome-lost";
  * `lost` is the read-only twin of the prompt route's 410
  * {@link DISPATCH_OUTCOME_LOST_KIND}: an earlier bridge process recorded the id
  * and this one cannot tell whether its turn ran, so it will refuse the id for
- * good. Everything else is `unknown`. Older bridges never answer `lost`.
+ * good. `absent` is the only negative, and an assertion like the other two:
+ * the bridge can prove this id never reached it and that a prompt sent under
+ * it now would be its first delivery. A bridge answers it only while its
+ * journal is complete for the session (loaded cleanly, written before every
+ * handover, nothing evicted or skipped since the session began). Everything
+ * else is `unknown`. Older bridges never answer `lost` or `absent`, and an
+ * older backend reads `absent` as `unknown`.
  */
-export type BridgePromptDispatchStatus = "dispatched" | "unknown" | "lost";
+export type BridgePromptDispatchStatus = "dispatched" | "unknown" | "lost" | "absent";
 
 /** How long a retired dispatch stays visible on its native agent session. */
 export const NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS = 24 * 60 * 60 * 1000;

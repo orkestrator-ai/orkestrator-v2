@@ -25,7 +25,7 @@ import {
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
-import type { ProviderActiveSteerRun } from "./agent-provider-contract.js";
+import type { ProviderActiveSteerRun, ProviderDispatchStatus } from "./agent-provider-contract.js";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES } from "./build-pipeline-prompts.js";
@@ -132,6 +132,13 @@ class ScriptedProvider implements BuildPipelineProvider {
   statusOverride: ProviderStatus | null = null;
   /** Queue of errors; each send() shifts one and throws it when present. */
   sendErrors: unknown[] = [];
+  /**
+   * What `dispatchStatus` answers. By default a bridge with a complete
+   * journal: `dispatched` for an id it took, `absent` for one it never did
+   * (a scripted send error happens before the bridge takes anything).
+   */
+  dispatchAnswer: ProviderDispatchStatus | null = null;
+  readonly dispatchReads: string[] = [];
   /** Ordered attach/send trace, so the two can be asserted against each other. */
   readonly dispatchTrace: string[] = [];
   prepareDispatchError: unknown = null;
@@ -213,6 +220,12 @@ class ScriptedProvider implements BuildPipelineProvider {
       model: options.model,
     });
     this.running.delete(sessionId);
+  }
+
+  async dispatchStatus(_sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
+    this.dispatchReads.push(requestId);
+    if (this.dispatchAnswer) return this.dispatchAnswer;
+    return this.sent.some((entry) => entry.requestId === requestId) ? "dispatched" : "absent";
   }
 
   async status(sessionId: string): Promise<ProviderStatus> {
@@ -690,6 +703,102 @@ describe("BuildPipelineService prompt dispatch", () => {
       // did start is joined rather than run a second time.
       expect(provider.sent.map((entry) => entry.requestId)).toEqual([requestId]);
     });
+  });
+
+  test("a stage prompt is marked durably before it is sent, and cleared when refused", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      expect((await snapshot(storage, staged.id)).pendingPromptAttempt?.dispatchingAt).toEqual(
+        expect.any(String),
+      );
+
+      // A definite failure proves the prompt was never written: the next send
+      // is a first send again, with no proof needed.
+      provider.sendErrors = [new ProviderUnavailableError("preflight unavailable")];
+      await service.advanceNow(staged.id);
+      const refused = await snapshot(storage, staged.id);
+      expect(provider.sent).toHaveLength(0);
+      expect(refused.pendingPromptAttempt).toBeDefined();
+      expect(refused.pendingPromptAttempt?.dispatchingAt).toBeUndefined();
+      const reads = provider.dispatchReads.length;
+      await service.advanceNow(staged.id);
+      expect(provider.sent).toHaveLength(1);
+      expect(provider.dispatchReads).toHaveLength(reads);
+    });
+  });
+
+  test("does not resend a stage prompt the provider cannot prove never arrived", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      const requestId = (await snapshot(storage, staged.id)).pendingPromptAttempt!.requestId;
+
+      // A bridge that restarted (or evicted the id) cannot deduplicate a
+      // resend, so `unknown` parks the attempt within the deadline.
+      provider.dispatchAnswer = "unknown";
+      await service.advanceNow(staged.id);
+      await service.advanceNow(staged.id);
+      const parked = await snapshot(storage, staged.id);
+      expect(provider.sent).toHaveLength(0);
+      expect(provider.dispatchReads.filter((id) => id === requestId)).toHaveLength(2);
+      expect(parked.pendingPromptAttempt?.requestId).toBe(requestId);
+      expect(parked.phase).toBe("building");
+    });
+  });
+
+  test("fails a stage prompt whose acceptance stays unconfirmed past the deadline", async () => {
+    await withService(
+      async ({ service, storage, provider }) => {
+        const staged = await startAtSetup(service, storage);
+        provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+        await service.advanceNow(staged.id);
+        provider.dispatchAnswer = "unknown";
+        await service.advanceNow(staged.id);
+        const failed = await snapshot(storage, staged.id);
+        expect(provider.sent).toHaveLength(0);
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain("dispatch acceptance could not be confirmed");
+      },
+      { reconnectDeadlineMs: 0 },
+    );
+  });
+
+  test("fails a stage prompt the provider lost in a restart rather than resending it", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+      await service.advanceNow(staged.id);
+      provider.dispatchAnswer = "lost";
+      await service.advanceNow(staged.id);
+      const failed = await snapshot(storage, staged.id);
+      expect(provider.sent).toHaveLength(0);
+      expect(failed.phase).toBe("failed");
+      expect(failed.error).toContain("lost in a provider restart and cannot be resent safely");
+    });
+  });
+
+  test("settles a stage prompt the provider confirms without sending it again", async () => {
+    for (const answer of ["dispatched", "pending"] as const) {
+      await withService(async ({ service, storage, provider }) => {
+        const staged = await startAtSetup(service, storage);
+        provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
+        await service.advanceNow(staged.id);
+        const sessionId = (await snapshot(storage, staged.id)).pendingPromptAttempt!.sessionId;
+        provider.dispatchAnswer = answer;
+        // The accepted turn is still running when the next pass asks.
+        provider.markRunning(sessionId);
+        provider.statusOverride = "idle";
+        await service.advanceNow(staged.id);
+        provider.statusOverride = null;
+        const settled = await snapshot(storage, staged.id);
+        expect(provider.sent).toHaveLength(0);
+        expect(settled.pendingPromptAttempt).toBeUndefined();
+        expect(settled.sessions.at(-1)?.status).toBe("running");
+      });
+    }
   });
 
   test("does not redispatch when the session is already running the attempt", async () => {

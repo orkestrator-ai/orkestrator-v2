@@ -853,6 +853,15 @@ export class BuildPipelineReviewFanout {
       const acceptance = await provider
         .dispatchStatus?.(consolidation.providerSessionId, consolidation.requestId)
         .catch(() => "unknown" as const);
+      if (acceptance === "absent") {
+        // Proven never delivered: back to `prepared`, as after a send refused
+        // before the prompt was written, so the next pass sends it again under
+        // the same id.
+        delete consolidation.idleResultPolls;
+        consolidation.state = "prepared";
+        await this.save(pipeline);
+        return { kind: "working" };
+      }
       if (acceptance !== "dispatched" && acceptance !== "pending") {
         return this.countIdlePoll(
           pipeline,

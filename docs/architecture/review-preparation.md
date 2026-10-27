@@ -303,21 +303,35 @@ after the durable write. Two rules keep a recovered record honest
   or a result for this exact request id (the tool-transport slot, or a
   structured result naming the request), moves it to `sent`. `lost` (the
   provider restored the id without an outcome and refuses it for good) fails
-  the reviewer at once. Anything else parks it, and the idle-poll bound fails
-  it closed. It is never re-sent under a new id, and not under the same id
-  either: no bridge can yet prove an id never reached it
+  the reviewer at once. `absent` (the provider proves the id never reached
+  it) moves it back to `prepared`, and the next pass re-runs admission and
+  sends it again under the same id; a result for the exact request outranks
+  that answer, and a late delivery of the first send is the provider's
+  duplicate. Anything else parks it, and the idle-poll bound fails it closed.
+  It is never re-sent under a new id
   ([0223](../todo/coordinator-and-multi-review/0223-provider-non-delivery-proof.md)).
 
 A restart notice names the request it cut short (`interruptedRequestId`, see
 [agent engines](agent-engines.md)), so a continuation the provider has
 journaled but not yet started is not failed as a second restart. The Multi Review
 preparation, consolidation and Fix steps and Build Pipeline consolidation park
-an unconfirmed `dispatching` request the same way; they have one writer per
-request, so the first rule does not arise there.
+an unconfirmed `dispatching` request, and re-send an `absent` one, the same way;
+they have one writer per request, so the first rule does not arise there.
+
+Build Pipeline's stage prompts follow the same rule. A `pendingPromptAttempt`
+gets `dispatchingAt` durably just before its send (cleared again when the send
+is refused before the prompt was written). A later pass re-sends an attempt
+without that mark freely, since it never reached the provider; one with it is
+settled as sent on `dispatched` or `pending`, fails the stage on `lost`, is
+re-sent under the same id only on `absent`, and otherwise waits within the
+reconnect deadline and then fails closed ("dispatch acceptance could not be
+confirmed"). An older backend ignores the mark and re-sends, as before.
 
 `review-fanout-interleaving.test.ts` checks both rules over seeded
 interleavings of commits, provider calls, cancellation, fence loss and backend
-restarts. Without a crash, a durable `dispatching` request that no send was
+restarts. Its "a provider that proves an id never arrived" suites run the
+restart and chaos flavours against a provider that answers `absent`, lets a
+crash leave a send on the wire to land later, and must deduplicate it. Without a crash, a durable `dispatching` request that no send was
 ever attempted for fails the seed, and the fake provider starts half of all
 continuations late, so the status read still shows the restart they continue.
 

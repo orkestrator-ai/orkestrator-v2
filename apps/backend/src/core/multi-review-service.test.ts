@@ -149,8 +149,11 @@ const consolidatedReport: StructuredReviewReport = {
 };
 
 class Provider implements BuildPipelineProvider {
+  /** Answer `absent` for an id never sent: a bridge whose journal is complete. */
+  provesAbsence = false;
   async dispatchStatus(_sessionId: string, requestId: string) {
-    return this.sends.has(requestId) ? ("dispatched" as const) : ("unknown" as const);
+    if (this.sends.has(requestId)) return "dispatched" as const;
+    return this.provesAbsence ? ("absent" as const) : ("unknown" as const);
   }
   readonly agent: BuildPipelineProvider["agent"] = "claude";
   readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
@@ -12039,6 +12042,81 @@ test.each(["queued", "dispatch"] as const)(
     );
   },
 );
+
+for (const kind of ["prepare", "consolidate", "fix"] as const) {
+  test(`${kind} re-sends a recovered dispatch the provider proves never arrived, once`, async () => {
+    const provider = new Provider(false);
+    provider.statusValue = "running";
+    const environmentId = `env-dispatch-absent-${kind}`;
+    await withService(
+      environmentId,
+      provider,
+      async (context) => {
+        const { service, storage, snapshot, workflowResults } = context;
+        let first: MultiReviewWorkflow;
+        if (kind === "consolidate") {
+          const selection = { agent: "codex" as const, model: "default" };
+          const started = await context.start([selection], selection);
+          const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+            Boolean(workflow.reviewers[0]?.requestId),
+          );
+          provider.statusValue = "idle";
+          await workflowResults!.submit(
+            { environmentId, projectId: "project-1" },
+            reviewing.reviewers[0]!.requestId!,
+            cleanReport,
+          );
+          first = await advanceUntil(
+            service,
+            snapshot,
+            started.id,
+            (workflow) =>
+              workflow.activeRequest?.kind === "consolidate" &&
+              workflow.activeRequest.state === "sent",
+          );
+        } else {
+          first = await startFollowUpStep(kind, context, environmentId, true);
+        }
+        provider.statusValue = "running";
+        const requestId = first.activeRequest!.requestId;
+        const initial = provider.sends.get(requestId)!;
+        // The checkpoint before the send reached the provider.
+        provider.sends.delete(requestId);
+        first.activeRequest!.state = "dispatching";
+        const stored = (await storage.getMultiReviewWorkflow(first.id))!;
+        await storage.saveMultiReviewWorkflow(first.id, environmentId, 1, first, stored.revision);
+        await service.shutdown();
+        provider.provesAbsence = true;
+        const restored = new MultiReviewService(storage, stableReviewInvoker, {
+          autoAdvance: false,
+          provider: async () => provider,
+          workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+        });
+        try {
+          await restored.init();
+          await restored.advanceNow(first.id);
+          expect((await snapshot(first.id))!.activeRequest).toMatchObject({
+            requestId,
+            state: "prepared",
+          });
+          expect(provider.sends.has(requestId)).toBe(false);
+          await restored.advanceNow(first.id);
+          const resent = (await snapshot(first.id))!;
+          expect(resent.activeRequest).toMatchObject({ requestId, state: "sent" });
+          expect(resent.phase).toBe(first.phase);
+          expect(provider.sends.get(requestId)?.prompt).toBe(initial.prompt);
+        } finally {
+          await restored.shutdown();
+        }
+      },
+      { toolMode: true },
+    );
+  });
+}
 
 for (const kind of ["prepare", "consolidate", "fix"] as const) {
   test.each([false, true])(

@@ -710,6 +710,13 @@ export interface PipelinePromptAttempt {
   structuredReview?: boolean;
   resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
   startedAt: string;
+  /**
+   * Written durably just before the send, so a later pass knows the prompt may
+   * have reached the provider and re-sends it under the same id only on the
+   * provider's proof that it did not (`absent`). Absent means "never sent":
+   * every preparation step before it is safe to retry.
+   */
+  dispatchingAt?: string;
 }
 
 export interface BuildPipeline {
@@ -1324,7 +1331,8 @@ function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
       value.resultTransport === "tool-v1" ||
       value.resultTransport === "structured-output-v1") &&
     (value.validationPlan === undefined || typeof value.validationPlan === "boolean") &&
-    isIsoDate(value.startedAt)
+    isIsoDate(value.startedAt) &&
+    (value.dispatchingAt === undefined || isIsoDate(value.dispatchingAt))
   );
 }
 

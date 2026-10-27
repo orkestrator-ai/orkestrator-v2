@@ -687,6 +687,14 @@ export interface SessionState {
    */
   restoredDispatchedRequestIds?: ReadonlySet<string>;
   /**
+   * `dispatchedRequestIds` holds every request id this session ever claimed,
+   * in this process and every earlier one (see the preferences field of the
+   * same name). True only for a session created with no durable journal on
+   * disk, or restored from one that says so; false for good once the bound
+   * drops an id. Only then is a missing id provably never sent.
+   */
+  dispatchJournalComplete?: boolean;
+  /**
    * Local transcript rows that are not in the SDK rollout, such as an idle
    * `/steer` exchange. Eviction and restart rehydrate from disk and then merge
    * these back so the pair does not vanish.

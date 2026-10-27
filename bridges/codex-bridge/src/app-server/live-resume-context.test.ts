@@ -5,7 +5,9 @@
  * `<environment_context>` that opens a thread, a skill's `<skill>`
  * instructions after the `$name` prompt that invoked it, and a
  * `<turn_aborted>` note after an interrupt. The live tab shows none of them,
- * so a reload from the rollout must not either. A loopback Responses endpoint
+ * so a reload from the rollout must not either. Nor may it show the text the
+ * bridge sent in place of what the user typed (plan-mode preamble, `$name`,
+ * an expanded template, the recovered transcript). A loopback Responses endpoint
  * plays the model, so this runs real turns without calling a model or
  * spending credits. Gated like the other live contract tests because it needs
  * the pinned binary:
@@ -22,6 +24,10 @@ import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineEvent, EngineTurnConfig, EngineUserInput } from "../engine/types.js";
 import { hydrateMessagesFromPersistedSession } from "../history/rollout.js";
 import { resolveCodexBinary } from "./live-binary.js";
+import { buildRecoveredContextPrompt } from "../app-server-runtime-base.js";
+import { wrapPromptForConversationMode } from "../prompts/slash-commands.js";
+import { appendAttachmentTags } from "../messages/attachment-tags.js";
+import { recordTypedPrompt } from "../sessions/typed-prompts.js";
 
 // See `live-contract.test.ts`: the test preload replaces `Response`, and
 // `Bun.serve` only accepts its own.
@@ -106,65 +112,75 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Pr
   }
 }
 
+/**
+ * A real app-server on a fresh CODEX_HOME holding one `tidy` skill, whose
+ * model is the loopback fake. No AGENTS.md anywhere: the shape of an
+ * isolated profile, where the environment block opens the thread as a
+ * message of its own.
+ */
+async function startLiveCodex() {
+  // Real paths: Codex matches a skill input against the skill roots it loaded.
+  const codexHome = await realpath(await mkdtemp(join(tmpdir(), "ork-resume-context-home-")));
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-resume-context-ws-")));
+  await mkdir(join(workspace, ".git"), { recursive: true });
+  await writeFile(join(workspace, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  // Never a real key: the only server it can reach is the loopback fake.
+  await writeFile(
+    join(codexHome, "auth.json"),
+    JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
+    { mode: 0o600 },
+  );
+  const skillPath = join(codexHome, "skills", "tidy", "SKILL.md");
+  await mkdir(join(codexHome, "skills", "tidy"), { recursive: true });
+  await writeFile(
+    skillPath,
+    "---\nname: tidy\ndescription: Tidy the named thing.\n---\n\nTidy it and reply done.\n",
+    "utf8",
+  );
+
+  const responses = startScriptedResponses();
+  const engine = new AppServerEngine({
+    codexPath: await resolveCodexBinary(),
+    cwd: workspace,
+    codexHome,
+    clientInfo: CLIENT_INFO,
+    configOverrides: {
+      ...codexAppServerConfigOverrides({}),
+      openai_base_url: JSON.stringify(responses.baseUrl),
+    },
+    supervisorOverrides: { pidFileEnabled: false },
+  });
+  const completedTurns = new Map<string, string>();
+  const waiters = new Map<string, () => void>();
+  engine.subscribe((event: EngineEvent) => {
+    if (event.kind !== "turn.completed") return;
+    completedTurns.set(event.turnId, event.status);
+    waiters.get(event.turnId)?.();
+  });
+  const completion = (turnId: string) =>
+    completedTurns.has(turnId)
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => waiters.set(turnId, resolve));
+  const config: EngineTurnConfig = {
+    mode: "build",
+    cwd: workspace,
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    policy: {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+    },
+  };
+  return { codexHome, skillPath, responses, engine, completedTurns, completion, config };
+}
+
 describeLive("live resumed transcript", () => {
   test("a reload shows only the prompts the user sent, not Codex's own user blocks", async () => {
-    // No AGENTS.md anywhere: the shape of an isolated profile, where the
-    // environment block opens the thread as a message of its own.
-    // Real paths: Codex matches a skill input against the skill roots it loaded.
-    const codexHome = await realpath(await mkdtemp(join(tmpdir(), "ork-resume-context-home-")));
-    const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-resume-context-ws-")));
-    await mkdir(join(workspace, ".git"), { recursive: true });
-    await writeFile(join(workspace, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
-    // Never a real key: the only server it can reach is the loopback fake.
-    await writeFile(
-      join(codexHome, "auth.json"),
-      JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
-      { mode: 0o600 },
-    );
-    const skillPath = join(codexHome, "skills", "tidy", "SKILL.md");
-    await mkdir(join(codexHome, "skills", "tidy"), { recursive: true });
-    await writeFile(
-      skillPath,
-      "---\nname: tidy\ndescription: Tidy the named thing.\n---\n\nTidy it and reply done.\n",
-      "utf8",
-    );
-
-    const responses = startScriptedResponses();
-    const engine = new AppServerEngine({
-      codexPath: await resolveCodexBinary(),
-      cwd: workspace,
-      codexHome,
-      clientInfo: CLIENT_INFO,
-      configOverrides: {
-        ...codexAppServerConfigOverrides({}),
-        openai_base_url: JSON.stringify(responses.baseUrl),
-      },
-      supervisorOverrides: { pidFileEnabled: false },
-    });
-    const completedTurns = new Map<string, string>();
-    const waiters = new Map<string, () => void>();
-    engine.subscribe((event: EngineEvent) => {
-      if (event.kind !== "turn.completed") return;
-      completedTurns.set(event.turnId, event.status);
-      waiters.get(event.turnId)?.();
-    });
-    const completion = (turnId: string) =>
-      completedTurns.has(turnId)
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => waiters.set(turnId, resolve));
-    const config: EngineTurnConfig = {
-      mode: "build",
-      cwd: workspace,
-      sandbox: "danger-full-access",
-      approvalPolicy: "never",
-      policy: {
-        id: "interactive-host",
-        sandbox: "none",
-        approvals: "auto-approve",
-        projectResources: true,
-        networkAccess: "full",
-      },
-    };
+    const { codexHome, skillPath, responses, engine, completedTurns, completion, config } =
+      await startLiveCodex();
     // What the live tab shows for each turn is the prompt as sent; the skill
     // turn's wire text is the `$name` marker the bridge builds for it.
     const turns: Array<{ input: EngineUserInput[]; interrupt?: true }> = [
@@ -245,6 +261,121 @@ describeLive("live resumed transcript", () => {
       expect(
         hydrated.messages.filter((message) => message.role === "user").map((m) => m.content),
       ).toEqual(sent);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  }, 180_000);
+
+  test("a reload shows a prompt the bridge rewrote as the user typed it", async () => {
+    const { codexHome, skillPath, responses, engine, completedTurns, completion, config } =
+      await startLiveCodex();
+    const ownReminder = "<system-reminder>Keep mine</system-reminder>\n\nPlan it";
+    // Each turn as the runtime builds it: the text it sends, and the typed
+    // text it records when that cannot be read back from what was sent.
+    const turns: Array<{ typed: string; input: EngineUserInput[]; records: boolean }> = [
+      {
+        typed: "Continue now",
+        input: [
+          {
+            type: "text",
+            text: buildRecoveredContextPrompt(
+              [
+                { id: "u", role: "user", content: "Remember this", parts: [], createdAt: "" },
+                { id: "a", role: "assistant", content: "Kept.", parts: [], createdAt: "" },
+              ],
+              "Continue now",
+            ),
+          },
+        ],
+        records: true,
+      },
+      {
+        typed: "/skill:tidy the header",
+        input: [
+          { type: "text", text: "$tidy the header" },
+          { type: "skill", name: "tidy", path: skillPath },
+        ],
+        records: true,
+      },
+      {
+        typed: "/review src/a.ts",
+        input: [{ type: "text", text: "Review src/a.ts and report." }],
+        records: true,
+      },
+      {
+        typed: "Plan the header",
+        input: [{ type: "text", text: wrapPromptForConversationMode("Plan the header", "plan") }],
+        records: false,
+      },
+      {
+        typed: ownReminder,
+        input: [{ type: "text", text: wrapPromptForConversationMode(ownReminder, "plan") }],
+        records: false,
+      },
+    ];
+
+    const imagePath = join(codexHome, "shot.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    turns.push({
+      typed: "/review image",
+      input: [
+        {
+          type: "text",
+          text: appendAttachmentTags("Review the image and report.", [
+            { path: imagePath, filename: "shot.png" },
+          ]),
+        },
+        { type: "local_image", path: imagePath },
+      ],
+      records: true,
+    });
+
+    let threadId: string | null = null;
+    const previousCodexHome = process.env.CODEX_HOME;
+    try {
+      await engine.start();
+      const thread = await engine.startThread({ config });
+      for (const turn of turns) {
+        const started = await engine.startTurn({
+          handle: thread.handle,
+          input: turn.input,
+          config,
+        });
+        threadId ??= started.threadId;
+        if (turn.records) {
+          await recordTypedPrompt(
+            codexHome,
+            started.threadId,
+            started.turnId,
+            (turn.input[0] as { text: string }).text,
+            turn.typed,
+          );
+        }
+        await withTimeout(completion(started.turnId), 60_000, `turn ${started.turnId}`);
+      }
+    } finally {
+      await engine.stop();
+      await responses.stop();
+    }
+    expect(threadId).toBeString();
+    expect([...completedTurns.values()]).toEqual(turns.map(() => "completed"));
+
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession(threadId!);
+      expect(hydrated.transcriptStatus).not.toBe("unavailable");
+      const imageRow = hydrated.messages.filter((message) => message.role === "user").at(-1);
+      expect(imageRow?.parts.find((part) => part.type === "file")?.fileUrl).toBe(imagePath);
+      expect(
+        hydrated.messages.filter((message) => message.role === "user").map((m) => m.content),
+      ).toEqual(turns.map((turn) => turn.typed));
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;

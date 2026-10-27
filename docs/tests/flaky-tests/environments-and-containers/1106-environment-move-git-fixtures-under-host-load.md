@@ -87,3 +87,22 @@ repairs the original`. That case alone,
 passed in 2.7 s at load average 161. Added to the list above; nothing
 changed.
 
+
+## Consolidated-review cleanup fixes — 2026-10-27
+
+The teardown now bounds history settlement to two seconds and removes fixture
+roots in `finally`. Its deterministic stalled-settlement regression passes;
+no move assertion or timeout changed. The six-file `review-fix-integration`
+run (`--parallel=2`) remained non-green under concurrent host work: 131 passed,
+one skipped, 28 failed and 23 between-test errors in 386.2 s. All failures
+were in this owner, beginning with the five-second test budget and followed
+by hook deadlines, removed-path and SQLite errors while unfinished operations
+outlived their fixtures. The other five command/preview owners then passed
+together in 22.3 s.
+
+The complete owner rerun,
+`mise run test:logged -- --name review-environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`,
+also failed: 13 passed, 25 failed and 23 between-test errors across 38 tests in
+289.8 s. This is a retained validation failure, not a new flake classification
+or proof of an idle-host pass. Evidence: `orkestrator-test-run.CUD1YR` and
+`orkestrator-test-run.VXqm94` beneath the host temporary directory.

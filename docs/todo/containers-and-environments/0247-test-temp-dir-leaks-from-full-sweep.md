@@ -353,6 +353,79 @@ is deliberately recorded as non-green despite the targeted fixes passing.
 
 None.
 
+## Consolidated review fixes (2026-10-27)
+
+- Preserve the command column from `ps` verbatim after its fixed numeric and
+  status columns. Ownership matching also recognizes how BSD `ps` renders tabs
+  (`\011`) and how procps renders them (`?`), while retaining literal
+  backslashes. Real detached-process regressions cover consecutive spaces and
+  tabs; a fixed-output test checks raw whitespace and backslash preservation.
+- Refuse new MCP tick passes after disposal, including callers waiting for a
+  previous pass. The regression arms settlement before queuing another tick,
+  disposes the service, and verifies that cleanup cannot be followed by a
+  directory-recreating pass.
+- Bound terminal-history settlement in environment-move and command-I/O
+  teardown to two seconds and remove fixture roots in `finally`. A stalled or
+  rejected writer still fails the hook after cleanup. Tests cover successful,
+  rejected and stalled settlement, plus a real history collector appending
+  after shutdown before its final quiescing flush.
+- Start the production artifact runtime factory in fresh child processes with
+  a private TMPDIR containing aged scratch for a dead owner and a live child.
+  Assert removal and its logged count in process isolation, retention in
+  container/disabled isolation, and retention of the live owner's scratch.
+- Exercise failed and timed-out `ps` calls and require unverified cleanup.
+  A real Playwright Chromium profile containing consecutive spaces verifies
+  marker ownership and exit of the browser and its observed helpers.
+- Use a shared XDG fixture helper and assert all four overrides are absent
+  during command tests and restored afterwards. Its tests cover both defined
+  and absent originals, including overrides changed during a test.
+
+Validation on macOS: the targeted regression suite and its final command-parser,
+startup and real-Chromium subsets passed. The five command/preview owner files
+(`commands-io-coverage`, `commands-process-coverage`, `preview-supervisor`,
+`preview-isolation`, `runtime`) passed together in 22.3 s; the existing real
+Docker case was skipped because its worker image is unavailable. `mise run
+check` passed (format, lint and all workspace, test and script typechecks).
+
+The broader six-file run including `environment-move.test.ts` remained
+non-green (131 passed, one skipped, 28 failed, 23 between-test errors; 386.2 s).
+The failures were in environment-move, beginning at the five-second test
+budget, followed by hook timeouts, removed-path and SQLite errors as unfinished
+operations outlived their tests. Its complete owner rerun also failed (13 passed,
+25 failed, 23 between-test errors; 289.8 s, `orkestrator-test-run.VXqm94`). This
+is not an idle-host pass or a new flake classification. Evidence:
+`orkestrator-test-run.CUD1YR/review-fix-integration.log.gz` under the host
+temporary directory. The deterministic stalled-settlement cleanup regression
+passes without changing the move test budgets or assertions.
+
+The required `mise run test` also remains non-green: root/support finished
+with 3,530 passed and three failures. The firewall entrypoint deadline passed
+in the complete unchanged owner (21.6 s), recorded in existing case
+[0983](../../tests/flaky-tests/environments-and-containers/0983-firewall-root-entrypoint-shell-timeout.md).
+Both unchanged migration-copy failures reproduced alone (10 passed, two failed;
+3.3 s, `orkestrator-test-run.abZ2L8`). The bridge group failed five unchanged
+Claude coordinator/runtime-idle cases. Workspace completed web (9,937 passed),
+protocol (1,935 passed), web-public (41 passed), toolchain (90 passed, one failed)
+and desktop (1,369 passed, two failed). Toolchain's empty version-probe output
+passed in the complete unchanged owner (2.5 s), recorded in existing case
+[0290](../../tests/flaky-tests/backend-services-and-tooling/0290-toolchain-version-probe-empty-output.md).
+Desktop's two failures were the existing `pruneProfiles` keychain-warning
+expectations. Backend remained incomplete, with environment/Git and other
+fixture deadlines; there is no complete backend total.
+
+The logged wrapper stopped the required repository run at its 1,800-second
+absolute deadline (exit 1, `timeoutReason: absolute`). The workspace group had
+waited 1,162.4 s for four host worker slots before starting. This is explicitly
+non-green and incomplete, not acceptance proof. Outer compressed evidence:
+`orkestrator-test-run.OHbyVm/review-fix-suite.log.gz`; bounded inner group logs:
+`orkestrator-test-run.S3DyLI`, both under the host temporary directory.
+
+The final late-append history regression passed (0.6 s), followed by the backend
+source/test typecheck (1.7 s). The implementation is committed as `82009c8c1`.
+Linux/Windows execution and a green, complete repository run remain unverified;
+full browser/Electron/Docker/iOS scenario suites were outside these cleanup
+changes. The real Chromium cleanup regression ran successfully on macOS.
+
 ## Needs verification
 
 - The repeat sweep on omarchy-hp (Qualification item 2). On macOS
@@ -365,9 +438,11 @@ None.
 - The escaped-browser ownership marker on Linux: `ps -A -ww -o ...,command=`
   is also valid for procps, and Chromium carries `--user-data-dir` there
   too, but the reproduction and the unit test ran only on macOS.
-- `sweepStalePreviewScratch` on a real backend start with leftovers present
-  (only unit-tested here; the backend was not run against a real data
-  directory).
+- Linux and Windows execution of the new process-marker regressions remains
+  unqualified on this macOS host. The real-Chromium test is collected by the
+  existing transcript-artifacts area suite and follows its Chromium availability
+  prerequisite. Windows execution is not established by the Unix `ps`
+  implementation.
 
 ## Assumptions and decisions
 

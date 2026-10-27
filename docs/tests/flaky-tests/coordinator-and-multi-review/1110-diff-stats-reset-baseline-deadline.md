@@ -1,7 +1,7 @@
 # Diff-stats reset waits past the baseline-owner deadline
 
 - **ID:** 1110
-- **Status:** open; cause unconfirmed, aggregate acceptance still pending
+- **Status:** open
 - **Date observed:** 2026-10-27
 - **Owning file:** `apps/backend/src/core/diff-stats-tracking.test.ts`
 - **Test:** `a successful reset to creation clears the advanced baseline and retargets scans`

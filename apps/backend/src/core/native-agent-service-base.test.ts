@@ -8,6 +8,7 @@ import path from "node:path";
 
 import { type BuildPipeline, type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 
+import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orkestrator";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -3621,6 +3622,14 @@ describe("NativeAgentService", () => {
       // Without this a coordinator fills every model and effort field it is
       // shown, and every worker silently runs a selection the user never chose.
       expect(sent).toContain(COORDINATOR_LAUNCH_DEFAULTS_RULE);
+      // The main coordinator offers to save durable decisions, batched and
+      // without re-asking declined ones.
+      expect(sent).toContain(COORDINATOR_AGENTS_MD_RULE);
+      expect(COORDINATOR_AGENTS_MD_RULE).toContain("propose_agents_md_update");
+      expect(COORDINATOR_AGENTS_MD_RULE).toContain("batch several decisions");
+      expect(COORDINATOR_AGENTS_MD_RULE).toContain(
+        "do not ask again about a decision the user declined",
+      );
       // The conversation's own platform, not a bare availability question.
       expect(delegationFor).toHaveBeenCalledWith("codex");
       expect(
@@ -3712,6 +3721,7 @@ describe("NativeAgentService", () => {
         "Orkestrator worker controls are unavailable in this session",
       );
       expect(sentWithoutDelegation).toContain("do not report them as workers");
+      expect(sentWithoutDelegation).not.toContain(COORDINATOR_AGENTS_MD_RULE);
       provider.provider.commandCatalogue = async () => ({
         enhanced: true,
         status: "ready",

@@ -19,6 +19,7 @@ import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { useFederation } from "./FederationProvider";
 import { RootChangesApprovalDialog } from "./RootChangesApprovalDialog";
+import { AgentsMdApprovalDialog } from "./AgentsMdApprovalDialog";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
 
@@ -31,7 +32,9 @@ function targetLabel(request: NodeActionRequestView): string {
           ? `${target.projectName ?? target.gitRemote ?? "a project"} to ${target.nodeName}${target.location ? ` at ${target.location}` : ""}`
           : request.kind === "apply-root-changes"
             ? `uncommitted changes to “${target.environmentName ?? target.environmentId}”`
-            : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
+            : request.kind === "update-agents-md"
+              ? `the ## Orkestrator section of AGENTS.md on ${target.nodeName}`
+              : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
     )
     .join(", ");
 }
@@ -42,12 +45,14 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
   "update-project-files": "Update project files",
   "reveal-env-value": "Show a value in plain text",
   "apply-root-changes": "Apply",
+  "update-agents-md": "Update",
 };
 
 /**
  * A coordinator asked for something only the user may do (delete an
  * environment, create a project on a node, push project files, show a
- * secret value, copy the checkout's uncommitted changes into a worker).
+ * secret value, copy the checkout's uncommitted changes into a worker, save
+ * decisions to the project's AGENTS.md through a pull request).
  * Nothing happens until the user approves here; the dialog names every node
  * and environment involved.
  */
@@ -95,6 +100,9 @@ export function NodeActionRequestsDialog() {
     return (
       <RootChangesApprovalDialog key={request.requestId} request={request} onSettled={refresh} />
     );
+  // The user reviews the section diff and may edit the entries in their own dialog.
+  if (request.kind === "update-agents-md")
+    return <AgentsMdApprovalDialog key={request.requestId} request={request} onSettled={refresh} />;
   const label = targetLabel(request);
   const reviewCopy =
     request.kind === "create-project" && request.requestedBy && portalState.selfId

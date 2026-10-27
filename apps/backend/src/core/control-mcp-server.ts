@@ -508,6 +508,8 @@ export class ControlMcpServer {
         "resolve_node_action_request",
         // Runs only from the user's approval of an `apply-root-changes` request.
         "apply_project_root_changes",
+        // Runs only from the user's approval of an `update-agents-md` request.
+        "open_project_agents_md_pr",
       ]);
       if (denied.has(command)) throw new Error("Coordinator capability denied");
       return this.invoke<T>(command, args);

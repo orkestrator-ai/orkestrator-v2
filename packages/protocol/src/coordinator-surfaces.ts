@@ -42,6 +42,7 @@ export const COORDINATOR_SURFACE_ACTIONS = Object.freeze([
   "custom-fix",
   "launch-feature-plan",
   "request-root-changes",
+  "propose-agents-md-update",
 ] as const);
 export type CoordinatorSurfaceAction = (typeof COORDINATOR_SURFACE_ACTIONS)[number];
 

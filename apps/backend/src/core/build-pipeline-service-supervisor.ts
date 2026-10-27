@@ -3,6 +3,7 @@
  * lock, and the state machine each pass advances (provisioning, stage start and
  * dispatch, review packages, validation and the multi-model review).
  */
+import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -72,6 +73,7 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import {
+  type WorkflowResultError,
   type WorkflowResultKind,
   workflowResultInstruction,
   workflowResultToolName,
@@ -121,6 +123,13 @@ import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
+import {
+  compareValidationWorktree,
+  hasValidationBaseline,
+  validationWorktreeError,
+  validationWorktreeRefusal,
+} from "./build-pipeline-validation-worktree.js";
+import type { WorkflowResultAttempt } from "./workflow-result-service.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -710,9 +719,9 @@ export class BuildPipelineSupervisor {
   /**
    * Observes the worktree a validation stage is about to run in.
    *
-   * The build stage is only *asked* to commit, so a review that re-derived this
-   * inside its own turn could quietly decide the tree was dirty and skip
-   * validation. Probing here makes the state the pipeline's own evidence.
+   * Addressing can leave uncommitted paths behind. Capturing them before the
+   * verification turn makes the state the pipeline's own evidence and tells
+   * the verifier exactly which paths it must preserve.
    *
    * The probe is one command round trip into a container or worktree and can
    * fail transiently, so it is retried a bounded number of times before the
@@ -825,62 +834,55 @@ export class BuildPipelineSupervisor {
 
   /**
    * Rejects a validation turn that changed the workspace rather than only
-   * reading it and writing ignored output.
-   *
-   * Scope is exactly what `git status --porcelain` reports plus HEAD: tracked
-   * paths, and untracked paths Git does not ignore. It deliberately does *not*
-   * cover ignored files, anything under `.git/`, or paths outside the worktree —
-   * writes there are invisible to this check, so the disclosure the launcher
-   * shows and the prompts' own instructions have to claim no more than this.
-   *
-   * The comparison is against the baseline path set, not against cleanliness, so
-   * uncommitted work the build stage left behind survives review instead of
-   * failing the pipeline after the fact.
+   * reading it and writing ignored output. See {@link compareValidationWorktree}
+   * for exactly what counts as a change.
    */
   async assertValidationWorktreeUnchanged(
     pipeline: BuildPipeline,
     session: PipelineSession,
+    options: { repairableOnly?: boolean } = {},
   ): Promise<void> {
     const stage = VALIDATION_STAGE_LABELS[session.phase === "review" ? "review" : "verify"];
-    // A snapshot written before the path list existed still carries a status, and
-    // "clean" pins the baseline to the empty set without it. "dirty" does not,
-    // so that one case still fails closed rather than guessing.
-    const baselinePaths =
-      session.validationUncommittedPathsAtStart ??
-      (session.validationWorktreeStatusAtStart === "clean" ? [] : undefined);
-    if (!session.validationHeadAtStart || !baselinePaths) {
-      throw new Error(
-        `${stage} cannot be certified because its starting Git state was not recorded`,
+    // Without a baseline there is nothing to compare, so do not spend a probe.
+    const change = compareValidationWorktree(
+      session,
+      hasValidationBaseline(session)
+        ? await this.reviewWorktreeSnapshot(pipeline)
+        : { status: "unknown", reason: "no baseline" },
+    );
+    if (options.repairableOnly && !validationWorktreeRefusal(change)) return;
+    const error = validationWorktreeError(stage, change);
+    if (error) throw new Error(error);
+  }
+
+  /**
+   * The same comparison, asked by the workflow result service before it
+   * validates or accepts a verification result, so the verifier can undo a
+   * change while its turn is still running instead of the pipeline failing
+   * after it. Only the attempt the pipeline is currently waiting on is judged.
+   */
+  async verificationResultRefusal(
+    attempt: WorkflowResultAttempt,
+  ): Promise<WorkflowResultError | null> {
+    for (const record of await this.ctx.storage.listBuildPipelines(attempt.projectId)) {
+      const pipeline = record.snapshot;
+      if (
+        record.environmentId !== attempt.environmentId ||
+        !isBuildPipeline(pipeline) ||
+        pipeline.phase !== "verifying"
+      ) {
+        continue;
+      }
+      const session = pipeline.sessions[pipeline.currentSessionIndex];
+      if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey) {
+        continue;
+      }
+      if (!hasValidationBaseline(session)) return null;
+      return validationWorktreeRefusal(
+        compareValidationWorktree(session, await this.reviewWorktreeSnapshot(pipeline)),
       );
     }
-    const current = await this.reviewWorktreeSnapshot(pipeline);
-    if (current.status === "unknown") {
-      throw new Error(
-        `${stage} cannot be certified because the backend could not verify Git state after validation: ${current.reason}`,
-      );
-    }
-    if (current.head !== session.validationHeadAtStart) {
-      throw new Error(
-        `${stage} cannot be certified because validation changed the environment HEAD`,
-      );
-    }
-    const before = new Set(baselinePaths);
-    const currentPaths = current.status === "dirty" ? current.paths : [];
-    const after = new Set(currentPaths);
-    const added = currentPaths.filter((path) => !before.has(path));
-    if (added.length) {
-      throw new Error(
-        `${stage} cannot be certified because validation left ${added.length} uncommitted ${added.length === 1 ? "path that was" : "paths that were"} not there when it started`,
-      );
-    }
-    // Removal matters as much as addition: deleting a path the build stage left
-    // uncommitted destroys work that no commit is holding.
-    const removed = baselinePaths.filter((path) => !after.has(path));
-    if (removed.length) {
-      throw new Error(
-        `${stage} cannot be certified because validation removed ${removed.length} uncommitted ${removed.length === 1 ? "path that was" : "paths that were"} there when it started`,
-      );
-    }
+    return null;
   }
 
   /**
@@ -915,6 +917,7 @@ export class BuildPipelineSupervisor {
       session.structuredResultStatus = "pending";
       session.turnStartedAt = startedAt;
       pipeline.pendingPromptAttempt = {
+        dispatchVersion: 1,
         id: randomUUID(),
         sessionId: session.sdkSessionId,
         requestId,
@@ -1161,6 +1164,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: next.id,
       sessionId: session.sdkSessionId,
       requestId,
@@ -1382,7 +1386,7 @@ export class BuildPipelineSupervisor {
       });
       const stagePrompt = override
         ? { prompt: override.prompt, images: override.images, schema: override.schema }
-        : await this.promptFor(pipeline, sessionPhase, agent);
+        : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
       const prompt = withUnattendedPolicy(stagePrompt.prompt);
       const { schema, images } = stagePrompt;
       const requestId = randomUUID();
@@ -1441,6 +1445,7 @@ export class BuildPipelineSupervisor {
       delete pipeline.failureContext;
 
       pipeline.pendingPromptAttempt = {
+        dispatchVersion: 1,
         id: randomUUID(),
         sessionId,
         requestId,
@@ -1542,6 +1547,12 @@ export class BuildPipelineSupervisor {
         : undefined,
     );
     try {
+      await this.openDispatchWindow(pipeline, requestId);
+    } catch (error) {
+      this.ctx.settleArtifactTurn(pipeline, stageSession, requestId);
+      throw error;
+    }
+    try {
       await provider.send(
         sessionId,
         resultTransport === "tool-v1" && resultKind
@@ -1572,11 +1583,12 @@ export class BuildPipelineSupervisor {
       }
       if (error instanceof AmbiguousPromptDispatchError) {
         // The bridge may have accepted the stable request before the response
-        // was lost. Keep the durable attempt; the next tick reconciles status
-        // and, if still idle, retries this exact request ID through bridge
-        // deduplication.
+        // was lost. Keep the durable attempt; the next tick settles it on the
+        // provider's dispatch answer and re-sends this exact request id only
+        // when the provider proves it never arrived.
         return;
       }
+      await this.closeDispatchWindow(pipeline, requestId);
       throw error;
     }
   }
@@ -1698,6 +1710,7 @@ export class BuildPipelineSupervisor {
       if (phase === "reviewing") pipeline.structuredReviewRequestId = requestId;
     }
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: randomUUID(),
       sessionId: session.sdkSessionId,
       requestId,
@@ -1724,6 +1737,12 @@ export class BuildPipelineSupervisor {
   async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
     const attempt = pipeline.pendingPromptAttempt;
     if (!attempt) return;
+    if (
+      (attempt.dispatchVersion !== 1 || attempt.dispatchingAt !== undefined) &&
+      !(await this.resendProvenSafe(pipeline, provider))
+    ) {
+      return;
+    }
     const schema = attempt.structuredReview
       ? attempt.phase === "building" || attempt.phase === "fixing"
         ? attempt.validationPlan === true
@@ -1811,6 +1830,12 @@ export class BuildPipelineSupervisor {
         : undefined,
     );
     try {
+      await this.openDispatchWindow(pipeline, attempt.requestId);
+    } catch (error) {
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      throw error;
+    }
+    try {
       await provider.send(
         attempt.sessionId,
         attempt.resultTransport === "tool-v1" && resultKind
@@ -1844,19 +1869,93 @@ export class BuildPipelineSupervisor {
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) return;
       this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      await this.closeDispatchWindow(pipeline, attempt.requestId);
       throw error;
     }
   }
 
   /**
+   * The at-most-once window opens here, durably and just before the send:
+   * from now on a later pass re-sends this id only on the provider's proof
+   * that it never arrived. Every preparation step before it stays retryable.
+   */
+  private async openDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
+    const attempt = pipeline.pendingPromptAttempt;
+    if (attempt?.requestId !== requestId) return;
+    attempt.dispatchingAt = new Date().toISOString();
+    await this.ctx.save(pipeline, pipeline.backendRevision);
+  }
+
+  /**
+   * A send refused before the prompt was written: a retry is a first send.
+   * A failed save leaves the mark, which only costs a proof read.
+   */
+  private async closeDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
+    const attempt = pipeline.pendingPromptAttempt;
+    if (attempt?.requestId !== requestId || attempt.dispatchingAt === undefined) return;
+    attempt.dispatchVersion = 1;
+    delete attempt.dispatchingAt;
+    await this.ctx.save(pipeline, pipeline.backendRevision).catch(() => undefined);
+  }
+
+  /**
+   * Whether a prompt attempt that may already have reached the provider can be
+   * sent again under its id. Only the provider's proof that it never arrived
+   * (`absent`) allows it; acceptance settles the attempt as sent, `lost` fails
+   * the stage, and anything else waits within the reconnect deadline and then
+   * fails closed, as the fan-out does (0223). Bridges deduplicate a resend only
+   * while they still hold the id, which a restart or eviction can end.
+   */
+  private async resendProvenSafe(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+  ): Promise<boolean> {
+    const attempt = pipeline.pendingPromptAttempt!;
+    const session = pipeline.sessions.find(
+      (candidate) => candidate.sdkSessionId === attempt.sessionId,
+    );
+    const label = session?.label.toLowerCase() ?? `${attempt.phase} step`;
+    const acceptance = await recoveredDispatchAcceptance(
+      provider,
+      attempt.sessionId,
+      attempt.requestId,
+      attempt.resultTransport === "tool-v1"
+        ? () => this.ctx.options.workflowResults?.structured<unknown>(attempt.requestId)
+        : undefined,
+    );
+    if (acceptance === "absent") return true;
+    if (acceptance === "dispatched" || acceptance === "pending") {
+      if (session) session.status = "running";
+      delete pipeline.pendingPromptAttempt;
+      delete pipeline.reconnectAttempt;
+      delete pipeline.error;
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+      return false;
+    }
+    if (acceptance === "lost") {
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      throw new Error(
+        `The ${label} dispatch was lost in a provider restart and cannot be resent safely`,
+      );
+    }
+    const elapsed = Date.now() - Date.parse(attempt.dispatchingAt ?? attempt.startedAt);
+    if (elapsed >= this.ctx.reconnectDeadlineMs) {
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      throw new Error(`The ${label} dispatch acceptance could not be confirmed`);
+    }
+    return false;
+  }
+
+  /**
    * The baseline is passed in rather than probed here: the same observation has
-   * to reach both the prompt the reviewer reads and the session field the guard
+   * to reach both the prompt the verifier reads and the session field the guard
    * later compares against, and two probes could disagree.
    */
   async promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
     agent: BuildPipelineAgent,
+    worktree?: ReviewWorktreeSnapshot,
   ): Promise<{
     prompt: string;
     schema?: JsonSchema;
@@ -1921,7 +2020,7 @@ export class BuildPipelineSupervisor {
     }
     if (phase === "verify") {
       return {
-        prompt: verificationPrompt(pipeline, notes, target),
+        prompt: verificationPrompt(pipeline, notes, target, worktree),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };

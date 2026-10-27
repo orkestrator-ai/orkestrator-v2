@@ -18,6 +18,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-repositories.ts` | `StorageRepositories`, which builds every repository over one context |
 | `apps/backend/src/core/storage-files.ts` | `StorageFiles`: the paths of shared stores and of the files beside the database |
 | `apps/backend/src/core/storage-<area>.ts` | One repository per store group (`ProjectsRepository`, `KanbanRepository`, …; see [Code layout](#code-layout)) |
+| `apps/backend/src/core/storage-shared.ts` | The record types and pure helpers every repository shares, re-exported from `storage-shared-core.ts` (base guards, record types, protocol names) the topic modules `storage-shared-<topic>.ts` (pane layouts, agent activity, persisted records, native sessions, model catalogues, config normalisation) and `storage-shared-extra.ts` (OpenCode catalogues, the storage error classes) |
 | `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
 | `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
 
@@ -51,7 +52,9 @@ the change journal.
 | `ConfigRepository` | `storage-config.ts` | `config.json`, `agent-platforms.json`, model catalogues |
 | `SessionsRepository` | `storage-sessions.ts` | Sessions, pane layouts |
 | `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
-| `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions, the interaction journal, prompt-queue persistence and claim recovery |
+| `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
+| `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
+| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, load and save, and recovery of claims older backends left |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
@@ -80,8 +83,7 @@ uses. Repositories call each other through the registry, which is how the
 paths that cross stores work: project removal deletes compose drafts
 (`this.repos.drafts`), session removal deletes the session buffer, public
 operations write projects and environments under those stores' leases
-(`this.repos.projects.enqueueEnvironmentMutation`), and the facade's `init`
-runs prompt-queue claim recovery on the native-session repository. A lease
+(`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
 the repository that owns its store, with its target, label and timeout
 unchanged.
@@ -352,6 +354,15 @@ prompt-queue dispatch errors) and its readers have no legacy branch. Readers
 that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
+
+One upgrade cannot run once: a backend up to v2.28.0-beta shares this schema
+version and can still write a prompt-queue claim (`outstandingClaim`). So
+`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
+and survive queue writes until settlement or expiry. Expired or malformed
+leases restore their message to the head, and the next save persists that.
+Malformed message ids receive a stable recovery id. A new migration would have made
+every older release refuse the database.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,

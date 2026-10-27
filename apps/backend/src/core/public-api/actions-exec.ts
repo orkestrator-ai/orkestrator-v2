@@ -43,8 +43,6 @@ import type {
  * terminal marker or scraped output. Nothing is ever re-run automatically.
  */
 
-const inFlight = new Map<string, Promise<OperationPatch | null>>();
-
 /**
  * Whether the exec control claimed the operation (`state.json` exists). The
  * control starts a worker only after that claim, so once the control process
@@ -83,9 +81,7 @@ async function reconcileExec(
   record: PublicOperationRecord,
   context: PublicActionContext,
 ): Promise<OperationPatch | null> {
-  const existing = inFlight.get(record.operationId);
-  if (existing) return existing;
-  const evaluation = (async (): Promise<OperationPatch | null> => {
+  return context.command.runtime.publicApi.reconcileExec(record.operationId, async () => {
     const environment = record.resources.environmentId
       ? await context.command.storage.getEnvironment(record.resources.environmentId)
       : null;
@@ -143,9 +139,7 @@ async function reconcileExec(
     if (!patch.state && JSON.stringify(patch.execution) === JSON.stringify(record.execution))
       return null;
     return patch;
-  })().finally(() => inFlight.delete(record.operationId));
-  inFlight.set(record.operationId, evaluation);
-  return evaluation;
+  });
 }
 
 registerReconciler("environment.exec", reconcileExec);

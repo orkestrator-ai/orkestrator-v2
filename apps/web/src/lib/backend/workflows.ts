@@ -727,6 +727,17 @@ export async function listNativeAgentResumableSessions(input: {
   return invoke("list_native_agent_resumable_sessions", input);
 }
 
+/** Takes a conversation out of the resume list, or puts it back. Never a delete. */
+export async function setNativeAgentResumableSessionArchived(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  resumableSessionId: string;
+  archived: boolean;
+}): Promise<{ archived: boolean }> {
+  return invoke("set_native_agent_resumable_session_archived", input);
+}
+
 export async function resumeNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;

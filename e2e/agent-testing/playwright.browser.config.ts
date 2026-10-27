@@ -30,6 +30,7 @@ export default defineConfig({
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
     "codex-typed-prompts-live.spec.ts",
+    "codex-refused-login-live.spec.ts",
     "slash-command-inactive.spec.ts",
     "slash-command-picker.spec.ts",
     "mcp-apply-inactive.spec.ts",

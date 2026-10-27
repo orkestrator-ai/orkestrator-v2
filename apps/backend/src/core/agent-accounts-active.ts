@@ -10,6 +10,7 @@ import { COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/co
 import { jwtExpiryMs, restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 
 import type { CommandContext } from "./commands-context.js";
+import type { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import {
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
@@ -144,7 +145,7 @@ export async function localBridgeIsOnActiveAccount(
           ? Boolean(
               (await readUsableClaudeLogin(context, active, readAddedClaudeCredentials)).token,
             )
-          : (await readCoordinatorCodexLogin(active)).text !== undefined;
+          : (await readCoordinatorCodexLogin(active, context.runtime.accounts)).text !== undefined;
       if (!usable) return true;
       return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
     }
@@ -152,7 +153,7 @@ export async function localBridgeIsOnActiveAccount(
     const fresh =
       kind === "claude"
         ? await readFreshClaudeTokenExpiry(context, active)
-        : (await readCoordinatorCodexLogin(active)).tokenExpiresAt;
+        : (await readCoordinatorCodexLogin(active, context.runtime.accounts)).tokenExpiresAt;
     // A lapsed lead window is only a reason to relaunch when there is a
     // better token to hand over. Keep the existing bridge until actual expiry.
     if (!fresh || fresh <= tokenExpiresAt) {
@@ -277,19 +278,6 @@ export interface CoordinatorAgentAccount {
   loginless?: true;
 }
 
-/**
- * Asks the backend's login keeper to have Claude refresh the active login when
- * it is due (`ContainerClaudeLoginKeeper.refreshLocalLoginIfDue`). Registered
- * by the backend; absent in tests and tools that never refresh.
- */
-let localClaudeLoginRefresher: (() => Promise<unknown>) | undefined;
-
-export function setLocalClaudeLoginRefresher(
-  refresher: (() => Promise<unknown>) | undefined,
-): void {
-  localClaudeLoginRefresher = refresher;
-}
-
 function isRefreshableClaudeLogin(credentials: string | undefined): boolean {
   try {
     const refreshToken = (
@@ -319,19 +307,15 @@ async function readUsableClaudeLogin(
   let token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
   if (
     !token &&
-    localClaudeLoginRefresher &&
     context.runtimeFlavor !== "agent-test" &&
-    isRefreshableClaudeLogin(credentials)
+    isRefreshableClaudeLogin(credentials) &&
+    (await context.runtime.accounts.refreshLocalClaudeLogin())
   ) {
-    await localClaudeLoginRefresher().catch(() => undefined);
     credentials = await read();
     token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
   }
   return { credentials, token };
 }
-
-/** Coordinator homes whose own Keychain entry was already removed by this process. */
-const clearedCoordinatorKeychainEntries = new Set<string>();
 
 /**
  * Remove a Keychain login Claude may have saved under the coordinator home.
@@ -343,13 +327,13 @@ const clearedCoordinatorKeychainEntries = new Set<string>();
  * handed over. Once per home per process is enough: nothing writes it now.
  */
 async function clearCoordinatorKeychainLogin(
+  accounts: AgentAccountsRuntime,
   coordinatorHome: string,
   removeKeychainEntry: (service: string) => Promise<void>,
 ): Promise<void> {
-  if (process.platform !== "darwin" || clearedCoordinatorKeychainEntries.has(coordinatorHome)) {
+  if (process.platform !== "darwin" || !accounts.claimCoordinatorKeychainClear(coordinatorHome)) {
     return;
   }
-  clearedCoordinatorKeychainEntries.add(coordinatorHome);
   await removeKeychainEntry(claudeKeychainService(coordinatorHome)).catch(() => undefined);
 }
 
@@ -397,7 +381,11 @@ export async function applyCoordinatorClaudeAccount(
     await fs.rm(path.join(coordinatorHome, name), { force: true });
   }
   await prepareHome(coordinatorHome);
-  await clearCoordinatorKeychainLogin(coordinatorHome, removeKeychainEntry);
+  await clearCoordinatorKeychainLogin(
+    context.runtime.accounts,
+    coordinatorHome,
+    removeKeychainEntry,
+  );
   env.CLAUDE_CONFIG_DIR = coordinatorHome;
   if (env.ANTHROPIC_AUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY) {
     return { accountId: active.accountId };
@@ -463,27 +451,27 @@ export function coordinatorCodexLogin(
 
 /**
  * The active Codex login as a coordinator would receive it. Codex keeps its
- * login in a file only. Renew it in the owning home before handing out an
- * access-only copy; the coordinator never receives the renewable login.
+ * login in a file only. Renew it in the owning home (through the backend's
+ * `accounts`, when given) before handing out an access-only copy; the
+ * coordinator never receives the renewable login.
  */
 export async function readCoordinatorCodexLogin(
   active: ResolvedAgentAccount,
+  accounts?: Pick<AgentAccountsRuntime, "refreshLocalCodexLogin">,
 ): Promise<CoordinatorCodexLogin> {
   const home = active.home ?? coordinatorHostCodexHome();
   let raw = await readCodexAuthFile(home);
   let login = coordinatorCodexLogin(raw);
-  if (!login.text && localCodexLoginRefresher && codexHasRefreshToken(raw)) {
-    await localCodexLoginRefresher(home).catch(() => undefined);
+  if (
+    !login.text &&
+    accounts &&
+    codexHasRefreshToken(raw) &&
+    (await accounts.refreshLocalCodexLogin(home))
+  ) {
     raw = await readCodexAuthFile(home);
     login = coordinatorCodexLogin(raw);
   }
   return login;
-}
-
-let localCodexLoginRefresher: ((home: string) => Promise<void>) | undefined;
-
-export function setLocalCodexLoginRefresher(refresher: typeof localCodexLoginRefresher): void {
-  localCodexLoginRefresher = refresher;
 }
 
 function codexHasRefreshToken(raw: string | undefined): boolean {

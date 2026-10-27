@@ -32,6 +32,7 @@ import {
 } from "../src/core/tmux";
 
 import { BackendRuntime } from "../src/core/backend-runtime";
+import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 
 export const tempDirs: string[] = [];
@@ -670,6 +671,14 @@ let currentRuntime = new BackendRuntime({ emit: () => undefined });
 
 export function harnessRuntime(): BackendRuntime {
   return currentRuntime;
+}
+
+/**
+ * A hand-built context for a direct call (`cleanupEnvironmentTmux`), with the
+ * per-test runtime unless it names its own, as `invoke` does.
+ */
+export function harnessContext(context: Record<string, unknown>): CommandContext {
+  return { runtime: currentRuntime, ...context } as unknown as CommandContext;
 }
 
 afterEach(async () => {

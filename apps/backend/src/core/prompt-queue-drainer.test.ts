@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
+import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 
 const ENVIRONMENT_ID = "env-1";
 const TAB_ID = "tab-1";
@@ -118,6 +119,39 @@ async function enqueue(
 }
 
 describe("PromptQueueDrainer", () => {
+  test("a live legacy holder excludes tmux drains and mail", async () => {
+    const context = await harness();
+    try {
+      await context.storage.savePromptQueue(QUEUE_KEY, ENVIRONMENT_ID, [
+        { id: "head", text: "claimed" },
+      ]);
+      seedLegacyPromptQueueClaim(context.storage.getDataDir(), QUEUE_KEY, "head");
+      await context.drainer.drainAll();
+      await context.drainer.drainQueue(QUEUE_KEY);
+      expect(
+        await context.drainer.mailInjectPresence({ environmentId: ENVIRONMENT_ID, tabId: TAB_ID }),
+      ).toBe("working");
+      expect(
+        await context.drainer.dispatchMailInject({
+          environmentId: ENVIRONMENT_ID,
+          tabId: TAB_ID,
+          text: "mail",
+        }),
+      ).toEqual({ outcome: "held", reason: "queue" });
+      let submitted = false;
+      expect(
+        await context.storage.withEmptyPromptQueueForMail(QUEUE_KEY, ENVIRONMENT_ID, async () => {
+          submitted = true;
+        }),
+      ).toEqual({ empty: false });
+      expect(submitted).toBe(false);
+      expect(context.submits()).toHaveLength(0);
+      expect(context.calls).toEqual([]);
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("holds mail instead of starting a stopped tmux session", async () => {
     const context = await harness();
     try {

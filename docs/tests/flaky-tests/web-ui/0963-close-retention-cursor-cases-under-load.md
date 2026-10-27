@@ -34,3 +34,12 @@
   steer arrives after the turn has ended, and the truncated transcript is
   read before the shed is applied. Load seems to widen both races. Not
   confirmed. No assertion, timeout or skip changed.
+
+## Recurrence during search review fixes, 2026-10-27
+
+Desktop steering again failed at line 719 with `The Cursor session has no
+running turn to steer`, both in the nine-worker component run and in the
+complete one-worker owner rerun. No new isolated pass was established.
+Commands, counts, and artifacts are recorded in
+[1126](../aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md#review-fix-validation-2026-10-27).
+Status remains open; no assertion, timeout, or skip changed.

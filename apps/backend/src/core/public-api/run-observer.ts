@@ -53,8 +53,6 @@ async function runTarget(
   };
 }
 
-const inFlight = new Map<string, Promise<OperationPatch | null>>();
-
 /**
  * Observe one run. Concurrent observers of the same operation share one
  * evaluation, so N waiting clients cause at most one provider status read.
@@ -63,13 +61,9 @@ export function observeRun(
   record: PublicOperationRecord,
   context: PublicActionContext,
 ): Promise<OperationPatch | null> {
-  const existing = inFlight.get(record.operationId);
-  if (existing) return existing;
-  const evaluation = evaluateRun(record, context).finally(() =>
-    inFlight.delete(record.operationId),
+  return context.command.runtime.publicApi.observeRun(record.operationId, () =>
+    evaluateRun(record, context),
   );
-  inFlight.set(record.operationId, evaluation);
-  return evaluation;
 }
 
 function sameExecution(a: PublicExecutionState | undefined, b: PublicExecutionState): boolean {
@@ -124,8 +118,8 @@ async function evaluateQueuedRun(
   }
   const held = [
     ...(queue?.messages ?? []),
-    queue?.inFlight?.message,
     queue?.outstandingClaim?.message,
+    queue?.inFlight?.message,
   ].some((message) => isRecord(message) && message.id === id);
   const session = await storage.getNativeAgentSession(
     nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),

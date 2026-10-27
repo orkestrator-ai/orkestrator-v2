@@ -593,6 +593,7 @@ export class BuildPipelineLifecycle {
               ? ("structured-output-v1" as const)
               : undefined;
         candidate.pendingPromptAttempt = {
+          dispatchVersion: 1,
           id: randomUUID(),
           sessionId: session.sdkSessionId,
           requestId,

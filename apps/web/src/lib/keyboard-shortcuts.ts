@@ -6,6 +6,8 @@
  * matching entry here so the dialog stays truthful.
  */
 
+import { isKeyboardShortcutsChord } from "@orkestrator/protocol/keyboard-shortcuts";
+
 export type ShortcutPlatform = "mac" | "other";
 
 export interface KeyboardShortcut {
@@ -136,7 +138,8 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         description: "Show keyboard shortcuts",
         mac: ["⌘", "⇧", "K"],
         other: ["Ctrl", "Shift", "K"],
-        keywords: ["help", "keybindings", "hotkeys"],
+        // Also View › Keyboard Shortcuts… in the desktop app's menu bar.
+        keywords: ["help", "keybindings", "hotkeys", "view menu"],
       },
       {
         id: "search-projects",
@@ -486,13 +489,5 @@ export function filterKeyboardShortcuts(
 
 /** ⌘⇧K on macOS, Ctrl+Shift+K elsewhere; either modifier is accepted, as with ⌘K. */
 export function isKeyboardShortcutsShortcut(event: KeyboardEvent): boolean {
-  const hasModifier = event.metaKey || event.ctrlKey;
-  const hasBothModifiers = event.metaKey && event.ctrlKey;
-  return (
-    hasModifier &&
-    !hasBothModifiers &&
-    event.shiftKey &&
-    !event.altKey &&
-    event.key.toLowerCase() === "k"
-  );
+  return isKeyboardShortcutsChord(event);
 }

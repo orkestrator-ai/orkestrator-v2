@@ -18,6 +18,7 @@ import {
 import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { useFederation } from "./FederationProvider";
+import { RootChangesApprovalDialog } from "./RootChangesApprovalDialog";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
 
@@ -28,7 +29,9 @@ function targetLabel(request: NodeActionRequestView): string {
         ? `“${target.environmentName ?? target.environmentId}” on ${target.nodeName}`
         : request.kind === "create-project"
           ? `${target.projectName ?? target.gitRemote ?? "a project"} to ${target.nodeName}${target.location ? ` at ${target.location}` : ""}`
-          : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
+          : request.kind === "apply-root-changes"
+            ? `uncommitted changes to “${target.environmentName ?? target.environmentId}”`
+            : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
     )
     .join(", ");
 }
@@ -38,13 +41,15 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
   "create-project": "Copy",
   "update-project-files": "Update project files",
   "reveal-env-value": "Show a value in plain text",
+  "apply-root-changes": "Apply",
 };
 
 /**
  * A coordinator asked for something only the user may do (delete an
  * environment, create a project on a node, push project files, show a
- * secret value). Nothing happens until the user approves here; the dialog
- * names every node and environment involved.
+ * secret value, copy the checkout's uncommitted changes into a worker).
+ * Nothing happens until the user approves here; the dialog names every node
+ * and environment involved.
  */
 export function NodeActionRequestsDialog() {
   const { kind, portalState } = useFederation();
@@ -85,6 +90,11 @@ export function NodeActionRequestsDialog() {
   // A copy request is reviewed in the copy dialog, where the user settles
   // the location and files before approving.
   if (copyRequest?.actionRequestId === request.requestId) return null;
+  // The user picks which changed files go to the worker in their own dialog.
+  if (request.kind === "apply-root-changes")
+    return (
+      <RootChangesApprovalDialog key={request.requestId} request={request} onSettled={refresh} />
+    );
   const label = targetLabel(request);
   const reviewCopy =
     request.kind === "create-project" && request.requestedBy && portalState.selfId

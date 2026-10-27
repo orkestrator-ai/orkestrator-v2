@@ -35,8 +35,6 @@ export const COMPATIBILITY_PATH_IDS = [
   "mcp-report.older-bridge-outcome",
   /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
   "preview.legacy-loopback-route",
-  /** An expired prompt-queue claim, which only older backends write now, was restored to the head. */
-  "prompt-queue.legacy-claim-recovered",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

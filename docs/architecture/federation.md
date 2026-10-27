@@ -495,13 +495,75 @@ with `MachinesFilter`:
   connection instead of resolving against this window. The same component
   shows attention toasts ("Waiting for input", "New completed work") for
   other machines, deduplicated by machine-qualified key.
-- The project search dialog adds an "Other machines" section
-  (`FederatedSearchSection`, at most 20 rows). It is labelled per machine,
-  opens that machine's panel, and says when results may be incomplete
-  because a machine is unavailable, still loading or truncated.
+- The project search (⌘K, and the sidebar's search field, which opens the
+  same dialog) searches every machine in one merged list; see
+  [Project search](#project-search).
 - Settings pages show a scope banner: **All machines** for Machines,
   **Backend: name** for everything else, which always targets the window's
   bound machine.
+
+## Project search
+
+`ProjectSearchBar` and its ranking, `searchProjectsAndEnvironments`
+(`apps/web/src/lib/project-search.ts`), are the only search over projects and
+environments. The ⌘K shortcut and the sidebar's "Search projects,
+environments..." field open the same dialog, so they behave identically.
+
+- **Sources.** This machine's rows come from its full stores
+  (`localSearchSource`); every other machine's from its summaries
+  (`machineSearchSource`, over `useMachineViews`). Both are normalized into
+  the same records with the same helpers (`repositoryHint`, `pathName`), so a
+  remote row matches on exactly the fields a local row does: project name,
+  repository owner/name and repository name (never the host or scheme),
+  checkout directory name; and for environments also the environment name,
+  branch, type and worktree directory name. The default branch is not a
+  match field; it marks an environment on it as `primary`. Project homes have
+  no row, as in the sidebar. Other machines are searched only in a
+  multi-machine view (`federation.enabled`).
+- **One merged list, one row per machine.** Projects and environments from
+  every machine share the Projects and Environments sections; a project on
+  five machines is five rows. In a multi-machine view every row carries a
+  `MachineBadge` (dot and name) and an accessible name naming the machine and
+  project (`"telegram-scraper, project on mbp3"`, `"run-desktop-app,
+  environment of orkestrator-v2 on mbp3"`). Remote rows are keyed by machine
+  (`<connectionId>:<id>`); this machine's rows keep their plain IDs. "No
+  projects or environments match that search." appears only when nothing
+  matches on any machine in scope.
+- **Ranking.** Most recently used first, across machines, then match quality
+  (exact, prefix, substring per token), then: projects by machine (this one
+  first, then sidebar machine order) and sidebar order; environments by last
+  activity (falling back to creation time). The empty query lists recents the
+  same way (8 per section); a query shows up to 50 per section, after
+  merging.
+- **Recently used.** `machineViewStore.recentKeys` (persisted with the rest
+  of the window's cross-machine view state, at most 64) holds node-qualified
+  `projectKey` / `environmentKey` values, newest first. This window's own
+  selections are recorded from `uiStore` (`FederationEffects`); another
+  machine's project or environment is recorded when it is opened
+  (`remoteWorkspaceStore.open`), reported by the active realm after navigation,
+  or chosen in the search. Reports from inactive realms do not change recency.
+  The node's older `recentProjectIds` follow as a fallback. Nothing is written to the window's
+  workspace stores, and no remote ID is resolved against them.
+- **Filters.** Tab and Shift+Tab cycle All / Projects / Environments over
+  every machine. The Filter menu adds a **Machine** group (shown when other
+  machines exist): All machines (default), This machine, or one machine, each
+  marked offline/stale/loading when it is. Both reset when the dialog closes.
+- **Choosing a row.** This machine's rows select as before. Another machine's
+  project is selected in the sidebar, not opened (`useRevealMachineProject`):
+  it is recorded as recent, its machine section, folder (by machine, by
+  project and by repository) and project are expanded, a sidebar machine
+  filter that hides it is cleared, and the row is highlighted
+  (`machineViewStore.revealedProject`) and scrolled into view until something
+  else is selected. When the current layout cannot show it (sorted by
+  activity, or a merged list hiding a disconnected machine), selection switches
+  to the by-machine project view immediately. Another machine's environment
+  opens on that machine (`openMachineWorkspace`), as its sidebar row does.
+- **Offline, stale and loading machines** keep their last-known rows, greyed
+  (`opacity-60`) with an offline/stale/loading label, and can still be
+  chosen: a project is revealed in the by-machine sidebar, which keeps its
+  last-known tree; an environment opens as from the sidebar. While a machine
+  in scope is unavailable, loading or truncated the dialog (including empty-query
+  recents) says "Results may be incomplete".
 
 ## Storage namespacing
 

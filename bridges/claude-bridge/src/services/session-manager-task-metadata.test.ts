@@ -325,12 +325,8 @@ describe("background task metadata", () => {
         },
       };
       if (hookRestart)
-        recordBackgroundTaskLaunch(
-          session,
-          { id: "agent" },
-          {} as NonNullable<typeof session.queryControl>,
-          { newRun: true },
-        );
+        // No CLI runs in this unit, so nothing owns the run.
+        recordBackgroundTaskLaunch(session, { id: "agent" }, undefined, { newRun: true });
       else
         handleTaskEdge(turn, {
           type: "system",

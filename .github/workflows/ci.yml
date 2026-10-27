@@ -13,6 +13,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  mobile-shell-browser:
+    name: Mobile shell (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install browser
+        run: bunx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Test mobile shell input
+        env:
+          ORKESTRATOR_E2E_BROWSER: ${{ matrix.browser }}
+        run: mise run test:logged -- --name mobile-shell-${{ matrix.browser }} -- bunx playwright test --config e2e/playwright.config.ts e2e/MobileAppShellLayout.spec.ts --workers=1
+
+      - name: Upload browser failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mobile-shell-${{ matrix.browser }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/playwright/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   oxc:
     name: bun fmt and oxlint
     runs-on: ubuntu-latest

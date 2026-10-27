@@ -27,6 +27,61 @@ const reloadCount = (events: EngineEvent[]) =>
   events.filter((event) => event.kind === "account.reload.requested").length;
 
 describe("stored account reload admission", () => {
+  test.each(["account-updated", "stored-login"])(
+    "clears a refused API-key notice after external credential replacement via %s",
+    async (replacement) => {
+      writeFileSync(
+        join(codexHome, "auth.json"),
+        JSON.stringify({ OPENAI_API_KEY: "rejected-test-key" }),
+      );
+      const h = await harness({
+        "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
+        "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      });
+      try {
+        const { sessionId } = h.runtime.createSession({ mode: "build" });
+        await h.runtime.prompt(sessionId, {
+          prompt: "hello",
+          requestId: "refused",
+          attachments: [],
+        });
+        h.child().notify("turn/completed", {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: {
+              message: "Login refused",
+              codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+            },
+          },
+        });
+        await h.drain();
+        await waitUntil(
+          () => h.runtime.getStatus(sessionId)?.authNotice?.state === "needs-auth",
+          "notice missing",
+        );
+        await h.engine.readAccount();
+        await h.drain();
+        expect(h.engine.isAccountSignInRequired()).toBe(false);
+        expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+        expect(h.children).toHaveLength(1);
+        storeLogin();
+        if (replacement === "account-updated")
+          h.child().notify("account/updated", { authMode: "chatgpt" });
+        else await h.engine.readAccount();
+        await waitUntil(
+          () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+          "external replacement did not clear refused notice",
+        );
+        if (replacement === "stored-login") expect(h.children).toHaveLength(2);
+        expect(h.runtime.getStatus(sessionId)?.readiness).toBeUndefined();
+      } finally {
+        await h.runtime.stop();
+      }
+    },
+  );
+
   test("a stored-login replacement clears needs-auth without a login-completed event", async () => {
     let signedIn = false;
     const h = await harness({

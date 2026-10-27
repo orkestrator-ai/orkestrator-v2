@@ -166,6 +166,8 @@ export const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 export const MAX_MODEL_ID_BYTES = 1_024;
 export const MAX_MODELS = 2_000;
 export const MAX_PROMPT_JOURNAL = 256;
+/** The prompt and steer routes' bound on a request id, after trimming. */
+export const MAX_REQUEST_ID_BYTES = 512;
 export const MAX_STEER_JOURNAL = 256;
 export const MAX_STRUCTURED_RESULTS = 64;
 export const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;

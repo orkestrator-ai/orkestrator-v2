@@ -123,3 +123,13 @@ test("the build pipeline graph keeps a height of its own", () => {
   expect(reloaded.getState().pipelineGraphHeight).toBe(300);
   expect(reloaded.getState().multiReviewGraphHeight).toBeNull();
 });
+
+test("the data-saving preference is off by default and survives a reload", () => {
+  localStorage.clear();
+  const initial = createUIStore();
+  expect(initial.getState().dataSaving).toBe(false);
+  initial.getState().setDataSaving(true);
+  expect(createUIStore().getState().dataSaving).toBe(true);
+  createUIStore().getState().setDataSaving(false);
+  expect(createUIStore().getState().dataSaving).toBe(false);
+});

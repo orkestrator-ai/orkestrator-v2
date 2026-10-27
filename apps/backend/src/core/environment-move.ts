@@ -24,7 +24,6 @@ import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { pathExists, runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";
-import { tmuxManager } from "./tmux-session-manager.js";
 import { cleanupEnvironmentTmux } from "./tmux-commands.js";
 import { getWorktreeBaseDir, validateWorktreeLocation } from "./worktree-locations.js";
 
@@ -149,7 +148,9 @@ export function moveEnvironmentTask(
 }
 
 async function assertFreshAgentIdle(environmentId: string, context: CommandContext): Promise<void> {
-  if (tmuxManager.activityState(environmentId) !== "idle") throw new Error(AGENT_ACTIVE_MOVE_ERROR);
+  if (context.runtime.tmux.sessions.activityState(environmentId) !== "idle") {
+    throw new Error(AGENT_ACTIVE_MOVE_ERROR);
+  }
   await context.nativeAgents?.assertEnvironmentIdleForMove(environmentId);
 }
 

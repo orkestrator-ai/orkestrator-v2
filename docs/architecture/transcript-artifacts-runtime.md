@@ -201,7 +201,17 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   The worker gets a scrubbed environment (fixed `PATH`, nothing inherited:
   no tokens, credentials, proxies or user configuration) and a private,
   owner-only scratch directory that is its `HOME`, `TMPDIR`, XDG directories
-  and cwd; the directory is removed once the exit is verified. The watchdog
+  and cwd; the directory is removed once the exit is verified, by the job or
+  by the reaper of an unverified exit. It is named
+  `ork-artifact-preview-<backend pid>-<random>`, and startup removes those of
+  backends that have exited or whose PID has been recycled once they are an
+  hour old. Each new scratch records the backend's process start identity
+  (`/proc` start ticks plus boot ID on Linux, `ps lstart` elsewhere); a live
+  PID protects scratch only when that identity matches. If a live process
+  cannot be inspected, its recorded scratch is retained. Older scratch
+  without an identity uses a day-long limit while its PID is live, as do
+  names without a PID: a backend killed during a job, or stopped while an exit was
+  still unverified, leaves its scratch behind. The watchdog
   lives in the backend, kills the whole process tree on deadline or memory
   breach (single process over 1 GiB or tree over 4 GiB, sampled every
   500 ms), and verifies exit before freeing the slot. Network denial is
@@ -251,16 +261,39 @@ bundle, every hash-verified pinned bundle, licenses) plus the seccomp
 profile and `published-image.json`. The command (and the "Prepare isolated
 preview worker" action the artifact card and draft inspector show when
 capabilities report `interactiveIsolation: "unavailable"` and
-`workerPreparation.available`) then runs one of two fixed routes: when
-`published-image.json` records a digest it runs `docker pull --quiet
-<image>@<digest>`; otherwise `docker build --quiet --pull=false --label
-orkestrator.artifact-preview-worker=1 --tag
-orkestrator-artifact-preview-worker:1 <shipped context>` (a source checkout
-stages the context with `stage-context.ts` first). Each Docker call has a
-fixed argument vector and a 10-minute bound; output is never logged, only the
+`workerPreparation.available`) then runs one of two fixed routes. When
+`published-image.json` records a digest and its `contextDigest` equals the
+digest of the context this backend ships (a source checkout stages the
+context with `stage-context.ts` first), it runs `docker pull --quiet
+<image>@<digest>` and requires the pulled image's
+`orkestrator.artifact-preview-worker.context` label to equal that digest.
+Otherwise, or when the pull or label check fails, it runs `docker build
+--quiet --pull=false --label orkestrator.artifact-preview-worker=1 --tag
+orkestrator-artifact-preview-worker:1 <context>`, and the backend logs why the
+published image was not used (`context_mismatch`, `pull_failed` or
+`label_mismatch`). A build context is required for both routes, because a pin
+is trusted only for the context it names.
+
+The context digest (`preview-worker-context-digest.ts`, printed by
+`docker/artifact-preview-worker/context-digest.ts <dir>`) is SHA-256 over
+every regular file of the staged context in relative-path order, each framed
+as `<path>\0<length>\0<bytes>`; the seccomp profile copied beside it is
+excluded because it is passed to `docker run`, not built into the image. Any
+change to the worker bundle, a pinned renderer bundle, the Dockerfile or the
+npm lockfile changes it, so a backend never pulls a worker built from other
+sources. Staging runs from the repository root wherever it is invoked,
+because Bun writes module paths relative to the working directory into the
+bundle; the backend build, CI and a source checkout stage the same bytes.
+The backend build prints a notice when the checked-in pin is not for the
+context it ships. At startup a published image already present locally is
+preferred over the local tag only under the same condition (a packaged
+backend with a matching shipped context). Each Docker call has a fixed
+argument vector and a 10-minute bound; output is never logged, only the
 image id is read. A built id is pinned in
 `<data dir>/artifact-preview-worker/image-pin.json`, which later startups
-prefer. Afterwards isolation is re-selected without a restart: under `auto`
+prefer; that local pin is not yet checked against the shipped context, so it
+survives an upgrade
+([0385](../todo/transcripts-and-observation/0385-stale-local-preview-worker-after-upgrade.md)). Afterwards isolation is re-selected without a restart: under `auto`
 (and an explicit `container`) a new container runner with the
 content-addressed image replaces the process runner; new jobs go to it and
 the old runner closes once its admitted work drains (at most 60 s). An
@@ -269,15 +302,29 @@ explicit `process` or `disabled` setting, or an explicit
 runs at a time; its state (`idle`, `preparing`, `ready`, `failed`, method,
 content-free reason) is reported in `capabilities().workerPreparation`.
 
-Publishing (maintainer only). `docker/artifact-preview-worker/publish.sh
-<repository> [tag]` stages the same context, builds `linux/amd64` and
-`linux/arm64` with `docker buildx build --push`, reads the pushed
-manifest-list digest back with `docker buildx imagetools inspect`, and writes
-`image`, `tag`, `digest` and `publishedAt` into the checked-in
-`published-image.json`. Steps: `docker login <registry>`, run the script,
-review and commit `published-image.json`, then build the backend so packaged
-installs ship the pin. Until that happens the file holds `null`s and
-preparation builds locally. Nothing in the product pushes or logs in.
+Publishing. The `publish-preview-worker` workflow
+(`.github/workflows/publish-preview-worker.yml`) runs on every main push that
+touches the context's inputs (the worker directory, the transcript-artifact
+sources, the protocol sources, `bun.lock`, `mise.toml`) and on demand. It
+stages the context once and computes its digest; if
+`ghcr.io/orkestrator-ai/orkestrator-v2/artifact-preview-worker:ctx-<digest
+hex>` already exists nothing is rebuilt. Otherwise it builds `linux/amd64`
+and `linux/arm64` on native runners from those exact bytes, labelled with the
+context digest, pushes them by digest, joins them into one manifest list
+tagged `ctx-<hex>` and `sha-<commit>`, and attests its provenance. It then
+checks that both platforms carry the label and that the image can be pulled
+anonymously, and opens a pull request that rewrites `published-image.json`
+(`write-pin.ts`: `image`, `tag`, `digest`, `contextDigest`, `publishedAt`).
+Merging it pins packaged installs built from that context. A pin lags main by
+one pull request after each worker change; until it is merged, a release
+ships a pin for an older context, which its installs ignore and build
+locally. Two one-time maintainer steps: make the GHCR package public (a new
+package starts private, and the workflow does not propose a pin it cannot
+pull anonymously), and allow GitHub Actions to create pull requests in the
+repository settings. A pull request opened with `GITHUB_TOKEN` does not start
+CI; close and reopen it to run the checks. `docker/artifact-preview-worker/publish.sh
+<repository> [tag]` does the same by hand after `docker login` (tag defaults
+to `ctx-<hex>`). Nothing in the product pushes or logs in.
 
 Packaging. The worker image installs `playwright-core` with `npm ci` from
 `docker/artifact-preview-worker/package-lock.json` (generated with the base

@@ -5,6 +5,7 @@ import path from "node:path";
 import { openBackendDatabase } from "./storage-stores.js";
 import {
   promptQueueMessageFingerprint,
+  restoreLegacyPromptQueueClaims,
   upgradeCoordinatorStore,
   upgradeNativeAgentSessionRecords,
   upgradePromptQueueRecords,
@@ -87,6 +88,73 @@ describe("record shape upgrades", () => {
       },
     });
   });
+
+  test("restores a legacy prompt-queue claim to the head without touching its input", () => {
+    const claim = {
+      token: "t",
+      message: { id: "m1", text: "claimed" },
+      claimedAt: new Date(0).toISOString(),
+      expiresAt: new Date(1).toISOString(),
+    };
+    const unclaimed = { messages: [{ id: "m3" }], revision: 4 };
+    const stored = {
+      claimed: {
+        messages: [{ id: "m2" }, { id: "m1", text: "stale copy" }],
+        outstandingClaim: claim,
+        revision: 2,
+      },
+      noMessage: { messages: [{ id: "m2" }], outstandingClaim: { token: "t" }, revision: 3 },
+      unclaimed,
+    };
+    const before = structuredClone(stored);
+
+    expect(restoreLegacyPromptQueueClaims(stored)).toEqual({
+      claimed: { messages: [{ id: "m1", text: "claimed" }, { id: "m2" }], revision: 2 },
+      noMessage: { messages: [{ id: "m2" }], revision: 3 },
+      unclaimed,
+    });
+    expect(stored).toEqual(before);
+    expect((restoreLegacyPromptQueueClaims(stored) as typeof stored).unclaimed).toBe(unclaimed);
+    const clean = { unclaimed };
+    expect(restoreLegacyPromptQueueClaims(clean)).toBe(clean);
+    expect(restoreLegacyPromptQueueClaims("garbage")).toBe("garbage");
+  });
+
+  test("leaves a live legacy claim untouched", () => {
+    const now = Date.now();
+    const queue = {
+      messages: [{ id: "tail" }],
+      outstandingClaim: {
+        token: "holder",
+        message: { id: "head" },
+        claimedAt: new Date(now - 1000).toISOString(),
+        expiresAt: new Date(now + 300_000).toISOString(),
+      },
+    };
+    const stored = { queue };
+    expect(restoreLegacyPromptQueueClaims(stored)).toBe(stored);
+  });
+
+  test.each([undefined, "", "  ", 42])(
+    "gives a recovered claim with id %p a stable deliverable identity",
+    (id) => {
+      const message = { ...(id === undefined ? {} : { id }), text: "preserved", attachments: [] };
+      const stored = { queue: { messages: [{ id: "tail" }], outstandingClaim: { message } } };
+      const before = structuredClone(stored);
+      const expected = {
+        queue: {
+          messages: [
+            { ...message, id: `legacy-claim-${promptQueueMessageFingerprint(message)}` },
+            { id: "tail" },
+          ],
+        },
+      };
+      expect(restoreLegacyPromptQueueClaims(stored)).toEqual(expected);
+      expect(restoreLegacyPromptQueueClaims(stored)).toEqual(expected);
+      expect(restoreLegacyPromptQueueClaims(expected)).toBe(expected);
+      expect(stored).toEqual(before);
+    },
+  );
 
   test("versions legacy native sessions and keeps unreadable ones verbatim", () => {
     const upgraded = upgradeNativeAgentSessionRecords({

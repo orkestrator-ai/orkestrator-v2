@@ -1,0 +1,402 @@
+name: Publish preview worker image
+
+# Publishes the transcript-artifact preview worker image to GHCR whenever a
+# main push changes its build context, keyed by the context digest
+# (docker/artifact-preview-worker/context-digest.ts), and opens a pull request
+# that records the published manifest digest in
+# docker/artifact-preview-worker/published-image.json. Packaged backends pull
+# that exact digest only when it was built from the context they ship; any
+# other context is built locally, so a pin that lags behind main is safe.
+# See docs/architecture/transcript-artifacts-runtime.md#preview-worker.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docker/artifact-preview-worker/**"
+      - "apps/backend/src/core/transcript-artifacts/**"
+      - "apps/backend/package.json"
+      - "packages/protocol/src/**"
+      - "bun.lock"
+      - "mise.toml"
+      - ".github/workflows/publish-preview-worker.yml"
+  workflow_dispatch:
+
+# One run at a time: only the newest main context matters, and two runs must
+# not race on the same pin branch. A queued run is replaced by a newer one.
+concurrency:
+  group: publish-preview-worker
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  CONTEXT_LABEL: orkestrator.artifact-preview-worker.context
+
+jobs:
+  context:
+    name: Stage build context
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.identity.outputs.image }}
+      tag: ${{ steps.identity.outputs.tag }}
+      context-digest: ${{ steps.identity.outputs.context-digest }}
+      exists: ${{ steps.exists.outputs.exists }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Verify active Bun matches mise
+        run: test "$(bun --version)" = "$(mise current bun)"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The same staging the backend build ships in
+      # dist/artifact-runtime/worker-context/; both architectures build from
+      # these exact bytes.
+      - name: Stage the worker build context
+        run: bun docker/artifact-preview-worker/stage-context.ts "${RUNNER_TEMP}/worker-context"
+
+      - name: Compute image identity
+        id: identity
+        run: |
+          set -euo pipefail
+          context_digest="$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")"
+          [[ "$context_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}/artifact-preview-worker"
+          {
+            echo "image=${image}"
+            echo "tag=ctx-${context_digest#sha256:}"
+            echo "context-digest=${context_digest}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Qualify publishing against a disposable registry
+        env:
+          ORKESTRATOR_TEST_LIVE_WORKER_PUBLISH: "1"
+        run: mise run test:logged -- --name preview-worker-publish -- bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-worker-publish.test.ts --parallel=1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # An image for this context is never rebuilt; the pin step still runs.
+      - name: Check for an image of this context
+        id: exists
+        env:
+          IMAGE: ${{ steps.identity.outputs.image }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          if docker buildx imagetools inspect "${IMAGE}:${TAG}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the build context
+        if: steps.exists.outputs.exists != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview-worker-context
+          path: ${{ runner.temp }}/worker-context
+          if-no-files-found: error
+          retention-days: 1
+
+  context-parity:
+    name: Verify staging on ${{ matrix.runner }}
+    needs: context
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, macos-15]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Compare independently staged context with Linux CI
+        env:
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "$(mise current bun)"
+          bun docker/artifact-preview-worker/stage-context.ts "${RUNNER_TEMP}/worker-context"
+          test "$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")" = "$CONTEXT_DIGEST"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [context, context-parity]
+    if: needs.context.outputs.exists != 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Download the build context
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: preview-worker-context
+          path: ${{ runner.temp }}/worker-context
+
+      - name: Verify the context digest
+        env:
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+        run: test "$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")" = "$CONTEXT_DIGEST"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push architecture by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/worker-context
+          platforms: ${{ matrix.platform }}
+          labels: |
+            orkestrator.artifact-preview-worker=1
+            ${{ env.CONTEXT_LABEL }}=${{ needs.context.outputs.context-digest }}
+            org.opencontainers.image.title=Orkestrator artifact preview worker
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+          outputs: type=image,name=${{ needs.context.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=preview-worker-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=preview-worker-${{ matrix.name }}
+
+      - name: Export architecture digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test "${IMAGE_DIGEST#sha256:}" != "$IMAGE_DIGEST"
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload architecture digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview-worker-digest-${{ matrix.name }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish manifest and pin
+    needs: [context, context-parity, build]
+    if: always() && needs.context-parity.result == 'success' && needs.context.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download architecture digests
+        if: needs.build.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: preview-worker-digest-*
+          merge-multiple: true
+
+      - name: Create the multi-architecture manifest
+        if: needs.build.result == 'success'
+        env:
+          IMAGE: ${{ needs.context.outputs.image }}
+          TAG: ${{ needs.context.outputs.tag }}
+        run: |
+          set -euo pipefail
+          digest_refs=()
+          for digest_file in "${RUNNER_TEMP}"/digests/*; do
+            digest_refs+=("${IMAGE}@sha256:$(basename "$digest_file")")
+          done
+          test "${#digest_refs[@]}" -eq 2
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG}" \
+            --tag "${IMAGE}:sha-${GITHUB_SHA}" \
+            "${digest_refs[@]}"
+
+      # The pin names the manifest list by digest; every platform must carry
+      # the context label the backend checks after pulling.
+      - name: Resolve and verify the published digest
+        id: manifest
+        env:
+          IMAGE: ${{ needs.context.outputs.image }}
+          TAG: ${{ needs.context.outputs.tag }}
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -er '.digest')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platforms="$(docker buildx imagetools inspect "${IMAGE}@${digest}" --raw | \
+            jq -r '.manifests[] | select(.platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)"' | sort -u)"
+          grep -Fxq 'linux/amd64' <<< "$platforms"
+          grep -Fxq 'linux/arm64' <<< "$platforms"
+          for platform in linux/amd64 linux/arm64; do
+            label="$(docker buildx imagetools inspect "${IMAGE}@${digest}" --format "{{json (index .Image \"${platform}\")}}" | \
+              jq -er --arg label "$CONTEXT_LABEL" '.config.Labels[$label]')"
+            test "$label" = "$CONTEXT_DIGEST"
+          done
+          # Qualify the existing-tag route after both a fresh publish and a skip.
+          existing_digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -er '.digest')"
+          test "$existing_digest" = "$digest"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        if: needs.build.result == 'success'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ needs.context.outputs.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+
+      # Installs pull anonymously, so a pin is only proposed for an image
+      # anyone can pull. A new GHCR package starts private; make it public in
+      # the package settings once, then re-run this workflow.
+      - name: Check anonymous pull access
+        id: public
+        env:
+          REFERENCE: ${{ needs.context.outputs.image }}@${{ steps.manifest.outputs.digest }}
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+        run: |
+          set -euo pipefail
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          public=true
+          for platform in linux/amd64 linux/arm64; do
+            if ! DOCKER_CONFIG="$anonymous_config" docker pull --quiet --platform "$platform" "$REFERENCE"; then
+              public=false
+              break
+            fi
+            label="$(docker image inspect --platform "$platform" --format "{{index .Config.Labels \"${CONTEXT_LABEL}\"}}" "$REFERENCE")"
+            test "$label" = "$CONTEXT_DIGEST"
+          done
+          echo "public=${public}" >> "$GITHUB_OUTPUT"
+
+      - name: Record the published image
+        env:
+          REFERENCE: ${{ needs.context.outputs.image }}@${{ steps.manifest.outputs.digest }}
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+          PUBLIC: ${{ steps.public.outputs.public }}
+        run: |
+          {
+            echo "### Preview worker image"
+            echo
+            echo "\`${REFERENCE}\` (linux/amd64, linux/arm64)"
+            echo
+            echo "Build context \`${CONTEXT_DIGEST}\`"
+            if [[ "$PUBLIC" != "true" ]]; then
+              echo
+              echo "**Not pinned:** the package cannot be pulled anonymously. Make it public, then re-run this workflow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out repository
+        if: steps.public.outputs.public == 'true' && github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise toolchain
+        if: steps.public.outputs.public == 'true' && github.ref == 'refs/heads/main'
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      # A pull request created with GITHUB_TOKEN does not start CI; close and
+      # reopen it (or push to its branch) to run the required checks.
+      - name: Open the pin pull request
+        if: steps.public.outputs.public == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.context.outputs.image }}
+          TAG: ${{ needs.context.outputs.tag }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+        run: |
+          set -euo pipefail
+          pin=docker/artifact-preview-worker/published-image.json
+          result="$(bun docker/artifact-preview-worker/write-pin.ts "$IMAGE" "$TAG" "$DIGEST" "$CONTEXT_DIGEST")"
+          if [[ "$result" == "unchanged" ]]; then
+            echo "published-image.json already pins this image."
+            exit 0
+          fi
+          branch="preview-worker-pin/${CONTEXT_DIGEST#sha256:}"
+          branch="${branch:0:40}"
+          existing_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          if [[ -n "$existing_pr" ]]; then
+            remote_pin="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${pin}?ref=${branch}" --jq '.content' | base64 --decode)"
+            test "$(jq -r '.image' <<< "$remote_pin")" = "$IMAGE"
+            test "$(jq -r '.digest' <<< "$remote_pin")" = "$DIGEST"
+            test "$(jq -r '.contextDigest' <<< "$remote_pin")" = "$CONTEXT_DIGEST"
+            echo "Verified existing pin pull request #${existing_pr}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "$pin"
+          git commit -m "chore(artifacts): pin the published preview worker image" \
+            -m "${IMAGE}@${DIGEST}, built from context ${CONTEXT_DIGEST} at ${GITHUB_SHA}."
+          git push --force origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore(artifacts): pin the published preview worker image" \
+            --body "Records \`${IMAGE}@${DIGEST}\` (linux/amd64, linux/arm64), built from build context \`${CONTEXT_DIGEST}\` at ${GITHUB_SHA}, in \`${pin}\`. Packaged backends whose shipped worker context has this digest pull the image instead of building it. Opened by the publish-preview-worker workflow; close and reopen to run CI."
+          gh pr view "$branch" --json headRefOid --jq '.headRefOid' > "${RUNNER_TEMP}/pin-pr-head"
+          test "$(cat "${RUNNER_TEMP}/pin-pr-head")" = "$(git rev-parse HEAD)"
+          remote_pin="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${pin}?ref=${branch}" --jq '.content' | base64 --decode)"
+          diff -u "$pin" <(printf '%s\n' "$remote_pin")

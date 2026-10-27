@@ -362,12 +362,6 @@ export interface PersistedPromptQueue<T = unknown> {
     message: string;
     failedAt: string;
   };
-  outstandingClaim?: {
-    token: string;
-    message: T;
-    claimedAt: string;
-    expiresAt: string;
-  };
   updatedAt: string;
   revision: number;
 }

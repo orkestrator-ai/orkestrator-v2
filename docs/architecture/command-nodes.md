@@ -360,6 +360,18 @@ A command node attached to another command node operates in leaf mode:
   half-open route never errors on its own), and every connected node is
   re-read every 60 s by the named `node-summary-reconcile` activity due job as a last resort; a re-read that finds nothing new
   announces nothing.
+- Summaries carry what the project search matches on, bounded and
+  additive: a project's `repositoryHint`, its checkout directory's last
+  segment (`pathName`, at most 128 characters, never the path) and its
+  configured `defaultBranch`; an environment's branch, type, worktree
+  directory name (`worktreeName`) and `createdAt`. The command node asks a
+  node for default branches with `get_projects { includeDefaultBranch: true }`
+  (never combined with a conditional read, since config changes do not move
+  the project manifest). A node older than that ignores the argument and sends
+  none; its rows match on what is present and "primary" falls back to `main`.
+  Config resource changes trigger a summary re-read, so changed default branches
+  appear without waiting for the next reconcile. The 60 s reconcile remains a
+  fallback for missed events or changes made without an event.
 - Every resource is node-qualified (`{ nodeId, projectId }`,
   `{ nodeId, environmentId }`), so identical IDs on two nodes never collide.
   Commands from the portal carry the node reference and the command node
@@ -602,7 +614,9 @@ remain and use the same paths.
   `request_project_on_node` (with an optional location and suggested files)
   creates a request the user reviews in the same copy dialog, where the
   location and files are settled before approving; the outcome wakes the
-  coordinator.
+  coordinator. `request_root_changes` uses the same request flow (kind
+  `apply-root-changes`) for a worker on the coordinator's own node; see
+  [coordinator.md](coordinator.md#worker-surfaces).
 - Creating an environment on a leaf follows the same rules as creating a
   local environment today: a worktree (or container) is made from the
   project, then the project's `.env` files and other files selected in the

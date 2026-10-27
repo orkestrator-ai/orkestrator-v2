@@ -20,8 +20,8 @@ beforeEach(() => {
   fixture = createFixture({ env: { XDG_CONFIG_HOME: undefined } });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 describe("provider adapters", () => {
@@ -103,7 +103,7 @@ describe("provider adapters", () => {
 
   test("Codex: names outside Codex's grammar are refused and CODEX_HOME is honoured", async () => {
     const custom = `${fixture.root}/custom-codex`;
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { CODEX_HOME: custom } });
     const targetId = await targetIdFor(fixture, "codex", "backend");
     const snapshot = await fixture.service.snapshot({ targetId });
@@ -260,7 +260,7 @@ describe("provider adapters", () => {
 
   test("OpenCode: XDG_CONFIG_HOME relocates the user file", async () => {
     const custom = mkdtempSync(path.join(tmpdir(), "mcp-xdg-"));
-    fixture.cleanup();
+    await fixture.cleanup();
     fixture = createFixture({ env: { XDG_CONFIG_HOME: custom } });
     const read = () =>
       JSON.parse(readFileSync(path.join(custom, "opencode", "opencode.json"), "utf8"));

@@ -1,7 +1,7 @@
 # Keyboard shortcuts: Monaco startup under parallel browser load
 
 - **ID:** 0792
-- **Status:** open
+- **Status:** resolved
 - **Date:** 2026-10-25
 - **Owner:** `e2e/KeyboardShortcuts.spec.ts`, `Meta shortcut wins over Monaco Delete Line`.
 - **Revision:** `9ebb6ee6f`.
@@ -23,3 +23,10 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
 - **Disposition:** open.
 - **Evidence:** the initial observation and the resume-cleanup recurrence above both missed the mobile Monaco textbox startup deadline, then passed in complete unchanged one-worker owner reruns. The only later change to the spec (#1240, 2a06be4a6) waits for the terminal textarea in two other tests, not for Monaco.
 - **Next step:** check a failure trace for whether Monaco's lazy chunk was still loading; if so, wait for the editor with the longer startup budget the suite uses elsewhere.
+
+## Keyboard shortcuts menu branch — 2026-10-27
+
+- **Recurrence:** the branch `keyboard-shortcuts-8ea8474c65c7-r1` verification ran `e2e/KeyboardShortcuts.spec.ts` beside other suites and again missed the mobile Monaco `Editor content` textbox at the five-second `toBeAttached` deadline; the same case failed on an `origin/main` comparison run. Every other shortcut case passed with one worker.
+- **Owner reruns:** `bunx playwright test --config e2e/playwright.config.ts e2e/KeyboardShortcuts.spec.ts --repeat-each=3` passed 102/102 (nine workers, 1.0 min). `... e2e/KeyboardShortcuts.spec.ts e2e/MonacoRuntime.spec.ts --project=mobile-chromium --repeat-each=8 --workers=16` passed 136, skipped 8 (1.4 min).
+- **Fix:** every recorded failure happened before the shortcut was pressed, while Monaco's lazy chunk was still loading. The editor-startup wait now has a 30-second budget, like other startup waits in `e2e/`. The shortcut, Delete Line, focus-return and typing assertions keep the default deadline, so a shortcut regression still fails quickly.
+- **Disposition:** resolved by the startup budget. Reopen this case if the failure comes back after the editor is attached.

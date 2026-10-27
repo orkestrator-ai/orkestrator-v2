@@ -54,6 +54,7 @@ async function withProjection(
     host: NativeAgentTranscriptProjectionHost;
   }) => Promise<void>,
   projectionIdentity: NativeAgentProjectionInput = identity,
+  options: NativeAgentTranscriptProjectionHost["options"] = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-transcript-projection-"));
   const storage = await createStorage(dataDir);
@@ -77,7 +78,7 @@ async function withProjection(
   });
   const host: NativeAgentTranscriptProjectionHost = {
     storage,
-    options: {},
+    options,
     catalogs,
     observedActivity: () => undefined,
     providerGeneration: () => "generation-1",
@@ -110,6 +111,58 @@ async function withProjection(
 }
 
 describe("NativeAgentTranscriptProjection", () => {
+  test.each([undefined, "sync-v1"] as const)(
+    "a late generated title cannot change a replacement conversation's cached title or revision (%s)",
+    async (representation) => {
+      const readIdentity = { ...identity, ...(representation ? { representation } : {}) };
+      let resolveTitle!: (value: { title: string; strategy: "codex" }) => void;
+      const generated = new Promise<{ title: string; strategy: "codex" }>((resolve) => {
+        resolveTitle = resolve;
+      });
+      const generate = mock(() => generated);
+      const stub = createProviderStub("opencode", {
+        interactiveSnapshot: async (sessionId) => ({
+          status: "idle",
+          ...(sessionId === "replacement-session" ? { title: "Replacement title" } : {}),
+          messages: [{ ...textMessage("u1", "Original request"), role: "user" }],
+        }),
+      });
+      await withProjection(
+        stub.provider,
+        async ({ projection, storage }) => {
+          try {
+            await projection.refreshProjection(readIdentity, true);
+            expect(generate).toHaveBeenCalledTimes(1);
+            await storage.adoptNativeAgentSession({
+              key: sessionKey,
+              ...identity,
+              providerSessionId: "replacement-session",
+              expectedProviderSessionId: "provider-session",
+            });
+            const replacement = await projection.refreshProjection(readIdentity, true);
+            expect(replacement?.sessionId).toBe("replacement-session");
+            const revision = replacement?.revision;
+            const title = replacement?.title;
+            resolveTitle({ title: "Stale generated title", strategy: "codex" });
+            await Promise.allSettled(projection.pendingRefreshes());
+            const cached = projection.cachedProjectionSnapshot(
+              identity.environmentId,
+              identity.agent,
+              identity.logicalSessionKey,
+            );
+            expect(cached?.sessionId).toBe("replacement-session");
+            expect(cached?.title).toBe(title);
+            expect(cached?.revision).toBe(revision);
+          } finally {
+            resolveTitle({ title: "Stale generated title", strategy: "codex" });
+          }
+        },
+        identity,
+        { sessionTitles: { generate, shutdown: async () => {} } },
+      );
+    },
+  );
+
   test("defers a replayed Claude user image and resolves its original bytes", async () => {
     const claudeIdentity = { ...identity, agent: "claude" as const };
     const fileUrl = "data:image/png;base64,iVBORw0KGgo=";

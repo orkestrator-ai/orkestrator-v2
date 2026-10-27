@@ -246,7 +246,7 @@ export class NodeReadModel {
   noteLocalEvent(event: string, payload: unknown): void {
     if (event === RESOURCE_CHANGED_EVENT) {
       const resource = (payload as { resource?: unknown } | null)?.resource;
-      if (resource !== "project" && resource !== "environment") return;
+      if (resource !== "project" && resource !== "environment" && resource !== "config") return;
     } else if (event !== BACKEND_PROFILE_CHANGED_EVENT) {
       return;
     }
@@ -442,7 +442,8 @@ export class NodeReadModel {
         return;
       }
     }
-    if (change.resource === "project") {
+    // Repository config owns defaultBranch without advancing the project manifest.
+    if (change.resource === "project" || change.resource === "config") {
       void this.requestHydrate(nodeId);
     } else if (change.resource === "environment") {
       const projectId =
@@ -692,7 +693,9 @@ async function readProjects(
   nodeId: BackendId,
   invoke: SummaryInvoke,
 ): Promise<{ projects: NodeProjectSummary[]; truncated: boolean }> {
-  const raw = await invoke<unknown>("get_projects");
+  // A node older than `includeDefaultBranch` ignores it and sends none; the
+  // search then falls back to "main", as it does for an unconfigured project.
+  const raw = await invoke<unknown>("get_projects", { includeDefaultBranch: true });
   const list = Array.isArray(raw) ? raw : [];
   const projects = list
     .slice(0, MAX_SUMMARY_PROJECTS)

@@ -23,6 +23,7 @@ export interface InitializeBrowserPreviewsOptions {
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
+  toggleKeyboardShortcuts: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
   transport?: BrowserPreviewManagerOptions["transport"];
   openServiceExternally?: BrowserPreviewManagerOptions["openServiceExternally"];
@@ -91,6 +92,7 @@ export function initializeBrowserPreviews({
   openExternal,
   writeClipboardText,
   focusAddressBar,
+  toggleKeyboardShortcuts,
   getAuthorization,
   transport,
   openServiceExternally,
@@ -109,6 +111,7 @@ export function initializeBrowserPreviews({
     openExternal,
     writeClipboardText,
     focusAddressBar,
+    toggleKeyboardShortcuts,
     ...(transport ? { transport } : {}),
     ...(openServiceExternally ? { openServiceExternally } : {}),
     ...(captureStore ? { captureStore } : {}),

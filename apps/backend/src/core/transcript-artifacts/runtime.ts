@@ -48,15 +48,18 @@ import { normalizeApplicationOrigins } from "./content-server.js";
 import { DESKTOP_ARTIFACT_SHELL_ORIGIN, normalizeFrameAncestors } from "./interactive-csp.js";
 import { TranscriptInteractivePreparer } from "./interactive-prepare.js";
 import { TranscriptPreviewRunner, type PreviewRunnerOptions } from "./preview-runner.js";
+import { WORKER_CONTEXT_LABEL } from "./preview-worker-context-digest.js";
 import {
   previewContainerOwner,
   reapOrphanPreviewContainers,
   runDocker,
+  sweepStalePreviewScratch,
 } from "./preview-supervisor.js";
 import {
   canPrepareWorker,
   localWorkerPinFile,
   prepareWorkerImage,
+  publishedMatchesBuildContext,
   readPublishedWorkerImage,
   resolvePublishedPinFile,
   resolveWorkerBuildContext,
@@ -401,7 +404,9 @@ export async function createTranscriptArtifactRuntime(
     ).catch(() => ({ code: null, stdout: "" }));
 
   // A published, digest-pinned worker that is present locally is preferred
-  // over the local tag; an explicit ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins.
+  // over the local tag when it was built from this backend's shipped or staged context
+  // (a pin left over from another context is ignored); an explicit
+  // ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins.
   let configuredImage = explicitImage ?? DEFAULT_PREVIEW_WORKER_IMAGE;
   let dockerAnswered: boolean | null = null;
   if (
@@ -412,7 +417,21 @@ export async function createTranscriptArtifactRuntime(
   ) {
     const present = await inspectImage(published.reference);
     dockerAnswered = present.code !== null;
-    if (present.code === 0) configuredImage = published.reference;
+    if (present.code === 0 && (await publishedMatchesBuildContext(published, buildContext))) {
+      const label = await runDocker(
+        docker,
+        [
+          "image",
+          "inspect",
+          "--format",
+          `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`,
+          published.reference,
+        ],
+        AUTO_DETECT_TIMEOUT_MS,
+      ).catch(() => ({ code: null, stdout: "" }));
+      if (label.code === 0 && label.stdout.trim() === published.contextDigest)
+        configuredImage = published.reference;
+    }
   }
 
   let isolation: "process" | "container" | "disabled";
@@ -488,6 +507,12 @@ export async function createTranscriptArtifactRuntime(
     workerImage = { reference: image.reference, pinned: image.pinned };
     runner = containerRunner(workerImage);
   } else {
+    // Startup recovery: a crash can leave this backend's worker scratch behind.
+    const swept = await sweepStalePreviewScratch();
+    if (swept.length > 0)
+      options.logger?.warn(
+        `[transcript-artifacts] removed ${swept.length} stale preview scratch director${swept.length === 1 ? "y" : "ies"}`,
+      );
     runner = new TranscriptPreviewRunner({
       isolation: "process",
       isolationSelection,
@@ -537,7 +562,7 @@ export async function createTranscriptArtifactRuntime(
         reason:
           "ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE names the worker image; prepare it with Docker directly",
       };
-    if (!canPrepareWorker({ published, buildContext }))
+    if (!canPrepareWorker({ buildContext }))
       return {
         available: false,
         reason: "No preview worker build context ships with this installation",
@@ -612,6 +637,10 @@ export async function createTranscriptArtifactRuntime(
       ...(options.prepareDocker ? { runDocker: options.prepareDocker } : {}),
     });
     const finishedAt = new Date().toISOString();
+    if (outcome.publishedSkipped)
+      options.logger?.info?.(
+        `[transcript-artifacts] published preview worker image not used (${outcome.publishedSkipped}); building locally`,
+      );
     if (!outcome.ok) {
       preparationState = {
         available: true,

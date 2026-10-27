@@ -70,7 +70,7 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
   let settledProvisionalTask = false;
   for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
     if (outcome.launch) {
-      recordBackgroundTaskLaunch(session, outcome.launch, turn.queryIteratorControl!);
+      recordBackgroundTaskLaunch(session, outcome.launch, turn.runtime);
       continue;
     }
     if (outcome.retainCandidate) continue;

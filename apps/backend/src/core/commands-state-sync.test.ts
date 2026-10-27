@@ -30,7 +30,6 @@ import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
-import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub } from "./native-agent-service-projection-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -52,7 +51,6 @@ async function withCommands<T>(
     context: CommandContext,
   ) => Promise<T>,
   options: {
-    claudeStatePolls?: ClaudeStatePollManager;
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
     loopedReviews?: CommandContext["loopedReviews"];
@@ -85,7 +83,6 @@ async function withCommands<T>(
     ...options.environment,
   } as Parameters<StorageService["addEnvironment"]>[0]);
   const commands = createCommandRegistry({
-    claudeStatePolls: options.claudeStatePolls,
     tabTeardown: options.tabTeardown,
     modelCatalogRefresh: options.modelCatalogRefresh,
   });
@@ -112,6 +109,8 @@ async function withCommands<T>(
     return await run(invoke, storage, dataDir, commands, context);
   } finally {
     context.runtime.shutdown();
+    // Closing a terminal disposes its history without awaiting the writes.
+    await context.runtime.terminals.history.settled();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }

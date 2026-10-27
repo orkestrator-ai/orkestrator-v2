@@ -3,9 +3,15 @@
   "agentGuidance": false,
   "cacheMaxAge": "7d",
   "cacheMaxSize": "10GB",
+  "globalPassThroughEnv": ["TMPDIR"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "@orkestrator/backend#build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docker/artifact-preview-worker/**"],
       "outputs": ["dist/**"]
     },
     "typecheck": {

@@ -899,6 +899,203 @@ describe("read coordinator: quiet backoff policy hook", () => {
   });
 });
 
+describe("read coordinator: quiet backoff restarts on return", () => {
+  test("returning after a missed base period reads at once and restarts the backoff", async () => {
+    const { clock, document, coordinator } = setup();
+    const starts: number[] = [];
+    coordinator.subscribe({
+      key: key(),
+      read: async () => {
+        starts.push(clock.now());
+      },
+      readOnSubscribe: false,
+      demand: { intervalMs: 1_000, priority: "critical", quietBackoffMs: [3_000, 5_000, 10_000] },
+    });
+    await clock.advance(11_000);
+    expect(starts).toEqual([1_000, 4_000, 9_000]);
+    document.setVisibility("hidden");
+    await clock.advance(500);
+    document.setVisibility("visible");
+    await clock.advance(READ_RESUME_COALESCE_MS);
+    // Backed off, the next read was due at 19 s; the base cadence is overdue.
+    expect(starts).toEqual([1_000, 4_000, 9_000, 11_550]);
+    await clock.advance(1_000);
+    expect(starts).toEqual([1_000, 4_000, 9_000, 11_550, 12_550]);
+  });
+
+  test("focus inside the base period does not read but restores the base cadence", async () => {
+    const { clock, window, coordinator } = setup();
+    const starts: number[] = [];
+    coordinator.subscribe({
+      key: key(),
+      read: async () => {
+        starts.push(clock.now());
+      },
+      readOnSubscribe: false,
+      demand: { intervalMs: 1_000, quietBackoffMs: [3_000, 5_000] },
+    });
+    await clock.advance(4_500);
+    expect(starts).toEqual([1_000, 4_000]);
+    window.dispatch("focus");
+    await clock.advance(READ_RESUME_COALESCE_MS);
+    expect(starts).toEqual([1_000, 4_000]);
+    // On the grid of the last read, not the 9 s the backoff had scheduled.
+    await clock.advance(450);
+    expect(starts).toEqual([1_000, 4_000, 5_000]);
+  });
+});
+
+describe("read coordinator: data saving", () => {
+  test("uses each subscriber's variant and switching re-establishes the cadence", async () => {
+    const { clock, coordinator } = setup();
+    const starts: number[] = [];
+    coordinator.subscribe({
+      key: key(),
+      read: async () => {
+        starts.push(clock.now());
+      },
+      readOnSubscribe: false,
+      demand: { intervalMs: 500, priority: "critical", dataSaving: { intervalMs: 1_000 } },
+    });
+    await clock.advance(1_000);
+    expect(starts).toEqual([500, 1_000]);
+    expect(coordinator.getDiagnostics().dataSaving).toBe(false);
+
+    coordinator.setDataSaving(true);
+    expect(coordinator.getDiagnostics()).toMatchObject({
+      dataSaving: true,
+      entries: [{ cadenceMs: 1_000 }],
+    });
+    // Switching never reads by itself.
+    await clock.advance(999);
+    expect(starts).toEqual([500, 1_000]);
+    await clock.advance(2_001);
+    expect(starts).toEqual([500, 1_000, 2_000, 3_000, 4_000]);
+
+    coordinator.setDataSaving(false);
+    await clock.advance(1_000);
+    expect(starts).toEqual([500, 1_000, 2_000, 3_000, 4_000, 4_500, 5_000]);
+  });
+
+  test("a subscriber that gives no variant keeps its cadence and the fastest demand still wins", async () => {
+    const { clock, coordinator } = setup();
+    const starts: number[] = [];
+    const read = async () => {
+      starts.push(clock.now());
+    };
+    coordinator.setDataSaving(true);
+    coordinator.subscribe({
+      key: key(),
+      read,
+      readOnSubscribe: false,
+      demand: { intervalMs: 500, dataSaving: { intervalMs: 1_000 } },
+    });
+    expect(coordinator.getDiagnostics().entries[0]!.cadenceMs).toBe(1_000);
+    coordinator.subscribe({
+      key: key(),
+      read,
+      readOnSubscribe: false,
+      demand: { intervalMs: 800 },
+    });
+    expect(coordinator.getDiagnostics().entries[0]!.cadenceMs).toBe(800);
+    coordinator.subscribe({
+      key: key({ target: "env-2" }),
+      read,
+      readOnSubscribe: false,
+      demand: { intervalMs: 5_000 },
+    });
+    expect(coordinator.getDiagnostics().entries[1]!.cadenceMs).toBe(5_000);
+  });
+
+  test("a quiet backoff variant applies only with data saving and noteActivity restores the base", async () => {
+    const { clock, coordinator } = setup();
+    const starts: number[] = [];
+    const sub = coordinator.subscribe({
+      key: key(),
+      read: async () => {
+        starts.push(clock.now());
+      },
+      readOnSubscribe: false,
+      demand: { intervalMs: 1_000, dataSaving: { quietBackoffMs: [3_000, 5_000] } },
+    });
+    await clock.advance(3_000);
+    expect(starts).toEqual([1_000, 2_000, 3_000]);
+
+    coordinator.setDataSaving(true);
+    await clock.advance(9_000);
+    // Grid restarts at 3 s: 4 s, then 3 s and 5 s steps.
+    expect(starts).toEqual([1_000, 2_000, 3_000, 4_000, 7_000, 12_000]);
+
+    await clock.advance(1_000);
+    sub.noteActivity();
+    // Restores the base cadence without reading.
+    expect(starts).toEqual([1_000, 2_000, 3_000, 4_000, 7_000, 12_000]);
+    await clock.advance(1_000);
+    expect(starts).toEqual([1_000, 2_000, 3_000, 4_000, 7_000, 12_000, 14_000]);
+  });
+
+  test("invalidations and explicit refreshes are never slowed", async () => {
+    const { clock, coordinator } = setup();
+    const starts: Array<[number, string]> = [];
+    coordinator.setDataSaving(true);
+    const sub = coordinator.subscribe({
+      key: key(),
+      read: async (context) => {
+        starts.push([clock.now(), context.reason]);
+      },
+      readOnSubscribe: false,
+      demand: {
+        intervalMs: 500,
+        priority: "critical",
+        dataSaving: { intervalMs: 1_000, quietBackoffMs: [5_000, 15_000] },
+      },
+    });
+    await clock.advance(6_100);
+    expect(starts).toEqual([
+      [1_000, "interval"],
+      [6_000, "interval"],
+    ]);
+    sub.invalidate();
+    await flush();
+    expect(starts.at(-1)).toEqual([6_100, "invalidate"]);
+    await clock.advance(50);
+    await sub.refresh();
+    expect(starts.at(-1)).toEqual([6_150, "explicit"]);
+    // The invalidation restarted the backoff at the data-saving base interval.
+    await clock.advance(1_000);
+    expect(starts.at(-1)).toEqual([7_100, "interval"]);
+  });
+
+  test("two coordinators (two clients) keep their own cadence", async () => {
+    const saving = setup();
+    const normal = setup();
+    const demand = { intervalMs: 500, dataSaving: { intervalMs: 1_000 } };
+    const savingStarts: number[] = [];
+    const normalStarts: number[] = [];
+    saving.coordinator.setDataSaving(true);
+    saving.coordinator.subscribe({
+      key: key(),
+      read: async () => {
+        savingStarts.push(saving.clock.now());
+      },
+      readOnSubscribe: false,
+      demand,
+    });
+    normal.coordinator.subscribe({
+      key: key(),
+      read: async () => {
+        normalStarts.push(normal.clock.now());
+      },
+      readOnSubscribe: false,
+      demand,
+    });
+    await saving.clock.advance(2_000);
+    await normal.clock.advance(2_000);
+    expect(savingStarts).toEqual([1_000, 2_000]);
+    expect(normalStarts).toEqual([500, 1_000, 1_500, 2_000]);
+  });
+});
+
 describe("shared coordinator", () => {
   test("transport reconnects reach the shared instance without creating one", () => {
     let notified = 0;

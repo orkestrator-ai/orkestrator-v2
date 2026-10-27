@@ -24,8 +24,8 @@ beforeEach(() => {
   fixture = createFixture({ env: {} });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 /** Every session gets Orkestrator's own server, which takes one of the bridge's slots. */

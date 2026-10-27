@@ -1,0 +1,13 @@
+{
+  "type": "session_meta",
+  "payload": {
+    "id": "fixture-thread",
+    "cli_version": "0.164.0",
+    "history_mode": "paginated",
+    "history_base": {
+      "thread_id": "fixture-thread",
+      "end_ordinal_exclusive": 17,
+      "end_byte_offset": 47482
+    }
+  }
+}

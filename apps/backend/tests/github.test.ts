@@ -16,9 +16,12 @@ import {
   updateGitHubIssueStatus,
   type GitHubLabel,
 } from "../src/core/github";
+import { IntegrationLocks } from "../src/core/integration-locks";
 
 const token = "github_pat_super_secret";
 const repository = { owner: "octo-org", name: "octo-repo" };
+/** One backend's locks, shared by the file as the process-wide maps were. */
+const locks = new IntegrationLocks();
 
 function jsonResponse(
   payload: unknown,
@@ -157,8 +160,8 @@ describe("GitHub issue workflow API", () => {
       throw new Error(`Unexpected request ${init?.method ?? "GET"} ${url.pathname}`);
     });
 
-    await ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
-    await ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
+    await ensureGitHubWorkflowLabels(locks, token, repository, asFetch(fetchMock));
+    await ensureGitHubWorkflowLabels(locks, token, repository, asFetch(fetchMock));
 
     expect(posts).toEqual(["ork:todo", "ork:inprogress", "ork:review"]);
   });
@@ -187,7 +190,7 @@ describe("GitHub issue workflow API", () => {
       return jsonResponse({ message: "Not Found" }, { status: 404 });
     });
 
-    await ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
+    await ensureGitHubWorkflowLabels(locks, token, repository, asFetch(fetchMock));
     expect(createAttempts).toBe(3);
     expect(labels).toEqual(new Set(Object.values(GITHUB_STATUS_LABELS)));
   });
@@ -228,7 +231,7 @@ describe("GitHub issue workflow API", () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
-    const result = await listGitHubIssues(token, repository, asFetch(fetchMock));
+    const result = await listGitHubIssues(locks, token, repository, asFetch(fetchMock));
 
     expect(result.repository.fullName).toBe("octo-org/octo-repo");
     expect(result.viewer.login).toBe("viewer");
@@ -261,7 +264,14 @@ describe("GitHub issue workflow API", () => {
       return jsonResponse(apiIssue(7, { labels: [...labels].map((name) => apiLabel(name)) }));
     });
 
-    const issue = await updateGitHubIssueStatus(token, repository, 7, "review", asFetch(fetchMock));
+    const issue = await updateGitHubIssueStatus(
+      locks,
+      token,
+      repository,
+      7,
+      "review",
+      asFetch(fetchMock),
+    );
     expect(issue.status).toBe("review");
     expect(issue.labels.map((label) => label.name)).toEqual(["bug", "ork:review", "automation"]);
   });
@@ -278,7 +288,7 @@ describe("GitHub issue workflow API", () => {
       return jsonResponse(apiIssue(8, { labels: [...labels].map((name) => apiLabel(name)) }));
     });
     await expect(
-      updateGitHubIssueStatus(token, repository, 8, "backlog", asFetch(fetchMock)),
+      updateGitHubIssueStatus(locks, token, repository, 8, "backlog", asFetch(fetchMock)),
     ).resolves.toMatchObject({ status: "backlog" });
   });
 
@@ -295,8 +305,8 @@ describe("GitHub issue workflow API", () => {
     });
 
     const [first, second] = await Promise.allSettled([
-      updateGitHubIssueStatus(token, repository, 8, "review", asFetch(fetchMock)),
-      updateGitHubIssueStatus(token, repository, 8, "todo", asFetch(fetchMock)),
+      updateGitHubIssueStatus(locks, token, repository, 8, "review", asFetch(fetchMock)),
+      updateGitHubIssueStatus(locks, token, repository, 8, "todo", asFetch(fetchMock)),
     ]);
 
     expect(first.status).toBe("rejected");
@@ -521,7 +531,7 @@ describe("GitHub error handling", () => {
     );
 
     try {
-      const stalled = ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock));
+      const stalled = ensureGitHubWorkflowLabels(locks, token, repository, asFetch(fetchMock));
       await Promise.resolve();
       expect(timeoutDurations).toEqual([30_000]);
       timeoutControllers[0]?.abort(new DOMException(`timed out with ${token}`, "TimeoutError"));
@@ -533,7 +543,7 @@ describe("GitHub error handling", () => {
       );
 
       await expect(
-        ensureGitHubWorkflowLabels(token, repository, asFetch(fetchMock)),
+        ensureGitHubWorkflowLabels(locks, token, repository, asFetch(fetchMock)),
       ).resolves.toBeUndefined();
       expect(requests).toBe(2);
     } finally {
@@ -555,7 +565,7 @@ describe("GitHub error handling", () => {
       updateGitHubIssue(token, repository, 1, { title: " ", body: "" }, asFetch(unused)),
     ).rejects.toThrow("title cannot be empty");
     await expect(
-      updateGitHubIssueStatus(token, repository, 1, "invalid" as never, asFetch(unused)),
+      updateGitHubIssueStatus(locks, token, repository, 1, "invalid" as never, asFetch(unused)),
     ).rejects.toThrow("Unknown");
     expect(unused).not.toHaveBeenCalled();
   });

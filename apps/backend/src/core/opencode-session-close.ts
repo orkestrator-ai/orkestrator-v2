@@ -15,60 +15,72 @@ import type { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-br
  *    longer has, so the close is already done (same as tab teardown).
  * 2. Restore temporary reviewer permissions even when no workflow turn was
  *    left unsettled.
- * 3. Reject every permission and question still pending for this session.
- *    Neither the pinned SDK (1.19.0: abort returns a boolean) nor the server
- *    docs promise that abort withdraws them, so close fails closed: a request
- *    answered after the close would be answering for a tab that is gone. A
- *    read or rejection failure rejects the close so the durable intent stays;
- *    a 404 on a rejection means it was answered or withdrawn meanwhile.
+ * 3. Reject every permission and question still pending for this session
+ *    (`rejectPendingOpenCodeRequests`). A read or rejection failure rejects
+ *    the close so the durable intent stays.
  *
- * The caller forgets its own registration afterwards.
+ * All three steps share the dispatch lock in the broker. The caller forgets
+ * its own registration afterwards.
  */
 export async function closeOpenCodeSessionRetaining(
-  client: OpencodeClient,
-  directory: string | undefined,
   sessionId: string,
   steps: {
     broker: Pick<OpenCodeWorkflowResultBroker, "abort">;
     endTurn: () => void;
     restoreReviewer: () => Promise<unknown>;
-    requestOptions: () => { signal: AbortSignal };
   },
 ): Promise<void> {
-  const aborted = await steps.broker.abort(sessionId, steps.endTurn, steps.restoreReviewer, {
+  await steps.broker.abort(sessionId, steps.endTurn, steps.restoreReviewer, {
     missingIsGone: true,
+    restoreReviewerWithoutTurn: true,
   });
-  if (aborted === "missing") return;
-  await steps.restoreReviewer();
+}
+
+/**
+ * Reject every permission and question still pending for one session, after
+ * its turn was stopped by an explicit abort, a retry-action abort, or a close.
+ * Neither the SDK (abort returns a boolean) nor the server docs promise that
+ * an abort withdraws them, so all stop paths fail closed: a request answered after its turn was
+ * stopped would grant something to a turn nobody is running any more. A read
+ * or rejection failure is a `ProviderUnavailableError`; a 404 on a rejection
+ * means the request was answered or withdrawn meanwhile.
+ */
+export async function rejectPendingOpenCodeRequests(
+  client: OpencodeClient,
+  directory: string | undefined,
+  sessionId: string,
+  reason: "abort" | "close",
+  requestOptions: () => { signal: AbortSignal },
+): Promise<void> {
   try {
-    const closing = new Set([sessionId]);
+    const stopped = new Set([sessionId]);
     const [permissions, questions] = await Promise.all([
-      client.permission.list({ directory }, steps.requestOptions()),
-      client.question.list({ directory }, steps.requestOptions()),
+      client.permission.list({ directory }, requestOptions()),
+      client.question.list({ directory }, requestOptions()),
     ]);
     assertSdkResponse(permissions, "OpenCode pending permission read");
     assertSdkResponse(questions, "OpenCode pending question read");
     const pendingIds = (value: unknown, operation: string): string[] =>
-      boundedOwnedOpenCodeCollection(value, closing, operation).flatMap((entry) => {
+      boundedOwnedOpenCodeCollection(value, stopped, operation).flatMap((entry) => {
         const id = asRecord(entry)?.id;
         return typeof id === "string" ? [id] : [];
       });
     for (const requestId of pendingIds(permissions.data, "OpenCode pending permission read")) {
       const response = await client.permission.reply(
         { requestID: requestId, directory, reply: "reject" },
-        steps.requestOptions(),
+        requestOptions(),
       );
       if (response.response?.status !== 404) {
-        assertSdkResponse(response, "OpenCode permission rejection on close");
+        assertSdkResponse(response, `OpenCode permission rejection on ${reason}`);
       }
     }
     for (const requestId of pendingIds(questions.data, "OpenCode pending question read")) {
       const response = await client.question.reject(
         { requestID: requestId, directory },
-        steps.requestOptions(),
+        requestOptions(),
       );
       if (response.response?.status !== 404) {
-        assertSdkResponse(response, "OpenCode question rejection on close");
+        assertSdkResponse(response, `OpenCode question rejection on ${reason}`);
       }
     }
   } catch (error) {

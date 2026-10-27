@@ -74,8 +74,7 @@ export class BuildPipelineRecovery {
    * The corrected report is a new turn under a new structured request id, so it
    * goes out through the same durable attempt every other prompt uses: a
    * dispatch whose response is lost is retried under that id rather than
-   * delivered twice. The session's validation baseline is untouched, so the
-   * repair turn is certified against the same worktree state the review was.
+   * delivered twice. The repair keeps the same immutable review package.
    */
   async repairStructuredReport(
     pipeline: BuildPipeline,
@@ -109,6 +108,7 @@ export class BuildPipelineRecovery {
     // the corrected result instead of re-reading the one already refused.
     pipeline.structuredReviewRequestId = requestId;
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: randomUUID(),
       sessionId: session.sdkSessionId,
       requestId,
@@ -149,7 +149,17 @@ export class BuildPipelineRecovery {
       resolvedRequestId,
     );
     if (!result) {
-      await this.awaitStructuredResult(pipeline, provider, session, "verification");
+      try {
+        await this.awaitStructuredResult(pipeline, provider, session, "verification");
+      } catch (error) {
+        // A verdict the worktree check kept refusing never arrives. Name the
+        // repairable change that blocked it. An unavailable comparison must
+        // preserve the original missing-result, save or reminder failure.
+        await this.stageSupervisor.assertValidationWorktreeUnchanged(pipeline, session, {
+          repairableOnly: true,
+        });
+        throw error;
+      }
       return;
     }
     await this.stageSupervisor.assertValidationWorktreeUnchanged(pipeline, session);

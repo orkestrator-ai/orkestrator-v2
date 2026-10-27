@@ -280,3 +280,14 @@ The unchanged owning file then passed `mise run test:logged -- --name merge-clea
 - Reopened: the 2026-10-20 fix removed one cause, but the case still misses
   its hook deadline in a loaded aggregate. Cause not established. See
   [1101](../aggregate-validation-runs/1101-codex-typed-prompts-0211-validation.md).
+
+## Recurrence — 2026-10-27
+
+On the todo 0160 branch (`0d325203a`, base `863b57821`), `mise run test` at
+load average about 150 failed this case at 5,018 ms. The owner run alone
+(`mise run test:logged -- --name re-commands-integration -- bun test --cwd apps/backend --parallel=1 ./tests/commands-integration.test.ts`)
+failed on the branch twice (once this case, once `enables git's scan caches
+on a newly created worktree`), and on the unchanged base twice of three
+(this case, 5,016 ms and 5,496 ms). The branch does not touch the owner or
+anything it imports. See
+[1170](../aggregate-validation-runs/1170-codex-saved-rules-0160-validation.md).

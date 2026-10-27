@@ -57,6 +57,11 @@ revoke what it saved") was not met for it.
     again in the next turn. The control answered the same request with the
     amendment, as the bridge used to: Codex wrote `rules/default.rules` and
     the next identical command ran without asking.
+- Full suite (`mise run test`, 2026-10-27): codex-bridge 2,441 passed and
+  every web, protocol and other-bridge suite passed; the failures were in
+  files this change does not reach and are recorded, with base-commit reruns,
+  in flake case
+  [1170](../../tests/flaky-tests/aggregate-validation-runs/1170-codex-saved-rules-0160-validation.md).
 - Rules a user saved before this change stay in their Codex home
   (`~/.codex/rules/default.rules`). Orkestrator does not read or edit them
   (decision 2).

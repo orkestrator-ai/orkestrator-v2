@@ -17,6 +17,7 @@ import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore 
 import { useProjectStore } from "@/stores/projectStore";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
+import { startDataSavingReadPolicy } from "@/lib/data-saving";
 import {
   connectionListDisconnected,
   setTransportDisconnected,
@@ -338,6 +339,7 @@ function ConnectedApp() {
   );
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startTransportConnectivity(), []);
+  useEffect(() => startDataSavingReadPolicy(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {

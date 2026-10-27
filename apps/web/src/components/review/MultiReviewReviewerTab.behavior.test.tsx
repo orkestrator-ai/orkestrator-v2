@@ -413,6 +413,58 @@ describe("MultiReviewReviewerTab", () => {
     expect(loadTranscript.mock.calls.length).toBe(afterMount + 4);
   });
 
+  test("with data saving on, backs its poll off while nothing moves and restores it on a checkpoint", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "running",
+      transcript: "snapshot",
+      sourceToken: "token-1",
+      messages: [],
+    };
+    const loadTranscript = mock(async () => running);
+    useMultiReviewStore.setState({ workflows: new Map([["multi-1", reviewingWorkflow()]]) });
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+    await act(async () => {
+      await clock.advance(0);
+    });
+    const afterMount = loadTranscript.mock.calls.length;
+    // 4 s, then the 8 s and 15 s steps: three polls in 27 s instead of six.
+    await act(async () => {
+      await clock.advance(REFRESH_INTERVAL_MS + 8_000 + 15_000);
+    });
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 3);
+
+    // A checkpoint reads at once and puts the poll back on its interval.
+    act(() => {
+      useMultiReviewStore.setState({
+        workflows: new Map([["multi-1", { ...reviewingWorkflow(), backendRevision: 8 }]]),
+      });
+    });
+    await waitFor(() => expect(loadTranscript.mock.calls.length).toBe(afterMount + 4));
+    await act(async () => {
+      await clock.advance(REFRESH_INTERVAL_MS);
+    });
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 5);
+  });
+
   test("queues a manual refresh behind an in-flight transcript poll", async () => {
     let resolvePoll!: (value: MultiReviewReviewerTranscript) => void;
     const poll = new Promise<MultiReviewReviewerTranscript>((resolve) => {

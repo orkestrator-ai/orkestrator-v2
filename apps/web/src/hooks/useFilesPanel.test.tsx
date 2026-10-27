@@ -6,6 +6,7 @@ import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
 import type { ChangesRefreshResult } from "@orkestrator/protocol/change-resources";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import {
   environmentProjectionFixture,
   resetChangeProjectionStore,
@@ -615,6 +616,57 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     expect(snapshotCalls()).toEqual({ tree: 3, changes: 3 });
     await act(() => clock.advance(1));
     expect(snapshotCalls()).toEqual({ tree: 4, changes: 4 });
+  });
+
+  test("with data saving on, an unwatched target's poll backs off to 10 s", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    await openPanel();
+    expect(snapshotCalls()).toEqual({ tree: 1, changes: 1 });
+    await act(() => clock.advance(5_000));
+    expect(snapshotCalls()).toEqual({ tree: 2, changes: 2 });
+    await act(() => clock.advance(9_999));
+    expect(snapshotCalls()).toEqual({ tree: 2, changes: 2 });
+    await act(() => clock.advance(1));
+    expect(snapshotCalls()).toEqual({ tree: 3, changes: 3 });
+    await act(() => clock.advance(10_000));
+    expect(snapshotCalls()).toEqual({ tree: 4, changes: 4 });
+  });
+
+  test("with data saving on, a watched worktree's poll backs off to 30 s and a refresh restores it", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    useWorktreeSnapshotStore.setState({
+      entries: new Map([
+        [
+          "environment-1",
+          {
+            environmentId: "environment-1",
+            targetGeneration: 1,
+            comparisonRef: "unrelated-baseline",
+            fileListRevision: 1,
+            treeRevision: 1,
+            freshness: "current",
+            watched: true,
+          },
+        ],
+      ]),
+    });
+    try {
+      const { result } = await openPanel();
+      // 5 s, then the 10, 15 and 30 s steps.
+      await act(() => clock.advance(60_000));
+      expect(snapshotCalls()).toEqual({ tree: 5, changes: 5 });
+      await act(async () => {
+        await result.current.refresh();
+        await clock.advance(0);
+      });
+      const afterRefresh = snapshotCalls();
+      await act(() => clock.advance(5_000));
+      expect(snapshotCalls().tree).toBe(afterRefresh.tree + 1);
+    } finally {
+      act(() => useWorktreeSnapshotStore.setState({ entries: new Map() }));
+    }
   });
 
   test("a closed panel keeps no periodic demand", async () => {

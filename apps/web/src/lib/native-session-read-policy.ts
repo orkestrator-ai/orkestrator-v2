@@ -3,6 +3,7 @@ import {
   NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
 } from "@orkestrator/protocol/native-agent-observation";
+import { DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS } from "@/lib/data-saving-policy";
 import type { ReadDemand } from "@/lib/read-coordinator";
 
 /**
@@ -84,5 +85,7 @@ export function nativeSessionReadDemand(
     priority: "critical",
     // Running/blocked/recovering views keep their latency budget regardless.
     quietBackoffMs: !responsive && qualified ? NATIVE_QUIET_BACKOFF_TRIAL_MS : null,
+    // Data saving slows only the responsive backstop; idle views keep theirs.
+    dataSaving: responsive ? { intervalMs: DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS } : null,
   };
 }

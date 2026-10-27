@@ -2,7 +2,8 @@
 
 Checked against `main` at `ce205ad34` plus the 0247 branch at `8268be981`
 (2026-10-26) and at `0c77d9b46` and `39980f699` (2026-10-27, the
-verification follow-up).
+verification follow-up), and at `4231a3ed2` plus the second follow-up below
+(2026-10-27).
 
 [0023](0023-environment-and-disk-cleanup.md) fixed the test temp-directory
 leaks it listed. Its 2026-10-26 sweep then ran the bridge and backend suites
@@ -16,7 +17,10 @@ directories (three Claude bridge session fixtures, the live MCP-calls probe
 root and one preview scratch); their causes are fixed in the verification
 follow-up (2026-10-27). The repeat sweep after it left only the by-design
 entries and one ACP bridge root, whose cause (and the same one in the
-protocol package) is fixed and rechecked; see
+protocol package) is fixed and rechecked. A second acceptance verification's
+sweep then left one Cursor bridge root, and the bridge re-sweep after that
+fix one Codex bridge Git fixture; both are fixed at source, and the bridges
+then left only by-design entries; see
 [the 2026-10-27 sweeps](#verification-sweep-and-repeat-sweep-2026-10-27).
 Qualification still needs
 the original Arch Linux host, where `ork-env-move-*` leaked and macOS never
@@ -61,6 +65,33 @@ baseline failures must not be read as a passing acceptance run.
   `ChangeEvidenceSpool` from the directory and never awaited the compaction
   rewrite its constructor queues. Both tests now flush it before teardown
   (4 of 12 and 3 of 12 runs left one before, 0 of 12 after).
+- `cursor-bridge-mcp-reattach-test-<pid>` (found by the second acceptance
+  verification's sweep, 2026-10-27, holding `state.json`; the owner file was
+  unchanged from `origin/main`): `agent-session-mcp-reattach.test.ts` attaches
+  agents, which queue best-effort state-file writes (`schedulePersist` in
+  `bridges/cursor-bridge/src/persistence.ts`), and its `afterAll` removed the
+  state root without waiting for them. A write already running keeps the path
+  it read, so it re-created `state.json` under the removed root — the same
+  shape as the Pi prefixes below. The `afterAll` now awaits
+  `drainPersistence()` first, restores `CURSOR_BRIDGE_STATE_DIR`, and only
+  then calls `reopenPersistenceForTests()` and removes the root (the order
+  the bridge's `testing/router-harness.ts` already uses). The committed old
+  file, run ten times alone under a private `TMPDIR` with the suite preload,
+  left a root 3 times; the fixed file left none in 20 runs (ten with the preload, ten without).
+- `codex-bridge-item-to-parts-*` (found by the bridge re-sweep after the
+  Cursor fix, one, holding a partial `.git`: the initial commit's object,
+  refs, logs, index and hook samples; no worktree file or `config`):
+  `withGitWorkspace` in `bridges/codex-bridge/src/item-to-parts.test.ts`
+  commits, and Git 2.56's `git commit` then starts a detached auto-maintenance
+  child. Still writing under `.git` while the fixture's
+  `rmSync(dir, { recursive: true, force: true })` ran, it left the directory,
+  and Bun's forced `rmSync` returned without an error, so the test passed. A
+  standalone probe (Bun 1.4.4, Git 2.56.0, load average about 100) that does
+  init, commit, `rmSync` 200 times left 12 directories of the same shape;
+  with `maintenance.auto=false` and `gc.auto=0` it left none. The fixture
+  now sets both in the repository's own config after `git init`. The owning
+  file itself left one root in 1 of 60 runs before the fix and none in 40
+  after, so the direct before/after is weak; the probe is the evidence.
 - `ork-backend-core-*` (found by the first macOS qualification sweep, one
   `data/design-canvases/index.json`): `backend-core.test.ts` initialised a
   backend it never shut down, and startup work wrote after the directory was
@@ -164,7 +195,9 @@ baseline failures must not be read as a passing acceptance run.
 1. ~~Repeat the sweep after the fixes and record what the private `TMPDIR`
    holds.~~ Done on macOS 2026-10-26, and again on 2026-10-27 after the
    verification follow-up (left only the by-design entries plus one ACP
-   bridge root, fixed and rechecked), not on the original Arch host; see
+   bridge root, fixed and rechecked), and after the second verification
+   (one Cursor and then one Codex bridge root, both fixed and rechecked; the
+   bridges then left only by-design entries), not on the original Arch host; see
    [Qualification results](#qualification-results-2026-10-26).
 2. Repeat the same sweep on omarchy-hp (Arch Linux), where `ork-env-move-*`
    leaked and macOS never reproduced it, and confirm the
@@ -210,6 +243,13 @@ backend `test:workspace`, outside Turbo, one empty private `TMPDIR` under
 | Acceptance verification sweep (run by the verifier; directory `ork0247-verify.l3eR6W0G`) | `5702c8255` | ACP, Codex, Cursor and Pi passed; Claude 1,705 passed, 6 skipped, 1 failed (a coordinator sandbox test that failed the same way on `origin/main`). Backend exit 1: 12,002 passed, 115 skipped, 17 failed, 14 errors. | `claude-client-session-restart-*`, `claude-dispatch-journal-*`, `claude-metadata-noop-*`, `claude-mcp-calls-*`, `ork-artifact-preview-92054-*` (a dead owner; Chromium profile inside), plus the intended `orkestrator-mcp-locks-501`, `jiti`, `node-compile-cache` and the kept `orkestrator-test-run.*` failure logs. All five causes are fixed at source (leak table, Code item 2). |
 | Repeat sweep after those fixes (directory `ork0247-qual3`) | `0c77d9b46` | Bridges all passed (acp 695, claude 1,706, codex 2,412, cursor 801, pi 651). Backend exit 1 in 677 s at load average 67 to 95: 12,006 passed, 115 skipped, 16 failed, 12 errors, all five-second deadlines of Git-heavy fixtures (below). | `acp-bridge-test-*` (one, holding `entries.jsonl`), plus the intended `orkestrator-mcp-locks-501`, `jiti` and `node-compile-cache`. No preview scratch, no Claude bridge fixture, nothing from the backend. |
 | ACP bridge and protocol package after the spool fix (`ork0247-qual3b`, `ork0247-qual3c`) | `39980f699` | ACP `test:bridge` 695 passed, 3 skipped; protocol `test:workspace` 1,935 passed, 2 skipped. | Nothing. |
+| Second acceptance verification sweep (run by the verifier) | `4231a3ed2` | Bridges passed. Backend `test:workspace` non-green: 12,012 passed, 115 skipped, 26 failed, 18 between-test errors, chiefly the recorded Git/worktree deadline family. | `cursor-bridge-mcp-reattach-test-<pid>/state.json` (the owner file, unchanged from `origin/main`, left a root in 5 of 10 repeats there), plus the intended `orkestrator-mcp-locks-501`, `jiti` and `node-compile-cache`. Nothing from the backend. Fixed at source (Current state). |
+| Bridge re-sweep after the Cursor fix (`ork0247-qual4`, load average 62 to 78) | `4231a3ed2` plus the Cursor fix | All five `test:bridge` passed: acp 695 (3 skipped), claude 1,706 (6 skipped), codex 2,412 (45 skipped), cursor 801, pi 652 (2 skipped). | `codex-bridge-item-to-parts-*` (one, partial `.git`), plus the intended `jiti` and `node-compile-cache`. Fixed at source (Current state). |
+| Codex bridge after the Git fixture fix (`ork0247-qual4b`) | the same plus the Codex fix | Codex `test:bridge` 2,412 passed, 45 skipped. | Nothing. |
+
+The backend was not swept again after the last two fixes: they change only
+two bridge test files, and the second verification's backend run left nothing
+of its own.
 
 The `acp-bridge-test-*` root came from `change-evidence.test.ts`: the test
 restores a second `ChangeEvidenceSpool` from the directory, the constructor
@@ -661,6 +701,34 @@ Decisions 1 to 8 were made on 2026-10-26 while working through the file;
     eighteen names; (c) was not taken because neither test's code is in
     this ticket's scope and a longer budget would hide the host-load signal
     the records track.
+
+12. **The Cursor reattach test's late state write.** Options: (a) opt
+    `cursor-bridge-mcp-reattach-test-` into `tests/temp-sweep.ts`; (b) drain
+    the bridge's persistence queue in the test's `afterAll` before removing
+    the root; (c) record it as remaining work in a new todo. Chose (b). Pros:
+    the leak is removed at source with the bridge's existing
+    `drainPersistence()` and `reopenPersistenceForTests()`, which the
+    router harness and six other Cursor test files already use, so no new
+    test seam; the root is gone when the file finishes, not an hour later.
+    Cons: none in production; a new Cursor test file that sets
+    `CURSOR_BRIDGE_STATE_DIR` and removes it without draining can leak the
+    same way (the six other such files did not leak in any recorded sweep, so
+    they were not changed). (a) was not taken because the cause was
+    removable; (c) because the fix is a test-only ordering change in scope.
+
+13. **The Codex Git fixture's maintenance child.** Options: (a) disable
+    auto-maintenance in the fixture's repository config; (b) disable it for
+    every test process through `GIT_CONFIG_COUNT` in `tests/setup-node.ts`;
+    (c) retry the removal until the directory is gone; (d) opt the prefix
+    into `tests/temp-sweep.ts`. Chose (a). Pros: removes the writer at source
+    for the one fixture the sweep found, two `git config` calls, no change to
+    the environment other tests and the code under test see. Cons: other
+    fixtures that commit in a temporary directory share the race (none was
+    left in any recorded sweep, and the backend's Git fixtures did not leak);
+    (b) was not taken because a global Git environment would change what
+    production Git calls under test see and would interact with tests that set
+    `GIT_CONFIG_*` themselves; (c) because a retry still races a child that
+    can write after it; (d) because the cause was removable.
 
 ## Related
 

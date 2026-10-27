@@ -232,9 +232,9 @@ describe("build pipeline multi-model review", () => {
       );
       expect(reviewerPrompts).toHaveLength(2);
       expect(reviewerPrompts.every((entry) => entry.prompt.includes("review-package-"))).toBe(true);
-      // One verification admits the whole reviewer wave; it is no longer
-      // repeated inside every reviewer's prompt.
-      expect(packageGeneration.verificationCount).toBe(1);
+      // One check admits the reviewer wave, and address rechecks the evidence;
+      // admission is still not repeated inside each reviewer's prompt.
+      expect(packageGeneration.verificationCount).toBe(2);
       expect(
         reviewerPrompts.every((entry) =>
           entry.prompt.includes("Do not modify, create, or delete files"),
@@ -287,6 +287,9 @@ describe("build pipeline multi-model review", () => {
       // Provenance is derived by the backend from the cited source IDs, never
       // taken from what the consolidation model claimed.
       expect(addressing.structuredReview?.issues[0]?.reviewModels).toEqual(["claude/opus"]);
+      const verifying = await advanceUntil(service, read, started.id, "verifying");
+      expect(verifying.error ?? verifying.phase).toBe("verifying");
+      expect(packageGeneration.verificationCount).toBe(3);
     });
   });
 
@@ -795,8 +798,8 @@ describe("build pipeline multi-model review", () => {
         );
         const addressing = await advanceUntil(service, read, started.id, "addressing");
         expect(addressing.error ?? addressing.phase).toBe("addressing");
-        // One verification for the whole three-reviewer wave.
-        expect(packageGeneration.verificationCount).toBe(1);
+        // One check for the whole three-reviewer wave, plus address's check.
+        expect(packageGeneration.verificationCount).toBe(2);
       },
       { efficiency },
     );

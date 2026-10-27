@@ -1,15 +1,16 @@
 import { create } from "zustand";
 
 /**
- * Zoom and pan of each Multi Review flow graph, kept between visits.
+ * View state of each workflow flow graph (Multi Review, the build pipeline),
+ * kept between visits: zoom and pan, and whether the graph is collapsed.
  *
  * This is view state, not workflow state: it lives only in the renderer and is
- * never sent to the backend. An entry remembers the viewport width it was
+ * never sent to the backend. A view entry remembers the viewport width it was
  * taken at, because the layout depends on that width; a graph shown at another
  * width starts from 100% again.
  */
 
-export interface MultiReviewFlowViewEntry {
+export interface FlowGraphViewEntry {
   zoom: number;
   scrollLeft: number;
   scrollTop: number;
@@ -20,14 +21,18 @@ export interface MultiReviewFlowViewEntry {
 /** Workflows whose view is remembered; the least recently changed go first. */
 export const MAX_REMEMBERED_FLOW_VIEWS = 50;
 
-interface MultiReviewFlowViewState {
-  views: Map<string, MultiReviewFlowViewEntry>;
-  saveView: (workflowId: string, view: MultiReviewFlowViewEntry) => void;
+interface FlowGraphViewState {
+  views: Map<string, FlowGraphViewEntry>;
+  /** Workflows whose graph is collapsed, oldest first. Absent means expanded. */
+  collapsed: Set<string>;
+  saveView: (workflowId: string, view: FlowGraphViewEntry) => void;
   clearView: (workflowId: string) => void;
+  setCollapsed: (workflowId: string, collapsed: boolean) => void;
 }
 
-export const useMultiReviewFlowViewStore = create<MultiReviewFlowViewState>()((set) => ({
+export const useFlowGraphViewStore = create<FlowGraphViewState>()((set) => ({
   views: new Map(),
+  collapsed: new Set(),
   saveView: (workflowId, view) =>
     set((state) => {
       const current = state.views.get(workflowId);
@@ -56,5 +61,20 @@ export const useMultiReviewFlowViewStore = create<MultiReviewFlowViewState>()((s
       const views = new Map(state.views);
       views.delete(workflowId);
       return { views };
+    }),
+  setCollapsed: (workflowId, collapsed) =>
+    set((state) => {
+      if (state.collapsed.has(workflowId) === collapsed) return state;
+      const next = new Set(state.collapsed);
+      if (collapsed) {
+        next.add(workflowId);
+        for (const key of Array.from(next)) {
+          if (next.size <= MAX_REMEMBERED_FLOW_VIEWS) break;
+          next.delete(key);
+        }
+      } else {
+        next.delete(workflowId);
+      }
+      return { collapsed: next };
     }),
 }));

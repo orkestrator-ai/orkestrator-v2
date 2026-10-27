@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { multiReviewFlowLayout } from "./multi-review-flow";
+import { multiReviewFlowLayout } from "../review/multi-review-flow";
 import {
   FLOW_VIEWPORT_MAX_HEIGHT,
   FLOW_VIEWPORT_RESIZE_MIN_HEIGHT,
@@ -10,6 +10,8 @@ import {
   canZoomIn,
   canZoomOut,
   clampFlowZoom,
+  fitFlowView,
+  fitStackedFlowZoom,
   flowContentOffset,
   flowViewportHeight,
   pinchFlowZoom,
@@ -17,7 +19,7 @@ import {
   steppedFlowZoom,
   wheelZoomFactor,
   zoomFlowView,
-} from "./multi-review-flow-viewport";
+} from "./flow-viewport";
 
 function graph(reviewerCount: number, width = 1440) {
   const layout = multiReviewFlowLayout({ width, reviewerCount, packageHasChips: true });
@@ -198,5 +200,33 @@ describe("resized viewport height", () => {
   test("rounds requested heights to whole layout pixels", () => {
     expect(resizedFlowViewportHeight(300.49, 800)).toBe(300);
     expect(resizedFlowViewportHeight(300.5, 800)).toBe(301);
+  });
+});
+
+describe("fit", () => {
+  test("zooms a large graph out until all of it shows, from its start", () => {
+    const { content, viewport } = graph(32);
+    const view = fitFlowView(content, viewport);
+    expect(view.zoom).toBeLessThan(1);
+    expect(content.width * view.zoom).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(content.height * view.zoom).toBeLessThanOrEqual(viewport.height + 0.5);
+    expect(view.scrollLeft).toBe(0);
+    expect(view.scrollTop).toBe(0);
+  });
+
+  test("never magnifies a graph that already fits, and stops at the minimum", () => {
+    expect(fitFlowView({ width: 400, height: 200 }, { width: 1440, height: 720 }).zoom).toBe(1);
+    expect(fitFlowView({ width: 100_000, height: 200 }, { width: 1000, height: 720 }).zoom).toBe(
+      FLOW_ZOOM_MIN,
+    );
+    expect(fitFlowView({ width: 0, height: 0 }, { width: 1000, height: 720 }).zoom).toBe(1);
+  });
+
+  test("fits the stacked column to the height the page shows it in", () => {
+    expect(fitStackedFlowZoom(2_000, 800)).toBeCloseTo(0.4);
+    expect(fitStackedFlowZoom(400, 800)).toBe(1);
+    expect(fitStackedFlowZoom(40_000, 800)).toBe(FLOW_ZOOM_MIN);
+    expect(fitStackedFlowZoom(2_000, null)).toBe(1);
+    expect(fitStackedFlowZoom(0, 800)).toBe(1);
   });
 });

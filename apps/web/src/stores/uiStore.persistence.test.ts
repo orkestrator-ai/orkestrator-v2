@@ -115,6 +115,15 @@ test("graph height survives fresh-store hydration and resetting restores automat
   expect(createUIStore().getState().multiReviewGraphHeight).toBeNull();
 });
 
+test("the build pipeline graph keeps a height of its own", () => {
+  localStorage.clear();
+  const initial = createUIStore();
+  initial.getState().setPipelineGraphHeight(300);
+  const reloaded = createUIStore();
+  expect(reloaded.getState().pipelineGraphHeight).toBe(300);
+  expect(reloaded.getState().multiReviewGraphHeight).toBeNull();
+});
+
 test("the data-saving preference is off by default and survives a reload", () => {
   localStorage.clear();
   const initial = createUIStore();

@@ -53,7 +53,7 @@ mock.module("@/hooks", () => ({
 /*
  * react-virtuoso measures a real viewport, so its rows never render under
  * happy-dom. Stubbed exactly as the sibling suite does, because these tests
- * assert that the transcript stays mounted behind the stage list.
+ * assert that the transcript stays mounted below the graph.
  */
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -169,7 +169,7 @@ const reviewed: BuildPipeline = {
   backendRevision: 40,
 };
 
-function renderPipeline(next: BuildPipeline) {
+function renderPipeline(next: BuildPipeline, layout?: "graph" | "stacked") {
   useBuildPipelineStore.setState({
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
@@ -183,53 +183,24 @@ function renderPipeline(next: BuildPipeline) {
         isLocal: true,
       }}
       isActive
+      layout={layout}
     />,
   );
-  expandStageGroups();
-}
-
-function renderTab() {
-  renderPipeline(pipeline);
 }
 
 /**
- * Open every folded phase in the stage rail.
- *
- * Settled phases fold to a summary, which unmounts their stage tabs. Tests
- * about a stage's transcript, badges or keyboard behaviour rather than the
- * rail's folding open them all first. The headers are found in the DOM, not
- * the accessibility tree, so this also works while a phone hides the rail.
+ * A phone renders the graph as one stacked column. happy-dom measures every
+ * width as zero, so the column is asked for, as the measured width would.
  */
-function expandStageGroups() {
-  for (const header of Array.from(
-    document.querySelectorAll<HTMLElement>('[data-stage-group][aria-expanded="false"]'),
-  )) {
-    fireEvent.click(header);
-  }
+function renderTab(layout: "graph" | "stacked" = "stacked") {
+  renderPipeline(pipeline, layout);
 }
 
-/** The mobile switcher, scoped so its tabs never collide with the stage tabs. */
-function viewTabs() {
-  return within(screen.getByRole("tablist", { name: "Build view" }));
-}
-
-/**
- * A stage tab, or null while the stage list is hidden.
- *
- * `getByRole` skips anything the accessibility tree excludes, so this doubles
- * as the visibility assertion: a `hidden` panel takes its tabs with it. Scoped
- * to the stage list because the switcher names its transcript tab after the
- * selected stage, so the two lists share a name while both are on screen.
- */
-function stageTab(name: string): HTMLElement | null {
-  const list = screen.queryByRole("tablist", { name: "Build stages" });
-  if (!list) return null;
-  const ids = (list.getAttribute("aria-owns") ?? "").split(" ").filter(Boolean);
-  return (
-    ids
-      .map((id) => document.getElementById(id))
-      .find((tab) => tab?.getAttribute("aria-label")?.match(new RegExp(name))) ?? null
-  );
+/** A node of the graph, by its title. */
+function node(title: string): HTMLElement {
+  return within(screen.getByRole("tablist", { name: "Build pipeline" })).getByRole("tab", {
+    name: new RegExp(`^${title},`),
+  });
 }
 
 /** The options behind the transcript on screen right now. */
@@ -251,156 +222,88 @@ beforeEach(() => {
 describe("BuildChatTab on a phone", () => {
   beforeEach(() => setMobileViewport(true));
 
-  test("opens on the transcript with the stage rail folded away", () => {
+  test("stacks the graph above the inspector, with no view switcher", () => {
     renderTab();
 
-    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected")).toBe(
-      "false",
-    );
+    expect(document.querySelector('[data-flow-layout="stacked"]')).toBeTruthy();
     expect(
-      viewTabs().getByRole("tab", { name: "Verification Session" }).getAttribute("aria-selected"),
-    ).toBe("true");
-    // The rail would otherwise take 240px of a ~390px screen.
-    expect(stageTab("Build Session")).toBeNull();
+      screen.getByRole("tablist", { name: "Build pipeline" }).getAttribute("aria-orientation"),
+    ).toBe("vertical");
+    expect(screen.queryByRole("tablist", { name: "Build view" }) === null).toBe(true);
+    // The running stage is selected and its transcript is on the same page.
+    expect(node("Verify").getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("All criteria pass")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Send a message to the agent" })).toBeTruthy();
   });
 
-  test("gives the stage list the full width without unmounting the transcript", () => {
+  test("keeps the header compact", () => {
     renderTab();
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-
-    expect(stageTab("Build Session")).toBeTruthy();
-    expect(stageTab("Verification Session")).toBeTruthy();
-    // Still in the DOM, just not on screen: unmounting it would throw away the
-    // transcript's scroll position every time the user checked the stage list.
-    expect(screen.getByText("All criteria pass")).toBeTruthy();
-    expect(
-      document.getElementById(
-        viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-controls")!,
-      )?.hidden,
-    ).toBe(false);
-    // The composer addresses the transcript, so it travels with it rather than
-    // eating a third of the stage list.
-    expect(screen.queryByRole("textbox") === null).toBe(true);
+    expect(screen.getByTestId("build-pipeline-header").className).toContain("px-3");
   });
 
-  test("deactivates the transcript's scroll state while the stage list is on screen", () => {
+  test("keeps the zoom controls in reach at the top of the column", () => {
     renderTab();
-    expect(lastScrollState().isActive).toBe(true);
-
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-
-    // Hiding the transcript has to deactivate it exactly as switching tabs
-    // does. Leaving it active would keep it following a stream nobody can see
-    // and skip the re-lock that brings the user back to the live bottom.
-    expect(lastScrollState().isActive).toBe(false);
-    expect(lastScrollState().activation).toBe("latest");
-
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Verification Session" }));
-
-    expect(lastScrollState().isActive).toBe(true);
+    const controls = screen.getByRole("group", { name: "Zoom" });
+    expect(controls.closest(".sticky")).toBeTruthy();
+    for (const button of within(controls).getAllByRole("button")) {
+      // 44 px touch targets: square icons, and the level beside them.
+      expect(button.className).toMatch(/size-11|h-11/);
+    }
   });
 
-  test("brings the transcript forward when a stage is chosen", () => {
+  test("shows a chosen stage in the inspector below without moving focus", () => {
     renderTab();
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    fireEvent.click(stageTab("Build Session")!);
-
-    expect(
-      viewTabs().getByRole("tab", { name: "Build Session" }).getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(stageTab("Verification Session")).toBeNull();
-    expect(screen.getByText("Implementation complete")).toBeTruthy();
-  });
-
-  test("hands focus to the transcript tab when the stage list that held it hides", () => {
-    renderTab();
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    const chosen = stageTab("Build Session")!;
+    const chosen = node("Build");
     chosen.focus();
     fireEvent.click(chosen);
 
-    // Hiding the element that holds focus drops focus to <body>, and the next
-    // Tab would restart from the top of the document. Compared by id rather
-    // than by node: a failed element-identity assertion makes the runner
-    // serialize both DOM subtrees, which crashes it instead of reporting.
-    expect(document.activeElement?.id).toBe(
-      viewTabs().getByRole("tab", { name: "Build Session" }).id,
+    expect(chosen.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(chosen);
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
+    expect(screen.getByTestId("pipeline-inspector").getAttribute("aria-labelledby")).toBe(
+      chosen.id,
     );
+    // The transcript stays on screen, so it keeps following the stream.
+    expect(lastScrollState()).toMatchObject({
+      isActive: true,
+      persistKey: "build-pipeline:pipeline-1",
+      activation: "latest",
+    });
   });
 
-  test("leaves focus alone when the stage list was not holding it", () => {
+  test("walks the column with the arrow keys", () => {
     renderTab();
-    const stages = viewTabs().getByRole("tab", { name: "Stages" });
-    fireEvent.click(stages);
-    stages.focus();
-    fireEvent.click(stageTab("Build Session")!);
-
-    // A tap leaves focus where the pointer put it, and moving it would be a
-    // change the user did not ask for.
-    expect(document.activeElement?.id).toBe(stages.id);
+    const verify = node("Verify");
+    verify.focus();
+    fireEvent.keyDown(verify, { key: "ArrowUp" });
+    expect(node("Build").getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(node("Build"));
+    fireEvent.keyDown(node("Build"), { key: "Home" });
+    expect(node("Ticket").getAttribute("aria-selected")).toBe("true");
   });
 
-  test("brings the transcript forward when the review report hint is chosen", () => {
-    cleanup();
-    renderPipeline(reviewed);
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    expect(stageTab("Review Session")).toBeTruthy();
+  test("the review report hint selects the stage holding the report", () => {
+    renderPipeline(reviewed, "stacked");
+    fireEvent.click(screen.getByRole("button", { name: /The review reported/ }));
 
-    const hint = screen.getByRole("button", { name: /The review reported/ });
-    hint.focus();
-    fireEvent.click(hint);
+    expect(node("Review").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByLabelText("Structured review report")).toBeTruthy();
+  });
 
-    // The hint sits above the switcher so it is reachable from either half,
-    // and it is a request to read a stage — so it moves the view like a pick
-    // in the stage list does.
-    expect(stageTab("Review Session")).toBeNull();
+  test("keeps an unsent draft while another stage is read", () => {
+    renderTab();
+    fireEvent.change(screen.getByRole("textbox", { name: "Send a message to the agent" }), {
+      target: { value: "half-written" },
+    });
+    fireEvent.click(node("Build"));
+    expect(screen.queryByRole("textbox", { name: "Send a message to the agent" }) === null).toBe(
+      true,
+    );
+    fireEvent.click(node("Verify"));
     expect(
-      viewTabs().getByRole("tab", { name: "Review Session" }).getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(screen.getByText("The review is complete")).toBeTruthy();
-    // Selecting the report removes the focused hint. Keep keyboard focus on
-    // the persistent tab that now names and controls the visible transcript.
-    expect(document.activeElement?.id).toBe(
-      viewTabs().getByRole("tab", { name: "Review Session" }).id,
-    );
-  });
-
-  test("browses the stage list with arrow keys without leaving it", () => {
-    renderTab();
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    fireEvent.keyDown(stageTab("Verification Session")!, { key: "ArrowUp" });
-
-    // Arrow keys walk the list; only an explicit pick switches views.
-    expect(stageTab("Build Session")?.getAttribute("aria-selected")).toBe("true");
-    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected")).toBe(
-      "true",
-    );
-  });
-
-  test("moves between the two views with arrow keys", () => {
-    renderTab();
-    fireEvent.keyDown(viewTabs().getByRole("tab", { name: "Verification Session" }), {
-      key: "ArrowLeft",
-    });
-
-    const stages = viewTabs().getByRole("tab", { name: "Stages" });
-    expect(stages.getAttribute("aria-selected")).toBe("true");
-    expect(stageTab("Build Session")).toBeTruthy();
-    // A tablist moves focus with the selection, so the next arrow key keeps
-    // walking the switcher rather than starting over from the document.
-    expect(document.activeElement?.id).toBe(stages.id);
-  });
-
-  test("keeps an unsent draft while the stage list is on screen", () => {
-    renderTab();
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "check the migration" },
-    });
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Verification Session" }));
-
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("check the migration");
+      (screen.getByRole("textbox", { name: "Send a message to the agent" }) as HTMLTextAreaElement)
+        .value,
+    ).toBe("half-written");
   });
 });
 
@@ -470,48 +373,31 @@ describe("BuildChatTab across the breakpoint", () => {
     }
   });
 
-  test("widening past the breakpoint puts both halves back on screen", () => {
-    renderTab();
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    expect(lastScrollState().isActive).toBe(false);
-
+  test("crossing the breakpoint keeps the selection and the transcript", () => {
+    renderTab("graph");
+    fireEvent.click(node("Build"));
     act(() => emitViewportChange(false));
-
-    // Nothing left to choose between, so the switcher goes away with the
-    // constraint that produced it.
-    expect(screen.queryByRole("tablist", { name: "Build view" }) === null).toBe(true);
-    expect(stageTab("Build Session")).toBeTruthy();
-    expect(screen.getByText("All criteria pass")).toBeTruthy();
-    // The transcript is on screen again, so it follows the stream again.
-    expect(lastScrollState().isActive).toBe(true);
-  });
-
-  test("narrowing again returns to the half the user last chose", () => {
-    renderTab();
-    fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
-    act(() => emitViewportChange(false));
+    expect(node("Build").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
     act(() => emitViewportChange(true));
-
-    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected")).toBe(
-      "true",
-    );
-    expect(stageTab("Build Session")).toBeTruthy();
-    expect(screen.queryByRole("textbox") === null).toBe(true);
-    expect(lastScrollState().isActive).toBe(false);
+    expect(node("Build").getAttribute("aria-selected")).toBe("true");
+    expect(lastScrollState().isActive).toBe(true);
   });
 });
 
 describe("BuildChatTab on a desktop", () => {
   beforeEach(() => setMobileViewport(false));
 
-  test("keeps the stage rail beside the transcript with no view switcher", () => {
-    renderTab();
+  test("draws the wide graph above the inspector", () => {
+    renderTab("graph");
 
+    expect(document.querySelector('[data-flow-layout="graph"]')).toBeTruthy();
     expect(screen.queryByRole("tablist", { name: "Build view" }) === null).toBe(true);
-    expect(stageTab("Build Session")).toBeTruthy();
+    expect(node("Build")).toBeTruthy();
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeTruthy();
     expect(lastScrollState().isActive).toBe(true);
+    expect(screen.getByTestId("build-pipeline-header").className).not.toContain("px-3");
   });
 
   test("keeps the pipeline controls icon-only and reveals their labels in tooltips", async () => {
@@ -525,19 +411,5 @@ describe("BuildChatTab on a desktop", () => {
 
     fireEvent.focus(screen.getByRole("button", { name: "Restart Build Stage" }));
     expect((await screen.findByRole("tooltip")).textContent).toContain("Restart Build Stage");
-  });
-
-  test("choosing a stage neither hides anything nor moves focus", () => {
-    renderTab();
-    const chosen = stageTab("Build Session")!;
-    chosen.focus();
-    fireEvent.click(chosen);
-
-    // The mobile-only view switch has nothing to hide here, so the stage list
-    // keeps both the selection and the focus that made it.
-    expect(document.activeElement?.id).toBe(chosen.id);
-    expect(stageTab("Verification Session")).toBeTruthy();
-    expect(screen.getByText("Implementation complete")).toBeTruthy();
-    expect(lastScrollState().isActive).toBe(true);
   });
 });

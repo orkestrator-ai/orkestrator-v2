@@ -372,6 +372,7 @@ export class BuildPipelineAgents {
         );
         if (session) {
           session.completedAt = now;
+          session.reviewerOutcome = "cancelled";
           if (reviewer.tokenCount !== undefined) session.tokenCount = reviewer.tokenCount;
           if (reviewer.cacheReadTokens !== undefined) {
             session.cacheReadTokens = reviewer.cacheReadTokens;

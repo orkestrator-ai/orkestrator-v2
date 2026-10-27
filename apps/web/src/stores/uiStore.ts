@@ -85,6 +85,8 @@ interface UIState {
   zoomLevel: number;
   /** Multi Review graph height set by dragging its divider; null sizes it to the graph. */
   multiReviewGraphHeight: number | null;
+  /** Build pipeline graph height set by dragging its divider; null sizes it to the graph. */
+  pipelineGraphHeight: number | null;
   /**
    * This client's data-saving preference: slower background reads of what it
    * shows (`setReadCoordinatorDataSaving`). Client-local by design — it never
@@ -103,6 +105,7 @@ interface UIState {
   selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
   setSidebarWidth: (width: number) => void;
   setMultiReviewGraphHeight: (height: number | null) => void;
+  setPipelineGraphHeight: (height: number | null) => void;
   /** Toggle the collapsed state of a project */
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
@@ -158,6 +161,7 @@ export const createUIStore = () =>
         activitySortOrder: "priority",
         zoomLevel: ZOOM_DEFAULT,
         multiReviewGraphHeight: null,
+        pipelineGraphHeight: null,
         dataSaving: false,
 
         // Actions
@@ -193,6 +197,7 @@ export const createUIStore = () =>
         setSidebarWidth: (width) => set({ sidebarWidth: width }),
 
         setMultiReviewGraphHeight: (height) => set({ multiReviewGraphHeight: height }),
+        setPipelineGraphHeight: (height) => set({ pipelineGraphHeight: height }),
 
         toggleProjectCollapse: (projectId) =>
           set((state) => ({
@@ -303,6 +308,7 @@ export const createUIStore = () =>
           activitySortOrder: state.activitySortOrder,
           zoomLevel: state.zoomLevel,
           multiReviewGraphHeight: state.multiReviewGraphHeight,
+          pipelineGraphHeight: state.pipelineGraphHeight,
           dataSaving: state.dataSaving,
         }),
       },

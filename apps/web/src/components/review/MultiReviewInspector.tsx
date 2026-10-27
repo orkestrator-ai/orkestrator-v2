@@ -25,7 +25,6 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as backend from "@/lib/backend";
-import type { RuntimeParts } from "@/lib/review/runtime-summary";
 import { hideReviewPackagePlanText } from "@/lib/structured-review-messages";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { cn } from "@/lib/utils";
@@ -35,29 +34,10 @@ import {
   toMultiReviewReviewerMessages,
   toMultiReviewSessionMessages,
 } from "./MultiReviewReviewerTab";
-import { MultiReviewFlowStateIcon, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
+import { FlowInspectorHeader } from "@/components/flow-graph/FlowInspector";
+import { withIdleIcon, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
-import {
-  provisionalFindingLabel,
-  type MultiReviewFlowState,
-  type MultiReviewMergedFinding,
-} from "./multi-review-flow";
-
-const PILL_CLASS: Record<MultiReviewFlowState, string> = {
-  "not-started": "border-border text-muted-foreground",
-  running: "border-cyan-400/25 bg-cyan-400/8 text-cyan-300",
-  paused: "border-amber-400/30 bg-amber-400/8 text-amber-300",
-  complete: "border-success/30 bg-success/8 text-green-300",
-  failed: "border-failure/30 bg-failure/8 text-failure",
-  cancelling: "border-border text-muted-foreground",
-  cancelled: "border-border text-muted-foreground",
-};
-
-function tokensInWords(runtime: RuntimeParts | null): string | null {
-  if (runtime?.tokens) return `${runtime.tokens} tokens`;
-  if (runtime?.tokensPending) return "Tokens pending";
-  return null;
-}
+import { provisionalFindingLabel, type MultiReviewMergedFinding } from "./multi-review-flow";
 
 /** Icon, name, status pill and token count of the selected node, with its actions. */
 export function MultiReviewInspectorHeader({
@@ -67,32 +47,8 @@ export function MultiReviewInspectorHeader({
   node: MultiReviewFlowNodeModel;
   actions: ReactNode;
 }) {
-  const tokens = tokensInWords(node.runtime);
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-2">
-      <MultiReviewFlowStateIcon
-        kind={node.kind}
-        state={node.state}
-        stalled={node.stalled}
-        className="size-4"
-      />
-      <h2 className="min-w-0 truncate text-sm font-semibold">{node.title}</h2>
-      <span
-        data-testid="multi-review-inspector-status"
-        className={cn(
-          "shrink-0 rounded-full border px-2 py-px text-[11px]",
-          node.stalled && node.state === "running"
-            ? "border-amber-500/30 bg-amber-500/8 text-amber-500"
-            : PILL_CLASS[node.state],
-        )}
-      >
-        {node.statusLabel}
-      </span>
-      {tokens ? (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">{tokens}</span>
-      ) : null}
-      <div className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</div>
-    </div>
+    <FlowInspectorHeader node={withIdleIcon(node)} actions={actions} testIdPrefix="multi-review" />
   );
 }
 

@@ -1,5 +1,5 @@
 /**
- * Zoom and pan for the Multi Review flow graph.
+ * Zoom and pan for the workflow flow graphs (Multi Review, the build pipeline).
  *
  * The graph sits in a scrolling viewport: pan is the viewport's scroll
  * position, so wheel, trackpad and touch scrolling pan it natively and the
@@ -9,7 +9,7 @@
  * the answers.
  */
 
-import { FLOW_GRAPH_MIN_HEIGHT, type FlowRect } from "./multi-review-flow";
+import { FLOW_GRAPH_MIN_HEIGHT, type FlowRect } from "./flow-graph-model";
 
 export const FLOW_ZOOM_MIN = 0.2;
 export const FLOW_ZOOM_MAX = 2;
@@ -65,8 +65,11 @@ export function canZoomOut(zoom: number): boolean {
 }
 
 /** The viewport keeps the graph's own height up to {@link FLOW_VIEWPORT_MAX_HEIGHT}. */
-export function flowViewportHeight(contentHeight: number): number {
-  return clamp(contentHeight, FLOW_GRAPH_MIN_HEIGHT, FLOW_VIEWPORT_MAX_HEIGHT);
+export function flowViewportHeight(
+  contentHeight: number,
+  minHeight: number = FLOW_GRAPH_MIN_HEIGHT,
+): number {
+  return clamp(contentHeight, minHeight, FLOW_VIEWPORT_MAX_HEIGHT);
 }
 
 /** The shortest the divider drags the viewport to. */
@@ -130,6 +133,29 @@ export function zoomFlowView(
     content,
     viewport,
   );
+}
+
+/**
+ * Fit: the zoom that shows the whole graph inside the viewport, from its
+ * start. It never magnifies (the layout already fills the width at 100%), and
+ * it stops at {@link FLOW_ZOOM_MIN}, past which a larger graph still scrolls.
+ */
+export function fitFlowView(content: FlowSize, viewport: FlowSize): FlowView {
+  const zoom =
+    content.width > 0 && content.height > 0
+      ? clampFlowZoom(Math.min(1, viewport.width / content.width, viewport.height / content.height))
+      : 1;
+  return clampScroll({ zoom, scrollLeft: 0, scrollTop: 0 }, content, viewport);
+}
+
+/**
+ * Fit for the stacked column, which scrolls with the page: the zoom at which
+ * the column's height fits the height the page shows it in. Unmeasured, it
+ * leaves the column at 100% rather than guessing.
+ */
+export function fitStackedFlowZoom(contentHeight: number, availableHeight: number | null): number {
+  if (!(contentHeight > 0) || availableHeight === null || !(availableHeight > 0)) return 1;
+  return clampFlowZoom(Math.min(1, availableHeight / contentHeight));
 }
 
 function revealAxis(

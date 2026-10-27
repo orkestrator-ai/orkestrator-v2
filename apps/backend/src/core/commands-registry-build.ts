@@ -70,6 +70,13 @@ export function registerBuildPipelineCommands(
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryStage(asNonBlankString(pipelineId, "pipelineId"));
   });
+  register("retry_build_pipeline_reviewer", ({ pipelineId, reviewerId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryReviewer(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(reviewerId, "reviewerId"),
+    );
+  });
   register("restart_build_pipeline_step", ({ pipelineId, stageId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.restartStep(

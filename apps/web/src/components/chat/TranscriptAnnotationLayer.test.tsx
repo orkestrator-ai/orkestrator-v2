@@ -8,12 +8,14 @@ interface AnnotationHarnessProps {
   enabled?: boolean;
   initialComment?: string;
   onOuterKeyDown?: () => void;
+  onCommentDone?: () => void;
 }
 
 function AnnotationHarness({
   enabled = true,
   initialComment = "",
   onOuterKeyDown,
+  onCommentDone,
 }: AnnotationHarnessProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const nextAnnotationId = useRef(1);
@@ -73,6 +75,7 @@ function AnnotationHarness({
             ),
           )
         }
+        onCommentDone={onCommentDone}
       />
     </div>
   );
@@ -256,6 +259,21 @@ describe("TranscriptAnnotationLayer", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.queryByTestId("transcript-annotation-editor") === null).toBe(true);
+  });
+
+  test("reports keyboard dismissal so focus can return to the composer", () => {
+    const onCommentDone = mock(() => {});
+    render(<AnnotationHarness onCommentDone={onCommentDone} />);
+    addAnnotation("message-1");
+
+    fireEvent.change(commentInput(1), { target: { value: "Tighten this" } });
+    expect(onCommentDone).not.toHaveBeenCalled();
+    fireEvent.keyDown(commentInput(1), { key: "Enter" });
+    expect(onCommentDone).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit comment for transcript reference 1" }));
+    fireEvent.keyDown(commentInput(1), { key: "Escape" });
+    expect(onCommentDone).toHaveBeenCalledTimes(2);
   });
 
   test("closes on Escape without propagating it to ancestors", () => {

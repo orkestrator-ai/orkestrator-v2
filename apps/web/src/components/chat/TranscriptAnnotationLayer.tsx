@@ -34,6 +34,8 @@ interface TranscriptAnnotationLayerProps {
   annotations: readonly TranscriptAnnotation[];
   onAddAnnotation: (text: string) => TranscriptAnnotation | null;
   onUpdateAnnotationComment: (id: string, comment: string) => void;
+  /** Keyboard dismissal of the comment editor, so focus can return to the composer. */
+  onCommentDone?: () => void;
 }
 
 function elementForNode(node: Node): Element | null {
@@ -80,6 +82,7 @@ export function TranscriptAnnotationLayer({
   annotations,
   onAddAnnotation,
   onUpdateAnnotationComment,
+  onCommentDone,
 }: TranscriptAnnotationLayerProps) {
   const [selection, setSelection] = useState<SelectionAnchor | null>(null);
   const [annotationAnchors, setAnnotationAnchors] = useState<ActiveAnnotationAnchor[]>([]);
@@ -335,6 +338,7 @@ export function TranscriptAnnotationLayer({
                 event.preventDefault();
                 event.stopPropagation();
                 setActiveAnnotationId(null);
+                onCommentDone?.();
               }}
               className="w-full rounded-2xl border border-zinc-600/70 bg-zinc-800/95 px-4 py-3 text-sm text-zinc-100 shadow-[0_16px_42px_rgba(0,0,0,0.46)] outline-none placeholder:text-zinc-500 focus:border-blue-400/70 focus:ring-2 focus:ring-blue-500/20"
             />

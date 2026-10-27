@@ -599,6 +599,12 @@ export function SharedNativeAgentController({
     },
     [isDispatching, sessionKey, updateDraft],
   );
+  // Back to the prompt once a comment is entered, so the user can keep
+  // typing or press Enter again to send.
+  const focusComposerAfterAnnotationComment = useCallback(() => {
+    const { text } = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    inputRef.current?.focusAtEnd(text);
+  }, [sessionKey]);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
@@ -3253,6 +3259,7 @@ export function SharedNativeAgentController({
       annotationInteractionEnabled={!isSubmitting && !isDispatching}
       onAddAnnotation={addTranscriptAnnotation}
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
+      onAnnotationCommentDone={focusComposerAfterAnnotationComment}
       messageActions={
         adapter.capabilities.fork && !isReadOnlyCoordinator ? renderMessageActions : undefined
       }

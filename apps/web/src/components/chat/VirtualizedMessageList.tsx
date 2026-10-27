@@ -121,6 +121,7 @@ interface VirtualizedMessageListProps<TMessage> {
     annotations: readonly TranscriptAnnotation[];
     onAdd: (text: string) => TranscriptAnnotation | null;
     onUpdateComment: (id: string, comment: string) => void;
+    onCommentDone?: () => void;
   };
 }
 
@@ -897,6 +898,7 @@ export function VirtualizedMessageList<TMessage>({
           annotations={annotation.annotations}
           onAddAnnotation={annotation.onAdd}
           onUpdateAnnotationComment={annotation.onUpdateComment}
+          onCommentDone={annotation.onCommentDone}
         />
       ) : null}
       <LiveArrivalsContext value={animateArrivals}>

@@ -72,7 +72,7 @@ export interface AgentsMdPrDependencies {
   ): Promise<string>;
   /** The GitHub CLI with the credential selected in Settings. */
   gh(args: string[], options: { cwd: string; timeoutMs?: number }): Promise<string>;
-  /** Where temporary worktrees live; outside every checkout. */
+  /** Parent for fresh mode-0700 run directories; outside every checkout. */
   worktreeRoot: string;
 }
 
@@ -88,7 +88,13 @@ export function defaultAgentsMdPrDependencies(): AgentsMdPrDependencies {
         })
       ).stdout,
     remoteGit: async (command, args, { cwd, timeoutMs = 120_000 }) =>
-      (await runRemoteGit(command, args, { cwd, timeoutMs })).stdout,
+      (
+        await runRemoteGit(command, args, {
+          cwd,
+          timeoutMs,
+          gitOptions: ["-c", "core.hooksPath=/dev/null"],
+        })
+      ).stdout,
     gh: async (args, { cwd, timeoutMs = 60_000 }) => {
       const { stdout } = await runCommandBuffer(gitHubCli(), args, {
         cwd,
@@ -97,7 +103,7 @@ export function defaultAgentsMdPrDependencies(): AgentsMdPrDependencies {
       });
       return stdout.toString("utf8");
     },
-    worktreeRoot: path.join(os.tmpdir(), "orkestrator-agents-md"),
+    worktreeRoot: os.tmpdir(),
   };
 }
 
@@ -130,8 +136,8 @@ export interface AgentsMdBase {
 async function readBase(
   baseBranch: string,
   git: (args: string[], cwd?: string) => Promise<Buffer>,
+  ref = `refs/remotes/origin/${baseBranch}`,
 ): Promise<AgentsMdBase> {
-  const ref = `refs/remotes/origin/${baseBranch}`;
   const baseCommit = (
     await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).catch(() => {
       throw new AgentsMdPrError("fetch-failed", `origin/${baseBranch} does not exist.`);
@@ -177,11 +183,11 @@ async function fetchBase(root: string, baseBranch: string, deps: AgentsMdPrDepen
   );
 }
 
-function localGit(deps: AgentsMdPrDependencies, root: string, hooksPath: string) {
+function localGit(deps: AgentsMdPrDependencies, root: string) {
   // Repository hooks never run: Coordinator does not load them, and a hook in
   // a worktree without the project's dependencies would fail anyway.
   return (args: string[], cwd = root, input?: Buffer) =>
-    deps.git(["-c", `core.hooksPath=${hooksPath}`, ...args], {
+    deps.git(["-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
       ...(input ? { input } : {}),
     });
@@ -206,8 +212,7 @@ export async function readAgentsMdSectionFromBase(input: {
   await fetchBase(input.root, baseBranch, deps).catch((error: unknown) => {
     fetchError = errorText(error);
   });
-  await fs.mkdir(path.join(deps.worktreeRoot, "no-hooks"), { recursive: true });
-  const git = localGit(deps, input.root, path.join(deps.worktreeRoot, "no-hooks"));
+  const git = localGit(deps, input.root);
   const base = await readBase(baseBranch, git);
   return {
     baseBranch,
@@ -261,9 +266,22 @@ export function openAgentsMdPullRequest(input: {
 }): Promise<AgentsMdPrResult> {
   const existing = running.get(input.key);
   if (existing) return existing;
-  const run = openOnce(input).finally(() => running.delete(input.key));
+  const run = withPrivateDirectory(input).finally(() => running.delete(input.key));
   running.set(input.key, run);
   return run;
+}
+
+async function withPrivateDirectory(
+  input: Parameters<typeof openOnce>[0],
+): Promise<AgentsMdPrResult> {
+  const deps = input.deps ?? defaultAgentsMdPrDependencies();
+  await fs.mkdir(deps.worktreeRoot, { recursive: true });
+  const directory = await fs.mkdtemp(path.join(deps.worktreeRoot, "agents-md-"));
+  try {
+    return await openOnce({ ...input, deps: { ...deps, worktreeRoot: directory } });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function openOnce(input: {
@@ -282,9 +300,7 @@ async function openOnce(input: {
   const branch = agentsMdBranchName(input.key);
   const where = input.nodeName ?? "this machine";
   const { root } = input;
-  const hooksPath = path.join(deps.worktreeRoot, "no-hooks");
-  await fs.mkdir(hooksPath, { recursive: true });
-  const git = localGit(deps, root, hooksPath);
+  const git = localGit(deps, root);
   await removeAgentsMdWorktree(git, deps.worktreeRoot, input.key);
 
   const origin = (
@@ -319,14 +335,33 @@ async function openOnce(input: {
 
   const findPr = async (): Promise<string | null> => {
     const listed = await deps.gh(
-      ["pr", "list", ...repo, "--head", branch, "--state", "all", "--json", "url", "--limit", "1"],
+      [
+        "pr",
+        "list",
+        ...repo,
+        "--head",
+        branch,
+        "--state",
+        "all",
+        "--json",
+        "url,state",
+        "--limit",
+        "1",
+      ],
       { cwd: root, timeoutMs: 30_000 },
     );
     try {
-      const rows = JSON.parse(listed) as Array<{ url?: unknown }>;
+      const rows = JSON.parse(listed) as Array<{ url?: unknown; state?: unknown }>;
       const url = Array.isArray(rows) ? rows[0]?.url : undefined;
-      return typeof url === "string" && url ? url : null;
-    } catch {
+      if (typeof url !== "string" || !url) return null;
+      if (rows[0]?.state !== "OPEN")
+        throw new AgentsMdPrError(
+          "pr-failed",
+          `The request's pull request is ${String(rows[0]?.state ?? "in an unknown state")}: ${url}. Propose a new request if another change is needed.`,
+        );
+      return url;
+    } catch (error) {
+      if (error instanceof AgentsMdPrError) throw error;
       return null;
     }
   };
@@ -354,38 +389,33 @@ async function openOnce(input: {
     );
   }
 
-  let outcomes: AgentsMdChangeOutcome[] = [];
-  let baseCommit: string | undefined;
-  const pushed = await remoteBranch().catch(() => null);
+  const base = await readBase(baseBranch, git);
+  const baseCommit = base.baseCommit;
+  const merged = mergeOrkestratorSection(base.content, input.changes);
+  const outcomes = merged.outcomes;
+  if (merged.conflicts.length > 0)
+    throw new AgentsMdPrError(
+      "conflict",
+      `The ## Orkestrator section changed on ${baseBranch}: ${merged.conflicts.map((outcome) => outcome.detail).join(" ")} Nothing was changed; propose against the current section.`,
+    );
+  const pushed = await remoteBranch();
   if (pushed) {
-    // An earlier attempt pushed before it could open the pull request. The
-    // branch is this request's own; check it holds only the AGENTS.md change.
     await deps.remoteGit("fetch", ["--no-tags", "origin", `refs/heads/${branch}`], { cwd: root });
-    const changed = (
-      await git(["diff", "--name-only", `refs/remotes/origin/${baseBranch}...${pushed}`])
-    )
+    const recovered = await readBase(baseBranch, git, "FETCH_HEAD");
+    const changed = (await git(["diff", "--name-only", baseCommit, recovered.baseCommit]))
       .toString("utf8")
       .split("\n")
       .filter(Boolean);
-    if (changed.length !== 1 || changed[0] !== AGENTS_MD_FILE)
-      throw new AgentsMdPrError(
-        "push-failed",
-        `Branch ${branch} already exists on origin with other changes; delete it or propose again with a new request.`,
-      );
-  } else {
-    const base = await readBase(baseBranch, git);
-    baseCommit = base.baseCommit;
-    const merged = mergeOrkestratorSection(base.content, input.changes);
-    outcomes = merged.outcomes;
-    if (merged.conflicts.length > 0)
+    if (
+      changed.length !== 1 ||
+      changed[0] !== AGENTS_MD_FILE ||
+      recovered.content !== merged.content
+    )
       throw new AgentsMdPrError(
         "conflict",
-        `The ## Orkestrator section changed on ${baseBranch} since this was proposed: ${merged.conflicts
-          .map((outcome) => outcome.detail)
-          .join(
-            " ",
-          )} Nothing was changed; ask the coordinator to propose against the current section.`,
+        `Branch ${branch} does not match the approved changes against current origin/${baseBranch}. Nothing was changed; propose again with a new request.`,
       );
+  } else {
     if (!merged.changed) return { status: "unchanged", branch, baseBranch, baseCommit, outcomes };
     await commitAndPush({
       git,
@@ -529,8 +559,9 @@ async function commitAndPush(input: {
         cwd: worktree,
       });
     } catch (error) {
-      // Pushed by a concurrent attempt in another process: carry on to the PR.
-      if (await input.isPushed().catch(() => null)) return;
+      // A lost push reply is safe only when origin has this exact commit.
+      const expected = (await git(["rev-parse", "HEAD"], worktree)).toString("utf8").trim();
+      if ((await input.isPushed().catch(() => null)) === expected) return;
       throw new AgentsMdPrError(
         "push-failed",
         `Could not push ${input.branch}: ${errorText(error)}`,

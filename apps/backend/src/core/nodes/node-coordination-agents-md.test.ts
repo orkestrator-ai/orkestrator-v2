@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { agentsMdRequestKey } from "../agents-md-pr.js";
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import { NodeOutcomeUnknownError } from "./node-link.js";
+import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import {
   NodeActionRequests,
   parseNodeActionApproval,
   type NodeActionRequest,
 } from "./node-action-requests.js";
+import { NodeOutcomeLedger, routeToNode } from "./node-routing.js";
+import { TestNodeNetwork, settle } from "./node-network-test-support.js";
+import type { NodePortal } from "./node-portal.js";
 import { NodeCoordination } from "./node-coordination.js";
 
 /**
@@ -25,11 +28,14 @@ type Call = { command: string; args: Record<string, unknown> };
 async function setup(options: {
   invoke?: (command: string, args: Record<string, unknown>) => Promise<unknown>;
   invokeOnNode?: (args: Record<string, unknown>) => Promise<unknown>;
+  portal?: NodePortal;
+  routed?: boolean;
 }) {
   const world = await MailWorld.create();
   worlds.push(world);
   const main = await world.main();
   const calls: Call[] = [];
+  const outcomes = new NodeOutcomeLedger();
   const instance = new NodeCoordination({
     storage: world.storage,
     nodes: {
@@ -41,13 +47,28 @@ async function setup(options: {
       subscribe: () => () => undefined,
       listNodes: async () => ({ nodes: [] }),
     } as never,
-    portal: {
-      readModel: { onNodeEvent: () => () => undefined },
-      invokeOnNode: async (args: Record<string, unknown>) => {
-        calls.push({ command: `node:${String(args.command)}`, args });
-        return options.invokeOnNode?.(args) ?? { outcome: "ok", result: {} };
-      },
-    } as never,
+    portal:
+      options.portal ??
+      ({
+        outcomes,
+        readModel: { onNodeEvent: () => () => undefined },
+        invokeOnNode: async (args: Record<string, unknown>) => {
+          calls.push({ command: `node:${String(args.command)}`, args });
+          if (options.routed)
+            return routeToNode({
+              nodeId: args.nodeId as never,
+              command: String(args.command),
+              args: args.args as Record<string, unknown>,
+              requestKey: String(args.requestKey),
+              outcomes,
+              link: {
+                connected: true,
+                invoke: async <T>() => (await options.invokeOnNode?.(args)) as T,
+              },
+            });
+          return options.invokeOnNode?.(args) ?? { outcome: "ok", result: {} };
+        },
+      } as never),
     invoke: (async (command: string, args: Record<string, unknown>) => {
       calls.push({ command, args });
       return options.invoke?.(command, args);
@@ -68,7 +89,7 @@ async function setup(options: {
     reason: "Agreed in chat",
     agentsMd: { changes: [{ action: "add", text: "Use bun." }] },
   });
-  return { world, main, calls, instance, input };
+  return { world, main, calls, instance, input, outcomes };
 }
 
 const opened = {
@@ -169,8 +190,8 @@ describe("update-agents-md approval", () => {
       "bk_leaf",
       "bk_leaf",
     ]);
-    // Each attempt is a distinct routed write; the node joins the one run.
-    expect(new Set(calls.map((call) => call.args.requestKey)).size).toBe(3);
+    // Every attempt joins the same remote run and outcome record.
+    expect(new Set(calls.map((call) => call.args.requestKey)).size).toBe(1);
     instance.collector.dispose();
   });
 
@@ -297,5 +318,105 @@ describe("restart mid-approval", () => {
     expect((await after.resolve("r2", "approve")).state).toBe("executed");
     await expect(after.resolve("r2", "approve")).rejects.toThrow("already executed");
     expect(runs).toBe(1);
+  });
+});
+
+describe("routed AGENTS.md outcomes", () => {
+  for (const succeeds of [true, false]) {
+    test(`lost replies ${succeeds ? "are settled by success" : "leave one durable notice"}`, async () => {
+      let attempts = 0;
+      const { instance, input, outcomes, world, main } = await setup({
+        routed: true,
+        invokeOnNode: async () => {
+          if (++attempts === 1 || !succeeds) throw new NodeOutcomeUnknownError("timeout");
+          return opened;
+        },
+      });
+      const notice = spyOn(world.storage, "sendAgentMail");
+      try {
+        const request = await instance.createActionRequest(input("bk_leaf"));
+        // Also settle records written by the former attempt-specific keys.
+        if (succeeds)
+          await outcomes.record({
+            nodeId: "bk_leaf" as never,
+            command: "open_project_agents_md_pr",
+            requestKey: `agents-md:${request.requestId}:0`,
+          });
+        const result = await instance.actions.resolve(request.requestId, "approve");
+        expect(result.state).toBe(succeeds ? "executed" : "outcome-unknown");
+        expect(attempts).toBe(succeeds ? 2 : 5);
+        expect(outcomes.list()).toHaveLength(succeeds ? 0 : 1);
+        expect(notice).toHaveBeenCalledTimes(1);
+        expect(notice.mock.calls[0]![1].toTabId).toBe(main.tabId);
+      } finally {
+        instance.dispose();
+      }
+    });
+  }
+  test("offline approved requests stay retryable until reconciliation succeeds", async () => {
+    let online = false;
+    const { instance, input, world } = await setup({
+      invokeOnNode: async () => {
+        if (!online) throw new NodeUnavailableError("offline");
+        return { outcome: "ok", result: opened };
+      },
+    });
+    const notice = spyOn(world.storage, "sendAgentMail");
+    try {
+      const request = await instance.createActionRequest(input("bk_leaf"));
+      const approval = { changes: [{ action: "add" as const, text: "Edited." }] };
+      expect(await instance.actions.resolve(request.requestId, "approve", approval)).toMatchObject({
+        state: "approved",
+        approval,
+        result: { code: "node-unavailable" },
+      });
+      expect(notice).not.toHaveBeenCalled();
+      online = true;
+      instance.start();
+      for (
+        let attempt = 0;
+        attempt < 100 && (await instance.actions.get(request.requestId))?.state !== "executed";
+        attempt++
+      )
+        await Bun.sleep(10);
+      expect((await instance.actions.get(request.requestId))?.state).toBe("executed");
+      expect(notice).toHaveBeenCalledTimes(1);
+    } finally {
+      instance.dispose();
+    }
+  });
+  test("a remote command failure preserves its code and message through the node link", async () => {
+    const network = new TestNodeNetwork();
+    const command = await network.add("command", { forceRegistration: true });
+    const leaf = await network.add("leaf");
+    leaf.commands.set("open_project_agents_md_pr", () => {
+      throw Object.assign(new Error("Sign in with gh on Build box."), { code: "gh-auth" });
+    });
+    let instance: NodeCoordination | undefined;
+    try {
+      await command.service.addNode({
+        routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+        token: leaf.token,
+      });
+      await settle(40);
+      const setupResult = await setup({ portal: command.portal });
+      instance = setupResult.instance;
+      const notice = spyOn(setupResult.world.storage, "sendAgentMail");
+      const request = await instance.createActionRequest(setupResult.input("bk_leaf"));
+      expect(await instance.actions.resolve(request.requestId, "approve")).toMatchObject({
+        state: "failed",
+        result: { code: "gh-auth", message: "Sign in with gh on Build box." },
+      });
+      expect(
+        leaf.received.filter((call) => call.command === "open_project_agents_md_pr"),
+      ).toHaveLength(1);
+      expect(notice.mock.calls[0]![1].body).toContain("Sign in with gh on Build box.");
+    } finally {
+      instance?.dispose();
+      for (const node of network.nodes.values()) {
+        node.portal.stop();
+        await node.service.stop();
+      }
+    }
   });
 });

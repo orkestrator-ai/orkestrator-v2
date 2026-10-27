@@ -1154,8 +1154,9 @@ the command node. It reads the section from the freshly fetched base branch on
 the node owning the project copy (`preview_agents_md_update` →
 `read_project_agents_md_section`) and shows the change as a line diff,
 computed by the same merge the backend runs. The user can edit each entry's
-text or drop it, and approves or declines. A replacement whose original is no
-longer in the section shows as a conflict and blocks approval until it is
+text or drop it, and approves or declines. Approval stays disabled until the
+preview has loaded and the merge succeeded; a failed read offers a retry and
+still permits declining. A replacement whose original is no longer in the section shows as a conflict and blocks approval until it is
 dropped; a proposal the section already satisfies says no pull request is
 needed. Nothing happens without approval; the outcome is mailed to the
 coordinator, which wakes it.
@@ -1167,21 +1168,24 @@ are refused by name):
 1. `gh auth status` first; a missing or signed-out `gh` fails with what to run
    (`gh auth login` on that machine, or a token under Settings).
 2. A pull request for the request's branch (`orkestrator/agents-md-<key>`, the
-   key derived from the request) is returned if one exists.
+   key derived from the request) is returned if it is open. A closed or merged
+   pull request produces a clear status and URL instead of an open-PR success.
 3. `git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>`, the
    base being the repository's PR base branch, else its default branch.
-4. If an earlier attempt already pushed the branch, it is checked to change
-   only `AGENTS.md` and the pull request is opened from it.
-5. Otherwise the entries are re-applied to `AGENTS.md` at `origin/<base>`.
+4. The entries are re-applied to `AGENTS.md` at the fetched `origin/<base>`.
    Additions already present and removals already gone are no-ops; a
    replacement whose original is gone is a conflict and nothing is pushed.
-   With nothing left to change there is no pull request.
-6. A temporary worktree under the system temp directory, detached and
-   without a checkout, gets the new file's exact bytes through
+5. If an earlier attempt already pushed the branch, it must change only
+   `AGENTS.md` and its file must match that fresh merge byte for byte. A
+   mismatch is a conflict; recovery never force-pushes. Otherwise, with
+   nothing left to change, there is no pull request.
+6. A temporary worktree inside a fresh private mode-0700 system temp directory,
+   detached and without a checkout, gets the new file's exact bytes through
    `hash-object --no-filters` and `update-index`, so line-ending conversion,
    clean filters and LFS cannot alter the rest of the file. It commits with
-   the repository's hooks disabled (Coordinator never loads them), checks the
-   commit changes only `AGENTS.md`, and pushes the branch, never forced.
+   `core.hooksPath=/dev/null`, checks the commit changes only `AGENTS.md`, and
+   pushes the branch, never forced. A lost push reply is accepted only if
+   origin holds that exact commit. The PR body also lives in the private directory.
 7. `gh pr create` with a body listing the changes and the reason, ending with
    the generated-by line. The worktree is removed in every case.
 
@@ -1196,17 +1200,24 @@ note that it holds coordinator-approved operating decisions every agent must
 follow; a missing file is created with just the section. Entries are compared
 ignoring case, spacing and a final full stop, stay de-duplicated (existing
 duplicates collapse to the first when the section changes), keep their order,
-and new ones go after the last entry. Headings inside fenced code are not
-headings, and two `## Orkestrator` sections are refused as ambiguous.
+and new ones go after the last entry. ATX and Setext level-one and level-two
+headings end the section; a first-line BOM does not hide its heading. Headings
+inside fenced code are not headings, and two `## Orkestrator` sections are
+refused as ambiguous. Invisible Unicode format characters are refused in new
+entries and ignored in comparison keys; compatibility normalization also
+prevents visually equivalent block markers from bypassing validation.
 
 **Durability.** The request (with the user's edited entries once approved)
 is in the node action request store. An approval a backend restart
-interrupted is run again on start (`resumeInterrupted`); with step 2 and 4
-above that finds the pull request or pushed branch the earlier run left
-rather than opening a second. On another node the routed call is retried if
-its answer is lost (the node link times out after 60 seconds); each retry
-joins the run still going there. After five lost answers the request ends
-`outcome-unknown`, naming the branch to check.
+interrupted is run again after node links and portal storage start
+(`resumeInterrupted`); with steps 2–5 above that finds the pull request or pushed branch the earlier run left
+rather than opening a second. An unavailable target keeps the request approved
+with the user's edits intact; reconnects and a 30-second reconciliation sweep
+retry it. On another node the routed call is retried if its answer is lost (the node link times out after 60 seconds); each retry
+joins the run still going there using the same routed request key. A successful
+answer clears earlier unknown-outcome notices for that run. After five lost
+answers the request ends `outcome-unknown`, naming the branch to check, with one
+routed outcome record. Remote failures retain their error code and message.
 
 ## Tests that exist today
 

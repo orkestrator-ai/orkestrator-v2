@@ -33,17 +33,30 @@ const SECTION = [
 
 /** The decision the dialog sent, rendered for the spec to read. */
 function installFixture(record: (value: unknown) => void) {
+  const mode = new URLSearchParams(window.location.search).get("preview");
+  let attempts = 0;
   window.orkestrator = {
     ...window.orkestrator!,
     invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
       switch (command) {
         case "preview_agents_md_update":
+          attempts++;
+          if (mode === "pending")
+            await new Promise<void>((resolve) =>
+              window.addEventListener("agents-md-preview-ready", () => resolve(), { once: true }),
+            );
+          // StrictMode replays the initial preview effect; both reads must fail.
+          if (mode === "error" && attempts <= 2) throw new Error("The project node is offline.");
           return {
             baseBranch: "main",
             baseCommit: "c0ffee00".repeat(5),
             fetched: true,
             fileExists: true,
-            section: { exists: true, text: SECTION, entries: [] },
+            section: {
+              exists: true,
+              text: mode === "invalid" ? `${SECTION}## Orkestrator\n` : SECTION,
+              entries: [],
+            },
           } as T;
         case "resolve_node_action_request":
           record(args);

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { agentsMdBaseBranch } from "./agents-md-commands.js";
 import { agentsMdBranchName, agentsMdRequestKey } from "./agents-md-pr.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
@@ -155,5 +156,33 @@ describe("request_coordinator_agents_md_update", () => {
     expect((await requests.list())[0]!.targets).toEqual([
       { nodeId: "bk_leaf", nodeName: "Build box", projectId: "leaf-project" },
     ]);
+  });
+});
+
+describe("AGENTS.md base branch selection", () => {
+  for (const [config, expected] of [
+    [{ prBaseBranch: " release ", defaultBranch: "develop" }, "release"],
+    [{ prBaseBranch: "  ", defaultBranch: " develop " }, "develop"],
+    [{ defaultBranch: "trunk" }, "trunk"],
+    [{}, "main"],
+    [{ prBaseBranch: " ", defaultBranch: " " }, "main"],
+    [null, "main"],
+  ] as const) {
+    test(`selects ${expected} from ${JSON.stringify(config)}`, async () => {
+      const ctx = {
+        storage: { getRepositoryConfig: async () => config },
+      } as unknown as CommandContext;
+      expect(await agentsMdBaseBranch(ctx, "p1")).toBe(expected);
+    });
+  }
+  test("unreadable repository settings fall back to main", async () => {
+    const ctx = {
+      storage: {
+        getRepositoryConfig: async () => {
+          throw new Error("unavailable");
+        },
+      },
+    } as unknown as CommandContext;
+    expect(await agentsMdBaseBranch(ctx, "p1")).toBe("main");
   });
 });

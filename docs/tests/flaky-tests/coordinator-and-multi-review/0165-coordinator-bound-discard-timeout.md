@@ -755,3 +755,23 @@ assertion, timeout or skip was changed for validation.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SdxKj0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Isolated rerun: `mise run test:logged -- --name coord-unborn-alone -- bun test --cwd apps/backend ./src/core/coordinator-service.test.ts --parallel=1 -t "discards an unborn HEAD"` passed (exit 0, 3.0 s).
 - Assessment: the same aggregate-load timeout. Still open; nothing changed.
+
+
+## Recurrence — 2026-10-27, AGENTS.md review fixes
+
+- Command: `mise run test:logged -- --name agents-md-full -- mise run test`
+  on `agents-decision-pr-350b9400f5bb-r1`, working tree based on `60c6655b1`.
+  The default worker plan reserved four workspace slots, one root slot and two
+  bridge slots; the component browser suite also ran on the shared macOS host.
+- Failures: `project coordinator > a dirty submodule needs enhanced confirmation
+  before a discarding switch` (5828.07 ms) and `project coordinator > fetch force,
+  fast-forward sync, remote switching, and divergence stay safe` (5083.40 ms),
+  both at the unchanged five-second budget.
+- Complete unchanged owner rerun:
+  `mise run test:logged -- --name agents-md-baseline-coordinator -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  passed (exit 0, 49.2 seconds).
+- Aggregate evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.7AiZMP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+  Full-run totals and the other owner reruns are in case 1220.
+- Assessment: recurrence under aggregate load; no coordinator-service code,
+  assertion or timeout was changed. Status remains open.

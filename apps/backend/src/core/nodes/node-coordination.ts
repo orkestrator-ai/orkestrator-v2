@@ -110,6 +110,32 @@ export class NodeCoordination {
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
   readonly copies: NodeProjectCopies;
+  private recoveryStarted = false;
+  private recoveryTimer: ReturnType<typeof setInterval> | undefined;
+  private unsubscribeNodes: (() => void) | undefined;
+
+  /** Called after backend recovery, links and portal storage are ready. */
+  start(): void {
+    if (this.recoveryStarted) return;
+    this.recoveryStarted = true;
+    this.resumeActions();
+    this.recoveryTimer = setInterval(() => this.resumeActions(), 30_000);
+    this.recoveryTimer.unref?.();
+  }
+
+  private resumeActions(): void {
+    if (!this.recoveryStarted) return;
+    void this.actions.resumeInterrupted().catch(() => {
+      console.warn("[nodes] Could not resume approved actions; will retry.");
+    });
+  }
+
+  dispose(): void {
+    this.recoveryStarted = false;
+    clearInterval(this.recoveryTimer);
+    this.unsubscribeNodes?.();
+    this.collector.dispose();
+  }
 
   constructor(
     private readonly options: {
@@ -180,7 +206,7 @@ export class NodeCoordination {
     );
     // Every (re)connect collects whatever waited while the link was down.
     let connected = new Set<string>();
-    nodes.subscribe(() => {
+    this.unsubscribeNodes = nodes.subscribe(() => {
       void nodes
         .listNodes()
         .then((list) => {
@@ -189,7 +215,11 @@ export class NodeCoordination {
               .filter((node) => node.connection.state === "connected")
               .map((node) => node.nodeId),
           );
-          for (const nodeId of now) if (!connected.has(nodeId)) void this.collector.collect(nodeId);
+          for (const nodeId of now)
+            if (!connected.has(nodeId)) {
+              void this.collector.collect(nodeId);
+              this.resumeActions();
+            }
           connected = now;
         })
         .catch(() => undefined);
@@ -500,6 +530,7 @@ export class NodeCoordination {
     command: string,
     args: Record<string, unknown>,
     requestKey: string,
+    previousRequestKey?: string,
   ): Promise<{ outcome: "ok"; result: T } | { outcome: "unknown" }> {
     if (nodeId === (await this.options.nodes.selfIdentity()))
       return { outcome: "ok", result: await this.options.invoke<T>(command, args) };
@@ -509,9 +540,25 @@ export class NodeCoordination {
           nodeId,
           command,
           args,
-          requestKey: `${requestKey}:${attempt}`,
+          requestKey,
         });
-        if (routed.outcome === "ok") return { outcome: "ok", result: routed.result as T };
+        if (routed.outcome === "ok") {
+          // These retries join the same idempotent remote run. Its successful
+          // answer settles earlier lost answers, including before a restart.
+          const ledger = this.options.portal.outcomes;
+          const keys = [requestKey, previousRequestKey?.slice(0, 128)];
+          for (const record of ledger.list(nodeId)) {
+            if (
+              record.command === command &&
+              keys.some(
+                (key) =>
+                  key && (record.requestKey === key || record.requestKey.startsWith(`${key}:`)),
+              )
+            )
+              await ledger.dismiss(record.outcomeId);
+          }
+          return { outcome: "ok", result: routed.result as T };
+        }
       } catch (error) {
         if (!(error instanceof NodeOutcomeUnknownError)) throw error;
       }
@@ -541,6 +588,7 @@ export class NodeCoordination {
         reason: request.reason ?? "Approved in Orkestrator",
         nodeName: target.nodeName,
       },
+      `agents-md:${key}`,
       `agents-md:${request.requestId}`,
     );
     if (outcome.outcome === "unknown")

@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+  stat,
+  symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ORKESTRATOR_SECTION_NOTE } from "@orkestrator/protocol/agents-md-orkestrator";
@@ -40,7 +50,13 @@ let root: string;
 let origin: string;
 let seed: string;
 let checkout: string;
-let prs: Array<{ url: string; head: string; base: string; body: string }>;
+let prs: Array<{
+  url: string;
+  head: string;
+  base: string;
+  body: string;
+  state?: "OPEN" | "CLOSED" | "MERGED";
+}>;
 let ghCalls: string[][];
 let ghAuthOk: boolean;
 let ghMissing: boolean;
@@ -78,7 +94,11 @@ function deps(): AgentsMdPrDependencies {
       }
       const head = args[args.indexOf("--head") + 1]!;
       if (args[1] === "list")
-        return JSON.stringify(prs.filter((pr) => pr.head === head).map((pr) => ({ url: pr.url })));
+        return JSON.stringify(
+          prs
+            .filter((pr) => pr.head === head)
+            .map((pr) => ({ url: pr.url, state: pr.state ?? "OPEN" })),
+        );
       if (args[1] === "create") {
         if (failCreateOnce) {
           failCreateOnce = false;
@@ -178,7 +198,7 @@ describe("openAgentsMdPullRequest", () => {
       expect(prs[0]!.body).toContain("**Reason:** Agreed in the coordinator chat");
       expect(prs[0]!.body.trimEnd().endsWith(AGENTS_MD_GENERATED_BY)).toBe(true);
       // The temporary worktree is gone.
-      expect(await readdir(path.join(root, "worktrees"))).toEqual(["no-hooks"]);
+      expect(await readdir(path.join(root, "worktrees"))).toEqual([]);
     },
     TIMEOUT,
   );
@@ -223,12 +243,10 @@ describe("openAgentsMdPullRequest", () => {
       expect((error as AgentsMdPrError).code).toBe("pr-failed");
       const pushed = await git(checkout, "ls-remote", "--heads", "origin", agentsMdBranchName(KEY));
       expect(pushed).not.toBe("");
-      // A crashed attempt's leftover worktree directory is cleaned up too.
-      await mkdir(path.join(root, "worktrees", KEY), { recursive: true });
       const resumed = await open([{ action: "add", text: "Use bun." }]);
       expect(resumed.status).toBe("opened");
       expect(prs).toHaveLength(1);
-      expect(await readdir(path.join(root, "worktrees"))).toEqual(["no-hooks"]);
+      expect(await readdir(path.join(root, "worktrees"))).toEqual([]);
     },
     TIMEOUT,
   );
@@ -292,13 +310,29 @@ describe("openAgentsMdPullRequest", () => {
       await pushSeed({ "AGENTS.md": crlf }, "crlf");
       await git(checkout, "config", "core.autocrlf", "true");
       const hooks = path.join(checkout, ".git", "hooks");
-      for (const hook of ["pre-commit", "commit-msg", "pre-push", "post-checkout"]) {
+      for (const hook of [
+        "pre-commit",
+        "commit-msg",
+        "prepare-commit-msg",
+        "post-commit",
+        "pre-push",
+        "post-checkout",
+        "reference-transaction",
+      ]) {
         await writeFile(path.join(hooks, hook), "#!/bin/sh\nexit 1\n");
         await chmod(path.join(hooks, hook), 0o755);
       }
       const result = await open([{ action: "add", text: "Use bun." }]);
       expect(result.status).toBe("opened");
-      await git(checkout, "fetch", "-q", "origin", `refs/heads/${result.branch}`);
+      await git(
+        checkout,
+        "-c",
+        "core.hooksPath=/dev/null",
+        "fetch",
+        "-q",
+        "origin",
+        `refs/heads/${result.branch}`,
+      );
       const bytes = (
         await runCommand("git", ["cat-file", "blob", "FETCH_HEAD:AGENTS.md"], { cwd: checkout })
       ).stdout;
@@ -327,6 +361,161 @@ describe("readAgentsMdSectionFromBase", () => {
       expect(read.fileExists).toBe(true);
       expect(read.section.entries).toEqual(["Never touch ports 34121/34122."]);
       expect(read.baseCommit).toBe((await git(seed, "rev-parse", "HEAD")).trim());
+    },
+    TIMEOUT,
+  );
+});
+
+async function seedRequestBranch(content: string) {
+  await git(seed, "checkout", "-q", "-b", "foreign");
+  await writeFile(path.join(seed, "AGENTS.md"), content);
+  await git(seed, "add", "AGENTS.md");
+  await git(seed, "commit", "-q", "-m", "foreign branch");
+  await git(seed, "push", "-q", "origin", `HEAD:refs/heads/${agentsMdBranchName(KEY)}`);
+  await git(seed, "checkout", "-q", "main");
+}
+
+describe("PR recovery integrity", () => {
+  for (const content of [
+    AGENTS.replace("Keep this exactly.", "Unapproved outside edit."),
+    AGENTS.replace("- Never touch", "- Use something else.\n- Never touch"),
+  ]) {
+    test(
+      "rejects an AGENTS.md-only branch with unapproved content",
+      async () => {
+        await seedRequestBranch(content);
+        await expect(open([{ action: "add", text: "Use bun." }])).rejects.toMatchObject({
+          code: "conflict",
+        });
+        expect(prs).toHaveLength(0);
+        expect(ghCalls.some((args) => args[1] === "create")).toBe(false);
+      },
+      TIMEOUT,
+    );
+  }
+  test(
+    "rechecks replacement conflicts after push and before PR recovery",
+    async () => {
+      const changes = [
+        {
+          action: "replace" as const,
+          replaces: "Never touch ports 34121/34122.",
+          text: "Use bun.",
+        },
+      ];
+      failCreateOnce = true;
+      await expect(open(changes)).rejects.toMatchObject({ code: "pr-failed" });
+      await pushSeed(
+        { "AGENTS.md": AGENTS.replace("Never touch ports 34121/34122.", "Upstream replacement.") },
+        "upstream",
+      );
+      await expect(open(changes)).rejects.toMatchObject({ code: "conflict" });
+      expect(prs).toHaveLength(0);
+      expect(ghCalls.filter((args) => args[1] === "create")).toHaveLength(1);
+    },
+    TIMEOUT,
+  );
+  test(
+    "a foreign branch appearing during a failed push is rejected",
+    async () => {
+      const dependencies = deps();
+      const remoteGit = dependencies.remoteGit;
+      dependencies.remoteGit = async (command, args, options) => {
+        if (command === "push") {
+          await seedRequestBranch(AGENTS.replace("Keep this exactly.", "Unapproved outside edit."));
+          throw new Error("push rejected");
+        }
+        return remoteGit(command, args, options);
+      };
+      await expect(
+        openAgentsMdPullRequest({
+          root: checkout,
+          baseBranch: "main",
+          key: KEY,
+          changes: [{ action: "add", text: "Use bun." }],
+          reason: "approved",
+          deps: dependencies,
+        }),
+      ).rejects.toMatchObject({ code: "push-failed" });
+      expect(prs).toHaveLength(0);
+    },
+    TIMEOUT,
+  );
+  test(
+    "a lost push reply accepts the exact commit already on origin",
+    async () => {
+      const dependencies = deps();
+      const remoteGit = dependencies.remoteGit;
+      dependencies.remoteGit = async (command, args, options) => {
+        const result = await remoteGit(command, args, options);
+        if (command === "push") throw new Error("reply lost");
+        return result;
+      };
+      expect(
+        (
+          await openAgentsMdPullRequest({
+            root: checkout,
+            baseBranch: "main",
+            key: KEY,
+            changes: [{ action: "add", text: "Use bun." }],
+            reason: "approved",
+            deps: dependencies,
+          })
+        ).status,
+      ).toBe("opened");
+      expect(prs).toHaveLength(1);
+    },
+    TIMEOUT,
+  );
+  for (const state of ["CLOSED", "MERGED"] as const) {
+    test(
+      `reports ${state} PRs clearly instead of successful open recovery`,
+      async () => {
+        await open([{ action: "add", text: "Use bun." }]);
+        prs[0]!.state = state;
+        const error = await open([{ action: "add", text: "Use bun." }]).catch((error) => error);
+        expect(error).toBeInstanceOf(AgentsMdPrError);
+        expect(error.code).toBe("pr-failed");
+        expect(error.message).toContain(state);
+        expect(error.message).toContain(prs[0]!.url);
+        expect(ghCalls.filter((args) => args[1] === "create")).toHaveLength(1);
+      },
+      TIMEOUT,
+    );
+  }
+  test(
+    "private temp files ignore predictable hooks and body symlinks",
+    async () => {
+      const parent = path.join(root, "worktrees");
+      const hooks = path.join(parent, "no-hooks");
+      await mkdir(hooks, { recursive: true });
+      const marker = path.join(root, "hook-ran");
+      const victim = path.join(root, "victim");
+      await writeFile(victim, "untouched");
+      await symlink(victim, path.join(parent, `${KEY}.body.md`));
+      await writeFile(path.join(hooks, "post-commit"), `#!/bin/sh\necho ran > '${marker}'\n`);
+      await chmod(path.join(hooks, "post-commit"), 0o755);
+      const dependencies = deps();
+      const realGit = dependencies.git;
+      dependencies.git = async (args, options) => {
+        expect(args.slice(0, 2)).toEqual(["-c", "core.hooksPath=/dev/null"]);
+        if (options.cwd !== checkout) {
+          const privateRoot = path.dirname(options.cwd);
+          expect((await stat(privateRoot)).mode & 0o777).toBe(0o700);
+        }
+        return realGit(args, options);
+      };
+      await openAgentsMdPullRequest({
+        root: checkout,
+        baseBranch: "main",
+        key: KEY,
+        changes: [{ action: "add", text: "Use bun." }],
+        reason: "approved",
+        deps: dependencies,
+      });
+      expect(await readFile(victim, "utf8")).toBe("untouched");
+      expect(await stat(marker).catch(() => null)).toBeNull();
+      expect((await readdir(parent)).sort()).toEqual([`${KEY}.body.md`, "no-hooks"]);
     },
     TIMEOUT,
   );

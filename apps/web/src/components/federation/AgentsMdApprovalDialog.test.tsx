@@ -185,3 +185,51 @@ describe("AGENTS.md approval dialog", () => {
     );
   });
 });
+
+test("pending preview blocks approval but permits decline", async () => {
+  const resolved = backend();
+  const fallback = invokeMock.getMockImplementation()!;
+  invokeMock.mockImplementation((command: string, args: Record<string, unknown>) =>
+    command === "preview_agents_md_update" ? new Promise(() => {}) : fallback(command, args),
+  );
+  render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);
+  const approve = screen.getByRole("button", { name: "Approve and open PR" }) as HTMLButtonElement;
+  expect(approve.disabled).toBe(true);
+  fireEvent.click(approve);
+  expect(resolved).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+  await waitFor(() =>
+    expect(resolved).toEqual([{ requestId: request.requestId, decision: "reject" }]),
+  );
+});
+
+test("failed preview blocks approval; retry enables it after a valid diff", async () => {
+  const resolved = backend();
+  const fallback = invokeMock.getMockImplementation()!;
+  let attempts = 0;
+  invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+    if (command === "preview_agents_md_update" && attempts++ === 0)
+      return Promise.reject(new Error("node offline"));
+    return fallback(command, args);
+  });
+  render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);
+  await screen.findByText(/node offline/);
+  const approve = () =>
+    screen.getByRole("button", { name: "Approve and open PR" }) as HTMLButtonElement;
+  expect(approve().disabled).toBe(true);
+  fireEvent.click(approve());
+  expect(resolved).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Retry preview" }));
+  await screen.findByTestId("agents-md-diff");
+  expect(approve().disabled).toBe(false);
+});
+
+test("a merge exception blocks approval", async () => {
+  const resolved = backend({ section: "## Orkestrator\n- a\n## Orkestrator\n- b\n" });
+  render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);
+  await screen.findByText(/more than one/);
+  const approve = screen.getByRole("button", { name: "Approve and open PR" }) as HTMLButtonElement;
+  expect(approve.disabled).toBe(true);
+  fireEvent.click(approve);
+  expect(resolved).toEqual([]);
+});

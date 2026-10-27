@@ -311,3 +311,54 @@ test("describeAgentsMdChange names each action", () => {
   expect(describeAgentsMdChange(add("a"))).toBe("Add: a");
   expect(describeAgentsMdChange(remove("a"))).toBe("Remove: a");
 });
+
+describe("section boundary regressions", () => {
+  for (const underline of ["===", "---"]) {
+    test(`preserves a following Setext section (${underline}) for every action`, () => {
+      const suffix = `Testing\n${underline}\n\n- Outside rule.\n`;
+      const original = `## Orkestrator\n\n- Inside rule.\n\n${suffix}`;
+      for (const change of [
+        add("Another rule."),
+        replace("Inside rule.", "Updated rule."),
+        remove("Inside rule."),
+        remove("Outside rule."),
+      ]) {
+        const merged = mergeOrkestratorSection(original, [change]);
+        expect(merged.content.endsWith(suffix)).toBe(true);
+        expect(merged.entriesAfter).not.toContain("Outside rule.");
+      }
+    });
+  }
+  test("Setext-looking text inside a fence does not end the section", () => {
+    const original = "## Orkestrator\n\n```md\nTesting\n---\n```\n\n- Inside rule.\n";
+    expect(
+      mergeOrkestratorSection(original, [replace("Inside rule.", "Updated rule.")]).content,
+    ).toContain("- Updated rule.");
+  });
+  test("BOM-prefixed first heading stays unique with the BOM intact", () => {
+    for (const change of [
+      add("Another rule."),
+      replace("Inside rule.", "Updated rule."),
+      remove("Inside rule."),
+    ]) {
+      const merged = mergeOrkestratorSection("\uFEFF## Orkestrator\n\n- Inside rule.\n", [change]);
+      expect(merged.content.startsWith("\uFEFF## Orkestrator")).toBe(true);
+      expect(merged.content.match(/## Orkestrator/g)).toHaveLength(1);
+      expect(merged.createdSection).toBe(false);
+      expect(readOrkestratorSection(merged.content).exists).toBe(true);
+    }
+  });
+  test("format characters and compatibility block markers cannot hide entries", () => {
+    for (const text of [
+      "\u200B## Hidden",
+      "Rule.\u200B",
+      "\u2060Rule",
+      "＃＃ Hidden",
+      "＞ Hidden",
+      "＜!-- Hidden --＞",
+    ])
+      expect(() => validateAgentsMdEntry(text)).toThrow();
+    expect(agentsMdEntryKey("Rule.\u200B")).toBe(agentsMdEntryKey("Rule."));
+    expect(agentsMdEntryKey("Ｒｕｌｅ.")).toBe(agentsMdEntryKey("Rule."));
+  });
+});

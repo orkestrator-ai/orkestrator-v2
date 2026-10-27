@@ -184,6 +184,13 @@ export class NodeOutcomeLedger {
   async record(
     entry: Omit<NodeOutcomeRecord, "outcomeId" | "recordedAt">,
   ): Promise<NodeOutcomeRecord> {
+    const existing = this.records.find(
+      (record) =>
+        record.nodeId === entry.nodeId &&
+        record.command === entry.command &&
+        record.requestKey === entry.requestKey,
+    );
+    if (existing) return existing;
     const record: NodeOutcomeRecord = {
       ...entry,
       outcomeId: randomUUID(),

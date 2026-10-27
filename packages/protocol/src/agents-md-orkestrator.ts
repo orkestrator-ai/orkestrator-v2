@@ -66,7 +66,9 @@ export class AgentsMdSectionError extends Error {
 const LINE_BREAK = new RegExp("[\\r\\n\\u000b\\u000c\\u0085\\u2028\\u2029]");
 // Tabs are allowed (and collapsed); every other C0/C1 control is refused.
 const CONTROL = new RegExp("[\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f]");
-// Bidirectional overrides and isolates can make text render unlike its bytes.
+// Format characters can hide content or create visually identical entries.
+const FORMAT = /\p{Cf}/u;
+// Keep the more specific diagnostic for bidirectional overrides and isolates.
 const BIDI = new RegExp("[\\u202a-\\u202e\\u2066-\\u2069]");
 // What could open another Markdown block when it starts a list item's text.
 const BLOCK_START =
@@ -84,7 +86,7 @@ export function normalizeAgentsMdEntry(text: string): string {
 
 /** The comparison key: entries differing only in case, spacing or a final full stop are one. */
 export function agentsMdEntryKey(text: string): string {
-  return normalizeAgentsMdEntry(text)
+  return normalizeAgentsMdEntry(text.replace(/\p{Cf}/gu, "").normalize("NFKC"))
     .toLowerCase()
     .replace(/[.;]+$/, "")
     .trim();
@@ -96,11 +98,12 @@ export function validateAgentsMdEntry(value: unknown, field = "text"): string {
   if (LINE_BREAK.test(value)) throw invalid(`${field} must be a single line`);
   if (CONTROL.test(value)) throw invalid(`${field} contains control characters`);
   if (BIDI.test(value)) throw invalid(`${field} contains bidirectional control characters`);
+  if (FORMAT.test(value)) throw invalid(`${field} contains invisible format characters`);
   const text = normalizeAgentsMdEntry(value);
   if (!text) throw invalid(`${field} is empty`);
   if (text.length > MAX_AGENTS_MD_ENTRY_CHARS)
     throw invalid(`${field} is longer than ${MAX_AGENTS_MD_ENTRY_CHARS} characters`);
-  if (BLOCK_START.test(text))
+  if (BLOCK_START.test(text.normalize("NFKC")))
     throw invalid(
       `${field} must be plain bullet text; it cannot start with a heading, quote, list, fence, table, HTML or rule marker`,
     );
@@ -237,19 +240,47 @@ function parseDocument(content: string): ParsedDocument {
   const inFence = fenceTracker();
   let headingIndex = -1;
   let endIndex = lines.length;
+  const plainParagraph = (text: string) =>
+    Boolean(text.trim()) &&
+    !/^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t]|$)|\d+[.)][ \t]|>|#|`{3}|~{3}|<))/.test(text);
+  let paragraphStart = -1;
   for (const [index, line] of lines.entries()) {
-    if (inFence(line.text)) continue;
-    const found = heading(line.text);
+    // A BOM belongs to the file bytes, but is not part of the first heading.
+    const text = index === 0 ? line.text.replace(/^\uFEFF/, "") : line.text;
+    if (inFence(text)) {
+      paragraphStart = -1;
+      continue;
+    }
+    const setext = paragraphStart !== -1 && /^ {0,3}(?:=+|-+)[ \t]*$/.test(text);
+    const found = setext
+      ? {
+          level: text.trim().startsWith("=") ? 1 : 2,
+          title: lines
+            .slice(paragraphStart, index)
+            .map((item) => item.text.trim())
+            .join(" "),
+        }
+      : heading(text);
+    const start = setext ? paragraphStart : index;
+    if (found) paragraphStart = -1;
+    else if (plainParagraph(text)) {
+      if (paragraphStart === -1) paragraphStart = index;
+    } else paragraphStart = -1;
     if (!found || found.level > 2) continue;
     const ours = found.level === 2 && found.title.toLowerCase() === "orkestrator";
+    if (ours && setext)
+      throw new AgentsMdSectionError(
+        "ambiguous-section",
+        "Use an ATX ## Orkestrator heading before editing this section.",
+      );
     if (ours && headingIndex !== -1)
       throw new AgentsMdSectionError(
         "ambiguous-section",
         "AGENTS.md has more than one ## Orkestrator section; merge them by hand first.",
       );
-    if (headingIndex !== -1 && endIndex === lines.length) endIndex = index;
+    if (headingIndex !== -1 && endIndex === lines.length) endIndex = start;
     if (ours) {
-      headingIndex = index;
+      headingIndex = start;
       endIndex = lines.length;
     }
   }

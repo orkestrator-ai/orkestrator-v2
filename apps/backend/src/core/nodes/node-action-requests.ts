@@ -309,6 +309,19 @@ export class NodeActionRequests {
             ...(outcome.url ? { url: outcome.url } : {}),
           };
         } catch (error) {
+          // Offline nodes have not accepted the write. Keep approved entries
+          // durable so startup/reconnect reconciliation can try them again.
+          if (
+            RESUMABLE_KINDS.has(request.kind) &&
+            (error as { code?: unknown })?.code === "node-unavailable"
+          ) {
+            request.result = {
+              code: "node-unavailable",
+              message: "Waiting for the target node to reconnect.",
+            };
+            await this.persist();
+            return structuredClone(request);
+          }
           request.state = "failed";
           request.result = {
             code: (error as { code?: unknown }).code

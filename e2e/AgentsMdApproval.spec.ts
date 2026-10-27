@@ -51,3 +51,34 @@ test("AGENTS.md approval can be declined without approving anything", async ({ p
     JSON.stringify({ requestId: "agents-md-fixture", decision: "reject" }),
   );
 });
+
+test("approval waits for a successfully rendered preview", async ({ page }) => {
+  await page.goto("/agents-md-approval?preview=pending");
+  const approve = page.getByRole("button", { name: "Approve and open PR" });
+  await expect(approve).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Decline" })).toBeEnabled();
+  await expect(page.getByTestId("decision")).toHaveText("");
+  await expect(page.getByText("Reading AGENTS.md on the base branch…")).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("agents-md-preview-ready")));
+  await expect(page.getByTestId("agents-md-diff")).toBeVisible();
+  await expect(approve).toBeEnabled();
+});
+
+test("a failed preview can be retried without approving it", async ({ page }) => {
+  await page.goto("/agents-md-approval?preview=error");
+  await expect(page.getByText(/The project node is offline/)).toBeVisible();
+  const approve = page.getByRole("button", { name: "Approve and open PR" });
+  await expect(approve).toBeDisabled();
+  await page.getByRole("button", { name: "Retry preview" }).click();
+  await expect(page.getByTestId("agents-md-diff")).toBeVisible();
+  await expect(approve).toBeEnabled();
+  await expect(page.getByTestId("decision")).toHaveText("");
+});
+
+test("a merge failure blocks approval and still allows decline", async ({ page }) => {
+  await page.goto("/agents-md-approval?preview=invalid");
+  await expect(page.getByText(/more than one ## Orkestrator/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve and open PR" })).toBeDisabled();
+  await page.getByRole("button", { name: "Decline" }).click();
+  await expect(page.getByTestId("decision")).toContainText('"decision":"reject"');
+});

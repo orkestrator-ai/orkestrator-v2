@@ -77,6 +77,7 @@ export function AgentsMdApprovalDialog({
       include: true,
     })),
   );
+  const [previewAttempt, setPreviewAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -91,7 +92,7 @@ export function AgentsMdApprovalDialog({
     return () => {
       active = false;
     };
-  }, [request.requestId]);
+  }, [request.requestId, previewAttempt]);
 
   // The user's final entries, validated by the same rules the backend applies.
   const proposal = useMemo((): { changes: AgentsMdChange[] } | { error: string } => {
@@ -136,8 +137,15 @@ export function AgentsMdApprovalDialog({
     included += 1;
   }
 
+  const canApprove =
+    !!preview &&
+    !loadError &&
+    merged?.ok === true &&
+    conflicts.length === 0 &&
+    "changes" in proposal;
+
   const decide = async (decision: "approve" | "reject") => {
-    if (decision === "approve" && !("changes" in proposal)) return;
+    if (busy || (decision === "approve" && !canApprove)) return;
     setBusy(true);
     try {
       const resolved = await resolveNodeActionRequest(
@@ -253,9 +261,23 @@ export function AgentsMdApprovalDialog({
 
         <section className="space-y-1" aria-label="Change to the section">
           {loadError ? (
-            <p className="flex items-center gap-2 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4" /> Could not read the current section: {loadError}
-            </p>
+            <div>
+              <p className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" /> Could not read the current section: {loadError}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  setLoadError(null);
+                  setPreview(null);
+                  setPreviewAttempt((attempt) => attempt + 1);
+                }}
+              >
+                Retry preview
+              </Button>
+            </div>
           ) : !preview ? (
             <p className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Reading AGENTS.md on the base branch…
@@ -320,7 +342,7 @@ export function AgentsMdApprovalDialog({
           </Button>
           <Button
             type="button"
-            disabled={busy || !("changes" in proposal) || conflicts.length > 0}
+            disabled={busy || !canApprove}
             onClick={() => void decide("approve")}
           >
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

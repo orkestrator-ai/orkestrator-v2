@@ -9,7 +9,12 @@
  * completion clears the notice unless its own words say the renewal failed, in
  * which case it stays as a sign-in prompt. A confirmed sign-out still locks the
  * composer through readiness (`account/read`), independently of this.
+ *
+ * A login the API refuses outright sends no recovery at all: app-server treats
+ * an invalid API key as signed in, retries the request and fails the turn with
+ * a 401 (`refusedLoginNotice`).
  */
+import type { EngineError } from "../engine/types.js";
 import type { ThreadAuthNotice } from "./thread-registry.js";
 
 const RENEWAL_FAILED =
@@ -42,4 +47,39 @@ export function nextThreadAuthNotice(
     };
   }
   return undefined;
+}
+
+export const CODEX_LOGIN_REFUSED_MESSAGE =
+  "Codex's login was refused. Sign in to Codex again to keep working.";
+
+/**
+ * Whether a failed turn's error is the API refusing the login: app-server's
+ * `unauthorized`, or a 401 on a variant that forwards the upstream status
+ * (`httpConnectionFailed`, `responseStreamConnectionFailed`,
+ * `responseStreamDisconnected`, `responseTooManyFailedAttempts`). Only a 401:
+ * the notice locks the composer, so a failure with no status or a 5xx, which
+ * signing in would not fix, never raises it.
+ */
+export function isRefusedLoginError(error: EngineError | undefined): boolean {
+  if (!error) return false;
+  return error.code === "unauthorized" || error.httpStatusCode === 401;
+}
+
+/**
+ * The notice for a turn whose login was refused. A refusal already shown keeps
+ * its occurrence, so a notice the user dismissed stays dismissed when the
+ * next turn is refused the same way.
+ */
+export function refusedLoginNotice(
+  current: ThreadAuthNotice | undefined,
+  newOccurrenceId: () => string,
+): ThreadAuthNotice {
+  if (current?.state === "needs-auth" && current.message === CODEX_LOGIN_REFUSED_MESSAGE) {
+    return current;
+  }
+  return {
+    state: "needs-auth",
+    message: CODEX_LOGIN_REFUSED_MESSAGE,
+    occurrenceId: newOccurrenceId(),
+  };
 }

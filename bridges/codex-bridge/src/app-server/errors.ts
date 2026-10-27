@@ -259,3 +259,18 @@ export function codexErrorInfoToCode(info: unknown): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * The upstream HTTP status on a `CodexErrorInfo` variant that carries one
+ * (`{ httpConnectionFailed: { httpStatusCode: 401 } }`). The code alone loses
+ * it, and a refused login is told from a network failure only by it.
+ */
+export function codexErrorInfoHttpStatus(info: unknown): number | undefined {
+  if (!info || typeof info !== "object") return undefined;
+  const values = Object.values(info as Record<string, unknown>);
+  if (values.length !== 1) return undefined;
+  const payload = values[0];
+  if (!payload || typeof payload !== "object") return undefined;
+  const status = (payload as { httpStatusCode?: unknown }).httpStatusCode;
+  return typeof status === "number" && Number.isSafeInteger(status) ? status : undefined;
+}

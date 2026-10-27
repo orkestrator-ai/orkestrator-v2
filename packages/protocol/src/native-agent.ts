@@ -2388,6 +2388,13 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
+  /**
+   * Rows saying how the last turn ended (`native-terminal:` ids), from the
+   * progressive state view. Shown after `messages` with
+   * `withNativeTerminalMessages` (`native-terminal-rows.ts`); a full
+   * projection carries them in `messages` instead.
+   */
+  terminalMessages?: TMessage[];
   turnBoundaries?: NativeAgentTurnBoundary[];
   slashCommands?: NativeAgentSlashCommand[];
   /** Freshness of {@link slashCommands}; absent from a legacy backend. */
@@ -2485,6 +2492,14 @@ export interface NativeAgentSessionStateView {
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
+  /**
+   * System rows for the provider's terminal state: its turn error and its
+   * `error`/`stopped` notices, which `notices` leaves out. The transcript view
+   * never reads session state, so without these a failed turn's reason never
+   * reached a progressive reader. Absent when there is none, and from older
+   * backends.
+   */
+  terminalMessages?: unknown[];
   shareUrl?: string | null;
   title?: string;
 }

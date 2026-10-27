@@ -1197,8 +1197,8 @@ app.get("/global/auth", async (c) => {
     pendingSignIn?: unknown;
   };
   const account = raw.account;
+  const pendingSignIn = normalizePendingSignIn(raw.pendingSignIn);
   if (!account) {
-    const pendingSignIn = normalizePendingSignIn(raw.pendingSignIn);
     return c.json({
       state: raw.requiresOpenaiAuth ? "needs-auth" : "signed-out",
       signIn: { kind: "browser-url" },
@@ -1209,6 +1209,7 @@ app.get("/global/auth", async (c) => {
   const label = account.type === "chatgpt" ? account.email || "ChatGPT" : account.type || "Codex";
   return c.json({
     state: "signed-in",
+    pendingSignIn: pendingSignIn ?? null,
     account: { label, ...(account.planType ? { plan: account.planType } : {}) },
     signIn: { kind: "browser-url" },
     signOut: true,

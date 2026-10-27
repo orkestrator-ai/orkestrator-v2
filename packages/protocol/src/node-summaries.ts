@@ -5,7 +5,9 @@
  * and environments and serves it to clients (`get_node_summaries`). These
  * are the bounded projections of a node's ordinary summary reads
  * (`get_projects`, `get_environment_snapshots`): names, status and activity
- * only, never transcripts, prompts, paths or credentials.
+ * only, never transcripts, prompts, paths or credentials. The search fields
+ * (`pathName`, `worktreeName`, `defaultBranch`, `createdAt`) carry what the
+ * project search matches on: a directory's last segment, never its path.
  */
 
 import {
@@ -24,6 +26,9 @@ export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
 export const MAX_SUMMARY_PROJECTS = 500;
 export const MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT = 500;
 const MAX_TEXT = 256;
+/** A directory name (the last path segment) is shown and matched, never the path. */
+const MAX_PATH_NAME = 128;
+const MAX_TIMESTAMP = 64;
 
 export type SummaryFreshness = "initializing" | "current" | "catching-up" | "stale" | "degraded";
 
@@ -37,6 +42,16 @@ export interface NodeProjectSummary {
   folder?: string;
   /** Sanitized repository identity (host/owner/name), never a credentialed URL. */
   repositoryHint?: string;
+  /**
+   * Last segment of the project's checkout path, for search. Absent from
+   * summaries read before it was added and for projects without a checkout.
+   */
+  pathName?: string;
+  /**
+   * The project's configured default branch, when the node sends it
+   * (`get_projects` with `includeDefaultBranch`); older nodes do not.
+   */
+  defaultBranch?: string;
 }
 
 export interface NodeEnvironmentSummary {
@@ -53,6 +68,10 @@ export interface NodeEnvironmentSummary {
   lastActivityAt?: string;
   hasUnreadWork: boolean;
   environmentType?: string;
+  /** Last segment of the environment's worktree path, for search. */
+  worktreeName?: string;
+  /** Owner clock; the search falls back to it when there is no activity time. */
+  createdAt?: string;
   deleting: boolean;
   isProjectHome: boolean;
 }
@@ -131,6 +150,18 @@ export function repositoryHint(gitUrl: unknown): string | undefined {
   }
 }
 
+/**
+ * The last segment of a filesystem path, bounded, or nothing. Only the name
+ * leaves the node's summary projection: the rest of the path is private.
+ */
+export function pathName(path: unknown): string | undefined {
+  if (typeof path !== "string" || !path || path.length > 4096) return undefined;
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  const segments = trimmed.split(/[\\/]/);
+  const name = boundedText(segments[segments.length - 1] ?? "", MAX_PATH_NAME).trim();
+  return name || undefined;
+}
+
 function normalizeActivity(value: unknown): AgentActivity {
   return value === "working" || value === "waiting" ? value : "idle";
 }
@@ -143,6 +174,9 @@ export function toNodeProjectSummary(
   if (typeof raw.id !== "string" || !raw.id) return null;
   const ref = projectRef(nodeId, raw.id);
   const hint = repositoryHint(raw.gitUrl);
+  const checkout = pathName(raw.localPath);
+  const defaultBranch =
+    typeof raw.defaultBranch === "string" ? boundedText(raw.defaultBranch.trim()) : "";
   return {
     ref,
     key: projectKey(ref),
@@ -152,6 +186,8 @@ export function toNodeProjectSummary(
       ? { folder: boundedText(raw.folder, 64) }
       : {}),
     ...(hint ? { repositoryHint: hint } : {}),
+    ...(checkout ? { pathName: checkout } : {}),
+    ...(defaultBranch ? { defaultBranch } : {}),
   };
 }
 
@@ -162,6 +198,7 @@ export function toNodeEnvironmentSummary(
 ): NodeEnvironmentSummary | null {
   if (typeof raw.id !== "string" || !raw.id || typeof raw.projectId !== "string") return null;
   const ref = environmentRef(nodeId, raw.id);
+  const worktree = pathName(raw.worktreePath);
   return {
     ref,
     key: environmentKey(ref),
@@ -172,14 +209,18 @@ export function toNodeEnvironmentSummary(
     status: boundedText(raw.status, 32) || "stopped",
     activity: normalizeActivity(raw.agentActivityState),
     ...(typeof raw.agentActivityUpdatedAt === "string"
-      ? { activityUpdatedAt: raw.agentActivityUpdatedAt.slice(0, 64) }
+      ? { activityUpdatedAt: raw.agentActivityUpdatedAt.slice(0, MAX_TIMESTAMP) }
       : {}),
     ...(typeof raw.lastActivityAt === "string"
-      ? { lastActivityAt: raw.lastActivityAt.slice(0, 64) }
+      ? { lastActivityAt: raw.lastActivityAt.slice(0, MAX_TIMESTAMP) }
       : {}),
     hasUnreadWork: raw.hasUnreadWork === true,
     ...(typeof raw.environmentType === "string"
       ? { environmentType: boundedText(raw.environmentType, 32) }
+      : {}),
+    ...(worktree ? { worktreeName: worktree } : {}),
+    ...(typeof raw.createdAt === "string" && raw.createdAt
+      ? { createdAt: raw.createdAt.slice(0, MAX_TIMESTAMP) }
       : {}),
     deleting:
       raw.lifecycleOperation === "deleting" ||

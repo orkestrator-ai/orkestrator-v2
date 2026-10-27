@@ -87,7 +87,7 @@ test("a machine with no projects keeps the search-specific empty message", async
   await expect(page.getByText("No projects or environments match that search.")).toBeVisible();
   await expect(page.getByText("No projects yet", { exact: true })).toHaveCount(0);
   await input.fill("");
-  await expect(page.getByText("No projects on this machine")).toBeVisible();
+  await expect(page.getByText("No projects on empty")).toBeVisible();
   await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);
 });
 

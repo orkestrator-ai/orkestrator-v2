@@ -605,7 +605,9 @@ export function ProjectSearchBar({
                   : hasQuery
                     ? "No projects or environments match that search."
                     : results.projectCount === 0
-                      ? "No projects on this machine"
+                      ? machineFilter !== THIS_MACHINE && machineFilterMachine
+                        ? `No projects on ${machineFilterMachine.name}`
+                        : "No projects on this machine"
                       : "No environments yet"}
               </div>
             ) : (

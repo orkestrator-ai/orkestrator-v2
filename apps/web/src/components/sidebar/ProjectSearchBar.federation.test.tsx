@@ -5,6 +5,7 @@ import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import type { MachineView } from "@/lib/federation/aggregate";
 import {
+  SELF_NODE_ID,
   connectionList,
   installDesktopFake,
   remoteConnection,
@@ -260,7 +261,11 @@ describe("ProjectSearchBar across machines", () => {
       ).toBeTruthy();
       expectDomAbsent(screen.queryByText("No projects yet"), "global empty-state copy");
       fireEvent.change(input, { target: { value: "" } });
-      expect(await screen.findByText("No projects on this machine")).toBeTruthy();
+      expect(
+        await screen.findByText(
+          scope === "remote" ? "No projects on mbp3" : "No projects on this machine",
+        ),
+      ).toBeTruthy();
     });
   }
 
@@ -390,6 +395,37 @@ describe("ProjectSearchBar across machines", () => {
     expect(projectRows[0]!.getAttribute("aria-label")).toBe("telegram-scraper, project on mbp3");
     expect(screen.getByText("Recent projects")).toBeTruthy();
   });
+  test("qualifies legacy local recents behind machine recents without duplicating rows", async () => {
+    const localProjects = ["unranked", "legacy-second", "tg", "overlap", "modern"].map(
+      (id, order) => ({ ...localProject, id, name: id, order }),
+    );
+    useUIStore.setState({ recentProjectIds: ["tg", "legacy-second", "overlap"] });
+    useMachineViewStore.setState({
+      recentKeys: [
+        projectKey(projectRef("bk_mbp3" as BackendId, "tg")),
+        projectKey(projectRef(SELF_NODE_ID, "modern")),
+        projectKey(projectRef(SELF_NODE_ID, "overlap")),
+      ],
+    });
+    renderSearch(localProjects, []);
+    await openAndType("");
+    await option("telegram-scraper, project on mbp3");
+    const labels = screen
+      .getAllByRole("option")
+      .filter((row) => /, project on /.test(row.getAttribute("aria-label") ?? ""))
+      .map((row) => row.getAttribute("aria-label"));
+    expect(labels).toEqual([
+      "telegram-scraper, project on mbp3",
+      "modern, project on This computer",
+      "overlap, project on This computer",
+      "tg, project on This computer",
+      "legacy-second, project on This computer",
+      "unranked, project on This computer",
+      "orkestrator-v2, project on mbp3",
+      "orkestrator-v2, project on mini, offline",
+    ]);
+  });
+
   test("navigation reported by an active realm leads the empty-query recent results", async () => {
     renderSearch();
     await openAndType("telegram");

@@ -841,6 +841,145 @@ describe("pipelineFlowModel", () => {
     expect(node("build").session?.completedAt).toBeUndefined();
   });
 
+  test.each(["build", "prepare"] as const)(
+    "%s remains bounded by the first reviewer attempt after retries collapse",
+    (kind) => {
+      const model = pipelineFlowModel(
+        build({
+          phase: "complete",
+          reviewers: PANEL.slice(0, 2),
+          sessions: [
+            session(kind === "build" ? "build" : "fix", "before", 0, {
+              ...(kind === "prepare" ? { label: REVIEW_PACKAGE_SESSION_LABEL } : {}),
+              completedAt: undefined,
+            }),
+            reviewer(0, "survivor", 60, {
+              reviewPassId: "panel",
+              reviewerOutcome: "completed",
+              completedAt: undefined,
+            }),
+            reviewer(1, "old", 50, { reviewPassId: "panel", reviewerOutcome: "failed" }),
+            session("review", "discarded", 120, {
+              label: "Consolidation",
+              reviewPassId: "panel",
+              superseded: true,
+            }),
+            reviewer(1, "retry", 180, {
+              reviewPassId: "panel",
+              reviewerOutcome: "completed",
+              completedAt: undefined,
+            }),
+            session("review", "consolidation", 240, {
+              label: "Consolidation",
+              reviewPassId: "panel",
+            }),
+          ],
+        }),
+      );
+      expect(model.nodes.some((node) => node.id === "old" || node.id === "discarded")).toBe(false);
+      expect(model.nodes.find((node) => node.id === "before")?.completedAt).toBe(
+        new Date(Date.parse(CREATED) + 50_000).toISOString(),
+      );
+      // Neither the first consolidation nor its replacement is an exact reviewer end.
+      for (const id of ["survivor", "retry"]) {
+        expect(model.nodes.find((node) => node.id === id)).toMatchObject({ state: "complete" });
+        expect(model.nodes.find((node) => node.id === id)?.completedAt).toBeUndefined();
+      }
+    },
+  );
+
+  test("a missing reviewer start still bounds preparation by the original consolidation", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "complete",
+        reviewers: PANEL.slice(0, 1),
+        sessions: [
+          session("fix", "prep", 0, {
+            label: REVIEW_PACKAGE_SESSION_LABEL,
+            completedAt: undefined,
+          }),
+          reviewer(0, "old", 60, {
+            startedAt: undefined,
+            reviewPassId: "panel",
+            reviewerOutcome: "failed",
+          }),
+          session("review", "discarded", 120, {
+            label: "Consolidation",
+            reviewPassId: "panel",
+            superseded: true,
+          }),
+          reviewer(0, "retry", 180, {
+            startedAt: undefined,
+            reviewPassId: "panel",
+            reviewerOutcome: "completed",
+          }),
+          session("review", "consolidation", 240, {
+            label: "Consolidation",
+            reviewPassId: "panel",
+          }),
+        ],
+      }),
+    );
+    expect(model.nodes.some((node) => node.id === "discarded")).toBe(false);
+    expect(model.nodes.find((node) => node.id === "prep")?.completedAt).toBe(
+      new Date(Date.parse(CREATED) + 120_000).toISOString(),
+    );
+  });
+
+  test("parallel reviewers without recorded ends keep their durations unknown", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "complete",
+        reviewers: PANEL,
+        sessions: [
+          reviewer(0, "first", 60, { completedAt: undefined }),
+          reviewer(1, "second", 75, { completedAt: undefined }),
+          reviewer(2, "recorded", 80),
+          session("review", "consolidation", 240, { label: "Consolidation" }),
+        ],
+      }),
+    );
+    for (const id of ["first", "second"]) {
+      expect(model.nodes.find((node) => node.id === id)).toMatchObject({ state: "complete" });
+      expect(model.nodes.find((node) => node.id === id)?.completedAt).toBeUndefined();
+    }
+    expect(model.nodes.find((node) => node.id === "recorded")?.completedAt).toBe(
+      new Date(Date.parse(CREATED) + 130_000).toISOString(),
+    );
+  });
+
+  test.each([undefined, "invalid"])(
+    "inference skips a column with start %s and uses the nearest started successor",
+    (startedAt) => {
+      const model = pipelineFlowModel(
+        build({
+          phase: "complete",
+          sessions: [
+            session("build", "build", 0, { completedAt: undefined }),
+            session("review", "unknown-start", 60, { startedAt }),
+            session("address", "address", 180),
+            // A legacy clock skew must not move Build's boundary past Address.
+            session("verify", "verify", 120),
+          ],
+        }),
+      );
+      expect(model.nodes.find((node) => node.id === "build")?.completedAt).toBe(
+        new Date(Date.parse(CREATED) + 180_000).toISOString(),
+      );
+    },
+  );
+
+  test("a completed final Ship stage without a successor start keeps its end unknown", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "complete",
+        sessions: [session("pr", "ship", 60, { completedAt: undefined })],
+      }),
+    );
+    expect(model.nodes.find((node) => node.id === "ship")).toMatchObject({ state: "complete" });
+    expect(model.nodes.find((node) => node.id === "ship")?.completedAt).toBeUndefined();
+  });
+
   test("failed and stopped stages are not given an end they never recorded", () => {
     const model = pipelineFlowModel(
       build({

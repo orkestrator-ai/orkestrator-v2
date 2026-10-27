@@ -29,7 +29,7 @@ import {
   reviewerStatusWord,
   validationChips,
 } from "@/components/review/multi-review-steps";
-import { runtimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
+import { runtimeParts } from "@/lib/review/runtime-summary";
 import { formatObservedAt } from "@/lib/view-freshness";
 import { useUIStore } from "@/stores/uiStore";
 import { PIPELINE_FLOW_MIN_HEIGHT, pipelineFlowLayout } from "./pipeline-flow-layout";
@@ -154,22 +154,18 @@ export function pipelineNodeView({
   const running = node.state === "running";
   // The ticket did not run; its clock is when the pipeline picked it up.
   const ticketStarted = node.kind === "ticket" ? formatObservedAt(pipeline.createdAt) : null;
-  const runtime: RuntimeParts | null =
-    node.kind === "ticket"
-      ? ticketStarted
-        ? { elapsed: ticketStarted, tokens: null, tokensPending: false, live: false }
-        : null
-      : node.placeholder
-        ? null
-        : runtimeParts(
-            {
-              startedAt: node.startedAt,
-              completedAt: node.completedAt,
-              tokenCount: node.tokenCount,
-            },
-            running,
-            now,
-          );
+  const runtime =
+    node.kind === "ticket" || node.placeholder
+      ? null
+      : runtimeParts(
+          {
+            startedAt: node.startedAt,
+            completedAt: node.completedAt,
+            tokenCount: node.tokenCount,
+          },
+          running,
+          now,
+        );
   const issues = issueTotal(node.issueCounts);
   const liveReviewers = pipeline.reviewFanout?.reviewers ?? [];
   const statusWord: FlowNodeModel["statusWord"] =
@@ -194,9 +190,10 @@ export function pipelineNodeView({
     statusLabel: pipelineNodeStatusLabel(node, pipeline, pullRequest),
     detail: nodeDetail(node, pipeline, pullRequest, modelLabel),
     runtime,
-    runtimeLabel: ticketStarted
-      ? `Pipeline started ${ticketStarted}`
-      : `${node.title} runtime and token usage`,
+    runtimeLabel: `${node.title} runtime and token usage`,
+    startTime: ticketStarted
+      ? { dateTime: pipeline.createdAt, text: `Started ${ticketStarted}` }
+      : undefined,
     pendingLabel:
       node.state === "not-started" && node.kind !== "pr"
         ? node.reviewer

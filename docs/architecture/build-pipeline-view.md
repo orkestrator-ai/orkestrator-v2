@@ -65,10 +65,12 @@ a transcript.
   stage that failed or paused before its session existed gets a node of its
   own; a fan-out that failed without consolidating carries it on
   Consolidation.
-- **Ticket.** Always first and complete, no elapsed time. The inspector shows
-  the stored `taskSnapshot` (title, description, acceptance criteria, reference
-  images, comments; Markdown rendered; empty sections omitted), never the
-  bridge prompt. A pipeline without a snapshot shows a placeholder. When the
+- **Ticket.** Always first and complete, no elapsed time. Its third row shows
+  the pipeline creation date in local time, explicitly labelled "Started" and
+  included as a start time in its accessible name. Missing or invalid creation
+  dates omit this row. The inspector shows the stored `taskSnapshot` (title,
+  description, acceptance criteria, reference images, comments; Markdown
+  rendered; empty sections omitted), never the bridge prompt. A pipeline without a snapshot shows a placeholder. When the
   board has already loaded the Kanban ticket and it now reads differently, a
   note says so; nothing is fetched for it.
 - **PR.** The environment's pull request (`prUrl`, `prState`) and the PR
@@ -98,7 +100,9 @@ Every node face, in both graphs, is built from rows (`data-flow-node-row`):
    ("paused", "failed", "stopped"), sit at its end.
 3. **Runtime** — `{elapsed} · {tokens}`, with the running state word
    ("running", "reviewing", "stalled"). Shown whenever the node runs, and kept
-   after it ran when a runtime was recorded.
+   after it ran when a runtime was recorded. The Ticket instead uses a dedicated
+   **Start** row (`data-flow-node-row="start"`): `Started {local date/time}`,
+   rendered as a `time` element, separate from elapsed runtime and tokens.
 
 So a node that has not run (or a placeholder ahead) has two rows, and a
 running node three. **Decision:** a finished node keeps its final duration and
@@ -108,13 +112,20 @@ moves as a stage completes), and the detail row free for the model and the
 severity chips. The cost is a finished node 18 px taller than a two-row one.
 Validation chips and the PR's checks are further rows under the face.
 
+For legacy completed sequential stages without a recorded end, the graph uses
+the earliest qualifying start in the nearest later column that has one,
+retaining boundaries from all attempts even when retries replace visible nodes.
+Parallel reviewer ends are never inferred from consolidation: a reviewer may
+finish earlier than its peers. Failed/stopped nodes and final stages without a
+later start keep their end unknown.
+
 `flowNodeHeight` turns those rows into the height the wide layouts give a
 node (64 px for two rows, 82 px with the runtime row, plus 28 px of chips or
-20 px of checks), and both `pipelineFlowLayout` and `multiReviewFlowLayout`
-centre a taller node on the same line as its neighbours, so edges still meet
-every node at its vertical centre. Node widths do not change. The stacked
-column lays nodes out by their content, so it needs no heights, and Fit
-measures what was laid out.
+20 px of checks; the Ticket's start row also adds 18 px). Both
+`pipelineFlowLayout` and `multiReviewFlowLayout` centre a taller node on the
+same line as its neighbours, so edges still meet every node at its vertical
+centre. Node widths do not change. The stacked column lays nodes out by their
+content, so it needs no heights, and Fit measures what was laid out.
 
 A running node whose provider has not reported usage yet shows a dash in place
 of the count ("2m 35s · —"); its accessible name and the inspector leave the

@@ -96,6 +96,7 @@ function createHarness(
   const openExternal = mock(() => undefined);
   const writeClipboardText = mock(() => undefined);
   const focusAddressBar = mock(() => undefined);
+  const toggleKeyboardShortcuts = mock((_tabId: string) => undefined);
   const popup = mock(() => undefined);
   const menuTemplates: MenuItemConstructorOptions[][] = [];
   const menu = {
@@ -114,6 +115,7 @@ function createHarness(
     openExternal,
     writeClipboardText,
     focusAddressBar,
+    toggleKeyboardShortcuts,
   });
   return {
     manager,
@@ -124,6 +126,7 @@ function createHarness(
     openExternal,
     writeClipboardText,
     focusAddressBar,
+    toggleKeyboardShortcuts,
     menuTemplates,
     popup,
     window,
@@ -390,6 +393,48 @@ describe("BrowserPreviewManager", () => {
       expect(event.preventDefault).not.toHaveBeenCalled();
     }
     expect(harness.focusAddressBar).toHaveBeenCalledTimes(2);
+  });
+
+  test("routes Cmd+Shift+K and Ctrl+Shift+K from the native preview to the shortcuts dialog", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    const press = (overrides: Record<string, unknown>) => {
+      const event = { preventDefault: mock(() => undefined) };
+      contents.emit("before-input-event", event, {
+        type: "keyDown",
+        key: "K",
+        code: "KeyK",
+        meta: false,
+        control: false,
+        alt: false,
+        shift: true,
+        isAutoRepeat: false,
+        ...overrides,
+      });
+      return event.preventDefault.mock.calls.length;
+    };
+
+    // Claimed before the page or the menu's key equivalent can see it.
+    expect(press({ meta: true })).toBe(1);
+    expect(press({ control: true })).toBe(1);
+    // A layout whose K key types no Latin letter still matches.
+    expect(press({ meta: true, key: "Л" })).toBe(1);
+    // A held key is still claimed, but toggles only once.
+    expect(press({ meta: true, isAutoRepeat: true })).toBe(1);
+    expect(harness.toggleKeyboardShortcuts.mock.calls).toEqual([
+      [input.tabId],
+      [input.tabId],
+      [input.tabId],
+    ]);
+
+    // Other chords stay with the page.
+    expect(press({ meta: true, shift: false })).toBe(0);
+    expect(press({ meta: true, alt: true })).toBe(0);
+    expect(press({ meta: true, control: true })).toBe(0);
+    expect(press({ meta: true, type: "keyUp" })).toBe(0);
+    expect(harness.toggleKeyboardShortcuts).toHaveBeenCalledTimes(3);
+    expect(harness.focusAddressBar).not.toHaveBeenCalled();
   });
 
   test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {

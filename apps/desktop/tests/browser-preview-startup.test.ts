@@ -139,6 +139,7 @@ describe("browser preview startup wiring", () => {
     const openExternal = mock(() => undefined);
     const writeClipboardText = mock(() => undefined);
     const focusAddressBar = mock(() => undefined);
+    const toggleKeyboardShortcuts = mock(() => undefined);
     const menuTemplates: Array<Array<{ label?: string; click?: (...args: never[]) => void }>> = [];
     const buildFromTemplate = mock(
       (template: Array<{ label?: string; click?: (...args: never[]) => void }>) => {
@@ -158,6 +159,7 @@ describe("browser preview startup wiring", () => {
       openExternal,
       writeClipboardText,
       focusAddressBar,
+      toggleKeyboardShortcuts,
       getAuthorization: (url) =>
         url.startsWith("https://desk.example/__orkestrator/") ? "Bearer test" : null,
     });

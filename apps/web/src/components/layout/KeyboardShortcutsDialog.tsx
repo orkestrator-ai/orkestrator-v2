@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  KEYBOARD_SHORTCUTS_EVENT,
+  isKeyboardShortcutsRequest,
+} from "@orkestrator/protocol/keyboard-shortcuts";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
+import { listen } from "@/lib/native/events";
 import { cn } from "@/lib/utils";
 import { Keyboard, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -30,7 +35,13 @@ function KeyCaps({ keys, className }: { keys: readonly string[]; className?: str
  * The dialog body. It unmounts when the dialog closes, so every open starts
  * with an empty search; the dialog focuses the search input as it opens.
  */
-function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
+function KeyboardShortcutsPanel({
+  platform,
+  searchRef,
+}: {
+  platform: ShortcutPlatform;
+  searchRef: RefObject<HTMLInputElement | null>;
+}) {
   const [query, setQuery] = useState("");
   const groups = useMemo(() => filterKeyboardShortcuts(query, platform), [query, platform]);
   const openShortcut = platform === "mac" ? ["⌘", "⇧", "K"] : ["Ctrl", "Shift", "K"];
@@ -40,6 +51,7 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
       <div className="flex shrink-0 items-center gap-2 border-b border-border/70 px-4 py-3">
         <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input
+          ref={searchRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search keyboard shortcuts..."
@@ -113,36 +125,97 @@ function KeyboardShortcutsPanel({ platform }: { platform: ShortcutPlatform }) {
   );
 }
 
-/** Lists application keyboard shortcuts, searchable; toggled with ⌘⇧K / Ctrl+Shift+K. */
+/**
+ * How long after one delivery of the chord a delivery from the other path is
+ * taken as the same key press. The renderer normally claims the chord and the
+ * desktop menu's key equivalent stands down, but if a platform ever delivers
+ * both, toggling twice would open and close the dialog in one press.
+ */
+export const KEYBOARD_SHORTCUTS_ECHO_MS = 500;
+
+type ChordSource = "renderer" | "desktop";
+
+/**
+ * Lists application keyboard shortcuts, searchable. ⌘⇧K / Ctrl+Shift+K
+ * toggles it from anywhere in this document; the desktop app also opens it
+ * from View › Keyboard Shortcuts… and forwards the chord from native preview
+ * views, which keep their keys from this document.
+ */
 export function KeyboardShortcutsDialog({
   platform: platformOverride,
 }: {
   platform?: ShortcutPlatform;
 }) {
   const [open, setOpen] = useState(false);
+  // Read by the window and menu listeners, which are installed once so a menu
+  // event can never fall into a gap between unsubscribe and resubscribe.
+  const openRef = useRef(false);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const platform = useMemo(() => platformOverride ?? detectShortcutPlatform(), [platformOverride]);
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isKeyboardShortcutsShortcut(event)) return;
-      // Claim the chord before Monaco (Delete Line) or xterm can process it.
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.repeat) return;
-      if (!open) {
+    let lastChord: { source: ChordSource; at: number } | null = null;
+
+    const show = (next: boolean) => {
+      if (next && !openRef.current) {
         previousFocus.current =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
       }
-      setOpen(!open);
+      openRef.current = next;
+      setOpen(next);
+    };
+
+    const toggleFrom = (source: ChordSource) => {
+      const now = performance.now();
+      if (
+        lastChord &&
+        lastChord.source !== source &&
+        now - lastChord.at < KEYBOARD_SHORTCUTS_ECHO_MS
+      ) {
+        return;
+      }
+      lastChord = { source, at: now };
+      show(!openRef.current);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !isKeyboardShortcutsShortcut(event)) return;
+      // Claim the chord before Monaco (Delete Line) or xterm can process it,
+      // and so the desktop menu's key equivalent does not fire as well.
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      toggleFrom("renderer");
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [open]);
+    // Desktop only: the browser client has no native menu and never emits it.
+    const unlisten = listen<unknown>(KEYBOARD_SHORTCUTS_EVENT, ({ payload }) => {
+      if (!isKeyboardShortcutsRequest(payload)) return;
+      if (payload === "toggle") {
+        toggleFrom("desktop");
+      } else if (openRef.current) {
+        // A menu click never closes the dialog; it returns focus to the search.
+        searchRef.current?.focus();
+      } else {
+        show(true);
+      }
+    });
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        openRef.current = next;
+        setOpen(next);
+      }}
+    >
       <DialogContent
         showCloseButton={false}
         data-testid="keyboard-shortcuts-dialog"
@@ -161,7 +234,7 @@ export function KeyboardShortcutsDialog({
         <DialogDescription className="sr-only">
           Application keyboard shortcuts in Orkestrator. Type to filter the list.
         </DialogDescription>
-        <KeyboardShortcutsPanel platform={platform} />
+        <KeyboardShortcutsPanel platform={platform} searchRef={searchRef} />
       </DialogContent>
     </Dialog>
   );

@@ -28,6 +28,7 @@
     "./agent-interaction-deadline": "./src/agent-interaction-deadline.ts",
     "./agent-mail": "./src/agent-mail.ts",
     "./human-prompts": "./src/human-prompts.ts",
+    "./keyboard-shortcuts": "./src/keyboard-shortcuts.ts",
     "./user-commands": "./src/user-commands.ts",
     "./agent-registry": "./src/agent-registry.ts",
     "./agent-slash-commands": "./src/agent-slash-commands.ts",

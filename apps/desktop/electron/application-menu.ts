@@ -1,4 +1,8 @@
-import type { MenuItemConstructorOptions } from "electron";
+import type { KeyboardEvent as MenuKeyboardEvent, MenuItemConstructorOptions } from "electron";
+import {
+  KEYBOARD_SHORTCUTS_ACCELERATOR,
+  type KeyboardShortcutsRequest,
+} from "@orkestrator/protocol/keyboard-shortcuts";
 
 export type ApplicationMenuWindow = {
   id: number;
@@ -13,6 +17,8 @@ export type ApplicationMenuActions = {
   closeTab(): void;
   selectWindow(id: number): void;
   zoom(direction: "in" | "out" | "reset"): void;
+  /** Show the keyboard shortcuts dialog in the focused window's renderer. */
+  showKeyboardShortcuts(request: KeyboardShortcutsRequest): void;
   /** Present only when this install can update itself. */
   checkForUpdates?(): void;
 };
@@ -120,6 +126,18 @@ export function createApplicationMenuTemplate(
         { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: () => actions.zoom("out") },
         { type: "separator" },
         { label: "Actual Size", accelerator: "CmdOrCtrl+0", click: () => actions.zoom("reset") },
+        { type: "separator" },
+        {
+          label: "Keyboard Shortcuts…",
+          accelerator: KEYBOARD_SHORTCUTS_ACCELERATOR,
+          // The renderer owns the chord in every window, browser client included,
+          // so on Windows and Linux the accelerator is only shown. macOS always
+          // keeps it as a key equivalent, which fires only when the focused page
+          // did not claim the key; that delivery toggles, as the key would.
+          registerAccelerator: false,
+          click: (_item, _window, event: MenuKeyboardEvent) =>
+            actions.showKeyboardShortcuts(event?.triggeredByAccelerator ? "toggle" : "open"),
+        },
       ],
     },
     {

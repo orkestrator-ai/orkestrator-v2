@@ -112,6 +112,7 @@ import {
   registerWindowAllClosedQuit,
 } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
+import { requestKeyboardShortcuts } from "./keyboard-shortcuts-menu.js";
 import {
   createAutoUpdateController,
   isAutoUpdateSupported,
@@ -402,11 +403,15 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 }
 
 /** The focused renderer of the focused window: one of its realms, or the window's own. */
-function emitToFocusedRenderer(event: string, payload: unknown): void {
+function focusedRenderer(): Electron.WebContents | null {
   const context = focusedContext();
-  if (!context) return;
-  const realm = realmContexts.focused(context.contents.id);
-  emitToContents((realm ?? context).contents, event, payload);
+  if (!context) return null;
+  return realmContexts.focused(context.contents.id)?.contents ?? context.contents;
+}
+
+function emitToFocusedRenderer(event: string, payload: unknown): void {
+  const contents = focusedRenderer();
+  if (contents) emitToContents(contents, event, payload);
 }
 
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
@@ -573,6 +578,8 @@ function createWindowBrowserPreviews(
       getWindow: () => createdWindow,
       emitFocus: (tabId) => emitToOwner("browser-preview-focus-address", tabId),
     }),
+    toggleKeyboardShortcuts: () =>
+      requestKeyboardShortcuts(realm?.contents ?? createdWindow.webContents, "toggle"),
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,
@@ -716,6 +723,8 @@ function createMenu(): void {
     closeTab: () => emitToFocusedRenderer("menu-close-tab", undefined),
     selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
+    // The dialog belongs to the focused renderer, which may be a realm.
+    showKeyboardShortcuts: (request) => requestKeyboardShortcuts(focusedRenderer(), request),
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

@@ -484,6 +484,48 @@ print("public.tiff")
         ),
       )
       .toBe(`${profile.electronTitle} — Local`);
+    if (!nicknamesOnly && !failure) {
+      // View › Keyboard Shortcuts… reaches the focused window's renderer over
+      // IPC. A click opens and never closes; a delivery of the menu's key
+      // equivalent toggles, and a renderer press of the same chord right after
+      // it is taken as the same press rather than a second toggle.
+      const clickKeyboardShortcuts = (triggeredByAccelerator: boolean) =>
+        app.evaluate(({ BrowserWindow, Menu }, triggeredByAccelerator) => {
+          const focusedWindow =
+            BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          const viewMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "View");
+          const item = viewMenu?.submenu?.items.find(
+            (candidate) => candidate.label === "Keyboard Shortcuts…",
+          );
+          if (!focusedWindow || !item?.click) {
+            throw new Error("Keyboard Shortcuts… menu item is unavailable");
+          }
+          if (item.accelerator !== "CmdOrCtrl+Shift+K") {
+            throw new Error(`Keyboard Shortcuts… shows ${String(item.accelerator)}`);
+          }
+          item.click({ triggeredByAccelerator }, focusedWindow, focusedWindow.webContents);
+        }, triggeredByAccelerator);
+      const shortcutsDialog = window.getByTestId("keyboard-shortcuts-dialog");
+      const shortcutsSearch = window.getByRole("textbox", { name: "Search keyboard shortcuts" });
+
+      await clickKeyboardShortcuts(false);
+      await expect(shortcutsDialog).toBeVisible();
+      await expect(shortcutsSearch).toBeFocused();
+      await clickKeyboardShortcuts(false);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await expect(shortcutsDialog).toBeVisible();
+      await window.keyboard.press("Escape");
+      await expect(shortcutsDialog).toHaveCount(0);
+
+      await clickKeyboardShortcuts(true);
+      await expect(shortcutsDialog).toBeVisible();
+      await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await expect(shortcutsDialog).toBeVisible();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
+      await expect(shortcutsDialog).toHaveCount(0);
+    }
     const invokeNewWindowAccelerator = () =>
       app.evaluate(({ BrowserWindow, Menu }) => {
         const focusedWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];

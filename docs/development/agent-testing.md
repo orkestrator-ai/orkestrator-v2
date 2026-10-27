@@ -932,6 +932,27 @@ must be installed (or supplied through `ORKESTRATOR_POLICY_CLAUDE_PATH`). Both
 fixtures clean up their own resources. Neither uses host credentials or calls
 an external model.
 
+Codex Default-mode questions have a credential-free qualification against the
+pinned real app-server as well:
+
+```bash
+RUN_LIVE_CODEX_APP_SERVER=1 RUN_LIVE_CODEX_QUESTION_DEADLINES=1 \
+  ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=750000 \
+  mise run test:logged -- --name codex-question-deadlines -- \
+  bun test bridges/codex-bridge/src/app-server/live-request-user-input.test.ts --parallel=1
+```
+
+The quick cases prove a watched question parks and its answer reaches the
+model, while a pipeline retains Codex's Default-mode refusal. The extra deadline
+opt-in runs a held question and an unheld control together in separate temporary
+homes. Every 30 seconds it checks that the held question remains pending with
+its moved deadline and no second model sample; after a fixed 10.5 minutes it
+answers. The control must expire after the production five-minute window and
+send an empty answer. Neither elapsed window can be shortened by an environment
+variable. The longer watchdog allows Bun to buffer output from the long test.
+This uses a loopback model and fake key; the browser qualification
+below additionally covers real-model behavior, card controls and reload.
+
 The launch-policy renderer regression is also exercised against a running
 container in `native-draft-attachments.spec.ts`. On a disposable Docker fixture
 profile, run it with `ORKESTRATOR_AGENT_TEST_DOCKER=1` and
@@ -957,8 +978,8 @@ mise run dev:stop --profile qa-pause
 mise run dev:reset --profile qa-pause
 ```
 
-Each case (a Claude question and approval, a Codex command approval, a Grok
-question and permission, an OpenCode question and permission, a Pi approval)
+Each case (a Claude question and approval, a Codex question and command approval,
+a Grok question and permission, an OpenCode question and permission, a Pi approval)
 gets its own local environment under an `approvals: "ask"` policy and its own
 real turn. Providers run in parallel, and a provider's own cases start one
 after the other. As soon as a request appears, the spec holds its countdown
@@ -976,6 +997,11 @@ token. The whole run takes about 20 minutes.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS` narrows the providers (default
   `claude,codex,grok,opencode,pi`). Leave out any provider the host is signed
   out of: a provider that cannot start fails the run.
+- `ORKESTRATOR_AGENT_TEST_PAUSE_CASES` narrows case ids within those providers
+  (default: all). For just the Codex Default-mode question, use
+  `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex` and
+  `ORKESTRATOR_AGENT_TEST_PAUSE_CASES=codex-question`. Unknown ids and empty
+  selections fail before any environment is created.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS` shortens the wait for a shakedown.
   Only the default proves the ten-minute claim.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It

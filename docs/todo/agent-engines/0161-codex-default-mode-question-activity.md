@@ -2,8 +2,8 @@
 
 Checked against `main` at `00a0cb82` (2026-10-25). Code item done on
 `todo-0161-codex-default-mode-question-2cf150514fc2` from `863b5782`
-(2026-10-27). Only the real-model qualification below is left; the durable
-description now lives in
+(2026-10-27). The real-app-server and real-model question qualifications
+below are complete; the durable description lives in
 [`agent-engines.md`](../../architecture/agent-engines.md) (end of
 "Interaction deadlines and pausing") and
 [`bridges/codex-bridge/AGENTS.md`](../../../bridges/codex-bridge/AGENTS.md).
@@ -47,9 +47,10 @@ not hold the session's activity at `waiting`.
   `getActivity` reports `waiting` for any parked interaction. That rule stays
   for bridges that still pass the wire's `false` through.
 - **Live, against the real pinned app-server** (loopback model, throwaway
-  `CODEX_HOME`): `live-request-user-input.test.ts` now pauses the question as
-  soon as it parks and answers it after `CODEX_LIVE_QUESTION_ANSWER_DELAY_MS`.
-  See Qualification for the 11-minute run.
+  `CODEX_HOME`): `live-request-user-input.test.ts` pauses the question as
+  soon as it parks. Its separate `RUN_LIVE_CODEX_QUESTION_DEADLINES=1`
+  qualification uses a fixed 10.5-minute pause and an unheld five-minute
+  expiry control. See Qualification for recorded runs.
 
 ## Outstanding work
 
@@ -89,12 +90,45 @@ not hold the session's activity at `waiting`.
   The question was published `isBlocking: true` with a deadline, the pause
   applied, the only resolution was `answered`, the model was sampled once
   before the answer, and the answer reached it.
-- **Left — with a real Codex model on the real stack:** an interactive
-  question shows the session as waiting while pending, and a paused question
-  survives past ten minutes (`ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex`,
-  case `codex-question` in `e2e/agent-testing/paused-interactions-live.spec.ts`).
-  Not run here: it needs a signed-in Codex account in an isolated `dev:test`
-  profile, and this run was not allowed to use the host's Codex login.
+- **Review follow-up (2026-10-27) — Fixed elapsed-time qualification.**
+  `RUN_LIVE_CODEX_APP_SERVER=1 RUN_LIVE_CODEX_QUESTION_DEADLINES=1
+  ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=750000 mise run test:logged --
+  --name codex-question-deadlines -- bun test
+  bridges/codex-bridge/src/app-server/live-request-user-input.test.ts --parallel=1`
+  passed in 652.8 s against managed Codex 0.164.0. The held question stayed
+  pending for 10.5 minutes with one model sample and then delivered
+  `PROBE_BETA`; the separate unheld control expired after the production
+  five-minute window, sent `{ answers: {} }`, and left no parked request.
+  The watchdog allowance is needed because Bun buffers the long test's output;
+  the first attempt hit the runner's five-minute no-output cutoff. The elapsed
+  windows themselves remain fixed. Summary: host temporary directory
+  `orkestrator-test-run.2w0Gfw/summary.json`.
+- **Real-model question qualification (2026-10-27).** Disposable profile
+  `codex-question-pause-0161`, Codex 0.164.0, model `gpt-6.1-sol`, default
+  10.5-minute browser wait. The combined Codex question/approval run recorded
+  `codex-question: resumed with the answer`: it was pending after 12 minutes,
+  reloaded with its pause, accepted the chosen codeword, finished its turn,
+  and cleared pending interactions. The separate approval case ran its command
+  (marker present, turn idle) but its model replied without the required done
+  token, so the combined test failed. Both setup-cleanup cases passed. Artifacts:
+  `output/agent-testing/codex-question-pause-0161/browser/` and host temporary
+  directory `orkestrator-test-run.bvu0of`. The new
+  `ORKESTRATOR_AGENT_TEST_PAUSE_CASES=codex-question` selector permits an
+  independent question qualification without changing its wait or assertions.
+- **Done — independent real-stack question rerun (2026-10-27).** Same
+  disposable profile, with `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex`,
+  `ORKESTRATOR_AGENT_TEST_PAUSE_CASES=codex-question`, and
+  `ORKESTRATOR_AGENT_TEST_RUN_ID=codex-question-only-0161`, using
+  `ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1 mise run test:logged --
+  --name codex-question-browser -- mise run test:agent:paused-interactions`.
+  No wait override: the question survived the full 10.5-minute pause, stayed
+  pending throughout, rehydrated after reload, accepted `PAUSE_BETA`, finished
+  with the selected codeword, and cleared pending interactions. All three
+  tests passed, including both real-environment setup-failure cleanup cases
+  (745.9 s total). Artifacts:
+  `output/agent-testing/codex-question-only-0161/browser/`; summary in host
+  temporary directory `orkestrator-test-run.wM2c5n/summary.json`. The profile
+  was stopped and reset afterwards.
 
 ## Constraints and rationale
 
@@ -133,13 +167,12 @@ not hold the session's activity at `waiting`.
    covers a person who needs longer. Cons: an unpaused question still ends
    after 5 minutes, earlier than a Plan-mode one would; (c) would be
    Codex-faithful but shorter than every other card in the product.
-3. **The live test pauses at once and answers after a configurable delay.**
-   Options: a separate long-running test, or one env var on the existing
-   gated test. Chose the env var (`CODEX_LIVE_QUESTION_ANSWER_DELAY_MS`,
-   default 2 s): the default run stays fast, and one opt-in run proves the
-   pause holds past the default deadline and Codex's own auto-resolution. The
-   pause now happens when the question parks, not just before the answer, so
-   a long delay cannot be cut short by the unpaused deadline.
+3. **The live test pauses at once; the long qualification has a fixed wait.**
+   The quick live contract keeps its two-second answer. The separate
+   `RUN_LIVE_CODEX_QUESTION_DEADLINES=1` opt-in always waits 10.5 minutes,
+   checks the held question every 30 seconds, and runs an unheld expiry
+   control alongside it. This replaces the earlier configurable answer delay,
+   so a shortened shakedown cannot be mistaken for deadline qualification.
 
 ## Open questions
 
@@ -147,8 +180,8 @@ not hold the session's activity at `waiting`.
 
 ## Needs verification
 
-- The real-model, real-stack qualification above (Codex login in an
-  isolated profile).
+- Verified (2026-10-27): the real-model, real-stack question qualification
+  above, including the full pause, reload, answer and completed turn.
 - Resolved (2026-10-27): Codex has no timeout of its own on a held
   Default-mode question in 0.164.0 (source read above, and the 11-minute
   live run). A Codex bump re-checks it (`upgrade-agents.md`).

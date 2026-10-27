@@ -40,3 +40,45 @@ outside the bridge is the updated backend test, and the bridges group passed.
 The four owners new to this list fail alone on code identical to the base, so
 they were not run on a separate base worktree. No assertion, deadline, skip or
 implementation was changed.
+
+## Coverage follow-up validation (2026-10-27)
+
+Only live-test code, the paused-interaction case selector, and documentation
+changed in this follow-up; no runtime implementation changed.
+
+- `mise run check` passed after each test edit; focused question interaction,
+  router, runtime lifecycle, and backend projection tests passed (8.0 s).
+- Fixed real-app-server deadline qualification passed (652.8 s): a held
+  Default-mode question survived 10.5 minutes and returned the chosen answer;
+  an unheld control expired after five minutes with an empty answer. Summary:
+  host temporary directory `orkestrator-test-run.2w0Gfw/summary.json`.
+- Aggregate `mise run test` artifacts are in host temporary directory
+  `orkestrator-test-run.SuudhC` (completed in 1,957.4 s, including capacity
+  waits). Host load reached 253/219/206. The protocol lockfile passed;
+  workspace, root/support and bridges failed outside the changed question
+  tests. Backend finished with 11,444 passed, 106 skipped and 51 failed.
+  Root/support repeated only the two known `migrate-copy` failures (3,526 passed); owner rerun `Aqe4zz` repeated both (10 passed).
+- Desktop repeated the two Keychain-warning assertions above; owner rerun
+  `6mqieY` repeated both (20 passed). Backend's real-Git worktree cases hit
+  five-second deadlines again; `environment-move.test.ts` alone (`Ap6MvT`)
+  also timed out (17 passed, 21 failed, 19 follow-on errors, 247.8 s).
+- Bridges additionally hit Codex catalogue's two-second settle wait
+  ([0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md)); its
+  owner rerun (`u3qij2`) failed a sibling settle-wait case (29 passed).
+  Claude coordinator sandbox cases `default-sandbox-writes` and
+  `unavailable-hook-refuses-abbreviation`, execution-policy `escape`, and
+  steer-journal `bounds coalesced input at 64 UUIDs and definitively refuses
+  excess steers` also failed. The steer owner passed alone
+  (`question-claude-steer-baseline`, 5.4 s); the two policy owners together (`YCbFZN`) passed 12 cases and
+  repeated only `default-sandbox-writes` (the CLI's 15-second abort, 101.8 s
+  total). These owners and their runtime imports are unchanged by the follow-up.
+
+The billed browser run's question outcome and its separate approval-model
+completion-token failure are recorded in
+[todo 0161](../../../todo/agent-engines/0161-codex-default-mode-question-activity.md#qualification).
+
+The independent question-only browser qualification then passed all three
+tests (745.9 s), with its default 10.5-minute wait, reload, chosen-codeword
+completion, and both setup-cleanup cases. Artifacts:
+`output/agent-testing/codex-question-only-0161/browser/`; host temporary
+summary `orkestrator-test-run.wM2c5n/summary.json`.

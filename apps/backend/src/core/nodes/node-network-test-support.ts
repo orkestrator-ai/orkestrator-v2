@@ -209,7 +209,10 @@ export class TestNodeNetwork {
             } as unknown as CommandContext);
         return json(200, { result });
       } catch (error) {
-        return json(500, { error: error instanceof Error ? error.message : String(error) });
+        return json(500, {
+          error: error instanceof Error ? error.message : String(error),
+          code: (error as { code?: string }).code,
+        });
       }
     }
     return json(404, { error: "Not found" });

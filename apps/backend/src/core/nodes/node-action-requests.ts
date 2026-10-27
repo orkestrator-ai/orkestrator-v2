@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  parseAgentsMdChanges,
+  type AgentsMdChange,
+} from "@orkestrator/protocol/agents-md-orkestrator";
 
 /**
  * Actions a coordinator may only *request*; the user approves or rejects
@@ -15,9 +19,19 @@ import { randomUUID } from "node:crypto";
  * - `apply-root-changes`: apply a patch of the project checkout's
  *   uncommitted changes to one worker on this node. The coordinator names
  *   the worker and may suggest files; the user picks the files.
+ * - `update-agents-md`: open a pull request changing only the
+ *   `## Orkestrator` section of the project's root AGENTS.md, on the node
+ *   that owns the project copy. The user may edit the entries while
+ *   approving.
  *
- * Requests hold names and identifiers only, never file contents or values.
+ * Requests hold names and identifiers only, never file contents or values;
+ * the one exception is an AGENTS.md proposal's entries, which are the
+ * coordinator's own bounded words the user reviews.
  * The outcome is mailed back to the requesting coordinator conversation.
+ *
+ * An approved `update-agents-md` request keeps the user's final entries, and
+ * one a backend restart interrupted is run again on start
+ * (`resumeInterrupted`); its executor is idempotent per request.
  */
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
@@ -29,7 +43,11 @@ export type NodeActionKind =
   | "create-project"
   | "update-project-files"
   | "reveal-env-value"
-  | "apply-root-changes";
+  | "apply-root-changes"
+  | "update-agents-md";
+
+/** Kinds whose approved, unfinished runs are resumed after a restart. */
+const RESUMABLE_KINDS: ReadonlySet<NodeActionKind> = new Set(["update-agents-md"]);
 
 export interface NodeActionTarget {
   nodeId: string;
@@ -55,11 +73,15 @@ export interface NodeActionRequest {
   /** The coordinator conversation that asked, and why (its own words, bounded). */
   requestedBy: { coordinatorEnvironmentId: string; coordinatorTabId: string; projectId: string };
   reason?: string;
+  /** `update-agents-md`: the coordinator's proposal. */
+  agentsMd?: { changes: AgentsMdChange[] };
   createdAt: string;
   expiresAt: string;
   state: NodeActionState;
   resolvedAt?: string;
-  result?: { code: string; message: string };
+  /** The user's choices, kept for kinds that resume after a restart. */
+  approval?: NodeActionApproval;
+  result?: { code: string; message: string; url?: string };
 }
 
 /**
@@ -70,12 +92,14 @@ export interface NodeActionApproval {
   location?: string;
   paths?: string[];
   rememberFiles?: boolean;
+  /** `update-agents-md`: the entries as the user edited them. */
+  changes?: AgentsMdChange[];
 }
 
 export type NodeActionExecutor = (
   request: NodeActionRequest,
   approval: NodeActionApproval,
-) => Promise<{ code: string; message: string; outcomeUnknown?: boolean }>;
+) => Promise<{ code: string; message: string; url?: string; outcomeUnknown?: boolean }>;
 
 /** Bounded, validated approval choices; unknown fields are dropped. */
 export function parseNodeActionApproval(value: unknown): NodeActionApproval {
@@ -100,6 +124,7 @@ export function parseNodeActionApproval(value: unknown): NodeActionApproval {
     approval.paths = raw.paths as string[];
   }
   if (raw.rememberFiles !== undefined) approval.rememberFiles = raw.rememberFiles === true;
+  if (raw.changes !== undefined) approval.changes = parseAgentsMdChanges(raw.changes);
   return approval;
 }
 
@@ -107,6 +132,8 @@ export class NodeActionRequests {
   private requests: NodeActionRequest[] = [];
   private loadPromise: Promise<void> | null = null;
   private saveQueue: Promise<void> = Promise.resolve();
+  /** Requests whose executor is running in this process. */
+  private readonly running = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -161,6 +188,7 @@ export class NodeActionRequests {
     targets: NodeActionTarget[];
     requestedBy: NodeActionRequest["requestedBy"];
     reason?: string;
+    agentsMd?: NodeActionRequest["agentsMd"];
   }): Promise<NodeActionRequest> {
     if (input.requestId !== undefined && (!input.requestId.trim() || input.requestId.length > 256))
       throw new Error("Expected a requestId of 1-256 characters");
@@ -174,7 +202,8 @@ export class NodeActionRequests {
           existing.kind !== input.kind ||
           JSON.stringify(existing.targets) !== JSON.stringify(input.targets) ||
           JSON.stringify(existing.requestedBy) !== JSON.stringify(input.requestedBy) ||
-          existing.reason !== (input.reason ? input.reason.slice(0, 500) : undefined)
+          existing.reason !== (input.reason ? input.reason.slice(0, 500) : undefined) ||
+          JSON.stringify(existing.agentsMd) !== JSON.stringify(input.agentsMd)
         )
           throw new Error("Request ID was reused with a different payload");
         await this.persist();
@@ -189,6 +218,7 @@ export class NodeActionRequests {
       targets: input.targets.map((target) => ({ ...target })),
       requestedBy: { ...input.requestedBy },
       ...(input.reason ? { reason: input.reason.slice(0, 500) } : {}),
+      ...(input.agentsMd ? { agentsMd: structuredClone(input.agentsMd) } : {}),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + NODE_ACTION_REQUEST_TTL_MS).toISOString(),
       state: "pending",
@@ -237,27 +267,74 @@ export class NodeActionRequests {
       return structuredClone(request);
     }
     request.state = "approved";
+    if (RESUMABLE_KINDS.has(request.kind)) request.approval = structuredClone(approval);
     await this.persist();
-    const executor = this.options.executors[request.kind];
-    if (!executor) {
-      request.state = "failed";
-      request.result = { code: "unsupported", message: "This kind of request cannot run here." };
-    } else {
-      try {
-        const outcome = await executor(structuredClone(request), approval);
-        request.state = outcome.outcomeUnknown ? "outcome-unknown" : "executed";
-        request.result = { code: outcome.code, message: outcome.message };
-      } catch (error) {
-        request.state = "failed";
-        request.result = {
-          code: (error as { code?: unknown }).code
-            ? String((error as { code?: unknown }).code)
-            : "failed",
-          message: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-        };
-      }
+    return this.execute(request, approval);
+  }
+
+  /**
+   * Run again every approved request of a resumable kind that a backend
+   * restart interrupted. Its executor finds what the earlier run left.
+   */
+  async resumeInterrupted(): Promise<void> {
+    await this.ensureLoaded();
+    for (const request of this.requests) {
+      if (
+        request.state !== "approved" ||
+        !RESUMABLE_KINDS.has(request.kind) ||
+        this.running.has(request.requestId)
+      )
+        continue;
+      await this.execute(request, request.approval ?? {});
     }
-    await this.persist();
+  }
+
+  private async execute(
+    request: NodeActionRequest,
+    approval: NodeActionApproval,
+  ): Promise<NodeActionRequest> {
+    this.running.add(request.requestId);
+    try {
+      const executor = this.options.executors[request.kind];
+      if (!executor) {
+        request.state = "failed";
+        request.result = { code: "unsupported", message: "This kind of request cannot run here." };
+      } else {
+        try {
+          const outcome = await executor(structuredClone(request), approval);
+          request.state = outcome.outcomeUnknown ? "outcome-unknown" : "executed";
+          request.result = {
+            code: outcome.code,
+            message: outcome.message,
+            ...(outcome.url ? { url: outcome.url } : {}),
+          };
+        } catch (error) {
+          // Offline nodes have not accepted the write. Keep approved entries
+          // durable so startup/reconnect reconciliation can try them again.
+          if (
+            RESUMABLE_KINDS.has(request.kind) &&
+            (error as { code?: unknown })?.code === "node-unavailable"
+          ) {
+            request.result = {
+              code: "node-unavailable",
+              message: "Waiting for the target node to reconnect.",
+            };
+            await this.persist();
+            return structuredClone(request);
+          }
+          request.state = "failed";
+          request.result = {
+            code: (error as { code?: unknown }).code
+              ? String((error as { code?: unknown }).code)
+              : "failed",
+            message: (error instanceof Error ? error.message : String(error)).slice(0, 600),
+          };
+        }
+      }
+      await this.persist();
+    } finally {
+      this.running.delete(request.requestId);
+    }
     await this.options.notify?.(structuredClone(request)).catch(() => undefined);
     return structuredClone(request);
   }
@@ -308,6 +385,13 @@ export function describeNodeAction(request: Pick<NodeActionRequest, "kind" | "ta
     case "apply-root-changes":
       return `Apply uncommitted checkout changes to ${request.targets
         .map((target) => `“${names(target)}” on ${target.nodeName}`)
+        .join(", ")}`;
+    case "update-agents-md":
+      return `Open a pull request updating the ## Orkestrator section of AGENTS.md in ${request.targets
+        .map(
+          (target) =>
+            `${target.projectName ?? target.projectId ?? "the project"} on ${target.nodeName}`,
+        )
         .join(", ")}`;
   }
 }

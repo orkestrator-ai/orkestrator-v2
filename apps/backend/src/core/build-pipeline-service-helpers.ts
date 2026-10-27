@@ -19,6 +19,7 @@ import type {
 import {
   BUILD_STEP_KEYS,
   isActiveBuildPhase,
+  isSupersededPipelineSession,
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
@@ -137,8 +138,14 @@ export function buildAdmissionKey(input: StartBuildPipelineInput): string {
     .digest("hex");
 }
 
+/**
+ * The session the pipeline is running. A session a restart superseded is
+ * history, never current: between the rewind and the replacement's start the
+ * phase has no session, as it would before a stage's first session.
+ */
 export function sessionForCurrentPhase(pipeline: BuildPipeline): PipelineSession | undefined {
-  return pipeline.sessions[pipeline.currentSessionIndex];
+  const session = pipeline.sessions[pipeline.currentSessionIndex];
+  return isSupersededPipelineSession(session) ? undefined : session;
 }
 
 /**

@@ -209,6 +209,33 @@ describe("Orkestrator control MCP server", () => {
   const BASE = { baseBranch: "main", baseCommit: "a".repeat(40) };
 
   for (const mode of ["off", "settled"] as const) {
+    test("coordinator invoker directly refuses the PR-opening command", async () => {
+      overrides.set("get_project_coordinator", () => ({
+        workspace: {
+          id: "coordinator-1",
+          lifecycleState: "ready",
+          conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+        },
+      }));
+      const guarded = server as unknown as {
+        coordinatorInvoker(
+          scope: Record<string, unknown>,
+        ): Promise<{ ok: boolean; invoke: ControlMcpInvoker }>;
+      };
+      const checked = await guarded.coordinatorInvoker({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        mailboxIncarnationId: "incarnation-1",
+      });
+      expect(checked.ok).toBe(true);
+      await expect(
+        checked.invoke("open_project_agents_md_pr", { projectId: "project-1" }),
+      ).rejects.toThrow("Coordinator capability denied");
+      expect(invocations.some((item) => item.command === "open_project_agents_md_pr")).toBe(false);
+    });
+
     test(`workflow tool wake promises match the ${mode} observer policy`, async () => {
       const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
       try {
@@ -409,6 +436,7 @@ describe("Orkestrator control MCP server", () => {
       "open_worker_browser",
       "edit_worker_tab",
       "request_root_changes",
+      "propose_agents_md_update",
       "start_looped_review",
       "get_looped_review",
       "cancel_looped_review",
@@ -442,6 +470,54 @@ describe("Orkestrator control MCP server", () => {
       conversationId: "conversation-1",
     });
     expect(forwarded?.args.input).toMatchObject({ environmentId: "env-1", tabType: "plain" });
+
+    // The AGENTS.md proposal only forwards the validated proposal; a side
+    // agent cannot call it, and a path or extra field is refused up front.
+    overrides.set("request_coordinator_agents_md_update", () => ({
+      approvalRequestId: "approval-1",
+      state: "pending",
+    }));
+    const proposal = {
+      requestId: "decisions",
+      changes: [{ action: "add", text: "Never touch ports 34121/34122." }],
+      reason: "Agreed in chat",
+    };
+    const proposed = await server.callCoordinatorTool(scope, "propose_agents_md_update", proposal);
+    expect(proposed.isError).not.toBe(true);
+    expect(proposed.text).toContain("Do not poll");
+    const forwardedProposal = invocations.findLast(
+      (entry) => entry.command === "request_coordinator_agents_md_update",
+    );
+    expect(forwardedProposal?.args).toEqual({
+      scope: {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+      },
+      input: proposal,
+    });
+    expect(
+      (
+        await server.callCoordinatorTool(scope, "propose_agents_md_update", {
+          ...proposal,
+          path: "README.md",
+        })
+      ).isError,
+    ).toBe(true);
+    expect(
+      (
+        await server.callCoordinatorTool(
+          {
+            ...scope,
+            conversationId: "side-1",
+            mailboxIncarnationId: "incarnation-2",
+            capabilities: coordinatorRoleCapabilities("side"),
+          },
+          "propose_agents_md_update",
+          proposal,
+        )
+      ).isError,
+    ).toBe(true);
 
     const refused = await server.callCoordinatorTool(scope, "launch_terminal", {
       requestId: "smuggled",

@@ -75,6 +75,9 @@ works across the nodes that node controls:
 - `request_environment_deletion` only asks: the user confirms in a dialog
   that names the node and the environment. A coordinator never deletes on
   its own initiative, here or on its own node.
+- `propose_agents_md_update` with `nodeId` saves decisions to that node's
+  copy: the user reviews it here, and the pull request is opened there (see
+  [Saving decisions to AGENTS.md](#saving-decisions-to-agentsmd)).
 
 The coordinator's context says whether its node is a command node. A command
 node attached to another runs in leaf mode: its coordinator's context names
@@ -1115,6 +1118,107 @@ all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
 The coordinator never sees the patch.
 
+## Saving decisions to AGENTS.md
+
+Users settle durable decisions in coordinator conversations: how workers
+behave, safety rules, conventions ("never touch ports 34121/34122", "commit
+flaky-test records in the same change"). The main coordinator can save them to
+a dedicated `## Orkestrator` section of the project's root `AGENTS.md`, which
+every agent reads, through a pull request, without a worker environment.
+
+**When it offers.** The main coordinator's per-turn context
+(`COORDINATOR_AGENTS_MD_RULE` in
+`packages/protocol/src/agents-md-orkestrator.ts`) tells it to ask once,
+briefly, at a natural pause after such a decision is agreed, whether to save
+it; to batch several decisions into one question and one call; to skip
+one-off task details; and not to ask again about a decision the user declined
+in the same conversation. The decline mail repeats that last rule. Side agents
+are not told and cannot call the tool.
+
+**The tool.** `propose_agents_md_update` (main only: capability
+`environments`) takes a `requestId`, a `reason`, an optional `nodeId` for the
+project's copy on another node, and 1 to 20 `changes`, each
+`{action: "add" | "replace" | "remove", text, replaces?}` (`replaces` names the
+existing entry for a `replace`). Each entry is one plain line of at most 500
+characters. It cannot start another Markdown block (a heading, quote, list,
+fence, table, HTML or thematic break) or contain a line break, an HTML comment,
+a control character or a bidirectional override, so it cannot escape the
+section; there is no path parameter and unknown fields are refused. Two
+changes may not touch the same entry. The tool creates an `update-agents-md`
+node action request and returns at once (`delivery: "async"`); it writes
+nothing. A retry with the same `requestId` returns the same request with its
+current `state` and, once opened, `prUrl`.
+
+**The review.** The request opens `AgentsMdApprovalDialog` in every window of
+the command node. It reads the section from the freshly fetched base branch on
+the node owning the project copy (`preview_agents_md_update` →
+`read_project_agents_md_section`) and shows the change as a line diff,
+computed by the same merge the backend runs. The user can edit each entry's
+text or drop it, and approves or declines. Approval stays disabled until the
+preview has loaded and the merge succeeded; a failed read offers a retry and
+still permits declining. A replacement whose original is no longer in the section shows as a conflict and blocks approval until it is
+dropped; a proposal the section already satisfies says no pull request is
+needed. Nothing happens without approval; the outcome is mailed to the
+coordinator, which wakes it.
+
+**The pull request** (`apps/backend/src/core/agents-md-pr.ts`, run by
+`open_project_agents_md_pr` on the owning node, which coordinator credentials
+are refused by name):
+
+1. `gh auth status` first; a missing or signed-out `gh` fails with what to run
+   (`gh auth login` on that machine, or a token under Settings).
+2. A pull request for the request's branch (`orkestrator/agents-md-<key>`, the
+   key derived from the request) is returned if it is open. A closed or merged
+   pull request produces a clear status and URL instead of an open-PR success.
+3. `git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>`, the
+   base being the repository's PR base branch, else its default branch.
+4. The entries are re-applied to `AGENTS.md` at the fetched `origin/<base>`.
+   Additions already present and removals already gone are no-ops; a
+   replacement whose original is gone is a conflict and nothing is pushed.
+5. If an earlier attempt already pushed the branch, it must change only
+   `AGENTS.md` and its file must match that fresh merge byte for byte. A
+   mismatch is a conflict; recovery never force-pushes. Otherwise, with
+   nothing left to change, there is no pull request.
+6. A temporary worktree inside a fresh private mode-0700 system temp directory,
+   detached and without a checkout, gets the new file's exact bytes through
+   `hash-object --no-filters` and `update-index`, so line-ending conversion,
+   clean filters and LFS cannot alter the rest of the file. It commits with
+   `core.hooksPath=/dev/null`, checks the commit changes only `AGENTS.md`, and
+   pushes the branch, never forced. A lost push reply is accepted only if
+   origin holds that exact commit. The PR body also lives in the private directory.
+7. `gh pr create` with a body listing the changes and the reason, ending with
+   the generated-by line. The worktree is removed in every case.
+
+The user's checkout (its branch, index, working tree and stash) is never
+touched; only `origin/<base>` is fetched and the shared object store gains
+the new objects. Nothing merges.
+
+**The section.** `mergeOrkestratorSection` copies everything outside the
+section byte for byte (CRLF kept, a byte-order mark kept, invalid UTF-8
+refused). A missing section is created at the end of the file, opening with a
+note that it holds coordinator-approved operating decisions every agent must
+follow; a missing file is created with just the section. Entries are compared
+ignoring case, spacing and a final full stop, stay de-duplicated (existing
+duplicates collapse to the first when the section changes), keep their order,
+and new ones go after the last entry. ATX and Setext level-one and level-two
+headings end the section; a first-line BOM does not hide its heading. Headings
+inside fenced code are not headings, and two `## Orkestrator` sections are
+refused as ambiguous. Invisible Unicode format characters are refused in new
+entries and ignored in comparison keys; compatibility normalization also
+prevents visually equivalent block markers from bypassing validation.
+
+**Durability.** The request (with the user's edited entries once approved)
+is in the node action request store. An approval a backend restart
+interrupted is run again after node links and portal storage start
+(`resumeInterrupted`); with steps 2–5 above that finds the pull request or pushed branch the earlier run left
+rather than opening a second. An unavailable target keeps the request approved
+with the user's edits intact; reconnects and a 30-second reconciliation sweep
+retry it. On another node the routed call is retried if its answer is lost (the node link times out after 60 seconds); each retry
+joins the run still going there using the same routed request key. A successful
+answer clears earlier unknown-outcome notices for that run. After five lost
+answers the request ends `outcome-unknown`, naming the branch to check, with one
+routed outcome record. Remote failures retain their error code and message.
+
 ## Tests that exist today
 
 The async and read-only contracts are asserted at the layer that owns each
@@ -1176,6 +1280,15 @@ guarantee, not by one end-to-end scenario replayed per platform:
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in
   [`agent-testing.md`](../development/agent-testing.md).
+- AGENTS.md decisions: parsing, merging, injection and the diff
+  (`agents-md-orkestrator.test.ts`, protocol); the pull request against a real
+  local `origin` with a fake `gh`, including a fresh base, a missing section
+  or file, retries, a restart after the push, upstream conflicts, missing
+  `gh` sign-in, hooks and line-ending filters (`agents-md-pr.test.ts`); main
+  versus side, validation and replay (`agents-md-commands.test.ts`); approval,
+  decline, remote routing and restart (`node-coordination-agents-md.test.ts`);
+  the dialog (`AgentsMdApprovalDialog.test.tsx`, web, and
+  `e2e/AgentsMdApproval.spec.ts` in a real browser)
 - worker surfaces (terminal, browser, tab edits, looped review, feature
   plans, custom fix, reviewer tabs, the root-changes request and receipts):
   `coordinator-surface-actions.test.ts`; the patch and the untouched

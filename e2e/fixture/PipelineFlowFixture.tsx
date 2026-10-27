@@ -187,8 +187,109 @@ function loops(): BuildPipeline {
   });
 }
 
+function nestedRewinds(): BuildPipeline {
+  const previous = (id: string) => ({ supersededBy: id, supersededAt: at(1800) });
+  return base({
+    phase: "verifying",
+    currentSessionIndex: 5,
+    sessions: [
+      stage("build", "outer-build", 30, 50, previous("outer")),
+      stage("review", "review-failed", 90, 50, {
+        ...previous("inner"),
+        label: "Review 1",
+        reviewPassId: "pass",
+        reviewerOutcome: "failed",
+      }),
+      stage("review", "review-retry", 150, 50, {
+        ...previous("inner"),
+        label: "Review 1",
+        reviewPassId: "pass",
+        reviewerOutcome: "completed",
+      }),
+      stage("verify", "inner-verify", 210, 50, previous("inner")),
+      stage("review", "outer-review", 270, 50, previous("outer")),
+      stage("verify", "live-verify", 330, null),
+    ],
+    rewinds: [
+      {
+        id: "inner",
+        at: at(900),
+        fromPhase: "failed",
+        fromIteration: 1,
+        iteration: 0,
+        step: { kind: "session", phase: "review" },
+        supersededSessions: 3,
+        validationRun: validationRun({ error: "Retained validation failure", status: "failed" }),
+      },
+      {
+        id: "outer",
+        at: at(1800),
+        fromPhase: "verifying",
+        fromIteration: 0,
+        iteration: 0,
+        step: { kind: "session", phase: "build" },
+        supersededSessions: 2,
+      },
+    ],
+  });
+}
+
+function validationRewind(reviewing: boolean): BuildPipeline {
+  const pipeline = fanout();
+  pipeline.rewinds = [
+    {
+      id: "validation-rewind",
+      at: at(780),
+      fromPhase: "building",
+      fromIteration: 0,
+      iteration: 0,
+      step: { kind: "validation", implementationPhase: "build" },
+      supersededSessions: 0,
+      replacementValidationRunId: "replacement-validation",
+      validationRun: validationRun({
+        id: "retained-validation",
+        startedAt: at(765),
+        completedAt: at(775),
+        status: "failed",
+        error: "Retained validation failure",
+      }),
+    },
+  ];
+  pipeline.validationRun = validationRun({
+    id: "replacement-validation",
+    startedAt: at(780),
+    status: reviewing ? "completed" : "running",
+    completedAt: reviewing ? at(790) : undefined,
+  });
+  pipeline.sessions = reviewing ? pipeline.sessions : pipeline.sessions.slice(0, 1);
+  pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+  if (reviewing) {
+    pipeline.reviewers = PANEL.slice(0, 2);
+    pipeline.reviewFanout!.reviewers = pipeline.reviewFanout!.reviewers.slice(0, 2);
+    pipeline.reviewFanout!.reviewers.forEach((reviewer) => {
+      reviewer.status = "running";
+      delete reviewer.error;
+    });
+    pipeline.sessions
+      .filter((session) => session.phase === "review")
+      .forEach((session) => {
+        session.status = "running";
+        delete session.completedAt;
+        delete session.error;
+        delete session.reviewerOutcome;
+      });
+  } else {
+    pipeline.phase = "building";
+    delete pipeline.reviewFanout;
+  }
+  return pipeline;
+}
+
 function scenario(): BuildPipeline {
   const name = new URLSearchParams(window.location.search).get("scenario");
+  if (name === "nested-rewinds") return nestedRewinds();
+  if (name === "validation-rewind") return validationRewind(false);
+  if (name === "review-after-validation-rewind") return validationRewind(true);
   if (name === "failed-review") {
     const pipeline = fanout();
     pipeline.phase = "failed";
@@ -291,6 +392,8 @@ function installBackend(pipeline: BuildPipeline) {
             updatedAt: at(1800),
             snapshot: current,
           } as T;
+        case "restart_build_pipeline_step":
+          return next({});
         case "cancel_build_pipeline":
           return next({
             phase: "failed",

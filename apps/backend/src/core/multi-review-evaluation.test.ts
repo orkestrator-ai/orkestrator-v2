@@ -343,6 +343,34 @@ describe("panel value summaries", () => {
     expect(summary!.laterCacheReadShareDelta).toBeCloseTo(0.6);
   });
 
+  test("superseded reviewers and consolidation do not affect the live summary", () => {
+    const overlap = referenceOverlap(byId("severity-disagreement"));
+    const summaries = summarizePanelValue({
+      sessions: [
+        { phase: "review", iteration: 0, label: "Review 1", tokenCount: 10, cacheReadTokens: 2 },
+        {
+          phase: "review",
+          iteration: 0,
+          label: "Review 1",
+          tokenCount: 900,
+          supersededBy: "rewind",
+        },
+        {
+          phase: "review",
+          iteration: 0,
+          label: "Consolidation",
+          reviewOverlap: overlap,
+          supersededBy: "rewind",
+        },
+        { phase: "review", iteration: 2, label: "Review 1", supersededBy: "rewind" },
+      ],
+    } as never);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.reviewers).toHaveLength(1);
+    expect(summaries[0]!.reviewers[0]!.cacheReadTokens).toBe(2);
+    expect(summaries[0]).not.toHaveProperty("overlap");
+  });
+
   test("a Build Pipeline yields one summary per review iteration, newest tile per slot", () => {
     const overlap = referenceOverlap(byId("severity-disagreement"));
     const session = (fields: object) => ({

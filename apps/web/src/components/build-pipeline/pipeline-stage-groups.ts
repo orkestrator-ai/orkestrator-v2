@@ -1,4 +1,7 @@
-import { isReviewPackagePreparationSession } from "@orkestrator/protocol/build-pipeline";
+import {
+  isReviewPackagePreparationSession,
+  isSupersededPipelineSession,
+} from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipeline, PipelineSession } from "@/stores/buildPipelineStore";
 
 export type PipelineStageItem =
@@ -73,8 +76,13 @@ export function pipelineStageItems(pipeline: BuildPipeline): PipelineStageItem[]
     key: `validation-${pipeline.validationRun.id}`,
   };
   let preparationIndex = -1;
+  // The run belongs to the live round; a rewind's superseded preparation is history.
   for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
-    if (isReviewPackagePreparationSession(pipeline.sessions[index], pipeline)) {
+    const session = pipeline.sessions[index];
+    if (
+      isReviewPackagePreparationSession(session, pipeline) &&
+      !isSupersededPipelineSession(session)
+    ) {
       preparationIndex = index;
       break;
     }
@@ -86,7 +94,9 @@ export function pipelineStageItems(pipeline: BuildPipeline): PipelineStageItem[]
 
   // Old persisted snapshots can have validation evidence without the labelled
   // preparation session. It still belongs before the first review it supplied.
-  const firstReviewIndex = pipeline.sessions.findIndex((session) => session.phase === "review");
+  const firstReviewIndex = pipeline.sessions.findIndex(
+    (session) => session.phase === "review" && !isSupersededPipelineSession(session),
+  );
   items.splice(firstReviewIndex >= 0 ? firstReviewIndex : items.length, 0, validationItem);
   return items;
 }

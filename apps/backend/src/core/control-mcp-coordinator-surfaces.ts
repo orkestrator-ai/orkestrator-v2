@@ -3,7 +3,13 @@ import {
   COORDINATOR_TAB_EDIT_OPERATIONS,
   COORDINATOR_TERMINAL_TAB_TYPES,
 } from "@orkestrator/protocol/coordinator-surfaces";
+import {
+  MAX_AGENTS_MD_CHANGES,
+  MAX_AGENTS_MD_ENTRY_CHARS,
+  MAX_AGENTS_MD_REASON_CHARS,
+} from "@orkestrator/protocol/agents-md-orkestrator";
 import { z } from "zod";
+import { createNodeTargets } from "./control-mcp-nodes.js";
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool-support.js";
@@ -11,9 +17,9 @@ import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool
 /**
  * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
  * tmux tab, a browser preview, tab editing, looped review, feature-plan
- * launch, and the request to copy the checkout's uncommitted changes into a
- * worker. None of them reaches the project checkout; the last one only asks
- * the user. Each calls one `*_coordinator_*` backend command with the
+ * launch, the request to copy the checkout's uncommitted changes into a
+ * worker, and the proposal to save decisions to AGENTS.md. None of them
+ * reaches the project checkout; the last two only ask the user. Each calls one `*_coordinator_*` backend command with the
  * authenticated scope, which revalidates it and refuses the project home.
  */
 
@@ -44,6 +50,8 @@ export const COORDINATOR_SURFACE_TOOL_CAPABILITIES: ReadonlyArray<readonly [stri
   ["open_worker_browser", "environments"],
   ["edit_worker_tab", "environments"],
   ["request_root_changes", "environments"],
+  // Main coordinator only: side agents' credentials lack `environments`.
+  ["propose_agents_md_update", "environments"],
   ["start_looped_review", "multi-review"],
   ["get_looped_review", "multi-review"],
   ["cancel_looped_review", "multi-review"],
@@ -171,6 +179,74 @@ export function registerCoordinatorSurfaceTools(
         wake: "You will be woken by mail when the user approves or declines. Nothing has changed yet.",
         nextStep: "Finish your turn now. Do not poll.",
       }),
+  );
+
+  const entryText = z.string().min(1).max(MAX_AGENTS_MD_ENTRY_CHARS);
+  server.registerTool(
+    "propose_agents_md_update",
+    {
+      title: "Propose saving decisions to AGENTS.md (## Orkestrator)",
+      description:
+        "Propose adding, replacing or removing entries in the ## Orkestrator section of the project's root AGENTS.md: durable decisions, rules and preferences the user agreed that future workers and conversations must follow. Ask the user first, and batch every decision into one call. You write nothing: the user sees the change as a diff against the base branch, may edit it, and approves or declines; only an approval makes Orkestrator open a pull request (never merged automatically). Each entry is one plain line; headings, lists, fences, HTML and line breaks are refused, and only that section of AGENTS.md can change. You are woken by mail with the outcome and the pull request URL. If the user declines, do not propose those entries again in this conversation unless they ask.",
+      inputSchema: z
+        .object({
+          requestId,
+          changes: z
+            .array(
+              z
+                .object({
+                  action: z.enum(["add", "replace", "remove"]),
+                  text: entryText.describe(
+                    "The entry (one line, no leading bullet), or for replace the new text.",
+                  ),
+                  replaces: entryText
+                    .optional()
+                    .describe("replace only: the existing entry's text, as it appears now."),
+                })
+                .strict(),
+            )
+            .min(1)
+            .max(MAX_AGENTS_MD_CHANGES),
+          reason: z
+            .string()
+            .trim()
+            .min(1)
+            .max(MAX_AGENTS_MD_REASON_CHARS)
+            .describe("Why, in the user's words; shown to the user and in the pull request."),
+          nodeId: z
+            .string()
+            .trim()
+            .min(1)
+            .max(200)
+            .optional()
+            .describe(
+              "Only for the project's copy on another node (from list_nodes); the pull request is opened there. Omit for this node.",
+            ),
+        })
+        .strict(),
+      annotations: WRITE,
+    },
+    async ({ nodeId, ...input }) => {
+      // A copy on another node: the node owning it reads AGENTS.md and opens the PR.
+      const remote = nodeId ? await createNodeTargets(invoke, scope).targetOrSelf(nodeId) : null;
+      return toolResult({
+        ...(await call("request_coordinator_agents_md_update", {
+          input,
+          ...(remote
+            ? {
+                target: {
+                  nodeId: remote.nodeId,
+                  nodeName: remote.nodeName,
+                  projectId: remote.projectId,
+                },
+              }
+            : {}),
+        })),
+        delivery: "async",
+        wake: "You will be woken by mail when the user approves or declines, with the pull request URL. Nothing has changed yet.",
+        nextStep: "Finish your turn now. Do not poll.",
+      });
+    },
   );
 
   server.registerTool(

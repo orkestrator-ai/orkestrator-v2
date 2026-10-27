@@ -11,6 +11,7 @@
  * (`invoke_on_node`), which routes them to the owner.
  */
 
+import type { AgentsMdChange, AgentsMdSection } from "@orkestrator/protocol/agents-md-orkestrator";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
@@ -241,7 +242,8 @@ export interface NodeActionRequestView {
     | "create-project"
     | "update-project-files"
     | "reveal-env-value"
-    | "apply-root-changes";
+    | "apply-root-changes"
+    | "update-agents-md";
   targets: Array<{
     nodeId: string;
     nodeName: string;
@@ -257,8 +259,11 @@ export interface NodeActionRequestView {
   reason?: string;
   /** The coordinator that asked; its project is the one a copy request copies. */
   requestedBy?: { projectId: string };
+  /** `update-agents-md`: the proposed changes to the ## Orkestrator section. */
+  agentsMd?: { changes: AgentsMdChange[] };
   state: string;
-  result?: { code: string; message: string };
+  /** `url`: the pull request an `update-agents-md` approval opened. */
+  result?: { code: string; message: string; url?: string };
 }
 
 /** Requests from coordinators that wait for this user's decision. */
@@ -272,14 +277,37 @@ export async function listNodeActionRequests(): Promise<NodeActionRequestView[]>
 export async function resolveNodeActionRequest(
   requestId: string,
   decision: "approve" | "reject",
-  /** A copy request's final location and files, as the user settled them. */
-  approval?: { location?: string; paths?: string[]; rememberFiles?: boolean },
+  /**
+   * A copy request's final location and files, or an AGENTS.md request's
+   * entries, as the user settled them.
+   */
+  approval?: {
+    location?: string;
+    paths?: string[];
+    rememberFiles?: boolean;
+    changes?: AgentsMdChange[];
+  },
 ): Promise<NodeActionRequestView> {
   return portalInvoke<NodeActionRequestView>("resolve_node_action_request", {
     requestId,
     decision,
     ...(approval ? { approval } : {}),
   });
+}
+
+/** The ## Orkestrator section on the latest base branch, for an AGENTS.md request's review. */
+export interface AgentsMdPreview {
+  baseBranch: string;
+  baseCommit: string;
+  fetched: boolean;
+  fetchError?: string;
+  fileExists: boolean;
+  section: AgentsMdSection;
+  nodeName?: string;
+}
+
+export async function previewAgentsMdUpdate(requestId: string): Promise<AgentsMdPreview> {
+  return portalInvoke<AgentsMdPreview>("preview_agents_md_update", { requestId });
 }
 
 /**

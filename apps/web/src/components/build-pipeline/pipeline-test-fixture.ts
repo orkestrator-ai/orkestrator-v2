@@ -132,3 +132,43 @@ export function validationRun(overrides: Partial<ValidationRun> = {}): Validatio
     ...overrides,
   };
 }
+
+/**
+ * Round 2's Verify failed; the user restarted round 1's Verify, which now
+ * runs again. Verify 1, Fix 2, Review 2 and Verify 2 are the previous attempt.
+ */
+export function rewoundToFirstVerify(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
+  const superseded = { supersededBy: "rewind-1", supersededAt: "2026-07-29T00:10:00.000Z" };
+  return build({
+    phase: "verifying",
+    iteration: 0,
+    currentSessionIndex: 6,
+    sessions: [
+      session("build", "build-1", 0),
+      session("review", "review-1", 60),
+      session("verify", "verify-1", 120, { ...superseded, verificationResult: "fail" }),
+      session("fix", "fix-2", 180, { ...superseded, iteration: 1 }),
+      session("review", "review-2", 240, { ...superseded, iteration: 1 }),
+      session("verify", "verify-2", 300, {
+        ...superseded,
+        iteration: 1,
+        status: "error",
+        error: "Verification failed after 2 iterations",
+      }),
+      session("verify", "verify-1-rerun", 600, { status: "running", completedAt: undefined }),
+    ],
+    rewinds: [
+      {
+        id: "rewind-1",
+        at: "2026-07-29T00:10:00.000Z",
+        fromPhase: "failed",
+        fromIteration: 1,
+        iteration: 0,
+        step: { kind: "session", phase: "verify" },
+        sessionKey: "verify-1",
+        supersededSessions: 4,
+      },
+    ],
+    ...overrides,
+  });
+}

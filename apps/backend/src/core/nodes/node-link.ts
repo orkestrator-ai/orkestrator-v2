@@ -533,7 +533,7 @@ export class NodeLink {
         await reader?.cancel().catch(() => undefined);
       }
       const text = Buffer.concat(chunks).toString("utf8");
-      let payload: { result?: T; error?: unknown } = {};
+      let payload: { result?: T; error?: unknown; code?: unknown } = {};
       try {
         payload = JSON.parse(text) as typeof payload;
       } catch {
@@ -549,7 +549,10 @@ export class NodeLink {
             : `The node answered HTTP ${response.status}.`;
         const refusal = parseNodeRefusal(message);
         if (refusal) throw new NodeRefusalError(refusal.code, refusal.message);
-        throw new Error(message);
+        const error = new Error(message);
+        if (typeof payload.code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(payload.code))
+          Object.assign(error, { code: payload.code });
+        throw error;
       }
       if (!payload || typeof payload !== "object" || !("result" in payload)) {
         throw new Error("The node returned an incomplete response.");

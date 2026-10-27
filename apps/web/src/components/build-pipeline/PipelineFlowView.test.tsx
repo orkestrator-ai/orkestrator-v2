@@ -9,6 +9,7 @@ import { formatObservedAt } from "@/lib/view-freshness";
 import {
   CREATED,
   build,
+  rewoundToFirstVerify,
   session,
   sessionlessReviewerRetry,
   validationRun,
@@ -17,8 +18,11 @@ import {
   BuildChatTab,
   graphNode,
   inspector,
+  nodeTitles,
+  queryGraphNode,
   renderPipelineTab,
   retryReviewerMock,
+  restartStepMock,
   restoreBuildChatTabMocks,
   selectNode,
 } from "./build-chat-tab-test-support";
@@ -26,7 +30,11 @@ import {
 afterAll(restoreBuildChatTabMocks);
 afterEach(() => {
   cleanup();
-  useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
+  useFlowGraphViewStore.setState({
+    views: new Map(),
+    collapsed: new Set(),
+    expandedAttempts: new Set(),
+  });
 });
 
 const reviewing = () =>
@@ -375,6 +383,135 @@ describe("failed node faces", () => {
     const tooltip = await screen.findByTestId("pipeline-node-error-tooltip");
     expect(tooltip.textContent).toContain("Reviewer exited with code 1");
     expect(tooltip.textContent).toContain('File "review.py", line 4');
+  });
+});
+
+describe("a pipeline a restart rewound", () => {
+  test("shows the superseded run as one previous attempt that expands into greyed steps", async () => {
+    renderPipelineTab(rewoundToFirstVerify());
+
+    expect(nodeTitles()).toEqual([
+      "Ticket",
+      "Setup",
+      "Build",
+      "Review",
+      "Previous attempt",
+      "Verify",
+      "Ship",
+      "PR",
+    ]);
+    // The rerun is followed, not the history.
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Running");
+    // The step count is the live run's; the previous attempt is history.
+    expect(screen.getByText(/^5 of 7 steps/)).toBeTruthy();
+
+    selectNode("Previous attempt");
+    expect(
+      within(inspector()).getByText(/rewound the pipeline from round 2 to Verify of round 1/),
+    ).toBeTruthy();
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
+
+    await waitFor(() => expect(queryGraphNode("Fix · round 2")).not.toBeNull());
+    const fix = graphNode("Fix · round 2");
+    expect(fix.hasAttribute("data-flow-superseded")).toBe(true);
+    selectNode("Verify · round 2");
+    expect(within(inspector()).getByText(/Superseded by a restart/)).toBeTruthy();
+    // History is read, never restarted or retried.
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
+    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" }) === null).toBe(
+      true,
+    );
+
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Hide steps" }));
+    await waitFor(() => expect(queryGraphNode("Fix · round 2") === null).toBe(true));
+  });
+
+  test("each historical reviewer retry opens its own transcript", async () => {
+    const pipeline = rewoundToFirstVerify();
+    const superseded = { supersededBy: "rewind-1", reviewPassId: "pass", label: "Review 1" };
+    pipeline.sessions.splice(
+      3,
+      0,
+      session("review", "failed-review", 1, { ...superseded, reviewerOutcome: "failed" }),
+      session("review", "retry-review", 2, { ...superseded, reviewerOutcome: "completed" }),
+    );
+    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+    renderPipelineTab(pipeline, { isActive: true });
+    for (const [index, key] of ["failed-review", "retry-review"].entries()) {
+      selectNode("Previous attempt");
+      const buttons = within(inspector()).getAllByRole("button", { name: "Review 1 · round 1" });
+      fireEvent.click(buttons[index]!);
+      await waitFor(() =>
+        expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+          `${key}-session`,
+        ),
+      );
+    }
+  });
+
+  test.each([true, false])(
+    "retained validation opens its own checks with sessions=%s",
+    async (withSessions) => {
+      const pipeline = rewoundToFirstVerify();
+      if (!withSessions) pipeline.sessions = [];
+      pipeline.rewinds![0]!.validationRun = validationRun({
+        error: "Historical validation failure",
+        status: "failed",
+      });
+      renderPipelineTab(pipeline);
+      selectNode("Previous attempt");
+      fireEvent.click(within(inspector()).getByRole("button", { name: "Validation" }));
+      await waitFor(() =>
+        expect(within(inspector()).getByText("Historical validation failure")).toBeTruthy(),
+      );
+      expect(
+        within(inspector()).queryByRole("button", { name: "Restart from here" }) === null,
+      ).toBe(true);
+    },
+  );
+
+  test("historical validation cannot restart the newer live run", async () => {
+    const pipeline = rewoundToFirstVerify({
+      phase: "building",
+      sessions: [session("build", "build", 0)],
+      currentSessionIndex: 0,
+      validationRun: validationRun({
+        id: "live",
+        startedAt: "2026-07-29T00:11:00.000Z",
+        status: "running",
+      }),
+    });
+    pipeline.rewinds![0]!.validationRun = validationRun({ id: "retained" });
+    restartStepMock.mockClear();
+    renderPipelineTab(pipeline);
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
+    await waitFor(() => expect(queryGraphNode("Validation")).not.toBeNull());
+    selectNode("Validation");
+    expect(within(inspector()).queryByRole("button", { name: "Restart validation" }) === null).toBe(
+      true,
+    );
+    fireEvent.contextMenu(graphNode("Validation"));
+    expect(screen.queryByRole("menuitem", { name: "Restart validation" }) === null).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(restartStepMock).not.toHaveBeenCalled();
+    selectNode("Prepare");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Restart validation" }));
+    await waitFor(() =>
+      expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:live"),
+    );
+  });
+
+  test("a live step still offers restart", () => {
+    renderPipelineTab(rewoundToFirstVerify());
+    selectNode("Review");
+    expect(within(inspector()).getByRole("button", { name: "Restart from here" })).toBeTruthy();
   });
 });
 

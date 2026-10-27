@@ -1,7 +1,17 @@
 import { beforeEach, expect, test } from "bun:test";
-import { MAX_REMEMBERED_FLOW_VIEWS, useFlowGraphViewStore } from "./flowGraphViewStore";
+import {
+  MAX_REMEMBERED_FLOW_VIEWS,
+  flowAttemptKey,
+  useFlowGraphViewStore,
+} from "./flowGraphViewStore";
 
-beforeEach(() => useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() }));
+beforeEach(() =>
+  useFlowGraphViewStore.setState({
+    views: new Map(),
+    collapsed: new Set(),
+    expandedAttempts: new Set(),
+  }),
+);
 const view = (zoom = 1) => ({ zoom, scrollLeft: 120, scrollTop: 35, width: 960 });
 
 test("restores independent workflow viewport and collapsed state", () => {
@@ -43,4 +53,29 @@ test("bounds collapsed entries and makes a re-collapsed workflow newest", () => 
   expect(useFlowGraphViewStore.getState().collapsed.size).toBe(MAX_REMEMBERED_FLOW_VIEWS);
   expect(useFlowGraphViewStore.getState().collapsed.has("1")).toBe(false);
   expect(useFlowGraphViewStore.getState().collapsed.has("0")).toBe(true);
+});
+
+test("remembers expanded previous attempts per pipeline, bounded, oldest dropped", () => {
+  const store = useFlowGraphViewStore.getState();
+  store.setAttemptExpanded("build", "rewind-1", true);
+  store.setAttemptExpanded("other", "rewind-1", true);
+  expect(
+    useFlowGraphViewStore.getState().expandedAttempts.has(flowAttemptKey("build", "rewind-1")),
+  ).toBe(true);
+  const unchanged = useFlowGraphViewStore.getState();
+  store.setAttemptExpanded("build", "rewind-1", true);
+  expect(useFlowGraphViewStore.getState()).toBe(unchanged);
+  store.setAttemptExpanded("build", "rewind-1", false);
+  expect(
+    useFlowGraphViewStore.getState().expandedAttempts.has(flowAttemptKey("build", "rewind-1")),
+  ).toBe(false);
+  expect(
+    useFlowGraphViewStore.getState().expandedAttempts.has(flowAttemptKey("other", "rewind-1")),
+  ).toBe(true);
+  for (let i = 0; i < MAX_REMEMBERED_FLOW_VIEWS; i++)
+    store.setAttemptExpanded("build", String(i), true);
+  expect(useFlowGraphViewStore.getState().expandedAttempts.size).toBe(MAX_REMEMBERED_FLOW_VIEWS);
+  expect(
+    useFlowGraphViewStore.getState().expandedAttempts.has(flowAttemptKey("other", "rewind-1")),
+  ).toBe(false);
 });

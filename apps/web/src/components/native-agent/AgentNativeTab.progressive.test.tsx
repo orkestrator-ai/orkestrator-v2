@@ -100,6 +100,7 @@ let backgroundTaskStops: string[] = [];
 let discoveryRead: (() => Promise<NativeAgentDiscoveryUpdate>) | undefined;
 let handoffRead: (() => Promise<AgentHandoffSnapshot | null>) | undefined;
 let adoptionRead: (() => Promise<unknown>) | undefined;
+let authStatusRead: (() => Promise<unknown>) | undefined;
 let replacementSessionId: string | undefined;
 const resumeSessionMock = mock(async (input: { providerSessionId: string }) => ({
   ...seedProjection([]),
@@ -131,7 +132,7 @@ mock.module("@/lib/backend", () => ({
   }),
   adoptNativeAgentSession: async () => adoptionRead?.() ?? {},
   resumeNativeAgentSession: resumeSessionMock,
-  getNativeAgentAuthStatus: async () => ({ authenticated: false }),
+  getNativeAgentAuthStatus: async () => authStatusRead?.() ?? { authenticated: false },
   getNativeAgentProjection: async () => null,
   getNativeAgentProjectionUpdate: async () => {
     throw new Error("joined projection must not run on the progressive path");
@@ -322,6 +323,7 @@ beforeEach(() => {
   handoffRead = undefined;
   resetAgentHandoffCache();
   adoptionRead = undefined;
+  authStatusRead = undefined;
   replacementSessionId = undefined;
   useNativeComposeStore.setState({ drafts: new Map() });
   resumeSessionMock.mockClear();
@@ -1324,6 +1326,62 @@ describe("AgentNativeTab progressive controller", () => {
       screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
     ).toBe("true");
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+  });
+
+  test("shows a refused Codex turn's error row and sign-in banner after a reload", async () => {
+    const refused =
+      "unexpected status 401 Unauthorized: Incorrect API key provided: sk-fake***1234.";
+    const prompt: TestMessage = {
+      id: "user-1",
+      role: "user",
+      content: "hello",
+      createdAt: "2026-10-27T00:00:00.000Z",
+      parts: [{ type: "text", content: "hello" }],
+    };
+    // The transcript read holds only the provider's rows; the failure arrives
+    // with session state, as the backend sends it.
+    const failedState = () =>
+      stateSnapshot("state-refused", {
+        turn: { phase: "error", error: refused },
+        terminalMessages: [
+          {
+            id: "native-terminal:error:0123456789abcdef",
+            role: "system",
+            content: refused,
+            parts: [{ type: "text", content: refused }],
+            createdAt: "1970-01-01T00:00:00.000Z",
+          },
+        ],
+        notices: [
+          {
+            kind: "auth",
+            state: "needs-auth",
+            message: "Codex's login was refused. Sign in to Codex again to keep working.",
+            occurrenceId: "refused-1",
+          },
+        ],
+      });
+    authStatusRead = async () => ({ state: "signed-out", signIn: { kind: "browser-url" } });
+
+    for (const visit of ["first load", "reload"]) {
+      transcriptUpdates = [async () => transcriptSnapshot(`transcript-${visit}`, [prompt])];
+      stateUpdates = [async () => failedState()];
+      const view = renderTab();
+      await waitFor(() =>
+        expect(
+          document.querySelector('[data-message-id="native-terminal:error:0123456789abcdef"]')
+            ?.textContent,
+        ).toContain("401 Unauthorized"),
+      );
+      expect(
+        screen.getByText("Codex's login was refused. Sign in to Codex again to keep working."),
+      ).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
+      view.unmount();
+      // A reload starts from nothing but what the backend answers.
+      useNativeAgentProjectionStore.getState().reset();
+      resetNativeAgentSyncCapabilityForTests();
+    }
   });
 
   test("does not announce refresh on every idle poll of an unavailable transcript", async () => {

@@ -88,7 +88,11 @@ ends with an error `status` line on its last row saying why
 `error.message`). A refused model fails the turn before anything streams, so
 without it the turn read as idle with an empty reply. The rollout keeps the
 same error on `task_complete`, and the replay adds the same line. The bridge's
-own verdicts (a rejected structured result, a lost rebind) add none.
+own verdicts (a rejected structured result, a lost rebind) add none. A turn
+failed for its login (`unauthorized`, or a 401 `toTurnError` keeps as
+`httpStatusCode`) also raises the thread's `needs-auth` notice
+(`refusedLoginNotice`); never raise it on a failure without a 401, because it
+locks the tab's composer.
 
 ## File changes and change evidence
 

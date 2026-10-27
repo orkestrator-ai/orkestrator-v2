@@ -80,6 +80,12 @@ export interface EngineError {
   /** True only when the engine explicitly said the request was not executed. */
   retryable?: boolean;
   details?: string;
+  /**
+   * The upstream HTTP status app-server forwarded on the error's
+   * `codexErrorInfo` variant (`httpConnectionFailed`,
+   * `responseStreamDisconnected`, …), when it had one.
+   */
+  httpStatusCode?: number;
 }
 
 export type EngineTurnStatus = "completed" | "interrupted" | "failed";

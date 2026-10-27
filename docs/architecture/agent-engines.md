@@ -813,7 +813,15 @@ Claude AskUserQuestion option previews are requested as Markdown
 block on the question card (`AgentInteractionOption.preview`, bounded per
 option and per request). Codex questions reach the card because interactive
 threads turn on `default_mode_request_user_input`; pipeline threads keep
-Codex's Default-mode refusal.
+Codex's Default-mode refusal. Codex 0.164.0 sends such a question with
+`isBlocking: false`, yet its core waits for the answer with no timeout of its
+own: the flag only lets a client auto-resolve it (Codex's TUI sends an empty
+answer after two minutes). The bridge therefore publishes every parked
+question as blocking, so the session shows as waiting, and keeps the wire flag
+for the deadline: a Default-mode question gets the bounded, pausable deadline,
+whose expiry cancels with the same empty answer. The backend also reads a
+question from an older bridge that still says `false` as blocking
+(`mapCodexInteraction`).
 
 ## Cursor Agent
 

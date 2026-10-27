@@ -14,6 +14,12 @@
  *
  *   RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-request-user-input.test.ts
+ *
+ * The question is paused as soon as it parks and answered after
+ * `CODEX_LIVE_QUESTION_ANSWER_DELAY_MS` (default 2 s). Set it past ten minutes
+ * to prove a paused Default-mode question outlives both the bridge's default
+ * deadline and Codex's own TUI auto-resolution (two minutes): app-server
+ * neither resolves nor withdraws it, and the model is not sampled again.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
@@ -23,7 +29,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import { codexAppServerConfigOverrides } from "../codex-config.js";
 import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineEvent, EngineTurnConfig } from "../engine/types.js";
-import type { InteractionRequest } from "./interactions.js";
+import type { InteractionRequest, InteractionResolution } from "./interactions.js";
 import { resolveCodexBinary } from "./live-binary.js";
 
 // See `live-contract.test.ts`: the test preload replaces `Response`, and
@@ -39,7 +45,7 @@ const describeLive = LIVE ? describe : describe.skip;
 
 const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9" };
 const CALL_ID = "call_question_probe";
-const ANSWER_DELAY_MS = 2_000;
+const ANSWER_DELAY_MS = Number(process.env.CODEX_LIVE_QUESTION_ANSWER_DELAY_MS ?? "2000");
 const QUESTION_ARGUMENTS = JSON.stringify({
   questions: [
     {
@@ -182,16 +188,20 @@ async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
     supervisorOverrides: { pidFileEnabled: false },
   });
   const questions: InteractionRequest[] = [];
+  const resolutions: InteractionResolution[] = [];
   let samplesBeforeAnswer: number | undefined;
   let held: string | undefined;
   engine.setInteractionHandlers({
     present: (request) => {
       questions.push(request);
-      // Pause it and answer a while later, as a person at the card would. The
-      // model must not be sampled again until the answer is in.
+      // Pause it, then answer a while later, as a person at the card would.
+      // The model must not be sampled again until the answer is in. The pause
+      // is applied once the router has registered the question.
+      queueMicrotask(() => {
+        held = engine.holdInteraction(request.interactionId, true).status;
+      });
       setTimeout(() => {
         samplesBeforeAnswer = responses.sampled();
-        held = engine.holdInteraction(request.interactionId, true).status;
         engine.resolveInteraction(request.interactionId, {
           action: "accept",
           answers: { codeword: ["PROBE_BETA"] },
@@ -199,7 +209,9 @@ async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
       }, ANSWER_DELAY_MS);
       return true;
     },
-    resolved: () => undefined,
+    resolved: (_request, _answer, resolution) => {
+      resolutions.push(resolution);
+    },
   });
   let completed!: () => void;
   const turnCompleted = new Promise<void>((resolve) => {
@@ -223,9 +235,10 @@ async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
       input: [{ type: "text", text: "Ask me which codeword to use." }],
       config,
     });
-    await withTimeout(turnCompleted, 60_000, "the turn to complete");
+    await withTimeout(turnCompleted, 60_000 + ANSWER_DELAY_MS, "the turn to complete");
     return {
       questions,
+      resolutions,
       samplesBeforeAnswer,
       held,
       toolOutput: responses.toolOutput(),
@@ -238,23 +251,32 @@ async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
 }
 
 describeLive("live request_user_input", () => {
-  test("a watched session's question parks as a card and its answer reaches the model", async () => {
-    const result = await runQuestionTurn("interactive-host");
-    expect(result.questions).toHaveLength(1);
-    expect(result.questions[0]).toMatchObject({
-      kind: "question",
-      method: "item/tool/requestUserInput",
-      isBlocking: false,
-    });
-    expect(JSON.stringify(result.questions[0])).toContain("Which codeword should I use?");
-    // Codex 0.164.0 marks it non-blocking but still waits for the answer, and
-    // the question carries a deadline the card can pause.
-    expect(result.questions[0]?.expiresAt).toBeNumber();
-    expect(result.held).toBe("applied");
-    expect(result.samplesBeforeAnswer).toBe(1);
-    expect(result.toolOutput).toContain("PROBE_BETA");
-    expect(result.toolOutput).not.toContain("unavailable in Default mode");
-  }, 120_000);
+  test(
+    "a watched session's question parks as a card and its answer reaches the model",
+    async () => {
+      const result = await runQuestionTurn("interactive-host");
+      expect(result.questions).toHaveLength(1);
+      // Codex 0.164.0 sends it with `isBlocking: false` but still waits for the
+      // answer, so the bridge publishes it blocking, with a deadline the card
+      // can pause.
+      expect(result.questions[0]).toMatchObject({
+        kind: "question",
+        method: "item/tool/requestUserInput",
+        isBlocking: true,
+      });
+      expect(JSON.stringify(result.questions[0])).toContain("Which codeword should I use?");
+      // Only a wire `isBlocking: true` drops the deadline, so this proves the
+      // hint was still false.
+      expect(result.questions[0]?.expiresAt).toBeNumber();
+      expect(result.held).toBe("applied");
+      // Neither app-server nor the bridge settled it before the answer.
+      expect(result.resolutions).toEqual(["answered"]);
+      expect(result.samplesBeforeAnswer).toBe(1);
+      expect(result.toolOutput).toContain("PROBE_BETA");
+      expect(result.toolOutput).not.toContain("unavailable in Default mode");
+    },
+    120_000 + ANSWER_DELAY_MS,
+  );
 
   test("an unattended session keeps Codex's Default-mode refusal (control)", async () => {
     const result = await runQuestionTurn("pipeline");

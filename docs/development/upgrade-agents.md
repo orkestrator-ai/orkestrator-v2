@@ -825,6 +825,16 @@ hermetic `codex exec` exception.
    new switch, or take `question` back out of the Codex row in
    `nativeAgentCapabilities()`.
 
+   The bridge publishes every parked question as blocking because 0.164.0's
+   core awaits the answer whatever `isBlocking` says
+   (`core/src/tools/handlers/request_user_input.rs` sets
+   `is_blocking: mode == ModeKind::Plan`; only the TUI auto-resolves). On a
+   bump, read that handler and `Session::request_user_input` again: if Codex
+   starts resolving a non-blocking question itself, publish its limit as the
+   question's `providerLimitAt` instead. To prove a paused question outlives
+   the default deadline and Codex's own auto-resolution, run the same test
+   once with `CODEX_LIVE_QUESTION_ANSWER_DELAY_MS=660000` (about 11 minutes).
+
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party
    HTTP MCP server that still speaks the 2025 protocol: the bridge relies on

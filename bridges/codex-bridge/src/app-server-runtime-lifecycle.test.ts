@@ -4677,7 +4677,9 @@ describe("activity polling", () => {
     expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
     expect(h.runtime.getActivity(sessionId)).toBe("waiting");
     const request = h.runtime.listInteractions(sessionId)[0]!;
-    expect(request.isBlocking).toBe(false);
+    // Published blocking: Codex waits for the answer whatever the wire says.
+    expect(request.isBlocking).toBe(true);
+    expect(request.expiresAt).toBeNumber();
     expect(
       h.runtime.respondToInteraction(sessionId, request.interactionId, {
         action: "accept",

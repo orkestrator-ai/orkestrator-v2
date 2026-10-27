@@ -222,6 +222,13 @@ own verdicts (a rejected structured result, a lost rebind) add none.
   (`codexRequestUserInputConfig`) so the question parks as a card; a pipeline
   keeps the refusal, because nobody would answer it. Verified against 0.164.0
   by `live-request-user-input.test.ts` (no credits).
+- Never publish a parked question as non-blocking. Codex sends a Default-mode
+  question with `isBlocking: false`, but its core awaits the answer with no
+  timeout of its own (`is_blocking` only tells a client it may auto-resolve;
+  the TUI sends an empty answer after two minutes). `describeInteraction`
+  publishes every question `isBlocking: true` and uses the wire flag only for
+  the deadline: `true` waits indefinitely, otherwise the bounded, pausable
+  one, whose expiry cancels with the same empty answer.
 - A pause (`POST …/approvals/:id/hold`, `…/interactions/:id/hold`) only moves the
   parked request's `InteractionDeadline` to its hold ceiling (24 h, or a
   question's `autoResolutionMs`); expiry still declines or cancels. A hold never

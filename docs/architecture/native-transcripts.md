@@ -109,21 +109,28 @@ The backend has two cursor namespaces that never mix
   view has none. It is a retained compatibility path; see the end of this
   document.
 
-A progressive view carries a direct cursor (`historyPaging: "direct"`)
-whenever its provider pages. The provider's `historyCursor` names the
-position of its snapshot's first row, which is usable while the view starts
-at or before it. When the view's own byte bound drops leading rows the
-provider sent, the view names its first kept row instead through the
-snapshot's `historyCursorBefore`: a bridge cursor moved to that row's absolute
-position (`bridgeTranscriptPageCursorAt`), or, for OpenCode, which pages by
-whole message, the cursor before the first kept row that starts a message.
-Rows between the view's start and that position come back on the first page
-too, and the renderer drops them by id. This happens to ordinary sessions: a
-tool call's detail reference is larger than a short output the bridge summary
-kept inline, so a window of edits and short commands is larger once
-projected than the bridge measured it. Before 0232 such a view had no cursor,
-and **Load earlier messages** minted a joined one, a whole transcript read
-(the `o` efficiency workload measures both).
+A progressive view carries a direct cursor (`historyPaging: "direct"`) when
+its provider pages and a usable whole-message boundary remains. The
+provider's `historyCursor` names the position of its snapshot's first row,
+which is usable while the view starts at or before it. When the view's own
+byte bound drops leading rows the provider sent, the view names its first
+kept row instead through the snapshot's `historyCursorBefore`: a bridge
+cursor moved to that row's absolute position
+(`bridgeTranscriptPageCursorAt`), or, for OpenCode, which pages by whole
+message, the cursor before the first kept row that starts a message. Rows
+between the view's start and that position come back on the first page too,
+and the renderer drops them by id. Byte bounding happens to ordinary
+sessions: a tool call's detail reference is larger than a short output the
+bridge summary kept inline, so a window of edits and short commands is
+larger once projected than the bridge measured it. Before 0232 such a view
+had no cursor, and **Load earlier messages** minted a joined one, a whole
+transcript read (the `o` efficiency workload measures both).
+
+If an OpenCode view retains only a failed message's inline error row after
+dropping its oversized main row, no kept row can name a whole-message cursor.
+That view uses joined `sync-v1` paging instead; naming a cursor before the
+failed message would strand its main row. A provider cursor too long to wrap
+also requires joined paging.
 
 ## Changed rows outside the live window
 
@@ -263,11 +270,13 @@ serves only peers outside the support window.
   paging the backend's own joined copy. Every renderer reaches it the same
   way: when the progressive view carries no direct cursor, **Load earlier
   messages** mints one from the sync-v1 projection, which only mints v1
-  cursors. Since 0232 a view whose provider pages always carries a direct
-  cursor, and every renderer in the window adopts it, so on this backend the
-  path serves only sources without direct pages (the `/messages` fallback
-  below, a bridge without page routes) and a provider cursor too long to
-  wrap. The renderer keeps the mint for those and for backends before 0232.
+  cursors. Since 0232 a view whose provider pages carries a direct cursor
+  when a usable whole-message boundary remains, and every renderer in the
+  window adopts it. On this backend the joined path serves sources without
+  direct pages (the `/messages` fallback below, a bridge without page routes),
+  a provider cursor too long to wrap, and an OpenCode view retaining only a
+  failed message's inline error row after its main row was byte-omitted. The
+  renderer keeps the mint for those and for backends before 0232.
   [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
   owns removing it.
 - **The `/messages` fallback.** When `/transcript` answers 404 or 405,

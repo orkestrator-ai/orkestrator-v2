@@ -2473,7 +2473,9 @@ export class NativeAgentTranscriptProjection {
      * (or, for a provider that pages by message, the first kept row a page can
      * end at). Rows between the view's start and that position come back on
      * the first page as well, and the client deduplicates them by id; rows the
-     * bound dropped come back after them. Without this, the client could only
+     * bound dropped come back after them. If only an OpenCode inline error row
+     * remains, no whole-message boundary can name a cursor: joined paging
+     * must recover its dropped main row. Without this, the client could only
      * page by minting a joined cursor, a whole transcript read (0232).
      */
     const providerHistoryCursor = !snapshot.historyCursor

@@ -3256,12 +3256,13 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (progressive && !historyCursorRef.current) {
         if (historyUnpageableRef.current) return projectionRef.current;
         /*
-         * No direct cursor to page from. A backend with 0232 names one on every
-         * view whose provider pages directly, including a view its own byte
-         * bound cut, so this is now a compatibility path: a backend before
-         * 0232, or a source with no direct pages (the Claude bridge's
-         * `/messages` fallback, 0050). It mints a joined cursor from the
-         * sync-v1 projection, a whole transcript read, which is why it runs
+         * No direct cursor to page from. With 0232 a pageable provider names one
+         * when the byte-bounded view retains a usable whole-message boundary.
+         * Joined paging still serves an OpenCode view keeping only a failed
+         * message's error row (its main row was byte-omitted), a cursor too
+         * long to wrap, a backend before 0232, or a source with no direct pages
+         * (the Claude bridge's `/messages` fallback, 0050). It mints a joined
+         * cursor from the sync-v1 projection, a whole transcript read, which runs
          * only on a click. A click is the request to mint one even when the
          * live tail reported that it could not page — the joined snapshot is
          * what turns "not shown" into a page. Retirement: version-compatibility.md.

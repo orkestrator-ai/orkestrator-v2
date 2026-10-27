@@ -12,6 +12,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { NativeAgentTranscriptView } from "@orkestrator/protocol/native-agent";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { openCodeTranscriptPage, openCodeTranscriptSnapshot } from "./opencode-snapshots.js";
+import { normalizeOpenCodeTranscriptMessages } from "./opencode-messages.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
@@ -66,6 +67,101 @@ function openCodeProviderStub(
 }
 
 describe("OpenCode history through the native projection", () => {
+  test("a bound splitting a failed message skips its error row and recovers the main row directly", async () => {
+    const server = openCodeHistoryServer(150);
+    const failed = server.messages[148]!;
+    failed.parts[0]!.text = "x".repeat(600 * 1024);
+    failed.info.error = { name: "ProviderError", data: { message: "upstream failed" } };
+    const { stub, messages, interactiveSnapshot } = openCodeProviderStub(server, 4);
+    await withService(
+      { prefix: "orkestrator-opencode-history-split-error-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const { update, ids, pages } = await walkHistory(service);
+        expect(update.value.messages.map((row) => (row as { id: string }).id)).toEqual([
+          `error-opencode-${failed.info.id}`,
+          server.messages[149]!.info.id,
+        ]);
+        expect(update.value.historyPaging).toBe("direct");
+        const envelope = JSON.parse(
+          Buffer.from(update.value.historyCursor!, "base64url").toString(),
+        );
+        expect(JSON.parse(Buffer.from(envelope.cursor, "base64url").toString()).id).toBe(
+          server.messages[149]!.info.id,
+        );
+        const firstPageIds = pages[0]!.messages.map((row) => (row as { id: string }).id);
+        expect(firstPageIds).toContain(failed.info.id);
+        expect(firstPageIds).toContain(`error-opencode-${failed.info.id}`);
+        expect(ids).toEqual(
+          normalizeOpenCodeTranscriptMessages(server.messages, () => undefined).map(
+            (row) => row.id as string,
+          ),
+        );
+        expect(messages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
+        expect(projectionInternals(service).progressiveHydrations.size).toBe(0);
+      },
+    );
+  });
+
+  test("a view retaining only an error row uses joined paging to recover its omitted main row", async () => {
+    const server = openCodeHistoryServer(150);
+    const failed = server.messages[149]!;
+    failed.parts[0]!.text = "x".repeat(600 * 1024);
+    failed.info.error = { name: "ProviderError", data: { message: "upstream failed" } };
+    const { stub } = openCodeProviderStub(server, 4);
+    const allRows = normalizeOpenCodeTranscriptMessages(server.messages, () => undefined);
+    const interactiveSnapshot = mock(async () => ({ status: "idle" as const, messages: allRows }));
+    const provider = { ...stub.provider, interactiveSnapshot };
+    await withService(
+      { prefix: "orkestrator-opencode-history-only-error-", provider: async () => provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        expect(update.value.messages.map((row) => (row as { id: string }).id)).toEqual([
+          `error-opencode-${failed.info.id}`,
+        ]);
+        expect(update.value.historyPaging).toBeUndefined();
+        expect(update.value.historyCursor).toBeUndefined();
+        expect(update.value.historyComplete).toBe(false);
+        expect(update.value.messageWindow).toMatchObject({ truncationReason: "bytes" });
+        // The renderer's Load earlier bootstrap deliberately reads the joined projection.
+        const joined = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (joined.status !== "snapshot") throw new Error("expected a joined snapshot");
+        expect(JSON.parse(Buffer.from(joined.historyCursor!, "base64url").toString()).v).toBe(1);
+        const ids = joined.projection.messages.map((row) => (row as { id: string }).id);
+        let cursor = joined.historyCursor;
+        let pages = 0;
+        while (cursor) {
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: cursor,
+          });
+          ids.unshift(...page.messages.map((row) => (row as { id: string }).id));
+          cursor = page.nextCursor;
+          expect(++pages).toBeLessThan(20);
+          if (!cursor) expect(page.complete).toBe(true);
+        }
+        expect([...new Set(ids)]).toEqual(allRows.map((row) => row.id as string));
+        expect(ids).toContain(failed.info.id);
+        expect(interactiveSnapshot).toHaveBeenCalled();
+        expect(stub.transcriptPage).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   test("a long turn's early steps page back directly to the first message", async () => {
     const server = openCodeHistoryServer(260);
     // An early step's tool output is inline; its page must still register it.

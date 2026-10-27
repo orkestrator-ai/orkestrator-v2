@@ -175,6 +175,26 @@ describe("OpenCode history paging", () => {
     );
   });
 
+  test("an error-only suffix has no whole-message boundary for a direct cursor", async () => {
+    const server = openCodeHistoryServer(150);
+    const failed = server.messages[149]!;
+    failed.parts[0]!.text = "x".repeat(600 * 1024);
+    failed.info.error = { name: "ProviderError", data: { message: "upstream failed" } };
+    const snapshot = await snapshotOf(server);
+    // The provider keeps the newest whole group even over its soft byte target.
+    expect(rowIds(snapshot.messages)).toEqual([failed.info.id, `error-opencode-${failed.info.id}`]);
+    expect(snapshot.historyCursorBefore!(failed.info.id)).toBe(snapshot.historyCursor);
+    const retainedSuffix = snapshot.messages.slice(1);
+    expect(rowIds(retainedSuffix).map(snapshot.historyCursorBefore!)).toEqual([undefined]);
+    // Reusing the snapshot's cursor after dropping the main row cannot recover
+    // it: OpenCode's strict-before page excludes the entire failed message.
+    const page = await pageOf(server, snapshot.historyCursor!, liveWindow);
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(rowIds(page.messages)).not.toContain(failed.info.id);
+    expect(rowIds(page.messages)).not.toContain(`error-opencode-${failed.info.id}`);
+    // The service must use joined paging for this suffix instead.
+  });
+
   test("a session that fits is complete and offers no cursor", async () => {
     const snapshot = await snapshotOf(openCodeHistoryServer(12));
     expect(snapshot.messages).toHaveLength(12);

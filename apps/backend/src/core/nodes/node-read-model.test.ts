@@ -202,3 +202,56 @@ test("a node that predates includeDefaultBranch still summarizes without it", as
     model.stop();
   }
 });
+
+test("config-only changes invalidate the cached self default branch", async () => {
+  let defaultBranch = "main";
+  const { model, projectArgs } = searchFieldModel(() => [{ id: "p1", name: "One", defaultBranch }]);
+  try {
+    expect(
+      (await model.summaries(undefined, { includeSelf: true })).self!.projects[0]!.defaultBranch,
+    ).toBe("main");
+    defaultBranch = "develop";
+    model.noteLocalEvent("resource-changed", { resource: "config", id: "app" });
+    expect(
+      (await model.summaries(undefined, { includeSelf: true })).self!.projects[0]!.defaultBranch,
+    ).toBe("develop");
+    expect(projectArgs).toEqual([{ includeDefaultBranch: true }, { includeDefaultBranch: true }]);
+  } finally {
+    model.stop();
+  }
+});
+
+test("config-only leaf events rehydrate the remote project's default branch", async () => {
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let defaultBranch = "main";
+  leaf.commands.set("get_projects", () => [{ id: "p1", name: "One", defaultBranch }]);
+  leaf.commands.set("get_environments", () => []);
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 60_000,
+  });
+  try {
+    await model.start();
+    await settle(40);
+    expect((await model.summaries()).nodes[0]!.projects[0]!.defaultBranch).toBe("main");
+    const before = leaf.received.filter((call) => call.command === "get_projects").length;
+    defaultBranch = "develop";
+    leaf.emit("resource-changed", { resource: "config", id: "app", revision: 1 });
+    await settle(40);
+    expect((await model.summaries()).nodes[0]!.projects[0]!.defaultBranch).toBe("develop");
+    expect(leaf.received.filter((call) => call.command === "get_projects").length).toBeGreaterThan(
+      before,
+    );
+  } finally {
+    model.stop();
+  }
+});

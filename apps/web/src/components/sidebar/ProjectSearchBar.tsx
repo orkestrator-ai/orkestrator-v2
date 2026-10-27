@@ -663,7 +663,7 @@ export function ProjectSearchBar({
                 ) : null}
               </div>
             )}
-            {results.incomplete && hasQuery ? (
+            {results.incomplete ? (
               <p
                 className="px-3 pt-2 text-[11px] text-amber-400/90"
                 data-testid="federated-search-incomplete"

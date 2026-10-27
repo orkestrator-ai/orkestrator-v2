@@ -66,7 +66,7 @@ function useRecentSelections(backendId: BackendId | null) {
       }
       const views = useMachineViewStore.getState();
       views.recordRecent(keys);
-      views.revealProject(null);
+      if (keys.length > 0) views.revealProject(null);
     });
   }, [backendId]);
 }

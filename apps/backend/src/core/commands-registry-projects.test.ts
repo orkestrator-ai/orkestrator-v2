@@ -66,6 +66,33 @@ describe("get_projects includeDefaultBranch", () => {
     ).rejects.toThrow("conditional");
   });
 
+  test("returns projects without enrichment if config cannot be read", async () => {
+    const handler = registry.get("get_projects")!;
+    const failingContext = {
+      storage: {
+        loadProjects: async () => projects,
+        loadConfig: async () => {
+          throw new Error("config unavailable");
+        },
+      },
+    } as unknown as CommandContext;
+    expect(await handler({ includeDefaultBranch: true }, failingContext)).toBe(projects);
+  });
+
+  test("does not hide a project read failure behind optional config enrichment", async () => {
+    const handler = registry.get("get_projects")!;
+    const failingContext = {
+      storage: {
+        loadProjects: async () => {
+          throw new Error("projects unavailable");
+        },
+      },
+    } as unknown as CommandContext;
+    await expect(handler({ includeDefaultBranch: true }, failingContext)).rejects.toThrow(
+      "projects unavailable",
+    );
+  });
+
   test("withDefaultBranches tolerates a config without repositories", () => {
     expect(withDefaultBranches(projects, {} as never)).toEqual(projects);
   });

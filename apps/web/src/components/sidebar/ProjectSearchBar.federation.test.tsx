@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -10,6 +10,7 @@ import {
   remoteConnection,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -260,4 +261,129 @@ describe("ProjectSearchBar across machines", () => {
     expect(projectRows[0]!.getAttribute("aria-label")).toBe("telegram-scraper, project on mbp3");
     expect(screen.getByText("Recent projects")).toBeTruthy();
   });
+  test("navigation reported by an active realm leads the empty-query recent results", async () => {
+    renderSearch();
+    await openAndType("telegram");
+    await option("telegram-scraper, project on mbp3");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    act(() => {
+      useRemoteWorkspaceStore.getState().open("bk_mbp3", { projectId: "tg" });
+      useRemoteWorkspaceStore
+        .getState()
+        .noteRealmSelection("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+    });
+    await openAndType("");
+    const rows = screen.getAllByRole("option");
+    expect(
+      rows
+        .find((row) => /, project on /.test(row.getAttribute("aria-label") ?? ""))
+        ?.getAttribute("aria-label"),
+    ).toBe("orkestrator-v2, project on mbp3");
+    expect(
+      rows
+        .find((row) => /, environment of /.test(row.getAttribute("aria-label") ?? ""))
+        ?.getAttribute("aria-label"),
+    ).toBe("run-desktop-app, environment of orkestrator-v2 on mbp3");
+  });
+
+  for (const state of ["loading", "truncated"] as const) {
+    test(`empty-query recent results warn about a ${state} machine with no rows`, async () => {
+      renderSearch();
+      await openAndType("");
+      await option("telegram-scraper, project on mbp3");
+      act(() =>
+        portalStore.store.setState((current) => ({
+          nodes: current.nodes.map((node) =>
+            node.nodeId === "bk_mini"
+              ? {
+                  ...node,
+                  available: true,
+                  view: {
+                    ...node.view,
+                    connection: { ...node.view.connection, state: "connected" },
+                  },
+                  freshness: state === "loading" ? "initializing" : "current",
+                  loadedAt: state === "loading" ? null : 1,
+                  truncated: state === "truncated",
+                  projects: [],
+                  environments: [],
+                }
+              : node,
+          ),
+        })),
+      );
+      expect(screen.getByTestId("federated-search-incomplete")).toBeTruthy();
+      fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: /mbp3/ }));
+      await waitFor(() =>
+        expectDomAbsent(
+          screen.queryByTestId("federated-search-incomplete"),
+          "incomplete note for a complete machine",
+        ),
+      );
+    });
+  }
+
+  test("a forgotten machine filter falls back to all machines", async () => {
+    renderSearch();
+    await openAndType("orkestrator");
+    await option("orkestrator-v2, project on mbp3");
+    fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /mbp3/ }));
+    expect(await screen.findByLabelText("Filter results: All, mbp3")).toBeTruthy();
+    act(() =>
+      portalStore.store.setState((state) => ({
+        nodes: state.nodes.filter((node) => node.nodeId !== "bk_mbp3"),
+      })),
+    );
+    expect(await screen.findByLabelText("Filter results: All")).toBeTruthy();
+    expect(await option("orkestrator-v2, project on This computer")).toBeTruthy();
+    expect(await option("orkestrator-v2, project on mini, offline")).toBeTruthy();
+  });
+
+  for (const availability of ["offline", "stale"] as const) {
+    test(`greyed ${availability} project accepts Enter and its environment accepts a click`, async () => {
+      const { onSelectMachineProject, onSelectProject, onSelectEnvironment } = renderSearch();
+      const input = await openAndType("telegram");
+      await option("telegram-scraper, project on mbp3");
+      act(() =>
+        portalStore.store.setState((state) => ({
+          nodes: state.nodes.map((node) =>
+            node.nodeId === "bk_mbp3"
+              ? {
+                  ...node,
+                  freshness: "stale",
+                  available: availability !== "offline",
+                  view: {
+                    ...node.view,
+                    connection: {
+                      ...node.view.connection,
+                      state: availability === "offline" ? "unavailable" : "connected",
+                    },
+                  },
+                }
+              : node,
+          ),
+        })),
+      );
+      const row = await option(`telegram-scraper, project on mbp3, ${availability}`);
+      expect(row.className).toContain("opacity-60");
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSelectMachineProject).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: "bk_mbp3" }),
+        "tg",
+      );
+      expect(onSelectProject).not.toHaveBeenCalled();
+      await openAndType("run-desktop");
+      fireEvent.click(
+        await option(`run-desktop-app, environment of orkestrator-v2 on mbp3, ${availability}`),
+      );
+      expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+        nodeId: "bk_mbp3",
+        projectId: "ork-3",
+        environmentId: "run",
+      });
+      expect(onSelectEnvironment).not.toHaveBeenCalled();
+    });
+  }
 });

@@ -75,3 +75,52 @@ test("choosing another machine's environment opens it on that machine", async ({
     .click();
   await expect(page.getByTestId("opened")).toHaveText("bk_mbp3");
 });
+
+test("empty-query recents show the incomplete note until scoped to a complete machine", async ({
+  page,
+}) => {
+  await openSearch(page);
+  await expect(page.getByTestId("federated-search-incomplete")).toBeVisible();
+  await page.getByTestId("project-search-filter").click();
+  await page.getByRole("menuitemradio", { name: /mbp3/ }).click();
+  await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);
+});
+
+for (const mode of ["activity", "project", "repository"] as const) {
+  test(`project selection immediately reveals its row from ${mode} view`, async ({ page }) => {
+    await page.goto("/project-search-machines");
+    await page.getByRole("combobox", { name: "Sidebar view", exact: true }).selectOption(mode);
+    await page.getByTestId("project-search-trigger").click();
+    const input = page.getByRole("combobox", { name: "Search projects and environments" });
+    await input.fill(mode === "activity" ? "telegram" : "orkestrator");
+    await page
+      .getByRole("option", {
+        name:
+          mode === "activity"
+            ? "telegram-scraper, project on mbp3"
+            : "orkestrator-v2, project on mini, offline",
+        exact: true,
+      })
+      .click();
+    const sidebar = page.getByRole("complementary", { name: "Machine projects" });
+    const revealed = sidebar.locator('[data-revealed="true"]');
+    await expect(revealed).toBeVisible();
+    await expect(revealed.locator('[aria-current="true"]')).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
+      "machine",
+    );
+    // Opening another machine's environment ends the reveal, even with no local selection.
+    await page.getByTestId("project-search-trigger").click();
+    await input.fill("run-desktop");
+    await page
+      .getByRole("option", { name: "run-desktop-app, environment of orkestrator-v2 on mbp3" })
+      .click();
+    await expect(sidebar.locator('[data-revealed="true"]')).toHaveCount(0);
+    const projectButton = sidebar.locator(
+      mode === "activity"
+        ? 'button[title="Open telegram-scraper on mbp3"]'
+        : 'button[title="Open orkestrator-v2 on mini"]',
+    );
+    await expect(projectButton).not.toHaveAttribute("aria-current");
+  });
+}

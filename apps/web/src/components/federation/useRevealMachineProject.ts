@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { toast } from "sonner";
 import { projectFolderKey } from "@/lib/project-folders";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import {
@@ -22,8 +21,8 @@ import { useMachineViews } from "./useMachineViews";
  * written to the machine or to this window's workspace stores.
  *
  * Where the current layout cannot show the project (sorted by activity, or a
- * merged list hiding its disconnected machine), a toast offers the
- * by-machine view, which keeps a machine's last-known projects.
+ * merged list hiding its disconnected machine), selection switches to the
+ * by-machine project view, which keeps a machine's last-known projects.
  */
 export function useRevealMachineProject(): (machine: MachineView, projectId: string) => void {
   const machines = useMachineViews();
@@ -73,22 +72,10 @@ export function useRevealMachineProject(): (machine: MachineView, projectId: str
       const shownHere =
         ui.environmentSortMode !== "activity" &&
         (views.grouping === "machine" || isMachineShown(machine));
-      if (shownHere) return;
-      toast.info(`${project.name} is on ${machine.name}`, {
-        description:
-          ui.environmentSortMode === "activity"
-            ? "The sidebar is sorted by activity, which lists environments only."
-            : `${machine.name} is not connected, so this list hides its projects.`,
-        action: {
-          label: "Show by machine",
-          onClick: () => {
-            useUIStore.getState().setEnvironmentSortMode("project");
-            const current = useMachineViewStore.getState();
-            current.setGrouping("machine");
-            current.revealProject(project.key);
-          },
-        },
-      });
+      if (!shownHere) {
+        ui.setEnvironmentSortMode("project");
+        views.setGrouping("machine");
+      }
     },
     [layout, machines, selfId],
   );

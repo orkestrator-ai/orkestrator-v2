@@ -444,7 +444,13 @@ export function registerProjectCommands(
     if (args.knownManifestGeneration !== undefined || args.knownResourceRevision !== undefined) {
       throw new Error("includeDefaultBranch cannot be combined with a conditional read");
     }
-    return withDefaultBranches(await storage.loadProjects(), await storage.loadConfig());
+    const projects = await storage.loadProjects();
+    try {
+      return withDefaultBranches(projects, await storage.loadConfig());
+    } catch {
+      // Search enrichment is optional; an unreadable config must not hide projects.
+      return projects;
+    }
   });
   register("add_project", async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);

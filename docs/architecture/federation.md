@@ -540,8 +540,9 @@ environments..." field open the same dialog, so they behave identically.
   `projectKey` / `environmentKey` values, newest first. This window's own
   selections are recorded from `uiStore` (`FederationEffects`); another
   machine's project or environment is recorded when it is opened
-  (`openMachineWorkspace`) or chosen in the search. The node's older
-  `recentProjectIds` follow as a fallback. Nothing is written to the window's
+  (`remoteWorkspaceStore.open`), reported by the active realm after navigation,
+  or chosen in the search. Reports from inactive realms do not change recency.
+  The node's older `recentProjectIds` follow as a fallback. Nothing is written to the window's
   workspace stores, and no remote ID is resolved against them.
 - **Filters.** Tab and Shift+Tab cycle All / Projects / Environments over
   every machine. The Filter menu adds a **Machine** group (shown when other
@@ -554,15 +555,15 @@ environments..." field open the same dialog, so they behave identically.
   filter that hides it is cleared, and the row is highlighted
   (`machineViewStore.revealedProject`) and scrolled into view until something
   else is selected. When the current layout cannot show it (sorted by
-  activity, or a merged list hiding a disconnected machine) a toast offers
-  **Show by machine**. Another machine's environment opens on that machine
-  (`openMachineWorkspace`), as its sidebar row does.
+  activity, or a merged list hiding a disconnected machine), selection switches
+  to the by-machine project view immediately. Another machine's environment
+  opens on that machine (`openMachineWorkspace`), as its sidebar row does.
 - **Offline, stale and loading machines** keep their last-known rows, greyed
   (`opacity-60`) with an offline/stale/loading label, and can still be
   chosen: a project is revealed in the by-machine sidebar, which keeps its
   last-known tree; an environment opens as from the sidebar. While a machine
-  in scope is unavailable, loading or truncated the dialog says "Results may
-  be incomplete".
+  in scope is unavailable, loading or truncated the dialog (including empty-query
+  recents) says "Results may be incomplete".
 
 ## Storage namespacing
 

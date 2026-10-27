@@ -6,6 +6,15 @@ import {
   toNodeProjectSummary,
   type NodeSummary,
 } from "@orkestrator/protocol/node-summaries";
+import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
+import { useMachineViews } from "@/components/federation/useMachineViews";
+import {
+  MergedProjectList,
+  RemoteMachineSection,
+} from "@/components/federation/FederatedSidebarSections";
+import { isMachineShown } from "@/lib/federation/sidebar-layout";
+import { useMachineViewStore } from "@/stores/machineViewStore";
+import { useUIStore } from "@/stores/uiStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -141,23 +150,73 @@ function install() {
   return true;
 }
 
-export function ProjectSearchMachinesFixture() {
-  useState(install);
+function SearchContent() {
+  const reveal = useRevealMachineProject();
+  const machines = useMachineViews();
+  const grouping = useMachineViewStore((state) => state.grouping);
+  const sort = useUIStore((state) => state.environmentSortMode);
   const [selected, setSelected] = useState<string | null>(null);
   const opened = useRemoteWorkspaceStore((state) => state.active?.nodeId ?? null);
   return (
     <main className="max-w-sm">
       <output data-testid="selected">{selected}</output>
       <output data-testid="opened">{opened}</output>
-      <FederationProvider>
-        <ProjectSearchBar
-          projects={[localProject]}
-          environments={[localEnvironment]}
-          onSelectProject={(id) => setSelected(`local:${id}`)}
-          onSelectEnvironment={(id) => setSelected(`local-environment:${id}`)}
-          onSelectMachineProject={(machine, id) => setSelected(`${machine.name}:${id}`)}
-        />
-      </FederationProvider>
+      <label>
+        Sidebar view
+        <select
+          aria-label="Sidebar view"
+          value={sort === "activity" ? "activity" : grouping}
+          onChange={(event) => {
+            const mode = event.target.value;
+            useUIStore
+              .getState()
+              .setEnvironmentSortMode(mode === "activity" ? "activity" : "project");
+            if (mode === "machine" || mode === "project" || mode === "repository")
+              useMachineViewStore.getState().setGrouping(mode);
+          }}
+        >
+          <option value="machine">By machine</option>
+          <option value="project">By project</option>
+          <option value="repository">By repository</option>
+          <option value="activity">By activity</option>
+        </select>
+      </label>
+      <ProjectSearchBar
+        projects={[localProject]}
+        environments={[localEnvironment]}
+        onSelectProject={(id) => setSelected(`local:${id}`)}
+        onSelectEnvironment={(id) => setSelected(`local-environment:${id}`)}
+        onSelectMachineProject={(machine, id) => {
+          reveal(machine, id);
+          setSelected(`${machine.name}:${id}`);
+        }}
+      />
+      <aside aria-label="Machine projects">
+        {sort === "activity" ? null : grouping === "machine" ? (
+          machines
+            .filter((machine) => !machine.bound)
+            .map((machine) => <RemoteMachineSection key={machine.connectionId} machine={machine} />)
+        ) : (
+          <MergedProjectList
+            machines={machines}
+            shownIds={
+              new Set(machines.filter(isMachineShown).map((machine) => machine.connectionId))
+            }
+            mode={grouping}
+            renderBoundProject={() => null}
+            onBoundEnvironmentDragEnd={() => {}}
+          />
+        )}
+      </aside>
     </main>
+  );
+}
+
+export function ProjectSearchMachinesFixture() {
+  useState(install);
+  return (
+    <FederationProvider>
+      <SearchContent />
+    </FederationProvider>
   );
 }

@@ -547,6 +547,20 @@ describe("searchProjectsAndEnvironments across machines", () => {
     ).toBe(false);
   });
 
+  test("degraded summaries are stale and connected catching-up summaries are loading", () => {
+    const degraded = { ...mbp3, freshness: "degraded" as const };
+    const catchingUp = { ...mini, freshness: "catching-up" as const };
+    expect(machineAvailability(degraded)).toBe("stale");
+    expect(machineAvailability(catchingUp)).toBe("loading");
+    const results = search("orkestrator", { sources: sources(degraded, catchingUp) });
+    expect(results.projects.map((hit) => hit.availability)).toEqual(["live", "stale", "loading"]);
+    expect(results.incomplete).toBe(true);
+    expect(
+      search("", { sources: sources(degraded, catchingUp), machineFilter: THIS_MACHINE })
+        .incomplete,
+    ).toBe(false);
+  });
+
   test("remote rows match on exactly the fields local rows match on", () => {
     const rawProject = {
       id: "p-parity",

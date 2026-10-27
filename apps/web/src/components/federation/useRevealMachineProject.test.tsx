@@ -8,6 +8,7 @@ import {
   projectRef,
   type BackendId,
 } from "@orkestrator/protocol/federation";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { mockToastInfo, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
 import { projectFolderKey } from "@/lib/project-folders";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -20,12 +21,16 @@ import {
 } from "@/test/federation-desktop-fake";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
-import { RemoteMachineSection } from "./FederatedSidebarSections";
+import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSections";
+import { isMachineShown } from "@/lib/federation/sidebar-layout";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FederationEffects } from "./FederationEffects";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 import { useRevealMachineProject } from "./useRevealMachineProject";
 
+const INITIAL_REMOTE_STATE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const MBP3 = remoteConnection("mbp3", "mbp3", "teal");
 const key = projectKey(projectRef("bk_mbp3" as BackendId, "tg"));
@@ -36,13 +41,33 @@ const captured: {
   machines: ReturnType<typeof useMachineViews>;
 } = { reveal: null, machines: [] };
 
+function projectRow() {
+  return Array.from(document.querySelectorAll("[data-project]")).find(
+    (row) => row.getAttribute("data-project") === key,
+  );
+}
+
 function Harness() {
   const reveal = useRevealMachineProject();
   const machines = useMachineViews();
+  const grouping = useMachineViewStore((state) => state.grouping);
+  const sort = useUIStore((state) => state.environmentSortMode);
   useEffect(() => {
     captured.reveal = reveal;
     captured.machines = machines;
   });
+  if (sort === "activity") return null;
+  if (grouping !== "machine") {
+    return (
+      <MergedProjectList
+        machines={machines}
+        shownIds={new Set(machines.filter(isMachineShown).map((m) => m.connectionId))}
+        mode={grouping}
+        renderBoundProject={() => null}
+        onBoundEnvironmentDragEnd={() => {}}
+      />
+    );
+  }
   return (
     <>
       {machines
@@ -58,6 +83,7 @@ describe("useRevealMachineProject", () => {
   beforeEach(() => {
     if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
     localStorage.removeItem("machine-view-storage");
+    useRemoteWorkspaceStore.setState(INITIAL_REMOTE_STATE, true);
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
     useUIStore.setState({ environmentSortMode: "project" });
     resetSonnerMocks();
@@ -75,6 +101,7 @@ describe("useRevealMachineProject", () => {
   afterEach(() => {
     cleanup();
     uninstallDesktopFake();
+    useRemoteWorkspaceStore.setState(INITIAL_REMOTE_STATE, true);
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
     useUIStore.setState({ environmentSortMode: "project" });
     localStorage.removeItem("machine-view-storage");
@@ -144,16 +171,58 @@ describe("useRevealMachineProject", () => {
     expect(useMachineViewStore.getState().revealedProject).toBeNull();
   });
 
-  test("offers the by-machine view when the sidebar is sorted by activity", async () => {
+  test("immediately shows an environment-less project when sorted by activity", async () => {
     useUIStore.setState({ environmentSortMode: "activity" });
     await revealIn();
-    expect(mockToastInfo).toHaveBeenCalledTimes(1);
-    const options = mockToastInfo.mock.calls[0]?.[1] as {
-      action: { label: string; onClick: () => void };
-    };
-    expect(options.action.label).toBe("Show by machine");
-    act(() => options.action.onClick());
     expect(useUIStore.getState().environmentSortMode).toBe("project");
     expect(useMachineViewStore.getState().grouping).toBe("machine");
+    expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
+      "true",
+    );
+    expect(mockToastInfo).not.toHaveBeenCalled();
+  });
+
+  for (const grouping of ["project", "repository"] as const) {
+    test(`immediately shows an offline project from ${grouping} grouping`, async () => {
+      uninstallDesktopFake();
+      installDesktopFake({
+        list: connectionList([{ ...MBP3, transport: "unreachable" }]),
+        datasets: {
+          mbp3: {
+            projects: [{ id: "tg", name: "telegram-scraper", folder: "Scrapers" }],
+            environments: {},
+          },
+        },
+      });
+      useMachineViewStore.setState({
+        grouping,
+        collapsedMachines: ["bk_mbp3"],
+        collapsedProjectKeys: [key],
+      });
+      await revealIn();
+      expect(useMachineViewStore.getState().grouping).toBe("machine");
+      const row = projectRow();
+      expect(row?.getAttribute("data-revealed")).toBe("true");
+      expect(row?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe("true");
+    });
+  }
+
+  test("another remote selection removes the row highlight with no local selection", async () => {
+    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    openMachineWorkspace({ connectionId: "bk_other", projectId: "other", title: "Other" });
+    await revealIn();
+    const row = projectRow()!;
+    expect(row.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe("true");
+    act(() =>
+      openMachineWorkspace({
+        connectionId: "bk_other",
+        projectId: "other",
+        environmentId: "env",
+        title: "Other",
+      }),
+    );
+    expect(useMachineViewStore.getState().revealedProject).toBeNull();
+    expect(row.getAttribute("data-revealed")).not.toBe("true");
+    expectDomAbsent(row.querySelector("[aria-current]"), "revealed project current marker");
   });
 });

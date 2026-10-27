@@ -377,7 +377,11 @@ export function searchProjectsAndEnvironments({
 
   for (const source of scoped) {
     const { machine } = source;
-    if (machine && !machine.bound && (machine.freshness !== "current" || machine.truncated)) {
+    if (
+      machine &&
+      !machine.bound &&
+      (machine.transport !== "connected" || machine.freshness !== "current" || machine.truncated)
+    ) {
       incomplete = true;
     }
     const availability = machineAvailability(machine);

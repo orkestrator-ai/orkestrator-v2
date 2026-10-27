@@ -21,8 +21,9 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
 
 /**
- * The ⌘K search on a command node with two leaves: mbp3 (connected) and
- * mini (offline, last-known rows). This machine has orkestrator-v2 too, so
+ * The ⌘K search on a command node with three leaves: mbp3 (connected),
+ * mini (offline, last-known rows), and empty (connected, no projects).
+ * This machine has orkestrator-v2 too, so
  * that project appears once per machine.
  */
 
@@ -131,6 +132,7 @@ const nodes: NodeSummary[] = [
     [{ id: "ork-m", name: "orkestrator-v2", gitUrl: "https://github.com/acme/orkestrator-v2.git" }],
     [],
   ),
+  node("bk_empty", "empty", "amber", true, [], []),
 ];
 
 function install() {

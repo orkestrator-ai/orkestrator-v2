@@ -600,11 +600,13 @@ export function ProjectSearchBar({
           >
             {hits.length === 0 ? (
               <div className="px-3 py-10 text-center text-sm text-muted-foreground">
-                {results.projectCount === 0
+                {sources.every((source) => source.projects.length === 0)
                   ? "No projects yet"
                   : hasQuery
                     ? "No projects or environments match that search."
-                    : "No environments yet"}
+                    : results.projectCount === 0
+                      ? "No projects on this machine"
+                      : "No environments yet"}
               </div>
             ) : (
               <div className="space-y-3">

@@ -547,6 +547,28 @@ describe("searchProjectsAndEnvironments across machines", () => {
     ).toBe(false);
   });
 
+  for (const transport of ["unreachable", "authentication-required"] as const) {
+    test(`${transport} machines with current summaries retain offline rows and mark results incomplete`, () => {
+      const unavailable = { ...mbp3, transport };
+      const results = search("orkestrator", { sources: sources(unavailable) });
+      expect(unavailable.freshness).toBe("current");
+      expect(results.projects.map((hit) => [hit.machine?.name, hit.availability])).toEqual([
+        ["studio", "live"],
+        ["mbp3", "offline"],
+      ]);
+      expect(results.environments.find((hit) => hit.machine === unavailable)?.availability).toBe(
+        "offline",
+      );
+      expect(results.incomplete).toBe(true);
+      expect(
+        search("", { sources: sources(unavailable), machineFilter: THIS_MACHINE }).incomplete,
+      ).toBe(false);
+      expect(
+        search("", { sources: sources({ ...unavailable, transport: "connected" }) }).incomplete,
+      ).toBe(false);
+    });
+  }
+
   test("degraded summaries are stale and connected catching-up summaries are loading", () => {
     const degraded = { ...mbp3, freshness: "degraded" as const };
     const catchingUp = { ...mini, freshness: "catching-up" as const };

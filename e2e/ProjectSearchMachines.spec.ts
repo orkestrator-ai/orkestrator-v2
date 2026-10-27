@@ -76,6 +76,21 @@ test("choosing another machine's environment opens it on that machine", async ({
   await expect(page.getByTestId("opened")).toHaveText("bk_mbp3");
 });
 
+test("a machine with no projects keeps the search-specific empty message", async ({ page }) => {
+  const input = await openSearch(page);
+  await input.fill("telegram");
+  await expect(
+    page.getByRole("option", { name: "telegram-scraper, project on mbp3" }),
+  ).toBeVisible();
+  await page.getByTestId("project-search-filter").click();
+  await page.getByRole("menuitemradio", { name: "empty", exact: true }).click();
+  await expect(page.getByText("No projects or environments match that search.")).toBeVisible();
+  await expect(page.getByText("No projects yet", { exact: true })).toHaveCount(0);
+  await input.fill("");
+  await expect(page.getByText("No projects on this machine")).toBeVisible();
+  await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);
+});
+
 test("empty-query recents show the incomplete note until scoped to a complete machine", async ({
   page,
 }) => {

@@ -98,15 +98,15 @@ function install() {
   });
 }
 
-function renderSearch() {
+function renderSearch(projects = [localProject], environments = [localEnvironment]) {
   const onSelectProject = mock((_projectId: string) => undefined);
   const onSelectEnvironment = mock((_environmentId: string) => undefined);
   const onSelectMachineProject = mock((_machine: MachineView, _projectId: string) => undefined);
   render(
     <FederationProvider>
       <ProjectSearchBar
-        projects={[localProject]}
-        environments={[localEnvironment]}
+        projects={projects}
+        environments={environments}
         onSelectProject={onSelectProject}
         onSelectEnvironment={onSelectEnvironment}
         onSelectMachineProject={onSelectMachineProject}
@@ -235,6 +235,44 @@ describe("ProjectSearchBar across machines", () => {
         "mbp3 project under the this-machine filter",
       ),
     );
+  });
+
+  for (const scope of ["remote", "local"] as const) {
+    test(`an empty ${scope} machine keeps query-specific no-match copy`, async () => {
+      if (scope === "remote") {
+        uninstallDesktopFake();
+        installDesktopFake({
+          list: connectionList([MBP3]),
+          datasets: { mbp3: { projects: [], environments: {} } },
+        });
+      }
+      renderSearch(scope === "local" ? [] : [localProject], []);
+      const input = await openAndType("telegram");
+      await waitFor(() => expect(portalStore.getState().nodes.length).toBeGreaterThan(0));
+      fireEvent.pointerDown(screen.getByTestId("project-search-filter"));
+      fireEvent.click(
+        await screen.findByRole("menuitemradio", {
+          name: scope === "remote" ? /mbp3/ : /^This machine/,
+        }),
+      );
+      expect(
+        await screen.findByText("No projects or environments match that search."),
+      ).toBeTruthy();
+      expectDomAbsent(screen.queryByText("No projects yet"), "global empty-state copy");
+      fireEvent.change(input, { target: { value: "" } });
+      expect(await screen.findByText("No projects on this machine")).toBeTruthy();
+    });
+  }
+
+  test("shows the initial empty state when no machine has projects", async () => {
+    uninstallDesktopFake();
+    installDesktopFake({
+      list: connectionList([MBP3]),
+      datasets: { mbp3: { projects: [], environments: {} } },
+    });
+    renderSearch([], []);
+    await openAndType("");
+    expect(await screen.findByText("No projects yet")).toBeTruthy();
   });
 
   test("arrow keys traverse local and remote projects before Enter reveals the remote project", async () => {

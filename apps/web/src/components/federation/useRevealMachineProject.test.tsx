@@ -183,6 +183,58 @@ describe("useRevealMachineProject", () => {
   });
 
   for (const grouping of ["project", "repository"] as const) {
+    test(`reveals a connected project inside collapsed merged ${grouping} folders`, async () => {
+      uninstallDesktopFake();
+      installDesktopFake({
+        list: connectionList([MBP3]),
+        layout: { projectFolders: { [key]: "Merged scrapers" } },
+        datasets: {
+          mbp3: {
+            projects: [
+              {
+                id: "tg",
+                name: "telegram-scraper",
+                folder: "Scrapers",
+                gitUrl: "https://github.com/acme/telegram-scraper.git",
+              },
+            ],
+            environments: {},
+          },
+        },
+      });
+      const machineFolder = sidebarFolderKey("bk_mbp3", projectFolderKey("Scrapers"));
+      const mergedFolder = sidebarFolderKey("project", projectFolderKey("Merged scrapers"));
+      const repositoryFolder = sidebarFolderKey("repository", "github.com/acme/telegram-scraper");
+      const unrelatedFolder = sidebarFolderKey(grouping, "unrelated");
+      useMachineViewStore.setState({
+        grouping,
+        collapsedMachines: ["bk_mbp3"],
+        collapsedProjectKeys: [key],
+        collapsedFolderKeys: [machineFolder, mergedFolder, repositoryFolder, unrelatedFolder],
+      });
+      renderHarness();
+      const machine = await waitFor(() => {
+        const found = captured.machines.find((candidate) => candidate.name === "mbp3");
+        if (!found || found.projects.length === 0) throw new Error("mbp3 not loaded");
+        return found;
+      });
+      expect(machine.transport).toBe("connected");
+      expectDomAbsent(projectRow() ?? null, "project hidden inside collapsed merged folder");
+      act(() => captured.reveal!(machine, "tg"));
+      const views = useMachineViewStore.getState();
+      expect(views.grouping).toBe(grouping);
+      expect(views.collapsedMachines).not.toContain("bk_mbp3");
+      expect(views.collapsedProjectKeys).not.toContain(key);
+      expect(views.collapsedFolderKeys).toEqual([unrelatedFolder]);
+      expect(views.recentKeys[0]).toBe(key);
+      await waitFor(() => expect(projectRow()?.getAttribute("data-revealed")).toBe("true"));
+      expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
+        "true",
+      );
+      expect(useUIStore.getState().environmentSortMode).toBe("project");
+      expect(mockToastInfo).not.toHaveBeenCalled();
+    });
+
     test(`immediately shows an offline project from ${grouping} grouping`, async () => {
       uninstallDesktopFake();
       installDesktopFake({

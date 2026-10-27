@@ -1287,7 +1287,7 @@ describe("BuildChatTab graph", () => {
       };
       renderPipelineTab(running, { isActive: true });
       const runtime = () => screen.getByLabelText("Build runtime and token usage").textContent;
-      expect(runtime()).toBe("2m 0s · Tokens pending");
+      expect(runtime()).toBe("2m 0s · —");
       const tick = setIntervalSpy.mock.calls.find(([, timeout]) => timeout === 1_000)?.[0];
       expect(typeof tick).toBe("function");
 
@@ -1295,7 +1295,7 @@ describe("BuildChatTab graph", () => {
       act(() => {
         if (typeof tick === "function") tick();
       });
-      expect(runtime()).toBe("2m 5s · Tokens pending");
+      expect(runtime()).toBe("2m 5s · —");
 
       act(() => {
         useBuildPipelineStore.getState().replacePipeline({

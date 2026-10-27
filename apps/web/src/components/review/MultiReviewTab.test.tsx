@@ -643,8 +643,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toBe(
         "1m 35s · 12k tokens",
       );
-      expect(screen.getByLabelText("Reviewer 2 runtime and token usage").textContent).toContain(
-        "Tokens pending",
+      // Usage the provider has not reported yet shows as a neutral dash.
+      expect(screen.getByLabelText("Reviewer 2 runtime and token usage").textContent).toBe(
+        "1m 35s · —",
       );
     } finally {
       Date.now = originalNow;

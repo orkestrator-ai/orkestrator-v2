@@ -27,6 +27,8 @@ import type { Environment } from "../../apps/web/src/types";
  * - `loops`: a finished pipeline that went round the fix loop once, with its
  *   pull request open and CI failing.
  * - `new`: a pipeline still setting up its environment.
+ * - `building`: Build running on Claude Opus at high effort, with live usage;
+ *   `&usage=none` before its provider has reported any.
  *
  * Every backend command lands in `window.__pipelineCommands`, and every tab the
  * graph asks to open in `window.__openedTabs`.
@@ -347,6 +349,18 @@ function scenario(): BuildPipeline {
       ],
     };
     return pipeline;
+  }
+  if (name === "building") {
+    const reported = new URLSearchParams(window.location.search).get("usage") !== "none";
+    return base({
+      phase: "building",
+      sessions: [
+        stage("build", "build", 30, null, {
+          reasoningEffort: "high",
+          ...(reported ? { tokenCount: 48_200 } : {}),
+        }),
+      ],
+    });
   }
   if (name === "loops") return loops();
   if (name === "new") return base({ phase: "waiting-for-setup", sessions: [] });

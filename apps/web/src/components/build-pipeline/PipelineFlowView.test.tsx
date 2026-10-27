@@ -512,3 +512,138 @@ describe("a pipeline a restart rewound", () => {
     expect(within(inspector()).getByRole("button", { name: "Restart from here" })).toBeTruthy();
   });
 });
+
+describe("node face rows", () => {
+  const rows = (node: HTMLElement) =>
+    [...node.querySelectorAll<HTMLElement>("[data-flow-node-row]")].map((row) => [
+      row.getAttribute("data-flow-node-row"),
+      row.textContent,
+    ]);
+  const running = (overrides: Partial<Parameters<typeof session>[3]> = {}) =>
+    build({
+      phase: "building",
+      agentType: "claude",
+      sessions: [
+        session("build", "build", 0, {
+          status: "running",
+          completedAt: undefined,
+          agent: "claude",
+          model: "opus",
+          reasoningEffort: "high",
+          ...overrides,
+        }),
+      ],
+    });
+
+  test("a running node puts its title, model and clock on three rows", () => {
+    const now = Date.parse("2026-07-29T00:02:35.000Z");
+    const dateNow = Date.now;
+    Date.now = () => now;
+    try {
+      renderPipelineTab(running({ tokenCount: 48_200 }));
+      const node = graphNode("Build");
+      expect(rows(node)).toEqual([
+        ["title", "Build"],
+        ["detail", "claude · opus · high"],
+        ["runtime", "2m 35s · 48k tokensrunning"],
+      ]);
+      // The title is never squeezed by the clock: it shares its row with nothing.
+      const title = node.querySelector<HTMLElement>("[data-flow-node-title]")!;
+      expect(title.className).toContain("shrink-0");
+      // Only the subtitle truncates, with its whole text in the tooltip.
+      const detail = node.querySelector<HTMLElement>("[data-flow-node-detail]")!;
+      expect(detail.className).toContain("truncate");
+      expect(detail.title).toBe("claude · opus · high");
+      // The graph gives the taller face its own height, so its edges meet its centre.
+      expect(node.style.height).toBe("82px");
+    } finally {
+      Date.now = dateNow;
+    }
+  });
+
+  test("a running node whose provider has not reported usage shows a dash", () => {
+    const now = Date.parse("2026-07-29T00:00:10.000Z");
+    const dateNow = Date.now;
+    Date.now = () => now;
+    try {
+      renderPipelineTab(running());
+      const node = graphNode("Build");
+      expect(screen.getByLabelText("Build runtime and token usage").textContent).toBe("10s · —");
+      expect(node.textContent).not.toContain("Tokens pending");
+      expect(node.getAttribute("aria-label")).toBe("Build, Running, 10s");
+      selectNode("Build");
+      expect(inspector().textContent).not.toContain("Tokens pending");
+    } finally {
+      Date.now = dateNow;
+    }
+  });
+
+  test("steps ahead keep two rows, with their badge beside the title", () => {
+    renderPipelineTab(running());
+    const verify = graphNode("Verify");
+    expect(verify.hasAttribute("data-flow-placeholder")).toBe(true);
+    expect(rows(verify)).toEqual([
+      ["title", "Verifyahead"],
+      ["detail", "claude · Provider default"],
+    ]);
+    expect(verify.style.height).toBe("64px");
+    expect(rows(graphNode("PR"))).toEqual([
+      ["title", "PR"],
+      ["detail", "No pull request yet"],
+    ]);
+  });
+
+  test.each([false, true])("renders a production-shaped idle Build (paused: %s)", (paused) => {
+    renderPipelineTab(
+      build({
+        phase: paused ? "paused" : "reviewing",
+        ...(paused ? { pausedFromPhase: "building" as const } : {}),
+        agentType: "claude",
+        sessions: [
+          {
+            phase: "build",
+            iteration: 0,
+            sessionKey: "build",
+            sdkSessionId: "build-session",
+            status: "idle",
+            startedAt: "2026-07-29T00:00:00.000Z",
+            label: "Build Session",
+            ...(paused ? { completedAt: "2026-07-29T00:00:50.000Z" } : { tokenCount: 1_200 }),
+          },
+        ],
+      }),
+    );
+    const node = graphNode("Build");
+    expect(node.getAttribute("data-flow-state")).toBe(paused ? "paused" : "complete");
+    expect(screen.getByLabelText("Build runtime and token usage").textContent).toBe(
+      paused ? "50s" : "1.2k tokens",
+    );
+    expect(node.style.height).toBe("82px");
+  });
+
+  test("a finished node keeps its final runtime on the third row", () => {
+    renderPipelineTab(
+      build({
+        phase: "reviewing",
+        agentType: "claude",
+        sessions: [
+          session("build", "build", 0, {
+            agent: "claude",
+            model: "opus",
+            reasoningEffort: "high",
+            tokenCount: 120_000,
+          }),
+        ],
+      }),
+    );
+    const node = graphNode("Build");
+    expect(node.getAttribute("data-flow-state")).toBe("complete");
+    expect(rows(node)).toEqual([
+      ["title", "Build"],
+      ["detail", "claude · opus · high"],
+      ["runtime", "50s · 120k tokens"],
+    ]);
+    // Finishing does not change the node's height, so the graph does not jump.
+    expect(node.style.height).toBe("82px");
+  });
+});

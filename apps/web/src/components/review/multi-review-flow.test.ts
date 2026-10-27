@@ -6,6 +6,7 @@ import {
   FLOW_GRAPH_STACK_BELOW,
   defaultFlowSelection,
   flowEdgePath,
+  flowNodeHeight,
   summarizeFlowEdges,
   type FlowRect,
 } from "@/components/flow-graph/flow-graph-model";
@@ -453,13 +454,77 @@ describe("layout", () => {
     expect(Math.abs(centre - (stackTop + stackBottom) / 2)).toBeLessThanOrEqual(1);
   });
 
-  test("keeps the designed height up to five reviewers and grows beyond", () => {
+  test("gives a running node its taller face and keeps every centre on one line", () => {
+    const running = flowNodeHeight({ state: "running", runtime: null });
+    const idle = flowNodeHeight({ state: "not-started", runtime: null });
+    for (const count of [1, 4, 8, 32]) {
+      // Mixed heights: every other reviewer is running, and so is consolidation.
+      const reviewers = Array.from({ length: count }, (_, index) =>
+        index % 2 === 0 ? running : idle,
+      );
+      const layout = multiReviewFlowLayout({
+        width: 1440,
+        reviewerCount: count,
+        packageHasChips: true,
+        nodeHeights: { reviewers, consolidation: running },
+      });
+      expect(layout.reviewers.map((rect) => rect.height)).toEqual(reviewers);
+      expect(layout.consolidation.height).toBe(running);
+      const nodes = [layout.package, ...layout.reviewers, layout.consolidation, layout.fix];
+      for (const [index, node] of nodes.entries()) {
+        expect(node.y).toBeGreaterThanOrEqual(48);
+        expect(node.y + node.height).toBeLessThanOrEqual(layout.height);
+        for (const other of nodes.slice(index + 1)) expect(overlaps(node, other)).toBe(false);
+      }
+      // A taller node grows about its centre, so the edges meeting it stay level.
+      const centre = (rect: FlowRect) => rect.y + rect.height / 2;
+      expect(Math.abs(centre(layout.consolidation) - centre(layout.fix))).toBeLessThanOrEqual(1);
+      expect(Math.abs(centre(layout.package) - centre(layout.fix))).toBeLessThanOrEqual(1);
+      const stackTop = layout.reviewers[0]!.y;
+      const stackBottom = layout.reviewers.at(-1)!.y + layout.reviewers.at(-1)!.height;
+      expect(Math.abs(centre(layout.fix) - (stackTop + stackBottom) / 2)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("grows the canvas for running reviewers rather than overlapping them", () => {
+    const running = flowNodeHeight({ state: "running", runtime: null });
+    const tall = multiReviewFlowLayout({
+      width: 1440,
+      reviewerCount: 8,
+      packageHasChips: true,
+      nodeHeights: { reviewers: Array.from({ length: 8 }, () => running) },
+    });
+    const short = multiReviewFlowLayout({ width: 1440, reviewerCount: 8, packageHasChips: true });
+    expect(tall.height).toBeGreaterThan(short.height);
+  });
+
+  test("keeps compact reviewers at the designed height up to five and grows beyond", () => {
     const height = (count: number) =>
       multiReviewFlowLayout({ width: 1440, reviewerCount: count, packageHasChips: true }).height;
     expect(height(1)).toBe(FLOW_GRAPH_MIN_HEIGHT);
     expect(height(4)).toBe(FLOW_GRAPH_MIN_HEIGHT);
     expect(height(5)).toBe(FLOW_GRAPH_MIN_HEIGHT);
     expect(height(8)).toBeGreaterThan(FLOW_GRAPH_MIN_HEIGHT);
+  });
+
+  test("fits five running reviewers with the component's computed runtime heights", () => {
+    const runtime = { elapsed: "1m", tokens: null, tokensPending: true, live: true };
+    const running = flowNodeHeight({ state: "running", runtime });
+    const layout = multiReviewFlowLayout({
+      width: 1440,
+      reviewerCount: 5,
+      packageHasChips: true,
+      nodeHeights: { reviewers: Array.from({ length: 5 }, () => running) },
+    });
+    expect(layout.height).toBe(530);
+    expect(layout.height).toBeGreaterThan(FLOW_GRAPH_MIN_HEIGHT);
+    for (const [index, node] of layout.reviewers.entries()) {
+      expect(node.height).toBe(running);
+      expect(node.y).toBeGreaterThanOrEqual(48);
+      expect(node.y + node.height).toBeLessThanOrEqual(layout.height);
+      for (const other of layout.reviewers.slice(index + 1))
+        expect(overlaps(node, other)).toBe(false);
+    }
   });
 
   test("matches the design at full width and gives nodes their room first when narrower", () => {

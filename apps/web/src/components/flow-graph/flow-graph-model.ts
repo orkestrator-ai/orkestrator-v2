@@ -125,7 +125,52 @@ export function latestActivityAt(
 /** Below this width the graph stacks into a single column. */
 export const FLOW_GRAPH_STACK_BELOW = 960;
 export const FLOW_GRAPH_MIN_HEIGHT = 460;
+/**
+ * A node's two-row face: the title, then `{agent} · {model} · {effort}` (or
+ * the subtitle that stands for it).
+ */
 export const FLOW_NODE_HEIGHT = 64;
+/**
+ * The third row a node gains for its runtime (`{elapsed} · {tokens}`): always
+ * while it runs, and after it ran when a runtime was recorded. Keeping the
+ * runtime off the title row means the title is never cut short for the clock.
+ */
+export const FLOW_NODE_RUNTIME_ROW_HEIGHT = 18;
+/** A row of validation chips under the face. */
+export const FLOW_NODE_CHIPS_ROW_HEIGHT = 28;
+/** One more row under the face, e.g. a pull request's checks. */
+export const FLOW_NODE_EXTRA_ROW_HEIGHT = 20;
+
+/**
+ * Whether a node's face has the runtime row. A running node always does, so it
+ * does not grow when its first usage arrives; a node that ran keeps the row,
+ * so it does not shrink when it finishes.
+ */
+export function flowNodeHasRuntimeRow(node: {
+  state: FlowNodeState;
+  runtime: object | null;
+}): boolean {
+  return node.state === "running" || node.runtime !== null;
+}
+
+/**
+ * The height a laid-out graph gives a node: its face, then the rows it adds.
+ * The stacked column lays nodes out by their content and never reads this.
+ */
+export function flowNodeHeight(node: {
+  state: FlowNodeState;
+  runtime: object | null;
+  validation?: readonly unknown[];
+  extra?: unknown;
+}): number {
+  const runtime = flowNodeHasRuntimeRow(node) ? FLOW_NODE_RUNTIME_ROW_HEIGHT : 0;
+  const below = node.validation?.length
+    ? FLOW_NODE_CHIPS_ROW_HEIGHT
+    : node.extra
+      ? FLOW_NODE_EXTRA_ROW_HEIGHT
+      : 0;
+  return FLOW_NODE_HEIGHT + runtime + below;
+}
 
 export interface FlowRect {
   x: number;

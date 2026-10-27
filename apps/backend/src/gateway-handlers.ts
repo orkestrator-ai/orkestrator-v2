@@ -130,7 +130,11 @@ export class GatewayHandlers {
       serializedJsonResponse(response, 200, responseBody);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const responseBody = JSON.stringify({ error: message });
+      const code = (error as { code?: unknown } | null)?.code;
+      const responseBody = JSON.stringify({
+        error: message,
+        ...(typeof code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? { code } : {}),
+      });
       // Never retain the rejected, network-supplied value: a syntactically
       // valid token-like string is just as sensitive as an obviously malformed
       // label. Gate on registry membership rather than on the error text, so a

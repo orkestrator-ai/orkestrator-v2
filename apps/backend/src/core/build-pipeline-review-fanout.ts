@@ -73,6 +73,11 @@ import {
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
+  recordPipelineSessionUsage,
+  deferPipelineSessionUsage,
+  sharedTranscriptRead,
+} from "./build-pipeline-session-usage.js";
+import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
   readProviderStatus,
@@ -929,6 +934,8 @@ export class BuildPipelineReviewFanout {
             }
           : undefined,
       );
+      delete session.completedAt;
+      delete session.usageFinalizationPolls;
       consolidation.state = "dispatching";
       await this.save(pipeline);
       try {
@@ -1017,6 +1024,8 @@ export class BuildPipelineReviewFanout {
       turnSettled,
       backgroundWorkLive,
       interruption,
+      contextUsage,
+      usagePending,
     } = await readProviderStatus(
       provider,
       consolidation.providerSessionId,
@@ -1034,12 +1043,24 @@ export class BuildPipelineReviewFanout {
     const observedStatus = status === "running" || backgroundWorkLive ? "running" : "idle";
     const statusChanged = session.status !== observedStatus;
     const turnEnded = statusChanged && observedStatus === "idle";
+    const completionChanged = observedStatus === "idle" && session.completedAt === undefined;
+    if (observedStatus === "idle") session.completedAt ??= reviewFanoutNowIso();
     if (turnEnded) this.settleConsolidationArtifactTurn(pipeline, consolidation);
     if (status !== "running" || persistDue || statusChanged) {
+      const transcript = sharedTranscriptRead(provider, consolidation.providerSessionId);
       const changed = await this.deps.refreshMovedTranscript(session, provider, {
         force: turnEnded,
+        read: transcript.read,
       });
-      if (changed || statusChanged) {
+      // Usage rides the same cadence as the transcript: every terminal look,
+      // and the persist boundary while the turn runs.
+      const usageChanged = await recordPipelineSessionUsage(
+        session,
+        provider,
+        contextUsage,
+        transcript.taken(),
+      );
+      if (changed || statusChanged || completionChanged || usageChanged) {
         session.status = observedStatus;
         session.messagesPersistedAt = reviewFanoutNowIso();
         await this.save(pipeline);
@@ -1141,6 +1162,11 @@ export class BuildPipelineReviewFanout {
         state,
         new ReviewContractValidationError("structured-review-report", provenance.issues),
       );
+    }
+    const previousUsagePolls = session.usageFinalizationPolls;
+    if (deferPipelineSessionUsage(session, usagePending, this.deps.pollGate?.(pipeline))) {
+      if (previousUsagePolls !== session.usageFinalizationPolls) await this.save(pipeline);
+      return { kind: "working" };
     }
     state.report = provenance.report;
     session.status = "idle";

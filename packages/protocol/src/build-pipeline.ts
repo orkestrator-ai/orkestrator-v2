@@ -3,6 +3,7 @@ import { isStructuredReviewReport, type StructuredReviewReport } from "./structu
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
 import {
   REVIEW_FANOUT_MAX_REVIEWERS,
+  REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
   REVIEW_FANOUT_MIN_REVIEWERS,
   isReviewFanoutState,
   isReviewPanelOverlap,
@@ -454,8 +455,15 @@ export interface PipelineSession {
   startedAt: string;
   /** End of this stage attempt, retained for settled runtime presentation. */
   completedAt?: string;
-  /** Cumulative provider-session usage captured for an independent reviewer. */
+  /**
+   * Cumulative provider-session token usage, the latest the provider reported.
+   * Written while the turn runs, on the transcript persist cadence, and at turn
+   * end, for every stage session: reviewers mirror their fan-out record, every
+   * other stage is metered from the pipeline's own status observation.
+   */
   tokenCount?: number;
+  /** Bounded terminal observations waiting for delayed cumulative usage. */
+  usageFinalizationPolls?: number;
   /** The reviewer's prompt-cache read count; see `ReviewerRecord.cacheReadTokens`. */
   cacheReadTokens?: number;
   label: string;
@@ -1253,6 +1261,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     isIsoDate(value.startedAt) &&
     (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
     (value.tokenCount === undefined || isNonNegativeInteger(value.tokenCount)) &&
+    (value.usageFinalizationPolls === undefined ||
+      (isNonNegativeInteger(value.usageFinalizationPolls) &&
+        value.usageFinalizationPolls <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS)) &&
     (value.cacheReadTokens === undefined || isNonNegativeInteger(value.cacheReadTokens)) &&
     typeof value.label === "string" &&
     (value.messages === undefined || Array.isArray(value.messages)) &&

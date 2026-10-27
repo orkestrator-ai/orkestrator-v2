@@ -401,6 +401,14 @@ fix (`custom_fix_multi_review`), run a looped review, launch feature
 planning, and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
 [`coordinator.md`](coordinator.md#worker-surfaces).
+The main coordinator can propose saving durable decisions to the
+`## Orkestrator` section of the project's root `AGENTS.md`
+(`propose_agents_md_update`, capability `environments`, so never a side
+agent). It writes nothing: the user reviews a diff, may edit the entries, and
+only an approval opens a pull request, from a temporary worktree on the node
+that owns the project copy. The backend command that opens it
+(`open_project_agents_md_pr`) is refused by name to coordinator credentials;
+see [`coordinator.md`](coordinator.md#saving-decisions-to-agentsmd).
 `launch_multi_review` and `start_multi_review` take optional `autoFix` and
 `autoPr` booleans. Omitted, they use the user's saved Multi Review settings, as
 the button does; a coordinator sets them only when the user asks. With both on

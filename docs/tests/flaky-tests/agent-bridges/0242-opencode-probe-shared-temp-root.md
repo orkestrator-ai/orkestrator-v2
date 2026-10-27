@@ -99,3 +99,14 @@ The separate iOS command did not reach compilation or tests: `simctl list device
 - **Isolated rerun:** `mise run test:logged -- --name isolated-3 -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 1.4 s).
 - **Evidence:** `orkestrator-test-run.wESThp/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed recurrence of the shared temporary-root snapshot assertion; cross-worktree creation or cleanup remains plausible but unproven. No probe implementation, assertion, timeout or skip changed.
+
+
+## Pipeline rewind main merge validation — 2026-10-27
+
+- **Merge parents:** feature `205b76e461e206b7b7c030ba37c37389bc85845d` and main `536394f7de1d1241e0c79d2b04d65d65647d63ba`.
+- **Original command:** `mise run test:logged -- --name merge-suite -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 slots. Root used one isolated worker and waited 77.1 seconds for shared-host capacity.
+- **Failure:** `runOpenCodeLiveCompatibility > a deadline during setup stops the abandoned probe from spawning a server` observed `[]` instead of its initial one-entry temporary-root list at line 422 (156.74 ms). The no-spawn assertion passed.
+- **Root counts:** 3,532 passed and three failed across 3,535 tests in 171 files (228.44 seconds execution). The other two failures were the existing `migrate-copy` extract-status assertions; their complete owner also failed alone (10 passed, two failed).
+- **Isolated rerun:** `mise run test:logged -- --name merge-probe -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures` passed the unchanged complete owner (exit 0, 0.7 seconds).
+- **Evidence:** group log `orkestrator-test-run.GN0XJN/root-and-agent-support-tests.log.gz` and outer log `orkestrator-test-run.IIdbng/merge-suite.log.gz` under the host temporary directory after aggregate finalization. Migration-copy rerun: `orkestrator-test-run.r93NgB/merge-migrate-copy.log.gz`.
+- **Assessment:** recurrence of the existing shared temporary-root snapshot flake. Concurrent creation or cleanup remains plausible but unproven. No probe implementation, assertion, timeout or skip changed.

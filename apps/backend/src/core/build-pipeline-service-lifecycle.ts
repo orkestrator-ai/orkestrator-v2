@@ -544,6 +544,7 @@ export class BuildPipelineLifecycle {
           const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, session));
           await provider.abort(session.sdkSessionId);
           session.status = "idle";
+          session.completedAt ??= new Date().toISOString();
         } catch (error) {
           abortErrors = [error];
         }
@@ -613,6 +614,8 @@ export class BuildPipelineLifecycle {
           startedAt,
         };
         session.turnStartedAt = startedAt;
+        delete session.completedAt;
+        delete session.usageFinalizationPolls;
         delete candidate.stallWarning;
         candidate.activePromptContext = {
           phase,

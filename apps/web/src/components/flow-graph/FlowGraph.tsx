@@ -33,6 +33,7 @@ import {
   FLOW_GRAPH_STACK_BELOW,
   bypassEdgePath,
   flowEdgePath,
+  flowNodeHasRuntimeRow,
   type FlowEdgeState,
   type FlowGraphGeometry,
   type FlowNodeState,
@@ -63,9 +64,12 @@ export interface FlowNodeModel {
   detail: string;
   runtime: RuntimeParts | null;
   runtimeLabel: string;
-  /** Shown where the runtime would be, for a node that has not run. */
+  /** A small badge beside the title of a node that has not run, e.g. "ahead". */
   pendingLabel?: string;
-  /** Short state word on the second row of a node that is neither queued nor clean. */
+  /**
+   * Short state word of a node that is neither queued nor clean: beside the
+   * runtime on a running node's third row, else at the end of the second.
+   */
   statusWord?: { text: string; tone: "muted" | "running" | "warning" | "destructive" };
   severity?: Record<ReviewSeverity, number>;
   /** Finding totals in words, so the chips are not the only place they exist. */
@@ -144,6 +148,8 @@ export function FlowStateIcon({
 /**
  * `{elapsed} · {tokens}`. The word "tokens" is screen-reader text only: the node
  * has room for the count beside the clock, and the inspector spells it out.
+ * A live turn whose provider has not reported usage yet shows a dash, not a
+ * claim that a count is on its way.
  */
 export function FlowRuntime({
   runtime,
@@ -160,7 +166,7 @@ export function FlowRuntime({
       <span className="sr-only"> tokens</span>
     </>
   ) : runtime.tokensPending ? (
-    "Tokens pending"
+    <span title="No token usage reported yet">—</span>
   ) : null;
   return (
     <span
@@ -284,10 +290,15 @@ function FlowNode({
   const failure = node.state === "failed" && node.error?.trim() ? node.error : undefined;
   const openHint = node.canOpen ? "Double-click or press Enter to open the session" : undefined;
   const muted = node.state === "not-started" || node.state === "cancelled";
+  const runtimeRow = flowNodeHasRuntimeRow(node);
+  // A running node's state word sits with its clock, on the runtime row.
+  const runningWord =
+    node.state === "running" && !failure && !node.severity ? node.statusWord : undefined;
   const accessibleName = [
     node.title,
     node.statusLabel,
-    node.runtime ? formatRuntimeParts(node.runtime) : null,
+    // Usage not reported yet is left unsaid rather than announced as pending.
+    node.runtime ? formatRuntimeParts({ ...node.runtime, tokensPending: false }) : null,
     node.findingsLabel,
   ]
     .filter(Boolean)
@@ -325,23 +336,26 @@ function FlowNode({
         }}
         onKeyDown={(event) => onKeyDown(event, node)}
       >
-        <span className="flex min-w-0 items-center gap-2">
+        {/* Row 1: the title, whole, and at most a small badge that gives way to it. */}
+        <span data-flow-node-row="title" className="flex min-w-0 items-center gap-2">
           <FlowStateIcon state={node.state} stalled={node.stalled} idleIcon={node.idleIcon} />
           <span
+            data-flow-node-title=""
             className={cn(
-              "min-w-0 flex-1 truncate text-[13px] font-semibold",
+              "max-w-full min-w-0 shrink-0 truncate text-[13px] font-semibold",
               muted ? "text-zinc-400" : "text-foreground",
             )}
           >
             {node.title}
           </span>
-          {node.runtime ? (
-            <FlowRuntime runtime={node.runtime} label={node.runtimeLabel} />
-          ) : node.pendingLabel ? (
-            <span className="shrink-0 text-[11px] text-muted-foreground">{node.pendingLabel}</span>
+          {!node.runtime && node.pendingLabel ? (
+            <span className="ml-auto min-w-0 truncate text-[11px] text-muted-foreground">
+              {node.pendingLabel}
+            </span>
           ) : null}
         </span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-2">
+        {/* Row 2: `{agent} · {model} · {effort}`; this truncates, never the title. */}
+        <span data-flow-node-row="detail" className="mt-0.5 flex min-w-0 items-center gap-2">
           {failure && errorFace === "joined" ? (
             <span
               id={errorId}
@@ -365,18 +379,38 @@ function FlowNode({
               </span>
             </>
           ) : (
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            <span
+              data-flow-node-detail=""
+              title={node.detail || undefined}
+              className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+            >
               {node.detail}
             </span>
           )}
           {node.severity ? (
             <SeverityChips counts={node.severity} />
-          ) : node.statusWord && !failure ? (
+          ) : node.statusWord && !failure && !runningWord ? (
             <span className={cn("shrink-0 text-[11px]", STATUS_WORD_TONE[node.statusWord.tone])}>
               {node.statusWord.text}
             </span>
           ) : null}
         </span>
+        {/* Row 3: the clock and usage, live while running and final after. */}
+        {runtimeRow ? (
+          <span data-flow-node-row="runtime" className="mt-0.5 flex min-w-0 items-center gap-2">
+            {node.runtime ? <FlowRuntime runtime={node.runtime} label={node.runtimeLabel} /> : null}
+            {runningWord ? (
+              <span
+                className={cn(
+                  "ml-auto min-w-0 truncate text-[11px]",
+                  STATUS_WORD_TONE[runningWord.tone],
+                )}
+              >
+                {runningWord.text}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
         {node.validation?.length ? <ValidationChips checks={node.validation} /> : null}
         {node.extra}
       </button>

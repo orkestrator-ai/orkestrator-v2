@@ -1748,3 +1748,7 @@ This project uses **shadcn/ui** components. When adding new UI:
 
 - Avoid files larger than 2000 lines of code. Where files get this big, split them into smaller files, groups around a logical boundary. Also split the tests so that they line up with the split on the file they are testing.
 - Do not log secrets such as API keys, tokens, SSH keys, or credential file contents.
+
+## Orkestrator
+
+Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.

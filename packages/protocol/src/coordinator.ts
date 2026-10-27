@@ -367,6 +367,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "open_multi_review_fix",
   "open_worker_browser",
   "pause_build_pipeline",
+  "propose_agents_md_update",
   "read_messages",
   "read_node_environment",
   "request_env_value_reveal",

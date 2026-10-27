@@ -27,7 +27,7 @@ import {
   mergePersistedSessionMeta,
   readTranscriptLines,
 } from "./rollout.js";
-import { persistSessionTitle } from "../session-titles.js";
+import { persistSessionTitle } from "../session-title-index.js";
 import { recordCommandChanges } from "../sessions/command-changes.js";
 import { clearTranscriptCache, getTranscriptCacheStats } from "../transcript-cache.js";
 import type { StructuredOutputTurnRecord } from "@orkestrator/protocol/structured-output";
@@ -1432,6 +1432,39 @@ describe("rollout public helpers (continued)", () => {
       ],
       ["failed", "Inspecting the failed turn.", ["Inspecting the failed turn."]],
       ["ordinary", '{"ordinary":true}', ['{"ordinary":true}']],
+    ]);
+  });
+
+  test("a rollback marker drops the turns it rewound, as app-server does", async () => {
+    const message = (role: "user" | "assistant", text: string) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+      },
+    });
+    const turn = (id: string, prompt: string, answer: string) => [
+      { type: "turn_context", payload: { turn_id: id, cwd: "/workspace" } },
+      message("user", prompt),
+      message("assistant", answer),
+    ];
+    const hydrated = await hydrateRollout("thread-rolled-back", [
+      sessionMeta("thread-rolled-back"),
+      ...turn("one", "first prompt", "first answer"),
+      ...turn("two", "second prompt", "second answer"),
+      ...turn("three", "third prompt", "third answer"),
+      { type: "event_msg", payload: { type: "thread_rolled_back", num_turns: 2 } },
+      ...turn("four", "fourth prompt", "fourth answer"),
+      // A malformed marker removes nothing.
+      { type: "event_msg", payload: { type: "thread_rolled_back", num_turns: "all" } },
+    ]);
+
+    expect(hydrated.messages.map((entry) => [entry.turnId, entry.content])).toEqual([
+      ["one", "first prompt"],
+      ["one", "first answer"],
+      ["four", "fourth prompt"],
+      ["four", "fourth answer"],
     ]);
   });
 

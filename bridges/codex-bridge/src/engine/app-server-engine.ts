@@ -2555,6 +2555,14 @@ export class AppServerEngine implements CodexEngine {
     for (const event of events) this.emit(event);
   }
 
+  async archiveThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/archive", { threadId });
+  }
+
+  async unarchiveThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/unarchive", { threadId });
+  }
+
   async setThreadName(threadId: string, name: string): Promise<boolean> {
     try {
       await this.supervisor.request("thread/name/set", { threadId, name });

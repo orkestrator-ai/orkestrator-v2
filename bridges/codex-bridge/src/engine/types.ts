@@ -511,6 +511,11 @@ export type EngineEvent = EngineEventMeta &
       }
     | { kind: "thread.name.updated"; threadId: string; name?: string }
     /**
+     * The thread was rewound, by this bridge or another client. Thread-scoped
+     * like compaction: the notification names no turn.
+     */
+    | { kind: "thread.reverted"; threadId: string }
+    /**
      * Background context compaction finished.
      *
      * Deliberately carries no `turnId` even though the notification does: the
@@ -591,6 +596,13 @@ export interface CodexEngine {
   interruptTurn(handle: string, turnId: string): Promise<void>;
 
   setThreadName(threadId: string, name: string): Promise<boolean>;
+  /**
+   * Takes a thread out of (or back into) the resume list, keeping its rollout.
+   * There is deliberately no delete: `thread/delete` destroys the user's
+   * history and its descendants.
+   */
+  archiveThread(threadId: string): Promise<void>;
+  unarchiveThread(threadId: string): Promise<void>;
   unsubscribeThread(handle: string): Promise<void>;
 
   /** Reconfigure a thread without starting a turn (e.g. plan↔build switch). */

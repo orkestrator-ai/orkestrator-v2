@@ -18,7 +18,7 @@
 import type { EngineGeneration, EngineTurnConfig } from "../engine/types.js";
 import type { NormalizedMessage } from "../messages/types.js";
 import type { TurnAccumulator } from "./turn-accumulator.js";
-import type { PersistedSessionTitleSource } from "../session-titles.js";
+import type { PersistedSessionTitleSource } from "../session-title-index.js";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import {
   MAX_STRUCTURED_OUTPUT_TURNS,
@@ -107,8 +107,6 @@ export interface BridgeSession {
   configurationRevision: number;
   title?: string;
   titleSource?: SessionTitleSource;
-  titleGenerationAttempted?: boolean;
-  titleGenerationToken?: symbol;
   lastAcceptedRequestId?: string;
   /** Last completed constrained turn, kept outside the renderer tree. */
   structuredOutput?: StructuredOutputResult;

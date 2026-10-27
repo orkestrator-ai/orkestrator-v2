@@ -483,6 +483,7 @@ export function SharedNativeAgentController({
     retryRecoverableDispatch,
     discardRecoverableDispatch,
     listResumable,
+    setResumableArchived,
     resume,
     fork,
     performAction,
@@ -3024,6 +3025,7 @@ export function SharedNativeAgentController({
         agentLabel={label}
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
+        {...(adapter.capabilities.actions?.archive ? { onArchive: setResumableArchived } : {})}
         onResume={(providerSessionId) => {
           setResumeDialogOpen(false);
           const sourceSessionId = projection?.sessionId;

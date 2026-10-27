@@ -143,6 +143,14 @@ describe("thread and turn lifecycle", () => {
     ]);
   });
 
+  test("thread/reverted is adopted, not ignored", () => {
+    expect(reduce("thread/reverted", { threadId: "t1" })).toEqual([
+      { kind: "thread.reverted", threadId: "t1", engineGeneration: 1, handle: "handle-1" },
+    ]);
+    expect(reduce("thread/reverted", {})).toEqual([]);
+    expect(isIgnoredNotification("thread/reverted")).toBe(false);
+  });
+
   test("thread/name/updated without a thread id is dropped", () => {
     expect(reduce("thread/name/updated", { threadName: "orphan" })).toEqual([]);
     expect(reduce("thread/name/updated", undefined)).toEqual([]);

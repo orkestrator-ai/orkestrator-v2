@@ -5,6 +5,7 @@ import {
   shortResumeSessionId,
   type ResumableSession,
 } from "./NativeResumeSessionDialog";
+import { mockToast, mockToastError } from "../../../../../tests/mocks/sonner";
 
 /**
  * The three per-agent wrappers stub this dialog out in their tab suites, so
@@ -88,6 +89,57 @@ describe("NativeResumeSessionDialog", () => {
 
     await waitFor(() => expect(screen.getByText("Other")).toBeTruthy());
     expect(screen.queryByText("Current") === null).toBe(true);
+  });
+
+  test("offers no remove action where the platform cannot archive", async () => {
+    renderDialog([{ id: "a", title: "Alpha" }]);
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Remove from list" })).toBeNull();
+  });
+
+  test("removes an archived row and puts it back on Undo", async () => {
+    const onArchive = mock(async (_id: string, _archived: boolean) => undefined);
+    renderDialog(
+      [
+        { id: "a", title: "Alpha" },
+        { id: "b", title: "Beta" },
+      ],
+      { onArchive },
+    );
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+    const [first] = screen.getAllByRole("button", { name: "Remove from list" });
+    await act(async () => {
+      fireEvent.click(first!);
+    });
+    // Untimed rows keep their order, so the first remove is Alpha's.
+    expect(onArchive.mock.calls[0]).toEqual(["a", true]);
+    await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
+    expect(screen.getByText("Beta")).toBeTruthy();
+
+    const options = mockToast.mock.calls.at(-1)?.[1] as {
+      action: { label: string; onClick: () => void };
+    };
+    expect(options.action.label).toBe("Undo");
+    await act(async () => {
+      options.action.onClick();
+    });
+    expect(onArchive.mock.calls.at(-1)).toEqual(["a", false]);
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+  });
+
+  test("keeps a row the provider refused to archive", async () => {
+    const onArchive = mock(async () => {
+      throw new Error("This conversation is open in a tab");
+    });
+    renderDialog([{ id: "a", title: "Alpha" }], { onArchive });
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove from list" }));
+    });
+    await waitFor(() =>
+      expect(mockToastError.mock.calls.at(-1)?.[0]).toBe("This conversation is open in a tab"),
+    );
+    expect(screen.getByText("Alpha")).toBeTruthy();
   });
 
   test("resumes the clicked session by id", async () => {

@@ -169,6 +169,61 @@ until the user resumes it.
 Claude's `DELETE /session/:id` (SDK `deleteSession`) is the only destructive
 operation and nothing in the backend or renderer calls it.
 
+### Removing a conversation from the resume list
+
+Codex is the one platform that offers it (`actions.archive`). The resume
+dialog shows a **Remove from list** button on each row, with an **Undo**
+toast; the backend command `set_native_agent_resumable_session_archived` goes
+to the bridge's `POST /session/list/:threadId/archive` or `/unarchive`, which
+call `thread/archive` / `thread/unarchive`. The rollout is kept: archive is the
+explicit "remove from list", never a delete, and nothing calls
+`thread/delete`. A thread a tab in the same environment still holds is
+refused (409). The resume list leaves archived threads out: `thread/list`
+omits them, and the rollout fallback skips both what app-server lists as
+archived and rollouts under `archived_sessions`.
+
+Cursor's resume list hides agents the SDK reports `archived` (Cursor refuses a
+follow-up run on one until it is unarchived, which is cloud-only in the pinned
+SDK), so there is no archive action for Cursor.
+
+## Session titles
+
+The backend owns every native session's title (`native-agent-session-titles.ts`).
+On each projection read it shows, in order: a backend title the provider has
+not accepted yet, the provider's own title unless it is a placeholder ("Agent
+Session", Claude's "Session 1a2b3c"), a backend title the provider already
+holds, the first user message cut to 80 characters, and finally the
+placeholder.
+
+The backend chooses a title once per provider session, when the provider has
+none of its own and the read reaches the start of the conversation:
+
+- Interactive and coordinator sessions get a model-written title from
+  `session-title-service.ts`, keyed by the logins this machine has: the
+  session's own platform first when it is Codex or Claude, then the other.
+  Codex runs `codex exec --ephemeral --ignore-user-config --ignore-rules` with
+  a one-model catalog whose shell is disabled, a read-only sandbox in an empty
+  temporary directory and every tool-bearing feature off; Claude runs
+  `claude --print --safe-mode` with no tools, no MCP, no slash commands, no
+  setting sources and no session persistence (`--bare` would also disable
+  OAuth/Keychain sign-in). Both read the prompt on stdin, framed as untrusted
+  JSON data, without the coordinator preamble, framed guidance or the
+  annotation envelope. A failed strategy rests for ten minutes; at most two
+  run at once. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns generation off,
+  and it never runs under `bun test`.
+- Pipeline and review sessions, and any session no generator could title,
+  keep the first-message fallback.
+
+The chosen title is stored on the session record (`backendTitle`, scoped to the
+provider session) and pushed through `setSessionTitle`: Codex
+`thread/name/set` (and the bridge's own title index), OpenCode
+`session.update`, Pi `setSessionName`, Claude's `/session/:id/rename`. A
+successful push marks it accepted; until then it outranks the provider's own
+title, so a failed push never loses it, and the push is retried at most every
+five minutes. Cursor and Grok have no setter, so their backend title is always
+authoritative. No bridge generates a title, and the Codex bridge no longer
+reports a title it read back from the first prompt.
+
 ## What survives a restart
 
 "Bridge restart" means the bridge process dies and a successor starts on the
@@ -362,10 +417,16 @@ Codex's reasoning summary (`summary`) and `personality` are not offered.
 `personality` (`supportsPersonality` is always false). Codex's own
 `config.toml` still applies to both.
 
-`session-titles.ts` is the one deliberate exception to all of the above — it
-still spawns a hermetic `codex exec` with a custom model catalog, a read-only
-sandbox, and user config ignored, so title generation cannot inherit the user's
-tools or instructions.
+Session titles are no longer generated here; see [Session titles](#session-titles).
+The bridge keeps only its title index (`session-title-index.ts`), which survives
+a container rebuild that drops Codex's own `session_index.jsonl`.
+
+A rewind made by another client arrives as `thread/reverted`, which names no
+turn: the bridge reads the surviving turns with `thread/read` and trims the
+transcript it serves to them (`sessions/external-revert.ts`). Its own
+`thread/revert` echoes the same notification and finds nothing more to cut.
+A rollout replay drops the turns a `thread_rolled_back` marker removed, so a
+reload agrees with app-server.
 
 ### Project Coordinator
 

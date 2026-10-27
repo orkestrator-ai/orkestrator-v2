@@ -44,6 +44,7 @@ export interface CodexRuntimeCallbacks {
   messagesForSession: CodexRuntimePrompt["messagesForSession"];
   clearCompactionBackstop: CodexRuntimeSessions["clearCompactionBackstop"];
   finishCompaction: CodexRuntimeSessions["finishCompaction"];
+  reconcileExternalRevert: CodexRuntimeSessions["reconcileExternalRevert"];
 
   abort: CodexRuntimeTail["abort"];
   listModels: CodexRuntimeTail["listModels"];

@@ -29,7 +29,7 @@ import {
   readPersistedSessionTitleEntries,
   type PersistedSessionTitle,
   type PersistedSessionTitleSource,
-} from "../session-titles.js";
+} from "../session-title-index.js";
 import {
   type MessageRole,
   type NormalizedMessage,
@@ -1610,6 +1610,26 @@ async function replayPersistedRollout(
     }
   };
 
+  /** Removes the last `turns` user turns and everything after them. */
+  const dropLastTurns = (turns: number): void => {
+    const userIndexes: number[] = [];
+    messages.forEach((message, index) => {
+      if (message.role === "user") userIndexes.push(index);
+    });
+    if (userIndexes.length === 0) return;
+    const cut = userIndexes[Math.max(0, userIndexes.length - turns)]!;
+    const removed = new Set(messages.splice(cut));
+    if (unreadableRun && removed.has(unreadableRun.message)) unreadableRun = undefined;
+    for (const [callId, slot] of Array.from(toolPartsByCallId)) {
+      if (removed.has(slot.message)) toolPartsByCallId.delete(callId);
+    }
+    for (const [callId, slots] of Array.from(spawnPartSlots)) {
+      const kept = slots.filter((slot) => !removed.has(slot.message));
+      if (kept.length > 0) spawnPartSlots.set(callId, kept);
+      else spawnPartSlots.delete(callId);
+    }
+  };
+
   const visit = (record: TranscriptRecord, recordIndex: number): void => {
     if (isCollaborationRecord(record)) collaborationRecords.push(record);
     if (typeof record.timestamp === "string") lastTimestamp = record.timestamp;
@@ -1674,6 +1694,19 @@ async function replayPersistedRollout(
 
     if (record.type === "event_msg" && record.payload?.type === "item_completed") {
       visitCompletedItem(record.payload.item, timestamp);
+      return;
+    }
+
+    // A rewind (this bridge's `thread/revert`, or another client's) is recorded
+    // as a marker dropping the last `num_turns` turns, which app-server no
+    // longer serves either; replaying past it would bring them back.
+    if (record.type === "event_msg" && record.payload?.type === "thread_rolled_back") {
+      const turns = Number(record.payload.num_turns);
+      if (Number.isInteger(turns) && turns > 0) {
+        settleOpenCells();
+        closeAssistantRow();
+        dropLastTurns(turns);
+      }
       return;
     }
 

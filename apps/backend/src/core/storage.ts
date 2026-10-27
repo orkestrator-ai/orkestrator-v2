@@ -27,7 +27,11 @@ import type {
   TranscriptRead,
   TranscriptReadWindow,
 } from "./build-pipeline-transcript-store.js";
-import type { EnvironmentUnreadReason, IncompleteTurnNotice } from "./models.js";
+import type {
+  EnvironmentUnreadReason,
+  IncompleteTurnNotice,
+  NativeAgentSessionBackendTitle,
+} from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
 import type { NativeAgentDisplayTail } from "./native-agent-display-tails.js";
 import type { AgentMailboxDirectory } from "./storage-agent-mail-directory.js";
@@ -982,6 +986,13 @@ export class StorageService {
       providerSessionId,
       resumableSessionId,
     );
+  }
+
+  recordNativeAgentSessionBackendTitle(
+    key: string,
+    title: NativeAgentSessionBackendTitle,
+  ): Promise<boolean> {
+    return this.repos.nativeAgentSessions.recordNativeAgentSessionBackendTitle(key, title);
   }
 
   invalidateNativeAgentSession(key: string, providerSessionId: string): Promise<boolean> {

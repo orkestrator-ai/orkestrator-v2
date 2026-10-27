@@ -48,6 +48,7 @@ import {
   getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
+  setNativeAgentResumableSessionArchived,
   discardNativeAgentDispatch,
   movePromptQueueMessage,
   performNativeAgentSessionAction,
@@ -3193,6 +3194,12 @@ export function useNativeAgentSession<TMessage = unknown>({
     }
   }, [beginProjectionMutation, identity, refresh]);
   const listResumable = useCallback(() => listNativeAgentResumableSessions(identity), [identity]);
+  const setResumableArchived = useCallback(
+    async (resumableSessionId: string, archived: boolean) => {
+      await setNativeAgentResumableSessionArchived({ ...identity, resumableSessionId, archived });
+    },
+    [identity],
+  );
   const resume = useCallback(
     async (providerSessionId: string, controls?: NativeAgentControlUpdate) => {
       const operationEpoch = beginProjectionMutation();
@@ -3544,6 +3551,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     retryRecoverableDispatch,
     discardRecoverableDispatch,
     listResumable,
+    setResumableArchived,
     resume,
     fork,
     performAction,

@@ -1691,7 +1691,6 @@ describe("fork route outcomes", () => {
       id: "session-fork-parent",
       threadId: "thread-fork-parent",
       config: { mode: "build", cwd: "/workspace" },
-      titleGenerationAttempted: true,
     });
     const before = registry.listSessions().length;
     engine.forkThread = async () => {

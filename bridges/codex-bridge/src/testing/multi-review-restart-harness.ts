@@ -11,7 +11,6 @@ async function until(predicate: () => boolean): Promise<void> {
 
 async function main(): Promise<void> {
   const runtime = __testing.runtimeForTesting();
-  __testing.setSessionTitleGeneratorForTesting(async () => "Restart test");
   await until(() => runtime.getHealth().state === "ready");
   const server = Bun.serve({
     hostname: "127.0.0.1",

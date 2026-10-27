@@ -1,7 +1,11 @@
 import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { nativeAgentSessionWithControls } from "./native-agent-session-controls.js";
-import { nativeAgentSessionResumeIdentity } from "./models.js";
+import {
+  nativeAgentSessionBackendTitle,
+  nativeAgentSessionResumeIdentity,
+  type NativeAgentSessionBackendTitle,
+} from "./models.js";
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
@@ -872,6 +876,53 @@ export class NativeAgentSessionsRepository {
         updatedAt: nowIso(),
       };
       await this.saveNativeAgentSession(key, updated);
+      return true;
+    });
+  }
+
+  /**
+   * Record the title the backend chose for a session, or mark it accepted by
+   * the provider. Scoped to the provider session it was chosen for; a mapping
+   * that has moved on is left alone. A generated title replaces a fallback,
+   * never the reverse, so a slow fallback write cannot undo a generation.
+   * Announced, because every reader of the record shows it.
+   */
+  async recordNativeAgentSessionBackendTitle(
+    key: string,
+    title: NativeAgentSessionBackendTitle,
+  ): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(title.providerSessionId)) {
+      throw new Error("Native agent backend title identity is invalid");
+    }
+    if (!isNonBlankString(title.title)) throw new Error("Native agent backend title is blank");
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      const existing = loaded.sessions[key];
+      if (!existing || existing.providerSessionId !== title.providerSessionId) return false;
+      const current = nativeAgentSessionBackendTitle(existing);
+      if (current?.source === "generated" && title.source === "fallback") return false;
+      if (
+        current &&
+        current.title === title.title &&
+        current.source === title.source &&
+        (current.pushed === true) === (title.pushed === true)
+      ) {
+        return false;
+      }
+      const updated: PersistedNativeAgentSession = {
+        ...existing,
+        backendTitle: {
+          providerSessionId: title.providerSessionId,
+          title: title.title,
+          source: title.source,
+          ...(title.pushed ? { pushed: true } : {}),
+        },
+        updatedAt: nowIso(),
+      };
+      loaded.sessions[key] = updated;
+      await this.saveNativeAgentSession(key, updated);
+      this.announceNativeAgentRecord(updated);
       return true;
     });
   }

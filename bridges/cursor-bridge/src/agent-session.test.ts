@@ -1491,6 +1491,20 @@ describe("listResumableSessions", () => {
     expect(await listResumableSessions()).toEqual([{ id: "outer", status: "idle" }]);
   });
 
+  test("leaves archived agents out of the picker", async () => {
+    listed = {
+      items: [
+        { agentId: "kept", status: "idle" },
+        { agentId: "archived", status: "idle", archived: true },
+        { agentId: "unarchived", status: "idle", archived: false },
+      ],
+    };
+    expect((await listResumableSessions()).map((entry) => entry.id)).toEqual([
+      "kept",
+      "unarchived",
+    ]);
+  });
+
   test("is empty rather than an error when nothing is signed in", async () => {
     delete process.env.CURSOR_API_KEY;
     expect(await listResumableSessions()).toEqual([]);

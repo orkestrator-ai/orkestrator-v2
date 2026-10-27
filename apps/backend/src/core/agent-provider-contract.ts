@@ -839,6 +839,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   ): Promise<NativeAgentComposerState | undefined>;
   listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
   /**
+   * Take a resume-list conversation out of the list, or put it back. Keeps the
+   * provider's history: implementations must never delete a conversation.
+   */
+  setResumableSessionArchived?(resumableSessionId: string, archived: boolean): Promise<void>;
+  /**
    * Restate trusted session-held permissions before dispatch and after restart.
    * Process-held authority is refreshed by the launcher instead.
    */

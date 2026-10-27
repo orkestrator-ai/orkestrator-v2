@@ -42,6 +42,7 @@ import type {
 import {
   EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   isNativeAgentExecutionPolicy,
+  nativeAgentCapabilities,
   parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
@@ -1107,6 +1108,22 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   setSessionTitle(sessionId: string, title: string) {
     return this.catalogAdapter.setSessionTitle(sessionId, title);
+  }
+
+  async setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
+    if (!nativeAgentCapabilities(this.agent).actions?.archive) {
+      throw new PromptRejectedError(`${this.agent} cannot archive conversations`);
+    }
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/list/${encodeURIComponent(resumableSessionId)}/${archived ? "archive" : "unarchive"}`,
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    await assertOkWithErrorDetail(
+      response,
+      `${this.agent} ${archived ? "archive" : "unarchive"} conversation`,
+    );
   }
 
   async stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {

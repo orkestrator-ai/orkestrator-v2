@@ -151,10 +151,6 @@ const IGNORED_METHODS = new Set([
   // it belongs to is already rendered from `item/*`; this is the untyped
   // duplicate underneath it.
   "mcpServer/event/stream/notification",
-  // A thread rewound by another client. Consumed by plan 09, which owns
-  // message-level rewind; until then adopting it would drop transcript the
-  // bridge is still serving, with nothing able to put it back.
-  "thread/reverted",
   // Bookkeeping the bridge tracks itself.
   "thread/status/changed",
   "thread/archived",
@@ -406,6 +402,13 @@ export function reduceNotification(
     case "thread/compacted": {
       if (!threadId) return { events: [] };
       return { events: [{ kind: "thread.compacted", threadId, ...base }] };
+    }
+
+    // Another client rewound the thread (our own `thread/revert` reports here
+    // too). It names no turn, so the runtime reads which turns remain.
+    case "thread/reverted": {
+      if (!threadId) return { events: [] };
+      return { events: [{ kind: "thread.reverted", threadId, ...base }] };
     }
 
     case "thread/name/updated": {

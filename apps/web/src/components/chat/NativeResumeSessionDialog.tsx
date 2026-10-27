@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Clock, Loader2, MessageSquare } from "lucide-react";
+import { Archive, Clock, Loader2, MessageSquare } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,12 @@ interface NativeResumeSessionDialogProps {
   /** Excluded from the list — resuming the session you are in is a no-op. */
   currentSessionId?: string;
   emptyMessage?: string;
+  /**
+   * Takes a row out of the list (`archived: true`) or puts it back. The
+   * provider keeps the conversation either way; this is never a delete. Absent
+   * where the platform cannot archive, and the rows then offer no remove.
+   */
+  onArchive?: (sessionId: string, archived: boolean) => Promise<void>;
 }
 
 /**
@@ -66,8 +73,10 @@ export function NativeResumeSessionDialog({
   onResume,
   currentSessionId,
   emptyMessage = "No previous sessions found.",
+  onArchive,
 }: NativeResumeSessionDialogProps) {
   const [fetchedSessions, setFetchedSessions] = useState<ResumableSession[]>([]);
+  const [archiving, setArchiving] = useState<ReadonlySet<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
@@ -136,6 +145,46 @@ export function NativeResumeSessionDialog({
     [fetchedSessions, currentSessionId],
   );
 
+  /**
+   * Removes the row once the provider confirms, and offers to put it back. A
+   * refusal (the conversation is open in another tab, say) leaves it listed.
+   */
+  const archive = async (session: ResumableSession) => {
+    if (!onArchive) return;
+    setArchiving((current) => new Set(current).add(session.id));
+    try {
+      await onArchive(session.id, true);
+      setFetchedSessions((current) => current.filter((entry) => entry.id !== session.id));
+      toast("Removed from the list", {
+        description: "The conversation itself is kept.",
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void onArchive(session.id, false)
+              .then(() =>
+                setFetchedSessions((current) =>
+                  current.some((entry) => entry.id === session.id)
+                    ? current
+                    : [...current, session],
+                ),
+              )
+              .catch((err) =>
+                toast.error(err instanceof Error ? err.message : "Could not restore the session"),
+              );
+          },
+        },
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove the session");
+    } finally {
+      setArchiving((current) => {
+        const next = new Set(current);
+        next.delete(session.id);
+        return next;
+      });
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -159,40 +208,67 @@ export function NativeResumeSessionDialog({
             <ScrollArea className="h-[300px] overflow-hidden">
               <div className="space-y-1 pr-4">
                 {sessions.map((session) => (
-                  <button
+                  <div
                     key={session.id}
-                    onClick={() => onResume(session.id)}
                     className={cn(
-                      "w-full rounded-md px-3 py-2 text-left transition-colors",
+                      "group flex items-start gap-1 rounded-md transition-colors",
                       "hover:bg-accent hover:text-accent-foreground",
-                      "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
                     )}
                   >
-                    <div className="flex items-start gap-3">
-                      <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0 flex-1">
-                        <p className="max-w-full text-sm font-medium break-words whitespace-normal">
-                          {session.title || `Session ${shortResumeSessionId(session.id)}`}
-                        </p>
-                        <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                          <Clock className="h-3 w-3" />
-                          <span>{formatRelativeTime(session.activityAt)}</span>
-                          {session.detail && (
-                            <>
-                              <span className="opacity-60">·</span>
-                              <span>{session.detail}</span>
-                            </>
-                          )}
-                          {session.status === "running" && (
-                            <span className="ml-2 text-yellow-500">• Running</span>
-                          )}
-                          {session.status === "error" && (
-                            <span className="ml-2 text-destructive">• Error</span>
-                          )}
+                    <button
+                      onClick={() => onResume(session.id)}
+                      className={cn(
+                        "min-w-0 flex-1 rounded-md px-3 py-2 text-left",
+                        "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+                      )}
+                    >
+                      <div className="flex items-start gap-3">
+                        <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0 flex-1">
+                          <p className="max-w-full text-sm font-medium break-words whitespace-normal">
+                            {session.title || `Session ${shortResumeSessionId(session.id)}`}
+                          </p>
+                          <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                            <Clock className="h-3 w-3" />
+                            <span>{formatRelativeTime(session.activityAt)}</span>
+                            {session.detail && (
+                              <>
+                                <span className="opacity-60">·</span>
+                                <span>{session.detail}</span>
+                              </>
+                            )}
+                            {session.status === "running" && (
+                              <span className="ml-2 text-yellow-500">• Running</span>
+                            )}
+                            {session.status === "error" && (
+                              <span className="ml-2 text-destructive">• Error</span>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    {onArchive && (
+                      <button
+                        type="button"
+                        aria-label="Remove from list"
+                        title="Remove from list (the conversation is kept)"
+                        disabled={archiving.has(session.id)}
+                        onClick={() => void archive(session)}
+                        className={cn(
+                          "m-1 shrink-0 rounded-md p-1.5 text-muted-foreground",
+                          "opacity-0 group-hover:opacity-100 focus:opacity-100",
+                          "hover:bg-background hover:text-foreground disabled:opacity-50",
+                          "focus:outline-none focus:ring-2 focus:ring-ring",
+                        )}
+                      >
+                        {archiving.has(session.id) ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Archive className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             </ScrollArea>

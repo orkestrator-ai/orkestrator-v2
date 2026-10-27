@@ -27,6 +27,7 @@ import {
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator, unconfirmedTurnId } from "./sessions/turn-accumulator.js";
 import { DispatchJournalAdmissionError } from "./sessions/dispatch-journal.js";
+import { recordTypedPrompt } from "./sessions/typed-prompts.js";
 
 import { createMessageId, type NormalizedMessage, type NormalizedPart } from "./messages/types.js";
 
@@ -575,6 +576,11 @@ export class CodexRuntimePrompt {
     const promptWithRecoveredContext = session.recoveredContextPending
       ? buildRecoveredContextPrompt(session.localMessages, executionPrompt)
       : executionPrompt;
+    // A reload rebuilds this row from the rollout, which keeps only what was
+    // sent. Where that cannot be read back as typed (a command's wire form,
+    // the recovered transcript), the typed text is recorded once the turn is
+    // accepted. The plan-mode preamble is stripped on reload without one.
+    const recordsTypedPrompt = promptWithRecoveredContext !== input.prompt;
     const engineInput: EngineUserInput[] = withSkillInput(
       toEngineInput(
         wrapPromptForConversationMode(promptWithRecoveredContext, session.config.mode),
@@ -807,6 +813,21 @@ export class CodexRuntimePrompt {
       });
       session.lastAcceptedRequestId = requestId;
       session.recoveredContextPending = false;
+      if (recordsTypedPrompt) {
+        const sent = engineInput.find(
+          (item): item is Extract<EngineUserInput, { type: "text" }> => item.type === "text",
+        );
+        if (sent) {
+          // Failure-silent and serialized per thread; a reload's read waits for it.
+          void recordTypedPrompt(
+            this.ctx.options.codexHome,
+            context.threadId,
+            turn.turnId,
+            sent.text,
+            userMessage.content,
+          );
+        }
+      }
       // A new accepted user turn supersedes the restart notice for every tab
       // sharing this Codex thread, including tabs restored but not attached.
       const clearedRestartNotices = this.ctx.registry

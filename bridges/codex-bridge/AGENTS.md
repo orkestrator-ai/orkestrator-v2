@@ -27,6 +27,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
 | `src/bridge-state-dir.ts`               | Where session records live; shared across accounts |
 | `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
+| `src/sessions/typed-prompts.ts`         | What was typed for a rewritten prompt, per thread  |
 | `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
 | `src/messages/diff-budget.ts`           | Caps the diff state, the largest memory consumer   |
@@ -196,6 +197,20 @@ own verdicts (a rejected structured result, a lost rebind) add none.
   block, framed by its own open and close tags, so a prompt that mentions a
   tag still renders. A Codex bump re-checks the list (`upgrade-agents.md`;
   `live-resume-context.test.ts`, no credits).
+- Never reload a prompt the bridge rewrote as the text it sent. The live row
+  shows what the user typed; the rollout holds the wire form. The reader
+  strips the exact plan-mode preamble (`stripPlanModePreamble`, so a
+  `<system-reminder>` the user typed stays), and for a `/skill:` command, a
+  template and a recovered-context turn the runtime records the live row's
+  text after `markAccepted` (`sessions/typed-prompts.ts`). A record applies
+  only to the first matching user message of its turn, before synthetic-block
+  heuristics are applied. Independent per-turn files retain every record, and
+  replay loads one turn at a time. Codex's
+  balanced image framing is excluded from matching an attached prompt;
+  anything else, a thread from the Codex CLI included, shows the rollout's
+  text. Changing `PLAN_MODE_PREAMBLE` needs the old wording stripped too, or
+  every earlier plan-mode turn reloads with it. A fork copies its parent's
+  records before its first replay.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

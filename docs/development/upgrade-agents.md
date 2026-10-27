@@ -842,7 +842,10 @@ hermetic `codex exec` exception.
    `turn_aborted` as a developer message; older releases wrote it as a user
    one). A loopback test runs a plain, a skill and an interrupted turn on the
    new binary, without credits, and checks the reload shows only the
-   prompts:
+   prompts. Its second test sends the bridge's rewritten prompts (plan-mode
+   preamble, `$name`, a template expansion, a recovered transcript) and
+   checks the reload still shows them as typed, which depends on Codex
+   persisting the sent text item verbatim (`sessions/typed-prompts.ts`):
 
    ```bash
    CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \

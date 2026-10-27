@@ -9,9 +9,11 @@ with a private `TMPDIR` and found many more directories left behind, plus one
 test that reads the host's real state. This file holds that newly found work;
 0023 does not take new items.
 
-All code items are done (2026-10-26) and a repeat sweep on macOS left only
-intended entries. What remains is a repeat on the original Arch Linux host,
-where `ork-env-move-*` leaked and macOS never reproduced it.
+The code fixes include the review follow-up below (2026-10-27). The macOS
+private-directory sweep left only intended entries. Qualification still needs
+the original Arch Linux host, where `ork-env-move-*` leaked and macOS never
+reproduced it. The repository-wide test result remains non-green; the recorded
+baseline failures must not be read as a passing acceptance run.
 
 ## Current state
 
@@ -35,8 +37,8 @@ where `ork-env-move-*` leaked and macOS never reproduced it.
   | `claude-mcp-sync-*` | `run()` in `session-manager-prompt-mcp-sync.live-probe.ts` removed the root right after `control.close()`; the closing CLI then wrote `home/Library/Caches/claude-cli-nodejs/.../mcp-logs-*` into it. | The probe spawns the CLI through `spawnClaudeCodeProcess` and awaits its exit before the removal. | Yes, 5 before, 0 after. |
   | `ork-runtime-*` | `app-server-runtime-test-harness.ts` removed `CODEX_HOME` in `afterEach` while the runtime's dispatch journal still had a write queued (`orkestrator-bridge/dispatch-journal-*.json`). Seen from the lifecycle and prompt files. | The harness records every runtime it builds and `afterEach` awaits `runtime.stop()` (which drains pending work) before the removal. | Yes, 4 before, 0 after (485 tests). |
   | `orkestrator-state-sync-*`, `ork-terminal-history-*`, `ork-command-registry-data`, `ork-commands-io-history-<pid>` | Closing a terminal disposes its history without awaiting it (`TerminalRuntime.explicitlyCloseSession`), and completion, disposal and pruning write `terminal-history/*/manifest.json` after the command returns. The last two were also fixed paths nothing removed. | New `TerminalHistory.settled()`, awaited after `runtime.shutdown()` by `commands-state-sync.test.ts`, `terminal-history.test.ts`, `commands-io-coverage.test.ts`, `commands-registry-coverage.test.ts` and `environment-move.test.ts`. The two fixed paths are now `mkdtemp` directories removed in `afterAll`. | Yes, all four in the baseline sweep; state-sync also directly (2 before, 0 after). |
-  | `ork-env-move-*` | Not established: the file left none on macOS, alone or under host load average 12 to 19, before or after the change. | Defence in depth: the `afterEach` also settles terminal history, and the roots and the template are named through `ownedTempDirPrefix`, so `sweepStaleTempDirs` at the top of the file removes those of dead owners after an hour. | No. |
-  | `ork-artifact-preview-*` | The backends `apps/backend/tests/standalone.test.ts` starts (the baseline sweep never ran them: its checkout had no `dist/`). Every backend start runs the preview availability probe, whose worker the runner did not track, so a backend stopping mid-probe exited without cancelling it; and a backend whose Tailscale Serve setup failed exited without `backend.shutdown()`. The `transcript-artifacts` tests themselves (323 pass, real Chromium in process mode) left none. | `TranscriptPreviewRunner.close()` cancels the probe's worker and waits for its verified exit; the Serve-failure paths in `main.ts` shut the backend down before rethrowing; scratch is PID-named and swept at startup (Code item 2). | Yes, 5 before, 1 after the `close()` fix, 0 after the `main.ts` fix (two runs). |
+  | `ork-env-move-*` | Not established: the file left none on macOS, alone or under host load average 12 to 19, before or after the change. | Defence in depth: the `afterEach` also settles terminal history, and the roots and the template are named through `ownedTempDirPrefix`, so `sweepStaleTempDirs` at the top of the file removes those of dead owners after an hour and legacy names without a PID after a day. | No. |
+  | `ork-artifact-preview-*` | The backends `apps/backend/tests/standalone.test.ts` starts (the baseline sweep never ran them: its checkout had no `dist/`). Every backend start runs the preview availability probe, whose worker the runner did not track, so a backend stopping mid-probe exited without cancelling it; and a backend whose Tailscale Serve setup failed exited without `backend.shutdown()`. The `transcript-artifacts` tests themselves (323 pass, real Chromium in process mode) left none. | `TranscriptPreviewRunner.close()` cancels the probe's worker and waits for its verified exit; gateway startup in `main.ts` uses `startGatewayServices` to shut the backend down on failure, even if another cleanup rejects; scratch is PID-named and swept at startup (Code item 2). | Yes, 5 before, 1 after the `close()` fix, 0 after the `main.ts` fix (two runs). |
   | `mcp-mgmt-*` | A timer-started apply pass (`McpManagementService.tick`) still wrote `data/mcp-management/operations.json` after `dispose()`; seen from `service-apply.test.ts`. | New `McpManagementService.settled()`; the fixture's `cleanup()` is async, awaits it, and every caller awaits `cleanup()`. | Yes, 1 before, 0 after (441 tests, twice). |
   | `ork-clone-capacity-*` | The last clone the test started was still running at teardown and created `.orkestrator-clone-*` in the removed root. | The test waits for that clone to fail before returning. | Yes, before in the baseline sweep; 0 after in three runs. |
   | `media-stream-*` (a `staging/` directory) | `TranscriptMediaStreams` re-creates its staging root at construction without awaiting it; `dispose()` did not wait, so the `mkdir` landed after the test removed the root. | `dispose()` awaits the staging-root work. | Yes, 3 of 3 before, 0 of 3 after. |
@@ -152,12 +154,91 @@ and
 The unchanged `main` checkout failed the environment-move owner the same way at
 the same load.
 
+## Review follow-up and acceptance evidence (2026-10-27)
+
+- All three `commands-registry-mcp.test.ts` teardown hooks now await fixture
+  cleanup. The `mcp-private-tmp` run passed with **zero `mcp-mgmt-*` roots**
+  remaining under a new private `TMPDIR`. An AST contract test in
+  `tests/unit/mcp-fixture-cleanup.test.ts` checks MCP fixture callers for
+  dropped cleanup promises, including optional calls.
+- `startup-services.ts` owns gateway construction, startup, managed-client
+  configuration and Serve setup until successful handoff. Any failure attempts
+  Serve, managed-client, gateway and backend cleanup independently, awaits each,
+  and rethrows the original startup error. Regression tests cover constructor
+  and gateway rejection, no Tailscale address, rejected `get_config`, missing
+  browser URL, and Serve failure, including rejected cleanup and delayed backend
+  shutdown. Successful managed and standalone startup remain covered too.
+- The environment-move sweep now explicitly opts both prefixes into legacy
+  recovery after **24 hours**; the PID-owned dead-owner limit remains one hour.
+  The ownerless age limit deliberately matches preview scratch recovery rather
+  than assuming an hour-old ownerless directory is unused. A private-root sweep
+  test checks removal of both stale legacy prefixes and retention below a day.
+- Deterministic tests cover image inspection completing after runner close
+  without launching a worker, empty/repeated settlement, terminal writes queued
+  during settlement, and an MCP apply pass queued behind an active pass.
+- The review's captured aggregate was **35,493 passed, 6 failed, 204 not run**,
+  exit 1. It was not a successful acceptance run. The six names are now
+  reconciled with isolated and baseline evidence:
+
+  | Captured failure | Follow-up evidence | Tracking |
+  | --- | --- | --- |
+  | `verified copy helper > a missing listing completion times out as extract-failed` and `a missing root completion times out as extract-failed` | The unchanged owner fails both assertions alone (10 pass, 2 fail), and identically at the actual diff merge base `ce205ad34b9e157ad22eb866b1d159ba6420c992` (10 pass, 2 fail). Both receive extraction status `2` instead of `0`. | Existing cross-owner case [1013](../../tests/flaky-tests/aggregate-validation-runs/1013-interactive-command-main-merge-validation.md); deterministic baseline failures, not newly classified as flakes. |
+  | `pruneProfiles > the age rule applies only when asked for` and `unregisters worktrees the profile made in an outside repository` | The unchanged owner fails both assertions alone (20 pass, 2 fail), and identically on the base revision. Both receive an unexpected macOS `keychainWarning` for the temporary profile outside the default root. | [1013](../../tests/flaky-tests/aggregate-validation-runs/1013-interactive-command-main-merge-validation.md); deterministic baseline failures. |
+  | `Electron backend command registry > injects workspace artifact git excludes into local worktrees before status reads` | Complete unchanged owner passes alone, exit 0 (`previously-failing-commands`, 18.5 s). | Recurrence of [0187](../../tests/flaky-tests/environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md), reopened with this evidence. |
+  | `move_environment > moves a worktree with nested submodules (copy)` | The prior sweep already records owner and unchanged-main evidence for the deadline family. | [0621](../../tests/flaky-tests/environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), also see [1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md). |
+
+The baseline is the merge base of the review's `9791a425...b74e02ce` diff,
+not the newer target tip `9791a425`. Baseline runs use a detached temporary
+worktree with this checkout's installed dependency directories linked in;
+no package or lockfile is changed. These four assertions reproduce before
+0247 and remain outside its temporary-directory cleanup scope. They are
+recorded, not fixed, skipped or weakened by this follow-up.
+
+### Follow-up validation result
+
+`mise run test:logged -- --name review-full -- mise run test` finished with
+exit **1** in 711.7 s: **35,509 passed, 12 failed, 199 skipped**, plus **four
+between-test errors** after environment-move deadlines. Bridges and the Codex
+protocol-lockfile group passed. Root/support had 3,531 passed and the two
+baseline migration failures. Backend had 12,011 passed, 115 skipped, eight
+failed and four errors; desktop had the two baseline Keychain assertions.
+No new regression test failed.
+
+The twelve failures are accounted for as follows:
+
+- The same four baseline assertions in the table above ([1013](../../tests/flaky-tests/aggregate-validation-runs/1013-interactive-command-main-merge-validation.md)).
+- Both nested-submodule moves ([0621](../../tests/flaky-tests/environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md)),
+  failed submodule re-link ([0291](../../tests/flaky-tests/environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md)),
+  and restart recovery ([0248](../../tests/flaky-tests/environments-and-containers/0248-move-restart-recovery-submodule-timeout.md)).
+  The owner-file rerun remained non-green: 34 passed, four deadline failures,
+  four between-test errors, 66.0 s; see [1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md).
+- The explicit/configured worktree-root case (hook timeout) and accepted-alias
+  retarget case (test timeout). The complete unchanged owner passed in 7.5 s;
+  registered as [1107](../../tests/flaky-tests/environments-and-containers/1107-worktree-location-aggregate-timeouts.md).
+- Linked-worktree index and shared-ref watcher deadlines ([0957](../../tests/flaky-tests/environments-and-containers/0957-worktree-index-and-shared-ref-aggregate-timeouts.md)).
+  The unchanged owner rerun also timed out: one passed, three failed, one
+  between-test error, 16.3 s. This run is not reported as passing.
+
+Other validation passed: `mise run check` (format, lint, typecheck; existing
+unused-import warnings remain), `mise run build:backend`, the focused startup,
+settlement, MCP command and preview-isolation tests, the private-TMPDIR MCP
+check, all eleven standalone backend tests, and root sweep/cleanup-contract,
+flake-registry and suite-ownership checks. Browser, Electron, real Docker and
+iOS scenario suites were outside this cleanup change; no Arch Linux host was
+available for the remaining cross-platform qualification.
+
+Failure evidence is retained under the host temporary directory:
+`orkestrator-test-run.TZNWYO/summary.json` and its per-group compressed logs,
+with enclosing `orkestrator-test-run.DCQCrJ/review-full.log.gz`. The aggregate
+is deliberately recorded as non-green despite the targeted fixes passing.
+
 ## Constraints and rationale
 
 - The same rules as 0023: remove a directory in the test that made it, after
   whatever holds it open has closed; await the removal so the process cannot
-  exit first; `tests/temp-sweep.ts` removes a directory only when its PID is
-  dead and it is past the age limit.
+  exit first; `tests/temp-sweep.ts` removes a PID-owned directory only when
+  its PID is dead and it is past the age limit. Legacy ownerless names need
+  an explicit, longer age limit.
 - The `settled()` methods added to production classes (`TerminalHistory`,
   `McpManagementService`) only wait; they change no state, so production
   shutdown order is unchanged.
@@ -181,7 +262,8 @@ None.
 - The repeat sweep on omarchy-hp (Qualification item 2). On macOS
   `ork-env-move-*` was never left, so its Linux writer is unproven. Expected:
   gone, or, if its writer is something other than terminal history, removed
-  by the next run of the file once its owner has exited. Whether the Linux
+  by the next run of the file once its owner has exited and it is over an hour
+  old; legacy names without an owner are eligible after a day. Whether the Linux
   `ork-artifact-preview-*` leftovers had the same cause as the macOS ones
   (the untracked probe) is also unproven there.
 - `sweepStalePreviewScratch` on a real backend start with leftovers present

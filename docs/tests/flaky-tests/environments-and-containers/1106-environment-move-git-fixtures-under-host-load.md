@@ -25,3 +25,23 @@
 - **Hypothesis:** the same family as [0695](0695-environment-move-no-tmux-timeout.md) and [0935](0935-environment-move-cursor-read-failure-timeout.md): Git-heavy fixtures under the generic five-second budget on a contended host. Not established.
 - **Changes:** evidence only; no assertion, timeout or skip was changed.
 - **Next step:** the explicit environment-move fixture budget tracked under 0291 would cover these too.
+
+## 0247 review-follow-up qualification — 2026-10-27
+
+`mise run test:logged -- --name review-environment-move -- bun test --cwd
+apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+remained non-green: 34 passed, four deadline failures and four between-test
+errors, 66.0 s (`orkestrator-test-run.ClEvNo` under the host temporary directory).
+The failures were `moves every file and re-points git (copy)` (5015.19 ms),
+both nested-submodule variants (5037.11 / 8815.24 ms), and `a failed submodule
+re-link restores the original checkout` (5024.27 ms). Terminated Git children
+and removed fixture paths also reported errors after the deadlines.
+
+This run overlaps the required repository suite and other host work; it is
+an owner-file rerun, not proof of an idle-host pass. The existing base-run and
+passing-owner evidence above remains the basis for the deadline-family
+classification. The review follow-up changes this file only to opt legacy
+names into a day-old sweep; its new deterministic private-root sweep test
+passes. No timeout, assertion, skip or move implementation was changed.
+The submodule siblings remain tracked in [0621](0621-environment-move-nested-submodules-aggregate-timeout.md)
+and [0291](0291-environment-move-submodule-aggregate-timeout.md).

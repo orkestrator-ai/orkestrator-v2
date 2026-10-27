@@ -12,7 +12,8 @@ import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { startStandaloneTailscaleServe, TailscaleServeManager } from "./tailscale-serve.js";
+import { TailscaleServeManager } from "./tailscale-serve.js";
+import { startGatewayServices } from "./startup-services.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { instanceEndpoints, publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
@@ -79,8 +80,7 @@ if (options.standaloneUpdaterDir && !standaloneLayoutForService) {
   console.warn("[Backend] --standalone-updater does not match --data-dir; self-update is off");
 }
 
-let gateway: OrkestratorGateway;
-let tailscaleServe: TailscaleServeManager | null = null;
+let gateway!: OrkestratorGateway;
 const managedWebClient = options.desktopWebClient
   ? createManagedWebClient(options.tailscaleExecutable, options.dataDir, options.tailscaleServePort)
   : null;
@@ -106,100 +106,53 @@ const backend = new OrkestratorBackend({
 });
 await backend.init();
 
-gateway = new OrkestratorGateway({
-  previews: backend.previews,
-  backend,
-  dataDir: options.dataDir,
-  rendererRoot: options.rendererRoot,
-  rendererDevServerUrl: options.rendererDevServerUrl,
-  bindAddress:
-    options.tailscaleServe || options.desktopWebClient
-      ? (options.host ?? "127.0.0.1")
-      : options.host,
-  fallbackBindAddress: options.fallbackHost,
-  port: options.port,
-  controlBindAddress: options.controlHost,
-  controlPort: options.controlPort,
-  loopbackClientPort: options.loopbackClientPort,
-  backendHello: () => backend.backendHelloIdentity(),
-  nodeHooks: backend.nodeGateway(),
-  compression: options.compression,
-  allowNonTailscaleBind:
-    options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
-  allowedOrigins: options.allowedOrigins,
-  strictPort: options.strictGatewayPort,
-  agentTestMode: options.runtimeFlavor === "agent-test",
-  agentTestProfile: options.runtimeProfileId,
-  webClientControl: managedWebClient ?? undefined,
-  hostUpdaterControl: options.desktopUpdater
-    ? {
-        snapshot: () => backend.hostMaintenance.snapshotWithImpact(),
-        report: (report) => backend.hostMaintenance.report(report),
-      }
-    : undefined,
+const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
+  createGateway: () => {
+    return (gateway = new OrkestratorGateway({
+      previews: backend.previews,
+      backend,
+      dataDir: options.dataDir,
+      rendererRoot: options.rendererRoot,
+      rendererDevServerUrl: options.rendererDevServerUrl,
+      bindAddress:
+        options.tailscaleServe || options.desktopWebClient
+          ? (options.host ?? "127.0.0.1")
+          : options.host,
+      fallbackBindAddress: options.fallbackHost,
+      port: options.port,
+      controlBindAddress: options.controlHost,
+      controlPort: options.controlPort,
+      loopbackClientPort: options.loopbackClientPort,
+      backendHello: () => backend.backendHelloIdentity(),
+      nodeHooks: backend.nodeGateway(),
+      compression: options.compression,
+      allowNonTailscaleBind:
+        options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
+      allowedOrigins: options.allowedOrigins,
+      strictPort: options.strictGatewayPort,
+      agentTestMode: options.runtimeFlavor === "agent-test",
+      agentTestProfile: options.runtimeProfileId,
+      webClientControl: managedWebClient ?? undefined,
+      hostUpdaterControl: options.desktopUpdater
+        ? {
+            snapshot: () => backend.hostMaintenance.snapshotWithImpact(),
+            report: (report) => backend.hostMaintenance.report(report),
+          }
+        : undefined,
+    }));
+  },
+  reservePorts: (ports) => backend.previews?.reservePorts("gateway", ports),
+  loadWebClientEnabled: async () => {
+    const config = await backend.invoke<{ global?: { webClientEnabled?: boolean } }>("get_config");
+    return config.global?.webClientEnabled ?? true;
+  },
+  shutdownBackend: () => backend.shutdown(),
+  managedWebClient,
+  tailscaleServe: options.tailscaleServe,
+  tailscaleServePort: options.tailscaleServePort,
+  createTailscaleServe: () => new TailscaleServeManager(options.tailscaleExecutable),
+  logger: console,
 });
-
-const gatewayInfo = await gateway.start();
-if (!gatewayInfo) {
-  throw new Error(
-    "No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --allow-non-tailscale-bind for local development.",
-  );
-}
-
-// The gateway's own listeners can never become preview targets.
-backend.previews?.reservePorts(
-  "gateway",
-  [
-    gatewayInfo.port,
-    gatewayInfo.browserUrl ? Number(new URL(gatewayInfo.browserUrl).port) : 0,
-    gatewayInfo.loopbackClientUrl ? Number(new URL(gatewayInfo.loopbackClientUrl).port) : 0,
-  ].filter((port) => port > 0),
-);
-
-let info = gatewayInfo;
-if (managedWebClient) {
-  managedWebClient.setBrowserListenerUrl(gatewayInfo.browserUrl);
-  const config = await backend.invoke<{ global?: { webClientEnabled?: boolean } }>("get_config");
-  void managedWebClient
-    .setEnabled(config.global?.webClientEnabled ?? true)
-    .catch((error: unknown) => {
-      console.error(
-        `[TailscaleServe] Failed to initialize desktop web access: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-  info = {
-    ...gatewayInfo,
-    // The browser listener itself is loopback-only. Its public HTTPS URL is
-    // authoritative in ManagedWebClient and may become available after this
-    // backend readiness message has already been emitted.
-    browserUrl: undefined,
-    browserError: undefined,
-  };
-} else if (options.tailscaleServe) {
-  const browserUrl = gatewayInfo.browserUrl;
-  if (!browserUrl) {
-    await gateway.stop();
-    await backend.shutdown().catch(() => undefined);
-    throw new Error("Tailscale Serve requires an available browser listener");
-  }
-  tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
-  try {
-    const tailscaleUrl = await startStandaloneTailscaleServe(
-      tailscaleServe,
-      browserUrl,
-      options.tailscaleServePort,
-    );
-    console.info(`[TailscaleServe] Available at ${tailscaleUrl}`);
-    info = { ...gatewayInfo, browserUrl: tailscaleUrl };
-  } catch (error) {
-    await tailscaleServe.stop().catch(() => undefined);
-    await gateway.stop();
-    // The backend has started work of its own (the artifact preview probe's
-    // worker and its scratch directory); stop it before the process exits.
-    await backend.shutdown().catch(() => undefined);
-    throw error;
-  }
-}
 
 // Command nodes register these on their leaves, so a client that loaded this
 // node's portal can reach a leaf directly.

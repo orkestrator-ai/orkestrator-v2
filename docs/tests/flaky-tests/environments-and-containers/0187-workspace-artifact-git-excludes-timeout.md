@@ -1,7 +1,7 @@
 # 0187 — Workspace artifact Git excludes aggregate timeout
 
 - **ID:** 0187
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-11
 
 ## Observation — 2026-10-11
@@ -176,7 +176,7 @@ The unchanged owning file then passed `mise run test:logged -- --name merge-clea
 
 ## Resolution — 2026-10-20
 
-- **Status:** resolved
+- **Status:** open
 - **Shared root cause (shared fixture state, not slow Git):** `createCommandFixtures()`
   gives every context the same default data directory,
   `$TMPDIR/orkestrator-command-tests`. Every command-fixture file in every
@@ -267,3 +267,14 @@ The unchanged owning file then passed `mise run test:logged -- --name merge-clea
     pass for the file.
 
 - **Consolidation (2026-10-20):** the per-process data directory and the copied origin/worktree template were moved from the owning test files into `apps/backend/tests/command-fixtures.ts`, so every command-fixture file now gets its own data directory (removed in the fixture's `afterAll` after cancelling scheduled cleanup and closing the ledger). The 28 command-fixture files plus the coordinator and worktree-snapshot owners passed together afterwards: 582 passed, 1 skipped, 0 failed.
+
+## Recurrence during 0247 validation (2026-10-27 follow-up)
+
+The review of `b74e02ce0` captured the same artifact-excludes case timing out
+at five seconds in `mise run test` (the full run had six failures). The
+complete unchanged `commands-integration.test.ts` owner then passed alone:
+`mise run test:logged -- --name previously-failing-commands -- bun test
+--cwd apps/backend ./tests/commands-integration.test.ts --parallel=1 --only-failures`,
+exit 0, 18.5 s. Reopened on this evidence; this establishes a recurrence of
+the timeout, not that the previously fixed shared-ledger cause has returned.
+No deadline or assertion was changed.

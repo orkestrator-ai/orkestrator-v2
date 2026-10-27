@@ -29,7 +29,12 @@ import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../tests/temp-s
 // tests passed; on macOS the file leaves none, so the writer is unproven.
 // Roots carry their owner's PID and a later run removes those of dead owners.
 const TEMP_PREFIXES = ["ork-env-move-", "ork-env-move-template-"];
-sweepStaleTempDirs({ prefix: TEMP_PREFIXES, maxAgeMs: 60 * 60 * 1_000 });
+sweepStaleTempDirs({
+  prefix: TEMP_PREFIXES,
+  maxAgeMs: 60 * 60 * 1_000,
+  // Legacy roots have no owner to check; allow a full day before recovery.
+  legacyMaxAgeMs: 24 * 60 * 60 * 1_000,
+});
 
 const roots: string[] = [];
 const runtimes: BackendRuntime[] = [];

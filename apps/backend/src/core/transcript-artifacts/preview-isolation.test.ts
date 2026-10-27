@@ -6,7 +6,7 @@
  * bounded reaper confirms the boundary is gone, and Mermaid math labels are
  * refused with a specific diagnostic.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -27,6 +27,8 @@ import {
   type SupervisedJob,
   type SupervisedOutcome,
 } from "./preview-supervisor.js";
+
+import * as supervisor from "./preview-supervisor.js";
 
 const FAKE_WORKER = path.join(import.meta.dir, "fixtures", "fake-preview-worker.ts");
 
@@ -294,6 +296,37 @@ describe("capacity after an unverified worker exit", () => {
 });
 
 describe("closing the runner", () => {
+  test("does not launch a worker when Docker inspection finishes after close", async () => {
+    const inspection = Promise.withResolvers<{ code: number | null; stdout: string }>();
+    const inspect = spyOn(supervisor, "runDocker").mockImplementation(() => inspection.promise);
+    let launches = 0;
+    const target = create({
+      isolation: "container",
+      container: { docker: "/fixture/docker", image: "fixture-image", user: "1000" },
+      supervise: () => {
+        launches++;
+        throw new Error("worker launched after close");
+      },
+    });
+    try {
+      const probing = target.probe(true);
+      expect(inspect).toHaveBeenCalledWith("/fixture/docker", [
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "fixture-image",
+      ]);
+      await target.close();
+      inspection.resolve({ code: 0, stdout: "sha256:fixture" });
+      expect((await probing).available).toBe(false);
+      expect(launches).toBe(0);
+    } finally {
+      inspection.resolve({ code: 0, stdout: "sha256:fixture" });
+      inspect.mockRestore();
+    }
+  });
+
   test("cancels a running probe and waits for its worker's exit", async () => {
     let cancelled = false;
     let resolveOutcome!: (outcome: SupervisedOutcome) => void;

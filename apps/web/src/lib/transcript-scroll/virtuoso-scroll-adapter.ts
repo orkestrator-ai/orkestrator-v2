@@ -44,7 +44,9 @@ export function readScrollMetrics(scroller: HTMLElement): ScrollMetrics {
  * `cancelPendingNavigation` comes from `patches/react-virtuoso@4.18.19.patch`:
  * it retires the library's list-refresh retry window, smooth-target listener
  * and cleanup timer, and its queued automatic-follow work, all synchronously.
- * Bumping an application generation alone cannot stop those.
+ * Bumping an application generation alone cannot stop those. A retired index
+ * navigation still reports its target reached, so a restored snapshot's
+ * initial location cannot leave the item list `visibility: hidden`.
  */
 export class VirtuosoScrollAdapter {
   /** Positioning writes issued (handle commands and direct scroller writes). */

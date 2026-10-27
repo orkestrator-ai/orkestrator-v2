@@ -219,6 +219,62 @@ describe("patched Virtuoso navigation cancellation", () => {
     const { writes, before } = await shrinkViewport(false);
     expect(writes.tops.length).toBe(before);
   });
+
+  /**
+   * A restored snapshot is an initial location: the library keeps its item
+   * list `visibility: hidden` until that navigation reports its target
+   * reached. A cancellation landing inside the navigation's refresh window
+   * (the scroll controller starting activation on a remounted tab) must still
+   * reveal the list, or the transcript stays blank until it remounts.
+   */
+  async function restoreSnapshot(cancel: boolean) {
+    const handle = createRef<VirtuosoHandle>();
+    const writes: Writes = { tops: [] };
+    const restoreStateFrom = {
+      ranges: [{ startIndex: 0, endIndex: 199, size: ITEM }],
+      scrollTop: 3000,
+    };
+    let cancelled = false;
+    render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: VIEWPORT, itemHeight: ITEM }}>
+        <Virtuoso
+          ref={handle}
+          totalCount={200}
+          restoreStateFrom={restoreStateFrom}
+          itemContent={(index) => <div style={{ height: ITEM }}>row {index}</div>}
+          scrollerRef={(element) => {
+            if (!(element instanceof HTMLElement)) return;
+            instrument(element, () => 200, writes);
+            const write = element.scrollTo.bind(element);
+            element.scrollTo = ((options: ScrollToOptions) => {
+              write(options);
+              if (cancel && !cancelled) {
+                cancelled = true;
+                queueMicrotask(() => handle.current!.cancelPendingNavigation());
+              }
+            }) as typeof element.scrollTo;
+          }}
+          style={{ height: VIEWPORT }}
+        />
+      </VirtuosoMockContext.Provider>,
+    );
+    await wait(1300);
+    const list = document.querySelector<HTMLElement>("[data-testid=virtuoso-item-list]");
+    return { writes, cancelled, visibility: list?.style.visibility ?? null };
+  }
+
+  test("control: a restored snapshot reveals the list once its initial location is reached", async () => {
+    const { writes, visibility } = await restoreSnapshot(false);
+    expect(writes.tops).toContain(3000);
+    expect(visibility).not.toBe("hidden");
+  });
+
+  test("cancelling the restore navigation inside its refresh window still reveals the list", async () => {
+    const { writes, cancelled, visibility } = await restoreSnapshot(true);
+    expect(cancelled).toBe(true);
+    expect(writes.tops).toContain(3000);
+    expect(visibility).not.toBe("hidden");
+  });
 });
 
 describe("firstItemIndex with the real virtualizer", () => {

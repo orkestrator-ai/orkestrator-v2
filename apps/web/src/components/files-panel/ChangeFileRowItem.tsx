@@ -49,7 +49,7 @@ function splitPath(path: string): { directory: string; filename: string } {
   const index = path.lastIndexOf("/");
   return index < 0
     ? { directory: "", filename: path }
-    : { directory: path.slice(0, index + 1), filename: path.slice(index + 1) };
+    : { directory: path.slice(0, index), filename: path.slice(index + 1) };
 }
 
 /** A complete zero is a recorded outcome; the row leaves it implicit, as before. */

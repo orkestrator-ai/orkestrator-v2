@@ -10,6 +10,8 @@
  * every node, not just reviewers.
  */
 
+import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
+import type { ReviewerPollGate } from "./review-fanout.js";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
@@ -73,4 +75,24 @@ export async function recordPipelineSessionUsage(
     );
     return false;
   }
+}
+
+/** Wait across supervisor passes, with a durable bound that survives restarts. */
+export function deferPipelineSessionUsage(
+  session: PipelineSession,
+  pending: boolean | undefined,
+  gate?: ReviewerPollGate,
+): boolean {
+  const polls = session.usageFinalizationPolls ?? 0;
+  const scope = `${session.sessionKey}\0${session.turnStartedAt ?? session.startedAt}\0usage`;
+  if (
+    pending !== true ||
+    polls >= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS ||
+    gate?.exhausted(scope, polls, REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS)
+  ) {
+    gate?.clear(scope);
+    return false;
+  }
+  if (!gate || gate.count(scope)) session.usageFinalizationPolls = polls + 1;
+  return true;
 }

@@ -55,3 +55,39 @@ outside the change, and each either fails the same way on the clean
 `origin/main` clone or fails and passes on identical files on both trees
 across runs. No assertion, deadline, skip or implementation in an unrelated
 owner was changed.
+
+
+## Review-fix validation, 2026-10-27
+
+On parent `eb6fdc5cc`, the follow-up fixes add bounded delayed-usage polling for
+ordinary stages and consolidation, retain terminal error usage, and stamp settled
+and paused sessions. The focused supervisor, review fan-out and session-usage
+owners passed after the final code edits. The protocol validator, pipeline graph
+rendering and five-running-reviewer layout regressions passed as well.
+`mise run check` passed, including format, lint and types. The `PipelineFlow`
+and `MultiReviewFlow` Playwright specs passed on desktop and mobile (123.0 s).
+
+The aggregate `mise run test` exited 1 after 815.2 s, with failures outside the
+changed implementation and regression-test files. Backend finished with 12,580
+passed, 123 skipped and 29 failed tests. Its web group passed 10,196 tests
+(10 skipped), and protocol passed 2,069 (2 skipped). Root repeated the two
+`migrate-copy` extract-status failures; desktop repeated the two profile-cleanup
+failures. Backend repeated environment-move, checkout-alias watcher and
+lifecycle/Git fixture failures. These overlap the unchanged owners already
+investigated above and in [1171](1171-orkestrator-permission-rules-0723-validation.md).
+The suite is not green; no unrelated assertion, timeout or skip was changed.
+
+Additional complete-owner reruns with `--parallel=1`:
+
+| Owner | Result |
+| --- | --- |
+| Claude `session-manager-persistence.test.ts` | 99 passed, 1 skipped, 1 failed: undefined `sessionManagerTestHome` in cleanup. |
+| Claude `session-manager-lifecycle.test.ts` | 38 passed, 1 failed: the same undefined cleanup variable. Both offending lines are unchanged in `eb6fdc5cc`. |
+| Backend `commands-registry-environments.test.ts` | 63 passed, 5 failed, 1 between-test error: lifecycle hook deadlines and missing expected local Git push configuration. |
+| Backend `commands-registry-environments-create.test.ts` | 51 passed, 1 failed: persisted prompt-rename hook deadline. The aggregate hit a different lifecycle hook in this owner, so this rerun does not establish a flake. |
+
+The isolated failed-owner artifacts are `orkestrator-test-run.OPz7Wm`,
+`orkestrator-test-run.QZzURC`, `orkestrator-test-run.ZJo2yQ` and
+`orkestrator-test-run.Nw7myU` under the host temporary directory. The aggregate
+run uses `orkestrator-test-run.4jZ6Sl` with group logs in
+`orkestrator-test-run.wzP9nR`.

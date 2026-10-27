@@ -7,6 +7,7 @@ import {
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewLabel,
 } from "@orkestrator/protocol/build-pipeline";
+import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,
@@ -878,6 +879,58 @@ describe("build pipeline multi-model review", () => {
       expect(addressing.error ?? addressing.phase).toBe("addressing");
     });
   });
+
+  test.each([false, true])(
+    "bounds delayed consolidation usage (never finalizes: %s)",
+    async (neverFinalizes) => {
+      await withPipeline(async ({ service, read, provider }) => {
+        const originalObserve = provider.observeSession.bind(provider);
+        let pending = true;
+        let polls = 0;
+        provider.observeSession = async (sessionId) => {
+          const observation = await originalObserve(sessionId);
+          if (!sessionId.includes("consolidation")) return observation;
+          polls++;
+          return {
+            ...observation,
+            usagePending: pending,
+            ...(!pending ? { contextUsage: { usedTokens: 20, sessionTokens: 8_000 } } : {}),
+          };
+        };
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let attempt = 0; polls === 0 && attempt < 20; attempt++)
+          await service.advanceNow(started.id);
+        const waiting = await read(started.id);
+        expect(waiting.phase).toBe("reviewing");
+        const session = waiting.sessions.find((entry) => entry.label === "Consolidation")!;
+        expect(session.usageFinalizationPolls).toBe(1);
+        expect(session.completedAt).toBeDefined();
+        if (neverFinalizes) {
+          for (let poll = 2; poll <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS; poll++) {
+            await service.advanceNow(started.id);
+            expect((await read(started.id)).phase).toBe("reviewing");
+          }
+        } else {
+          pending = false;
+        }
+        await service.advanceNow(started.id);
+        const addressed = await read(started.id);
+        expect(addressed.phase).toBe("addressing");
+        const settled = addressed.sessions.find(
+          (entry) => entry.sessionKey === session.sessionKey,
+        )!;
+        expect(settled.completedAt).toBe(session.completedAt);
+        expect(settled.tokenCount).toBe(neverFinalizes ? undefined : 8_000);
+        expect(polls).toBe(neverFinalizes ? REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS + 1 : 2);
+      });
+    },
+  );
 
   test("throttles pure streaming transcript persistence", async () => {
     await withPipeline(

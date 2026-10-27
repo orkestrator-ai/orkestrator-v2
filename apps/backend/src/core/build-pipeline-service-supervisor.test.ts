@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, setSystemTime, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
@@ -22,6 +22,7 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
+import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -228,6 +229,7 @@ async function withService(
       >;
     },
   ) => Promise<void>,
+  options: { transcriptPersistIntervalMs?: number } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
   const storage = new StorageService(dataDir);
@@ -352,6 +354,7 @@ async function withService(
   };
   const service = new BuildPipelineService(storage, invoke, {
     autoAdvance: false,
+    ...options,
     provider: async () => provider,
   });
   try {
@@ -812,10 +815,14 @@ describe("BuildPipelineService", () => {
 
       const paused = await service.pause(started.id);
       expect(paused.phase).toBe("paused");
+      expect(paused.sessions[0]!.completedAt).toBeDefined();
+      expect(paused.sessions[0]!.tokenCount).toBeUndefined();
       expect(aborted).toBe(running.sessions[0]?.sdkSessionId ?? "");
 
       const resumed = await service.resume(started.id);
       expect(resumed.phase).toBe("building");
+      expect(resumed.sessions[0]!.completedAt).toBeUndefined();
+      expect(resumed.sessions[0]!.usageFinalizationPolls).toBeUndefined();
       const cancelled = await service.cancel(started.id);
       expect(cancelled).toMatchObject({
         phase: "failed",
@@ -1661,7 +1668,124 @@ describe("BuildPipelineService", () => {
       const build = settled.sessions.find((entry) => entry.sessionKey === session.sessionKey)!;
       expect(build.status).toBe("idle");
       expect(build.tokenCount).toBe(5_400);
+      expect(build.completedAt).toBeDefined();
     });
+  });
+
+  test("waits for delayed terminal usage and preserves the first completion time", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session } = await startBuilding(service, storage);
+      provider.observeSession = async () => ({ status: "idle", usagePending: true });
+      await service.advanceNow(started.id);
+      const pending = await pipeline(storage, started.id);
+      expect(pending.phase).toBe("building");
+      expect(pending.sessions[0]!.usageFinalizationPolls).toBe(1);
+      const completedAt = pending.sessions[0]!.completedAt;
+      expect(completedAt).toBeDefined();
+
+      provider.observeSession = async () => ({
+        status: "idle",
+        contextUsage: { usedTokens: 20, sessionTokens: 6_000 },
+      });
+      await service.advanceNow(started.id);
+      const settled = await pipeline(storage, started.id);
+      expect(settled.phase).toBe("reviewing");
+      expect(
+        settled.sessions.find((entry) => entry.sessionKey === session.sessionKey),
+      ).toMatchObject({
+        tokenCount: 6_000,
+        completedAt,
+      });
+    });
+  });
+
+  test("advances after the bounded terminal usage wait when usage never arrives", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started } = await startBuilding(service, storage);
+      provider.observeSession = async () => ({ status: "idle", usagePending: true });
+      for (let poll = 1; poll <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS; poll++) {
+        await service.advanceNow(started.id);
+        const pending = await pipeline(storage, started.id);
+        expect(pending.phase).toBe("building");
+        expect(pending.sessions[0]!.usageFinalizationPolls).toBe(poll);
+      }
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+    });
+  });
+
+  test.each(["available", "unreadable", "meter-fails"])(
+    "retains terminal error usage and the original failure with a %s transcript",
+    async (transcript) => {
+      await withService(async (service, storage, provider) => {
+        const { started } = await startBuilding(service, storage);
+        provider.observeSession = async () => ({
+          status: "error",
+          error: "original provider failure",
+          ...(transcript === "meter-fails"
+            ? {}
+            : {
+                contextUsage: { usedTokens: 20, sessionTokens: 9_000 },
+              }),
+        });
+        if (transcript === "unreadable")
+          provider.messages = async () => {
+            throw new Error("transcript unavailable");
+          };
+        if (transcript === "meter-fails")
+          provider.usageFromMessages = () => {
+            throw new Error("meter unavailable");
+          };
+        await service.advanceNow(started.id);
+        const failed = await pipeline(storage, started.id);
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toBe(
+          `The ${failed.sessions[0]!.label.toLowerCase()} failed: original provider failure`,
+        );
+        expect(failed.sessions[0]!.tokenCount).toBe(
+          transcript === "meter-fails" ? undefined : 9_000,
+        );
+      });
+    },
+  );
+
+  test("persists usage-only changes on the configured interval after a running checkpoint", async () => {
+    try {
+      setSystemTime(new Date("2026-10-27T12:00:00.000Z"));
+      await withService(
+        async (service, storage, provider) => {
+          let tokens = 100;
+          provider.observeSession = async () => ({
+            status: "running",
+            contextUsage: { usedTokens: 20, sessionTokens: tokens },
+          });
+          const { started } = await startBuilding(service, storage);
+          await service.advanceNow(started.id);
+          const before = (await storage.getBuildPipeline(started.id))!;
+          const checkpoint = (before.snapshot as BuildPipeline).sessions[0]!.messagesPersistedAt;
+          expect(checkpoint).toBeDefined();
+          tokens = 200;
+          setSystemTime(new Date("2026-10-27T12:00:59.999Z"));
+          await service.advanceNow(started.id);
+          expect((await storage.getBuildPipeline(started.id))!.revision).toBe(before.revision);
+          expect((await pipeline(storage, started.id)).sessions[0]!.tokenCount).toBe(100);
+          setSystemTime(new Date("2026-10-27T12:01:00.000Z"));
+          await service.advanceNow(started.id);
+          const after = (await storage.getBuildPipeline(started.id))!;
+          expect(after.revision).toBe(before.revision + 1);
+          expect((after.snapshot as BuildPipeline).sessions[0]).toMatchObject({
+            status: "running",
+            tokenCount: 200,
+          });
+          expect((after.snapshot as BuildPipeline).sessions[0]!.messagesPersistedAt).not.toBe(
+            checkpoint,
+          );
+        },
+        { transcriptPersistIntervalMs: 60_000 },
+      );
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("meters a running stage from its transcript when the provider reports usage there", async () => {

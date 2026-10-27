@@ -498,13 +498,33 @@ describe("layout", () => {
     expect(tall.height).toBeGreaterThan(short.height);
   });
 
-  test("keeps the designed height up to five reviewers and grows beyond", () => {
+  test("keeps compact reviewers at the designed height up to five and grows beyond", () => {
     const height = (count: number) =>
       multiReviewFlowLayout({ width: 1440, reviewerCount: count, packageHasChips: true }).height;
     expect(height(1)).toBe(FLOW_GRAPH_MIN_HEIGHT);
     expect(height(4)).toBe(FLOW_GRAPH_MIN_HEIGHT);
     expect(height(5)).toBe(FLOW_GRAPH_MIN_HEIGHT);
     expect(height(8)).toBeGreaterThan(FLOW_GRAPH_MIN_HEIGHT);
+  });
+
+  test("fits five running reviewers with the component's computed runtime heights", () => {
+    const runtime = { elapsed: "1m", tokens: null, tokensPending: true, live: true };
+    const running = flowNodeHeight({ state: "running", runtime });
+    const layout = multiReviewFlowLayout({
+      width: 1440,
+      reviewerCount: 5,
+      packageHasChips: true,
+      nodeHeights: { reviewers: Array.from({ length: 5 }, () => running) },
+    });
+    expect(layout.height).toBe(530);
+    expect(layout.height).toBeGreaterThan(FLOW_GRAPH_MIN_HEIGHT);
+    for (const [index, node] of layout.reviewers.entries()) {
+      expect(node.height).toBe(running);
+      expect(node.y).toBeGreaterThanOrEqual(48);
+      expect(node.y + node.height).toBeLessThanOrEqual(layout.height);
+      for (const other of layout.reviewers.slice(index + 1))
+        expect(overlaps(node, other)).toBe(false);
+    }
   });
 
   test("matches the design at full width and gives nodes their room first when narrower", () => {

@@ -451,6 +451,34 @@ describe("node face rows", () => {
     ]);
   });
 
+  test.each([false, true])("renders a production-shaped idle Build (paused: %s)", (paused) => {
+    renderPipelineTab(
+      build({
+        phase: paused ? "paused" : "reviewing",
+        ...(paused ? { pausedFromPhase: "building" as const } : {}),
+        agentType: "claude",
+        sessions: [
+          {
+            phase: "build",
+            iteration: 0,
+            sessionKey: "build",
+            sdkSessionId: "build-session",
+            status: "idle",
+            startedAt: "2026-07-29T00:00:00.000Z",
+            label: "Build Session",
+            ...(paused ? { completedAt: "2026-07-29T00:00:50.000Z" } : { tokenCount: 1_200 }),
+          },
+        ],
+      }),
+    );
+    const node = graphNode("Build");
+    expect(node.getAttribute("data-flow-state")).toBe(paused ? "paused" : "complete");
+    expect(screen.getByLabelText("Build runtime and token usage").textContent).toBe(
+      paused ? "50s" : "1.2k tokens",
+    );
+    expect(node.style.height).toBe("82px");
+  });
+
   test("a finished node keeps its final runtime on the third row", () => {
     renderPipelineTab(
       build({

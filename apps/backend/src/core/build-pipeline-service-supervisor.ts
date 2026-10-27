@@ -104,6 +104,7 @@ import {
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import {
   recordPipelineSessionUsage,
+  deferPipelineSessionUsage,
   sharedTranscriptRead,
 } from "./build-pipeline-session-usage.js";
 import {
@@ -516,6 +517,7 @@ export class BuildPipelineSupervisor {
       retainedContinuationRequestIds,
       interruption,
       contextUsage,
+      usagePending,
     } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
@@ -538,6 +540,23 @@ export class BuildPipelineSupervisor {
     }
     if (status === "missing") {
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
+    }
+    if (status === "error") {
+      // Usage must survive failure handling, including when the transcript is
+      // unreadable. Meter the observation independently of that best-effort read.
+      await recordPipelineSessionUsage(session, provider, contextUsage, undefined);
+      try {
+        const transcript = sharedTranscriptRead(provider, session.sdkSessionId);
+        await this.refreshMovedTranscript(session, provider, {
+          force: true,
+          read: transcript.read,
+        }).catch(() => false);
+        await recordPipelineSessionUsage(session, provider, contextUsage, transcript.taken());
+        session.completedAt ??= new Date().toISOString();
+        await this.ctx.save(pipeline, pipeline.backendRevision);
+      } catch {
+        // Metering/checkpoint failures must not replace the provider's failure.
+      }
     }
     if (status === "error" && interruption === "restart") {
       // A submitted result survives the process that produced it. Otherwise
@@ -657,6 +676,8 @@ export class BuildPipelineSupervisor {
 
     const wasRunning = session.status === "running";
     session.status = "idle";
+    const completionChanged = session.completedAt === undefined;
+    session.completedAt ??= new Date().toISOString();
     delete pipeline.stallWarning;
     // The turn ended, and its artifact grant with it.
     this.ctx.settleArtifactTurn(
@@ -681,13 +702,27 @@ export class BuildPipelineSupervisor {
     );
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
-    if (wasRunning || transcriptChanged || usageChanged) {
+    const previousUsagePolls = session.usageFinalizationPolls;
+    const waitForUsage = deferPipelineSessionUsage(session, usagePending, {
+      count: (scope) => this.ctx.reviewerPollGate.count(scope, this.ctx.passTrigger(pipeline.id)),
+      exhausted: (scope, count, limit) => this.ctx.reviewerPollGate.exhausted(scope, count, limit),
+      clear: (scope) => this.ctx.reviewerPollGate.clear(scope),
+    });
+    if (
+      wasRunning ||
+      completionChanged ||
+      transcriptChanged ||
+      usageChanged ||
+      previousUsagePolls !== session.usageFinalizationPolls
+    ) {
       // The turn is over, so this is the final transcript. Persist it now
       // rather than leaving the throttled tail to whichever branch runs next —
       // several of them return without saving.
       session.messagesPersistedAt = new Date().toISOString();
       await this.ctx.save(pipeline, pipeline.backendRevision);
     }
+
+    if (waitForUsage) return;
 
     if (pipeline.reviewRetryRequested) {
       delete pipeline.reviewRetryRequested;
@@ -938,6 +973,8 @@ export class BuildPipelineSupervisor {
       session.resultSubmission = session.resultTransport === "tool-v1" ? "preparing" : undefined;
       session.structuredResultStatus = "pending";
       session.turnStartedAt = startedAt;
+      delete session.completedAt;
+      delete session.usageFinalizationPolls;
       pipeline.pendingPromptAttempt = {
         dispatchVersion: 1,
         id: randomUUID(),
@@ -1196,6 +1233,8 @@ export class BuildPipelineSupervisor {
       startedAt,
     };
     session.turnStartedAt = startedAt;
+    delete session.completedAt;
+    delete session.usageFinalizationPolls;
     delete pipeline.stallWarning;
     await this.ctx.save(pipeline, pipeline.backendRevision);
     await this.dispatchPending(pipeline, provider);
@@ -1724,6 +1763,8 @@ export class BuildPipelineSupervisor {
     const startedAt = new Date().toISOString();
     session[followUp.spend] = true;
     session.turnStartedAt = startedAt;
+    delete session.completedAt;
+    delete session.usageFinalizationPolls;
     delete session.structuredWaitStartedAt;
     if (previousRequestId) {
       session.structuredRequestId = requestId;

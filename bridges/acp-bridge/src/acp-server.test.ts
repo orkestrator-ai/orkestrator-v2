@@ -143,7 +143,7 @@ describe("ACP bridge", () => {
     const dispatch = await nativeFetch(`${base}/session/${id}/dispatch?requestId=malformed`, {
       headers,
     });
-    expect(await dispatch.json()).toMatchObject({ dispatch: "unknown" });
+    expect(await dispatch.json()).toMatchObject({ dispatch: "absent" });
   });
 
   test("recreating a session under a stricter boundary restarts its agent", async () => {

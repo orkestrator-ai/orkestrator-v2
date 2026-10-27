@@ -281,6 +281,17 @@ The unchanged owning file then passed `mise run test:logged -- --name merge-clea
   its hook deadline in a loaded aggregate. Cause not established. See
   [1101](../aggregate-validation-runs/1101-codex-typed-prompts-0211-validation.md).
 
+## Recurrence during 0247 validation (2026-10-27 follow-up)
+
+The review of `b74e02ce0` captured the same artifact-excludes case timing out
+at five seconds in `mise run test` (the full run had six failures). The
+complete unchanged `commands-integration.test.ts` owner then passed alone:
+`mise run test:logged -- --name previously-failing-commands -- bun test
+--cwd apps/backend ./tests/commands-integration.test.ts --parallel=1 --only-failures`,
+exit 0, 18.5 s. Reopened on this evidence; this establishes a recurrence of
+the timeout, not that the previously fixed shared-ledger cause has returned.
+No deadline or assertion was changed.
+
 ## Recurrence — 2026-10-27
 
 On the todo 0160 branch (`0d325203a`, base `863b57821`), `mise run test` at

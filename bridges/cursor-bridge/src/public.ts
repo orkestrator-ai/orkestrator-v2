@@ -15,7 +15,7 @@ import {
   type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
-import { PROVIDER } from "./config.js";
+import { MAX_PROMPT_REQUEST_ID_BYTES, PROVIDER } from "./config.js";
 import { cursorAppliedPolicy } from "./execution-policy.js";
 import { contextWindowForModelId, publishedComposer } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
@@ -168,7 +168,18 @@ export function publicActivity(state: SessionState): JsonObject {
  * `DISPATCH_OUTCOME_LOST_KIND`: never `dispatched`, and never "not sent" —
  * the caller would run the same turn twice. This process's own failed send
  * (`sendFailed`, which a retry may still deliver) and a local reply are not
- * lost. Everything else is `unknown`.
+ * lost.
+ *
+ * `absent` is the one negative, and an assertion: the id has no record of any
+ * state and the session's journal is complete (`promptJournalComplete`: a
+ * session this bridge created with a new agent, loaded whole after every
+ * restart, nothing evicted), so no bridge process ever handed it to the SDK.
+ * Every send is journaled and published first. It is never answered while
+ * the session is closing, nor while a prompt claim is in flight, because that
+ * claim may be this very id before its prepared record exists; nor for an id
+ * the prompt route would not take verbatim (it trims, and bounds the length),
+ * since a record could sit under its trimmed form. Everything else is
+ * `unknown`.
  */
 export function publicDispatch(state: SessionState, requestId: string): JsonObject {
   const entry = requestId ? state.promptJournal.get(requestId) : undefined;
@@ -179,8 +190,21 @@ export function publicDispatch(state: SessionState, requestId: string): JsonObje
     ? "dispatched"
     : lost
       ? "lost"
-      : "unknown";
+      : !entry && provablyNeverSent(state, requestId)
+        ? "absent"
+        : "unknown";
   return { dispatch };
+}
+
+function provablyNeverSent(state: SessionState, requestId: string): boolean {
+  return (
+    state.promptJournalComplete === true &&
+    !state.closed &&
+    !state.dispatching &&
+    requestId.length > 0 &&
+    requestId === requestId.trim() &&
+    Buffer.byteLength(requestId) <= MAX_PROMPT_REQUEST_ID_BYTES
+  );
 }
 
 export function publicContextUsage(state: SessionState): NativeAgentContextUsage | undefined {

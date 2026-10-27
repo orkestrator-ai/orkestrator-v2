@@ -316,7 +316,6 @@ describeLive("live refused calls", () => {
         if (event.type === "session.idle") idle();
       },
       loadCachedModels: async () => ({ models: [], source: "fallback" }),
-      generateTitle: async () => "refused cells probe",
       sweepIntervalMs: 0,
     });
     try {
@@ -412,7 +411,6 @@ describeLive("live refused calls", () => {
         if (event.type === "session.idle") idle();
       },
       loadCachedModels: async () => ({ models: [], source: "fallback" }),
-      generateTitle: async () => "interrupted cell probe",
       sweepIntervalMs: 0,
     });
     try {

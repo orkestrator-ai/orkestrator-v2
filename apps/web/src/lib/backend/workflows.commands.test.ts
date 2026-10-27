@@ -7,6 +7,7 @@ import {
   getNativeAgentDiscoveryUpdate,
   getNativeAgentProjectionUpdate,
   refreshNativeAgentCommands,
+  setNativeAgentResumableSessionArchived,
 } from "./workflows";
 
 // `@/lib/native/backend` is replaced once for every suite in tests/setup.ts.
@@ -18,6 +19,26 @@ afterEach(() => {
 });
 
 describe("native command wrappers", () => {
+  test("archive and undo invoke the retained-history command", async () => {
+    const input = {
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "k",
+      resumableSessionId: "thread-1",
+      archived: true,
+    };
+    await setNativeAgentResumableSessionArchived(input);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "set_native_agent_resumable_session_archived",
+      input,
+    );
+    await setNativeAgentResumableSessionArchived({ ...input, archived: false });
+    expect(invokeMock).toHaveBeenLastCalledWith("set_native_agent_resumable_session_archived", {
+      ...input,
+      archived: false,
+    });
+  });
+
   test("refreshNativeAgentCommands calls the refresh command and returns its outcome", async () => {
     const result = { outcome: "deferred" as const, message: "Busy", projection: null };
     invokeMock.mockImplementation(async () => result);

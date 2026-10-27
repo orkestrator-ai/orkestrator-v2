@@ -72,6 +72,7 @@ export function MobileAppShellLayout({
   const previousSelectionRef = useRef({ selectedEnvironmentId, selectedProjectId });
   const titlePointerTypeRef = useRef<string | null>(null);
   const titleTooltipWasOpenOnPointerDownRef = useRef(false);
+  const tooltipPointerTypeRef = useRef<string | null>(null);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -277,6 +278,37 @@ export function MobileAppShellLayout({
             side="bottom"
             sideOffset={6}
             className="max-w-[calc(100vw-1rem)] break-words text-center"
+            // A tap on the bubble is not outside the tooltip, so Radix keeps it
+            // open. Chromium only closed it because the focused title blurred;
+            // WebKit and iOS Safari never focus a tapped button. Close it when
+            // the touch ends, not when it starts: the bubble must still be
+            // mounted so cancelling `touchend` also cancels the tap's mouse
+            // events and click, which would otherwise land on the workspace
+            // control under the bubble. For pen input, remember pointer-down
+            // rather than relying on click being a PointerEvent. Keep the
+            // bubble mounted through click so that it remains the target.
+            onPointerDown={(event) => {
+              tooltipPointerTypeRef.current = event.pointerType;
+              // Avoid blurring the title and unmounting the bubble mid-press.
+              if (event.pointerType === "pen") event.preventDefault();
+            }}
+            onPointerCancel={() => {
+              tooltipPointerTypeRef.current = null;
+            }}
+            onTouchEnd={(event) => {
+              event.preventDefault();
+              tooltipPointerTypeRef.current = null;
+              setTitleTooltipOpen(false);
+            }}
+            onClick={(event) => {
+              const pointerType = tooltipPointerTypeRef.current;
+              tooltipPointerTypeRef.current = null;
+              if (pointerType === "pen") {
+                event.preventDefault();
+                event.stopPropagation();
+                setTitleTooltipOpen(false);
+              }
+            }}
           >
             {title}
           </TooltipContent>

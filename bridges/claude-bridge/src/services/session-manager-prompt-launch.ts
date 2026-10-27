@@ -6,9 +6,7 @@ import { AGENT_MCP_SERVER_NAME } from "./mcp-config.js";
 import {
   closeQueryControl,
   emitBackgroundTaskSnapshot,
-  forgetSettlingBackgroundTasksOwnedBy,
-  removeBackgroundTaskCandidatesOwnedBy,
-  settleTasksOwnedByClosedControl,
+  releaseClaudeRuntimeTasks,
 } from "./session-manager-background-tasks.js";
 import { readLiveCommandInventory } from "./session-manager-commands.js";
 import {
@@ -146,12 +144,8 @@ function endClaudeRuntime(
       data: { error: session.error },
     });
   }
-  removeBackgroundTaskCandidatesOwnedBy(session, control);
-  // The handle is dead, so no edge can still arrive to claim these.
-  forgetSettlingBackgroundTasksOwnedBy(session, control);
-  const settled = settleTasksOwnedByClosedControl(
-    session,
-    control,
+  const settled = releaseClaudeRuntimeTasks(
+    runtime,
     "The Claude session that owned this task ended before it reported a result",
   );
   if (session.queryControl === control) session.queryControl = undefined;

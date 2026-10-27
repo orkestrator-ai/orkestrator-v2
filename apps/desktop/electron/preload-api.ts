@@ -345,6 +345,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
 
   return {
     isolatedViewState: true as const,
+    keyboardShortcuts: {
+      closed: (): Promise<void> => ipcRenderer.invoke("orkestrator:keyboard-shortcuts:closed"),
+    },
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
       return ipcRenderer.invoke("orkestrator:invoke", command, args ?? {});
     },

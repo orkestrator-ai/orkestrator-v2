@@ -354,6 +354,10 @@ export async function createSession(
   const work = (async () => {
     const resolved = resolvePiExecutionPolicy(policy);
     const state = newSessionState(clientSessionKey, resolved);
+    // The only session whose whole prompt history this journal has seen: it
+    // has no Pi session file yet, so nothing could have prompted it elsewhere.
+    // Resume and fork adopt an existing file and keep the default, false.
+    state.promptJournalComplete = true;
     // Pi's read-only gate is the enforcement point, and it is read at session
     // construction. A coordinator policy has to set it here rather than
     // through the separate `readOnly` request field, which the coordinator

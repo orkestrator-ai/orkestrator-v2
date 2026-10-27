@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
-import { readPersistedSessionTitleEntries } from "./session-titles.js";
+import { readPersistedSessionTitleEntries } from "./session-title-index.js";
 import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
+import { CODEX_LOGIN_REFUSED_MESSAGE } from "./sessions/auth-recovery-notice.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
@@ -124,6 +125,194 @@ describe("turn-time auth notice", () => {
     await waitUntil(
       () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
       "a successful sign-in did not clear the auth notice",
+    );
+  });
+});
+
+describe("refused-login auth notice", () => {
+  const refusedError = (codexErrorInfo: unknown) => ({
+    message: "unexpected status 401 Unauthorized: Incorrect API key provided: sk-fake***1234.",
+    codexErrorInfo,
+  });
+
+  async function failTurn(error: unknown, turnId = "turn-1", requestId = "req-refused") {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      "turn/start": () => ({ turn: { id: turnId } }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hi", requestId, attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: turnId, status: "failed", error },
+    });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.phase === "failed",
+      "the refused turn did not fail",
+    );
+    return { h, sessionId };
+  }
+
+  test("replacement device login survives refused-account polling, cancellation, and matching completion", async () => {
+    let attempt = 0;
+    const h = await harness({
+      "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
+      "account/login/start": () => ({
+        loginId: `replacement-${++attempt}`,
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "REPLACEMENT-CODE",
+      }),
+      "account/login/cancel": () => ({ status: "canceled" }),
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+    });
+    try {
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "refused", attachments: [] });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "failed", error: refusedError("unauthorized") },
+      });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.authNotice?.state === "needs-auth",
+        "refusal missing",
+      );
+      await h.runtime.beginAuthLogin("device-code");
+      const pending = await h.runtime.readAuthStatus();
+      expect(pending).toMatchObject({
+        account: { type: "apiKey" },
+        pendingSignIn: { code: "REPLACEMENT-CODE" },
+      });
+      expect(await h.runtime.readAuthStatus()).toEqual(pending);
+      h.child().notify("account/login/completed", { loginId: "prior-login", success: true });
+      await h.drain();
+      expect(await h.runtime.readAuthStatus()).toEqual(pending);
+      expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+      expect(await h.runtime.cancelAuthLogin()).toBe("canceled");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual([
+        { method: "account/login/cancel", params: { loginId: "replacement-1" } },
+      ]);
+      expect(await h.runtime.readAuthStatus()).not.toHaveProperty("pendingSignIn");
+      expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+      await h.runtime.beginAuthLogin("device-code");
+      h.child().notify("account/login/completed", { loginId: "replacement-2", success: true });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+        "matching sign-in did not unlock session",
+      );
+      expect(await h.runtime.readAuthStatus()).not.toHaveProperty("pendingSignIn");
+    } finally {
+      await h.runtime.stop();
+    }
+  });
+
+  test("a turn failed with a 401 asks for a sign-in until the user signs in", async () => {
+    const { h, sessionId } = await failTurn(
+      refusedError({ httpConnectionFailed: { httpStatusCode: 401 } }),
+    );
+    const notice = h.runtime.getStatus(sessionId)?.authNotice;
+    expect(notice).toMatchObject({
+      state: "needs-auth",
+      message: CODEX_LOGIN_REFUSED_MESSAGE,
+    });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.updated" &&
+          event.sessionId === sessionId &&
+          (event.data as { authNotice?: unknown }).authNotice === notice,
+      ),
+    ).toBe(true);
+    // The reason stays on the session and on the turn's last row.
+    expect(h.runtime.getStatus(sessionId)?.error).toContain("401 Unauthorized");
+    expect(
+      ((await h.runtime.getMessages(sessionId)) ?? [])
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.parts),
+    ).toEqual([
+      {
+        type: "status",
+        severity: "error",
+        content: "unexpected status 401 Unauthorized: Incorrect API key provided: sk-fake***1234.",
+      },
+    ]);
+
+    h.child().notify("account/login/completed", { loginId: "login-1", success: true });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "a successful sign-in did not clear the refused-login notice",
+    );
+  });
+
+  test.each([
+    [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }],
+    [{ responseStreamDisconnected: { httpStatusCode: 401 } }],
+    [{ responseTooManyFailedAttempts: { httpStatusCode: 401 } }],
+    ["unauthorized"],
+  ] as const)("a failure with %p is a refused login", async (info) => {
+    const { h, sessionId } = await failTurn(refusedError(info));
+    expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+  });
+
+  test.each([
+    [{ httpConnectionFailed: { httpStatusCode: null } }],
+    [{ httpConnectionFailed: { httpStatusCode: 503 } }],
+    [{ responseStreamDisconnected: { httpStatusCode: 500 } }],
+    [{ responseStreamConnectionFailed: { httpStatusCode: 403 } }],
+    ["internalServerError"],
+    [undefined],
+  ] as const)("a failure with %p never locks the tab behind a sign-in", async (info) => {
+    const { h, sessionId } = await failTurn({
+      message: "stream disconnected",
+      codexErrorInfo: info,
+    });
+    expect(h.runtime.getStatus(sessionId)?.authNotice).toBeUndefined();
+  });
+
+  test("a second refusal keeps the occurrence, and a completed turn clears it", async () => {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      "turn/start": (() => {
+        let turn = 0;
+        return () => ({ turn: { id: `turn-${++turn}` } });
+      })(),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const refuse = async (turnId: string, requestId: string) => {
+      await h.runtime.prompt(sessionId, { prompt: "hi", requestId, attachments: [] });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: {
+          id: turnId,
+          status: "failed",
+          error: refusedError({ httpConnectionFailed: { httpStatusCode: 401 } }),
+        },
+      });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.phase === "failed",
+        `${turnId} did not fail`,
+      );
+    };
+    await refuse("turn-1", "req-1");
+    const first = h.runtime.getStatus(sessionId)?.authNotice;
+    expect(first?.state).toBe("needs-auth");
+    await refuse("turn-2", "req-2");
+    // A notice the user dismissed stays dismissed for the same refusal.
+    expect(h.runtime.getStatus(sessionId)?.authNotice?.occurrenceId).toBe(first!.occurrenceId);
+
+    await h.runtime.prompt(sessionId, { prompt: "again", requestId: "req-3", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-3", status: "completed" },
+    });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "a completed turn did not clear the refused-login notice",
     );
   });
 });
@@ -1462,138 +1651,7 @@ describe("titles", () => {
     });
   });
 
-  test("a generated title is dual-written to Codex and the bridge index", async () => {
-    const h = await harness({}, { generateTitle: async () => "Generated Title" });
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
-
-    await h.runtime.prompt(sessionId, { prompt: "some work", requestId: "req-1", attachments: [] });
-    await h.drain();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    // thread/name/set makes Codex show it; the bridge index keeps it visible
-    // after a rollback to the SDK engine.
-    expect(h.child().requests.some((r) => r.method === "thread/name/set")).toBe(true);
-    expect(
-      h.events.some(
-        (event) =>
-          event.type === "session.title-updated" && event.data?.title === "Generated Title",
-      ),
-    ).toBe(true);
-  });
-
-  test("a generated title is persisted for every tab sharing the thread", async () => {
-    let resolveTitle!: (title: string) => void;
-    const h = await harness(
-      {
-        "thread/resume": () => ({ thread: threadPayload("thread-1") }),
-      },
-      {
-        generateTitle: () =>
-          new Promise<string>((resolve) => {
-            resolveTitle = resolve;
-          }),
-      },
-    );
-    const first = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(first.sessionId, {
-      prompt: "shared title",
-      requestId: "req-title",
-      attachments: [],
-    });
-    const second = await h.runtime.resumeSession({
-      threadId: "thread-1",
-      mode: "build",
-    });
-    await waitUntil(
-      () => typeof resolveTitle === "function",
-      "title generation did not start",
-      2_000,
-    );
-    resolveTitle("Shared Generated Title");
-    const store = new BridgeSessionStore({
-      codexHome,
-      cwd: "/tmp/ws",
-    });
-    let records = await store.load();
-    await waitUntil(
-      async () => {
-        records = await store.load();
-        return [first.sessionId, second!.sessionId].every((sessionId) =>
-          records.some(
-            (record) =>
-              record.bridgeSessionId === sessionId &&
-              record.title === "Shared Generated Title" &&
-              record.titleSource === "generated",
-          ),
-        );
-      },
-      "generated title was not persisted for both tabs",
-      2_000,
-    );
-    expect(records.find((record) => record.bridgeSessionId === first.sessionId)).toMatchObject({
-      title: "Shared Generated Title",
-      titleSource: "generated",
-    });
-    expect(records.find((record) => record.bridgeSessionId === second!.sessionId)).toMatchObject({
-      title: "Shared Generated Title",
-      titleSource: "generated",
-    });
-  });
-
-  /**
-   * Title generation is slow enough to outlive the prompt that started it. A
-   * superseded result must not overwrite a newer title, or the tab silently
-   * renames itself back to a conversation the user has moved on from.
-   */
-  test("a superseded title generation does not overwrite the newer title", async () => {
-    let resolveFirst!: (title: string) => void;
-    let calls = 0;
-    const h = await harness(
-      {},
-      {
-        generateTitle: async () => {
-          calls += 1;
-          if (calls === 1) {
-            return new Promise<string>((resolve) => {
-              resolveFirst = resolve;
-            });
-          }
-          return "Second Title";
-        },
-      },
-    );
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-1", attachments: [] });
-    h.child().notify("turn/completed", {
-      threadId: "thread-1",
-      turn: { id: "turn-1", status: "completed" },
-    });
-    await h.drain();
-
-    // A restored session retries generation, which is how a second generation can
-    // start while the first is still in flight.
-    const session = h.runtime.getRegistry().getSession(sessionId)!;
-    session.titleGenerationAttempted = false;
-    session.title = undefined;
-    session.titleSource = undefined;
-
-    await h.runtime.prompt(sessionId, { prompt: "second", requestId: "req-2", attachments: [] });
-    for (let attempt = 0; attempt < 100 && session.title !== "Second Title"; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    expect(session.title).toBe("Second Title");
-
-    resolveFirst("First Title");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(session.title).toBe("Second Title");
-    expect(
-      h.events.some(
-        (event) => event.type === "session.title-updated" && event.data?.title === "First Title",
-      ),
-    ).toBe(false);
-  });
-
-  test("a prompt fallback title is emitted immediately", async () => {
+  test("a prompt never names the session: the backend owns titles", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
@@ -1601,31 +1659,23 @@ describe("titles", () => {
       requestId: "req-1",
       attachments: [],
     });
+    await h.drain();
 
-    expect(h.events.some((event) => event.type === "session.title-updated")).toBe(true);
+    expect(h.runtime.getRegistry().getSession(sessionId)!.title).toBeUndefined();
+    expect(h.events.some((event) => event.type === "session.title-updated")).toBe(false);
+    expect(h.child().requests.some((r) => r.method === "thread/name/set")).toBe(false);
   });
 
-  test("a rejected title generation keeps the prompt fallback and clears its token", async () => {
-    const h = await harness(
-      {},
-      {
-        generateTitle: async () => {
-          throw new Error("title service unavailable");
-        },
-      },
-    );
+  test("a title read back from the first prompt is not reported as the session title", async () => {
+    const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(sessionId, {
-      prompt: "Fix the parser",
-      requestId: "req-title-failure",
-      attachments: [],
-    });
-    await Bun.sleep(10);
-
     const session = h.runtime.getRegistry().getSession(sessionId)!;
-    expect(session.title).toBe("Fix the parser");
-    expect(session.titleSource).toBe("prompt");
-    expect(session.titleGenerationToken).toBeUndefined();
+    session.title = "Fix the parser";
+    session.titleSource = "prompt";
+    expect(h.runtime.getStatus(sessionId)?.title).toBeUndefined();
+
+    session.titleSource = "explicit";
+    expect(h.runtime.getStatus(sessionId)?.title).toBe("Fix the parser");
   });
 });
 

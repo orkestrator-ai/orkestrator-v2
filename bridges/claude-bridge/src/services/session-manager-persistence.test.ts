@@ -55,7 +55,7 @@ import {
   sdkSessionInfo,
   sendPrompt,
   sessionIdForClientKey,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   setSessionPreferences,
   startIdleTranscriptSweep,
@@ -249,8 +249,7 @@ describe("reconcilePersistedSessions", () => {
       expect(getSession(alias)).toMatchObject({ sdkSessionId });
       expect(getSession(`session-${sdkSessionId}`)).toBeUndefined();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -394,8 +393,38 @@ describe("reconcilePersistedSessions", () => {
       );
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
+    }
+  });
+
+  test("restores journal completeness only from a marked journal, on both restore paths", async () => {
+    for (const marked of [true, false]) {
+      const directory = await mkdtemp(join(tmpdir(), "claude-restore-complete-"));
+      setClaudeHomeForTesting(directory);
+      try {
+        await updateSessionPreferences(PERSISTED_SDK_ID, {
+          dispatchedRequestIds: ["before-restart"],
+          ...(marked ? { dispatchJournalComplete: true as const } : {}),
+        });
+        mockSdkListSessions.mockImplementation(async () => [
+          sdkSessionInfo({ cwd: "/repo/env-a" }),
+        ]);
+        await withWorkspaceCwd("/repo/env-a", async () => {
+          await reconcilePersistedSessions();
+        });
+        const id = track(`session-${PERSISTED_SDK_ID}`);
+        expect(getSession(id)?.dispatchJournalComplete).toBe(marked ? true : undefined);
+        expect(getSession(id)?.restoredDispatchedRequestIds?.has("before-restart")).toBe(true);
+        deleteSession(id);
+
+        const materialized = await materializePersistedSession();
+        expect(materialized.dispatchJournalComplete).toBe(marked ? true : undefined);
+        expect(materialized.restoredDispatchedRequestIds?.has("before-restart")).toBe(true);
+        deleteSession(materialized.id);
+      } finally {
+        setClaudeHomeForTesting(sessionManagerTestHome);
+        await rm(directory, { recursive: true, force: true });
+      }
     }
   });
 
@@ -426,8 +455,7 @@ describe("reconcilePersistedSessions", () => {
       });
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -695,8 +723,7 @@ describe("ensurePersistedSession", () => {
       expect(state.dispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
       expect(state.restoredDispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -1551,11 +1578,7 @@ describe("evictIdleHydratedTranscripts", () => {
     expect(hydrating.messages.length).toBeGreaterThan(0);
   });
 
-  test("keeps sessions with live background task state or controls", async () => {
-    const controlled = await hydratedIdleSession();
-    markStale(controlled);
-    controlled.backgroundTaskControls = new Map([["task-controlled", { close: () => undefined }]]);
-
+  test("keeps sessions with live background task state", async () => {
     const running = await hydratedIdleSession();
     markStale(running);
     running.backgroundTasks = {
@@ -1566,14 +1589,35 @@ describe("evictIdleHydratedTranscripts", () => {
       },
     };
 
-    const candidate = await hydratedIdleSession();
-    markStale(candidate);
-    candidate.backgroundTaskCandidates = new Map([["bash-candidate", { close: () => undefined }]]);
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(running.messages.length).toBeGreaterThan(0);
+  });
+
+  test("keeps a transcript while its CLI runs, holding the work it owns", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const promptPromise = sendPrompt(state.id, "run a command");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-held-bash",
+        content: [{ type: "tool_use", id: "held-bash", name: "Bash", input: { command: "ls" } }],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => state.status === "idle");
+    // Task ownership is the CLI's own state: a Bash call with no result yet
+    // holds it, and the CLI holds the transcript its turns append to.
+    expect(state.claudeRuntime?.tasks.candidates.has("held-bash")).toBe(true);
+    expect(state.backgroundTasks).toBeUndefined();
+    state.queryControl = undefined;
+    markStale(state);
 
     expect(evictIdleHydratedTranscripts()).toEqual([]);
-    expect(controlled.messages.length).toBeGreaterThan(0);
-    expect(running.messages.length).toBeGreaterThan(0);
-    expect(candidate.messages.length).toBeGreaterThan(0);
+    expect(state.messages.length).toBeGreaterThan(0);
+    call.finish();
+    await promptPromise;
   });
 
   test("keeps a transcript referenced by a pending question", async () => {

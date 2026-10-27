@@ -1,3 +1,4 @@
+import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
 import type { DesignOperation } from "@orkestrator/protocol/design-canvas";
 
 let generations = 0;
@@ -37,6 +38,10 @@ export class DesignFrameBridge {
   }
   private receive = (event: MessageEvent) => {
     if (event.source !== this.#target) return;
+    if (event.data?.channel === "orkestrator-design-shortcuts") {
+      window.dispatchEvent(new CustomEvent(KEYBOARD_SHORTCUTS_EVENT));
+      return;
+    }
     if (event.data?.channel === "orkestrator-design-escape") {
       this.onEscape?.();
       return;

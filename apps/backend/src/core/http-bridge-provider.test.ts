@@ -839,16 +839,21 @@ describe("HTTP bridge provider", () => {
     // The bridge retired the id after a restart: the read-only twin of a 410.
     const lost = httpProvider(() => Response.json({ dispatch: "lost" }));
     await expect(lost.provider.dispatchStatus?.("s", "r")).resolves.toBe("lost");
+    // The bridge proves the id never reached it.
+    const absent = httpProvider(() => Response.json({ dispatch: "absent" }));
+    await expect(absent.provider.dispatchStatus?.("s", "r")).resolves.toBe("absent");
 
     // A bridge with no such route, an unknown session, an unparseable body and
-    // an explicit `unknown` are all the same fact: no evidence it ran.
+    // an explicit `unknown` are all the same fact: no evidence it ran. A failed
+    // response is never trusted, even with an assertion in its body.
     const unknown = [
       () => Response.json({ dispatch: "unknown" }),
       () => new Response(null, { status: 404 }),
       () => new Response("not json", { status: 200 }),
       () => Response.json({}),
-      () => Response.json({ dispatch: "absent" }),
+      () => Response.json({ dispatch: "never-sent" }),
       () => new Response(JSON.stringify({ dispatch: "lost" }), { status: 500 }),
+      () => new Response(JSON.stringify({ dispatch: "absent" }), { status: 500 }),
     ];
     for (const handler of unknown) {
       const { provider } = httpProvider(handler);

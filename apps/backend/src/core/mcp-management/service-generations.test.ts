@@ -30,8 +30,8 @@ beforeEach(() => {
   fixture.environment.codexBridgePid = 301;
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 const KEY = "env-env-1:tab-a";

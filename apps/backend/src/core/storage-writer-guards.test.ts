@@ -1680,6 +1680,8 @@ const REPOSITORIES = [
   "SessionsRepository",
   "ReviewsRepository",
   "NativeAgentSessionsRepository",
+  "NativeAgentDeliveries",
+  "PromptQueueStore",
   "PromptsRepository",
   "BuildPipelinesRepository",
   "DraftsRepository",

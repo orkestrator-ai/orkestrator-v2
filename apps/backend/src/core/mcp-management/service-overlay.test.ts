@@ -35,8 +35,8 @@ beforeEach(() => {
   fixture.containerFiles.set(CODEX, INHERITED_CODEX);
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 async function snapshotOf(provider: AgentPlatform = "codex") {

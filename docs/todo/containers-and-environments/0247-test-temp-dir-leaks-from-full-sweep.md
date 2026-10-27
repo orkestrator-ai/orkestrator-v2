@@ -142,8 +142,11 @@ baseline failures must not be read as a passing acceptance run.
    marker: a process whose command line contains it (Chromium's
    `--user-data-dir`), with its tree and the groups it leads, is killed and
    verified too, and an empty scan must be confirmed by a second one 100 ms
-   later, so a browser between fork and exec is not missed. After the fix, 0
-   of 48. Unit test in `preview-process-tree.test.ts` (an escaped, marked
+   later to guard process-list churn. The supervisor now also places the
+   scratch marker on the worker argv before launch: a detached child stopped
+   before exec inherits that argv even if the worker dies. Two empty scans
+   alone cannot prove exit when pre-exec ownership was never visible. The earlier
+   visible-marker qualification left 0 of 48 scratch roots. Unit test in `preview-process-tree.test.ts` (an escaped, marked
    process tree survives a pass without the marker and is killed with it).
    This is production behaviour too, so it was fixed rather than left to the
    startup sweep.
@@ -327,6 +330,93 @@ Failure evidence is retained under the host temporary directory:
 `orkestrator-test-run.TZNWYO/summary.json` and its per-group compressed logs,
 with enclosing `orkestrator-test-run.DCQCrJ/review-full.log.gz`. The aggregate
 is deliberately recorded as non-green despite the targeted fixes passing.
+
+### Classification follow-up for the pinned review aggregate
+
+The separate aggregate captured for `62c7cc084` (`mise run test`, exit 1,
+about 761.5 s; 25,485 passed, 20 failed, 130 not run as reported by the
+consolidated review) included three failures missing owner-level classification:
+
+| Owner and test | Captured failure |
+| --- | --- |
+| `apps/backend/src/core/diff-stats-tracking.test.ts` — `a storage failure releases the check and a later scan can retry` | Expected `idleBaseline.size` 0, received 1 after 9,208 ms. Case 0962 covers a different test and does not classify this assertion. |
+| `apps/backend/src/core/change-tracking/acceptance-sharing.test.ts` — `V09: environments aliasing one checkout share one watcher and scan; a linked worktree does not` | Hook timed out after about 14,100 ms. |
+| `apps/backend/src/core/public-api/public-api-project-init-cascade.test.ts` — `project.init > initializes a local repository with one commit and no remote, and registers it` | Hook timed out after about 9,054 ms. |
+
+All three unchanged owners were rerun serially on 2026-10-27, with one
+Bun worker and the original budgets. Commands ran from `apps/backend`
+(the two logged wrappers below ran from the repository root):
+
+- `mise exec -- bun test src/core/diff-stats-tracking.test.ts --parallel=1`:
+  exit 1, 17 passed, four failed, three between-test errors, 74.42 s.
+  The storage-retry case failed in a fixture hook at 11,397 ms, rather than
+  reproducing the original `idleBaseline.size` assertion. Git operations also
+  outlived removed fixtures. That assertion remains **unclassified**; case
+  0962 concerns the different in-flight baseline test.
+- `mise run test:logged -- --name acceptance-sharing-owner -- bun test --cwd apps/backend src/core/change-tracking/acceptance-sharing.test.ts --parallel=1`:
+  exit 1, 14 passed, one failed, one between-test error, 18.87 s.
+  The V09 watcher case reproduced the hook timeout at 17,091 ms, followed
+  by `condition not reached`. Evidence: `orkestrator-test-run.wpECkj/acceptance-sharing-owner.log.gz`.
+  This remains an **unclassified failing owner**, not a claimed flake.
+- `mise run test:logged -- --name project-init-owner -- bun test --cwd apps/backend src/core/public-api/public-api-project-init-cascade.test.ts --parallel=1`:
+  exit 0, complete owner passed in 13.2 s. Registered as
+  [1109](../../tests/flaky-tests/environments-and-containers/1109-project-init-hook-aggregate-timeout.md).
+  Success receipt: `orkestrator-test-run.KKWC2K/summary.json`.
+
+Temporary evidence paths are relative to the host temporary directory. These
+owner reruns shared the host with the required aggregate; no idle-host or
+baseline qualification is claimed. No assertion or test budget changed.
+The earlier twelve-failure accounting describes its own 711.7 s run; it does
+not account for the later captured run. Aggregate acceptance remains incomplete
+while the storage assertion and V09 owner are unclassified.
+
+### Pre-exec ownership and settlement regressions (2026-10-27)
+
+Process workers now start with `--ork-preview-scratch=<private scratch>` on
+argv. A detached fork inherits that marker before exec; after exec Chromium
+carries the profile path. The marker is no longer first exposed at browser
+exec. A real POSIX fork regression uses Python to stop a detached child before
+exec, keeps it stopped beyond the former two-scan interval, kills its worker,
+and requires verified cleanup to include and kill the orphan. The test uses
+`/usr/bin/python3` and skips when that POSIX fork helper is unavailable.
+Visible-marker and real Chromium regressions remain enabled and passed here.
+
+Two gated regressions cover the other review gaps: media disposal cannot
+resolve while constructor staging initialization is held, and removing its
+fixture after disposal cannot recreate the root; Pi settlement cannot resolve
+while a second write queued during the first generation is still held.
+
+Validation on macOS with the repository's Bun 1.4.4:
+
+- From `apps/backend`, `mise exec -- bun test src/core/transcript-artifacts/preview-process-tree.test.ts src/core/transcript-artifacts/preview-supervisor.test.ts src/core/transcript-artifacts/preview-isolation.test.ts src/core/transcript-artifacts/media-stream-dispose.test.ts src/core/transcript-artifacts/media-stream.test.ts --parallel=2`:
+  37 passed, zero failed, 10.15 s, including real Chromium. The final atomic
+  child-PID publication refinement passed its focused orphan test again
+  (one passed, zero failed, 1.60 s).
+- From `bridges/pi-bridge`, `mise exec -- bun test src/persistence-settled.test.ts --preload ../../tests/setup-node.ts --preload ./src/testing/test-isolation.ts --parallel=1`:
+  one passed, zero failed, 0.60 s. The complete Pi group also passed in the
+  aggregate (652 passed, two skipped).
+- `mise exec -- bun test tests/unit/flaky-tests-index.test.ts tests/unit/test-suite-ownership.test.ts --parallel=2`:
+  15 passed, zero failed, 2.12 s after the registry update.
+- `mise run format:check`, `mise run lint`, and `mise run typecheck` passed;
+  lint retained only existing warnings outside the changed files.
+
+The required `mise run test:logged -- --name review-fixes -- mise run test`
+finished with exit **1** after 1,164.8 s (inner aggregate 1,162.5 s):
+**35,518 passed, 24 failed, 199 skipped, plus ten between-test errors**.
+Backend had 12,020 passed, 19 failed, 115 skipped and ten errors; failures
+were environment moves, Git/worktree fixtures, remote-fetch timeout reporting
+and the worktree watcher. Root had the two migration-copy assertions;
+desktop had the two Keychain assertions; Claude bridge had one coordinator
+sandbox qualification failure. These owners are unchanged in this follow-up.
+No changed regression failed. Web, public web, CLI, protocol, toolchain,
+Pi/ACP/Codex/Cursor bridges and the protocol-lockfile check passed.
+
+The aggregate remains non-green; this is not evidence that every failure is
+pre-existing or flaky. Retained evidence under the host temporary directory:
+`orkestrator-test-run.OgVQEO/summary.json` and its compressed per-group logs,
+plus `orkestrator-test-run.GFT0Q7/review-fixes.log.gz`. No Linux/Windows or
+browser/Electron/Docker/iOS scenario qualification was performed; the existing
+real-container preview case lacked its worker image.
 
 ## Constraints and rationale
 

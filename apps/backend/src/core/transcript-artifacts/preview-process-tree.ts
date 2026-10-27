@@ -138,8 +138,11 @@ export interface TreeKillReport {
  * (before the supervisor has learnt the browser's pid) orphans it outside
  * both the tree and the owned groups; it then keeps writing its profile into
  * the scratch after the scratch was removed (0247). Processes carrying the
- * marker, with their trees, are owned too, and an empty scan must be
- * confirmed by a second one so a browser between fork and exec is not missed.
+ * marker, with their trees, are owned too. The supervisor must put the marker
+ * on the worker's argv before it can fork: a pre-exec child inherits that argv,
+ * then the browser carries the marker in its profile argument after exec.
+ * Two empty scans guard process-list churn; they cannot establish ownership
+ * of a pre-exec child whose worker was launched without the marker.
  */
 export async function killTree(
   roots: readonly number[],

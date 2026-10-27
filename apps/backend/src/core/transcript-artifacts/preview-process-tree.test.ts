@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { chromium } from "playwright-core";
 
 import { resolveDesignChromiumPath } from "../design/index.js";
 import { isAlive, killTree, listProcesses } from "./preview-process-tree.js";
+import { superviseWorker } from "./preview-supervisor.js";
 
 /**
  * A process outside every root and owned group, as Chromium is when the
@@ -87,6 +88,77 @@ describe("killTree", () => {
       }
     }, 10_000);
   }
+
+  // Python provides a real fork/setsid/stop boundary without running unsafe
+  // post-fork JavaScript in Bun's multithreaded runtime.
+  const python = "/usr/bin/python3";
+  const forkTest =
+    spawnSync(python, ["-c", "import os; assert hasattr(os, 'fork')"]).status === 0
+      ? test
+      : test.skip;
+  forkTest(
+    "kills an orphan held before exec beyond the empty-scan window",
+    async () => {
+      const worker = superviseWorker(
+        {
+          isolation: "process",
+          command: python,
+          args: [
+            "-c",
+            `
+import os, signal, time
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    for fd in (0, 1, 2):
+        os.close(fd)
+    os.kill(os.getpid(), signal.SIGSTOP)
+    os.execl('/bin/sleep', 'sleep', '30')
+os.waitpid(pid, os.WUNTRACED)
+with open('child.pid.tmp', 'w') as output:
+    output.write(str(pid))
+os.rename('child.pid.tmp', 'child.pid')
+while True:
+    time.sleep(1)
+`,
+          ],
+        },
+        {} as Parameters<typeof superviseWorker>[1],
+        { workerWallMs: 10_000, readinessHardMs: 3000, mermaidRenderMs: 3000, cleanupGraceMs: 0 },
+      );
+      let childPid: number | undefined;
+      try {
+        const pidFile = path.join(worker.scratchDir()!, "child.pid");
+        const deadline = Date.now() + 5000;
+        while (!existsSync(pidFile)) {
+          if (Date.now() > deadline) throw new Error("pre-exec child did not stop");
+          await Bun.sleep(10);
+        }
+        childPid = Number(readFileSync(pidFile, "utf8"));
+        // Hold the child longer than the old two-scan heuristic. It cannot exec
+        // or acquire Chromium's profile argument during termination either.
+        await Bun.sleep(350);
+        process.kill(worker.workerPid()!, "SIGKILL");
+        const report = await worker.exited;
+        expect(report.verified).toBe(true);
+        expect(report.pids).toContain(childPid);
+        expect(isAlive(childPid, await listProcesses())).toBe(false);
+        expect(existsSync(worker.scratchDir()!)).toBe(false);
+      } finally {
+        if (childPid) {
+          try {
+            process.kill(childPid, "SIGKILL");
+          } catch {
+            /* Already gone. */
+          }
+        }
+        worker.cancel();
+        await worker.exited;
+        await worker.reap();
+      }
+    },
+    15_000,
+  );
 
   test("preserves command whitespace after the fixed ps columns", async () => {
     const bin = mkdtempSync(path.join(tmpdir(), "ork-literal-ps-"));

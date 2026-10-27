@@ -71,6 +71,7 @@ export interface SupervisorDeadlines {
 export type ProcessWorkerLaunch = {
   isolation: "process";
   command: string;
+  /** Worker arguments; the supervisor appends a private scratch ownership argument. */
   args: string[];
   /** Parent of the per-job private scratch directory (default: the OS temp directory). */
   scratchRoot?: string;
@@ -394,8 +395,9 @@ export function superviseWorker(
     const roots = child?.pid ? [child.pid] : [];
     if (browserPid) roots.push(browserPid);
     const groups = [...(child?.pid ? [child.pid] : []), ...(browserPid ? [browserPid] : [])];
-    // The scratch path is on Chromium's command line (`--user-data-dir`), so
-    // a browser the worker launched after the last scan is still found.
+    // The worker carries the scratch marker from launch. A forked child
+    // inherits it before exec, then Chromium carries it in --user-data-dir.
+    // Ownership therefore survives an orphaning worker exit during launch.
     const tree = await killTree(roots, groups, undefined, scratchPath ?? undefined);
     if (child?.pid && !childExited) child.kill("SIGKILL");
     await Promise.race([childExit, new Promise((resolve) => setTimeout(resolve, 2_000))]);
@@ -440,7 +442,10 @@ export function superviseWorker(
         path.join(launch.scratchRoot ?? tmpdir(), `${PREVIEW_SCRATCH_PREFIX}${process.pid}-`),
       );
       scratchPath = scratch;
-      child = spawn(launch.command, launch.args, {
+      // A child paused between fork and exec still has the worker's argv,
+      // even after setsid and reparenting. Mark the worker before it can fork;
+      // HOME/TMPDIR alone are not visible in the process listing.
+      child = spawn(launch.command, [...launch.args, `--ork-preview-scratch=${scratch}`], {
         stdio: ["pipe", "pipe", "ignore"],
         // Own process group so the whole worker group can be signalled.
         detached: true,

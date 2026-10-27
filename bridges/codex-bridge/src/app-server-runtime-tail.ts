@@ -291,12 +291,21 @@ export class CodexRuntimeTail {
     }
 
     // A failed archived listing only loses the id filter; the path filter stays.
-    const archived = new Set(
-      await this.ctx.options.engine
-        .listThreads({ cwd, includeArchived: true })
-        .then(({ threads }) => threads.map((thread) => thread.id))
-        .catch(() => [] as string[]),
-    );
+    const archived = new Set<string>();
+    try {
+      let cursor: string | undefined;
+      do {
+        const page = await this.ctx.options.engine.listThreads({
+          cwd,
+          onlyArchived: true,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const thread of page.threads) if (thread.id) archived.add(thread.id);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    } catch {
+      // Keep IDs from pages already read, plus the path filter below.
+    }
     const archivedRoot = join(this.ctx.options.codexHome, "archived_sessions");
     const isArchived = (meta: PersistedSessionMeta) => {
       if (archived.has(meta.id)) return true;

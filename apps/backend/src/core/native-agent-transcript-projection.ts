@@ -931,7 +931,8 @@ export class NativeAgentTranscriptProjection {
             : Promise.resolve(false),
       },
       ...(this.options.sessionTitles ? { generator: this.options.sessionTitles } : {}),
-      onTitleChosen: (sessionKey, title) => this.showChosenTitle(sessionKey, title),
+      onTitleChosen: (sessionKey, title, providerSessionId) =>
+        this.showChosenTitle(sessionKey, title, providerSessionId),
       now: () => this.host.now(),
     });
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
@@ -969,10 +970,15 @@ export class NativeAgentTranscriptProjection {
    * waiting for the next provider read: an idle session may not be read again
    * for a long time.
    */
-  private showChosenTitle(sessionKey: string, title: string): void {
+  private showChosenTitle(sessionKey: string, title: string, providerSessionId: string): void {
     for (const key of [sessionKey, `${sessionKey}\0sync-v1`]) {
       const entry = this.projectionCache.get(key);
-      if (!entry || entry.projection.title === title) continue;
+      if (
+        !entry ||
+        entry.projection.sessionId !== providerSessionId ||
+        entry.projection.title === title
+      )
+        continue;
       this.commitProjection(
         key,
         entry.input,

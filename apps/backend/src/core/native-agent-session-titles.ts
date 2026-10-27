@@ -89,7 +89,7 @@ export interface NativeAgentSessionTitlesOptions {
   storage: SessionTitleStorage;
   generator?: SessionTitleGenerator;
   /** Called once a chosen title is stored, so cached reads can show it. */
-  onTitleChosen?: (sessionKey: string, title: string) => void;
+  onTitleChosen?: (sessionKey: string, title: string, providerSessionId: string) => void;
   now?: () => number;
 }
 
@@ -163,7 +163,7 @@ export class NativeAgentSessionTitles {
         : { providerSessionId, title: fallback, source: "fallback" };
       setBounded(this.chosen, stateKey, title);
       await this.store(read.sessionKey, title);
-      this.options.onTitleChosen?.(read.sessionKey, title.title);
+      this.options.onTitleChosen?.(read.sessionKey, title.title, providerSessionId);
       this.push(read, stateKey, title);
     })()
       .catch(() => undefined)

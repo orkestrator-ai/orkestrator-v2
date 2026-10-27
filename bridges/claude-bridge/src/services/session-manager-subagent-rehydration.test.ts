@@ -1,4 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getSubagentMessages, listSubagents } from "@anthropic-ai/claude-agent-sdk";
 import { normalizePersistedSessionMessages } from "./session-manager-messages.js";
 import { MAX_SUBAGENT_PARTS_PER_CALL } from "./session-manager-prompt-stream.js";
 import {
@@ -83,6 +88,85 @@ function subagent(parent: string, prefix: string): Record_[] {
 }
 
 describe("rehydrateSubagentParts", () => {
+  test("the pinned SDK reads the sidecar toolUseId and rehydrates its actual filesystem transcript", async () => {
+    const root = await mkdtemp(join(tmpdir(), "claude-subagent-sdk-"));
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
+    try {
+      const dir = join(root, "workspace");
+      const sessionId = randomUUID();
+      const project = join(root, "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"));
+      const agents = join(project, sessionId, "subagents");
+      await mkdir(agents, { recursive: true });
+      await writeFile(
+        join(project, `${sessionId}.jsonl`),
+        JSON.stringify({
+          type: "user",
+          uuid: randomUUID(),
+          parentUuid: null,
+          sessionId,
+          cwd: dir,
+          message: { role: "user", content: "Survey the repository" },
+        }) + "\n",
+      );
+      const first = randomUUID();
+      const second = randomUUID();
+      const rows = [
+        {
+          type: "user",
+          uuid: first,
+          parentUuid: null,
+          sessionId,
+          isSidechain: true,
+          message: { role: "user", content: "Look around" },
+        },
+        {
+          type: "assistant",
+          uuid: second,
+          parentUuid: first,
+          sessionId,
+          isSidechain: true,
+          message: {
+            id: "msg_fixture",
+            role: "assistant",
+            model: "claude-test",
+            content: [{ type: "text", text: "SDK sidecar detail" }],
+          },
+        },
+      ];
+      await writeFile(
+        join(agents, "agent-fixture.jsonl"),
+        rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      );
+      // This is the pinned SDK's on-disk field, distinct from the returned field.
+      await writeFile(
+        join(agents, "agent-fixture.meta.json"),
+        JSON.stringify({ toolUseId: "toolu_agent" }),
+      );
+      expect(await listSubagents(sessionId, { dir })).toEqual(["fixture"]);
+      const records = await getSubagentMessages(sessionId, "fixture", { dir });
+      expect(records.length).toBeGreaterThan(0);
+      expect(records.every((record) => record.parent_tool_use_id === "toolu_agent")).toBe(true);
+      const messages = rootTranscript();
+      await rehydrateSubagentParts(
+        { listSubagents, getSubagentMessages },
+        sessionId,
+        dir,
+        messages,
+      );
+      expect(messages.flatMap((message) => message.parts)).toContainEqual(
+        expect.objectContaining({
+          content: "SDK sidecar detail",
+          parentTaskUseId: "toolu_agent",
+        }),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("keeps the live stream's per-call bound", () => {
     expect(MAX_REHYDRATED_PARTS_PER_CALL).toBe(MAX_SUBAGENT_PARTS_PER_CALL);
   });

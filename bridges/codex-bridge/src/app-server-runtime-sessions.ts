@@ -38,6 +38,7 @@ import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
+  clearTranscriptPathCache,
 } from "./history/rollout.js";
 import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-title-index.js";
 
@@ -1012,6 +1013,8 @@ export class CodexRuntimeSessions {
     const beforeTurnId = context.messages[index]?.turnId;
     if (index < 0 || !beforeTurnId) return "unavailable";
     await this.ctx.options.engine.revertThread(session.threadId, beforeTurnId);
+    clearTranscriptPathCache();
+    invalidateTranscriptCatalogCache();
     context.messages.splice(index);
     context.error = undefined;
     this.ctx.registry.setPhase(context, "idle");
@@ -1030,6 +1033,14 @@ export class CodexRuntimeSessions {
    * Never throws: it runs detached from the notification that started it.
    */
   async reconcileExternalRevert(context: ThreadContext): Promise<void> {
+    clearTranscriptPathCache();
+    invalidateTranscriptCatalogCache();
+    const engineHandle = context.engineHandle;
+    const generation = context.engineGeneration;
+    const revisions = [...context.bridgeSessionIds].map((id) => {
+      const session = this.ctx.registry.getSession(id);
+      return { id, session, revision: session?.messageRevision };
+    });
     let turns: { id: string }[] | undefined;
     try {
       turns = (await this.ctx.options.engine.readThread(context.threadId, { includeTurns: true }))
@@ -1044,9 +1055,20 @@ export class CodexRuntimeSessions {
     // Detached or replaced while reading: the next attach rehydrates from the
     // rollout, which records the rollback itself. A turn running now may have
     // started after the read and be missing from it, so nothing is cut under
-    // one; the transcript catches up on the next hydration.
+    // one. The revision fence also rejects a turn that started and finished
+    // during the read; the transcript catches up on the next hydration.
     if (!turns || this.ctx.registry.getThread(context.threadId) !== context) return;
-    if (phaseToExternalStatus(context.phase) === "running") return;
+    if (
+      phaseToExternalStatus(context.phase) === "running" ||
+      context.dispatchInFlight ||
+      context.engineHandle !== engineHandle ||
+      context.engineGeneration !== generation ||
+      revisions.some(
+        ({ id, session, revision }) =>
+          this.ctx.registry.getSession(id) !== session || session?.messageRevision !== revision,
+      )
+    )
+      return;
     const cut = externalRevertCut(
       context.messages,
       turns.map((turn) => turn.id),

@@ -180,7 +180,8 @@ explicit "remove from list", never a delete, and nothing calls
 `thread/delete`. A thread a tab in the same environment still holds is
 refused (409). The resume list leaves archived threads out: `thread/list`
 omits them, and the rollout fallback skips both what app-server lists as
-archived and rollouts under `archived_sessions`.
+archived (following every archived-only `thread/list` page) and rollouts under
+`archived_sessions`.
 
 Cursor's resume list hides agents the SDK reports `archived` (Cursor refuses a
 follow-up run on one until it is unarchived, which is cloud-only in the pinned
@@ -425,8 +426,12 @@ A rewind made by another client arrives as `thread/reverted`, which names no
 turn: the bridge reads the surviving turns with `thread/read` and trims the
 transcript it serves to them (`sessions/external-revert.ts`). Its own
 `thread/revert` echoes the same notification and finds nothing more to cut.
-A rollout replay drops the turns a `thread_rolled_back` marker removed, so a
-reload agrees with app-server.
+A rollout replay follows paginated history's `history_base` retained-prefix
+references (the format qualified against pinned 0.164) and supports legacy
+`thread_rolled_back` markers. A shared turn ID makes steered user rows one turn
+for rollback counting. Revert notifications clear cached rollout paths; reads
+are fenced by context, engine generation and transcript revision so an older
+snapshot cannot remove a newer completed turn.
 
 ### Project Coordinator
 

@@ -2141,6 +2141,8 @@ export function SharedNativeAgentController({
         activityAt: entry.updatedAt ?? entry.createdAt ?? null,
         ...(entry.status ? { status: entry.status } : {}),
         ...(entry.detail ? { detail: entry.detail } : {}),
+        ...(entry.parentId ? { parentId: entry.parentId } : {}),
+        ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
       })),
     [listResumable],
   );

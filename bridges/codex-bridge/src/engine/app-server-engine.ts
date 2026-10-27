@@ -2435,7 +2435,7 @@ export class AppServerEngine implements CodexEngine {
       cwd,
       limit: options.limit ?? 100,
       ...(options.cursor ? { cursor: options.cursor } : {}),
-      ...(options.includeArchived === undefined ? {} : { archived: options.includeArchived }),
+      ...(options.onlyArchived === undefined ? {} : { archived: options.onlyArchived }),
     });
 
     const threads = (response.data ?? [])

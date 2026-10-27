@@ -47,6 +47,20 @@ function deferred<T>() {
 }
 
 describe("NativeResumeSessionDialog", () => {
+  test("shows a fork's branch label and a parent fallback", async () => {
+    renderDialog([
+      {
+        id: "branch-1",
+        title: "Forked work",
+        parentId: "parent-1",
+        branchLabel: "Alternative solution",
+      },
+      { id: "branch-2", title: "Unnamed branch", parentId: "parent-2" },
+    ]);
+    expect(await screen.findByText("Alternative solution")).toBeTruthy();
+    expect(screen.getByText(`Fork of ${shortResumeSessionId("parent-2")}`)).toBeTruthy();
+  });
+
   test("orders most-recently-active first, not by creation", async () => {
     renderDialog([
       { id: "older", title: "Older", activityAt: "2026-07-20T10:00:00.000Z" },

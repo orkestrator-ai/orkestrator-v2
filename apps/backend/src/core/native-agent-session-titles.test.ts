@@ -71,6 +71,18 @@ async function settle(titles: NativeAgentSessionTitles): Promise<void> {
 }
 
 describe("NativeAgentSessionTitles", () => {
+  test.each(["interactive-native", "coordinator", "build-pipeline", "looped-review"] as const)(
+    "gates model generation by origin (%s)",
+    async (origin) => {
+      const h = harness();
+      h.titles.resolve(h.read({ session: { providerSessionId: "provider-1", origin } }));
+      await settle(h.titles);
+      expect(h.generate.mock.calls.length).toBe(
+        origin === "interactive-native" || origin === "coordinator" ? 1 : 0,
+      );
+    },
+  );
+
   test("shows the fallback, generates once, stores and pushes the generated title", async () => {
     const h = harness();
     expect(h.titles.resolve(h.read())).toBe("Please fix the OAuth callback race in the login flow");

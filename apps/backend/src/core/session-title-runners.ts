@@ -200,7 +200,7 @@ export async function generateCodexSessionTitle(input: SessionTitleRunInput): Pr
   }
 }
 
-export function buildClaudeTitleCommandArgs(source: string): string[] {
+export function buildClaudeTitleCommandArgs(): string[] {
   return [
     "--print",
     // Capability isolation is enforced by the CLI, not by the prompt framing:
@@ -218,7 +218,6 @@ export function buildClaudeTitleCommandArgs(source: string): string[] {
     "haiku",
     "--system-prompt",
     CLAUDE_SESSION_TITLE_SYSTEM_PROMPT,
-    buildSessionTitlePrompt(source, "line"),
   ];
 }
 
@@ -227,17 +226,14 @@ export async function generateClaudeSessionTitle(input: SessionTitleRunInput): P
     path.join(input.temporaryRoot ?? tmpdir(), "orkestrator-session-title-"),
   );
   try {
-    const { stdout } = await input.run(
-      input.executable,
-      buildClaudeTitleCommandArgs(input.source),
-      {
-        // An empty directory, so even a project-scoped lookup finds nothing.
-        cwd: temporaryDirectory,
-        env: input.env,
-        timeoutMs: input.timeoutMs ?? SESSION_TITLE_COMMAND_TIMEOUT_MS,
-        ...(input.signal ? { signal: input.signal } : {}),
-      },
-    );
+    const { stdout } = await input.run(input.executable, buildClaudeTitleCommandArgs(), {
+      // An empty directory, so even a project-scoped lookup finds nothing.
+      cwd: temporaryDirectory,
+      env: input.env,
+      stdin: buildSessionTitlePrompt(input.source, "line"),
+      timeoutMs: input.timeoutMs ?? SESSION_TITLE_COMMAND_TIMEOUT_MS,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
     const title = sanitizeSessionTitle(stdout);
     if (!title) throw new Error("Claude returned an empty session title");
     return title;

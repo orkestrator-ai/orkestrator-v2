@@ -179,6 +179,11 @@ export class SessionTitleService implements SessionTitleGenerator {
 /** Credentials a title run must never hold: it reads no repository. */
 const TITLE_RUN_STRIPPED_ENV = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
+/** The production composition must never spend a login under the test runner. */
+export function sessionTitleGenerationEnabled(env: NodeJS.ProcessEnv): boolean {
+  return env.NODE_ENV !== "test" && env.ORKESTRATOR_SESSION_TITLE_GENERATION !== "0";
+}
+
 /**
  * The production service: the managed CLIs, launched on the active account
  * exactly as that platform's bridge would be, minus the GitHub credential.

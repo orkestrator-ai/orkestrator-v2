@@ -16,6 +16,8 @@ import { formatRelativeTime } from "@/lib/format-relative-time";
 export interface ResumableSession {
   id: string;
   title?: string;
+  parentId?: string;
+  branchLabel?: string;
   /**
    * When this session was last *worked in* — not when it was created.
    *
@@ -228,6 +230,12 @@ export function NativeResumeSessionDialog({
                           <p className="max-w-full text-sm font-medium break-words whitespace-normal">
                             {session.title || `Session ${shortResumeSessionId(session.id)}`}
                           </p>
+                          {(session.branchLabel || session.parentId) && (
+                            <p className="text-xs text-muted-foreground break-words">
+                              {session.branchLabel ||
+                                `Fork of ${shortResumeSessionId(session.parentId!)}`}
+                            </p>
+                          )}
                           <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                             <Clock className="h-3 w-3" />
                             <span>{formatRelativeTime(session.activityAt)}</span>

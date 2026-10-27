@@ -228,11 +228,13 @@ export function getTranscriptPathCacheStats(): { entries: number } {
  * containment check for filename shapes neither this code nor Codex produces.
  */
 function selectTranscriptPath(paths: readonly string[], threadId: string): string | null {
-  const anchored = paths.find((file) => {
-    const stem = basename(file).replace(/\.jsonl$/, "");
-    return stem === threadId || stem.endsWith(`-${threadId}`);
-  });
-  return anchored ?? paths.find((file) => file.includes(threadId)) ?? null;
+  const anchored = paths
+    .filter((file) => {
+      const stem = basename(file).replace(/\.jsonl$/, "");
+      return stem === threadId || stem.endsWith(`-${threadId}`) || stem.includes(`-${threadId}_`);
+    })
+    .sort((a, b) => basename(b, ".jsonl").localeCompare(basename(a, ".jsonl")));
+  return anchored[0] ?? paths.find((file) => file.includes(threadId)) ?? null;
 }
 
 export async function findTranscriptPath(
@@ -506,7 +508,11 @@ export async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {
       if (!transcriptPathByThreadId.has(fileThreadId)) {
         transcriptPathByThreadId.set(fileThreadId, transcriptPath);
       }
-      if (!transcriptPathByThreadId.has(meta.id)) {
+      const previous = transcriptPathByThreadId.get(meta.id);
+      if (
+        !previous ||
+        basename(transcriptPath, ".jsonl").localeCompare(basename(previous, ".jsonl")) > 0
+      ) {
         transcriptPathByThreadId.set(meta.id, transcriptPath);
       }
     }
@@ -1334,6 +1340,68 @@ export function replayedRowId(
 }
 
 /**
+ * Codex 0.164 paginated history forks a rollout on revert. The new leaf's
+ * history_base references a retained prefix of its predecessor; legacy
+ * rollouts instead carry thread_rolled_back markers. Stream both formats
+ * through the same replay without retaining whole files.
+ */
+async function forEachHistoryBatch(
+  snapshot: TranscriptSnapshot,
+  visit: (records: readonly TranscriptRecord[]) => void | Promise<void>,
+): Promise<boolean> {
+  let paths: string[] | undefined;
+  const seen = new Set<string>();
+  const walk = async (
+    current: TranscriptSnapshot,
+    limit: number,
+    depth: number,
+  ): Promise<boolean> => {
+    if (depth > 64 || seen.has(current.path) || current.status !== "complete") return false;
+    seen.add(current.path);
+    const base = current.sessionMeta?.payload?.history_base as
+      | {
+          thread_id?: unknown;
+          end_ordinal_exclusive?: unknown;
+        }
+      | undefined;
+    let visited = 0;
+    if (base) {
+      if (
+        typeof base.thread_id !== "string" ||
+        typeof base.end_ordinal_exclusive !== "number" ||
+        !Number.isSafeInteger(base.end_ordinal_exclusive) ||
+        base.end_ordinal_exclusive < 0
+      )
+        return false;
+      paths ??= await listTranscriptPaths();
+      // The base ID names either the original thread or a leaf UUID (the
+      // suffix after the logical thread ID in a paginated rollout filename).
+      const basePath = paths.find((file) => {
+        const stem = basename(file, ".jsonl");
+        return (
+          stem === base.thread_id ||
+          stem.endsWith(`-${base.thread_id}`) ||
+          stem.endsWith(`_${base.thread_id}`)
+        );
+      });
+      if (!basePath) return false;
+      const end = Math.min(limit, base.end_ordinal_exclusive);
+      if (!(await walk(await acquireTranscriptSnapshot(basePath), end, depth + 1))) return false;
+      visited = base.end_ordinal_exclusive;
+    }
+    const complete = await forEachTranscriptBatch(current, async (records) => {
+      const count = Math.max(0, Math.min(records.length, limit - visited));
+      if (count > 0) await visit(records.slice(0, count));
+      visited += records.length;
+    });
+    return complete && (limit === Number.POSITIVE_INFINITY || visited >= limit);
+  };
+  // Degraded legacy files retain their existing visible warning rows.
+  if (!snapshot.sessionMeta?.payload?.history_base) return forEachTranscriptBatch(snapshot, visit);
+  return walk(snapshot, Number.POSITIVE_INFINITY, 0);
+}
+
+/**
  * Replays one rollout snapshot into normalized messages, streaming its record
  * blocks in file order. Returns `null` if the snapshot went stale mid-replay.
  *
@@ -1353,7 +1421,7 @@ async function replayPersistedRollout(
   if (structuredTurns.size > 0) {
     let recordIndex = 0;
     let indexedTurnId: string | undefined;
-    const indexed = await forEachTranscriptBatch(snapshot, (records) => {
+    const indexed = await forEachHistoryBatch(snapshot, (records) => {
       for (const record of records) {
         indexedTurnId = readTurnId(record.payload) ?? indexedTurnId;
         if (
@@ -1613,8 +1681,12 @@ async function replayPersistedRollout(
   /** Removes the last `turns` user turns and everything after them. */
   const dropLastTurns = (turns: number): void => {
     const userIndexes: number[] = [];
+    let lastTurnId: string | undefined;
     messages.forEach((message, index) => {
-      if (message.role === "user") userIndexes.push(index);
+      if (message.role !== "user") return;
+      // Steers are additional user rows in the same provider turn.
+      if (!message.turnId || message.turnId !== lastTurnId) userIndexes.push(index);
+      lastTurnId = message.turnId;
     });
     if (userIndexes.length === 0) return;
     const cut = userIndexes[Math.max(0, userIndexes.length - turns)]!;
@@ -1852,7 +1924,7 @@ async function replayPersistedRollout(
   };
 
   let recordIndex = 0;
-  const replayed = await forEachTranscriptBatch(snapshot, async (records) => {
+  const replayed = await forEachHistoryBatch(snapshot, async (records) => {
     for (const record of records) {
       const turnId = readTurnId(record.payload);
       if (turnId && turnId !== currentTurnId) {

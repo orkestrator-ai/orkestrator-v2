@@ -134,7 +134,10 @@ import {
   nativeAgentSessionStorageKey,
   NativeAgentService,
 } from "./native-agent-service.js";
-import { createSessionTitleService } from "./session-title-service.js";
+import {
+  createSessionTitleService,
+  sessionTitleGenerationEnabled,
+} from "./session-title-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
 import {
   dispatchMultiReviewAddressPrompt,
@@ -693,8 +696,7 @@ export class OrkestratorBackend {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         // Never under `bun test`: a title run would use this machine's real
         // agent login. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns it off.
-        ...(process.env.NODE_ENV !== "test" &&
-        process.env.ORKESTRATOR_SESSION_TITLE_GENERATION !== "0"
+        ...(sessionTitleGenerationEnabled(process.env)
           ? { sessionTitles: createSessionTitleService(context) }
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),

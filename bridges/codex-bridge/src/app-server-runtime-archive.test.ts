@@ -65,6 +65,31 @@ describe("Codex archive", () => {
     }
   });
 
+  test("archived IDs on later pages stay out even when the rollout remains under sessions", async () => {
+    writeRollout("sessions", "thread-later-archived");
+    const h = await harness({
+      "thread/list": (params) => {
+        if (params.archived !== true) return { data: [], nextCursor: null };
+        return params.cursor === "archived-page-2"
+          ? { data: [threadPayload("thread-later-archived")], nextCursor: null }
+          : { data: [], nextCursor: "archived-page-2" };
+      },
+    });
+    expect((await h.runtime.listSessions()).sessions.map((session) => session.id)).not.toContain(
+      "thread-later-archived",
+    );
+    expect(
+      h
+        .child()
+        .requests.filter((request) => request.method === "thread/list")
+        .map((request) => request.params),
+    ).toEqual([
+      expect.not.objectContaining({ archived: true }),
+      expect.objectContaining({ archived: true }),
+      expect.objectContaining({ archived: true, cursor: "archived-page-2" }),
+    ]);
+  });
+
   test("the resume list leaves archived conversations out", async () => {
     writeRollout("sessions", "thread-live");
     writeRollout("sessions", "thread-listed-archived");

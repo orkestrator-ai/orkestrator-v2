@@ -333,7 +333,8 @@ export interface ListThreadsOptions {
   cwd?: string;
   limit?: number;
   cursor?: string;
-  includeArchived?: boolean;
+  /** true returns archived threads only; false/absent returns active threads. */
+  onlyArchived?: boolean;
 }
 
 export interface ListThreadsResult {

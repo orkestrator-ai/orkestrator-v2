@@ -292,24 +292,7 @@ export interface CursorSdkLoginProgress {
   auth: CursorSdkAuthStatus;
 }
 
-/**
- * The single in-flight login, held in the backend rather than the renderer.
- *
- * One at a time: a second concurrent flow would mint a second key and race to
- * persist it. Keeping the handle here is also what lets the settings pane be a
- * plain view — it starts a login and polls a status, and every decision about
- * spawning, parsing, storing and cancelling stays on this side.
- */
-let activeLogin:
-  | { handle: CursorSdkLoginHandle; state: CursorSdkLoginState; error?: string }
-  | undefined;
-interface CursorSdkLoginStartup {
-  promise: Promise<CursorSdkLoginHandle>;
-  controller: AbortController;
-  cancelled: boolean;
-}
-let activeLoginStartup: CursorSdkLoginStartup | undefined;
-
+/** Starts the backend's single Cursor login, or joins the pending one (`CursorSdkLoginSlot`). */
 export async function startCursorSdkLogin(
   context: CommandContext,
   options: {
@@ -319,52 +302,9 @@ export async function startCursorSdkLogin(
     openBrowser?: boolean;
   },
 ): Promise<{ loginUrl: string }> {
-  if (activeLogin?.state === "pending") return { loginUrl: activeLogin.handle.loginUrl };
-  if (activeLoginStartup) {
-    const startup = activeLoginStartup;
-    try {
-      const handle = await startup.promise;
-      if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
-      return { loginUrl: handle.loginUrl };
-    } catch (error) {
-      if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
-      throw error;
-    }
-  }
-
-  const controller = new AbortController();
-  const startup: CursorSdkLoginStartup = {
-    promise: beginCursorSdkLogin(context, { ...options, signal: controller.signal }),
-    controller,
-    cancelled: false,
-  };
-  activeLoginStartup = startup;
-  let handle: CursorSdkLoginHandle;
-  try {
-    handle = await startup.promise;
-  } catch (error) {
-    if (activeLoginStartup === startup) activeLoginStartup = undefined;
-    if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
-    throw error;
-  }
-  if (activeLoginStartup === startup) activeLoginStartup = undefined;
-  if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
-  const entry = {
-    handle,
-    state: "pending" as CursorSdkLoginState,
-    error: undefined as string | undefined,
-  };
-  activeLogin = entry;
-  void handle.completion.then(
-    () => {
-      entry.state = "authenticated";
-    },
-    (error: unknown) => {
-      entry.state = "failed";
-      entry.error = error instanceof Error ? error.message : String(error);
-    },
+  return context.runtime.localServers.cursorSdkLogin.start((signal) =>
+    beginCursorSdkLogin(context, { ...options, signal }),
   );
-  return { loginUrl: handle.loginUrl };
 }
 
 export async function cursorSdkLoginProgress(
@@ -372,23 +312,11 @@ export async function cursorSdkLoginProgress(
   storedApiKey: string | undefined,
 ): Promise<CursorSdkLoginProgress> {
   const auth = await cursorSdkAuthStatus(context, storedApiKey);
-  if (activeLoginStartup) return { state: "pending", auth };
-  if (!activeLogin) return { state: "idle", auth };
-  return {
-    state: activeLogin.state,
-    loginUrl: activeLogin.handle.loginUrl,
-    ...(activeLogin.error ? { error: activeLogin.error } : {}),
-    auth,
-  };
+  return { ...context.runtime.localServers.cursorSdkLogin.progress(), auth };
 }
 
-export function cancelCursorSdkLogin(): void {
-  if (activeLoginStartup) {
-    activeLoginStartup.cancelled = true;
-    activeLoginStartup.controller.abort();
-  }
-  activeLogin?.handle.cancel();
-  activeLogin = undefined;
+export function cancelCursorSdkLogin(context: CommandContext): void {
+  context.runtime.localServers.cursorSdkLogin.cancel();
 }
 
 /**

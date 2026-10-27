@@ -260,41 +260,6 @@ export function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
   throw new Error("Expected status to be backlog, todo, inprogress, or review");
 }
 
-export const linearCompletionCommentLocks = new Map<string, Promise<unknown>>();
-export const githubCompletionCommentLocks = new Map<string, Promise<unknown>>();
-
-export async function withLinearCompletionCommentLock<T>(
-  pipelineId: string,
-  task: () => Promise<T>,
-): Promise<T> {
-  const previous = linearCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
-  const current = previous.then(task);
-  linearCompletionCommentLocks.set(pipelineId, current);
-  try {
-    return await current;
-  } finally {
-    if (linearCompletionCommentLocks.get(pipelineId) === current) {
-      linearCompletionCommentLocks.delete(pipelineId);
-    }
-  }
-}
-
-export async function withGitHubCompletionCommentLock<T>(
-  pipelineId: string,
-  task: () => Promise<T>,
-): Promise<T> {
-  const previous = githubCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
-  const current = previous.then(task);
-  githubCompletionCommentLocks.set(pipelineId, current);
-  try {
-    return await current;
-  } finally {
-    if (githubCompletionCommentLocks.get(pipelineId) === current) {
-      githubCompletionCommentLocks.delete(pipelineId);
-    }
-  }
-}
-
 export function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }

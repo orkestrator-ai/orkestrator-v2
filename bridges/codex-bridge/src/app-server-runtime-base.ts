@@ -65,7 +65,6 @@ export interface AppServerRuntimeOptions {
   /** Reuses the bridge's persisted model cache and fallback catalog. */
   loadCachedModels: () => Promise<{ models: BridgeModel[]; source: "cache" | "fallback" }>;
   persistModels?: (models: BridgeModel[]) => Promise<void>;
-  generateTitle?: (prompt: string) => Promise<string>;
   coalesceIntervalMs?: number;
   now?: () => number;
   /** Detach a thread after this long untouched. 0 disables detaching. */

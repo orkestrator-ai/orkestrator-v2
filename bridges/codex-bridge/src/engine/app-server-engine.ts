@@ -824,6 +824,7 @@ export class AppServerEngine implements CodexEngine {
    * with a stale token that the normal refresh would have replaced.
    */
   private accountSignInRequired = false;
+  private refusedLoginFingerprint: Promise<string | undefined> | undefined;
   // One live login per app-server account, independent of any renderer or tab.
   private pendingSignIn: { loginId: string; display: NativeAgentPendingSignIn } | null = null;
   private pendingSignInTimer: ReturnType<typeof setTimeout> | undefined;
@@ -996,12 +997,8 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /** Applies a user's answer. False when the approval is already gone. */
-  resolveApproval(
-    approvalId: string,
-    decision: ApprovalDecision,
-    amendmentIndex?: number,
-  ): boolean {
-    return this.router.resolveApproval(approvalId, decision, amendmentIndex);
+  resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
+    return this.router.resolveApproval(approvalId, decision);
   }
 
   getParkedApprovals(): readonly ApprovalRequest[] {
@@ -1177,6 +1174,8 @@ export class AppServerEngine implements CodexEngine {
       }
     }
 
+    const completesActiveLogin =
+      !this.activeLoginId || objectRecord(notification.params).loginId === this.activeLoginId;
     if (notification.method === "account/login/completed") {
       const loginId = objectRecord(notification.params).loginId;
       if (typeof loginId === "string" && loginId.length <= 512) {
@@ -1190,7 +1189,8 @@ export class AppServerEngine implements CodexEngine {
     // the token the account connector was refused with.
     if (
       (notification.method === "account/login/completed" &&
-        objectRecord(notification.params).success === true) ||
+        objectRecord(notification.params).success === true &&
+        completesActiveLogin) ||
       notification.method === "account/updated"
     ) {
       // A sign-out through another client is a new account state: answers the
@@ -1200,8 +1200,10 @@ export class AppServerEngine implements CodexEngine {
     }
     if (
       notification.method === "account/login/completed" &&
-      objectRecord(notification.params).success === true
+      objectRecord(notification.params).success === true &&
+      completesActiveLogin
     ) {
+      this.refusedLoginFingerprint = undefined;
       this.emit({ kind: "account.signedIn", engineGeneration: generation });
     }
 
@@ -1240,8 +1242,9 @@ export class AppServerEngine implements CodexEngine {
       }
       if (
         (event.kind === "turn.completed" || (event.kind === "error" && !event.willRetry)) &&
-        event.error?.code === "unauthorized"
+        (event.error?.code === "unauthorized" || event.error?.httpStatusCode === 401)
       ) {
+        this.refusedLoginFingerprint ??= readStoredLoginFingerprint(this.options.codexHome);
         this.invalidateAccountServing(sequence);
         this.checkAccountSignIn(false, true);
       } else if (isModelResponseEvent(event) && "turnId" in event && event.threadId) {
@@ -1283,6 +1286,7 @@ export class AppServerEngine implements CodexEngine {
    * sign in to an account that is visibly working.
    */
   private recordAccountServing(generation: EngineGeneration): void {
+    this.refusedLoginFingerprint = undefined;
     this.accountServingGeneration = generation;
     this.accountSignInRequired = false;
   }
@@ -1302,12 +1306,13 @@ export class AppServerEngine implements CodexEngine {
    * through `$CODEX_HOME/auth.json` with other Codex clients.
    */
   private checkAccountSignIn(accountChanged: boolean, refreshToken = false): void {
+    const accountReplaced = accountChanged && !this.activeLoginId && !this.loginStart;
     const sequence = ++this.accountCheckSequence;
     const generation = this.supervisor.getGeneration();
     void this.supervisor
       .request("account/read", { refreshToken })
       .catch(signedOutAccountRead)
-      .then((response) => this.applyAccountRead(response, sequence, generation, accountChanged))
+      .then((response) => this.applyAccountRead(response, sequence, generation, accountReplaced))
       .catch((error: unknown) => {
         // Unconfirmed either way: leave admission alone. The notice still says
         // what Codex reported.
@@ -1329,14 +1334,20 @@ export class AppServerEngine implements CodexEngine {
     this.accountAppliedSequence = sequence;
     const wasSignInRequired = this.accountSignInRequired;
     const signedIn = this.recordAccount(response);
-    if (signedIn && wasSignInRequired) {
+    if (
+      signedIn &&
+      (wasSignInRequired || accountChanged) &&
+      !this.activeLoginId &&
+      !this.loginStart
+    ) {
+      this.refusedLoginFingerprint = undefined;
       // Stored-login reloads have no account/login/completed notification.
       // Publish the confirmed recovery so thread auth locks clear as well.
       this.emit({ kind: "account.signedIn", engineGeneration: generation });
     }
-    if (!signedIn) {
+    if (!signedIn || this.refusedLoginFingerprint) {
       await this.requestAccountReloadFromStoredLogin(sequence, generation);
-      return;
+      if (!signedIn) return;
     }
     if (!this.runtimeNotices.some(isCodexAccountAuthFailure)) return;
     if (!accountChanged && this.accountConnectorRetryGeneration === generation) return;
@@ -1366,8 +1377,17 @@ export class AppServerEngine implements CodexEngine {
     sequence: number,
     generation: EngineGeneration,
   ): Promise<void> {
-    if (!this.accountSignInRequired) return;
+    const refused = this.refusedLoginFingerprint;
+    if (!this.accountSignInRequired && !refused) return;
+    const rejectedFingerprint = await refused;
     const fingerprint = await readStoredLoginFingerprint(this.options.codexHome);
+    // A rejected API key can still read as signed in. Only a different stored
+    // credential warrants replacing that child; polling the old key proves nothing.
+    if (
+      !this.accountSignInRequired &&
+      (!refused || refused !== this.refusedLoginFingerprint || fingerprint === rejectedFingerprint)
+    )
+      return;
     if (
       !fingerprint ||
       fingerprint === this.accountReloadFingerprint ||
@@ -1439,7 +1459,8 @@ export class AppServerEngine implements CodexEngine {
     for (const binding of this.bindings.values()) binding.generation = previous;
     // Credentials live on disk, not in the child, so a confirmed sign-out
     // stands, but the replacement may have loaded a login made meanwhile.
-    if (this.accountSignInRequired) this.checkAccountSignIn(true);
+    if (this.accountSignInRequired || this.pendingAccountReloadFingerprint !== undefined)
+      this.checkAccountSignIn(true);
     this.emit({ kind: "engine.generation", generation, previous, engineGeneration: generation });
   }
 
@@ -2224,7 +2245,6 @@ export class AppServerEngine implements CodexEngine {
     const generation = this.supervisor.getGeneration();
     // On-demand UI auth-status reads must not force a token refresh here (see
     // `checkAccountSignIn`). App-server refreshes a stale token on its own.
-    const loginSequence = this.loginSequence;
     const response = await this.supervisor
       .request("account/read", { refreshToken: false })
       .catch(signedOutAccountRead);
@@ -2236,9 +2256,10 @@ export class AppServerEngine implements CodexEngine {
         redactSecrets(error instanceof Error ? error.message : String(error)),
       );
     });
-    if (loginSequence === this.loginSequence && objectRecord(response).account) this.forgetSignIn();
     const pendingSignIn = normalizePendingSignIn(this.pendingSignIn?.display);
-    if (!pendingSignIn) this.clearPendingSignIn();
+    if (!pendingSignIn && this.pendingSignIn) {
+      void this.cancelAccountLogin().catch(() => undefined);
+    }
     return { ...objectRecord(response), ...(pendingSignIn ? { pendingSignIn } : {}) };
   }
 
@@ -2435,7 +2456,7 @@ export class AppServerEngine implements CodexEngine {
       cwd,
       limit: options.limit ?? 100,
       ...(options.cursor ? { cursor: options.cursor } : {}),
-      ...(options.includeArchived === undefined ? {} : { archived: options.includeArchived }),
+      ...(options.onlyArchived === undefined ? {} : { archived: options.onlyArchived }),
     });
 
     const threads = (response.data ?? [])
@@ -2553,6 +2574,14 @@ export class AppServerEngine implements CodexEngine {
     );
     this.unsupportedItemCount += unsupportedItemTypes.length;
     for (const event of events) this.emit(event);
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/archive", { threadId });
+  }
+
+  async unarchiveThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/unarchive", { threadId });
   }
 
   async setThreadName(threadId: string, name: string): Promise<boolean> {

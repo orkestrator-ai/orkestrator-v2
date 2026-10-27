@@ -405,8 +405,11 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   sessions; remove it or start a new conversation), could not check (the
   backend failed or did not answer within 8 seconds: **Retry**, never a
   replacement; a late answer still replaces it) and closed (a backend older
-  than this command, or an agent without resume). Native agents have no
-  archive state yet ([0006](../todo/agent-engines/0006-session-titles-and-history.md)).
+  than this command, or an agent without resume). Codex conversations can
+  now be archived from the resume list
+  ([agent-engines.md](agent-engines.md#removing-a-conversation-from-the-resume-list));
+  links do not show an archived state yet
+  ([0038](../todo/design-canvas/0038-design-agent-conversation-links.md)).
 - **Resume conversation.** A closed link that can be resumed is offered ahead
   of a new conversation, alone or as the destination for new context
   ("Resume and add to composer"). The resume tab id is derived from the link

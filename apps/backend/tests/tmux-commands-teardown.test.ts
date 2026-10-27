@@ -1,15 +1,12 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
-import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import {
   cleanupEnvironmentTmux,
   killEnvironmentTmuxSessions,
   tmuxSessionName,
-  tmuxManager,
-  getLastTmuxOrphanSweepAt,
-  setLastTmuxOrphanSweepAt,
 } from "../src/core/tmux";
+import { BackendRuntime } from "../src/core/backend-runtime";
 import { TmuxBackend } from "../src/core/tmux-backend";
 import { existsSync, promises as fs } from "node:fs";
 import {
@@ -21,6 +18,8 @@ import { realTmux, withPrivateTmux } from "./tmux-lifecycle-fixture.js";
 import {
   createHandlers,
   deferred,
+  harnessContext,
+  harnessRuntime,
   invoke,
   waitFor,
   withFakeTmuxRuntime,
@@ -50,7 +49,8 @@ describe("Electron tmux environment teardown", () => {
             { tabId, environmentId: environment.id },
             context,
           )) as { tmux_session: string; session_id: string };
-          const session = tmuxManager.get(environment.id, tabId)!;
+          const sessions = harnessRuntime().tmux.sessions;
+          const session = sessions.get(environment.id, tabId)!;
           const sessionDir = path.join(runtimeRoot, "sessions", started.session_id);
           await fixture.start(started.tmux_session, worktree);
           await fs.unlink(fixture.socket);
@@ -67,7 +67,13 @@ describe("Electron tmux environment teardown", () => {
               ? fixture.exec(args[0])
               : exec.apply(this, args);
           });
-          const lastSweep = getLastTmuxOrphanSweepAt();
+          // A restarted backend: no in-memory sessions and no recent sweep.
+          const restartedRuntimes: BackendRuntime[] = [];
+          const restarted = () => {
+            const runtime = new BackendRuntime({ emit: () => undefined });
+            restartedRuntimes.push(runtime);
+            return { ...context, runtime };
+          };
           const run = async (command: string, args: string[] = []) => {
             const result = await fixture.exec([command, ...args]);
             if (result.status !== 0) throw new Error(result.stderr);
@@ -92,20 +98,18 @@ describe("Electron tmux environment teardown", () => {
               ),
             ).rejects.toThrow("stop incomplete");
             await expect(
-              cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext, {
+              cleanupEnvironmentTmux(environment.id, harnessContext(context), {
                 requireStopped: true,
               }),
             ).rejects.toThrow("cleanup incomplete");
-            expect(tmuxManager.get(environment.id, tabId)).toBe(session);
+            expect(sessions.get(environment.id, tabId)).toBe(session);
             expect(existsSync(sessionDir)).toBe(true);
             expect((await reap())[0]?.outcome).toBe("retry-pending");
             expect(existsSync(runtimeRoot)).toBe(true);
 
             // A restarted backend has no in-memory sessions. Reconciliation must
             // still keep the durable hooks and attribution on socket ENOENT.
-            tmuxManager.removeEnvironment(environment.id);
-            setLastTmuxOrphanSweepAt(0);
-            await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
+            await invoke(handlers, "claude_tmux_reconcile_orphans", {}, restarted());
             expect(existsSync(sessionDir)).toBe(true);
             expect(fixture.alive()).toBe(true);
 
@@ -114,15 +118,14 @@ describe("Electron tmux environment teardown", () => {
             // it is successful only now that process absence can be established.
             expect(await session.stop()).toBe(true);
             expect(existsSync(sessionDir)).toBe(false);
-            setLastTmuxOrphanSweepAt(0);
-            await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
+            await invoke(handlers, "claude_tmux_reconcile_orphans", {}, restarted());
             expect(existsSync(runtimeRoot)).toBe(false);
             await fs.mkdir(runtimeRoot, { recursive: true });
             expect((await reap())[0]?.outcome).toBe("reaped");
             expect(existsSync(runtimeRoot)).toBe(false);
           } finally {
-            tmuxManager.removeEnvironment(environment.id);
-            setLastTmuxOrphanSweepAt(lastSweep);
+            sessions.removeEnvironment(environment.id);
+            for (const runtime of restartedRuntimes) runtime.shutdown();
             spy.mockRestore();
           }
         });
@@ -151,8 +154,10 @@ describe("Electron tmux environment teardown", () => {
                 getEnvironment: async () => environment,
                 loadEnvironments: async () => [environment],
               },
-            } as unknown as CommandContext;
-            await cleanupEnvironmentTmux(environment.id, context, { requireStopped: true });
+            };
+            await cleanupEnvironmentTmux(environment.id, harnessContext(context), {
+              requireStopped: true,
+            });
             expect(existsSync(runtimeRoot)).toBe(false);
           } finally {
             spy.mockRestore();
@@ -253,7 +258,7 @@ describe("Electron tmux environment teardown", () => {
       expect(await fs.readFile(settingsPath, "utf8")).not.toBe(original);
 
       // Deleting the environment goes through this, not `claude_tmux_stop`.
-      await cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
+      await cleanupEnvironmentTmux(environment.id, harnessContext(context));
 
       expect(await fs.readFile(settingsPath, "utf8")).toBe(original);
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
@@ -296,7 +301,7 @@ describe("Electron tmux environment teardown", () => {
       };
 
       await expect(
-        cleanupEnvironmentTmux(unreachable.id, context as unknown as CommandContext),
+        cleanupEnvironmentTmux(unreachable.id, harnessContext(context)),
       ).resolves.toBeUndefined();
     });
   });
@@ -320,7 +325,7 @@ describe("Electron tmux environment teardown", () => {
         resourceRoot: "",
       };
 
-      await cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
+      await cleanupEnvironmentTmux(environment.id, harnessContext(context));
 
       expect(existsSync(path.join(alive, orphanName))).toBe(true);
       expect(await fs.readFile(log, "utf8")).not.toContain(`kill-session -t ${orphanName}`);
@@ -346,7 +351,7 @@ describe("Electron tmux environment teardown", () => {
       };
 
       await expect(
-        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
+        cleanupEnvironmentTmux(environment.id, harnessContext(context)),
       ).resolves.toBeUndefined();
       expect(existsSync(path.join(alive, orphanName))).toBe(false);
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
@@ -479,7 +484,7 @@ describe("Electron tmux environment teardown", () => {
         context,
       );
 
-      const cleanup = cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
+      const cleanup = cleanupEnvironmentTmux(environment.id, harnessContext(context));
       await waitFor(() => loadStarted);
 
       storedEnvironment = {
@@ -591,7 +596,7 @@ describe("Electron tmux environment teardown", () => {
         context,
       );
 
-      await cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
+      await cleanupEnvironmentTmux(environment.id, harnessContext(context));
 
       await expect(
         invoke(
@@ -628,7 +633,7 @@ describe("Electron tmux environment teardown", () => {
       process.env.FAKE_TMUX_FAIL_KILL = "1";
       try {
         await expect(
-          cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
+          cleanupEnvironmentTmux(environment.id, harnessContext(context)),
         ).rejects.toThrow("cleanup incomplete");
         expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
       } finally {
@@ -660,9 +665,9 @@ describe("Electron tmux environment teardown", () => {
         context,
       );
 
-      await expect(
-        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
-      ).rejects.toThrow("cleanup incomplete");
+      await expect(cleanupEnvironmentTmux(environment.id, harnessContext(context))).rejects.toThrow(
+        "cleanup incomplete",
+      );
       expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
     });
   });
@@ -693,9 +698,9 @@ describe("Electron tmux environment teardown", () => {
       await fs.rm(settingsPath);
       await fs.mkdir(settingsPath);
 
-      await expect(
-        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
-      ).rejects.toThrow("cleanup incomplete");
+      await expect(cleanupEnvironmentTmux(environment.id, harnessContext(context))).rejects.toThrow(
+        "cleanup incomplete",
+      );
       expect(
         await fs.readFile(
           path.join(runtimeRoot, "settings.local.json.orkestrator-v2-backup"),

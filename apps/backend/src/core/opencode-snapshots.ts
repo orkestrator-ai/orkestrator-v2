@@ -368,7 +368,15 @@ export async function openCodeTranscriptSnapshot(
       revision: input.revision(),
       freshness: "current",
       historyEpoch: snapshotEpoch,
-      ...(historyCursor ? { historyCursor } : {}),
+      ...(historyCursor
+        ? {
+            historyCursor,
+            historyCursorBefore: openCodeCursorBefore(
+              windowMessages.slice(start),
+              groups.slice(start),
+            ),
+          }
+        : {}),
       ...(revisedMessages.length > 0 ? { revisedMessages } : {}),
       ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
       ...(title ? { title } : {}),
@@ -376,6 +384,30 @@ export async function openCodeTranscriptSnapshot(
   } catch (error) {
     throw new ProviderUnavailableError("OpenCode transcript is unavailable", { cause: error });
   }
+}
+
+/**
+ * `historyCursorBefore` for an OpenCode window. OpenCode pages by whole
+ * message, so only the first row of a message's rows can end a page: a cursor
+ * named at its error row would page the message itself away. Rows are indexed
+ * on first use only.
+ */
+function openCodeCursorBefore(
+  messages: readonly unknown[],
+  groups: readonly Record<string, unknown>[][],
+): (messageId: string) => string | undefined {
+  let firstRows: Map<string, unknown> | undefined;
+  return (messageId) => {
+    if (!firstRows) {
+      firstRows = new Map();
+      groups.forEach((group, index) => {
+        const id = group[0]?.id;
+        if (typeof id === "string" && !firstRows!.has(id)) firstRows!.set(id, messages[index]);
+      });
+    }
+    const message = firstRows.get(messageId);
+    return message === undefined ? undefined : openCodeHistoryCursor(message);
+  };
 }
 
 /**

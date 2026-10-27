@@ -124,6 +124,10 @@ export async function createSession(
 
   const work = (async () => {
     const state = newSessionState(clientSessionKey, resolveCursorExecutionPolicy(policy));
+    // The only session whose journal starts complete: it has no agent id, so
+    // its first attach creates a new SDK agent that nothing but this journal
+    // has ever sent to. Resume and restore never set this here.
+    state.promptJournalComplete = true;
     if (typeof readOnly === "boolean") state.readOnly = readOnly;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposer(state.composer);
@@ -833,7 +837,10 @@ async function withoutUnusedWarmUps(items: SDKAgentInfo[]): Promise<SDKAgentInfo
  * Sessions this workspace can be resumed into.
  *
  * Scoped to `cwd` so the picker offers this environment's own history rather
- * than every agent the user has ever run on this machine.
+ * than every agent the user has ever run on this machine. Archived agents
+ * (`SDKAgentInfo.archived`, set when Cursor archived one) are left out: the
+ * SDK refuses a follow-up run on them until they are unarchived, which is
+ * cloud-only in the pinned SDK, so offering one would only fail.
  */
 export async function listResumableSessions(): Promise<JsonObject[]> {
   const { apiKey } = await resolveCredential();
@@ -853,7 +860,9 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
     cursor = page.nextCursor;
   } while (cursor && items.length < 2_000);
 
-  const offered = await withoutUnusedWarmUps(items.slice(0, 2_000));
+  const offered = await withoutUnusedWarmUps(
+    items.slice(0, 2_000).filter((item) => item.archived !== true),
+  );
   return offered.map((item) => ({
     // This is the bridge wire shape, not the normalized service shape. The
     // shared backend provider reads `id` here and turns it into `sessionId` for

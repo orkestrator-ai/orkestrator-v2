@@ -166,6 +166,16 @@ describe("project clone jobs", () => {
         localPath: path.join(root, "next"),
       }),
     ).toMatchObject({ state: "running" });
+    // Let it fail before teardown: a running clone still writes its staging
+    // directory into `root`.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const job = (await invoke("get_project_clone", { requestKey: "next" })) as { state: string };
+      if (job.state !== "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await invoke("get_project_clone", { requestKey: "next" })).toMatchObject({
+      state: "failed",
+    });
   });
 
   test("refuses a relative location", async () => {

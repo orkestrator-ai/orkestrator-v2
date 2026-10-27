@@ -70,6 +70,12 @@ Exit criteria:
 
 ## Phase 2: establish representative baselines
 
+Status (2026-10-27): the in-process harness
+(`apps/backend/scripts/remote-bandwidth-baseline.ts`) and a first matrix on
+loopback and a userspace-limited link are recorded in
+[todo 0052](../docs/todo/transcripts-and-observation/0052-remote-client-bandwidth.md).
+The run through the supported remote route is still owed.
+
 Build a reproducible matrix using the supported remote access path, not only a
 loopback microbenchmark.
 

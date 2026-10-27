@@ -158,8 +158,8 @@ const mockClaimPromptDispatch = mock<typeof realSessionManager.claimPromptDispat
     return "claimed";
   },
 );
-const mockPersistedDispatchClaimLost = mock<typeof realSessionManager.persistedDispatchClaimLost>(
-  async () => false,
+const mockPersistedDispatchStatus = mock<typeof realSessionManager.persistedDispatchStatus>(
+  async () => "unknown",
 );
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
@@ -226,7 +226,8 @@ mock.module("../services/session-manager.js", () => ({
   getPromptDispatchState: mockGetPromptDispatchState,
   // Real: the route test drives it through the peeked session record.
   restoredDispatchClaimLost: realSessionManagerSnapshot.restoredDispatchClaimLost,
-  persistedDispatchClaimLost: mockPersistedDispatchClaimLost,
+  dispatchJournalProvesAbsent: realSessionManagerSnapshot.dispatchJournalProvesAbsent,
+  persistedDispatchStatus: mockPersistedDispatchStatus,
   gracefulInterruptClaudeSession: mockGracefulInterruptClaudeSession,
   readClaudeCommandCatalogue: mockReadClaudeCommandCatalogue,
   refreshClaudeCommandCatalogue: mockRefreshClaudeCommandCatalogue,
@@ -382,8 +383,8 @@ describe("session routes", () => {
     mockClearPromptSuggestion.mockImplementation((id: string) => id === "s-1");
     mockGetPromptDispatchState.mockReset();
     mockGetPromptDispatchState.mockImplementation(() => "new");
-    mockPersistedDispatchClaimLost.mockReset();
-    mockPersistedDispatchClaimLost.mockImplementation(async () => false);
+    mockPersistedDispatchStatus.mockReset();
+    mockPersistedDispatchStatus.mockImplementation(async () => "unknown");
     resetPersistenceMocks();
   });
 
@@ -1391,10 +1392,17 @@ describe("session routes", () => {
         requestId: "structured-1",
         turnStartedAt,
       });
+      // Through the durable claim, like a plain prompt with a request id.
+      expect(mockClaimPromptDispatch).toHaveBeenCalledWith(
+        "s-1",
+        "structured-1",
+        expect.any(Function),
+      );
       expect(mockSendPrompt).toHaveBeenCalledWith(
         "s-1",
         "Review",
         expect.objectContaining({ outputSchema, requestId: "structured-1" }),
+        expect.objectContaining({ onQueryStarted: expect.any(Function) }),
       );
     });
 
@@ -1718,11 +1726,9 @@ describe("session routes", () => {
         "fastMode",
         "includeLocalSettings",
         "model",
-        "outputSchema",
         "parameterValues",
         "permissionMode",
         "promptSuggestions",
-        "requestId",
       ]);
       expect(callArgs[2]).toEqual({
         model: "opus",
@@ -1733,10 +1739,8 @@ describe("session routes", () => {
         agent: undefined,
         includeLocalSettings: undefined,
         promptSuggestions: undefined,
-        outputSchema: undefined,
         // A real effort level switches Ultracode off explicitly.
         parameterValues: { ultracode: false },
-        requestId: undefined,
       });
     });
 
@@ -2548,7 +2552,7 @@ describe("session routes", () => {
             pending: state === "processing",
           });
         }
-        expect(mockPersistedDispatchClaimLost).not.toHaveBeenCalled();
+        expect(mockPersistedDispatchStatus).not.toHaveBeenCalled();
         // Read-only: never the touching or hydrating lookups.
         expect(mockGetSession).not.toHaveBeenCalled();
         expect(mockEnsurePersistedSession).not.toHaveBeenCalled();
@@ -2561,18 +2565,61 @@ describe("session routes", () => {
       }
     });
 
+    test("answers absent only from a resident session whose journal is complete", async () => {
+      const resident = {
+        id: "s-1",
+        dispatchJournalComplete: true,
+        dispatchedRequestIds: new Set(["claimed-here", "idle-steer"]),
+        restoredDispatchedRequestIds: new Set(["before-restart"]),
+        structuredOutputRequestId: "structured-slot",
+        localTranscript: [{ id: "idle-steer:idle-steer" }],
+      };
+      mockPeekSession.mockImplementation((id: string) =>
+        id === "s-1" ? (resident as never) : undefined,
+      );
+      try {
+        const read = async (requestId: string) =>
+          jsonBody(await app.request(`/session/s-1/dispatch?requestId=${requestId}`));
+        expect(await read("never-sent")).toEqual({ dispatch: "absent" });
+        expect(await read("before-restart")).toEqual({ dispatch: "lost" });
+        expect(await read("claimed-here")).toEqual({ dispatch: "unknown" });
+        expect(await read("idle-steer")).toEqual({ dispatch: "unknown" });
+        expect(await read("structured-slot")).toEqual({ dispatch: "unknown" });
+        // A journal that dropped an id, or could not be read, proves nothing.
+        resident.dispatchJournalComplete = false;
+        expect(await read("never-sent")).toEqual({ dispatch: "unknown" });
+        Object.assign(resident, {
+          dispatchJournalComplete: true,
+          dispatchJournalUnavailable: true,
+        });
+        expect(await read("never-sent")).toEqual({ dispatch: "unknown" });
+        Object.assign(resident, { dispatchJournalUnavailable: false, deleting: true });
+        expect(await read("never-sent")).toEqual({ dispatch: "unknown" });
+        expect(mockPersistedDispatchStatus).not.toHaveBeenCalled();
+        expect(mockGetSession).not.toHaveBeenCalled();
+      } finally {
+        mockPeekSession.mockImplementation((id: string) =>
+          id === "s-health"
+            ? ({ id, lastAccessedAt: 123, health: runtimeHealth } as never)
+            : undefined,
+        );
+      }
+    });
+
     test("answers a session this process has not registered from its durable journal", async () => {
       mockGetPromptDispatchState.mockImplementation(() => "not-found");
-      mockPersistedDispatchClaimLost.mockImplementation(
-        async (_id, requestId) => requestId === "before-restart",
+      mockPersistedDispatchStatus.mockImplementation(async (_id, requestId) =>
+        requestId === "before-restart" ? "lost" : requestId === "never-sent" ? "absent" : "unknown",
       );
       const lost = await app.request("/session/s-cold/dispatch?requestId=before-restart");
       expect(await jsonBody(lost)).toEqual({ dispatch: "lost" });
-      expect(mockPersistedDispatchClaimLost).toHaveBeenCalledWith("s-cold", "before-restart");
+      expect(mockPersistedDispatchStatus).toHaveBeenCalledWith("s-cold", "before-restart");
+      const absent = await app.request("/session/s-cold/dispatch?requestId=never-sent");
+      expect(await jsonBody(absent)).toEqual({ dispatch: "absent" });
       const unknown = await app.request("/session/s-cold/dispatch?requestId=other");
       expect(await jsonBody(unknown)).toEqual({ dispatch: "unknown" });
       // A failed read is not evidence either way.
-      mockPersistedDispatchClaimLost.mockImplementation(async () => {
+      mockPersistedDispatchStatus.mockImplementation(async () => {
         throw new Error("unreadable");
       });
       const failed = await app.request("/session/s-cold/dispatch?requestId=before-restart");

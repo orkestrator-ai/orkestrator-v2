@@ -1159,12 +1159,12 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(read("apps/web/src/stores/configStore.ts")).toContain(
       "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
     );
-    expect(read("apps/backend/src/core/storage-shared-core.ts")).toContain(
+    expect(read("apps/backend/src/core/storage-shared-config.ts")).toContain(
       "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
     );
     for (const rel of [
       "apps/web/src/stores/configStore.ts",
-      "apps/backend/src/core/storage-shared-core.ts",
+      "apps/backend/src/core/storage-shared-config.ts",
       "docker/init-firewall.sh",
       "docker/update-firewall.sh",
       "docker/firewall-domains.sh",

@@ -1,5 +1,4 @@
 import { detectDockerTopology } from "./docker-image.js";
-import { containerOomEvents } from "./container-oom-events.js";
 import {
   UNRESTRICTED_LIMITS,
   builtInResourceDefault,
@@ -154,12 +153,14 @@ const DISK_TTL_MS = 5 * 60_000;
 let capacityCache: { at: number; value: DockerCapacity } | null = null;
 let diskCache: { at: number; value: DockerCapacity["disk"] } | null = null;
 
-/** Test seam. */
+/**
+ * Test seam. Capacity and disk describe the Docker daemon, not one backend,
+ * so they stay process-wide: two backends on one daemon read the same
+ * figures. The usage sample is per backend (`ContainerUsageSampler`).
+ */
 export function resetResourceCaches(): void {
   capacityCache = null;
   diskCache = null;
-  usageCache = null;
-  inflight = null;
 }
 
 function number(value: unknown): number | null {
@@ -316,14 +317,7 @@ async function dockerDisk(): Promise<DockerCapacity["disk"]> {
 // Usage sampler
 // ---------------------------------------------------------------------------
 
-/** A visible surface treats older samples as stale. */
-export const USAGE_STALE_MS = 15_000;
-/** Callers within this window share one sample. */
-const USAGE_MIN_INTERVAL_MS = 5_000;
 const MAX_SAMPLED_CONTAINERS = 128;
-
-let usageCache: { at: number; value: ContainerUsageSnapshot } | null = null;
-let inflight: Promise<ContainerUsageSnapshot> | null = null;
 
 /** `1.5GiB` / `512MiB` / `12kB` → bytes (binary for *iB, decimal otherwise). */
 export function parseMemorySize(value: string): number | null {
@@ -376,7 +370,7 @@ export function parseStatsLine(line: string): {
 }
 
 async function sampleNow(
-  context: Pick<CommandContext, "storage">,
+  context: Pick<CommandContext, "storage" | "runtime">,
 ): Promise<ContainerUsageSnapshot> {
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
   const sampledAt = new Date().toISOString();
@@ -422,7 +416,7 @@ async function sampleNow(
       memoryLimitBytes: null,
       pids: null,
       oomKilled: null,
-      oomEvents: containerOomEvents(id),
+      oomEvents: context.runtime.containerOom.count(id),
       exitCode: null,
     });
   }
@@ -479,31 +473,11 @@ async function sampleNow(
   };
 }
 
-/**
- * One sample shared by every caller within the minimum interval; concurrent
- * callers wait on the same subprocesses. Staleness is computed on read.
- */
-export async function sampleContainerUsage(
-  context: Pick<CommandContext, "storage">,
+/** This backend's shared usage sample (`ContainerUsageSampler`). */
+export function sampleContainerUsage(
+  context: Pick<CommandContext, "storage" | "runtime">,
 ): Promise<ContainerUsageSnapshot> {
-  const now = Date.now();
-  if (usageCache && now - usageCache.at < USAGE_MIN_INTERVAL_MS) {
-    return { ...usageCache.value, stale: now - usageCache.at > USAGE_STALE_MS };
-  }
-  if (!inflight) {
-    inflight = sampleNow(context)
-      .then((value) => {
-        if (value.sampledAt) usageCache = { at: Date.now(), value };
-        return value;
-      })
-      .finally(() => {
-        inflight = null;
-      });
-  }
-  const value = await inflight;
-  if (value.sampledAt) return value;
-  // Docker unavailable: the last good sample, marked stale, beats nothing.
-  return usageCache ? { ...usageCache.value, stale: true, error: value.error } : value;
+  return context.runtime.containerUsage.sample(() => sampleNow(context));
 }
 
 // ---------------------------------------------------------------------------

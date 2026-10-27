@@ -1,3 +1,4 @@
+import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
 import { describe, expect, test } from "bun:test";
 import { DesignFrameBridge } from "./frame-bridge";
 
@@ -45,4 +46,31 @@ describe("DesignFrameBridge lifecycle", () => {
     expect(escaped).toBe(1);
     bridge.close();
   });
+});
+
+test("only the owned, live design frame can forward the shortcuts chord", () => {
+  let toggles = 0;
+  const onToggle = () => toggles++;
+  window.addEventListener(KEYBOARD_SHORTCUTS_EVENT, onToggle);
+  const target = { postMessage() {} } as unknown as Window;
+  const bridge = new DesignFrameBridge(target);
+  const deliver = (source: Window) =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source,
+        data: { channel: "orkestrator-design-shortcuts" },
+      }),
+    );
+  try {
+    deliver(window);
+    expect(toggles).toBe(0);
+    deliver(target);
+    expect(toggles).toBe(1);
+    bridge.close();
+    deliver(target);
+    expect(toggles).toBe(1);
+  } finally {
+    bridge.close();
+    window.removeEventListener(KEYBOARD_SHORTCUTS_EVENT, onToggle);
+  }
 });

@@ -59,6 +59,7 @@ import {
   bearerBridgeHeaders,
 } from "./commands-server-health.js";
 import type { OpenCodeAgentToolsState } from "./opencode-agent-tools.js";
+import type { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -129,7 +130,6 @@ import {
 } from "./coordinator-runtime.js";
 import { drainContainerProcesses } from "./container-readiness.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
-import { setLocalClaudeConfigDirectoryProvider } from "./tmux-session-manager.js";
 import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
@@ -179,6 +179,7 @@ export async function prepareCoordinatorClaudeHome(destination: string): Promise
 export async function prepareCoordinatorCodexHome(
   destination: string,
   source = coordinatorHostCodexHome(),
+  accounts?: Pick<AgentAccountsRuntime, "refreshLocalCodexLogin">,
 ): Promise<Omit<CoordinatorAgentAccount, "accountId">> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   await chmod(destination, 0o700);
@@ -192,7 +193,7 @@ export async function prepareCoordinatorCodexHome(
   if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
     throw new Error("Codex authentication file must be a regular file, not a symbolic link");
   }
-  const login = await readCoordinatorCodexLogin({ accountId: "default", home: source });
+  const login = await readCoordinatorCodexLogin({ accountId: "default", home: source }, accounts);
   if (!login.text) return { loginless: true };
   const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
@@ -957,7 +958,11 @@ async function startLocalServerAttempt(
       // directory, or the host's when no account was added.
       const account = await resolveActiveAgentAccount(context, "codex");
       if (account.home) stripInheritedAgentCredentials(env);
-      const login = await prepareCoordinatorCodexHome(coordinatorCodexHome, account.home);
+      const login = await prepareCoordinatorCodexHome(
+        coordinatorCodexHome,
+        account.home,
+        context.runtime.accounts,
+      );
       // The skills a worker on this account reads. The bridge lists them
       // through app-server and grants the permission profile read access.
       env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV] = path.join(
@@ -1431,7 +1436,7 @@ export async function deleteEnvironment(
       if (environment?.containerId) {
         // Retire state polling before removing the container, or the next tick
         // execs into something that no longer exists.
-        shutdownClaudeStatePolling(environment.containerId);
+        shutdownClaudeStatePolling(context, environment.containerId);
         context.runtime.localServers.openCodeAgentTools.cancel(
           `container:${environment.containerId}`,
         );
@@ -1625,10 +1630,17 @@ export function deleteEnvironmentTask(
   }
 }
 
-// tmux cannot import the account modules without a cycle; the owner registers.
-setLocalClaudeConfigDirectoryProvider(
-  async (context) => (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR,
-);
+/**
+ * The Claude configuration directory a local tmux launch exports: the active
+ * account's. tmux cannot import the account modules without a cycle, so the
+ * backend passes this to `BackendRuntime` as `tmux.localClaudeConfigDirectory`
+ * (`index.ts`, `tests/command-fixtures.ts`).
+ */
+export async function tmuxLocalClaudeConfigDirectory(
+  context: CommandContext,
+): Promise<string | undefined> {
+  return (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR;
+}
 
 /**
  * Resumes only the unambiguous follow-up half of a persisted merge-and-cleanup

@@ -174,6 +174,7 @@ import {
   openWebAnnotationThread,
 } from "@/lib/web-annotations/navigation";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
+import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
 import {
   buildPromptWithTranscriptAnnotations,
   MAX_TRANSCRIPT_ANNOTATIONS,
@@ -217,6 +218,7 @@ import { isClaudeAuthenticationFailureMessage, isClaudeNotLoggedInNotice } from 
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
+const EMPTY_PROJECTION_MESSAGES: NativeMessage[] = [];
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
 /** How long a send made before the first session-state read may wait for it. */
 const HELD_SUBMIT_TIMEOUT_MS = 15_000;
@@ -483,6 +485,7 @@ export function SharedNativeAgentController({
     retryRecoverableDispatch,
     discardRecoverableDispatch,
     listResumable,
+    setResumableArchived,
     resume,
     fork,
     performAction,
@@ -682,11 +685,16 @@ export function SharedNativeAgentController({
     return Object.fromEntries(tasks.map((task) => [task.id, task]));
   }, [platform, projection?.backgroundTasks]);
   const decoratedMessages = useMemo(() => {
-    const source = projection?.messages ?? [];
+    // How the last turn ended (a provider error, a stop) arrives with session
+    // state on the progressive path, beside the transcript rather than in it.
+    const source = withNativeTerminalMessages(
+      projection?.messages ?? EMPTY_PROJECTION_MESSAGES,
+      projection?.terminalMessages,
+    );
     return platform === "claude"
       ? applyClaudeBackgroundTaskStates(source, claudeBackgroundTasksById)
       : source;
-  }, [claudeBackgroundTasksById, platform, projection?.messages]);
+  }, [claudeBackgroundTasksById, platform, projection?.messages, projection?.terminalMessages]);
   const normalizedMessages = useMemo(
     () =>
       normalizeNativeMessages(decoratedMessages).flatMap((message) =>
@@ -1083,12 +1091,9 @@ export function SharedNativeAgentController({
         });
         if (cancelled) return;
         if (!status?.signIn?.kind) throw new Error("Sign-in options are unavailable");
-        const pending =
-          status.state === "signed-in" ? undefined : normalizePendingSignIn(status.pendingSignIn);
+        const pending = normalizePendingSignIn(status.pendingSignIn);
         setSignInDetails(
-          (previous) =>
-            pending ??
-            (status.pendingSignIn === null || status.state === "signed-in" ? null : previous),
+          (previous) => pending ?? (status.pendingSignIn === null ? null : previous),
         );
         if (pending)
           timer = setTimeout(() => void read(), Math.min(2_000, pending.expiresAt - Date.now()));
@@ -2140,6 +2145,8 @@ export function SharedNativeAgentController({
         activityAt: entry.updatedAt ?? entry.createdAt ?? null,
         ...(entry.status ? { status: entry.status } : {}),
         ...(entry.detail ? { detail: entry.detail } : {}),
+        ...(entry.parentId ? { parentId: entry.parentId } : {}),
+        ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
       })),
     [listResumable],
   );
@@ -3024,6 +3031,7 @@ export function SharedNativeAgentController({
         agentLabel={label}
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
+        {...(adapter.capabilities.actions?.archive ? { onArchive: setResumableArchived } : {})}
         onResume={(providerSessionId) => {
           setResumeDialogOpen(false);
           const sourceSessionId = projection?.sessionId;

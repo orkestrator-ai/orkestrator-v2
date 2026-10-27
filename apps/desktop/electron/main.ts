@@ -14,6 +14,7 @@ import {
   session,
   shell,
   WebContentsView,
+  webContents,
 } from "electron";
 import path from "node:path";
 import os from "node:os";
@@ -112,6 +113,11 @@ import {
   registerWindowAllClosedQuit,
 } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
+import {
+  KeyboardShortcutsController,
+  type KeyboardShortcutsTarget,
+} from "./keyboard-shortcuts-menu.js";
+import { KeyboardShortcutsRouting } from "./keyboard-shortcuts-routing.js";
 import {
   createAutoUpdateController,
   isAutoUpdateSupported,
@@ -402,11 +408,39 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 }
 
 /** The focused renderer of the focused window: one of its realms, or the window's own. */
-function emitToFocusedRenderer(event: string, payload: unknown): void {
+function focusedRenderer(): Electron.WebContents | null {
   const context = focusedContext();
-  if (!context) return;
-  const realm = realmContexts.focused(context.contents.id);
-  emitToContents((realm ?? context).contents, event, payload);
+  if (!context) return null;
+  return shortcutRouting.focusedTarget(
+    webContents.getFocusedWebContents()?.id,
+    context.contents.id,
+    realmContexts.focused(context.contents.id)?.contents ?? context.contents,
+  ).renderer as Electron.WebContents;
+}
+
+const keyboardShortcuts = new KeyboardShortcutsController();
+const shortcutRouting = new KeyboardShortcutsRouting(
+  () => [...windowContexts.values(), ...realmContexts.values()],
+  keyboardShortcuts,
+);
+
+function focusedShortcutTarget(): KeyboardShortcutsTarget | null {
+  const context = focusedContext();
+  if (!context) return null;
+  return shortcutRouting.focusedTarget(
+    webContents.getFocusedWebContents()?.id,
+    context.contents.id,
+    realmContexts.focused(context.contents.id)?.contents ?? context.contents,
+  );
+}
+
+// A WebContents receives native input for its subframes too, including opaque
+// design frames and artifact documents. Preview views retain their own hook.
+app.on("web-contents-created", (_event, contents) => shortcutRouting.register(contents));
+
+function emitToFocusedRenderer(event: string, payload: unknown): void {
+  const contents = focusedRenderer();
+  if (contents) emitToContents(contents, event, payload);
 }
 
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
@@ -573,6 +607,11 @@ function createWindowBrowserPreviews(
       getWindow: () => createdWindow,
       emitFocus: (tabId) => emitToOwner("browser-preview-focus-address", tabId),
     }),
+    toggleKeyboardShortcuts: (tabId) =>
+      keyboardShortcuts.request(
+        shortcutRouting.target(manager?.webContentsIdForTab(tabId)),
+        "toggle",
+      ),
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,
@@ -716,6 +755,8 @@ function createMenu(): void {
     closeTab: () => emitToFocusedRenderer("menu-close-tab", undefined),
     selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
+    // The dialog belongs to the focused renderer, which may be a realm.
+    showKeyboardShortcuts: (request) => keyboardShortcuts.request(focusedShortcutTarget(), request),
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -998,6 +1039,9 @@ async function closeWindowRealms(context: DesktopWindowContext): Promise<void> {
 }
 
 function registerIpc(): void {
+  ipcMain.handle("orkestrator:keyboard-shortcuts:closed", (event) => {
+    shortcutRouting.closed(event.sender.id);
+  });
   const manager = () => {
     if (!connectionManager) throw new Error("Connections are not initialized");
     return connectionManager;

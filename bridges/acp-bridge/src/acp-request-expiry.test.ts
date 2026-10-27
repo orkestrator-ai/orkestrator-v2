@@ -7,6 +7,7 @@ import { route } from "./acp-http.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { attachChild, clearApprovals, parkGrokInteraction } from "./acp-session.js";
 import { nativeFetch, waitFor } from "./acp-test-harness.js";
+import { publicApprovals } from "./acp-public.js";
 import { configureCommandChanges } from "./acp-command-changes.js";
 
 let server: Server;
@@ -97,13 +98,37 @@ async function finished(state: SessionState, requestId: string) {
     (body) => body.turn !== undefined,
   );
 }
+/**
+ * The tool call each approval kind parks for. A call without the detail its
+ * kind needs (here, an edit with no path) stays a generic permission.
+ */
+const APPROVAL_CALLS: Record<string, { toolCall: Record<string, unknown>; published: unknown }> = {
+  permission: {
+    toolCall: { name: "write_file", kind: "edit" },
+    published: { kind: "permission" },
+  },
+  command: {
+    toolCall: { toolCallId: "run", kind: "execute", rawInput: { command: "bun test" } },
+    published: { kind: "command", command: "bun test" },
+  },
+  "file-change": {
+    toolCall: { toolCallId: "edit", kind: "edit", locations: [{ path: "/w/a.ts" }] },
+    published: { kind: "file-change", paths: ["/w/a.ts"] },
+  },
+};
+
 function park(kind: string, state: SessionState, child: AcpProcess) {
-  if (kind === "permission") {
+  const approval = APPROVAL_CALLS[kind];
+  if (approval) {
     child.onPermission(7, {
       sessionId: state.acpSessionId,
-      toolCall: { name: "write_file", kind: "edit" },
-      options: [{ optionId: "allow", kind: "allow_once" }],
+      toolCall: approval.toolCall,
+      options: [
+        { optionId: "allow", kind: "allow_once" },
+        { optionId: "reject", kind: "reject_once" },
+      ],
     });
+    expect(publicApprovals(state)).toEqual([expect.objectContaining(approval.published)]);
   } else {
     parkGrokInteraction(
       state,
@@ -120,7 +145,7 @@ function park(kind: string, state: SessionState, child: AcpProcess) {
   }
 }
 
-for (const kind of ["permission", "question", "plan"]) {
+for (const kind of [...Object.keys(APPROVAL_CALLS), "question", "plan"]) {
   describe(`${kind} expiry`, () => {
     test("five minutes denies the request and reports the owning turn failure through dispatch", async () => {
       const f = fixture();
@@ -134,7 +159,8 @@ for (const kind of ["permission", "question", "plan"]) {
         jest.advanceTimersByTime(1);
         jest.useRealTimers();
         expect(f.responses).toEqual([
-          kind === "permission" ? { outcome: { outcome: "cancelled" } } : { outcome: "cancelled" },
+          // Cancelled, never the allow option, for every approval kind.
+          kind in APPROVAL_CALLS ? { outcome: { outcome: "cancelled" } } : { outcome: "cancelled" },
         ]);
         expect(f.state.approvals.size + f.state.interactions.size).toBe(0);
         f.complete();

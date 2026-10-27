@@ -38,7 +38,7 @@ const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState } = await import("./agent-session.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
-const { setPersistWriteGateForTests } = await import("./persistence.js");
+const { setPersistWriteGateForTests, settlePersistenceForTests } = await import("./persistence.js");
 const { closeSessionRetaining } = await import("./session-close.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
@@ -93,6 +93,7 @@ async function withStateDirectory(run: (stateFile: string) => Promise<void>): Pr
   } finally {
     setPersistWriteGateForTests();
     delete process.env.PI_BRIDGE_STATE_DIR;
+    await settlePersistenceForTests();
     await rm(stateDirectory, { recursive: true, force: true });
   }
 }

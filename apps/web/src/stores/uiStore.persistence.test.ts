@@ -114,3 +114,13 @@ test("graph height survives fresh-store hydration and resetting restores automat
   reloaded.getState().setMultiReviewGraphHeight(null);
   expect(createUIStore().getState().multiReviewGraphHeight).toBeNull();
 });
+
+test("the data-saving preference is off by default and survives a reload", () => {
+  localStorage.clear();
+  const initial = createUIStore();
+  expect(initial.getState().dataSaving).toBe(false);
+  initial.getState().setDataSaving(true);
+  expect(createUIStore().getState().dataSaving).toBe(true);
+  createUIStore().getState().setDataSaving(false);
+  expect(createUIStore().getState().dataSaving).toBe(false);
+});

@@ -268,6 +268,51 @@ describe("recovered reviewer dispatch", () => {
     expect(h.sends).toHaveLength(0);
   });
 
+  test("an absent request is re-sent once under the same id on the next pass", async () => {
+    const h = harness("build");
+    h.reviewer.dispatchState = "dispatching";
+    h.reviewer.continuationPrompt = "Continue the review";
+    let reads = 0;
+    h.provider.dispatchStatus = async () => {
+      reads += 1;
+      return "absent";
+    };
+    h.provider.structured = async () => null;
+    const runner = new ReviewFanoutRunner(h.host);
+    // Proof of non-delivery: back to `prepared`, nothing sent yet, so the next
+    // pass re-runs admission before it sends.
+    await runner.advanceReviewers([h.reviewer]);
+    expect(h.reviewer).toMatchObject({
+      status: "running",
+      requestId: "review-request",
+      dispatchState: "prepared",
+      continuationPrompt: "Continue the review",
+    });
+    expect(h.sends).toHaveLength(0);
+    await runner.advanceReviewers([h.reviewer]);
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]?.options.requestId).toBe("review-request");
+    expect(h.reviewer).toMatchObject({ dispatchState: "sent" });
+    expect(reads).toBe(1);
+  });
+
+  test("a result for the exact request outranks an absent answer", async () => {
+    const h = harness("build");
+    h.reviewer.dispatchState = "dispatching";
+    h.provider.dispatchStatus = async () => "absent";
+    h.provider.structured = async <T>() =>
+      ({
+        ok: true,
+        provider: "opencode",
+        requestId: "review-request",
+        value: {},
+      }) as StructuredOutputResult<T>;
+    h.provider.status = async () => "running";
+    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+    expect(h.reviewer).toMatchObject({ status: "running", dispatchState: "sent" });
+    expect(h.sends).toHaveLength(0);
+  });
+
   test.each(["unknown", "lost"] as const)(
     "a structured result for the exact request proves a %s dispatch ran",
     async (acceptance) => {

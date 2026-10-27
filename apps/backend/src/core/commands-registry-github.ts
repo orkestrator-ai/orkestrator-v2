@@ -14,7 +14,6 @@ import {
   asString,
   requireGitHubProject,
   asGitHubIssueStatus,
-  withGitHubCompletionCommentLock,
   asNumber,
 } from "./commands-helpers.js";
 
@@ -36,7 +35,7 @@ export function registerGitHubCommands(
       const commentBody = asString(body, "body").trim();
       if (!commentBody) throw new Error("Completion comment cannot be empty");
 
-      return withGitHubCompletionCommentLock(runId, () =>
+      return context.runtime.integrationLocks.withGitHubCompletionComment(runId, () =>
         context.storage.kanban.withGitHubCompletionCommentLock(runId, async () => {
           const target = await requireGitHubProject(context, targetProjectId);
           if (
@@ -122,7 +121,11 @@ export function registerGitHubCommands(
   register("get_github_issues", async ({ projectId }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
-      return await listGitHubIssues(target.token, target.repository);
+      return await listGitHubIssues(
+        context.runtime.integrationLocks,
+        target.token,
+        target.repository,
+      );
     } catch (error) {
       throw new Error(sanitizeGitHubError(error, target.token));
     }
@@ -156,6 +159,7 @@ export function registerGitHubCommands(
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await updateGitHubIssueStatus(
+        context.runtime.integrationLocks,
         target.token,
         target.repository,
         asNumber(issueNumber, "issueNumber"),

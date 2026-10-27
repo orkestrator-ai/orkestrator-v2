@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
+import { DataSavingSetting } from "./DataSavingSetting";
 import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
@@ -661,6 +662,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderGeneral = () => (
     <div className="max-w-2xl space-y-8">
+      <DataSavingSetting />
+
       {/* Preferred Editor */}
       <div className="space-y-3">
         <div>

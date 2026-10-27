@@ -16,7 +16,7 @@
  *     bun test bridges/codex-bridge/src/app-server/live-resume-context.test.ts
  */
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexAppServerConfigOverrides } from "../codex-config.js";
@@ -178,6 +178,111 @@ async function startLiveCodex() {
 }
 
 describeLive("live resumed transcript", () => {
+  test("the pinned provider persists reverted history and retains archived conversations", async () => {
+    const { codexHome, responses, engine, completion, config } = await startLiveCodex();
+    const events: EngineEvent[] = [];
+    engine.subscribe((event) => events.push(event));
+    const previousHome = process.env.CODEX_HOME;
+    try {
+      await engine.start();
+      const thread = await engine.startThread({ config });
+      const ids: string[] = [];
+      let threadId: string | undefined;
+      for (const text of ["first fixture turn", "second fixture turn"]) {
+        const turn = await engine.startTurn({
+          handle: thread.handle,
+          input: [{ type: "text", text }],
+          config,
+        });
+        ids.push(turn.turnId);
+        threadId = turn.threadId ?? undefined;
+        await withTimeout(completion(turn.turnId), 20_000, "fixture completion");
+      }
+      expect(threadId).toBeString();
+      await engine.revertThread(threadId!, ids[1]!);
+      expect(
+        (await engine.readThread(threadId!, { includeTurns: true }))?.turns?.map((turn) => turn.id),
+      ).toEqual([ids[0]!]);
+      expect(
+        events.some((event) => event.kind === "thread.reverted" && event.threadId === threadId!),
+      ).toBe(true);
+      const continued = await engine.startTurn({
+        handle: thread.handle,
+        input: [{ type: "text", text: "after revert fixture turn" }],
+        config,
+      });
+      await withTimeout(completion(continued.turnId), 20_000, "post-revert completion");
+      const removedAgain = await engine.startTurn({
+        handle: thread.handle,
+        input: [{ type: "text", text: "remove nested fixture turn" }],
+        config,
+      });
+      await withTimeout(completion(removedAgain.turnId), 20_000, "nested completion");
+      await engine.revertThread(threadId!, removedAgain.turnId);
+      const finalTurn = await engine.startTurn({
+        handle: thread.handle,
+        input: [{ type: "text", text: "after nested revert fixture turn" }],
+        config,
+      });
+      await withTimeout(completion(finalTurn.turnId), 20_000, "nested post-revert completion");
+      await engine.archiveThread(threadId!);
+      expect(
+        (await engine.listThreads({ cwd: config.cwd, onlyArchived: true })).threads.some(
+          (entry) => entry.id === threadId!,
+        ),
+      ).toBe(true);
+      expect(
+        (await engine.listThreads({ cwd: config.cwd })).threads.some(
+          (entry) => entry.id === threadId!,
+        ),
+      ).toBe(false);
+      await engine.unarchiveThread(threadId!);
+      expect(
+        (await engine.listThreads({ cwd: config.cwd })).threads.some(
+          (entry) => entry.id === threadId!,
+        ),
+      ).toBe(true);
+      expect(
+        (await engine.readThread(threadId!, { includeTurns: true }))?.turns?.map((turn) => turn.id),
+      ).toEqual([ids[0]!, continued.turnId, finalTurn.turnId]);
+      process.env.CODEX_HOME = codexHome;
+      await engine.stop();
+      const paths = await readdir(join(codexHome, "sessions"), { recursive: true });
+      const leaf = paths
+        .filter((name) => name.includes(`${threadId}_`) && name.endsWith(".jsonl"))
+        .sort()
+        .at(-1);
+      expect(leaf).toBeString();
+      const header = JSON.parse(
+        (await readFile(join(codexHome, "sessions", leaf!), "utf8")).split("\n")[0]!,
+      );
+      expect(header.payload.history_base).toMatchObject({
+        thread_id: expect.any(String),
+        end_ordinal_exclusive: expect.any(Number),
+        end_byte_offset: expect.any(Number),
+      });
+      const hydrated = await hydrateMessagesFromPersistedSession(threadId!);
+      expect(
+        hydrated.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content),
+      ).toEqual([
+        "first fixture turn",
+        "after revert fixture turn",
+        "after nested revert fixture turn",
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      await engine.stop();
+      await responses.stop();
+      await Promise.all([
+        rm(codexHome, { recursive: true, force: true }),
+        rm(config.cwd!, { recursive: true, force: true }),
+      ]);
+    }
+  }, 60_000);
+
   test("a reload shows only the prompts the user sent, not Codex's own user blocks", async () => {
     const { codexHome, skillPath, responses, engine, completedTurns, completion, config } =
       await startLiveCodex();

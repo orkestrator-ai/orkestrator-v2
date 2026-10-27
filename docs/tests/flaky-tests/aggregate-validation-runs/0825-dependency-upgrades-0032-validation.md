@@ -150,3 +150,11 @@ remain under `output/playwright/test-results/` and the per-owner output paths.
 ## Triage 2026-10-25
 
 Stays open. Tracked or fixed: DesignCanvasAccessibility and the test-diagnostics convention were branch defects fixed in the change; coordinator service 0165, environment move 0621/0248/0291, Mermaid 0512, OpenCode host 0723, ToolGroupFold 0747/0793, StreamingTranscript 0767, Monaco 0517, DesignCanvas 0174; native branch selection is the deterministic failure in [0493](0493-component-browser-aggregate-timeout-cluster.md). The main-merge repository suite passed. Next step: add a design-canvas-and-artifacts owner case for `apps/backend/src/core/transcript-artifacts/media-stream.browser.test.ts` `streamed media in Chromium` (five-second Chromium hook, also in 0694 and 0801; owner passed alone here and in 0801), and fold the mobile `ToolGroupFold.spec.ts:79` painted-gap failure (57 px; owner passed alone) into the web-ui ToolGroupFold cases. Then mark this record resolved.
+
+## Media-stream owner case — 2026-10-27
+
+The `streamed media in Chromium` hook deadline now has its owner case,
+[1108](../design-canvas-and-artifacts/1108-media-stream-chromium-launch-hook-deadline.md),
+after it recurred in the 0247 acceptance verification's `mise run test`. The
+`ToolGroupFold.spec.ts:79` fold above is still to do, so this record stays
+open.

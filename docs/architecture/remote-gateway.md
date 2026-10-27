@@ -116,7 +116,7 @@ equivalent environment variable unless noted.
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. |
 | `--tailscale-serve-port` | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | Serve HTTPS port. Default `443`. |
 | `--tailscale-bin` | `ORKESTRATOR_TAILSCALE_BIN` | Tailscale CLI path. |
-| `--compression` | `ORKESTRATOR_GATEWAY_COMPRESSION` | `body` (default) or `on` (includes SSE gzip). |
+| `--compression` | `ORKESTRATOR_GATEWAY_COMPRESSION` | `off`, `body` (default) or `on` (adds SSE gzip). See [Compression and terminal transport](#compression-and-terminal-transport). |
 | `--data-dir` | `ORKESTRATOR_DATA_DIR` | Application data directory. |
 | `--docker-image` | `ORKESTRATOR_DOCKER_IMAGE` | Image tag. Default `orkestrator-v2:latest`. |
 | `--control-host` / `--control-port` | | Loopback Control MCP listener. |
@@ -127,6 +127,42 @@ Local-only development bind:
 ```bash
 bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
 ```
+
+## Compression and terminal transport
+
+`--compression` sets the client listeners' mode
+(`GATEWAY_COMPRESSION_MODES` in `apps/backend/src/gateway-support-core.ts`):
+
+- `off`: nothing is compressed.
+- `body` (default): eligible ordinary responses and static assets are
+  compressed; event streams are not.
+- `on`: `body` plus gzip on direct `/__orkestrator/events` streams
+  (`GzipEventClientWriter`) and proxied event streams
+  (`createSseGzipCompressor`). Each frame is sync-flushed, so delivery stays
+  incremental. A client that does not negotiate gzip gets identity; a
+  direct stream sends `Vary: Accept-Encoding` either way.
+
+Streaming gzip contexts are shared by direct and proxied streams and capped at
+`MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
+continues in identity and counts as declined. A browser holds two event
+streams (the main stream and one shared terminal stream), so four browsers
+fill the pool. The direct writer counts its compressor backlog in the
+slow-consumer limits. The control listener never compresses
+(`compressionModeForListener`).
+
+Terminals use HTTP/SSE unless the browser opts into the terminal WebSocket
+(`TerminalWebSocketGateway`, `apps/backend/src/terminal-websocket-server.ts`)
+through the `terminalTransport` option or the
+`orkestrator-terminal-transport` localStorage key set to `websocket`
+(`TERMINAL_TRANSPORT_STORAGE_KEY` in `apps/web/src/lib/native/web-gateway.ts`).
+The socket has process-wide socket and channel limits and a per-socket channel
+limit, uses no message compression, and is not touched by `--compression`.
+Output ACKs are cumulative and coalesced for 50 ms.
+
+Neither default has changed. The measurement plan and the first in-process
+baseline are in
+[0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md);
+the harness is `apps/backend/scripts/remote-bandwidth-baseline.ts`.
 
 ## Loopback client gateway (SSH forwarding target)
 

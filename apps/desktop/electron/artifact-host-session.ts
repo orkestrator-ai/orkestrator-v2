@@ -286,6 +286,14 @@ export class ArtifactHostSession {
     return this.view?.webContents ?? null;
   }
 
+  focusIfVisible(): boolean {
+    const contents = this.webContents();
+    if (!this.isOpen || !contents || contents.isDestroyed() || !this.view?.getVisible())
+      return false;
+    contents.focus();
+    return true;
+  }
+
   /**
    * Create the session, install every policy hook, then the view, then load
    * the shell. Throws when this Electron cannot provide the required APIs;

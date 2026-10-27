@@ -6,6 +6,7 @@ import {
   type OpenCodeAgentToolsTuning,
 } from "./opencode-agent-tools.js";
 import { OpenCodeHostStartGate } from "./opencode-host-start.js";
+import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 
 export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
@@ -96,6 +97,8 @@ export class LocalServerRuntime {
   readonly openCodeHostStart: OpenCodeHostStartGate;
   /** Pi's host catalogue probes (`pi-model-catalog-seeding.ts`). */
   readonly piCatalog: PiCatalogProbes;
+  /** The single in-flight Cursor SDK sign-in (`cursor-sdk-bridge.ts`). */
+  readonly cursorSdkLogin = new CursorSdkLoginSlot();
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();

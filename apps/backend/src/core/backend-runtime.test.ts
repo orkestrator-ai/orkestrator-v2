@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -10,11 +10,27 @@ import { createCommandRegistry } from "./commands-registry.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { PtyProcess } from "./pty.js";
 import type { StorageService } from "./storage.js";
+import type { DockerCleanupGrant } from "./docker-cleanup-grants.js";
+import type { CursorSdkLoginHandle } from "./cursor-sdk-bridge.js";
+import type { KanbanTask } from "./storage-shared.js";
+import { TmuxBackend } from "./tmux-backend.js";
+import { TmuxSession } from "./tmux-session-manager.js";
+import type { ContainerUsageSnapshot } from "@orkestrator/protocol/container-resources";
+import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 /**
  * Two backends in one process own separate state: whatever one registers is
- * invisible to the other (docs/todo/backend-structure/0011 and 0066).
+ * invisible to the other (docs/todo/backend-structure/0011, 0066 and 0133).
  */
+
+/** A promise and its resolver, for work held in flight. */
+function held<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 const runtimes: BackendRuntime[] = [];
 
@@ -329,5 +345,262 @@ describe("two BackendRuntimes in one process", () => {
     const secondService = second.prMonitor.service;
     first.prMonitor.shutdown();
     expect(second.prMonitor.service).toBe(secondService);
+  });
+  test("claude-tmux sessions, interactive panes and the orphan sweep are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const commands = createCommandRegistry();
+    const session = new TmuxSession("env-1", "tab-1", TmuxBackend.local("/tmp"), "/tmp");
+    spyOn(session, "tmuxAlive").mockResolvedValue(true);
+    first.tmux.sessions.insert("env-1", "tab-1", session);
+
+    const status = (context: CommandContext) =>
+      commands.get("claude_tmux_status")!({ environmentId: "env-1", tabId: "tab-1" }, context);
+    expect(await status(contextFor(first))).toMatchObject({ tab_id: "tab-1", running: true });
+    expect(await status(contextFor(second))).toBeNull();
+    await expect(
+      commands.get("claude_tmux_interrupt")!(
+        { environmentId: "env-1", tabId: "tab-1" },
+        contextFor(second),
+      ),
+    ).rejects.toThrow("tmux session not running");
+
+    const terminalId = first.tmux.interactiveTerminals.create(session, 80, 24);
+    await expect(second.tmux.interactiveTerminals.resize(terminalId, 100, 30)).rejects.toThrow(
+      "not found",
+    );
+
+    // Each backend sweeps orphans once a minute on its own clock.
+    expect(first.tmux.beginOrphanSweep(1_000_000)).toBe(true);
+    expect(first.tmux.beginOrphanSweep(1_000_001)).toBe(false);
+    expect(second.tmux.beginOrphanSweep(1_000_001)).toBe(true);
+    expect(first.tmux.orphanFirstSeen("env-1\0orphan", 5)).toBe(5);
+    expect(first.tmux.orphanFirstSeen("env-1\0orphan", 9)).toBe(5);
+    expect(second.tmux.orphanFirstSeen("env-1\0orphan", 9)).toBe(9);
+    first.tmux.sessions.removeEnvironment("env-1");
+  });
+
+  test("tmux activity writes read only their own backend's sessions", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const working = new TmuxSession("env-1", "tab-1", TmuxBackend.local("/tmp"), "/tmp");
+    spyOn(working, "activityState").mockReturnValue("working");
+    first.tmux.sessions.insert("env-1", "tab-1", working);
+    const written: string[] = [];
+    const contextWithActivity = (runtime: BackendRuntime, name: string): CommandContext => ({
+      ...contextFor(runtime),
+      storage: {
+        getEnvironment: async () => ({ id: "env-1" }),
+        setEnvironmentAgentActivity: async (_id: string, state: string) => {
+          written.push(`${name}:${state}`);
+        },
+      } as unknown as StorageService,
+    });
+    await first.tmux.persistEnvironmentActivity(contextWithActivity(first, "first"), "env-1");
+    await second.tmux.persistEnvironmentActivity(contextWithActivity(second, "second"), "env-1");
+    expect(written).toEqual(["first:working", "second:idle"]);
+    first.tmux.sessions.removeEnvironment("env-1");
+  });
+
+  test("Claude state polls are per backend and stop with it", async () => {
+    const pollOptions = {
+      readState: async () => "idle",
+      schedule: () => 1,
+      cancel: () => undefined,
+    };
+    const first = createRuntime({ emit: () => undefined, tmux: { claudeStatePolls: pollOptions } });
+    const second = createRuntime({
+      emit: () => undefined,
+      tmux: { claudeStatePolls: pollOptions },
+    });
+    const commands = createCommandRegistry();
+    const context: CommandContext = {
+      ...contextFor(first),
+      storage: {
+        loadEnvironments: async () => [
+          { id: "env-1", status: "running", containerId: "container-1" },
+        ],
+      } as unknown as StorageService,
+    };
+    await commands.get("reconcile_claude_state_polling")!({}, context);
+    expect(first.tmux.claudeStatePolls.status().containers).toBe(1);
+    expect(second.tmux.claudeStatePolls.status().containers).toBe(0);
+    second.tmux.shutdown();
+    expect(first.tmux.claudeStatePolls.status().containers).toBe(1);
+    first.tmux.shutdown();
+    expect(first.tmux.claudeStatePolls.status().containers).toBe(0);
+  });
+
+  test("Docker cleanup grants and the container usage sample are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const grant: DockerCleanupGrant = {
+      owner: "owner",
+      expiresAt: first.dockerCleanupGrants.expiryFrom(0),
+      containers: new Map(),
+      volumes: new Set(["volume-1"]),
+      networks: new Set(),
+    };
+    first.dockerCleanupGrants.record("token", grant, 0);
+    expect(second.dockerCleanupGrants.take("token", "owner", 1)).toBeUndefined();
+    expect(first.dockerCleanupGrants.take("token", "other-owner", 1)).toBeUndefined();
+    expect(first.dockerCleanupGrants.take("token", "owner", 1)).toBe(grant);
+    // The token is consumed.
+    expect(first.dockerCleanupGrants.take("token", "owner", 1)).toBeUndefined();
+
+    let samples = 0;
+    const sampleNow = async (): Promise<ContainerUsageSnapshot> => {
+      samples += 1;
+      return {
+        scope: "installation",
+        sampledAt: new Date().toISOString(),
+        stale: false,
+        containers: [],
+        error: null,
+      };
+    };
+    await first.containerUsage.sample(sampleNow);
+    await first.containerUsage.sample(sampleNow);
+    expect(samples).toBe(1);
+    await second.containerUsage.sample(sampleNow);
+    expect(samples).toBe(2);
+    // Neither backend follows Docker events until it starts its own follower.
+    expect(first.containerOom.count("container-1")).toBeNull();
+    expect(second.containerOom).not.toBe(first.containerOom);
+  });
+
+  test("GitHub and Linear locks, feature builds and public API reconciliations are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+
+    const comment = held<string>();
+    const firstComment = first.integrationLocks.withGitHubCompletionComment(
+      "pipeline-1",
+      () => comment.promise,
+    );
+    // The other backend's comment for the same pipeline does not queue behind it.
+    expect(
+      await second.integrationLocks.withGitHubCompletionComment("pipeline-1", async () => "second"),
+    ).toBe("second");
+    expect(
+      await second.integrationLocks.withLinearCompletionComment("pipeline-1", async () => "linear"),
+    ).toBe("linear");
+    comment.resolve("first");
+    expect(await firstComment).toBe("first");
+
+    let setups = 0;
+    const labels = held<void>();
+    const setup = () => {
+      setups += 1;
+      return labels.promise;
+    };
+    const firstSetup = first.integrationLocks.joinWorkflowLabelSetup("o/r", setup);
+    const joined = first.integrationLocks.joinWorkflowLabelSetup("o/r", setup);
+    const secondSetup = second.integrationLocks.joinWorkflowLabelSetup("o/r", setup);
+    expect(setups).toBe(2);
+    labels.resolve();
+    await Promise.all([firstSetup, joined, secondSetup]);
+
+    const resolution = held<KanbanTask>();
+    const firstTask = first.featureBuilds.resolveTask("project:request", () => resolution.promise);
+    expect(first.featureBuilds.resolveTask("project:request", async () => ({}) as KanbanTask)).toBe(
+      firstTask,
+    );
+    const other = { id: "task-2" } as KanbanTask;
+    expect(await second.featureBuilds.resolveTask("project:request", async () => other)).toBe(
+      other,
+    );
+    resolution.resolve({ id: "task-1" } as KanbanTask);
+    await firstTask;
+    let refined = 0;
+    first.featureBuilds.refineTitle("task-1", async () => void refined++);
+    second.featureBuilds.refineTitle("task-1", async () => void refined++);
+    await Promise.all([
+      first.featureBuilds.titleRefinementsSettled(),
+      second.featureBuilds.titleRefinementsSettled(),
+    ]);
+    expect(refined).toBe(2);
+
+    const evaluation = held<null>();
+    const observed = first.publicApi.observeRun("operation-1", () => evaluation.promise);
+    expect(first.publicApi.observeRun("operation-1", async () => null)).toBe(observed);
+    expect(second.publicApi.observeRun("operation-1", async () => null)).not.toBe(observed);
+    expect(second.publicApi.reconcileExec("operation-1", async () => null)).not.toBe(observed);
+    evaluation.resolve(null);
+    await observed;
+  });
+
+  test("the Cursor SDK login and agent-account state are per backend", async () => {
+    let refreshes = 0;
+    const first = createRuntime({
+      emit: () => undefined,
+      accounts: { localClaudeLoginRefresher: async () => void refreshes++ },
+    });
+    const second = createRuntime();
+
+    const begin = held<CursorSdkLoginHandle>();
+    const starting = first.localServers.cursorSdkLogin.start(() => begin.promise);
+    expect(first.localServers.cursorSdkLogin.progress()).toEqual({ state: "pending" });
+    expect(second.localServers.cursorSdkLogin.progress()).toEqual({ state: "idle" });
+    const cancel = mock(() => undefined);
+    begin.resolve({
+      loginUrl: "https://cursor.example/login",
+      completion: held<void>().promise,
+      cancel,
+    });
+    expect(await starting).toEqual({ loginUrl: "https://cursor.example/login" });
+    second.localServers.cursorSdkLogin.cancel();
+    expect(cancel).not.toHaveBeenCalled();
+    first.localServers.cursorSdkLogin.cancel();
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    expect(await first.accounts.refreshLocalClaudeLogin()).toBe(true);
+    expect(await second.accounts.refreshLocalClaudeLogin()).toBe(false);
+    expect(refreshes).toBe(1);
+    expect(first.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(true);
+    expect(first.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(false);
+    expect(second.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(true);
+
+    // The loaded store is per backend: the second reads the file afresh.
+    const accountsRoot = await mkdtemp(path.join(tmpdir(), "ork-runtime-usage-"));
+    try {
+      const reading: PlanUsageSnapshot = {
+        platform: "claude",
+        status: "ok",
+        plan: "max",
+        windows: [],
+        fetchedAt: "2026-10-01T00:00:00.000Z",
+      };
+      const failure: PlanUsageSnapshot = {
+        platform: "claude",
+        status: "error",
+        windows: [],
+        message: "HTTP 429",
+        fetchedAt: "2026-10-02T00:00:00.000Z",
+      };
+      await first.accounts.lastUsage.remember(accountsRoot, "claude", "account", reading);
+      await rm(path.join(accountsRoot, "last-usage.json"));
+      const now = Date.parse(failure.fetchedAt);
+      expect(
+        await first.accounts.lastUsage.withLastKnown(
+          accountsRoot,
+          "claude",
+          "account",
+          failure,
+          now,
+        ),
+      ).toMatchObject({ plan: "max", stale: true });
+      expect(
+        await second.accounts.lastUsage.withLastKnown(
+          accountsRoot,
+          "claude",
+          "account",
+          failure,
+          now,
+        ),
+      ).toBe(failure);
+    } finally {
+      await rm(accountsRoot, { recursive: true, force: true });
+    }
   });
 });

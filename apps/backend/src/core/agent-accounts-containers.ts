@@ -939,18 +939,6 @@ async function activeClaudeOAuthAccount(
   }
 }
 
-/**
- * Asks the host to refresh the active Claude login when it is due
- * (`ContainerClaudeLoginKeeper.refreshHostIfDue`), registered by the backend.
- * A container start that finds the host token expired uses it rather than
- * leaving the container signed out until the keeper's next pass.
- */
-let hostClaudeLoginRefresher: (() => Promise<unknown>) | undefined;
-
-export function setHostClaudeLoginRefresher(refresher: (() => Promise<unknown>) | undefined): void {
-  hostClaudeLoginRefresher = refresher;
-}
-
 /** The access-only login to hand over, asking the host to refresh first if it is due. */
 async function freshContainerClaudeCredentials(
   context: CommandContext,
@@ -961,7 +949,7 @@ async function freshContainerClaudeCredentials(
   const active = account ?? (await resolveActiveAgentAccount(context, "claude"));
   // MCP entries can survive an expired subscription login. Always run the due
   // check, which also handles usable tokens already inside the refresh window.
-  await hostClaudeLoginRefresher?.().catch(() => undefined);
+  await context.runtime.accounts.refreshHostClaudeLogin();
   return containerClaudeCredentials(context, global, active);
 }
 

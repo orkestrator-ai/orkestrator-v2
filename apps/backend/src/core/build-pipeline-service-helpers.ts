@@ -587,8 +587,9 @@ export function normalizeTranscriptFingerprint(stored: string | undefined): stri
  * A cold agent process is the slowest thing a dispatch can wait on, and time
  * spent on it inside the request is time the outcome is unknowable if the
  * connection drops. The pipeline recovers from that — it keeps
- * `pendingPromptAttempt` and retries the same request id — but recovery is a
- * whole tick, and one that reports the stage as reconnecting on the way. Paying
+ * `pendingPromptAttempt` and settles it on the provider's dispatch answer,
+ * re-sending the same request id only when the provider proves it never
+ * arrived — but recovery is a whole tick, and one that reports the stage as reconnecting on the way. Paying
  * the cold start here instead keeps the send short.
  *
  * Best-effort by contract: the prompt request performs the same work, so a

@@ -11,8 +11,6 @@ import {
   coordinatorCodexLogin,
   localBridgeIsOnActiveAccount,
   markLocalBridgesForLoginRefresh,
-  setLocalClaudeLoginRefresher,
-  setLocalCodexLoginRefresher,
   readCoordinatorCodexLogin,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
@@ -39,6 +37,8 @@ let storage: StorageService;
 let liveWork = false;
 let context: CommandContext;
 let restoreHostCredentialRead: (() => void) | undefined;
+let localClaudeLoginRefresher: (() => Promise<unknown>) | undefined;
+let localCodexLoginRefresher: ((home: string) => Promise<void>) | undefined;
 const noKeychain = async (): Promise<void> => undefined;
 
 /** A JWT-shaped token whose `exp` claim is `expiresAt`. Never a real credential. */
@@ -115,12 +115,20 @@ beforeEach(async () => {
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
     nativeAgents: { hasObservedLiveWork: async () => liveWork },
-    runtime: new BackendRuntime({ emit: () => undefined }),
+    runtime: new BackendRuntime({
+      emit: () => undefined,
+      // What the backend's keeper would do; unset means no keeper to ask.
+      accounts: {
+        localClaudeLoginRefresher: () => localClaudeLoginRefresher?.(),
+        localCodexLoginRefresher: (home) => localCodexLoginRefresher?.(home),
+      },
+    }),
   } as unknown as CommandContext;
 });
 
 afterEach(async () => {
-  setLocalCodexLoginRefresher(undefined);
+  localClaudeLoginRefresher = undefined;
+  localCodexLoginRefresher = undefined;
   restoreHostCredentialRead?.();
   restoreHostCredentialRead = undefined;
   for (const [key, value] of Object.entries(savedEnv)) {
@@ -274,12 +282,12 @@ describe("applyCoordinatorClaudeAccount", () => {
       claudeAiOauth: { accessToken: "old", refreshToken: "r", expiresAt: Date.now() - 60_000 },
     });
     let refreshes = 0;
-    setLocalClaudeLoginRefresher(async () => {
+    localClaudeLoginRefresher = async () => {
       refreshes += 1;
       credentials = JSON.stringify({
         claudeAiOauth: { accessToken: "renewed", refreshToken: "r2", expiresAt },
       });
-    });
+    };
     context.runtimeFlavor = "production";
     try {
       const env: NodeJS.ProcessEnv = {};
@@ -311,7 +319,7 @@ describe("applyCoordinatorClaudeAccount", () => {
       ).toEqual({ accountId: ACCOUNT_IDS.claude, loginless: true });
       expect(refreshes).toBe(1);
     } finally {
-      setLocalClaudeLoginRefresher(undefined);
+      localClaudeLoginRefresher = undefined;
     }
   });
 
@@ -595,20 +603,15 @@ test("renews an expired owner login without ordinary sessions before the coordin
   await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() - 60_000));
   let calls = 0;
   const production = { ...context, runtimeFlavor: "production" } as CommandContext;
-  setLocalCodexLoginRefresher(
-    createCodexLoginRefresher(production, async (owner) => {
-      calls++;
-      expect(owner).toBe(home);
-      await fs.writeFile(
-        path.join(owner, "auth.json"),
-        codexAuth(Date.now() + 3600_000, "renewed"),
-      );
-    }),
-  );
+  localCodexLoginRefresher = createCodexLoginRefresher(production, async (owner) => {
+    calls++;
+    expect(owner).toBe(home);
+    await fs.writeFile(path.join(owner, "auth.json"), codexAuth(Date.now() + 3600_000, "renewed"));
+  });
   const destination = path.join(root, "coordinator-codex");
   const [login] = await Promise.all([
-    prepareCoordinatorCodexHome(destination, home),
-    readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home }),
+    prepareCoordinatorCodexHome(destination, home, context.runtime.accounts),
+    readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home }, context.runtime.accounts),
   ]);
   expect(login.loginless).toBeUndefined();
   expect(calls).toBe(1);
@@ -619,7 +622,12 @@ test("renews an expired owner login without ordinary sessions before the coordin
   expect(copy.tokens.refresh_token).toBe("");
   // The following turn can use the renewed token and does not spend it again.
   expect(
-    (await readCoordinatorCodexLogin({ accountId: ACCOUNT_IDS.codex, home })).text,
+    (
+      await readCoordinatorCodexLogin(
+        { accountId: ACCOUNT_IDS.codex, home },
+        context.runtime.accounts,
+      )
+    ).text,
   ).toBeTruthy();
   expect(calls).toBe(1);
 });
@@ -660,11 +668,12 @@ test("a due Codex coordinator renews its owning login on reuse and moves only wh
   await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() + 60_000));
   launchBridge(key, { accountId: ACCOUNT_IDS.codex, tokenExpiresAt: Date.now() + 60_000 });
   let refreshes = 0;
-  setLocalCodexLoginRefresher(
-    createCodexLoginRefresher({ ...context, runtimeFlavor: "production" }, async (owner) => {
+  localCodexLoginRefresher = createCodexLoginRefresher(
+    { ...context, runtimeFlavor: "production" },
+    async (owner) => {
       refreshes++;
       await fs.writeFile(path.join(owner, "auth.json"), codexAuth(Date.now() + 3600_000));
-    }),
+    },
   );
   liveWork = true;
   expect(await localBridgeIsOnActiveAccount(key, "codex", "renew-on-use", context)).toBe(true);
@@ -697,7 +706,7 @@ test("real keeper refreshes the 4m30s handoff gap before a coordinator starts", 
       });
     },
   });
-  setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+  localClaudeLoginRefresher = () => keeper.refreshLocalLoginIfDue();
   try {
     const env: NodeJS.ProcessEnv = {};
     const result = await applyCoordinatorClaudeAccount(
@@ -714,7 +723,7 @@ test("real keeper refreshes the 4m30s handoff gap before a coordinator starts", 
     expect(JSON.stringify(env)).not.toContain("owner-refresh");
   } finally {
     clock.mockRestore();
-    setLocalClaudeLoginRefresher(undefined);
+    localClaudeLoginRefresher = undefined;
   }
 });
 
@@ -789,7 +798,7 @@ test("keeper reads the real active added-account path to renew a loginless local
       );
     },
   });
-  setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
+  localClaudeLoginRefresher = () => keeper.refreshLocalLoginIfDue();
   expect(await localBridgeIsOnActiveAccount(key, "claude", "env-loginless", context)).toBe(false);
   expect(refreshed).toEqual([home]);
   liveWork = true;

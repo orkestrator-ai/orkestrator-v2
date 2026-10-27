@@ -19,6 +19,7 @@ import {
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   MAX_PIPELINE_USER_MESSAGES,
+  MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
@@ -824,6 +825,14 @@ export class BuildPipelineLifecycle {
       if (candidate.validationRun && stageId === `validation:${candidate.validationRun.id}`) {
         return { kind: "validation" };
       }
+      const latest = candidate.rewinds?.at(-1);
+      if (
+        latest?.step.kind === "validation" &&
+        latest.validationRun &&
+        stageId === `validation:${latest.validationRun.id}`
+      ) {
+        return { kind: "satisfied" };
+      }
       const session = candidate.sessions.find(
         (session) => session.sdkSessionId === stageId || session.sessionKey === stageId,
       );
@@ -854,6 +863,13 @@ export class BuildPipelineLifecycle {
       if (!phase || !stagePhase) {
         return new Error("This build has no running stage to restart");
       }
+      if (
+        candidate.restartRequest?.kind === "validation" ||
+        (candidate.rewinds?.at(-1)?.replacementValidationRunId === candidate.validationRun?.id &&
+          (candidate.validationRun?.status === "planned" ||
+            candidate.validationRun?.status === "running"))
+      )
+        return { kind: "satisfied" };
       const validationTarget = reviewValidationStage(candidate, phase);
       if (validationTarget === "validation") return { kind: "validation" };
       if (validationTarget === "review-package") {
@@ -880,6 +896,7 @@ export class BuildPipelineLifecycle {
     pipelineId: string,
     locate: (candidate: BuildPipeline) =>
       | { kind: "validation" }
+      | { kind: "satisfied" }
       | { kind: "review-package"; implementationPhase: "build" | "fix" }
       | {
           kind: "session";
@@ -890,10 +907,15 @@ export class BuildPipelineLifecycle {
       | Error,
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
+    let satisfied = false;
     await this.ctx.mutate(pipelineId, async (candidate) => {
       const target = locate(candidate);
       if (target instanceof Error) {
         rejection = target;
+        return;
+      }
+      if (target.kind === "satisfied") {
+        satisfied = true;
         return;
       }
       const named = target.kind === "session" ? target.session : undefined;
@@ -966,6 +988,27 @@ export class BuildPipelineLifecycle {
         }
       }
 
+      // Old records kept only the latest accepted Verify verdict. Preserve it
+      // on its owning session before clearing the live result during rewind.
+      const verdictOwner = [...candidate.sessions]
+        .reverse()
+        .find(
+          (session) =>
+            session.phase === "verify" &&
+            !isSupersededPipelineSession(session) &&
+            (session.structuredResultStatus === "accepted" ||
+              (session.structuredResultStatus === undefined && session.status === "idle")),
+        );
+      if (verdictOwner && candidate.verificationResult && !verdictOwner.verificationResult) {
+        verdictOwner.verificationResult = candidate.verificationResult;
+        if (candidate.verificationFeedback !== undefined) {
+          const feedback = candidate.verificationFeedback;
+          verdictOwner.verificationFeedback ??=
+            feedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH
+              ? feedback
+              : `${feedback.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
+        }
+      }
       const previousValidationRun = candidate.validationRun;
       candidate.iteration = iteration;
       if (rewindsRound) {
@@ -1091,6 +1134,9 @@ export class BuildPipelineLifecycle {
           step: { ...restart },
           ...(named ? { sessionKey: named.sessionKey } : {}),
           supersededSessions,
+          ...(restart.kind === "validation"
+            ? { replacementValidationRunId: candidate.validationRun!.id }
+            : {}),
           ...(previousValidationRun && previousValidationRun.id !== candidate.validationRun?.id
             ? { validationRun: previousValidationRun }
             : {}),
@@ -1131,9 +1177,10 @@ export class BuildPipelineLifecycle {
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;
       candidate.pendingKanbanReactivation = true;
+      delete candidate.kanbanReactivationRetryAt;
     });
     if (rejection) throw rejection;
-    await this.stageSupervisor.runLocked(pipelineId);
+    if (!satisfied) await this.stageSupervisor.runLocked(pipelineId);
     return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 

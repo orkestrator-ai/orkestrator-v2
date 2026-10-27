@@ -20,6 +20,7 @@ import {
   queryGraphNode,
   renderPipelineTab,
   retryReviewerMock,
+  restartStepMock,
   restoreBuildChatTabMocks,
   selectNode,
 } from "./build-chat-tab-test-support";
@@ -472,6 +473,38 @@ describe("a pipeline a restart rewound", () => {
       ).toBe(true);
     },
   );
+
+  test("historical validation cannot restart the newer live run", async () => {
+    const pipeline = rewoundToFirstVerify({
+      phase: "building",
+      sessions: [session("build", "build", 0)],
+      currentSessionIndex: 0,
+      validationRun: validationRun({
+        id: "live",
+        startedAt: "2026-07-29T00:11:00.000Z",
+        status: "running",
+      }),
+    });
+    pipeline.rewinds![0]!.validationRun = validationRun({ id: "retained" });
+    restartStepMock.mockClear();
+    renderPipelineTab(pipeline);
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
+    await waitFor(() => expect(queryGraphNode("Validation")).not.toBeNull());
+    selectNode("Validation");
+    expect(within(inspector()).queryByRole("button", { name: "Restart validation" }) === null).toBe(
+      true,
+    );
+    fireEvent.contextMenu(graphNode("Validation"));
+    expect(screen.queryByRole("menuitem", { name: "Restart validation" }) === null).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(restartStepMock).not.toHaveBeenCalled();
+    selectNode("Prepare");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Restart validation" }));
+    await waitFor(() =>
+      expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:live"),
+    );
+  });
 
   test("a live step still offers restart", () => {
     renderPipelineTab(rewoundToFirstVerify());

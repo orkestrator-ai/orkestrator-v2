@@ -245,6 +245,9 @@ export class BuildPipelineRecovery {
       });
       return;
     }
+    if (detection.state === "closed") {
+      throw new Error("The pull request is still closed. Reopen it before completing Ship.");
+    }
     await this.persistPullRequest(pipeline, detection);
     if (detection.hasMergeConflicts === true) {
       await this.stageSupervisor.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");

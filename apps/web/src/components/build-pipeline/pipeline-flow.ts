@@ -647,7 +647,27 @@ export function pipelineFlowModel(
     placeValidation();
   }
 
+  // Validation-only rewinds have no superseded session to anchor them. Put
+  // them at the rewind boundary, before replacement validation/review work,
+  // so history cannot close the live pass before fan-out reconciliation.
+  const validationOnlyAttempts = (pipeline.rewinds ?? [])
+    .filter((rewind) => rewind.validationRun && !attemptSessions.has(rewind.id))
+    .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  let nextValidationAttempt = 0;
   for (const item of pipelineStageItems(pipeline)) {
+    const startedAt =
+      item.kind === "session" ? item.session.startedAt : pipeline.validationRun!.startedAt;
+    while (
+      nextValidationAttempt < validationOnlyAttempts.length &&
+      (Date.parse(validationOnlyAttempts[nextValidationAttempt]!.at) <= Date.parse(startedAt) ||
+        (item.kind === "validation" &&
+          validationOnlyAttempts[nextValidationAttempt]!.replacementValidationRunId ===
+            pipeline.validationRun!.id))
+    ) {
+      const rewind = validationOnlyAttempts[nextValidationAttempt++]!;
+      emittedAttempts.add(rewind.id);
+      placeAttempt(rewind.id, []);
+    }
     if (item.kind === "session" && isSupersededPipelineSession(item.session)) {
       const id = item.session.supersededBy!;
       if (!emittedAttempts.has(id)) {

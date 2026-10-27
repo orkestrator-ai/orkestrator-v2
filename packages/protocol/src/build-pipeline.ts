@@ -128,6 +128,8 @@ export interface PipelineRewind {
   supersededSessions: number;
   /** Validation evidence invalidated by this rewind, retained with its history. */
   validationRun?: ReviewValidationRun;
+  /** Replacement generation used to deduplicate current-step validation restarts. */
+  replacementValidationRunId?: string;
 }
 
 /** The newest rewinds a record keeps; older entries are dropped, their sessions stay superseded. */
@@ -944,6 +946,8 @@ export interface BuildPipeline {
   restartRequest?: PipelineRestartRequest;
   /** Retried independently of stage dispatch until the active ticket is reconciled. */
   pendingKanbanReactivation?: boolean;
+  /** Earliest retry after a failed Kanban reactivation, persisted across reloads. */
+  kanbanReactivationRetryAt?: string;
   /** Restarts that rewound the pipeline, oldest first, at most {@link MAX_PIPELINE_REWINDS}. */
   rewinds?: PipelineRewind[];
   createdAt: string;
@@ -1546,6 +1550,9 @@ function isPipelineRewind(value: unknown): value is PipelineRewind {
     (value.sessionKey === undefined ||
       (isNonBlankString(value.sessionKey) && value.sessionKey.length <= 512)) &&
     isNonNegativeInteger(value.supersededSessions) &&
+    (value.replacementValidationRunId === undefined ||
+      (isNonBlankString(value.replacementValidationRunId) &&
+        value.replacementValidationRunId.length <= 512)) &&
     (value.validationRun === undefined || isReviewValidationRun(value.validationRun))
   );
 }
@@ -1633,6 +1640,8 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
     (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
+    (value.kanbanReactivationRetryAt !== undefined &&
+      !isIsoDate(value.kanbanReactivationRetryAt)) ||
     (value.pendingKanbanReactivation !== undefined &&
       typeof value.pendingKanbanReactivation !== "boolean") ||
     (value.rewinds !== undefined &&

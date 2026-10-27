@@ -149,14 +149,21 @@ in `build-pipeline-rewind.ts`):
   sessions were superseded. An invalidated validation run is retained on that
   rewind and remains readable in its previous-attempt inspector (bounded by the
   same 50-rewind limit). A repeat of the same request (a double click, a
-  retried command) is a no-op; restarting a superseded step is refused.
+  retried command) is a no-op; restarting a superseded step is refused. Validation
+  rewinds record their replacement run ID: repeats naming the original validation
+  run, or the current-step control while its replacement is planned/running,
+  keep that generation. Selecting the live validation node explicitly can restart it again.
+  Validation-only history is placed at its rewind boundary, before replacement
+  reviewers, and its inspector and context menu expose no restart actions.
 - **Works from `failed` and `complete`.** The phase is set and the request
   persisted in one locked write, so the supervisor and recovery pick it up as
   for any active pipeline. Consuming the request moves a Kanban ticket back to
-  In progress; a durable pending flag retries transient Kanban failures on later
-  passes without dispatching the restarted stage again. The next terminal outcome
+  In progress; a durable pending flag and retry deadline retry Kanban failures at
+  most once every 30 seconds, including across backend reloads, without
+  dispatching the restarted stage again or writing on each intervening tick. The next terminal outcome
   reconciles it again and its comments dedupe. A Ship after an earlier Ship is told the existing PR URL and updates
-  (or reopens) that PR instead of creating one. A pipeline whose PR has merged
+  (or reopens) that PR instead of creating one. Ship fails if the provider finishes
+  with the PR still closed. A pipeline whose PR has merged
   refuses restarts.
 
 `restart_build_pipeline_current_step`, `retry_build_pipeline_stage` and

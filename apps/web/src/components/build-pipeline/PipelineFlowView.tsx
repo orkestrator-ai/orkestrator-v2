@@ -374,13 +374,19 @@ export function PipelineFlowView({
         disabled,
         onSelect: () => controls.restartStage(node.session!.sdkSessionId),
       });
-    } else if (node.hasValidation && !node.session && pipeline.validationRun) {
+    } else if (
+      node.hasValidation &&
+      !node.session &&
+      !node.superseded &&
+      pipeline.validationRun &&
+      node.id === `validation:${pipeline.validationRun.id}`
+    ) {
       actions.push({
         key: "restart",
         label: "Restart validation",
         icon: RotateCcw,
         disabled,
-        onSelect: () => controls.restartStage(`validation:${pipeline.validationRun!.id}`),
+        onSelect: () => controls.restartStage(node.id),
       });
     }
     if (node.kind === "pr" && pullRequest && shipped) {

@@ -49,7 +49,10 @@ describe("rewinding to an earlier step", () => {
       if (done(snapshot)) return snapshot;
       await service.advanceNow(id);
     }
-    throw new Error("The pipeline did not reach the expected state");
+    const final = await pipeline(storage, id);
+    throw new Error(
+      `The pipeline did not reach the expected state: ${final.phase}, round ${final.iteration}, ${final.error ?? "no error"}`,
+    );
   };
 
   const live = (snapshot: BuildPipeline) =>
@@ -274,6 +277,166 @@ describe("rewinding to an earlier step", () => {
     });
   });
 
+  test.each([true, false])(
+    "re-Ship of a closed PR only completes after confirmed reopen=%s",
+    async (reopened) => {
+      await withService(async (service, storage, provider, invocations, controls) => {
+        const started = await service.start(
+          startInput({ source: { type: "kanban", taskId: "task-default" } }),
+        );
+        const completed = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (snapshot) => snapshot.phase === "complete",
+        );
+        const url = controls.detection!.url;
+        const ship = completed.sessions.find((entry) => entry.phase === "pr")!;
+        controls.detection = { url, state: "closed", hasMergeConflicts: false };
+        await storage.updateEnvironment("env-1", { prState: "closed" });
+        provider.runningPhases.add("pr");
+        const restarted = await service.restartStep(started.id, ship.sessionKey);
+        expect(restarted.phase).toBe("creating-pr");
+        expect(controls.kanbanTasks.get("task-default")!.status).toBe("in-progress");
+        const sent = provider.sent.at(-1)!;
+        expect(sent.prompt).toContain(url);
+        expect(sent.prompt).toContain("gh pr reopen");
+        expect(sent.prompt).toContain("gh pr edit");
+        expect(sent.prompt).not.toContain("gh pr create");
+        // The provider boundary finishes its push/reopen/edit turn; the backend
+        // must independently observe the same PR open before reporting success.
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("creating-pr");
+        expect((await storage.getEnvironment("env-1"))!.prState).toBe("closed");
+        provider.runningPhases.delete("pr");
+        if (reopened) controls.detection = { url, state: "open", hasMergeConflicts: false };
+        const result = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (snapshot) => snapshot.phase === "complete" || snapshot.phase === "failed",
+        );
+        expect(result.phase).toBe(reopened ? "complete" : "failed");
+        if (!reopened) expect(result.error).toContain("still closed");
+        expect((await storage.getEnvironment("env-1"))!.prUrl).toBe(url);
+        expect((await storage.getEnvironment("env-1"))!.prState).toBe(reopened ? "open" : "closed");
+        const task = controls.kanbanTasks.get("task-default")!;
+        expect(task.status).toBe(reopened ? "review" : "backlog");
+        expect(
+          task.comments.filter((comment) => comment.text.startsWith("🔗 PR raised")),
+        ).toHaveLength(1);
+        expect(
+          invocations.filter((call) => call.command === "detect_pr_local").length,
+        ).toBeGreaterThanOrEqual(2);
+      });
+    },
+  );
+
+  test("a multi-reviewer cross-round rewind rebuilds its package and panel and fences the old generation", async () => {
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+        let rewound = false;
+        const originalSend = provider.send.bind(provider);
+        provider.send = async (sessionId, prompt, options) => {
+          await originalSend(sessionId, prompt, options);
+          const phase = provider.phases.get(sessionId)!;
+          const records = await storage.listAllBuildPipelines();
+          const current = records[0]!.snapshot as BuildPipeline;
+          if (
+            current.pendingPromptAttempt?.requestId === options.requestId &&
+            current.pendingPromptAttempt.resultTransport !== "tool-v1"
+          )
+            return;
+          // Leave the later round's reviewers in flight when rewinding.
+          if (!rewound && current.iteration === 1 && phase === "review") return;
+          if (phase === "address" || phase === "pr" || phase === "resolve-conflicts") return;
+          const result =
+            phase === "review"
+              ? cleanReview
+              : phase === "verify"
+                ? { complete: false, rationale: "A criterion still fails." }
+                : {
+                    headRef: controls.currentHead,
+                    commands: [],
+                    limitations: ["This fixture has no external validation commands."],
+                  };
+          expect(
+            await controls.workflowResults!.submit(scope, options.requestId, result),
+          ).toMatchObject({ ok: true });
+        };
+        const started = await service.start(
+          startInput({
+            maxIterations: 1,
+            reviewers: [
+              { agent: "claude", model: "opus" },
+              { agent: "claude", model: "sonnet" },
+            ],
+          }),
+        );
+        const later = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (snapshot) =>
+            snapshot.iteration === 1 &&
+            snapshot.reviewFanout?.reviewers.length === 2 &&
+            snapshot.reviewFanout.reviewers.every(
+              (reviewer) =>
+                reviewer.status === "running" &&
+                reviewer.providerSessionId &&
+                snapshot.sessions.some((entry) => entry.sessionKey === reviewer.sessionKey),
+            ),
+        );
+        const target = later.sessions.find(
+          (entry) => entry.phase === "review" && entry.iteration === 0,
+        )!;
+        const oldPackage = later.reviewPackage!.id;
+        const oldPanel = later.reviewFanout!.reviewers;
+        const oldKeys = later.sessions
+          .filter((entry) => entry.phase === "review")
+          .map((entry) => entry.sessionKey);
+        rewound = true;
+        const restarted = await service.restartStep(started.id, target.sessionKey);
+        expect(restarted.iteration).toBe(0);
+        expect(restarted.reviewPackage).toBeUndefined();
+        expect(restarted.reviewFanout).toBeUndefined();
+        expect(restarted.sessions.at(-1)!.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
+        expect(
+          oldKeys.every(
+            (key) => restarted.sessions.find((entry) => entry.sessionKey === key)?.supersededBy,
+          ),
+        ).toBe(true);
+        for (const reviewer of oldPanel) {
+          expect(provider.aborted).toContain(reviewer.providerSessionId!);
+          expect(
+            await controls.workflowResults!.submit(scope, reviewer.requestId!, cleanReview),
+          ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+        }
+        const verified = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (snapshot) => snapshot.phase === "verifying" && snapshot.iteration === 0,
+        );
+        expect(verified.reviewPackage!.id).not.toBe(oldPackage);
+        expect(verified.reviewPackage!.round).toBe(1);
+        const replacements = live(verified).filter((entry) => entry.phase === "review");
+        expect(replacements).toHaveLength(3);
+        expect(replacements.filter((entry) => entry.label === "Consolidation")).toHaveLength(1);
+        expect(
+          replacements.every(
+            (entry) =>
+              entry.structuredResultStatus === "accepted" && !oldKeys.includes(entry.sessionKey),
+          ),
+        ).toBe(true);
+        expect(new Set(replacements.map((entry) => entry.reviewPassId)).size).toBe(1);
+        expect(verified.structuredReview?.verdict.ready).toBe("yes");
+      },
+      { toolMode: true, completeEmptyValidation: true },
+    );
+  });
+
   test("refuses to restart a build whose pull request has merged", async () => {
     await withService(async (service, storage) => {
       const started = await service.start(startInput());
@@ -438,9 +601,84 @@ describe("rewinding to an earlier step", () => {
           { autoAdvance: false, provider: async () => provider },
         );
         try {
+          // Reloads honor the durable retry deadline instead of hammering Kanban.
           await reloaded.advanceNow(started.id);
+          expect((await pipeline(storage, started.id)).pendingKanbanReactivation).toBe(true);
+          const clock = spyOn(Date, "now").mockReturnValue(
+            Date.parse(restarted.kanbanReactivationRetryAt!) + 1,
+          );
+          try {
+            await reloaded.advanceNow(started.id);
+          } finally {
+            clock.mockRestore();
+          }
           expect(controls.kanbanTasks.get("task-default")!.status).toBe("in-progress");
           expect((await pipeline(storage, started.id)).pendingKanbanReactivation).toBeUndefined();
+          expect(provider.created).toHaveLength(created);
+        } finally {
+          await reloaded.shutdown();
+        }
+      });
+    },
+  );
+
+  test.each(["lookup-failure", "missing-task"] as const)(
+    "persistent Kanban %s retries at most once per interval across reload",
+    async (failure) => {
+      await withService(async (service, storage, provider, invocations, controls) => {
+        const started = await service.start(
+          startInput({ source: { type: "kanban", taskId: "task-default" } }),
+        );
+        const completed = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (snapshot) => snapshot.phase === "complete",
+        );
+        const verify = completed.sessions.find((entry) => entry.phase === "verify")!;
+        if (failure === "lookup-failure") controls.failCommands.add("get_kanban_tasks");
+        else controls.kanbanTasks.delete("task-default");
+        provider.runningPhases.add("verify");
+        invocations.length = 0;
+        const restarted = await service.restartStep(started.id, verify.sessionKey);
+        expect(restarted.pendingKanbanReactivation).toBe(true);
+        expect(isBuildPipeline(restarted)).toBe(true);
+        const deadline = restarted.kanbanReactivationRetryAt!;
+        expect(Date.parse(deadline)).toBeGreaterThan(Date.now());
+        // Settle the replacement's dispatch and transcript once, then prove a
+        // burst of ordinary ticks does no reconciliation writes or lookups.
+        await service.advanceNow(started.id);
+        const saves = spyOn(storage, "saveBuildPipeline");
+        try {
+          for (let tick = 0; tick < 5; tick++) await service.advanceNow(started.id);
+          expect(invocations.filter((call) => call.command === "get_kanban_tasks")).toHaveLength(1);
+          expect(saves).not.toHaveBeenCalled();
+        } finally {
+          saves.mockRestore();
+        }
+        let lookups = 0;
+        const reloaded = new BuildPipelineService(
+          storage,
+          async <T>(command: string): Promise<T> => {
+            if (command === "get_kanban_tasks") lookups++;
+            throw new Error("Kanban remains unavailable");
+          },
+          { autoAdvance: false, provider: async () => provider },
+        );
+        const created = provider.created.length;
+        try {
+          await reloaded.advanceNow(started.id);
+          expect(lookups).toBe(0);
+          const clock = spyOn(Date, "now").mockReturnValue(Date.parse(deadline) + 1);
+          try {
+            for (let tick = 0; tick < 5; tick++) await reloaded.advanceNow(started.id);
+            expect(lookups).toBe(1);
+            expect((await pipeline(storage, started.id)).kanbanReactivationRetryAt).not.toBe(
+              deadline,
+            );
+          } finally {
+            clock.mockRestore();
+          }
           expect(provider.created).toHaveLength(created);
         } finally {
           await reloaded.shutdown();
@@ -476,7 +714,7 @@ describe("rewinding to an earlier step", () => {
     });
   });
 
-  test.each(["address", "pr", "resolve-conflicts"] as const)(
+  test.each(["build", "address", "pr", "resolve-conflicts"] as const)(
     "an earlier %s restart restores its round and correct downstream boundary",
     async (phase) => {
       await withService(async (service, storage, provider) => {
@@ -516,11 +754,14 @@ describe("rewinding to an earlier step", () => {
         ).toBeDefined();
         expect(
           restarted.sessions.find((entry) => entry.phase === "verify")?.supersededBy !== undefined,
-        ).toBe(phase === "address");
+        ).toBe(phase === "address" || phase === "build");
         expect(
           restarted.sessions.find((entry) => entry.sessionKey === old.sessionKey)?.supersededBy !==
             undefined,
         ).toBe(phase !== "resolve-conflicts");
+        expect(restarted.structuredReview).toBeUndefined();
+        expect(restarted.verificationResult).toBeUndefined();
+        expect(restarted.verificationFeedback).toBeUndefined();
         if (phase === "address") {
           expect(restarted.restartRequest).toBeUndefined();
           expect(restarted.sessions.at(-1)?.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
@@ -529,6 +770,15 @@ describe("rewinding to an earlier step", () => {
           expect(restarted.sessions.at(-1)?.phase).toBe(phase);
           expect(provider.sent.at(-1)?.sessionId).toBe(restarted.sessions.at(-1)?.sdkSessionId);
         }
+        const finished = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (snapshot) => snapshot.phase === "complete",
+        );
+        expect(finished.iteration).toBe(0);
+        expect(live(finished).every((entry) => entry.iteration === 0)).toBe(true);
+        expect(isBuildPipeline(finished)).toBe(true);
       });
     },
   );
@@ -665,6 +915,13 @@ describe("rewinding to an earlier step", () => {
 
       expect(restarted.phase).toBe("verifying");
       expect(shape(live(restarted))).toEqual(["build:0", "review:0", "verify:0"]);
+      expect(
+        restarted.sessions.find((entry) => entry.sessionKey === verify.sessionKey),
+      ).toMatchObject({
+        supersededBy: restarted.rewinds![0]!.id,
+        verificationResult: "pass",
+        verificationFeedback: "All criteria pass.",
+      });
       const recompleted = await advanceUntil(
         service,
         storage,

@@ -86,7 +86,11 @@ function hasAcceptedResultEvidence(
 ): boolean {
   if (!session || !pipeline) return false;
   if (session.phase === "review") return pipeline.structuredReview !== undefined;
-  if (session.phase === "verify") return pipeline.verificationResult !== undefined;
+  if (session.phase === "verify")
+    return (
+      session.verificationResult !== undefined ||
+      (!isSupersededPipelineSession(session) && pipeline.verificationResult !== undefined)
+    );
   return false;
 }
 

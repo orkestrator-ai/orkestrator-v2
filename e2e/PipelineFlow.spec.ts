@@ -477,3 +477,55 @@ test("nested rewind history retains every transcript and validation across reloa
     expect(overlapping(await boxes(page))).toBe(0);
   }
 });
+
+test("retained validation stays read-only beside its live replacement after reload", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=validation-rewind");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await node(page, "Previous attempt").click();
+    await page.getByRole("button", { name: "Validation", exact: true }).click();
+    await expect(page.getByText("Retained validation failure", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restart validation", exact: true })).toHaveCount(
+      0,
+    );
+    await node(page, "Validation").click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Restart validation", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await node(page, "Prepare").click();
+    await page.getByRole("button", { name: "Restart validation", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.__pipelineCommands
+              ?.filter((entry) => entry.command === "restart_build_pipeline_step")
+              .at(-1)?.args,
+        ),
+      )
+      .toEqual({ pipelineId: "flow-pipeline", stageId: "validation:replacement-validation" });
+  }
+});
+
+test("validation-only history keeps the replacement reviewer panel together", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=review-after-validation-rewind");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(node(page, "Reviewer 1")).toHaveCount(1);
+    await expect(node(page, "Reviewer 2")).toHaveCount(1);
+    const titles = await graph(page)
+      .getByRole("tab")
+      .evaluateAll((nodes) =>
+        nodes.map((element) => element.getAttribute("aria-label")!.split(",")[0]),
+      );
+    expect(titles.indexOf("Previous attempt")).toBeLessThan(titles.indexOf("Reviewer 1"));
+    for (const slot of [1, 2]) {
+      await node(page, `Reviewer ${slot}`).click();
+      await expect(page.getByText(`Transcript of rev-${slot}.`, { exact: true })).toBeVisible();
+    }
+    expect(overlapping(await boxes(page))).toBe(0);
+  }
+});

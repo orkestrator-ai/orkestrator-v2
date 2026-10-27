@@ -202,6 +202,7 @@ export async function withService(
   ) => Promise<void>,
   options: {
     toolMode?: boolean;
+    completeEmptyValidation?: boolean;
     /** Defaults to a local worktree environment. */
     environmentType?: "local" | "containerized";
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
@@ -291,7 +292,13 @@ export async function withService(
     }
     if (command === "start_review_validation" || command === "status_review_validation") {
       const run = args.run as NonNullable<BuildPipeline["validationRun"]>;
-      return { ...run, status: "running" } as T;
+      return {
+        ...run,
+        status:
+          options.completeEmptyValidation && run.plan.commands.length === 0
+            ? "completed"
+            : "running",
+      } as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;

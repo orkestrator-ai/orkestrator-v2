@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
+import { rewoundToFirstVerify } from "./pipeline-test-fixture";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 import {
   graph,
@@ -487,6 +488,41 @@ describe("BuildChatTab reports and verdicts", () => {
     expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(visibleToolInvocations()).toEqual(["bun test"]);
     expect(visibleTextContents()).toEqual([]);
+  });
+
+  test("a superseded legacy Verify keeps its own accepted verdict after live evidence is cleared", async () => {
+    const historical = rewoundToFirstVerify();
+    const legacy = historical.sessions[2]!;
+    legacy.agent = "codex";
+    legacy.status = "idle";
+    delete legacy.structuredResultStatus;
+    // The backend migrates the latest legacy verdict onto its owner before
+    // clearing pipeline-level feedback during the rewind.
+    legacy.verificationResult = "fail";
+    legacy.verificationFeedback = "Historical criterion failed.";
+    const provisional = JSON.stringify({ complete: true, rationale: "Still checking." });
+    const final = JSON.stringify({ complete: false, rationale: legacy.verificationFeedback });
+    legacy.messages = [
+      {
+        id: "legacy-verdict",
+        role: "assistant",
+        content: final,
+        parts: [
+          { type: "text", content: provisional },
+          { type: "text", content: final },
+        ],
+      },
+    ];
+    expect(historical.verificationResult).toBeUndefined();
+    renderTab(historical);
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: `${legacy.label} · round 1` }));
+    await waitFor(() => expect(screen.getAllByText("Verification failed")).toHaveLength(1));
+    expect(visibleTextContents()).toEqual([final]);
+    expect(JSON.stringify(listProps.messages)).not.toContain("Still checking.");
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
   });
 
   test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {

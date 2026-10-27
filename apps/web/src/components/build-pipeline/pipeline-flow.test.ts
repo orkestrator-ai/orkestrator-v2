@@ -1103,6 +1103,80 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
     );
   });
 
+  test.each([false, true])(
+    "validation-only history precedes an intact live panel, consolidation=%s",
+    (consolidating) => {
+      const pipeline = rewoundToFirstVerify({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        validationRun: validationRun({ id: "replacement", startedAt: "2026-07-29T00:09:59.999Z" }),
+        sessions: [
+          session("build", "build", 0),
+          reviewer(0, "r1-session", 610, { reviewPassId: "r1" }),
+          reviewer(1, "r2-session", 610, { reviewPassId: "r1" }),
+          ...(consolidating
+            ? [
+                session("review", "consolidation", 620, {
+                  label: "Consolidation",
+                  reviewPassId: "r1",
+                  status: "running",
+                }),
+              ]
+            : []),
+        ],
+        reviewFanout: {
+          reviewers: PANEL.slice(0, 2).map((config, slot) => ({
+            ...config,
+            id: `r${slot + 1}`,
+            sessionKey: `r${slot + 1}-session`,
+            status: "completed",
+          })),
+          ...(consolidating
+            ? {
+                consolidation: {
+                  requestId: "consolidation-result",
+                  sessionKey: "consolidation",
+                  providerSessionId: "consolidation-session",
+                  agent: "claude",
+                  state: "sent",
+                  createdAt: "2026-07-29T00:10:20.000Z",
+                },
+              }
+            : {}),
+        },
+      });
+      pipeline.rewinds![0]!.validationRun = validationRun();
+      pipeline.rewinds![0]!.supersededSessions = 0;
+      pipeline.rewinds![0]!.replacementValidationRunId = "replacement";
+      pipeline.rewinds![0]!.step = { kind: "validation", implementationPhase: "build" };
+      for (const expandedAttempts of [new Set<string>(), new Set(["rewind-1"])]) {
+        const model = pipelineFlowModel(pipeline, null, { expandedAttempts });
+        const columns = model.columns.filter(
+          (column) => column.kind === "review" && !column.superseded,
+        );
+        expect(columns).toHaveLength(1);
+        expect(
+          model.columns.findIndex((column) => column.nodeIds.includes("attempt:rewind-1")),
+        ).toBeLessThan(
+          model.columns.findIndex((column) => column.nodeIds.includes("validation:replacement")),
+        );
+        expect(columns[0]!.nodeIds).toEqual(["r1-session", "r2-session"]);
+        const reviewers = model.nodes.filter(
+          (node) => node.kind === "reviewer" && !node.superseded,
+        );
+        expect(reviewers).toHaveLength(2);
+        expect(reviewers.every((node) => node.session && !node.placeholder)).toBe(true);
+        expect(
+          model.columns.findIndex((column) => column.nodeIds.includes("attempt:rewind-1")),
+        ).toBeLessThan(model.columns.indexOf(columns[0]!));
+        if (consolidating)
+          expect(model.nodes.find((node) => node.id === "consolidation")?.passKey).toBe(
+            reviewers[0]!.passKey,
+          );
+      }
+    },
+  );
+
   test("collapses the superseded run into one previous-attempt node before the rerun", () => {
     const model = pipelineFlowModel(rewoundToFirstVerify());
 

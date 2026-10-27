@@ -15,7 +15,14 @@ attempt" node (`pipeline-flow.ts`). Restarts work from `failed` and `complete`;
 a re-Ship updates the existing PR; a merged PR refuses the restart. Unit and
 service tests cover the rewind, the loop continuing to `maxIterations`, fix
 feedback per round, terminal restarts, Kanban, idempotency, denied late
-submissions, older records and the projection.
+submissions, older records and the projection. Added regression coverage exercises
+validation restart repeats while pending/running and after controller reload,
+validation-only history beside a live reviewer panel, persistent Kanban failures,
+earlier Build/Address/conflict restarts, and a multi-reviewer rewind through
+replacement consolidation. Closed-PR service integration covers confirmed reopen
+and refusal to complete while the PR stays closed. Browser fixtures cover retained
+validation actions and panel grouping at both viewport widths across reload.
+Live provider/GitHub qualification below remains separate from these controlled fixtures.
 
 ## Outstanding work
 

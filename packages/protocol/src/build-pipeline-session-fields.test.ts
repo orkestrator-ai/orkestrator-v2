@@ -51,6 +51,16 @@ function pipelineWith(session: Partial<PipelineSession> & Record<string, unknown
 }
 
 describe("pipeline session graph fields", () => {
+  test("Kanban retry deadlines are optional ISO timestamps", () => {
+    const pipeline = pipelineWith({});
+    expect(isBuildPipeline(pipeline)).toBe(true);
+    pipeline.pendingKanbanReactivation = true;
+    pipeline.kanbanReactivationRetryAt = "2026-10-27T20:00:00.000Z";
+    expect(isBuildPipeline(pipeline)).toBe(true);
+    for (const invalid of ["", "tomorrow", "2026-99-99T00:00:00Z", 100, null]) {
+      expect(isBuildPipeline({ ...pipeline, kanbanReactivationRetryAt: invalid })).toBe(false);
+    }
+  });
   test("accepts the reviewer outcome, error and issue counts, and records without them", () => {
     expect(isBuildPipeline(pipelineWith({}))).toBe(true);
     expect(
@@ -167,7 +177,7 @@ describe("pipeline rewind fields", () => {
     expect(
       isBuildPipeline({
         ...pipelineWith({}),
-        rewinds: [{ ...rewind, validationRun: run }],
+        rewinds: [{ ...rewind, validationRun: run, replacementValidationRunId: "replacement" }],
         pendingKanbanReactivation: true,
       }),
     ).toBe(true);
@@ -181,6 +191,14 @@ describe("pipeline rewind fields", () => {
   });
 
   test("rejects malformed rewind fields", () => {
+    for (const invalid of ["", 1, null, "x".repeat(513)]) {
+      expect(
+        isBuildPipeline({
+          ...pipelineWith({}),
+          rewinds: [{ ...rewind, replacementValidationRunId: invalid }],
+        }),
+      ).toBe(false);
+    }
     expect(isBuildPipeline(pipelineWith({ supersededBy: "" }))).toBe(false);
     expect(isBuildPipeline(pipelineWith({ supersededAt: "yesterday" }))).toBe(false);
     // A verdict copy belongs to a verify session only.

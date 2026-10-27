@@ -373,14 +373,20 @@ export class BuildPipelineSupervisor {
       return;
     }
 
-    if (pipeline.pendingKanbanReactivation || pipeline.restartRequest) {
+    if (
+      (pipeline.pendingKanbanReactivation || pipeline.restartRequest) &&
+      (!pipeline.kanbanReactivationRetryAt ||
+        Date.now() >= Date.parse(pipeline.kanbanReactivationRetryAt))
+    ) {
       // Keep reconciliation durable independently of dispatch. A transient
       // Kanban failure must neither strand nor dispatch the replacement twice.
       pipeline.pendingKanbanReactivation = true;
       try {
         await this.recovery.updateKanbanLifecycle(pipeline, { status: "in-progress" });
         delete pipeline.pendingKanbanReactivation;
+        delete pipeline.kanbanReactivationRetryAt;
       } catch (error) {
+        pipeline.kanbanReactivationRetryAt = new Date(Date.now() + 30_000).toISOString();
         console.warn(
           `[build-pipeline] Kanban status for restarted ${pipeline.id}:`,
           errorMessage(error),

@@ -122,6 +122,8 @@ describe("update-agents-md approval", () => {
     expect((await instance.actions.resolve(request.requestId, "reject")).state).toBe("rejected");
     expect(calls).toEqual([]);
     expect(notice.mock.calls[0]![1].subject).toContain("Request rejected");
+    // The coordinator is told not to ask again in this conversation.
+    expect(notice.mock.calls[0]![1].body).toContain("Do not propose these AGENTS.md entries again");
     instance.collector.dispose();
   });
 

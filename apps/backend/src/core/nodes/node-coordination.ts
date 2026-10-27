@@ -728,7 +728,11 @@ export class NodeCoordination {
         toEnvironmentId: request.requestedBy.coordinatorEnvironmentId,
         toTabId: request.requestedBy.coordinatorTabId,
         subject: `Request ${request.state}: ${describeNodeAction(request)}`.slice(0, 200),
-        body: `${describeNodeAction(request)}: ${request.state}. ${request.result?.message ?? ""}`.trim(),
+        body: `${describeNodeAction(request)}: ${request.state}. ${request.result?.message ?? ""}${
+          request.kind === "update-agents-md" && request.state === "rejected"
+            ? " Do not propose these AGENTS.md entries again in this conversation unless the user asks."
+            : ""
+        }`.trim(),
       },
     );
   }

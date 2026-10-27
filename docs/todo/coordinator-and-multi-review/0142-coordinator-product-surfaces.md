@@ -51,8 +51,8 @@ What is left is live evidence on a real stack; see **Needs verification**.
    address stored as an `agent-link` preview intent for that worker.
 4. ~~**Arbitrary pane editing** (opening, closing or moving a worker's
    tabs).~~ Done: `edit_worker_tab` (focus, move, close; close runs
-   `teardown_tab` and is refused under a running turn, a pending question or
-   an open delegation). Opening is the job of the tools that create each kind
+   `teardown_tab` and is refused under a native agent tab's running turn or
+   pending question, or an open delegation). Opening is the job of the tools that create each kind
    of tab.
 5. ~~**Custom-fix model switches, reviewer subtabs, looped review and
    feature-plan launch** for Multi Review and planning workflows.~~ Done:

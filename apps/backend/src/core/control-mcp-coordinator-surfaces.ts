@@ -130,7 +130,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Focus, close or move a worker's tab",
       description:
-        "Edit a worker environment's tabs: focus selects a tab, move puts it in another pane (pane IDs from list_tabs), close closes it. Closing a tab never deletes its conversation; it is refused while the tab's agent is working or waiting on a person, and while a coordinator waits on that tab's report. Closing a tab that is already gone succeeds. Open tabs with launch_job, launch_terminal, open_worker_browser and open_multi_review.",
+        "Edit a worker environment's tabs: focus selects a tab, move puts it in another pane (pane IDs from list_tabs), close closes it. Closing a tab never deletes its conversation; it is refused while a native agent tab's turn is running or waiting on a person, and while a coordinator waits on that tab's report; a terminal tab closes with whatever it is running. Closing a tab that is already gone succeeds. Open tabs with launch_job, launch_terminal, open_worker_browser and open_multi_review.",
       inputSchema: z
         .object({
           environmentId,

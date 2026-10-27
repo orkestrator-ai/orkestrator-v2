@@ -75,7 +75,9 @@ describe("describeApproval", () => {
     expect(approval.expiresAt).toBe(301_000);
   });
 
-  test("reads every bounded v2 policy amendment with its source index", () => {
+  test("never offers the policy amendments app-server proposes", () => {
+    // Accepting one saves a rule in the user's Codex home that Orkestrator
+    // cannot list or revoke (todo 0160), so the descriptor carries none.
     const approval = describeWith("item/commandExecution/requestApproval", {
       threadId: "thread-1",
       command: "curl https://one.example",
@@ -86,25 +88,10 @@ describe("describeApproval", () => {
       ],
     });
 
-    expect(approval.amendments).toEqual([
-      {
-        kind: "exec-policy",
-        detail: "allow curl",
-        decision: "approve-with-execpolicy-amendment",
-      },
-      {
-        kind: "network-policy",
-        detail: "allow one.example",
-        decision: "approve-with-network-amendment",
-        amendmentIndex: 0,
-      },
-      {
-        kind: "network-policy",
-        detail: "deny two.example",
-        decision: "approve-with-network-amendment",
-        amendmentIndex: 1,
-      },
-    ]);
+    expect(approval).not.toHaveProperty("amendments");
+    expect(JSON.stringify(approval)).not.toContain("allow curl");
+    expect(JSON.stringify(approval)).not.toContain("two.example");
+    expect(approval.actionable).toBe(true);
   });
 
   test("uses commandActions when the top-level command is absent", () => {
@@ -229,56 +216,30 @@ describe("buildApprovalResponse", () => {
     expect(buildApprovalResponse(method, "deny", {}).result).toEqual({ decision: "decline" });
   });
 
-  test("returns the exact selected v2 amendment and degrades safely when absent", () => {
+  test("never answers with a policy amendment, even when one was proposed", () => {
     const params = {
       proposedExecpolicyAmendment: ["allow bun test"],
-      proposedNetworkPolicyAmendments: [
-        { host: "one.example", action: "allow" },
-        { host: "two.example", action: "deny" },
-      ],
+      proposedNetworkPolicyAmendments: [{ host: "one.example", action: "allow" }],
     };
+    for (const method of [
+      "item/commandExecution/requestApproval",
+      "item/fileChange/requestApproval",
+    ] as const) {
+      for (const decision of APPROVAL_DECISIONS) {
+        const wire = JSON.stringify(buildApprovalResponse(method, decision, params).result);
+        expect(wire).not.toContain("acceptWithExecpolicyAmendment");
+        expect(wire).not.toContain("applyNetworkPolicyAmendment");
+      }
+    }
     expect(
-      buildApprovalResponse(
-        "item/commandExecution/requestApproval",
-        "approve-with-execpolicy-amendment",
-        params,
-      ).result,
-    ).toEqual({
-      decision: {
-        acceptWithExecpolicyAmendment: { execpolicy_amendment: ["allow bun test"] },
-      },
-    });
-    expect(
-      buildApprovalResponse(
-        "item/commandExecution/requestApproval",
-        "approve-with-network-amendment",
-        params,
-        1,
-      ).result,
-    ).toEqual({
-      decision: {
-        applyNetworkPolicyAmendment: {
-          network_policy_amendment: { host: "two.example", action: "deny" },
-        },
-      },
-    });
-    expect(
-      buildApprovalResponse(
-        "item/commandExecution/requestApproval",
-        "approve-with-network-amendment",
-        params,
-        99,
-      ).result,
+      buildApprovalResponse("item/commandExecution/requestApproval", "approve", params).result,
     ).toEqual({ decision: "accept" });
   });
 
-  test("legacy amendment approvals degrade to approved for session", () => {
-    expect(
-      buildApprovalResponse("execCommandApproval", "approve-with-execpolicy-amendment", {}).result,
-    ).toEqual({ decision: "approved_for_session" });
-    expect(
-      buildApprovalResponse("applyPatchApproval", "approve-with-network-amendment", {}).result,
-    ).toEqual({ decision: "approved_for_session" });
+  test("rejects the retired amendment decisions", () => {
+    // An older backend or a hand-made request must not reach a granting arm.
+    expect(isApprovalDecision("approve-with-execpolicy-amendment")).toBe(false);
+    expect(isApprovalDecision("approve-with-network-amendment")).toBe(false);
   });
 
   test("maps legacy decisions onto ReviewDecision", () => {
@@ -359,10 +320,6 @@ describe("describeApprovalOutcome", () => {
     // An approval needs no transcript note; the command itself is the evidence.
     expect(describeApprovalOutcome(base, "approve", "answered")).toBeNull();
     expect(describeApprovalOutcome(base, "approve-for-session", "answered")).toBeNull();
-    expect(
-      describeApprovalOutcome(base, "approve-with-execpolicy-amendment", "answered"),
-    ).toBeNull();
-    expect(describeApprovalOutcome(base, "approve-with-network-amendment", "answered")).toBeNull();
     expect(describeApprovalOutcome(base, "withdrawn", "withdrawn")).toBeNull();
   });
 

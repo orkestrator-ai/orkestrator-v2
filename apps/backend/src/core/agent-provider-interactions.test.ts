@@ -889,7 +889,7 @@ describe("provider-neutral interaction adapters", () => {
     ]);
   });
 
-  test("Codex preserves amendment choices and sends the exact selected proposal", async () => {
+  test("Codex never offers or sends an older bridge's policy amendments", async () => {
     const requestedAt = Date.now();
     let approvals: Array<Record<string, unknown>> = [
       {
@@ -926,20 +926,13 @@ describe("provider-neutral interaction adapters", () => {
       return new Response(null, { status: 404 });
     }, codexConnection);
 
+    // A bridge from before todo 0160 still describes the amendments; the card
+    // must not offer them, because the rule each saves cannot be listed or revoked.
     const request = (await provider.interactions!.listPendingInteractions("session-1"))
       .requests[0]!;
-    const question = request.presentation.questions[0]!;
-    expect(question.required).toBe(false);
-    expect(question.options).toMatchObject([
-      {
-        providerValue: "approve-with-execpolicy-amendment",
-        amendment: { kind: "exec-policy", detail: "allow curl" },
-      },
-      {
-        providerValue: "approve-with-network-amendment:1",
-        amendment: { kind: "network-policy", detail: "allow two.example" },
-      },
-    ]);
+    expect(request.presentation.questions).toEqual([]);
+    expect(JSON.stringify(request)).not.toContain("allow curl");
+    expect(JSON.stringify(request)).not.toContain("approve-with");
 
     await expect(
       provider.interactions!.resolveInteraction("session-1", request.id, {
@@ -951,12 +944,12 @@ describe("provider-neutral interaction adapters", () => {
           version: AGENT_INTERACTION_CONTRACT_VERSION,
           interactionId: request.id,
           sessionId: request.sessionId,
-          answers: [{ questionId: question.id, optionIds: [question.options[1]!.id] }],
+          answers: [],
         },
         resolvedAt: Math.max(Date.now(), request.createdAt),
       }),
     ).resolves.toMatchObject({ result: "applied" });
-    expect(bodies).toEqual([{ decision: "approve-with-network-amendment", amendmentIndex: 1 }]);
+    expect(bodies).toEqual([{ decision: "approve" }]);
   });
 
   test("Codex isolates malformed siblings and degrades large file and MCP payloads", async () => {

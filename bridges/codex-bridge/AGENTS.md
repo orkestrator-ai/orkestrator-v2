@@ -216,6 +216,13 @@ own verdicts (a rejected structured result, a lost rebind) add none.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.
+- Never offer or send an exec-policy or network-policy amendment
+  (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`). Codex
+  writes an accepted one into `CODEX_HOME/rules/`, where it applies to every
+  later Codex session on the host, and app-server 0.164.0 has no method to
+  list or remove it. `approvals.ts` drops the proposals from the descriptor
+  and the backend ignores `amendments` from an older bridge.
+  `live-policy-amendment.test.ts` proves Approve saves no rule (no credits).
 - Every turn runs in Codex's Default collaboration mode, which refuses
   `request_user_input`. Threads of a watched session (any policy but
   `pipeline`) carry `features.default_mode_request_user_input = true`

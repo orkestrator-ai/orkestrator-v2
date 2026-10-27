@@ -45,7 +45,11 @@ lists are the reason these engines are built the way they are. In short:
    tab that was inactive must be able to catch up from the snapshot instead of
    depending on an event it never received.
 5. **Approvals fail closed.** Timeout, disconnect, a malformed answer, or the
-   death of the process that asked all deny. None of them approve.
+   death of the process that asked all deny. None of them approve. No
+   approval saves a durable rule: Orkestrator offers no "always allow", and
+   the Codex bridge never offers or sends the exec-policy and network-policy
+   amendments app-server proposes, because Codex writes them into the user's
+   Codex home and has no method to list or remove them.
 6. **Managed executables are pinned and hash-verified.** `packages/toolchain/src/manifest.ts`
    pins each managed binary; the backend passes the resolved path down
    (`CLAUDE_CLI_PATH`, `CODEX_PATH`, `ACP_AGENT_PATH`) so a packaged app never

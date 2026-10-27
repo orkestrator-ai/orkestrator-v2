@@ -38,9 +38,10 @@ or a person.
   shared journaled path with `agentInteractionPolicyAction`
   (`build-pipeline-service-interactions.ts`, `looped-review-service.ts`).
 - Codex answers every server request (`app-server/server-request-router.ts`):
-  - exec-policy and network-policy amendments as options
-    (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment` in
-    `app-server/approvals.ts`);
+  - exec-policy and network-policy amendments are never offered or sent
+    (`app-server/approvals.ts`; removed on 2026-10-27 by
+    [0160](0160-codex-saved-rules-list-and-revoke.md), because the rule each
+    saves cannot be listed or revoked);
   - `serverRequest/resolved` withdraws a parked request (`event-reducer.ts`);
   - dynamic `item/tool/call` is answered as a failure, with a transcript
     explanation.
@@ -178,7 +179,8 @@ or a person.
    revoke surface (`NativeAgentPermissionRule`, the `permission-rules`
    routes, `listPermissionRules?` / `removePermissionRule?`) moved to
    [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
-   which also weighs dropping the amendment options instead.
+   which dropped the amendment options instead (2026-10-27): no Orkestrator
+   approval saves a rule now.
 2. **Grok approval kind.** Done 2026-10-22. The bridge derives the kind from
    the ACP `toolCall.kind` (or the kind it recorded for the same call, or a
    known tool name such as `bash`, reading through Grok's `use_tool`
@@ -658,9 +660,9 @@ All answered on 2026-10-25; the reasoning is in the decisions below.
   network access, reported as such with a note. Should the backend refuse such
   a session, as Cursor refuses `deny`, rather than run it?~~ No (decision 5).
 - ~~Should Orkestrator expose "always allow" at all, given there is no revoke
-  UI yet?~~ Not for Claude (decision 1). Codex's existing amendment options
-  stay until [0160](0160-codex-saved-rules-list-and-revoke.md) either adds a
-  revoke surface or removes them.
+  UI yet?~~ Not for Claude (decision 1). Codex's amendment options were
+  removed by [0160](0160-codex-saved-rules-list-and-revoke.md) on
+  2026-10-27.
 - ~~`previewFormat`: plain or html?~~ `markdown`, shown verbatim (decision 2).
 - ~~Claude MCP OAuth: is the parked `mcp-url` card the intended route for
   that sign-in, or should MCP management own a separate flow?~~ The parked

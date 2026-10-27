@@ -376,7 +376,7 @@ describe("interactive approvals", () => {
     expect(h.transcript).toHaveLength(0);
   });
 
-  test("an amendment approval is counted as approved and returns the selected proposal", async () => {
+  test("approving a request that proposes policy amendments sends plain accept", async () => {
     const h = approvalHarness();
     h.router.handle(
       {
@@ -386,30 +386,20 @@ describe("interactive approvals", () => {
           turnId: "turn-1",
           itemId: "item-1",
           command: "curl https://two.example",
-          proposedNetworkPolicyAmendments: [
-            { host: "one.example", action: "allow" },
-            { host: "two.example", action: "allow" },
-          ],
+          proposedExecpolicyAmendment: ["curl"],
+          proposedNetworkPolicyAmendments: [{ host: "two.example", action: "allow" }],
         },
       },
       1,
     );
     await settle();
 
-    expect(
-      h.router.resolveApproval(h.presented[0]!.approvalId, "approve-with-network-amendment", 1),
-    ).toBe(true);
+    expect(h.presented[0]).not.toHaveProperty("amendments");
+    expect(h.router.resolveApproval(h.presented[0]!.approvalId, "approve")).toBe(true);
     await settle();
 
-    expect(h.answers[0]!.result).toEqual({
-      decision: {
-        applyNetworkPolicyAmendment: {
-          network_policy_amendment: { host: "two.example", action: "allow" },
-        },
-      },
-    });
+    expect(h.answers[0]!.result).toEqual({ decision: "accept" });
     expect(h.router.getMetrics().approvalsApproved).toBe(1);
-    expect(h.router.getMetrics().approvalsDenied).toBe(0);
     expect(h.router.getHistory().at(-1)?.resolution).toBe("user-approved");
     expect(h.transcript).toEqual([]);
   });

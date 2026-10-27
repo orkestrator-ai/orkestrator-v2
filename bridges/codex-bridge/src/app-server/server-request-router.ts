@@ -324,14 +324,10 @@ export class ServerRequestRouter {
    * a restart. The caller should treat that as "the card is stale", not an error:
    * with a 5-minute window and a restartable child it is a normal race.
    */
-  resolveApproval(
-    approvalId: string,
-    decision: ApprovalDecision,
-    amendmentIndex?: number,
-  ): boolean {
+  resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
     const parked = this.parkedApprovals.get(approvalId);
     if (!parked) return false;
-    void this.settleApproval(parked, decision, "answered", { amendmentIndex });
+    void this.settleApproval(parked, decision, "answered");
     return true;
   }
 
@@ -731,7 +727,7 @@ export class ServerRequestRouter {
     parked: PendingApproval,
     decision: ApprovalDecision,
     resolution: ApprovalResolution,
-    options: { skipSend?: boolean; amendmentIndex?: number } = {},
+    options: { skipSend?: boolean } = {},
   ): Promise<void> {
     // First writer wins, so a user click racing the expiry timer cannot answer twice.
     if (!this.parkedApprovals.delete(parked.request.approvalId)) return;
@@ -762,12 +758,7 @@ export class ServerRequestRouter {
       return;
     }
 
-    const payload = buildApprovalResponse(
-      parked.method,
-      decision,
-      parked.rawParams,
-      options.amendmentIndex,
-    );
+    const payload = buildApprovalResponse(parked.method, decision, parked.rawParams);
     await this.finish(parked.key, parked.record, approved ? "user-approved" : "user-declined", () =>
       this.options.respond(parked.generation, parked.requestId, payload.result),
     );

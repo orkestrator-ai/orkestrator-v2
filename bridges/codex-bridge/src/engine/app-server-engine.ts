@@ -996,12 +996,8 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /** Applies a user's answer. False when the approval is already gone. */
-  resolveApproval(
-    approvalId: string,
-    decision: ApprovalDecision,
-    amendmentIndex?: number,
-  ): boolean {
-    return this.router.resolveApproval(approvalId, decision, amendmentIndex);
+  resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
+    return this.router.resolveApproval(approvalId, decision);
   }
 
   getParkedApprovals(): readonly ApprovalRequest[] {

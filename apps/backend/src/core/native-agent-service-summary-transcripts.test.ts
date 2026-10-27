@@ -20,6 +20,7 @@ import type {
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
 import { applyNativeAgentTranscriptDelta } from "@orkestrator/protocol/native-agent";
+import { positionedCursorBefore } from "./http-bridge-transcript-v2.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
@@ -79,7 +80,16 @@ function summaryProvider(history: {
       historyEpoch: `${generation}:${history.epoch}`,
       freshness: "current",
       representation: "summary",
-      ...(update.value.historyCursor ? { historyCursor: update.value.historyCursor } : {}),
+      ...(update.value.historyCursor
+        ? {
+            historyCursor: update.value.historyCursor,
+            historyCursorBefore: positionedCursorBefore(
+              update.value.messages,
+              update.value.startIndex,
+              update.value.historyCursor,
+            ),
+          }
+        : {}),
       ...(update.value.revisedMessages ? { revisedMessages: update.value.revisedMessages } : {}),
       ...(update.value.historyReconciliationToken
         ? { historyReconciliationToken: update.value.historyReconciliationToken }
@@ -282,10 +292,84 @@ describe("summary transcripts", () => {
     );
   });
 
-  // Pins why joined sync-v1 paging is not an older-bridge path (0050 item 3):
-  // the renderer's "mint a cursor" step (`loadEarlierMessages` in
-  // `useNativeAgentSession.ts`) asks the sync-v1 projection, which only mints
-  // v1 cursors, so a provider that pages directly still pages through it.
+  test("a view whose byte bound drops rows the bridge sent pages from the first row it kept", async () => {
+    // Calls with tiny outputs: the projection's detail reference is larger
+    // than the output the summary kept inline, so the projected window is
+    // larger than the bridge measured and its byte bound drops leading rows.
+    const history = {
+      messages: Array.from({ length: 250 }, (_, index) =>
+        message(
+          `m${index}`,
+          Array.from({ length: 20 }, (_, call) => ({
+            type: "tool-invocation",
+            content: "Run",
+            toolName: "bash",
+            toolUseId: `call-${index}-${call}`,
+            toolOutput: "ok",
+            toolState: "completed",
+          })),
+        ),
+      ).map((row) => ({ ...row, content: "c".repeat(4_000) })),
+      epoch: 1,
+      revision: 1,
+    };
+    const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-bounded-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const sent = await stub.provider.transcriptSnapshot!("provider-session", {
+          limit: liveWindow.messages,
+          targetBytes: liveWindow.targetBytes,
+        });
+        if ("unchanged" in sent) throw new Error("expected a snapshot");
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const ids = update.value.messages.map((entry) => (entry as TestMessage).id);
+        // The bound dropped rows the bridge sent; the cursor names the first kept one.
+        expect(ids.length).toBeLessThan(sent.messages.length);
+        expect(ids[0]).not.toBe((sent.messages[0] as TestMessage).id);
+        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+        const before =
+          compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0;
+        let cursor = update.value.historyCursor;
+        let pages = 0;
+        while (cursor) {
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: cursor,
+            limit: 60,
+          });
+          expect(page.historyEpoch).toBe(update.value.historyEpoch);
+          ids.unshift(...page.messages.map((entry) => (entry as TestMessage).id));
+          cursor = page.nextCursor;
+          pages += 1;
+          if (!cursor) expect(page.complete).toBe(true);
+          expect(pages).toBeLessThan(20);
+        }
+        // No gap and no repeat: the rows the bound dropped came back first.
+        expect(ids).toEqual(history.messages.map((entry) => entry.id));
+        expect(compatibilityPathUsage.snapshot().paths["history.joined-v1-page"]?.count ?? 0).toBe(
+          before,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(legacyMessages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  // The joined path older renderers and sources without direct pages still
+  // reach (0232 item 3): a renderer that holds no direct cursor mints one from
+  // the sync-v1 projection (`loadEarlierMessages` in `useNativeAgentSession.ts`),
+  // which only mints v1 cursors, even for a provider that pages directly.
   test("a pageable provider's sync-v1 projection still mints a joined v1 cursor", async () => {
     const history = {
       messages: Array.from({ length: 250 }, (_, index) => message(`m${index}`)),

@@ -3,6 +3,7 @@ import {
   BRIDGE_REVISED_MESSAGES_MAX,
   BRIDGE_SUMMARY_INLINE_DETAIL_BYTES,
   bridgeTranscriptPage,
+  bridgeTranscriptPageCursorAt,
   bridgeTranscriptSummaryUpdate,
   isBridgeDetailLocator,
   parseBridgeTranscriptDetailResponse,
@@ -378,6 +379,40 @@ describe("pages", () => {
         contentEpoch: 3,
       }).status,
     ).toBe("invalid");
+  });
+
+  test("a cursor moved to a later position pages exactly the rows before it", () => {
+    const cursor = firstCursor();
+    const moved = bridgeTranscriptPageCursorAt(cursor, 160);
+    expect(moved).toBeDefined();
+    const page = bridgeTranscriptPage(history, {
+      generation: "g1",
+      contentEpoch: 3,
+      complete: true,
+      cursor: moved!,
+      limit: 20,
+      targetBytes: 512 * 1024,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((entry) => (entry as Message).id)).toEqual(
+      history.slice(140, 160).map((entry) => entry.id),
+    );
+    // Same generation and epoch: another epoch still expires the moved cursor.
+    expect(
+      bridgeTranscriptPage(history, {
+        generation: "g1",
+        contentEpoch: 4,
+        complete: true,
+        cursor: moved!,
+        limit: 20,
+        targetBytes: 512 * 1024,
+      }).status,
+    ).toBe("expired");
+    // The snapshot's own position is allowed; one behind it, or a bad cursor, is not.
+    expect(bridgeTranscriptPageCursorAt(cursor, 150)).toBe(cursor);
+    expect(bridgeTranscriptPageCursorAt(cursor, 149)).toBeUndefined();
+    expect(bridgeTranscriptPageCursorAt(cursor, 1.5)).toBeUndefined();
+    expect(bridgeTranscriptPageCursorAt("bp1.bad", 160)).toBeUndefined();
   });
 
   test("history lost before the first retained message is never reported complete", () => {

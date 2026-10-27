@@ -809,6 +809,154 @@ describe("WorkflowResultService", () => {
     });
   });
 
+  describe("an acceptance check", () => {
+    const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
+    const refusal = {
+      code: "worktree_changed" as const,
+      nextAction: "correct" as const,
+      message: "Remove the stray path.",
+    };
+
+    test("refuses validation and submission without spending the correction budget", async () => {
+      const resultKey = await prepare();
+      const asked: unknown[] = [];
+      let blocked = true;
+      service.setAcceptanceCheck("feature-plan-state", async (attempt) => {
+        asked.push(attempt);
+        return blocked ? refusal : null;
+      });
+
+      expect(await service.validate(scope, resultKey, valid)).toEqual({
+        ok: false,
+        error: refusal,
+      });
+      // Nothing is held, so the refusal cannot be bypassed by digest.
+      expect((await service.status(scope, resultKey))?.delivery).toMatchObject({
+        validationCalls: 1,
+        lastValidation: "invalid",
+      });
+      expect((await service.status(scope, resultKey))?.delivery?.validatedDigest).toBeUndefined();
+      for (let index = 0; index < 6; index += 1) {
+        expect(await service.submit(scope, resultKey, valid)).toEqual({
+          ok: false,
+          error: refusal,
+        });
+      }
+      expect(await service.projection(resultKey)).toBe("preparing");
+      expect(asked[0]).toEqual({ resultKey, kind: "feature-plan-state", ...scope });
+
+      blocked = false;
+      expect(await service.submit(scope, resultKey, valid)).toMatchObject({ ok: true });
+      // An accepted result's duplicate is answered from its receipt, unchecked.
+      blocked = true;
+      expect(await service.submit(scope, resultKey, valid)).toMatchObject({
+        ok: true,
+        duplicate: true,
+      });
+    });
+
+    test("refuses a commit by digest when the environment changed after validation", async () => {
+      const resultKey = await prepare();
+      let blocked = false;
+      service.setAcceptanceCheck("feature-plan-state", async () => (blocked ? refusal : null));
+      const validation = await service.validate(scope, resultKey, valid);
+      if (!validation.ok) throw new Error("expected a valid result");
+
+      blocked = true;
+      expect(await service.submitValidated(scope, resultKey, validation.validatedDigest!)).toEqual({
+        ok: false,
+        error: refusal,
+      });
+    });
+
+    for (const transport of ["full", "digest"] as const) {
+      for (const lifecycle of ["accepted", "consumed"] as const) {
+        test(`an overlapping ${transport} submission replays the ${lifecycle} receipt after a late refusal`, async () => {
+          const resultKey = await prepare();
+          const validation = await service.validate(scope, resultKey, valid);
+          if (!validation.ok) throw new Error("expected a valid result");
+          const probe = Promise.withResolvers<typeof refusal | null>();
+          let checks = 0;
+          service.setAcceptanceCheck("feature-plan-state", () =>
+            ++checks === 1 ? probe.promise : Promise.resolve(null),
+          );
+          const pending =
+            transport === "full"
+              ? service.submit(scope, resultKey, valid)
+              : service.submitValidated(scope, resultKey, validation.validatedDigest!);
+          const accepted = await service.submit(scope, resultKey, valid);
+          if (!accepted.ok) throw new Error("expected an accepted result");
+          if (lifecycle === "consumed") await service.consume(resultKey);
+          probe.resolve(refusal);
+          expect(await pending).toEqual({ ...accepted, lifecycle, duplicate: true });
+        });
+      }
+    }
+
+    test("an overlapping different result wins over a late refusal with a conflict", async () => {
+      const resultKey = await prepare();
+      const probe = Promise.withResolvers<typeof refusal | null>();
+      let checks = 0;
+      service.setAcceptanceCheck("feature-plan-state", () =>
+        ++checks === 1 ? probe.promise : Promise.resolve(null),
+      );
+      const pending = service.submit(scope, resultKey, valid);
+      expect(
+        await service.submit(scope, resultKey, { ...valid, title: "Different" }),
+      ).toMatchObject({ ok: true });
+      probe.resolve(refusal);
+      expect(await pending).toMatchObject({ ok: false, error: { code: "submission_conflict" } });
+    });
+
+    for (const lifecycle of ["cancelled", "superseded"] as const) {
+      test(`closing an attempt as ${lifecycle} during the probe wins over refusal`, async () => {
+        const resultKey = await prepare();
+        const probe = Promise.withResolvers<typeof refusal | null>();
+        service.setAcceptanceCheck("feature-plan-state", () => probe.promise);
+        const pending = service.submit(scope, resultKey, valid);
+        await service.close(resultKey, lifecycle);
+        probe.resolve(refusal);
+        expect(await pending).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+      });
+    }
+
+    for (const identical of [false, true]) {
+      for (const refused of [false, true]) {
+        test(`an older ${refused ? "refused" : "successful"} validation preserves the newer ${identical ? "identical" : "different"} candidate`, async () => {
+          const resultKey = await prepare();
+          const probe = Promise.withResolvers<typeof refusal | null>();
+          let checks = 0;
+          service.setAcceptanceCheck("feature-plan-state", () =>
+            ++checks === 1 ? probe.promise : Promise.resolve(null),
+          );
+          const pending = service.validate(scope, resultKey, valid);
+          // A pending probe must never expose a candidate for digest submission.
+          expect(service.heldValidation(resultKey)).toBeUndefined();
+          const newer = identical ? valid : { ...valid, title: "Newer" };
+          const validation = await service.validate(scope, resultKey, newer);
+          if (!validation.ok) throw new Error("expected a valid result");
+          probe.resolve(refused ? refusal : null);
+          expect((await pending).ok).toBe(!refused);
+          expect((await service.status(scope, resultKey))?.delivery?.lastValidation).toBe("valid");
+          expect(
+            await service.submitValidated(scope, resultKey, validation.validatedDigest!),
+          ).toMatchObject({ ok: true });
+          expect(await service.structured(resultKey)).toMatchObject({ value: newer });
+        });
+      }
+    }
+
+    test("lets the result through when the check throws, and ignores other kinds", async () => {
+      const resultKey = await prepare();
+      service.setAcceptanceCheck("verification-result", async () => refusal);
+      expect(await service.validate(scope, resultKey, valid)).toMatchObject({ ok: true });
+      service.setAcceptanceCheck("feature-plan-state", async () => {
+        throw new Error("probe failed");
+      });
+      expect(await service.submit(scope, resultKey, valid)).toMatchObject({ ok: true });
+    });
+  });
+
   test("two simultaneous identical valid calls produce one receipt", async () => {
     const resultKey = await prepare();
     const payload = { phase: "collecting", title: "Same", summary: "" };

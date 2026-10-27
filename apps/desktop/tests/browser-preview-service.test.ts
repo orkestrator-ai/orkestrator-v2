@@ -138,6 +138,7 @@ function harness() {
     openExternal,
     writeClipboardText: () => undefined,
     focusAddressBar: () => undefined,
+    toggleKeyboardShortcuts: () => undefined,
     transport,
     openServiceExternally,
   });

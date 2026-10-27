@@ -1197,8 +1197,8 @@ app.get("/global/auth", async (c) => {
     pendingSignIn?: unknown;
   };
   const account = raw.account;
+  const pendingSignIn = normalizePendingSignIn(raw.pendingSignIn);
   if (!account) {
-    const pendingSignIn = normalizePendingSignIn(raw.pendingSignIn);
     return c.json({
       state: raw.requiresOpenaiAuth ? "needs-auth" : "signed-out",
       signIn: { kind: "browser-url" },
@@ -1209,6 +1209,7 @@ app.get("/global/auth", async (c) => {
   const label = account.type === "chatgpt" ? account.email || "ChatGPT" : account.type || "Codex";
   return c.json({
     state: "signed-in",
+    pendingSignIn: pendingSignIn ?? null,
     account: { label, ...(account.planType ? { plan: account.planType } : {}) },
     signIn: { kind: "browser-url" },
     signOut: true,
@@ -1397,18 +1398,28 @@ registerSessionActivityBatchRoute(app, appServerRuntime);
  *
  * `dispatched` is only ever an explicit positive. `prepared` means the journal
  * recorded intent and never learned the outcome — that is exactly the question
- * being asked, so it answers `unknown`, as does a request id this process has
- * no record of at all.
+ * being asked, so it answers `unknown`, as does any record under another
+ * session. `absent` is an assertion too, never a default: with no record at
+ * all, it is answered only where `promptDispatchAbsent` proves the id never
+ * reached Codex (a tracked journal, a session this bridge created fresh, no
+ * trace of the id, no prompt for it in flight). Everything else is `unknown`.
+ * Never `lost`: this bridge refuses no id for good.
  */
 app.get("/session/:id/dispatch", (c) => {
   const requestId = c.req.query("requestId")?.trim();
   if (!requestId) return c.json({ dispatch: "unknown" });
+  const sessionId = c.req.param("id");
   const record = appServerRuntime.getJournal().get(requestId);
+  if (!record) {
+    return c.json({
+      dispatch: appServerRuntime.promptDispatchAbsent(sessionId, requestId) ? "absent" : "unknown",
+    });
+  }
   // Unlike the other two bridges this journal is process-global, so the record
   // has to be checked against the session that is asking. Answering across
   // sessions would let one session's history settle another's parked dispatch.
   const dispatched =
-    record?.bridgeSessionId === c.req.param("id") &&
+    record.bridgeSessionId === sessionId &&
     (record.state === "accepted" || record.state === "terminal");
   return c.json({
     dispatch: dispatched ? "dispatched" : "unknown",
@@ -1737,6 +1748,11 @@ app.post("/session/:id/steer", async (c) => {
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   // No `outcome` field: the backend reads this as a definite refusal, not "idle".
   if (outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
+  // Nothing was sent: the dispatch journal could not record the id first. Like
+  // `closing`, a 409 with no `outcome` is a definite refusal.
+  if (outcome === "unavailable") {
+    return c.json({ error: "Dispatch journal is unavailable; the text was not sent" }, 409);
+  }
   if (outcome === "idle") {
     return c.json({ error: "There is no active turn", outcome: "idle" }, 409);
   }

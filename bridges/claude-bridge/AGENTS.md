@@ -53,6 +53,18 @@ writers on one `.jsonl`. When touching the prompt path:
   loop the CLI resumes on its own reclaims the foreground through it and
   publishes its own idle edge (`finishTurnInputIfSettled`), and a process that
   ends under such a turn hands the foreground back (`endClaudeRuntime`).
+- **Every prompt with a request id takes the durable claim**, structured ones
+  included (`claimPromptDispatch`): the id is written to the session
+  preferences' `dispatchedRequestIds` before the turn can start, so a
+  restarted bridge refuses a resend (410 `dispatch-outcome-lost`) instead of
+  running it again. `dispatchJournalComplete` (memory and preferences) says the
+  journal holds every id the session ever claimed: set for a fresh random-id
+  session, for a client-key session with no preferences file, or restored from
+  a file that says so; cleared for good once the 64-id bound drops an id, and
+  dropped by any older bridge's write. Only then does `/dispatch` answer
+  `absent` (`dispatchJournalProvesAbsent`, `persistedDispatchStatus`). A
+  client-key session recreated with no rollout restores its journal's ids
+  as lost rather than starting empty.
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
   effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking

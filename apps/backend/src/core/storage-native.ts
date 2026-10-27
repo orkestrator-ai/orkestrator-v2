@@ -4,17 +4,12 @@ import { nativeAgentSessionWithControls } from "./native-agent-session-controls.
 import { nativeAgentSessionResumeIdentity } from "./models.js";
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
 import {
-  MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
-  MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
   NATIVE_AGENT_SESSION_VERSION,
   createHash,
-  PendingNativeAgentDispatchError,
-  PendingNativeAgentSteerError,
   isAgentInteractionResolutionJournal,
   isAgentPlatform,
   isNonBlankString,
   isPersistedNativeAgentSession,
-  isPersistedPromptQueue,
   isRecord,
   nowIso,
   pruneAgentInteractionResolutionJournal,
@@ -58,7 +53,6 @@ type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
-type PersistedNativeAgentPendingSteer = shared.PersistedNativeAgentPendingSteer;
 type PersistedComposeDraft = shared.PersistedComposeDraft;
 type PersistedFileDraft = shared.PersistedFileDraft;
 type PersistedPromptQueue = shared.PersistedPromptQueue;
@@ -84,11 +78,6 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
-import {
-  isNativeAgentSteerRejectedOutcome,
-  nativeAsyncQuestionItemId,
-  type NativeAgentSessionActionOutcome,
-} from "@orkestrator/protocol/native-agent";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { IncompleteTurnNotice } from "./models.js";
 import {
@@ -99,7 +88,6 @@ import {
   NativeAgentDisplayTailStore,
   type NativeAgentDisplayTailDeletion,
 } from "./native-agent-display-tail-store.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -207,8 +195,6 @@ export class NativeAgentSessionsRepository {
     }
   }
 
-  private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
-
   /**
    * Serializes one native agent session's read-modify-write in this process
    * and across backend processes sharing the same data directory.
@@ -242,10 +228,7 @@ export class NativeAgentSessionsRepository {
    * leases (prompt queue, display tails). Never take a native session lease
    * while holding another one, a prompt-queue lease or the environment lease.
    */
-  private enqueueNativeAgentSessionMutation<T>(
-    key: string,
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  enqueueNativeAgentSessionMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const digest = createHash("sha256").update(key).digest("hex");
     return this.context.serialize(
       this.context.file(path.join("native-agent-session-leases", digest)),
@@ -263,10 +246,7 @@ export class NativeAgentSessionsRepository {
     );
   }
 
-  private async scrubPendingNativeAgentDispatchBackups(
-    key: string,
-    requestId: string,
-  ): Promise<void> {
+  async scrubPendingNativeAgentDispatchBackups(key: string, requestId: string): Promise<void> {
     await this.context.transformSensitiveJsonBackups(
       this.files.nativeAgentSessionsFile(),
       (records) => {
@@ -285,28 +265,9 @@ export class NativeAgentSessionsRepository {
     );
   }
 
-  private async scrubPendingNativeAgentSteerBackups(key: string, requestId: string): Promise<void> {
-    await this.context.transformSensitiveJsonBackups(
-      this.files.nativeAgentSessionsFile(),
-      (records) => {
-        const record = records[key];
-        if (
-          isRecord(record) &&
-          isRecord(record.pendingSteer) &&
-          record.pendingSteer.requestId === requestId
-        ) {
-          const next = { ...record };
-          delete next.pendingSteer;
-          return { ...records, [key]: next };
-        }
-        return records;
-      },
-    );
-  }
-
   private displayTailStoreInstance: NativeAgentDisplayTailStore | null = null;
 
-  private announceNativeAgentRecord(
+  announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
     deleted = false,
   ): void {
@@ -413,7 +374,7 @@ export class NativeAgentSessionsRepository {
     });
   }
 
-  private assertReadableNativeAgentSession(loaded: LoadedNativeAgentSessions, key: string): void {
+  assertReadableNativeAgentSession(loaded: LoadedNativeAgentSessions, key: string): void {
     if (key in loaded.opaque) {
       throw new Error(
         "Stored native agent session metadata is invalid or uses an unsupported version",
@@ -997,618 +958,6 @@ export class NativeAgentSessionsRepository {
     this.context.scrubDeletedDatabaseContent();
   }
 
-  async dispatchNativeAgentPromptOnce(
-    key: string,
-    requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
-      dispatched: false;
-      mailRefused?: true;
-      /** Recorded under the session's persisted notice field; `null` clears it. */
-      incompleteTurnNotice?: IncompleteTurnNotice | null;
-    }>,
-    pendingDispatch?: PersistedNativeAgentPendingDispatch,
-    /** Runs after deduplication/conflict checks, under the delivery lease, before journaling. */
-    admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
-  ): Promise<{
-    session: PersistedNativeAgentSession;
-    dispatched: boolean;
-  }> {
-    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
-      throw new Error("Native agent dispatch key must not be blank");
-    }
-    if (pendingDispatch) {
-      let serialized: string;
-      try {
-        serialized = JSON.stringify(pendingDispatch);
-      } catch {
-        throw new Error("Pending native agent dispatch must be JSON serializable");
-      }
-      if (
-        Buffer.byteLength(serialized, "utf8") > MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
-      ) {
-        throw new Error("Pending native agent dispatch exceeds the 32 MB limit");
-      }
-    }
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      let session = sessions[key];
-      if (!session) throw new Error("Native agent session was not found");
-      if (session.pendingSteer) {
-        throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
-      }
-      if (session.pendingDispatch && session.pendingDispatch.requestId !== requestId) {
-        throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
-      }
-      if (session.dispatchedRequestIds?.includes(requestId)) {
-        if (session.pendingDispatch?.requestId === requestId) {
-          session = { ...session, pendingDispatch: undefined, updatedAt: nowIso() };
-          sessions[key] = session;
-          await this.saveNativeAgentSession(key, sessions[key]);
-          await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-        }
-        return { session, dispatched: false };
-      }
-
-      if (pendingDispatch && pendingDispatch.requestId !== requestId) {
-        throw new Error("Pending native agent dispatch request ID mismatch");
-      }
-      const controlUpdate = await admit?.(session);
-      if (controlUpdate) {
-        session = nativeAgentSessionWithControls(session, controlUpdate);
-        sessions[key] = session;
-        await this.saveNativeAgentSession(key, session);
-        this.announceNativeAgentRecord(session);
-      }
-
-      if (pendingDispatch || session.pendingDispatch?.mailRefused) {
-        session = {
-          ...session,
-          // Even a composer retry with the same ID invalidates prior refusal
-          // evidence before provider I/O. Its outcome may now be ambiguous.
-          pendingDispatch: {
-            ...(pendingDispatch ?? session.pendingDispatch!),
-            mailRefused: undefined,
-          },
-          updatedAt: nowIso(),
-        };
-        sessions[key] = session;
-        // Persist before touching the provider. A crash or lost acknowledgement
-        // can then replay this exact request through the same idempotency key.
-        await this.saveNativeAgentSession(key, sessions[key]);
-      }
-
-      // Keep the cross-process lock until the provider has acknowledged this
-      // stable request id. If the process dies after provider acceptance but
-      // before this write, recovery retries the same id rather than inventing a
-      // second turn.
-      const outcome = await dispatch(session);
-      if (outcome?.dispatched === false) {
-        if (outcome.mailRefused && session.pendingDispatch?.requestId === requestId) {
-          const updated: PersistedNativeAgentSession = {
-            ...session,
-            pendingDispatch: { ...session.pendingDispatch, mailRefused: true },
-            updatedAt: nowIso(),
-          };
-          sessions[key] = updated;
-          // Persist proof of refusal before cleanup. A restart can release this
-          // fence without interpreting a missing provider journal as unsent.
-          await this.saveNativeAgentSession(key, sessions[key]);
-          this.announceNativeAgentRecord(updated);
-          return { session: updated, dispatched: false };
-        }
-        if (outcome.incompleteTurnNotice === undefined) {
-          // A preparation refusal happens before provider.send. The durable
-          // pending row was opened only to protect the provider side effect,
-          // so retaining it here would park a request that was never sent and
-          // block every later request id for this session.
-          if (session.pendingDispatch?.requestId === requestId) {
-            const updated: PersistedNativeAgentSession = {
-              ...session,
-              pendingDispatch: undefined,
-              updatedAt: nowIso(),
-            };
-            sessions[key] = updated;
-            await this.saveNativeAgentSession(key, sessions[key]);
-            await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-            this.announceNativeAgentRecord(updated);
-            return { session: updated, dispatched: false };
-          }
-          return { session, dispatched: false };
-        }
-        const updated: PersistedNativeAgentSession = {
-          ...session,
-          pendingDispatch: undefined,
-          ...(outcome.incompleteTurnNotice === null
-            ? { openCodeIncompleteTurnNotice: undefined }
-            : {
-                openCodeIncompleteTurnNotice: outcome.incompleteTurnNotice,
-              }),
-          updatedAt: nowIso(),
-        };
-        sessions[key] = updated;
-        await this.saveNativeAgentSession(key, sessions[key]);
-        await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-        this.announceNativeAgentRecord(updated);
-        return { session: updated, dispatched: false };
-      }
-      const updated: PersistedNativeAgentSession = {
-        ...session,
-        // Any successfully accepted prompt supersedes a prior recovery notice.
-        openCodeIncompleteTurnNotice: undefined,
-        pendingDispatch: undefined,
-        retiredDispatch: undefined,
-        dispatchedRequestIds: [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
-        updatedAt: nowIso(),
-      };
-      sessions[key] = updated;
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announceNativeAgentRecord(updated);
-      return { session: updated, dispatched: true };
-    });
-  }
-
-  /**
-   * Record that a parked dispatch is known to have reached the provider.
-   *
-   * This is the settled end of the ambiguity the pending record exists to
-   * describe: the provider has since confirmed it holds this request id, so the
-   * record is cleared *and* the id joins `dispatchedRequestIds`. Both halves
-   * matter — clearing alone would let a later retry of the same id dispatch the
-   * turn a second time, which is the exact outcome the journal exists to
-   * prevent.
-   *
-   * Returns false when this key has no pending record for `requestId`, so a
-   * caller racing a real acknowledgement cannot resurrect one.
-   */
-  async confirmNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
-    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
-      throw new Error("Native agent dispatch identity must not be blank");
-    }
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
-      if (!session || session.pendingDispatch?.requestId !== requestId) {
-        return false;
-      }
-      sessions[key] = {
-        ...session,
-        pendingDispatch: undefined,
-        retiredDispatch: undefined,
-        dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
-          ? session.dispatchedRequestIds
-          : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
-        updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announceNativeAgentRecord(sessions[key]!);
-      return true;
-    });
-  }
-
-  async clearPendingNativeAgentDispatch(
-    key: string,
-    requestId: string,
-    onlyMailRefused = false,
-  ): Promise<boolean> {
-    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
-      throw new Error("Pending native agent dispatch identity must not be blank");
-    }
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
-      if (
-        !session ||
-        session.pendingDispatch?.requestId !== requestId ||
-        (onlyMailRefused && !session.pendingDispatch.mailRefused)
-      ) {
-        return false;
-      }
-      sessions[key] = {
-        ...session,
-        pendingDispatch: undefined,
-        updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announceNativeAgentRecord(sessions[key]!);
-      return true;
-    });
-  }
-
-  /**
-   * Resolve a parked dispatch the provider reports lost.
-   *
-   * The provider recorded this id in an earlier process and will refuse it for
-   * good, so the record can never be retried into a turn. It is cleared like a
-   * retry refused with `requestIdRetired`, and a content-free
-   * `retiredDispatch` marker replaces any earlier one so every renderer can
-   * release the draft's id without a click. The id never joins
-   * `dispatchedRequestIds`: nothing proves its turn ran.
-   *
-   * Returns false when this key has no pending record for `requestId`.
-   */
-  async retireNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
-    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
-      throw new Error("Native agent dispatch identity must not be blank");
-    }
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
-      if (!session || session.pendingDispatch?.requestId !== requestId) {
-        return false;
-      }
-      sessions[key] = {
-        ...session,
-        pendingDispatch: undefined,
-        retiredDispatch: { requestId, retiredAt: nowIso() },
-        updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announceNativeAgentRecord(sessions[key]!);
-      return true;
-    });
-  }
-
-  /** Reserve under the session lock before publishing a durable steer record.
-   * Lock order is session, then queue. A crash between the two writes leaves
-   * an unsent reservation that recoverPromptQueueSteer restores.
-   */
-  async reservePromptQueueSteer(
-    key: string,
-    messageId: string,
-    expectedRunId: string,
-  ): Promise<PersistedNativeAgentPendingSteer | null> {
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = loaded.sessions[key];
-      if (!session) throw new Error("Native agent session was not found");
-      if (session.pendingDispatch)
-        throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
-      if (session.pendingSteer)
-        throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
-      return this.enqueuePromptQueueMutation(async () => {
-        const queues = await this.loadPromptQueues();
-        const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
-        const queue = queues[queueKey];
-        if (!queue || queue.environmentId !== session.environmentId) return null;
-        if (queue.inFlight || queue.outstandingClaim)
-          throw new Error("A queued prompt is already being delivered; refresh before steering");
-        const index = queue.messages.findIndex((item) => isRecord(item) && item.id === messageId);
-        const message = queue.messages[index];
-        if (!isRecord(message)) return null;
-        const requestId = isNonBlankString(message.requestId) ? message.requestId : messageId;
-        if (
-          message.command !== undefined ||
-          message.origin !== undefined ||
-          nativeAsyncQuestionItemId(messageId) ||
-          nativeAsyncQuestionItemId(requestId) ||
-          (Array.isArray(message.attachments) && message.attachments.length > 0)
-        ) {
-          throw new Error("This queued item cannot be steered");
-        }
-        if (
-          !isNonBlankString(message.text) ||
-          Buffer.byteLength(message.text, "utf8") > 64 * 1024 ||
-          Buffer.byteLength(requestId, "utf8") > 512
-        )
-          throw new Error("Queued steering text or identity is invalid");
-        if (session.dispatchedRequestIds?.includes(requestId)) {
-          throw new Error("This queued request was already delivered; refresh before steering");
-        }
-        const pending: PersistedNativeAgentPendingSteer = {
-          requestId,
-          text: message.text.trim(),
-          inputDigest: createHash("sha256").update(message.text.trim()).digest("hex"),
-          expectedRunId,
-          state: "prepared",
-          sourceQueue: true,
-          createdAt: nowIso(),
-        };
-        queues[queueKey] = {
-          ...queue,
-          messages: queue.messages.filter((_, i) => i !== index),
-          inFlight: { message, requestId, reservedAt: nowIso(), steer: true },
-          updatedAt: nowIso(),
-          revision: queue.revision + 1,
-        };
-        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-        await this.saveNativeAgentSession(key, {
-          ...session,
-          pendingSteer: pending,
-          updatedAt: nowIso(),
-        });
-        this.context.changes.announce("prompt-queue", session.environmentId);
-        return pending;
-      });
-    });
-  }
-
-  /** Called with the session lock. Persist a terminal intent before touching
-   * the source, so restart/retry can finish even an explicit discard exactly once.
-   */
-  private async finishQueuedSteer(
-    session: PersistedNativeAgentSession,
-    settlement: "applied" | "restore" | "discard",
-  ): Promise<void> {
-    const pending = session.pendingSteer;
-    if (!pending?.sourceQueue) return;
-    await this.saveNativeAgentSession(session.key, {
-      ...session,
-      pendingSteer: { ...pending, queueSettlement: settlement },
-    });
-    await this.settlePromptQueueSteerSource(session, pending.requestId, settlement);
-  }
-
-  private async settlePromptQueueSteerSource(
-    session: PersistedNativeAgentSession,
-    requestId: string,
-    settlement: "applied" | "restore" | "discard",
-  ): Promise<void> {
-    await this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
-      const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
-      const queue = queues[queueKey];
-      if (
-        !queue?.inFlight?.steer ||
-        queue.inFlight.requestId !== requestId ||
-        queue.environmentId !== session.environmentId
-      )
-        return;
-      const { inFlight, ...rest } = queue;
-      queues[queueKey] = {
-        ...rest,
-        messages:
-          settlement === "restore"
-            ? [
-                inFlight.message,
-                ...queue.messages.filter(
-                  (item) =>
-                    !isRecord(item) ||
-                    !isRecord(inFlight.message) ||
-                    item.id !== inFlight.message.id,
-                ),
-              ]
-            : queue.messages,
-        updatedAt: nowIso(),
-        revision: queue.revision + 1,
-      };
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", session.environmentId);
-    });
-  }
-
-  private async completePendingSteer(
-    session: PersistedNativeAgentSession,
-    settlement: "applied" | "restore" | "discard",
-  ): Promise<void> {
-    const requestId = session.pendingSteer!.requestId;
-    await this.finishQueuedSteer(session, settlement);
-    const saved = {
-      ...session,
-      pendingSteer: undefined,
-      ...(settlement === "applied"
-        ? {
-            dispatchedRequestIds: [
-              ...(session.dispatchedRequestIds ?? []).filter((id) => id !== requestId).slice(-999),
-              requestId,
-            ],
-          }
-        : {}),
-      updatedAt: nowIso(),
-    };
-    await this.saveNativeAgentSession(session.key, saved);
-    await this.scrubPendingNativeAgentSteerBackups(session.key, requestId);
-    this.announceNativeAgentRecord(saved);
-  }
-
-  /** The journal read shares dispatch's lock: an absent answer read before a
-   * concurrent send must never clear that send's newer ambiguous receipt.
-   */
-  async reconcileNativeAgentSteer(
-    key: string,
-    requestId: string,
-    readStatus: () => Promise<"dispatched" | "absent" | "unknown">,
-  ): Promise<"dispatched" | "absent" | undefined> {
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = loaded.sessions[key];
-      if (!session || session.pendingSteer?.requestId !== requestId) return undefined;
-      if (session.pendingSteer.queueSettlement) {
-        const settlement = session.pendingSteer.queueSettlement;
-        await this.completePendingSteer(session, settlement);
-        return settlement === "applied" ? "dispatched" : "absent";
-      }
-      const status = await readStatus();
-      if (status === "unknown") return undefined;
-      await this.completePendingSteer(session, status === "dispatched" ? "applied" : "restore");
-      return status;
-    });
-  }
-
-  /** No provider calls: recover an interrupted transfer/settlement under the
-   * same lock as dispatch. A live pending receipt always keeps its source reserved.
-   */
-  async recoverPromptQueueSteer(key: string, requestId: string): Promise<void> {
-    await this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = loaded.sessions[key];
-      if (!session) return;
-      if (session.pendingSteer?.requestId === requestId) {
-        const settlement = session.pendingSteer.queueSettlement;
-        if (!settlement) return;
-        await this.completePendingSteer(session, settlement);
-        return;
-      }
-      await this.settlePromptQueueSteerSource(
-        session,
-        requestId,
-        session.dispatchedRequestIds?.includes(requestId) ? "applied" : "restore",
-      );
-    });
-  }
-
-  /**
-   * Persist one backend-owned steering identity across the provider boundary.
-   *
-   * A provider exception is ambiguous by default: once the request was handed
-   * off, this layer cannot prove which side of admission it occurred on. The
-   * exact record therefore stays parked as `unknown` and every retry reuses it.
-   * Only a returned, verified `rejected` outcome (never a thrown error) proves
-   * the provider refused the request before delivery.
-   */
-  async dispatchNativeAgentSteerOnce(
-    key: string,
-    pendingSteer: PersistedNativeAgentPendingSteer,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<NativeAgentSessionActionOutcome>,
-  ): Promise<NativeAgentSessionActionOutcome> {
-    if (
-      !isNonBlankString(key) ||
-      !isNonBlankString(pendingSteer.requestId) ||
-      Buffer.byteLength(pendingSteer.requestId, "utf8") > 512 ||
-      !isNonBlankString(pendingSteer.text) ||
-      Buffer.byteLength(pendingSteer.text, "utf8") > 64 * 1024 ||
-      !/^[a-f0-9]{64}$/.test(pendingSteer.inputDigest) ||
-      !isNonBlankString(pendingSteer.expectedRunId) ||
-      Buffer.byteLength(pendingSteer.expectedRunId, "utf8") > 512
-    ) {
-      throw new Error("Native agent steer record is invalid");
-    }
-    let serialized: string;
-    try {
-      serialized = JSON.stringify(pendingSteer);
-    } catch {
-      throw new Error("Pending native agent steer must be JSON serializable");
-    }
-    if (Buffer.byteLength(serialized, "utf8") > MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES) {
-      throw new Error("Pending native agent steer exceeds its persistence limit");
-    }
-
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      let session = sessions[key];
-      if (!session) throw new Error("Native agent session was not found");
-      if (session.pendingDispatch) {
-        throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
-      }
-      if (session.dispatchedRequestIds?.includes(pendingSteer.requestId) && !session.pendingSteer) {
-        return { outcome: "applied" };
-      }
-      if (pendingSteer.sourceQueue && session.pendingSteer?.requestId !== pendingSteer.requestId)
-        return { outcome: "mismatch" };
-      if (session.pendingSteer?.queueSettlement) {
-        throw new Error("Queued steering settlement is pending; refresh before retrying");
-      }
-      if (session.pendingSteer) {
-        if (session.pendingSteer.requestId !== pendingSteer.requestId) {
-          throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
-        }
-        if (
-          session.pendingSteer.inputDigest !== pendingSteer.inputDigest ||
-          session.pendingSteer.expectedRunId !== pendingSteer.expectedRunId
-        ) {
-          return { outcome: "unknown", requestId: pendingSteer.requestId };
-        }
-      } else {
-        session = {
-          ...session,
-          pendingSteer,
-          updatedAt: nowIso(),
-        };
-        sessions[key] = session;
-        // The record must be durable before a provider can queue the text.
-        await this.saveNativeAgentSession(key, sessions[key]);
-      }
-
-      pendingSteer = session.pendingSteer ?? pendingSteer;
-      let outcome: NativeAgentSessionActionOutcome;
-      try {
-        outcome = await dispatch(session);
-      } catch {
-        outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
-      }
-      // A refusal is definitive only in its verified shape for this exact
-      // request. It then settles like idle/mismatch: the parked record and its
-      // backups go, and the id never joins the delivered history.
-      if (
-        outcome.outcome === "rejected" &&
-        !isNativeAgentSteerRejectedOutcome(outcome, pendingSteer.requestId)
-      ) {
-        outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
-      }
-
-      if (outcome.outcome === "unknown") {
-        sessions[key] = {
-          ...session,
-          pendingSteer: { ...pendingSteer, state: "unknown" },
-          updatedAt: nowIso(),
-        };
-        await this.saveNativeAgentSession(key, sessions[key]);
-        this.announceNativeAgentRecord(sessions[key]!);
-        return { ...outcome, requestId: pendingSteer.requestId };
-      }
-
-      await this.completePendingSteer(
-        session,
-        outcome.outcome === "applied" ? "applied" : "restore",
-      );
-      return outcome;
-    });
-  }
-
-  async confirmNativeAgentSteer(key: string, requestId: string): Promise<boolean> {
-    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
-      throw new Error("Native agent steer identity must not be blank");
-    }
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
-      if (!session || session.pendingSteer?.requestId !== requestId) {
-        return false;
-      }
-      await this.completePendingSteer(session, "applied");
-      return true;
-    });
-  }
-
-  async clearPendingNativeAgentSteer(
-    key: string,
-    requestId: string,
-    discard = false,
-  ): Promise<boolean> {
-    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
-      throw new Error("Native agent steer identity must not be blank");
-    }
-    return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
-      if (!session || session.pendingSteer?.requestId !== requestId) {
-        return false;
-      }
-      await this.completePendingSteer(session, discard ? "discard" : "restore");
-      return true;
-    });
-  }
-
   /**
    * Record or clear (`null`) a session's incomplete-turn notice. It is stored
    * under the session's original `openCodeIncompleteTurnNotice` field so
@@ -1698,112 +1047,13 @@ export class NativeAgentSessionsRepository {
     queue: PersistedPromptQueue | null;
   }> {
     return this.enqueueNativeAgentSessionMutation(key, () =>
-      this.enqueuePromptQueueMutation(async () => {
+      this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
         const loaded = await this.loadNativeAgentSessions();
         this.assertReadableNativeAgentSession(loaded, key);
-        const queues = await this.loadPromptQueues();
+        const queues = await this.repos.promptQueues.loadPromptQueues();
         return { session: loaded.sessions[key] ?? null, queue: queues[queueKey] ?? null };
       }),
     );
-  }
-
-  enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.context.serialize(this.files.promptQueuesFile(), "prompt queue storage", operation);
-  }
-
-  validatePromptQueueMessages(messages: unknown): asserts messages is unknown[] {
-    if (!Array.isArray(messages)) {
-      throw new Error("Prompt queue messages must be an array");
-    }
-    let serialized: string | undefined;
-    try {
-      serialized = JSON.stringify(messages);
-    } catch {
-      throw new Error("Prompt queue messages must be JSON serializable");
-    }
-    if (serialized === undefined) {
-      throw new Error("Prompt queue messages must be JSON serializable");
-    }
-    // Queued prompts carry pasted image attachments, so the ceiling has to be
-    // generous; it exists to stop a runaway client, not to bound normal use.
-    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
-      throw new Error("Prompt queue exceeds the 32 MB limit");
-    }
-  }
-
-  validatePromptQueueMessage(message: unknown): asserts message is Record<string, unknown> {
-    if (!isRecord(message) || !isNonBlankString(message.id)) {
-      throw new Error("Prompt queue message must have a non-blank ID");
-    }
-    this.validatePromptQueueMessages([message]);
-  }
-
-  async savePromptQueueMutation(
-    queues: Record<string, PersistedPromptQueue>,
-    queueKey: string,
-    environmentId: string,
-    messages: unknown[],
-    previous?: PersistedPromptQueue,
-  ): Promise<PersistedPromptQueue> {
-    this.validatePromptQueueMessages(messages);
-    // Queue edits carry a claim an older backend left in place; only expiry
-    // recovery (or that backend) clears it, and nothing here creates one.
-    const outstandingClaim = previous?.outstandingClaim ?? null;
-    const failedMessageStillUnchanged =
-      previous?.dispatchError !== undefined &&
-      messages.some(
-        (candidate) =>
-          isRecord(candidate) &&
-          candidate.id === previous.dispatchError?.messageId &&
-          this.repos.prompts.promptQueueMessageFingerprint(candidate) ===
-            previous.dispatchError?.messageFingerprint,
-      );
-    const removedOrigins = this.promptQueueRemovedOrigins(previous, messages, outstandingClaim);
-    const saved: PersistedPromptQueue = {
-      queueKey,
-      environmentId,
-      messages,
-      ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
-      ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
-      ...(outstandingClaim ? { outstandingClaim } : {}),
-      ...(removedOrigins.length > 0 ? { removedOrigins } : {}),
-      updatedAt: nowIso(),
-      revision: (previous?.revision ?? 0) + 1,
-    };
-    queues[queueKey] = saved;
-    await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-    this.context.changes.announce("prompt-queue", environmentId);
-    this.schedulePromptQueueClaimRecovery(queues);
-    return saved;
-  }
-
-  /**
-   * Tombstones for backend-authored items (a typed `origin` with a request id)
-   * that leave `messages` in this save without moving into the claim or the
-   * in-flight reservation: they were removed or replaced before dispatch.
-   * Reservation writes the in-flight record directly and never comes through
-   * here, so a dispatched item can never be tombstoned.
-   */
-  private promptQueueRemovedOrigins(
-    previous: PersistedPromptQueue | undefined,
-    messages: readonly unknown[],
-    outstandingClaim: PersistedPromptQueue["outstandingClaim"] | null,
-  ): Array<{ requestId: string; removedAt: string }> {
-    const existing = previous?.removedOrigins ?? [];
-    if (!previous) return existing;
-    const kept = new Set<unknown>();
-    for (const candidate of [...messages, outstandingClaim?.message, previous.inFlight?.message]) {
-      if (isRecord(candidate)) kept.add(candidate.id);
-    }
-    const added: Array<{ requestId: string; removedAt: string }> = [];
-    for (const candidate of previous.messages) {
-      if (!isRecord(candidate) || kept.has(candidate.id) || !isRecord(candidate.origin)) continue;
-      const requestId = candidate.origin.requestId;
-      if (!isNonBlankString(requestId) || requestId.length > 512) continue;
-      if (existing.some((entry) => entry.requestId === requestId)) continue;
-      added.push({ requestId, removedAt: nowIso() });
-    }
-    return added.length === 0 ? existing : [...existing, ...added].slice(-64);
   }
 
   /**
@@ -1898,65 +1148,6 @@ export class NativeAgentSessionsRepository {
     });
   }
 
-  schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {
-    if (this.promptQueueClaimRecoveryTimer) {
-      clearTimeout(this.promptQueueClaimRecoveryTimer);
-      this.promptQueueClaimRecoveryTimer = null;
-    }
-    const nextExpiry = Object.values(queues).reduce<number | null>((soonest, queue) => {
-      if (!queue.outstandingClaim) return soonest;
-      const expiry = Date.parse(queue.outstandingClaim.expiresAt);
-      if (!Number.isFinite(expiry)) return soonest;
-      return soonest === null || expiry < soonest ? expiry : soonest;
-    }, null);
-    if (nextExpiry === null) return;
-    this.promptQueueClaimRecoveryTimer = setTimeout(
-      () => {
-        this.promptQueueClaimRecoveryTimer = null;
-        void this.recoverExpiredPromptQueueClaims().catch(() => {
-          // A future read, mutation, or backend restart retries recovery. Avoid
-          // logging queue errors because their values may contain prompt data.
-        });
-      },
-      Math.max(0, nextExpiry - Date.now()),
-    );
-    this.promptQueueClaimRecoveryTimer.unref?.();
-  }
-
-  async recoverExpiredPromptQueueClaims(): Promise<void> {
-    await this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
-      const now = Date.now();
-      const changedEnvironmentIds = new Set<string>();
-      let changed = false;
-      for (const queue of Object.values(queues)) {
-        const claim = queue.outstandingClaim;
-        if (!claim || Date.parse(claim.expiresAt) > now) continue;
-        compatibilityPathUsage.record("prompt-queue.legacy-claim-recovered");
-        const messageId = isRecord(claim.message) ? claim.message.id : undefined;
-        queue.messages = [
-          claim.message,
-          ...queue.messages.filter(
-            (candidate) =>
-              messageId === undefined || !isRecord(candidate) || candidate.id !== messageId,
-          ),
-        ];
-        delete queue.outstandingClaim;
-        queue.updatedAt = nowIso();
-        queue.revision += 1;
-        changedEnvironmentIds.add(queue.environmentId);
-        changed = true;
-      }
-      if (changed) {
-        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-        for (const environmentId of changedEnvironmentIds) {
-          this.context.changes.announce("prompt-queue", environmentId);
-        }
-      }
-      this.schedulePromptQueueClaimRecovery(queues);
-    });
-  }
-
   async assertEnvironmentAcceptsBackgroundState(
     environmentId: string,
     label: string,
@@ -1997,19 +1188,5 @@ export class NativeAgentSessionsRepository {
       throw new Error(`${label} environment is being deleted: ${environmentId}`);
     }
     return environment;
-  }
-
-  async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
-    const stored = await this.context.loadJson<Record<string, PersistedPromptQueue>>(
-      this.files.promptQueuesFile(),
-      () => ({}),
-    );
-    // A first-generation dispatch error was upgraded once at import
-    // (storage-record-upgrades.ts); every stored error identifies its item.
-    return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, queue]) =>
-        isPersistedPromptQueue(queue, storedKey),
-      ),
-    );
   }
 }

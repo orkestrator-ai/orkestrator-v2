@@ -19,6 +19,10 @@ const identity: NativeAgentViewIdentity = {
 const query = new URLSearchParams(window.location.search);
 const mixed = query.has("mixed");
 const short = query.has("short");
+// `bounded` reports the tail the way a view whose own byte bound dropped rows
+// does: a direct cursor at the first kept row of a bytes-truncated window
+// (0232). Any joined sync-v1 call fails the fixture.
+const bounded = query.has("bounded");
 // `paged=N` serves history N source rows at a time behind a cursor, as the live
 // bridges do, so the first click leaves more to load. `stops=N` lengthens the
 // trail and starts the tail 100 rows from its end, like the live window.
@@ -197,7 +201,15 @@ function installBackend() {
               historyCursor: `before-${tailStart}`,
               historyPaging: "direct",
               historyComplete: false,
-              messageWindow: { limit: 100, truncated: true, canLoadEarlier: true },
+              messageWindow: bounded
+                ? {
+                    limit: 100,
+                    truncated: true,
+                    truncationReason: "bytes",
+                    omittedMessages: tailStart,
+                    canLoadEarlier: true,
+                  }
+                : { limit: 100, truncated: true, canLoadEarlier: true },
             },
           };
           break;

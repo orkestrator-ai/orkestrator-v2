@@ -286,31 +286,76 @@ export function restoredDispatchClaimLost(
 }
 
 /**
- * {@link restoredDispatchClaimLost} for a session this process has not
- * registered yet (after a restart nothing materializes it until a tab reads
- * it), answered from its durable preferences file. Materializing it would
- * restore exactly this journal as `restoredDispatchedRequestIds`, with no
- * outcome records, so the prompt route would refuse the id the same way.
- * Reads the file only: the session is not registered, touched or hydrated.
- * An unreadable file, or a resident session, answers false.
+ * Can this resident session prove `requestId` never reached Claude?
+ *
+ * Only while its journal is complete (`dispatchJournalComplete`): every id it
+ * ever claimed, in any process, is still journaled, and each claim was written
+ * to disk before its turn could start. Then an id missing from the journal, the
+ * restored ids, the structured-output slot and the idle `/steer` replies was
+ * never handed over, and a claim racing this read adds the id to the journal
+ * synchronously, so a resend under it is a duplicate. A pure read of the
+ * session record: no touch, no hydration.
  */
-export async function persistedDispatchClaimLost(
+export function dispatchJournalProvesAbsent(
+  session:
+    | Pick<
+        SessionState,
+        | "dispatchJournalComplete"
+        | "dispatchJournalUnavailable"
+        | "deleting"
+        | "dispatchedRequestIds"
+        | "restoredDispatchedRequestIds"
+        | "structuredOutputRequestId"
+        | "localTranscript"
+      >
+    | undefined,
+  requestId: string,
+): boolean {
+  if (
+    !session ||
+    session.dispatchJournalComplete !== true ||
+    session.dispatchJournalUnavailable === true ||
+    session.deleting === true ||
+    session.dispatchedRequestIds?.has(requestId) ||
+    session.restoredDispatchedRequestIds?.has(requestId) ||
+    session.structuredOutputRequestId === requestId
+  ) {
+    return false;
+  }
+  const localReplyId = idleSteerUserMessageId(requestId);
+  return !session.localTranscript?.some((message) => message.id === localReplyId);
+}
+
+/**
+ * {@link restoredDispatchClaimLost} and {@link dispatchJournalProvesAbsent}
+ * for a session this process has not registered yet (after a restart nothing
+ * materializes it until a tab reads it), answered from its durable preferences
+ * file. Materializing it would restore exactly this journal as
+ * `restoredDispatchedRequestIds`, with no outcome records, so the prompt route
+ * would refuse a journaled id the same way and take a missing one as new.
+ * Reads the file only: the session is not registered, touched or hydrated.
+ * An unreadable file, a missing one, or a resident session answers `unknown`.
+ */
+export async function persistedDispatchStatus(
   sessionId: string,
   requestId: string,
-): Promise<boolean> {
-  if (sessions.has(sessionId)) return false;
+): Promise<"lost" | "absent" | "unknown"> {
+  if (sessions.has(sessionId)) return "unknown";
   const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
-  if (!sdkSessionId) return false;
+  if (!sdkSessionId) return "unknown";
   let preferences: Awaited<ReturnType<typeof readSessionPreferences>>;
   try {
     preferences = await readSessionPreferences(sdkSessionId);
   } catch {
-    return false;
+    return "unknown";
   }
-  if (!preferences || sessionPreferencesUnavailable(preferences)) return false;
-  if (!preferences.dispatchedRequestIds?.includes(requestId)) return false;
+  if (!preferences || sessionPreferencesUnavailable(preferences)) return "unknown";
   const localReplyId = idleSteerUserMessageId(requestId);
-  return !preferences.localTranscript?.some((entry) => entry.id === localReplyId);
+  const localReply = preferences.localTranscript?.some((entry) => entry.id === localReplyId);
+  if (preferences.dispatchedRequestIds?.includes(requestId)) {
+    return localReply ? "unknown" : "lost";
+  }
+  return preferences.dispatchJournalComplete === true && !localReply ? "absent" : "unknown";
 }
 
 /**
@@ -359,9 +404,18 @@ export async function claimPromptDispatch(
   dispatchedRequestIds.add(requestId);
   session.dispatchedRequestIds = dispatchedRequestIds;
 
+  // Past the bound the oldest id is forgotten, and with it the proof that any
+  // id missing from the journal was never sent.
+  if (dispatchedRequestIds.size > MAX_DISPATCHED_REQUEST_IDS) {
+    session.dispatchJournalComplete = false;
+  }
   const recentRequestIds = [...dispatchedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS);
   const retainedRequestIds = new Set(recentRequestIds);
   session.dispatchedRequestIds = retainedRequestIds;
+  const journalUpdate = (ids: string[]) => ({
+    dispatchedRequestIds: ids,
+    dispatchJournalComplete: session.dispatchJournalComplete === true ? (true as const) : undefined,
+  });
 
   const sdkSessionId = session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
   if (!sdkSessionId) {
@@ -380,9 +434,7 @@ export async function claimPromptDispatch(
 
   const outcome = (async () => {
     await testHooks?.beforePersistence?.();
-    await updateSessionPreferences(sdkSessionId, {
-      dispatchedRequestIds: recentRequestIds,
-    });
+    await updateSessionPreferences(sdkSessionId, journalUpdate(recentRequestIds));
 
     if (
       sessions.get(sessionId) !== session ||
@@ -391,9 +443,10 @@ export async function claimPromptDispatch(
     ) {
       claimedPromptDispatches.delete(sessionId);
       retainedRequestIds.delete(requestId);
-      await updateSessionPreferences(sdkSessionId, {
-        dispatchedRequestIds: [...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS),
-      });
+      await updateSessionPreferences(
+        sdkSessionId,
+        journalUpdate([...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS)),
+      );
       throw sessionOperationError(
         "conflict",
         "Session became unavailable before the prompt could start",
@@ -414,9 +467,10 @@ export async function claimPromptDispatch(
       }
       retainedRequestIds.delete(requestId);
       try {
-        await updateSessionPreferences(sdkSessionId, {
-          dispatchedRequestIds: [...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS),
-        });
+        await updateSessionPreferences(
+          sdkSessionId,
+          journalUpdate([...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS)),
+        );
       } catch (rollbackError) {
         console.error(
           "[session-manager] Failed to roll back prompt dispatch claim:",

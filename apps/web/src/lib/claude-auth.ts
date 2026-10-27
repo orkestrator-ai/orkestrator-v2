@@ -1,11 +1,10 @@
+import { NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-terminal-rows";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 /** Updates the host-owned Claude credential used by local environments. */
 export const CLAUDE_AUTH_LOGIN_COMMAND = "claude auth login";
 /** Starts Claude's interactive login inside an isolated container. */
 export const CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND = "claude /login";
-
-const NATIVE_TERMINAL_ERROR_MESSAGE_PREFIX = "native-terminal:error:";
 
 const AUTH_ERROR_PATTERNS = [
   "failed to authenticate",
@@ -47,7 +46,7 @@ export function isClaudeAuthenticationFailureMessage(
 ): boolean {
   return (
     message.role === "system" &&
-    message.id.startsWith(NATIVE_TERMINAL_ERROR_MESSAGE_PREFIX) &&
+    message.id.startsWith(NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX) &&
     isClaudeAuthenticationError(message.content)
   );
 }

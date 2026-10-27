@@ -340,14 +340,22 @@ describe("ACP change evidence", () => {
     await persisted.flush();
 
     const restored = new ChangeEvidenceSpool({ directory });
-    expect(frames(restored).map((frame) => frame.frameId)).toEqual(before);
-    const [restoredFrame] = frames(restored);
-    const block = restoredFrame!.event.kind === "tool" ? restoredFrame!.event.evidence[0] : null;
-    if (block?.kind !== "replace" || block.evidence.kind !== "replacement") {
-      throw new Error("expected a replacement");
+    try {
+      expect(frames(restored).map((frame) => frame.frameId)).toEqual(before);
+      const [restoredFrame] = frames(restored);
+      const block = restoredFrame!.event.kind === "tool" ? restoredFrame!.event.evidence[0] : null;
+      if (block?.kind !== "replace" || block.evidence.kind !== "replacement") {
+        throw new Error("expected a replacement");
+      }
+      if (block.evidence.after.state !== "present") throw new Error("expected after content");
+      expect(restored.readBody(block.evidence.after.body.id)).not.toBeNull();
+    } finally {
+      // Restoring queues a compaction rewrite of `entries.jsonl`; the harness
+      // removes the directory after the test, so let the rewrite land first
+      // or it re-creates the directory (0247).
+      await restored.flush();
+      await persisted.flush();
     }
-    if (block.evidence.after.state !== "present") throw new Error("expected after content");
-    expect(restored.readBody(block.evidence.after.body.id)).not.toBeNull();
   });
 
   test("approval waits and refusals reach the call's lifecycle", () => {

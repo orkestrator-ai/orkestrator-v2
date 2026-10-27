@@ -90,6 +90,11 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       this.recovery,
       this.stageSupervisor,
     );
+    // Verification is certified against the worktree it started from. Asking
+    // at submission lets the verifier undo a stray file within its turn.
+    options.workflowResults?.setAcceptanceCheck("verification-result", (attempt) =>
+      this.stageSupervisor.verificationResultRefusal(attempt),
+    );
   }
 
   // -------------------------------------------------------------------------

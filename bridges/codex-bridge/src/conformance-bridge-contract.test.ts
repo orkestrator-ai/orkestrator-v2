@@ -39,7 +39,11 @@ delete process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING;
 // evaluated. Hono captures this constructor while installing its middleware.
 const originalCompressionStream = globalThis.CompressionStream;
 globalThis.CompressionStream = NodeCompressionStream as typeof CompressionStream;
-const { app } = await import("./index.js");
+const { app, __testing } = await import("./index.js");
+// `CODEX_BRIDGE_NO_ENGINE` skips the runtime start, which is what loads the
+// dispatch journal in production. Load it here, over the private CODEX_HOME,
+// so `/dispatch` answers from a journal as it would in a running bridge.
+await __testing.runtimeForTesting().getJournal().load();
 
 afterAll(() => {
   globalThis.CompressionStream = originalCompressionStream;

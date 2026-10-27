@@ -9,9 +9,10 @@
  * verified exit. The outcome resolves exactly once; exit verification is
  * reported separately so the runner releases capacity only afterwards.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstat, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -70,6 +71,7 @@ export interface SupervisorDeadlines {
 export type ProcessWorkerLaunch = {
   isolation: "process";
   command: string;
+  /** Worker arguments; the supervisor appends a private scratch ownership argument. */
   args: string[];
   /** Parent of the per-job private scratch directory (default: the OS temp directory). */
   scratchRoot?: string;
@@ -120,6 +122,123 @@ export interface SupervisedJob {
   reap(): Promise<boolean>;
   /** Process mode: path of the job's private HOME/TMPDIR (the directory is removed after a verified exit). */
   scratchDir(): string | null;
+}
+
+/**
+ * Prefix of a process-mode worker's scratch directory, named
+ * `<prefix><backend pid>-<random>` so a later backend can tell whose it is.
+ */
+export const PREVIEW_SCRATCH_PREFIX = "ork-artifact-preview-";
+const PREVIEW_SCRATCH_NAME = /^ork-artifact-preview-([1-9]\d*)-[A-Za-z0-9]{6}$/;
+/** The name used before the backend PID was embedded; only age can decide for these. */
+const LEGACY_PREVIEW_SCRATCH_NAME = /^ork-artifact-preview-[A-Za-z0-9]{6}$/;
+/** How long the scratch of a backend that has exited is kept before startup recovery removes it. */
+export const PREVIEW_SCRATCH_STALE_MS = 60 * 60_000;
+/** How long a legacy-named scratch directory is kept; a job is bounded to minutes. */
+export const LEGACY_PREVIEW_SCRATCH_STALE_MS = 24 * 60 * 60_000;
+const SCRATCH_OWNER_FILE = ".ork-preview-owner";
+
+/** A PID alone is not an identity: it can belong to a later process. */
+function processStartIdentity(pid: number): string | null {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const startTicks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+      const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      return startTicks ? `${boot}:${startTicks}` : null;
+    }
+    const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 1_000,
+      maxBuffer: 4096,
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+let backendStartIdentity: string | null | undefined;
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Startup recovery for process isolation, the counterpart of
+ * `reapOrphanPreviewContainers`. A scratch directory outlives its backend when
+ * the backend is killed during a job, or stops while a worker's exit is still
+ * unverified (the reaper stops with it). Removes those whose backend has
+ * exited or whose PID has been recycled and that are past the age limit.
+ * Scratch without a recorded start identity uses the legacy day-long limit
+ * if its PID is live. Never throws; returns what it removed.
+ */
+export async function sweepStalePreviewScratch(
+  options: {
+    root?: string;
+    now?: number;
+    maxAgeMs?: number;
+    isProcessAlive?: (pid: number) => boolean;
+    processStartIdentity?: (pid: number) => string | null;
+  } = {},
+): Promise<string[]> {
+  const root = options.root ?? tmpdir();
+  const now = options.now ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? PREVIEW_SCRATCH_STALE_MS;
+  const alive = options.isProcessAlive ?? isProcessAlive;
+  const identity = options.processStartIdentity ?? processStartIdentity;
+  const identities = new Map<number, string | null>();
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    const owner = PREVIEW_SCRATCH_NAME.exec(name);
+    let ageLimit: number;
+    if (owner) {
+      const pid = Number(owner[1]);
+      ageLimit = maxAgeMs;
+      if (alive(pid)) {
+        let recorded: string | null = null;
+        try {
+          recorded =
+            (await readFile(path.join(root, name, SCRATCH_OWNER_FILE), "utf8")).trim() || null;
+        } catch {
+          // Older backends did not record identity; use the legacy age bound.
+        }
+        if (recorded) {
+          if (!identities.has(pid)) identities.set(pid, identity(pid));
+          const current = identities.get(pid);
+          // Failure to inspect a live owner is not evidence it has exited.
+          if (current == null || current === recorded) continue;
+        } else {
+          ageLimit = Math.max(maxAgeMs, LEGACY_PREVIEW_SCRATCH_STALE_MS);
+        }
+      }
+    } else if (LEGACY_PREVIEW_SCRATCH_NAME.test(name)) {
+      ageLimit = LEGACY_PREVIEW_SCRATCH_STALE_MS;
+    } else continue;
+    const target = path.join(root, name);
+    try {
+      const info = await lstat(target);
+      if (!info.isDirectory() || now - info.mtimeMs <= ageLimit) continue;
+      await rm(target, { recursive: true, force: true });
+      removed.push(target);
+    } catch {
+      // Removed concurrently, or not ours to remove; the next start retries.
+    }
+  }
+  return removed;
 }
 
 /**
@@ -319,7 +438,10 @@ export function superviseWorker(
     const roots = child?.pid ? [child.pid] : [];
     if (browserPid) roots.push(browserPid);
     const groups = [...(child?.pid ? [child.pid] : []), ...(browserPid ? [browserPid] : [])];
-    const tree = await killTree(roots, groups);
+    // The worker carries the scratch marker from launch. A forked child
+    // inherits it before exec, then Chromium carries it in --user-data-dir.
+    // Ownership therefore survives an orphaning worker exit during launch.
+    const tree = await killTree(roots, groups, undefined, scratchPath ?? undefined);
     if (child?.pid && !childExited) child.kill("SIGKILL");
     await Promise.race([childExit, new Promise((resolve) => setTimeout(resolve, 2_000))]);
     return { verified: tree.verified && childExited, pids: tree.pids, browserPid };
@@ -359,9 +481,20 @@ export function superviseWorker(
     if (launch.isolation === "process") {
       // A private, owner-only scratch directory is the worker's HOME, TMPDIR
       // and cwd, so neither the worker nor Chromium sees the user's home.
-      scratch = mkdtempSync(path.join(launch.scratchRoot ?? tmpdir(), "ork-artifact-preview-"));
+      scratch = mkdtempSync(
+        path.join(launch.scratchRoot ?? tmpdir(), `${PREVIEW_SCRATCH_PREFIX}${process.pid}-`),
+      );
       scratchPath = scratch;
-      child = spawn(launch.command, launch.args, {
+      backendStartIdentity ??= processStartIdentity(process.pid);
+      if (backendStartIdentity) {
+        writeFileSync(path.join(scratch, SCRATCH_OWNER_FILE), backendStartIdentity, {
+          mode: 0o600,
+        });
+      }
+      // A child paused between fork and exec still has the worker's argv,
+      // even after setsid and reparenting. Mark the worker before it can fork;
+      // HOME/TMPDIR alone are not visible in the process listing.
+      child = spawn(launch.command, [...launch.args, `--ork-preview-scratch=${scratch}`], {
         stdio: ["pipe", "pipe", "ignore"],
         // Own process group so the whole worker group can be signalled.
         detached: true,

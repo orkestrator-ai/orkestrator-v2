@@ -12,8 +12,9 @@ What is still missing — mainly provider parity and live qualification — live
 [0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md);
 OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
-deferred coordinator features in
-[0142-coordinator-product-surfaces.md](../todo/coordinator-and-multi-review/0142-coordinator-product-surfaces.md).
+worker-surface follow-ups (other nodes, status wakes for looped review
+and feature planning) in
+[0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -661,7 +662,9 @@ the process-env token is only the fallback. Grok still needs the host
 safety setting to admit `advisory`.
 
 Worker creation records an explicit base branch and commit. Uncommitted root
-changes are not copied, stashed, or committed into a worker. A container worker
+changes are not copied, stashed, or committed into a worker, unless the user
+approves a `request_root_changes` request (see
+[Worker surfaces](#worker-surfaces)). A container worker
 can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
@@ -1061,12 +1064,56 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
 | Start/stop environment, ticket edits, adoption, mail | Existing backend mutations; no renderer-only workflow launch step. Mail preserves separate stored/injected/acknowledged outcomes. |
 
-Terminal/tmux launch already has a backend `launch_terminal_job` command with
-stable tabs, process ownership and bootstrap journaling, but it is not currently
-exposed by coordinator MCP. Browser launch/navigation, arbitrary pane editing,
-custom-fix model switches, reviewer subtabs, looped review and feature-plan
-launch are likewise not exposed coordinator controls. Repository checkout
-mutation controls remain unavailable to coordinators.
+Repository checkout mutation controls remain unavailable to coordinators.
+The worker surfaces below were added with their own authority and
+idempotency design.
+
+### Worker surfaces
+
+The main coordinator can also drive a worker's own surfaces, as the user
+would in that worker's window. Every one targets a disposable worker
+environment of the bound project: the backend command
+(`coordinator-surface-actions.ts`) revalidates the credential's scope and
+refuses the project home, the checkout the coordinator may only read. Side
+agents have none of them (their capabilities are `discovery`, `mail` and
+`schedules`). They act on this node only; the `nodeId` variants are in
+[0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
+
+| Tool | What it does | Retry with the same `requestId` | What the user sees and can undo |
+| --- | --- | --- | --- |
+| `launch_terminal` | A terminal tab in the worker running one command (`plain`), an agent CLI with an optional prompt (`claude`, `codex`, `grok`, `opencode`, `pi`), or Claude under tmux (`claude-tmux`), through `launch_terminal_job`. | Replays the receipt; the job and tab IDs derive from the request, so a retry after a crash reattaches to the same PTY. | The tab opens selected, like one the user opened; closing it ends the PTY. |
+| `open_worker_browser` | A browser tab at a loopback `http(s)` address of a service the worker runs, or navigates an existing browser tab. The address is stored as an `agent-link` preview intent, so it resolves to the worker's own service, local or container. | Replays; the new tab's ID and the write's `navigationRequestId` derive from the request. | A browser tab; the address bar and back button work as usual. The open web is refused: the coordinator's research tools are the policy-gated way out. |
+| `edit_worker_tab` | Focus, move (to a pane from `list_tabs`) or close one tab. | No receipt: each edit states the end state, so a retry is a no-op. Closing a tab that is gone succeeds. | Closing never deletes a conversation (`teardown_tab`'s retain-history close). It is refused while the tab's agent is working or waiting on a person, and while a coordinator waits on that tab's report. |
+| `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
+| `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
+| `start_looped_review`, `get_looped_review`, `cancel_looped_review` | The **Looped review** button: one agent reviews, fixes and repeats, then opens a PR. Omitted agent and model use the Review action's saved default. Opens the review's tab in the worker. | Replays; a retry after a crash reattaches to the review that attempt started (created after the receipt) instead of starting another. | The Looped Review tab; Cancel there or `cancel_looped_review`. Commits it made stay. No status wake: the result says to schedule a check. |
+| `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
+| `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
+
+Receipts live in the coordinator store (`actionReceipts`, bounded at 2,000,
+oldest completed dropped first). A receipt is admitted before the action has
+any effect and bound to a hash of the caller's payload; reusing a
+`requestId` with a different payload is refused. Concurrent identical calls
+in one backend share one run. A failed run drops its pending receipt so the
+same request can be retried; a pending receipt whose backend process died is
+reclaimed by the next retry, which reattaches as the table says.
+
+**Uncommitted changes in a worker.** Workers start from a commit, so work the
+user has not committed never reaches one on its own. When the user wants it
+to, `request_root_changes` creates an `apply-root-changes` node action
+request (the same approval flow as `request_project_on_node`). The user sees
+the checkout's changed files (`list_project_root_changes`: `git status`
+without optional locks), with the files the coordinator suggested ticked,
+and picks the files. Only the approval runs `apply_project_root_changes`,
+which the coordinator's command invoker refuses by name. It builds a binary
+patch from `HEAD` to the working tree for exactly those files, against a
+scratch copy of the index and a scratch object store in front of the real
+one, so the checkout's index, objects, refs and files are untouched. It then
+runs `git apply --check` and `git apply` in the worker (a local worktree, or
+`docker exec` in a running container): the patch applies whole or not at
+all. Paths the checkout no longer reports as changed are refused. The
+outcome is mailed to the conversation as a system notice, which wakes it.
+The coordinator never sees the patch.
 
 ## Tests that exist today
 
@@ -1129,6 +1176,12 @@ guarantee, not by one end-to-end scenario replayed per platform:
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in
   [`agent-testing.md`](../development/agent-testing.md).
+- worker surfaces (terminal, browser, tab edits, looped review, feature
+  plans, custom fix, reviewer tabs, the root-changes request and receipts):
+  `coordinator-surface-actions.test.ts`; the patch and the untouched
+  checkout against real Git repositories: `root-changes.test.ts`; the
+  approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
+  and side agents: `control-mcp-server.test.ts`
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`

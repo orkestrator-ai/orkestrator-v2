@@ -379,6 +379,79 @@ describe("Orkestrator control MCP server", () => {
     expect(newCredential.response.status).toBe(200);
   });
 
+  test("worker surface tools forward the authenticated scope and stay off side agents", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", mailboxIncarnationId: "incarnation-1", role: "main" },
+          { id: "side-1", mailboxIncarnationId: "incarnation-2", role: "side" },
+        ],
+      },
+    }));
+    overrides.set("launch_coordinator_terminal", (args) => ({
+      environmentId: (args.input as { environmentId: string }).environmentId,
+      tabId: "terminal-job-1",
+      tabType: "plain",
+      status: "started",
+    }));
+    const scope = {
+      role: "coordinator" as const,
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: coordinatorRoleCapabilities("main"),
+    };
+    const surfaces = [
+      "launch_terminal",
+      "open_worker_browser",
+      "edit_worker_tab",
+      "request_root_changes",
+      "start_looped_review",
+      "get_looped_review",
+      "cancel_looped_review",
+      "launch_feature_plan",
+      "get_feature_plan",
+      "custom_fix_multi_review",
+    ];
+    const main = (await server.listCoordinatorTools(scope)) as Array<{ name: string }>;
+    for (const name of surfaces) expect(main.map((tool) => tool.name)).toContain(name);
+    const side = (await server.listCoordinatorTools({
+      ...scope,
+      conversationId: "side-1",
+      mailboxIncarnationId: "incarnation-2",
+      capabilities: coordinatorRoleCapabilities("side"),
+    })) as Array<{ name: string }>;
+    for (const name of surfaces) expect(side.map((tool) => tool.name)).not.toContain(name);
+
+    const launched = await server.callCoordinatorTool(scope, "launch_terminal", {
+      requestId: "tests",
+      environmentId: "env-1",
+      command: "bun test",
+      // A caller-supplied scope is never trusted.
+    });
+    expect(launched.isError).not.toBe(true);
+    const forwarded = invocations.findLast(
+      (entry) => entry.command === "launch_coordinator_terminal",
+    );
+    expect(forwarded?.args.scope).toEqual({
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+    });
+    expect(forwarded?.args.input).toMatchObject({ environmentId: "env-1", tabType: "plain" });
+
+    const refused = await server.callCoordinatorTool(scope, "launch_terminal", {
+      requestId: "smuggled",
+      environmentId: "env-1",
+      command: "x",
+      scope: { projectId: "project-2" },
+    });
+    expect(refused.isError).toBe(true);
+  });
+
   test("binds coordinator credentials to one project and revokes them", async () => {
     overrides.set("get_projects", () => [
       { id: "project-1", name: "Allowed", localPath: "/allowed" },

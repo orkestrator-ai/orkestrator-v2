@@ -129,3 +129,81 @@ test("pending coordinator approvals appear after stream resync without remount",
   listenMock.mockReset();
   listenMock.mockImplementation(() => Promise.resolve(() => {}));
 });
+
+describe("the user picks which uncommitted changes a coordinator's worker gets", () => {
+  test("lists the checkout's changes, pre-ticks the suggestion, and approves only the picked files", async () => {
+    const resolved: Array<Record<string, unknown>> = [];
+    let pending = [
+      {
+        requestId: "req-changes",
+        kind: "apply-root-changes",
+        targets: [
+          {
+            nodeId: "bk_self",
+            nodeName: "this machine",
+            environmentId: "worker-1",
+            environmentName: "auth-fix",
+            projectId: "project-1",
+            files: ["src/a.ts", "src/gone.ts"],
+          },
+        ],
+        reason: "Start from my edits",
+        requestedBy: { projectId: "project-1" },
+        state: "pending",
+      },
+    ];
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "list_node_action_requests") return pending;
+      if (command === "list_project_root_changes") {
+        expect(args).toEqual({ projectId: "project-1" });
+        return {
+          files: [
+            { path: "src/a.ts", status: "modified" },
+            { path: "src/b.ts", status: "untracked" },
+            { path: "old.ts", status: "deleted" },
+          ],
+          truncated: false,
+          conflicts: 0,
+          headCommit: "a".repeat(40),
+        };
+      }
+      if (command === "resolve_node_action_request") {
+        resolved.push(args);
+        pending = [];
+        return { ...args, state: "executed", result: { code: "applied", message: "Applied." } };
+      }
+      return undefined;
+    });
+    render(
+      <FederationProvider>
+        <NodeActionRequestsDialog />
+      </FederationProvider>,
+    );
+    const dialog = await screen.findByTestId("root-changes-request");
+    expect(dialog.textContent).toContain("Apply uncommitted changes to “auth-fix”?");
+    expect(dialog.textContent).toContain("Start from my edits");
+    await screen.findByRole("checkbox", { name: "src/b.ts" });
+    // The suggestion that is still changed starts ticked; the vanished one is ignored.
+    expect(screen.getByRole("checkbox", { name: "src/a.ts" }).getAttribute("data-state")).toBe(
+      "checked",
+    );
+    expect(screen.getByRole("checkbox", { name: "src/b.ts" }).getAttribute("data-state")).toBe(
+      "unchecked",
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "old.ts" }));
+    });
+    expect(resolved).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Apply 2 files" }));
+    await waitFor(() =>
+      expect(resolved).toEqual([
+        {
+          requestId: "req-changes",
+          decision: "approve",
+          approval: { paths: ["src/a.ts", "old.ts"] },
+        },
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByTestId("root-changes-request") === null).toBe(true));
+  });
+});

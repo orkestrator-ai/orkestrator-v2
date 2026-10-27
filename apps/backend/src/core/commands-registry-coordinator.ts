@@ -16,6 +16,7 @@ import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline"
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
+import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
 import {
   buildPipelineInputWithDefaults,
   multiReviewInputWithDefaults,
@@ -124,6 +125,7 @@ export function registerCoordinatorCommands(
   dependencies: RegistryDependencies,
 ): void {
   registerCoordinatorReviewActions(register, dependencies);
+  registerCoordinatorSurfaceActions(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);

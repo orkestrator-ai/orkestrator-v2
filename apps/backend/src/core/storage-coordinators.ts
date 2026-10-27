@@ -10,6 +10,13 @@ import {
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import {
+  isCoordinatorSurfaceAction,
+  MAX_COORDINATOR_ACTION_RECEIPTS,
+  MAX_COORDINATOR_ACTION_RESULT_BYTES,
+  type CoordinatorActionReceipt,
+  type CoordinatorSurfaceAction,
+} from "@orkestrator/protocol/coordinator-surfaces";
 
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { StorageContext } from "./storage-context.js";
@@ -45,6 +52,7 @@ export class CoordinatorsRepository {
     revision: number;
     workspaces: Record<string, CoordinatorWorkspace>;
     workflows: CoordinatorWorkflowAssociation[];
+    actionReceipts: CoordinatorActionReceipt[];
   }> {
     const value = await this.context.loadJson<unknown>(this.files.coordinatorsFile(), () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
@@ -57,6 +65,7 @@ export class CoordinatorsRepository {
       revision: 0,
       workspaces: {} as Record<string, CoordinatorWorkspace>,
       workflows: [] as CoordinatorWorkflowAssociation[],
+      actionReceipts: [] as CoordinatorActionReceipt[],
     });
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       console.warn("[coordinator] Ignoring malformed coordinator store");
@@ -67,6 +76,7 @@ export class CoordinatorsRepository {
       revision?: unknown;
       workspaces?: unknown;
       workflows?: unknown;
+      actionReceipts?: unknown;
     };
     if (
       store.version !== COORDINATOR_WORKSPACE_VERSION ||
@@ -100,12 +110,134 @@ export class CoordinatorsRepository {
             typeof (item as CoordinatorWorkflowAssociation).coordinatorId === "string",
         )
       : [];
+    const actionReceipts = Array.isArray(store.actionReceipts)
+      ? store.actionReceipts.filter(isActionReceipt)
+      : [];
     return {
       version: COORDINATOR_WORKSPACE_VERSION,
       revision: Number.isSafeInteger(store.revision) ? (store.revision as number) : 0,
       workspaces,
       workflows,
+      actionReceipts,
     };
+  }
+
+  /**
+   * Admit one coordinator surface action before it has any effect.
+   *
+   * Returns the receipt to replay when the same request already completed,
+   * `claimed: true` when this caller must run the action (a new request, or a
+   * pending one whose owner process is gone), and refuses a reused
+   * `requestId` whose payload differs. A pending request still owned by a
+   * live process is reported unclaimed so the caller can ask for a retry.
+   */
+  async admitCoordinatorActionReceipt(input: {
+    coordinatorId: string;
+    projectId: string;
+    conversationId: string;
+    requestId: string;
+    action: CoordinatorSurfaceAction;
+    payloadHash: string;
+  }): Promise<{ receipt: CoordinatorActionReceipt; claimed: boolean }> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const existing = store.actionReceipts.find(
+        (item) => item.coordinatorId === input.coordinatorId && item.requestId === input.requestId,
+      );
+      if (existing) {
+        if (
+          existing.action !== input.action ||
+          existing.projectId !== input.projectId ||
+          existing.payloadHash !== input.payloadHash
+        ) {
+          throw new Error("Coordinator request id was reused with a different payload");
+        }
+        if (existing.conversationId !== input.conversationId) {
+          throw new Error("This request belongs to another coordinator conversation");
+        }
+        if (existing.state === "completed") return { receipt: existing, claimed: false };
+        // This process included: a pending receipt it owns is still running
+        // here (a failed run releases its receipt), so only a dead owner's
+        // receipt is reclaimed.
+        let ownerAlive = false;
+        if (existing.claimPid) {
+          try {
+            process.kill(existing.claimPid, 0);
+            ownerAlive = true;
+          } catch {
+            ownerAlive = false;
+          }
+        }
+        if (ownerAlive) return { receipt: existing, claimed: false };
+        existing.claimPid = process.pid;
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        return { receipt: existing, claimed: true };
+      }
+      if (store.actionReceipts.length >= MAX_COORDINATOR_ACTION_RECEIPTS) {
+        // Drop the oldest completed receipt; a pending one is still owed.
+        const oldest = store.actionReceipts.findIndex((item) => item.state === "completed");
+        if (oldest === -1) throw new Error("Coordinator action receipt store is full");
+        store.actionReceipts.splice(oldest, 1);
+      }
+      const receipt: CoordinatorActionReceipt = {
+        ...input,
+        state: "pending",
+        claimPid: process.pid,
+        createdAt: new Date().toISOString(),
+      };
+      store.actionReceipts.push(receipt);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return { receipt, claimed: true };
+    });
+  }
+
+  /** Record a claimed action's result so an identical retry replays it. */
+  async completeCoordinatorActionReceipt(
+    coordinatorId: string,
+    requestId: string,
+    result: Record<string, unknown>,
+  ): Promise<CoordinatorActionReceipt> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const receipt = store.actionReceipts.find(
+        (item) => item.coordinatorId === coordinatorId && item.requestId === requestId,
+      );
+      if (!receipt) throw new Error("Coordinator action receipt was not found");
+      if (receipt.state === "completed") return receipt;
+      const encoded = JSON.stringify(result);
+      receipt.result =
+        Buffer.byteLength(encoded, "utf8") > MAX_COORDINATOR_ACTION_RESULT_BYTES
+          ? { truncated: true }
+          : (JSON.parse(encoded) as Record<string, unknown>);
+      receipt.state = "completed";
+      receipt.completedAt = new Date().toISOString();
+      delete receipt.claimPid;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return receipt;
+    });
+  }
+
+  /**
+   * Drop a pending receipt whose action failed before any effect, so the
+   * same request may be retried as new. Completed receipts are kept.
+   */
+  async releaseCoordinatorActionReceipt(coordinatorId: string, requestId: string): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const index = store.actionReceipts.findIndex(
+        (item) =>
+          item.coordinatorId === coordinatorId &&
+          item.requestId === requestId &&
+          item.state === "pending",
+      );
+      if (index === -1) return;
+      store.actionReceipts.splice(index, 1);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
   }
 
   async getCoordinatorWorkspace(projectId: string): Promise<CoordinatorWorkspace | null> {
@@ -693,6 +825,7 @@ export class CoordinatorsRepository {
       coordinatorId = store.workspaces[projectId]?.id;
       delete store.workspaces[projectId];
       store.workflows = store.workflows.filter((item) => item.projectId !== projectId);
+      store.actionReceipts = store.actionReceipts.filter((item) => item.projectId !== projectId);
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
     });
@@ -744,4 +877,22 @@ export type CoordinatorsStorage = Pick<
   | "pruneCoordinatorAttachmentDirectories"
   | "writeCoordinatorAttachment"
   | "deleteCoordinatorByProject"
+  | "admitCoordinatorActionReceipt"
+  | "completeCoordinatorActionReceipt"
+  | "releaseCoordinatorActionReceipt"
 >;
+
+function isActionReceipt(value: unknown): value is CoordinatorActionReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.coordinatorId === "string" &&
+    typeof item.projectId === "string" &&
+    typeof item.conversationId === "string" &&
+    typeof item.requestId === "string" &&
+    isCoordinatorSurfaceAction(item.action) &&
+    typeof item.payloadHash === "string" &&
+    (item.state === "pending" || item.state === "completed") &&
+    typeof item.createdAt === "string"
+  );
+}

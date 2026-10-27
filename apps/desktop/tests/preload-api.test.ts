@@ -452,3 +452,10 @@ test("the portal channel is exposed only in a workspace realm", async () => {
   const onCommandNode = { ...ipc.ipc, sendSync: () => ({ connectionId: "local" }) };
   expect(exposePortal({ exposeInMainWorld: () => undefined }, onCommandNode)).toBe(false);
 });
+
+test("dialog dismissal uses a dedicated desktop IPC channel", async () => {
+  const { ipc, invoke } = createIpcMock();
+  const api = createOrkestratorElectronApi(ipc);
+  await api.keyboardShortcuts.closed();
+  expect(invoke).toHaveBeenCalledWith("orkestrator:keyboard-shortcuts:closed");
+});

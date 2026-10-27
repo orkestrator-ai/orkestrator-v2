@@ -32,8 +32,8 @@ describe("MCP management commands", () => {
     } as unknown as CommandContext;
   });
 
-  afterEach(() => {
-    fixture.cleanup();
+  afterEach(async () => {
+    await fixture.cleanup();
   });
 
   test("registers every management command", () => {
@@ -105,9 +105,9 @@ describe("MCP management command failures carry a correlation id", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     warn.mockRestore();
-    fixture.cleanup();
+    await fixture.cleanup();
   });
 
   test("a structured failure gets a reference that matches exactly one log line", async () => {
@@ -167,8 +167,8 @@ describe("MCP management rollout commands", () => {
     } as unknown as CommandContext;
   });
 
-  afterEach(() => {
-    fixture.cleanup();
+  afterEach(async () => {
+    await fixture.cleanup();
   });
 
   test("defaults to everything enabled and narrows per provider", async () => {

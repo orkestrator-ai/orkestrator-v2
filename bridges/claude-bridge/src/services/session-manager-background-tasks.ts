@@ -11,6 +11,7 @@ import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
 import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
+import type { ClaudeRuntime } from "./session-manager-runtime.js";
 
 type BackgroundTaskLaunch = {
   id: string;
@@ -74,54 +75,111 @@ export function resumeOrphanScanOutcome(
 }
 
 /**
+ * The background work one Claude CLI owns.
+ *
+ * A session runs one CLI (`session.claudeRuntime`), and only the process that
+ * started a task can stop it: a CLI asked to stop an id it never started
+ * answers `ok` without reaching anything. So ownership is the runtime's own
+ * state, fed by the task hooks (`TaskCreated`, `TaskCompleted`,
+ * `SubagentStart`), the `task_*` and `background_tasks_changed` frames and
+ * the Bash calls of that process, and it ends with the process
+ * (`releaseClaudeRuntimeTasks`).
+ */
+export interface ClaudeRuntimeTasks {
+  /**
+   * Live tasks this process started. What keeps it from being released while
+   * a task still runs after its turn let go of the foreground, and the only
+   * process a stop for one of them may reach.
+   */
+  readonly live: Set<string>;
+  /**
+   * Built-in Bash calls whose tool result has not arrived yet.
+   *
+   * These are deliberately not exposed as background tasks: a foreground
+   * command is only a candidate until its provider-authored result says it was
+   * backgrounded. Holding it here keeps a result frame that races ahead of
+   * that evidence from releasing the CLI. Bounded by
+   * `MAX_BACKGROUND_TASK_CANDIDATES`.
+   */
+  readonly candidates: Set<string>;
+  /**
+   * Tasks the level signal dropped before their terminal edge explained why.
+   *
+   * The SDK leaves the order of `background_tasks_changed` and
+   * `task_notification` for one transition unspecified. Through Agent SDK
+   * 0.3.284 the level came first; 0.3.292 (still in 0.3.309) documents a
+   * finishing task leaving the level *after* its edge. When the level does
+   * come first, the task leaves the live set with no outcome attached.
+   * Parking the snapshot here keeps liveness honest (the task is gone from
+   * `session.backgroundTasks`, so no stale running indicator can wedge) while
+   * still letting the edge settle it with its original description and start
+   * time instead of a fabricated one. Bounded by
+   * `MAX_SETTLING_BACKGROUND_TASKS`.
+   */
+  readonly settling: Map<string, BackgroundTaskSnapshot>;
+}
+
+export function createClaudeRuntimeTasks(): ClaudeRuntimeTasks {
+  return { live: new Set(), candidates: new Set(), settling: new Map() };
+}
+
+/** What owns background work: the session's CLI. */
+type TaskOwner = Pick<ClaudeRuntime, "session" | "control" | "tasks">;
+
+/**
+ * The CLI that owns `taskId`, if one still does.
+ *
+ * Only the session's current runtime can: a process that ended has released
+ * everything it owned (`releaseClaudeRuntimeTasks`), and a new one starts only
+ * after the old one has ended.
+ */
+export function backgroundTaskOwner(
+  session: SessionState,
+  taskId: string,
+): ClaudeRuntime | undefined {
+  const runtime = session.claudeRuntime;
+  return runtime?.tasks.live.has(taskId) ? runtime : undefined;
+}
+
+/** Forget that the session's CLI owns `taskId`. */
+function releaseBackgroundTask(session: SessionState, taskId: string): void {
+  session.claudeRuntime?.tasks.live.delete(taskId);
+}
+
+/**
  * Track one unresolved Bash invocation, up to a bound.
  *
  * Past the bound the invocation is simply not tracked. Throwing here would
  * propagate out of the message loop into the turn's error path, which marks
- * the session failed *and* settles every live background task the query owned
- * — destroying real work to protect a map of at most 128 short strings. Not
+ * the session failed *and* settles every live background task the CLI owned
+ * — destroying real work to protect a set of at most 128 short strings. Not
  * tracking degrades to the pre-candidate behaviour for that one command: its
- * stdin may close early, which is the smaller harm by a wide margin.
+ * CLI may be released early, which is the smaller harm by a wide margin.
  */
 export function registerBackgroundTaskCandidate(
-  session: SessionState,
+  runtime: TaskOwner | undefined,
   toolUseId: string,
-  control: NonNullable<SessionState["queryControl"]>,
 ): void {
-  const candidates = (session.backgroundTaskCandidates ??= new Map());
+  if (!runtime) return;
+  const { candidates } = runtime.tasks;
   if (!candidates.has(toolUseId) && candidates.size >= MAX_BACKGROUND_TASK_CANDIDATES) {
     console.warn("[session-manager] Ignoring an unresolved Bash call past the candidate bound:", {
-      sessionId: session.id,
+      sessionId: runtime.session.id,
       bound: MAX_BACKGROUND_TASK_CANDIDATES,
     });
     return;
   }
-  candidates.set(toolUseId, control);
+  candidates.add(toolUseId);
 }
 
+/** Resolve a Bash candidate, answering the CLI that was holding it. */
 export function takeBackgroundTaskCandidate(
   session: SessionState,
   toolUseId: string | undefined,
-): NonNullable<SessionState["queryControl"]> | undefined {
+): ClaudeRuntime | undefined {
   if (!toolUseId) return undefined;
-  const owner = session.backgroundTaskCandidates?.get(toolUseId);
-  session.backgroundTaskCandidates?.delete(toolUseId);
-  if (session.backgroundTaskCandidates?.size === 0) {
-    session.backgroundTaskCandidates = undefined;
-  }
-  return owner;
-}
-
-export function removeBackgroundTaskCandidatesOwnedBy(
-  session: SessionState,
-  control: NonNullable<SessionState["queryControl"]>,
-): void {
-  for (const [toolUseId, owner] of session.backgroundTaskCandidates ?? []) {
-    if (owner === control) session.backgroundTaskCandidates?.delete(toolUseId);
-  }
-  if (session.backgroundTaskCandidates?.size === 0) {
-    session.backgroundTaskCandidates = undefined;
-  }
+  const runtime = session.claudeRuntime;
+  return runtime?.tasks.candidates.delete(toolUseId) ? runtime : undefined;
 }
 
 export function takeProvisionalBackgroundTask(
@@ -129,22 +187,19 @@ export function takeProvisionalBackgroundTask(
   toolUseId: string | undefined,
 ): {
   task?: BackgroundTaskSnapshot;
-  owner?: NonNullable<SessionState["queryControl"]>;
+  owner?: ClaudeRuntime;
 } {
   const candidateOwner = takeBackgroundTaskCandidate(session, toolUseId);
   if (!toolUseId) return { owner: candidateOwner };
   const provisionalId = provisionalBackgroundTaskId(toolUseId);
   const task = session.backgroundTasks?.[provisionalId];
-  const owner = session.backgroundTaskControls?.get(provisionalId) ?? candidateOwner;
+  const owner = backgroundTaskOwner(session, provisionalId) ?? candidateOwner;
   if (task) {
     const nextTasks = { ...session.backgroundTasks };
     delete nextTasks[provisionalId];
     session.backgroundTasks = Object.keys(nextTasks).length > 0 ? nextTasks : undefined;
   }
-  session.backgroundTaskControls?.delete(provisionalId);
-  if (session.backgroundTaskControls?.size === 0) {
-    session.backgroundTaskControls = undefined;
-  }
+  releaseBackgroundTask(session, provisionalId);
   return { task, owner };
 }
 
@@ -384,7 +439,7 @@ export async function recordShellResult(
 export function recordBackgroundTaskLaunch(
   session: SessionState,
   launch: BackgroundTaskLaunch,
-  control: NonNullable<SessionState["queryControl"]>,
+  owner: TaskOwner | undefined,
   options?: { newRun?: boolean },
 ): void {
   takeBackgroundTaskCandidate(session, launch.toolUseId);
@@ -418,7 +473,7 @@ export function recordBackgroundTaskLaunch(
   const nextTasks = { ...session.backgroundTasks };
   if (provisionalId && provisionalId !== launch.id) {
     delete nextTasks[provisionalId];
-    session.backgroundTaskControls?.delete(provisionalId);
+    releaseBackgroundTask(session, provisionalId);
   }
   session.backgroundTasks = boundBackgroundTaskHistory({
     ...nextTasks,
@@ -445,9 +500,7 @@ export function recordBackgroundTaskLaunch(
   const task = session.backgroundTasks[launch.id]!;
   if (restarted) hookRunningTasks.add(task);
   else inheritBackgroundTaskHookRun(stored, task);
-  if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) {
-    (session.backgroundTaskControls ??= new Map()).set(launch.id, control);
-  }
+  if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) owner?.tasks.live.add(launch.id);
   emitBackgroundTaskSnapshot(session);
 }
 
@@ -504,52 +557,30 @@ export const MAX_SETTLING_BACKGROUND_TASKS = 128;
  * what the edge cannot reconstruct (description, `startedAt`, `toolUseId`).
  */
 export function parkSettlingBackgroundTask(
-  session: SessionState,
+  owner: TaskOwner | undefined,
   task: BackgroundTaskSnapshot,
-  owner: NonNullable<SessionState["queryControl"]>,
 ): void {
-  const settling = (session.settlingBackgroundTasks ??= new Map());
+  if (!owner) return;
+  const { settling } = owner.tasks;
   if (!settling.has(task.id) && settling.size >= MAX_SETTLING_BACKGROUND_TASKS) {
     console.warn("[session-manager] Ignoring a settling task past the bound:", {
-      sessionId: session.id,
+      sessionId: owner.session.id,
       bound: MAX_SETTLING_BACKGROUND_TASKS,
     });
     return;
   }
-  settling.set(task.id, { task, owner });
+  settling.set(task.id, task);
 }
 
 export function takeSettlingBackgroundTask(
   session: SessionState,
   taskId: string,
-): { task: BackgroundTaskSnapshot; owner: NonNullable<SessionState["queryControl"]> } | undefined {
-  const parked = session.settlingBackgroundTasks?.get(taskId);
-  if (!parked) return undefined;
-  session.settlingBackgroundTasks!.delete(taskId);
-  if (session.settlingBackgroundTasks!.size === 0) {
-    session.settlingBackgroundTasks = undefined;
-  }
-  return parked;
-}
-
-/**
- * Drop every parked snapshot belonging to `owner`.
- *
- * Called when that control can no longer deliver an edge — the watchdog
- * expired, or the query ended. The tasks are already absent from the live set,
- * so this only releases the retained metadata.
- */
-export function forgetSettlingBackgroundTasksOwnedBy(
-  session: SessionState,
-  owner: NonNullable<SessionState["queryControl"]> | undefined,
-): void {
-  if (!owner || !session.settlingBackgroundTasks) return;
-  for (const [taskId, parked] of session.settlingBackgroundTasks) {
-    if (parked.owner === owner) session.settlingBackgroundTasks.delete(taskId);
-  }
-  if (session.settlingBackgroundTasks.size === 0) {
-    session.settlingBackgroundTasks = undefined;
-  }
+): { task: BackgroundTaskSnapshot; owner: ClaudeRuntime } | undefined {
+  const owner = session.claudeRuntime;
+  const task = owner?.tasks.settling.get(taskId);
+  if (!owner || !task) return undefined;
+  owner.tasks.settling.delete(taskId);
+  return { task, owner };
 }
 
 export const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
@@ -583,40 +614,39 @@ export function settleBackgroundTask(
       ...(error !== undefined ? { error: previous.error ?? error } : {}),
     },
   });
-  session.backgroundTaskControls?.delete(taskId);
-  if (session.backgroundTaskControls?.size === 0) {
-    session.backgroundTaskControls = undefined;
-  }
+  releaseBackgroundTask(session, taskId);
   // The process that owned it stays up; its idle window decides when it goes.
   session.finishTurnInputIfSettled?.();
   return true;
 }
 
 /**
- * Settle every live task that `control` owned, plus any live task no handle
- * owns at all.
+ * Release everything a finished CLI owned: settle every live task it started,
+ * plus any live task no CLI owns at all, and forget its Bash candidates and
+ * parked snapshots.
  *
- * Called when a turn's iterator is finished with. The `for await` loop is the
- * only consumer of the stream and it ends either exhausted or through an
- * abrupt exit — and an abrupt exit invokes the iterator's `return()`, which the
- * SDK implements as `cleanup()` → `transport.close()`. So by the time this
- * runs the provider process behind `control` is gone: no further
- * `task_notification` can arrive and `stopTask` has nothing to talk to. A task
- * left at `running` here wedges there for the lifetime of the bridge.
+ * Called once the runtime's consumer is finished with it. The `for await`
+ * loop is the only consumer of the stream and it ends either exhausted or
+ * through an abrupt exit, and an abrupt exit invokes the iterator's
+ * `return()`, which the SDK implements as `cleanup()` → `transport.close()`.
+ * So by the time this runs the process is gone: no further
+ * `task_notification` can arrive and `stopTask` has nothing to talk to. A
+ * task left at `running` here wedges there for the lifetime of the bridge.
  */
-export function settleTasksOwnedByClosedControl(
-  session: SessionState,
-  control: NonNullable<SessionState["queryControl"]>,
-  reason: string,
-): boolean {
+export function releaseClaudeRuntimeTasks(owner: TaskOwner, reason: string): boolean {
+  const { session, tasks } = owner;
+  tasks.candidates.clear();
+  // The handle is dead, so no edge can still arrive to claim these.
+  tasks.settling.clear();
   let changed = false;
   for (const task of Object.values(session.backgroundTasks ?? {})) {
     if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
-    const owner = session.backgroundTaskControls?.get(task.id);
-    // An owner that is some *other* live control keeps the task addressable.
-    if (owner !== undefined && owner !== control) continue;
+    // A task some *other* CLI owns stays addressable through it.
+    const current = backgroundTaskOwner(session, task.id);
+    if (current !== undefined && current !== owner) continue;
     changed = settleBackgroundTask(session, task.id, "killed", reason) || changed;
   }
+  tasks.live.clear();
   return changed;
 }
 
@@ -632,12 +662,12 @@ export async function stopBackgroundTask(
   if (!task) {
     return { ok: false, reason: "task_not_found", message: "Task not found" };
   }
-  // Strictly the handle that owns this task. Falling back to whatever control
-  // is current could ask a different provider process (one started after the
+  // Strictly the CLI that owns this task. Falling back to whatever control is
+  // current could ask a different provider process (one started after the
   // owner exited) to stop a task it never started — it answers `ok` for a task
   // id it has never heard of, so the user would be told the work had stopped
   // when nothing had been reached at all.
-  const control = session.backgroundTaskControls?.get(taskId);
+  const control = backgroundTaskOwner(session, taskId)?.control;
   const stopTask = control?.stopTask;
   if (typeof stopTask !== "function") {
     return NO_CONTROL_CHANNEL;
@@ -746,25 +776,21 @@ export function takeQueryControls(
   const controls = new Set<NonNullable<SessionState["queryControl"]>>();
   if (session.queryControl) controls.add(session.queryControl);
   // The session's CLI, including while it is idle between turns running
-  // background work that no other collection names.
+  // background work. It owns every task, so this is the one control a stop
+  // could reach; its consumer settles the tasks once the process has gone
+  // (`releaseClaudeRuntimeTasks`), and nothing is addressable until then.
   if (session.claudeRuntime && session.claudeRuntime.state !== "ended") {
     const runtime = session.claudeRuntime;
     runtime.state = "draining";
     runtime.input.close();
     runtime.abortController.abort();
     session.queryControlDraining = runtime.control;
+    runtime.tasks.live.clear();
+    runtime.tasks.candidates.clear();
+    runtime.tasks.settling.clear();
     controls.add(runtime.control);
   }
-  for (const control of session.backgroundTaskControls?.values() ?? []) {
-    controls.add(control);
-  }
-  for (const control of session.backgroundTaskCandidates?.values() ?? []) {
-    controls.add(control);
-  }
   session.queryControl = undefined;
-  session.backgroundTaskControls = undefined;
-  session.backgroundTaskCandidates = undefined;
-  session.settlingBackgroundTasks = undefined;
   return controls;
 }
 
@@ -772,21 +798,12 @@ export function takeQueryControls(
  * Whether `runtime`'s process owns work that must outlive the response
  * boundary: a live task it started, or a Bash call that may yet become one.
  */
-export function claudeRuntimeOwnsLiveWork(
-  session: SessionState,
-  runtime: { control: NonNullable<SessionState["queryControl"]> },
-): boolean {
-  const { control } = runtime;
-  for (const task of Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]) {
-    if (
-      LIVE_BACKGROUND_TASK_STATUSES.has(task.status) &&
-      session.backgroundTaskControls?.get(task.id) === control
-    ) {
-      return true;
-    }
-  }
-  for (const owner of session.backgroundTaskCandidates?.values() ?? []) {
-    if (owner === control) return true;
+export function claudeRuntimeOwnsLiveWork(runtime: TaskOwner): boolean {
+  const { session, tasks } = runtime;
+  if (tasks.candidates.size > 0) return true;
+  for (const taskId of tasks.live) {
+    const task = session.backgroundTasks?.[taskId];
+    if (task && LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) return true;
   }
   return false;
 }

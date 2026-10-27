@@ -160,6 +160,7 @@ describe("native agent capability table", () => {
       steer: true,
       review: true,
       rewindMessages: true,
+      archive: true,
     });
 
     expect(nativeAgentCapabilities("opencode").composer.speed).toBe(false);

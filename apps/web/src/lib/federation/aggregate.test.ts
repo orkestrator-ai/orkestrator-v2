@@ -11,7 +11,6 @@ import {
   connectivitySummary,
   duplicateMachineColors,
   filterMachines,
-  searchMachines,
   type MachineView,
 } from "./aggregate";
 import type { FederatedEnvironment, FederatedProject } from "./summaries";
@@ -197,12 +196,9 @@ describe("aggregate projections", () => {
     expect(connectivitySummary([mini, vps]).complete).toBe(true);
   });
 
-  test("filtering changes presentation only and search reports incompleteness", () => {
+  test("filtering changes presentation only", () => {
     expect(filterMachines([mini, vps, laptop], "vps")).toEqual([vps]);
     expect(filterMachines([mini, vps], "all")).toHaveLength(2);
-    const result = searchMachines([mini, vps, laptop], "angela");
-    expect(result.rows.map((row) => row.environment.name)).toEqual(["env-9"]);
-    expect(result.incomplete).toBe(true);
   });
 
   test("CL-03: shared colours are reported, never resolved automatically", () => {

@@ -428,6 +428,14 @@ describe("monorepo orchestration scripts", () => {
     expect(workspaceTask.env ?? []).not.toContain("ORKESTRATOR_TEST_WORKERS");
   });
 
+  test("every Turbo task keeps the operator's temporary directory", () => {
+    // Strict environment mode drops anything undeclared, so without this the
+    // workspace and bridge suites fall back to /tmp and a private TMPDIR
+    // cannot be swept after an aggregate run. Passthrough keeps it out of hashes.
+    const turbo = JSON.parse(read("turbo.json")) as { globalPassThroughEnv?: string[] };
+    expect(turbo.globalPassThroughEnv).toContain("TMPDIR");
+  });
+
   test("desktop and standalone backends inherit the user's SSH agent through Turbo", () => {
     const turbo = JSON.parse(read("turbo.json")) as {
       tasks?: Record<string, { passThroughEnv?: string[] }>;

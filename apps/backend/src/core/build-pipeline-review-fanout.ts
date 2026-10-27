@@ -26,6 +26,7 @@
  * is skipped entirely while the fan-out is live; these sessions are driven from
  * here.
  */
+import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { randomUUID } from "node:crypto";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
@@ -850,9 +851,23 @@ export class BuildPipelineReviewFanout {
     if (consolidation.state === "dispatching") {
       // Session status can still belong to a superseded request. Require
       // acceptance of this exact ID before observing it or spending a follow-up.
-      const acceptance = await provider
-        .dispatchStatus?.(consolidation.providerSessionId, consolidation.requestId)
-        .catch(() => "unknown" as const);
+      const acceptance = await recoveredDispatchAcceptance(
+        provider,
+        consolidation.providerSessionId,
+        consolidation.requestId,
+        consolidation.resultTransport === "tool-v1"
+          ? () => this.deps.workflowResults?.structured<unknown>(consolidation.requestId)
+          : undefined,
+      );
+      if (acceptance === "absent") {
+        // Proven never delivered: back to `prepared`, as after a send refused
+        // before the prompt was written, so the next pass sends it again under
+        // the same id.
+        delete consolidation.idleResultPolls;
+        consolidation.state = "prepared";
+        await this.save(pipeline);
+        return { kind: "working" };
+      }
       if (acceptance !== "dispatched" && acceptance !== "pending") {
         return this.countIdlePoll(
           pipeline,

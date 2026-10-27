@@ -27,9 +27,10 @@ import {
   mergePersistedSessionMeta,
   readTranscriptLines,
 } from "./rollout.js";
-import { persistSessionTitle } from "../session-titles.js";
+import { persistSessionTitle } from "../session-title-index.js";
 import { recordCommandChanges } from "../sessions/command-changes.js";
 import { clearTranscriptCache, getTranscriptCacheStats } from "../transcript-cache.js";
+import capturedRevertMeta from "./fixtures/revert-session-meta.json";
 import type { StructuredOutputTurnRecord } from "@orkestrator/protocol/structured-output";
 
 const temporaryDirectories: string[] = [];
@@ -1432,6 +1433,191 @@ describe("rollout public helpers (continued)", () => {
       ],
       ["failed", "Inspecting the failed turn.", ["Inspecting the failed turn."]],
       ["ordinary", '{"ordinary":true}', ['{"ordinary":true}']],
+    ]);
+  });
+
+  test("replays a paginated revert leaf from its retained base prefix", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-revert-leaf-"));
+    temporaryDirectories.push(root);
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    const directory = join(root, "sessions");
+    await mkdir(directory);
+    const row = (role: string, text: string) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+      },
+    });
+    const base = [
+      sessionMeta("thread-base"),
+      { type: "turn_context", payload: { turn_id: "one" } },
+      row("user", "first"),
+      row("assistant", "answer"),
+      { type: "turn_context", payload: { turn_id: "two" } },
+      row("user", "removed"),
+      row("assistant", "removed answer"),
+    ];
+    const leaf = [
+      {
+        ...capturedRevertMeta,
+        type: "session_meta",
+        payload: {
+          ...capturedRevertMeta.payload,
+          id: "thread-base",
+          cwd: "/workspace",
+          history_base: {
+            thread_id: "thread-base",
+            end_ordinal_exclusive: 4,
+            end_byte_offset: 123,
+          },
+        },
+      },
+      { type: "turn_context", payload: { turn_id: "three" } },
+      row("user", "continued"),
+      row("assistant", "new answer"),
+    ];
+    try {
+      await writeFile(
+        join(directory, "rollout-2026-10-26-thread-base.jsonl"),
+        base.map((record) => JSON.stringify(record)).join("\n") + "\n",
+      );
+      await writeFile(
+        join(directory, "rollout-2026-10-27-thread-base_leaf.jsonl"),
+        leaf.map((record) => JSON.stringify(record)).join("\n") + "\n",
+      );
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-base");
+      expect(hydrated.transcriptStatus).toBe("complete");
+      expect(hydrated.messages.map((message) => [message.turnId, message.content])).toEqual([
+        ["one", "first"],
+        ["one", "answer"],
+        ["three", "continued"],
+        ["three", "new answer"],
+      ]);
+      const nested = [
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-base",
+            cwd: "/workspace",
+            history_base: {
+              thread_id: "leaf",
+              end_ordinal_exclusive: 8,
+              end_byte_offset: 456,
+            },
+          },
+        },
+        { type: "turn_context", payload: { turn_id: "four" } },
+        row("user", "nested"),
+        row("assistant", "nested answer"),
+      ];
+      await writeFile(
+        join(directory, "rollout-2026-10-28-thread-base_nested.jsonl"),
+        nested.map((record) => JSON.stringify(record)).join("\n") + "\n",
+      );
+      clearTranscriptPathCache();
+      const nestedHydration = await hydrateMessagesFromPersistedSession("thread-base");
+      expect(nestedHydration.transcriptStatus).toBe("complete");
+      expect(
+        nestedHydration.messages
+          .filter((message) => message.role === "user")
+          .map((message) => message.content),
+      ).toEqual(["first", "continued", "nested"]);
+      // Cycles and truncated retained prefixes must not certify a complete leaf.
+      const nestedPath = join(directory, "rollout-2026-10-28-thread-base_nested.jsonl");
+      for (const historyBase of [
+        { thread_id: "nested", end_ordinal_exclusive: 8, end_byte_offset: 456 },
+        { thread_id: "leaf", end_ordinal_exclusive: 10_000, end_byte_offset: 456 },
+      ]) {
+        await writeFile(
+          nestedPath,
+          [
+            { ...nested[0], payload: { id: "thread-base", history_base: historyBase } },
+            ...nested.slice(1),
+          ]
+            .map((record) => JSON.stringify(record))
+            .join("\n") + "\n",
+        );
+        clearTranscriptCache();
+        const invalid = await hydrateMessagesFromPersistedSession("thread-base");
+        expect(invalid.transcriptStatus).toBe("unavailable");
+        expect(invalid.readFailed).toBe(true);
+      }
+      await writeFile(nestedPath, nested.map((record) => JSON.stringify(record)).join("\n") + "\n");
+      // A missing base is unavailable, never a falsely complete leaf.
+      clearTranscriptCache();
+      await rm(join(directory, "rollout-2026-10-26-thread-base.jsonl"));
+      const missing = await hydrateMessagesFromPersistedSession("thread-base");
+      expect(missing.transcriptStatus).toBe("unavailable");
+      expect(missing.readFailed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      clearTranscriptPathCache();
+    }
+  });
+
+  test.each([1, 20])(
+    "rollback of %i turns counts a steered turn once and clamps oversized counts",
+    async (count) => {
+      const row = (role: string, text: string) => ({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role,
+          content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+        },
+      });
+      const hydrated = await hydrateRollout(`thread-steered-rollback-${count}`, [
+        sessionMeta(`thread-steered-rollback-${count}`),
+        { type: "turn_context", payload: { turn_id: "one", cwd: "/workspace" } },
+        row("user", "first"),
+        row("assistant", "first answer"),
+        { type: "turn_context", payload: { turn_id: "two", cwd: "/workspace" } },
+        row("user", "second"),
+        row("assistant", "before steer"),
+        row("user", "steer"),
+        row("assistant", "after steer"),
+        { type: "event_msg", payload: { type: "thread_rolled_back", num_turns: count } },
+      ]);
+      expect(hydrated.messages.map((message) => message.content)).toEqual(
+        count === 1 ? ["first", "first answer"] : [],
+      );
+    },
+  );
+
+  test("a rollback marker drops the turns it rewound, as app-server does", async () => {
+    const message = (role: "user" | "assistant", text: string) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+      },
+    });
+    const turn = (id: string, prompt: string, answer: string) => [
+      { type: "turn_context", payload: { turn_id: id, cwd: "/workspace" } },
+      message("user", prompt),
+      message("assistant", answer),
+    ];
+    const hydrated = await hydrateRollout("thread-rolled-back", [
+      sessionMeta("thread-rolled-back"),
+      ...turn("one", "first prompt", "first answer"),
+      ...turn("two", "second prompt", "second answer"),
+      ...turn("three", "third prompt", "third answer"),
+      { type: "event_msg", payload: { type: "thread_rolled_back", num_turns: 2 } },
+      ...turn("four", "fourth prompt", "fourth answer"),
+      // A malformed marker removes nothing.
+      { type: "event_msg", payload: { type: "thread_rolled_back", num_turns: "all" } },
+    ]);
+
+    expect(hydrated.messages.map((entry) => [entry.turnId, entry.content])).toEqual([
+      ["one", "first prompt"],
+      ["one", "first answer"],
+      ["four", "fourth prompt"],
+      ["four", "fourth answer"],
     ]);
   });
 

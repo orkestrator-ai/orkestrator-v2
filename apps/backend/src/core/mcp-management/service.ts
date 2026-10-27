@@ -287,6 +287,15 @@ export class McpManagementService {
     this.timer = null;
   }
 
+  /**
+   * Resolves once no apply pass is running, including a pass a waiting caller
+   * starts when the current one ends; a pass can still write the operation
+   * history after `dispose()`. For teardown that removes the data directory.
+   */
+  async settled(): Promise<void> {
+    while (this.ticking) await this.ticking.catch(() => undefined);
+  }
+
   // -------------------------------------------------------------------------
   // Catalog
   // -------------------------------------------------------------------------
@@ -1384,6 +1393,7 @@ export class McpManagementService {
    * flight per backend, which is the whole apply-concurrency budget.
    */
   async tick(): Promise<void> {
+    if (this.disposed) return;
     if (this.ticking) {
       // A caller may have supplied newer runtime evidence while the prior pass
       // was already reading. Give that evidence its own pass.

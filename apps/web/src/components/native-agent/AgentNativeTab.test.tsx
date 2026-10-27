@@ -209,6 +209,11 @@ const recoverMultiReviewFixSessionMock = mock(
     }) as never,
 );
 const listNativeAgentResumableSessionsMock = mock(async () => []);
+const setNativeAgentResumableSessionArchivedMock = mock(
+  async (_input: Parameters<typeof realBackend.setNativeAgentResumableSessionArchived>[0]) => ({
+    archived: true,
+  }),
+);
 const getAgentHandoffMock = mock(async (_handoffId: string): Promise<unknown> => null);
 const deleteAgentHandoffMock = mock(async (_handoffId: string, _environmentId: string) => true);
 const performNativeAgentSessionActionMock = mock(
@@ -407,6 +412,7 @@ mock.module("@/lib/backend", () => ({
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   recoverMultiReviewFixSession: recoverMultiReviewFixSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
+  setNativeAgentResumableSessionArchived: setNativeAgentResumableSessionArchivedMock,
   getAgentHandoff: getAgentHandoffMock,
   deleteAgentHandoff: deleteAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
@@ -575,6 +581,7 @@ afterEach(() => {
     async () => ({ id: "multi-1", backendRevision: 2 }) as never,
   );
   listNativeAgentResumableSessionsMock.mockClear();
+  setNativeAgentResumableSessionArchivedMock.mockClear();
   getAgentHandoffMock.mockReset();
   getAgentHandoffMock.mockResolvedValue(null);
   deleteAgentHandoffMock.mockReset();
@@ -3722,6 +3729,47 @@ describe("AgentNativeTab", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Grok Build/ }));
     return await screen.findByRole("dialog", { name: "Resume Session" });
   }
+
+  test.each([true, false])(
+    "resume mapping preserves fork lineage and gates archive by capability (%s)",
+    async (archive) => {
+      listNativeAgentResumableSessionsMock.mockImplementation(
+        async () =>
+          [
+            {
+              sessionId: "fork-session",
+              title: "Forked request",
+              parentId: "parent-session",
+              branchLabel: "Alternative branch",
+            },
+            { sessionId: "unnamed-fork", title: "Unnamed fork", parentId: "base" },
+          ] as never,
+      );
+      seedUnassignedResumeTab("tab-lineage");
+      render(<PaneBackedAgentNativeTab tabId="tab-lineage" />);
+      fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: archive ? /Codex/ : /Grok Build/,
+        }),
+      );
+      const picker = await screen.findByRole("dialog", { name: "Resume Session" });
+      expect(await within(picker).findByText("Alternative branch")).toBeTruthy();
+      expect(within(picker).getByText("Fork of base")).toBeTruthy();
+      if (archive) {
+        fireEvent.click(within(picker).getAllByRole("button", { name: /Remove.*list/ })[0]!);
+        await waitFor(() => expect(setNativeAgentResumableSessionArchivedMock).toHaveBeenCalled());
+        expect(setNativeAgentResumableSessionArchivedMock.mock.calls[0]?.[0]).toMatchObject({
+          agent: "codex",
+          environmentId: "env-1",
+          resumableSessionId: "fork-session",
+          archived: true,
+        });
+      } else {
+        expect(Boolean(within(picker).queryByRole("button", { name: /Remove.*list/ }))).toBe(false);
+      }
+    },
+  );
 
   test("a tab opened only to resume creates no session before the choice", async () => {
     const calls: string[] = [];

@@ -737,7 +737,9 @@ describe("ACP bridge", () => {
         { headers: bridge.headers },
       ).then((response) => response.json()) as Promise<{ dispatch: string }>;
 
-    expect(await dispatchStatus("never-sent")).toEqual({ dispatch: "unknown" });
+    // A session this bridge created has a complete journal (see
+    // `acp-dispatch-absent.test.ts`), so it can prove the id never arrived.
+    expect(await dispatchStatus("never-sent")).toEqual({ dispatch: "absent" });
     // A blank id is a caller bug, not a claim about any turn.
     expect(
       await nativeFetch(`${bridge.base}/session/${created.id}/dispatch`, {

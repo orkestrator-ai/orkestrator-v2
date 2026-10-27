@@ -268,6 +268,9 @@ export class TranscriptMediaStreams {
     this.closed = true;
     this.stopSweep();
     for (const streamId of Array.from(this.sessions.keys())) this.release(streamId);
+    // The staging root is re-created at construction without being awaited;
+    // settle it so nothing lands in the root after its owner removed it.
+    await this.stagingReady.catch(() => undefined);
   }
 
   /** Live stream count (tests and diagnostics). */

@@ -15,6 +15,7 @@
  */
 import {
   BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
+  bridgeTranscriptPageCursorAt,
   parseBridgeTranscriptDetailResponse,
   parseBridgeTranscriptPageResponse,
   parseBridgeTranscriptSummaryUpdate,
@@ -82,6 +83,32 @@ function historyEpoch(generation: unknown, contentEpoch: unknown): string {
 }
 
 /**
+ * `historyCursorBefore` for a positioned window: a bridge pages by absolute
+ * position, so the cursor before any row it sent is the snapshot's cursor
+ * moved to that row's position. Positions are indexed on first use only.
+ */
+export function positionedCursorBefore(
+  messages: readonly unknown[],
+  startIndex: number,
+  historyCursor: string,
+): (messageId: string) => string | undefined {
+  let positions: Map<string, number> | undefined;
+  return (messageId) => {
+    if (!positions) {
+      positions = new Map();
+      messages.forEach((message, index) => {
+        const id = (message as { id?: unknown } | null)?.id;
+        if (typeof id === "string" && !positions!.has(id)) positions!.set(id, startIndex + index);
+      });
+    }
+    const position = positions.get(messageId);
+    return position === undefined
+      ? undefined
+      : bridgeTranscriptPageCursorAt(historyCursor, position);
+  };
+}
+
+/**
  * Map a parsed v2 summary snapshot onto the provider-neutral snapshot, the
  * same way the v1 envelope is mapped, plus the representation, the cursor and
  * the revised rows from before the window.
@@ -91,6 +118,8 @@ function summarySnapshot(
 ): ProviderTranscriptSnapshot {
   const value = update.value;
   const window = value.messageWindow;
+  const historyCursor =
+    value.capabilities.pages && value.historyCursor ? value.historyCursor : undefined;
   return {
     messages: value.messages,
     ...(window.omittedParts ? { omittedParts: window.omittedParts } : {}),
@@ -106,8 +135,15 @@ function summarySnapshot(
     historyEpoch: historyEpoch(value.generation, value.contentEpoch),
     freshness: value.freshness,
     representation: "summary",
-    ...(value.capabilities.pages && value.historyCursor
-      ? { historyCursor: value.historyCursor }
+    ...(historyCursor
+      ? {
+          historyCursor,
+          historyCursorBefore: positionedCursorBefore(
+            value.messages,
+            value.startIndex,
+            historyCursor,
+          ),
+        }
       : {}),
     ...(value.historyReconciliationToken
       ? { historyReconciliationToken: value.historyReconciliationToken }

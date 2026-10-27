@@ -555,6 +555,8 @@ describe("build pipeline protocol", () => {
         useTaskImages: false,
         structuredReview: true,
         startedAt: "2026-07-29T00:03:00.000Z",
+        dispatchVersion: 1 as const,
+        dispatchingAt: "2026-07-29T00:03:01.000Z",
       },
       activePromptContext: {
         phase: "reviewing" as const,
@@ -612,6 +614,16 @@ describe("build pipeline protocol", () => {
     };
 
     expect(isBuildPipeline(valid)).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...valid,
+        pendingPromptAttempt: {
+          ...valid.pendingPromptAttempt,
+          dispatchVersion: undefined,
+          dispatchingAt: undefined,
+        },
+      }),
+    ).toBe(true);
 
     const invalidOverrides: Array<Record<string, unknown>> = [
       { createdAt: "yesterday" },
@@ -621,6 +633,8 @@ describe("build pipeline protocol", () => {
       { failureContext: { phase: "building", kind: "unknown" } },
       { reconnectAttempt: { ...valid.reconnectAttempt, startedAt: "invalid" } },
       { pendingPromptAttempt: { ...valid.pendingPromptAttempt, requestId: "" } },
+      { pendingPromptAttempt: { ...valid.pendingPromptAttempt, dispatchVersion: 2 } },
+      { pendingPromptAttempt: { ...valid.pendingPromptAttempt, dispatchingAt: "invalid" } },
       {
         pendingInteractionResolution: {
           ...valid.pendingInteractionResolution,

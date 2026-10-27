@@ -76,7 +76,10 @@ for (const modifier of ["Meta", "Control"]) {
     await page.goto("/monaco-runtime");
     const editor = page.getByTestId("monaco-runtime-editor");
     const input = editor.getByRole("textbox", { name: "Editor content" });
-    await expect(input).toBeAttached();
+    // Monaco's lazy chunk can take longer than five seconds under parallel
+    // load (flake 0792). Only startup gets the longer budget; the shortcut
+    // assertions below keep the default deadline.
+    await expect(input).toBeAttached({ timeout: 30_000 });
     await input.focus();
     const value = page.getByTestId("monaco-runtime-value");
     const original = await value.textContent();
@@ -105,4 +108,81 @@ test("short viewport keeps the footer and final shortcut reachable", async ({ pa
   const box = (await dialog.boundingBox())!;
   expect(box.y).toBeGreaterThanOrEqual(0);
   expect(box.y + box.height).toBeLessThanOrEqual(400);
+});
+
+for (const modifier of ["Meta", "Control"]) {
+  test(`${modifier} from an opaque app-owned design frame opens shortcuts`, async ({ page }) => {
+    await page.goto("/keyboard-shortcuts");
+    const input = page
+      .frameLocator('iframe[title="Design preview"]')
+      .getByRole("textbox", { name: "Design input" });
+    await input.fill("kept");
+    await page.keyboard.press(`${modifier}+Shift+K`);
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Search keyboard shortcuts" })).toBeFocused();
+    await page.keyboard.press(`${modifier}+Shift+K`);
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    await expect(input).toHaveValue("kept");
+  });
+}
+
+test("uncooperative cross-origin browser/service frames keep their keyboard events isolated", async ({
+  page,
+}) => {
+  await page.route("http://preview.invalid/", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: '<input aria-label="Preview input">',
+    }),
+  );
+  await page.goto("/keyboard-shortcuts");
+  await page.locator('iframe[title="Service preview"]').evaluate((frame: HTMLIFrameElement) => {
+    frame.src = "http://preview.invalid/";
+  });
+  const input = page.frameLocator('iframe[title="Service preview"]').getByRole("textbox");
+  await input.fill("kept");
+  await page.keyboard.press("Control+Shift+K");
+  // The browser's origin boundary prevents a parent from intercepting this
+  // chord. This limitation is explicit; Electron handles it before dispatch.
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+  await expect(input).toHaveValue("kept");
+  await page.getByRole("textbox", { name: "Composer" }).focus();
+  await page.keyboard.press("Control+Shift+K");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+});
+
+test("outside pointer dismissal notifies desktop restoration once and returns typing", async ({
+  page,
+}) => {
+  await page.goto("/keyboard-shortcuts");
+  await page.evaluate(() => {
+    const state = { closed: 0 };
+    Object.assign(window, {
+      shortcutDismissal: state,
+      orkestrator: {
+        keyboardShortcuts: {
+          closed: async () => {
+            state.closed++;
+          },
+        },
+      },
+    });
+  });
+  const composer = page.getByRole("textbox", { name: "Composer" });
+  await composer.focus();
+  await page.keyboard.press("Meta+Shift+K");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 2, y: 2 } });
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { shortcutDismissal: { closed: number } }).shortcutDismissal.closed,
+      ),
+    )
+    .toBe(1);
+  await expect(composer).toBeFocused();
+  await page.keyboard.type("resumed");
+  await expect(composer).toHaveValue("resumed");
 });

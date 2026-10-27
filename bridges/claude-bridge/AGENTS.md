@@ -29,11 +29,22 @@ writers on one `.jsonl`. When touching the prompt path:
   `CLAUDE_BRIDGE_MAX_IDLE_RUNTIMES` (default 3) idle CLIs stay warm per bridge;
   the one idle longest goes first. A hard abort with nothing running leaves a
   warm CLI alone.
+- **Background work belongs to the runtime.** `runtime.tasks` holds the live
+  tasks that process started, its unresolved Bash candidates and the
+  snapshots a level signal parked before their edge; the task hooks and the
+  `task_*` frames feed it, and `releaseClaudeRuntimeTasks` settles it when the
+  process ends. A stop reaches only the CLI that owns the task
+  (`backgroundTaskOwner`): a CLI asked to stop an id it never started answers
+  `ok` without reaching anything. Never keep task ownership on the session.
 - **A metadata read goes through `controlOnlyQuery`.** The Agent SDK drops
   `maxTurns: 0`, so a `prompt: ""` query sends an empty user message and starts
   a real turn (model calls, tools, an empty session file under
   `~/.claude/projects`) unless it is closed first. `controlOnlyQuery` sends no
-  message at all.
+  message at all. A bridge-wide read (models, account, plan usage) asks an
+  open runtime first (`live-claude-control.ts`) and probes only when none
+  answers: models and account come from its held initialize answer, which
+  sends nothing, and only a signed-in account counts, because that answer
+  predates any login since.
 - **The newest turn owns the root conversation.** Root frames, results, hooks
   and continuations go to `runtime.latestTurn`; only a subagent's frames go to
   the turn whose row holds its call (`routeClaudeFrame`). A superseded turn
@@ -42,6 +53,18 @@ writers on one `.jsonl`. When touching the prompt path:
   loop the CLI resumes on its own reclaims the foreground through it and
   publishes its own idle edge (`finishTurnInputIfSettled`), and a process that
   ends under such a turn hands the foreground back (`endClaudeRuntime`).
+- **Every prompt with a request id takes the durable claim**, structured ones
+  included (`claimPromptDispatch`): the id is written to the session
+  preferences' `dispatchedRequestIds` before the turn can start, so a
+  restarted bridge refuses a resend (410 `dispatch-outcome-lost`) instead of
+  running it again. `dispatchJournalComplete` (memory and preferences) says the
+  journal holds every id the session ever claimed: set for a fresh random-id
+  session, for a client-key session with no preferences file, or restored from
+  a file that says so; cleared for good once the 64-id bound drops an id, and
+  dropped by any older bridge's write. Only then does `/dispatch` answer
+  `absent` (`dispatchJournalProvesAbsent`, `persistedDispatchStatus`). A
+  client-key session recreated with no rollout restores its journal's ids
+  as lost rather than starting empty.
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
   effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking

@@ -31,7 +31,8 @@ live findings on real providers and a few gaps found on the way.
   (`FlowViewport.tsx`, maths in `flow-viewport.ts`). −, the zoom level (which
   resets to 100%), + and Fullscreen sit in its bottom-right corner; zoom runs
   from 20% to 200%. There is no Fit control: it was removed in #1199, and the
-  browser suite asserts it stays gone. Fullscreen portals the graph
+  browser suite asserts it stays gone. The shared viewport still offers Fit as
+  an opt-in (`fitControl`) that the build pipeline graph turns on. Fullscreen portals the graph
   over the whole Multi Review tab (an `@container` ancestor would confine a
   fixed overlay) and the viewport takes the tab's height; the button or an
   Escape no menu or dialog handled leaves it. Dragging the canvas, wheel and

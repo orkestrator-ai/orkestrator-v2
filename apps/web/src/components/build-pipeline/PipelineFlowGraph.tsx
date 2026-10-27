@@ -323,6 +323,7 @@ export function PipelineFlowGraph({
       fullscreenContainer={fullscreenContainer}
       isActive={isActive}
       minHeight={PIPELINE_FLOW_MIN_HEIGHT}
+      fitControl
     />
   );
 }

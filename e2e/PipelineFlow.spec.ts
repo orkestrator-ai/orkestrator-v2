@@ -360,3 +360,37 @@ test("running package validation keeps Prepare and its display clock live", asyn
   const before = await runtime.textContent();
   await expect.poll(() => runtime.textContent()).not.toBe(before);
 });
+
+test("Fit zooms the whole pipeline into view", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=loops");
+  const controls = page.getByRole("group", { name: "Zoom" });
+  const level = page.getByTestId("pipeline-zoom-level");
+  const zoomIn = controls.getByRole("button", { name: "Zoom in" });
+  while (await zoomIn.isEnabled()) await zoomIn.click();
+  await expect(level).toHaveText("200%");
+  await controls.getByRole("button", { name: "Fit the whole pipeline" }).click();
+  await expect
+    .poll(async () => Number.parseInt((await level.textContent()) ?? "", 10))
+    .toBeLessThanOrEqual(100);
+  // Every node is in view: inside the graph's viewport, or for the stacked
+  // column, inside the page.
+  const frame = isWide(page)
+    ? await page.locator("[data-flow-viewport]").evaluate((element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { x, y, width, height };
+      })
+    : { x: 0, y: 0, ...page.viewportSize()! };
+  await expect
+    .poll(async () =>
+      (await boxes(page)).every(
+        (box) =>
+          box.x >= frame.x - 1 &&
+          box.y >= frame.y - 1 &&
+          box.x + box.width <= frame.x + frame.width + 1 &&
+          box.y + box.height <= frame.y + frame.height + 1,
+      ),
+    )
+    .toBe(true);
+  await level.click();
+  await expect(level).toHaveText("100%");
+});

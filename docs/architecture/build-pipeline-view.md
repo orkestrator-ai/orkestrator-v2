@@ -16,15 +16,19 @@ Multi Review and the pipeline draw with the same components in
 | --- | --- |
 | `flow-graph-model.ts` | Node and edge state vocabulary (`FlowNodeState`, `FlowEdgeState`, `flowEdgeState`), `summarizeFlowEdges`, `defaultFlowSelection`, `latestActivityAt`, edge paths (`flowEdgePath`, `bypassEdgePath`), `FlowGraphGeometry`. |
 | `FlowGraph.tsx` | Node faces (state colours, icon, title, runtime, detail or first error line, severity chips, validation chips, an extra row), error tooltips, hand-drawn SVG edges and ports, column labels, the stacked column below 960 px with its sticky zoom controls, keyboard navigation, fullscreen, the height divider. |
-| `FlowViewport.tsx`, `flow-viewport.ts` | Zoom and pan maths and the viewport hook (Ctrl/⌘ + wheel, trackpad and touch pinch, drag to pan), the zoom controls and divider. |
+| `FlowViewport.tsx`, `flow-viewport.ts` | Zoom and pan maths and the viewport hook (Ctrl/⌘ + wheel, trackpad and touch pinch, drag to pan, opt-in Fit), the zoom controls and divider. |
 | `FlowInspector.tsx` | The inspector frame: the tab panel the nodes control, and its header (icon, title, status pill, tokens, actions). |
 | `stores/flowGraphViewStore.ts` | Renderer-only view state per workflow: zoom and pan (at most 50) and whether the graph is collapsed (at most 50). Never sent to the backend. |
 
 A workflow supplies the nodes in keyboard order, a layout function from width
 to geometry, the edges, ports and the stacked stages. Multi Review keeps its
 own five-column layout (`multiReviewFlowLayout`) and looks and behaves as
-before. There is no Fit control in either graph: Multi Review removed it in
-#1199 and its browser suite asserts it stays gone.
+before. The shared zoom controls offer Fit ("Fit the whole pipeline") when a
+graph passes `fitControl`: it zooms out, never past 100% in and never below
+20%, until the whole wide graph shows in its viewport, or the stacked column in
+the panel that scrolls it, and scrolls back to the start. The pipeline turns it
+on, since its unrolled passes grow the line without bound. Multi Review leaves
+it off: it removed Fit in #1199 and its browser suite asserts it stays gone.
 
 ## The pipeline graph
 

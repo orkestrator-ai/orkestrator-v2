@@ -135,6 +135,29 @@ export function zoomFlowView(
   );
 }
 
+/**
+ * Fit: the zoom that shows the whole graph inside the viewport, from its
+ * start. It never magnifies (the layout already fills the width at 100%), and
+ * it stops at {@link FLOW_ZOOM_MIN}, past which a larger graph still scrolls.
+ */
+export function fitFlowView(content: FlowSize, viewport: FlowSize): FlowView {
+  const zoom =
+    content.width > 0 && content.height > 0
+      ? clampFlowZoom(Math.min(1, viewport.width / content.width, viewport.height / content.height))
+      : 1;
+  return clampScroll({ zoom, scrollLeft: 0, scrollTop: 0 }, content, viewport);
+}
+
+/**
+ * Fit for the stacked column, which scrolls with the page: the zoom at which
+ * the column's height fits the height the page shows it in. Unmeasured, it
+ * leaves the column at 100% rather than guessing.
+ */
+export function fitStackedFlowZoom(contentHeight: number, availableHeight: number | null): number {
+  if (!(contentHeight > 0) || availableHeight === null || !(availableHeight > 0)) return 1;
+  return clampFlowZoom(Math.min(1, availableHeight / contentHeight));
+}
+
 function revealAxis(
   scroll: number,
   start: number,

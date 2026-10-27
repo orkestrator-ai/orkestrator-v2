@@ -134,3 +134,32 @@ describe("pipeline inspector controls", () => {
     expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Complete");
   });
 });
+
+describe("pipeline zoom controls", () => {
+  const largePanel = () => {
+    const reviewers = Array.from({ length: 16 }, (_, index) => ({
+      id: `r${index + 1}`,
+      agent: "claude" as const,
+      model: "opus",
+      status: "running" as const,
+    }));
+    return build({
+      phase: "reviewing",
+      reviewers: reviewers.map(({ agent, model }) => ({ agent, model })),
+      reviewFanout: { reviewers },
+    });
+  };
+
+  test("offer Fit, which zooms the whole graph into view and back from 100%", () => {
+    renderPipelineTab(largePanel());
+    const controls = screen.getByRole("group", { name: "Zoom" });
+    const level = screen.getByTestId("pipeline-zoom-level");
+    expect(level.textContent).toBe("100%");
+    fireEvent.click(within(controls).getByRole("button", { name: "Fit the whole pipeline" }));
+    const fitted = Number.parseInt(level.textContent!, 10);
+    expect(fitted).toBeLessThan(100);
+    expect(fitted).toBeGreaterThanOrEqual(20);
+    fireEvent.click(level);
+    expect(level.textContent).toBe("100%");
+  });
+});

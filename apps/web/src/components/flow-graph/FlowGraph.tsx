@@ -630,6 +630,25 @@ export interface FlowGraphProps {
   isActive?: boolean;
   /** The shortest the graph's viewport sizes itself to; 460 px by default. */
   minHeight?: number;
+  /**
+   * Offers a Fit control that zooms the whole graph into view. Multi Review
+   * leaves it off: Fit was removed there in #1199.
+   */
+  fitControl?: boolean;
+}
+
+/**
+ * Room Fit leaves in the stacked layout: the sticky zoom controls above the
+ * column and its padding below.
+ */
+const STACKED_FIT_MARGIN = 96;
+
+function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
+  for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && node.clientHeight > 0) return node;
+  }
+  return null;
 }
 
 /**
@@ -661,6 +680,7 @@ export function FlowGraph({
   fullscreenContainer,
   isActive = true,
   minHeight,
+  fitControl = false,
 }: FlowGraphProps) {
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
@@ -716,7 +736,22 @@ export function FlowGraph({
     measuredWidth,
     content: { width: measuredWidth ?? 0, height: columnHeight ?? 0 },
     layout: "stacked",
+    fitHeight: () => {
+      const wrapper = stackedWrapperRef.current;
+      // In fullscreen the column scrolls inside its own wrapper; otherwise
+      // with the panel or page around it.
+      const scroller = fullscreen ? wrapper : scrollingAncestor(wrapper);
+      const visible = scroller?.clientHeight ?? window.innerHeight;
+      return visible > STACKED_FIT_MARGIN ? visible - STACKED_FIT_MARGIN : null;
+    },
   });
+  const fitStacked = () => {
+    stackedViewport.fit();
+    // The column just got shorter; bring its top back into view.
+    const wrapper = stackedWrapperRef.current;
+    if (fullscreen && wrapper) wrapper.scrollTop = 0;
+    else wrapper?.scrollIntoView?.({ block: "start" });
+  };
   const attachStackedViewport = stackedViewport.attachViewport;
   const stackedViewportRef = useCallback(
     (element: HTMLDivElement | null) => {
@@ -869,6 +904,7 @@ export function FlowGraph({
               onZoomOut={() => stackedViewport.zoomBy(-1)}
               onZoomIn={() => stackedViewport.zoomBy(1)}
               onReset={stackedViewport.resetZoom}
+              onFit={fitControl ? fitStacked : undefined}
               fullscreen={fullscreen}
               onToggleFullscreen={toggleFullscreen}
               testIdPrefix={testIdPrefix}
@@ -1039,6 +1075,7 @@ export function FlowGraph({
         onZoomOut={() => flowViewport.zoomBy(-1)}
         onZoomIn={() => flowViewport.zoomBy(1)}
         onReset={flowViewport.resetZoom}
+        onFit={fitControl ? flowViewport.fit : undefined}
         fullscreen={fullscreen}
         onToggleFullscreen={toggleFullscreen}
         testIdPrefix={testIdPrefix}

@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Maximize, Minimize, Minus, Plus } from "lucide-react";
+import { Maximize, Minimize, Minus, Plus, Scan } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
@@ -17,6 +17,8 @@ import {
   canZoomIn,
   canZoomOut,
   centerFlowRect,
+  fitFlowView,
+  fitStackedFlowZoom,
   flowContentOffset,
   flowViewportHeight,
   pinchFlowZoom,
@@ -76,6 +78,7 @@ export function useFlowViewport({
   layout = "graph",
   fillHeight = null,
   minHeight,
+  fitHeight,
 }: {
   viewKey: string;
   measuredWidth: number | null;
@@ -84,6 +87,8 @@ export function useFlowViewport({
   fillHeight?: number | null;
   /** The shortest the wide graph's viewport sizes itself to. */
   minHeight?: number;
+  /** For the stacked column: the height the page shows it in, which Fit fits it to. */
+  fitHeight?: () => number | null;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(null);
@@ -105,9 +110,9 @@ export function useFlowViewport({
   const zoomRef = useRef(zoom);
   /** A scroll position waiting for the render at its zoom. */
   const pendingRef = useRef<FlowView | null>(null);
-  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey });
+  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey, stacked, fitHeight });
   useLayoutEffect(() => {
-    sizesRef.current = { content, viewport, measuredWidth, viewKey };
+    sizesRef.current = { content, viewport, measuredWidth, viewKey, stacked, fitHeight };
   });
 
   const attachViewport = useCallback((element: HTMLDivElement | null) => {
@@ -210,6 +215,25 @@ export function useFlowViewport({
   );
 
   const resetZoom = useCallback(() => zoomTo(DEFAULT_FLOW_VIEW.zoom), [zoomTo]);
+
+  /** Fit: the whole graph in view, from its start. */
+  const fit = useCallback(() => {
+    const {
+      content: size,
+      viewport: box,
+      stacked: column,
+      fitHeight: available,
+    } = sizesRef.current;
+    apply(
+      column
+        ? {
+            zoom: fitStackedFlowZoom(size.height, available?.() ?? null),
+            scrollLeft: 0,
+            scrollTop: 0,
+          }
+        : fitFlowView(size, box),
+    );
+  }, [apply]);
 
   const scrollTo = useCallback(
     (next: FlowView, smooth: boolean) => {
@@ -383,6 +407,7 @@ export function useFlowViewport({
     viewportHandlers,
     zoomBy,
     resetZoom,
+    fit,
     reveal,
     center,
   };
@@ -396,7 +421,8 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * −, the zoom level (which resets to 100%), + and Fullscreen. Over the wide graph's
+ * −, the zoom level (which resets to 100%), +, Fit when the graph offers it
+ * (`onFit`), and Fullscreen. Over the wide graph's
  * bottom-right corner; at the top of the stacked column, where they stay in
  * reach while it scrolls. Touch targets are 44 px wherever the pointer is
  * coarse, and always in the stacked layout, which is the phone layout.
@@ -406,6 +432,7 @@ export function FlowZoomControls({
   onZoomOut,
   onZoomIn,
   onReset,
+  onFit,
   fullscreen,
   onToggleFullscreen,
   placement = "corner",
@@ -415,6 +442,8 @@ export function FlowZoomControls({
   onZoomOut: () => void;
   onZoomIn: () => void;
   onReset: () => void;
+  /** Shows a Fit button. Multi Review leaves it out (removed in #1199). */
+  onFit?: () => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   placement?: "corner" | "inline";
@@ -472,6 +501,20 @@ export function FlowZoomControls({
       >
         <Plus className="size-3.5" />
       </Button>
+      {onFit ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={CONTROL_CLASS}
+          aria-label="Fit the whole pipeline"
+          title="Fit the whole pipeline"
+          data-testid={`${testIdPrefix}-fit`}
+          onClick={onFit}
+        >
+          <Scan className="size-3.5" />
+        </Button>
+      ) : null}
       <Button
         type="button"
         variant="ghost"

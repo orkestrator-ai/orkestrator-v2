@@ -18,6 +18,9 @@ const identity: NativeAgentViewIdentity = {
 };
 
 function installBackend() {
+  const annotationText = new URLSearchParams(window.location.search).has("annotations")
+    ? "The header needs more spacing"
+    : "";
   let ready = sessionStorage.getItem("held-send-ready") === "true";
   let authenticationRequired = sessionStorage.getItem("held-send-auth-required") === "true";
   let pendingSignIn = JSON.parse(
@@ -81,8 +84,18 @@ function installBackend() {
             token: "transcript-1",
             value: {
               identity,
-              freshness: "empty",
-              messages: [],
+              freshness: annotationText ? "current" : "empty",
+              messages: annotationText
+                ? [
+                    {
+                      id: "annotation-source",
+                      role: "assistant",
+                      content: annotationText,
+                      parts: [{ type: "text", content: annotationText }],
+                      createdAt: "2026-10-27T12:00:00Z",
+                    },
+                  ]
+                : [],
               historyEpoch: "epoch-1",
               historyComplete: true,
             },
@@ -99,6 +112,7 @@ function installBackend() {
         case "dispatch_native_agent_intent":
           dispatchCount += 1;
           sessionStorage.setItem("held-send-count", String(dispatchCount));
+          sessionStorage.setItem("held-send-prompt", String(args?.prompt ?? ""));
           result = { outcome: "accepted", requestId: args?.requestId };
           break;
         case "get_compose_draft":

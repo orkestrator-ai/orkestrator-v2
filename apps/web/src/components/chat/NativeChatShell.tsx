@@ -160,6 +160,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   annotationInteractionEnabled?: boolean;
   onAddAnnotation?: (text: string) => TranscriptAnnotation | null;
   onUpdateAnnotationComment?: (id: string, comment: string) => void;
+  onAnnotationCommentDone?: () => void;
 
   centerCompose: boolean;
   composer: ReactNode;
@@ -224,6 +225,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   annotationInteractionEnabled = true,
   onAddAnnotation,
   onUpdateAnnotationComment,
+  onAnnotationCommentDone,
   centerCompose,
   composer,
   resumeDialog,
@@ -558,6 +560,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   annotations,
                   onAdd: onAddAnnotation,
                   onUpdateComment: onUpdateAnnotationComment,
+                  onCommentDone: onAnnotationCommentDone,
                 }
               : undefined
           }

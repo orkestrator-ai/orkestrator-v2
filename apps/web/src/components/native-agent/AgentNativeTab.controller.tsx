@@ -740,18 +740,23 @@ export function SharedNativeAgentController({
   }, [normalizedMessages]);
   /*
    * A tab's first prompt is sent before its provider session has an id, so its
-   * confirmation starts with an empty one. The draft's copy adopts the id the
-   * projection reports; the optimistic copy is never rewritten, so defer to the
-   * draft's for the same request once it has one.
+   * confirmation starts with an empty one. Retain the adopted id on the
+   * optimistic prompt too: acceptance can clear the draft before its echo.
    */
-  const activeTranscriptConfirmation = useMemo(() => {
-    const optimistic = optimisticPrompt?.confirmation;
-    const drafted = draft.pendingTranscriptConfirmation;
-    if (!optimistic) return drafted;
-    return !optimistic.sessionId && drafted?.requestId === optimistic.requestId
-      ? drafted
-      : optimistic;
-  }, [draft.pendingTranscriptConfirmation, optimisticPrompt]);
+  const projectedSessionId = projection?.sessionId;
+  if (
+    optimisticPrompt?.confirmation &&
+    !optimisticPrompt.confirmation.sessionId &&
+    projectedSessionId
+  ) {
+    setOptimisticPrompt({
+      ...optimisticPrompt,
+      sessionId: projectedSessionId,
+      confirmation: { ...optimisticPrompt.confirmation, sessionId: projectedSessionId },
+    });
+  }
+  const activeTranscriptConfirmation =
+    optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
   /**
    * Has an authoritative transcript row appeared that can only be this prompt?
    *
@@ -797,7 +802,7 @@ export function SharedNativeAgentController({
   const displayMessages = useMemo(() => {
     const providerBase =
       turnStopMarker &&
-      turnStopMarker.sessionId === projection?.sessionId &&
+      turnStopMarker.sessionId === projectedSessionId &&
       !handoff.displayMessages.some(
         (message) => message.role === "system" && message.content === TURN_STOPPED_BY_USER,
       )
@@ -821,8 +826,8 @@ export function SharedNativeAgentController({
      * splicing it in would make the previous conversation's pending prompt the
      * first row of the resumed one.
      */
-    if (optimisticPrompt.sessionId !== undefined && projection?.sessionId !== undefined) {
-      if (optimisticPrompt.sessionId !== projection.sessionId) return base;
+    if (optimisticPrompt.sessionId !== undefined && projectedSessionId !== undefined) {
+      if (optimisticPrompt.sessionId !== projectedSessionId) return base;
     }
 
     const optimistic = createOptimisticNativeMessage(
@@ -848,7 +853,7 @@ export function SharedNativeAgentController({
   }, [
     handoff.displayMessages,
     optimisticPrompt,
-    projection?.sessionId,
+    projectedSessionId,
     sessionKey,
     transcriptEchoedOptimistic,
     turnStopMarker,

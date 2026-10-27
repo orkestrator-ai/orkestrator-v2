@@ -983,6 +983,26 @@ export class NativeAgentTranscriptProjection {
     }
   }
 
+  /**
+   * A background recovery of the same conversation keeps the title the view
+   * already shows: it carries only the provider's own, which the read path
+   * may have replaced with the backend's (`sessionTitles.resolve`).
+   */
+  private withShownTitle(
+    key: string,
+    projection: ProjectedProgressiveTranscript,
+  ): ProjectedProgressiveTranscript {
+    const shown = this.progressiveTranscriptCache.get(key)?.value;
+    if (
+      !shown?.title ||
+      shown.title === projection.value.title ||
+      shown.identity.providerSessionId !== projection.value.identity.providerSessionId
+    ) {
+      return projection;
+    }
+    return { ...projection, value: { ...projection.value, title: shown.title } };
+  }
+
   /** Keep a session's stop result until its next authoritative projection. */
   recordStopNotice(sessionKey: string, message: string): void {
     this.stopNotices.set(sessionKey, message);
@@ -2267,12 +2287,15 @@ export class NativeAgentTranscriptProjection {
             this.commitProgressiveTranscript(
               key,
               input,
-              this.projectProgressiveTranscript(
-                input,
+              this.withShownTitle(
                 key,
-                hydrated,
-                sessionId,
-                initialPromptPresentation,
+                this.projectProgressiveTranscript(
+                  input,
+                  key,
+                  hydrated,
+                  sessionId,
+                  initialPromptPresentation,
+                ),
               ),
             );
             // An idle view reads on a slow cadence. Say the recovered transcript

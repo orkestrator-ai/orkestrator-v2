@@ -141,15 +141,6 @@ export class NativeAgentSessionTitles {
     return fallback ?? (reported || undefined);
   }
 
-  /** Forget a session's in-memory state (tab closed, session replaced). */
-  forget(sessionKey: string): void {
-    const prefix = `${sessionKey}\0`;
-    for (const key of Array.from(this.chosen.keys())) {
-      if (key.startsWith(prefix)) this.chosen.delete(key);
-    }
-    this.pushAttempts.delete(sessionKey);
-  }
-
   /** Title choices still in flight, for shutdown to settle. */
   pending(): Promise<void>[] {
     return Array.from(this.choosing.values());

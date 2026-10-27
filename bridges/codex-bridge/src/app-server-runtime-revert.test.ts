@@ -64,7 +64,8 @@ describe("Codex rewinds", () => {
   test("our own rewind's echo finds nothing more to cut", async () => {
     const surviving = { turns: ["turn-1", "turn-2"] };
     const { h, sessionId } = await twoTurns(surviving);
-    const messages = (await h.runtime.getMessages(sessionId)) ?? [];
+    // The thread's own rows: these carry the turn ids set at dispatch.
+    const messages = h.runtime.getRegistry().getThreadForSession(sessionId)?.messages ?? [];
     const second = messages.find(
       (message) => message.role === "user" && message.content === "second prompt",
     );

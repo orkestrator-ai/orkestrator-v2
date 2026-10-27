@@ -1,7 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexHome, harness, threadPayload } from "./app-server-runtime-test-harness.js";
+import { clearTranscriptPathCache, invalidateTranscriptCatalogCache } from "./history/rollout.js";
+import { clearTranscriptCache } from "./transcript-cache.js";
+
+// The listing caches are process-wide; leave none pointing into this test's home.
+afterEach(() => {
+  invalidateTranscriptCatalogCache();
+  clearTranscriptPathCache();
+  clearTranscriptCache();
+});
 
 /** A rollout the fallback parser lists for the harness workspace. */
 function writeRollout(directory: "sessions" | "archived_sessions", threadId: string): void {

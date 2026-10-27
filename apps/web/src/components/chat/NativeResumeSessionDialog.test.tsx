@@ -94,7 +94,7 @@ describe("NativeResumeSessionDialog", () => {
   test("offers no remove action where the platform cannot archive", async () => {
     renderDialog([{ id: "a", title: "Alpha" }]);
     await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Remove from list" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove from list" }) === null).toBe(true);
   });
 
   test("removes an archived row and puts it back on Undo", async () => {
@@ -113,7 +113,7 @@ describe("NativeResumeSessionDialog", () => {
     });
     // Untimed rows keep their order, so the first remove is Alpha's.
     expect(onArchive.mock.calls[0]).toEqual(["a", true]);
-    await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Alpha") === null).toBe(true));
     expect(screen.getByText("Beta")).toBeTruthy();
 
     const options = mockToast.mock.calls.at(-1)?.[1] as {

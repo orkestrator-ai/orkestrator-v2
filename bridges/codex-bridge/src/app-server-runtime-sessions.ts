@@ -1042,12 +1042,15 @@ export class CodexRuntimeSessions {
       return;
     }
     // Detached or replaced while reading: the next attach rehydrates from the
-    // rollout, which records the rollback itself.
+    // rollout, which records the rollback itself. A turn running now may have
+    // started after the read and be missing from it, so nothing is cut under
+    // one; the transcript catches up on the next hydration.
     if (!turns || this.ctx.registry.getThread(context.threadId) !== context) return;
+    if (phaseToExternalStatus(context.phase) === "running") return;
     const cut = externalRevertCut(
       context.messages,
       turns.map((turn) => turn.id),
-      phaseToExternalStatus(context.phase) === "running",
+      false,
     );
     if (cut === undefined) return;
     context.messages.splice(cut);

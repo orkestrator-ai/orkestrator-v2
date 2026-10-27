@@ -114,7 +114,10 @@ against a real provider.
    and reload the tab.
 2. **Codex `thread/reverted` from another client.** Rewind a thread from the
    Codex CLI or another app-server client while its Orkestrator tab is open;
-   the tab should drop the rewound turns without a reload.
+   the tab should drop the rewound turns without a reload. A revert reported
+   while one of this bridge's turns runs is not adopted (the read may predate
+   that turn); the transcript catches up at the next hydration. Not checked
+   whether app-server allows a revert during a running turn at all.
 3. **Codex archive.** Archive and unarchive from the resume dialog on a real
    Codex home: the row disappears and comes back, the rollout moves between
    `sessions` and `archived_sessions` (or app-server marks it), and the

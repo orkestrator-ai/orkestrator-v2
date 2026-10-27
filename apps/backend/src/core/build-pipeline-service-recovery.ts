@@ -11,6 +11,7 @@ import {
   type PipelineInteractionTranscriptEntry,
   isVerificationVerdict,
   boundedPipelineSessionError,
+  MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
@@ -174,6 +175,13 @@ export class BuildPipelineRecovery {
     session.structuredResultStatus = "accepted";
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
+    // The pipeline keeps only the newest verdict. The session's own copy is
+    // what a rewind to the fix after this verification hands that fix.
+    session.verificationResult = pipeline.verificationResult;
+    session.verificationFeedback =
+      rationale.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH
+        ? rationale
+        : `${rationale.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (complete) {
       await this.updateKanbanLifecycle(pipeline, {

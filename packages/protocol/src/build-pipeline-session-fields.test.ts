@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_PIPELINE_REWINDS,
   MAX_PIPELINE_SESSION_ERROR_LENGTH,
+  MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   boundedPipelineSessionError,
   isBuildPipeline,
+  isSupersededPipelineSession,
   pipelineReviewIssueCounts,
   type BuildPipeline,
   type PipelineSession,
@@ -118,5 +121,67 @@ describe("pipeline session graph fields", () => {
     const long = boundedPipelineSessionError("y".repeat(MAX_PIPELINE_SESSION_ERROR_LENGTH * 2));
     expect(long).toHaveLength(MAX_PIPELINE_SESSION_ERROR_LENGTH);
     expect(isBuildPipeline(pipelineWith({ error: long }))).toBe(true);
+  });
+});
+
+describe("pipeline rewind fields", () => {
+  const rewind = {
+    id: "rewind-1",
+    at: "2026-10-26T01:00:00.000Z",
+    fromPhase: "failed",
+    fromIteration: 3,
+    iteration: 0,
+    step: { kind: "session", phase: "verify" },
+    sessionKey: "verify-1",
+    supersededSessions: 10,
+  };
+
+  test("accepts superseded sessions, verdict copies and rewinds, and records without them", () => {
+    expect(isBuildPipeline(pipelineWith({}))).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...pipelineWith({
+          supersededBy: "rewind-1",
+          supersededAt: "2026-10-26T01:00:00.000Z",
+        }),
+        rewinds: [rewind],
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        pipelineWith({ phase: "verify", verificationResult: "fail", verificationFeedback: "No" }),
+      ),
+    ).toBe(true);
+    expect(isSupersededPipelineSession({ supersededBy: "rewind-1" })).toBe(true);
+    expect(isSupersededPipelineSession({})).toBe(false);
+    expect(isSupersededPipelineSession(undefined)).toBe(false);
+  });
+
+  test("rejects malformed rewind fields", () => {
+    expect(isBuildPipeline(pipelineWith({ supersededBy: "" }))).toBe(false);
+    expect(isBuildPipeline(pipelineWith({ supersededAt: "yesterday" }))).toBe(false);
+    // A verdict copy belongs to a verify session only.
+    expect(isBuildPipeline(pipelineWith({ verificationResult: "fail" }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        pipelineWith({
+          phase: "verify",
+          verificationFeedback: "x".repeat(MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH + 1),
+        }),
+      ),
+    ).toBe(false);
+    expect(isBuildPipeline({ ...pipelineWith({}), rewinds: {} })).toBe(false);
+    expect(
+      isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, step: { kind: "nope" } }] }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, supersededSessions: -1 }] }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...pipelineWith({}),
+        rewinds: Array.from({ length: MAX_PIPELINE_REWINDS + 1 }, () => rewind),
+      }),
+    ).toBe(false);
   });
 });

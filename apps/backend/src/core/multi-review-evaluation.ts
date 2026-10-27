@@ -13,6 +13,7 @@ import {
   MULTI_REVIEW_REPORTS_FRAME_OPEN,
 } from "@orkestrator/protocol/review-evidence-frames";
 import {
+  isSupersededPipelineSession,
   pipelineIndependentReviewSlot,
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
@@ -386,7 +387,9 @@ export function summarizePanelValue(
   const pipeline = record as BuildPipeline;
   const iterations = new Map<number, PanelValueSummary>();
   for (const session of pipeline.sessions ?? []) {
-    if (session.phase !== "review") continue;
+    // A rewind's superseded passes are history; they would merge into the
+    // rerun's summary for the same round.
+    if (session.phase !== "review" || isSupersededPipelineSession(session)) continue;
     const slot = pipelineIndependentReviewSlot(session.label);
     if (slot === null && !session.reviewOverlap) continue;
     let summary = iterations.get(session.iteration);

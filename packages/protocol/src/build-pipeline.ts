@@ -101,6 +101,50 @@ export type PipelineRestartRequest =
   | { kind: "review-package"; implementationPhase: "build" | "fix" }
   | { kind: "validation"; implementationPhase: "build" | "fix" };
 
+/**
+ * One restart that rewound the pipeline to an earlier point of its loop.
+ *
+ * Restarting a step returns the pipeline to that step's own round
+ * (`iteration`) and phase. Every session at or after that point is kept but
+ * marked with this rewind's {@link id} in {@link PipelineSession.supersededBy}:
+ * it is history, readable but excluded from the live loop, results and
+ * verdicts. The code is not rewound; the new run continues on the current
+ * worktree.
+ */
+export interface PipelineRewind {
+  /** Named by {@link PipelineSession.supersededBy} on every session it superseded. */
+  id: string;
+  at: string;
+  /** Where the pipeline was when the restart was requested. */
+  fromPhase: BuildPhase;
+  fromIteration: number;
+  /** The round the pipeline rewound to. */
+  iteration: number;
+  /** The step that runs again; an earlier step of the same round when its inputs were gone. */
+  step: PipelineRestartRequest;
+  /** The session the restart named, when it named one. */
+  sessionKey?: string;
+  /** How many sessions this rewind superseded. */
+  supersededSessions: number;
+}
+
+/** The newest rewinds a record keeps; older entries are dropped, their sessions stay superseded. */
+export const MAX_PIPELINE_REWINDS = 50;
+/** The longest verification rationale copied onto a verify session. */
+export const MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH = 16_000;
+
+/** Whether a rewind superseded this session: history, never the live run. */
+export function isSupersededPipelineSession(
+  session: Pick<PipelineSession, "supersededBy"> | undefined,
+): boolean {
+  return session?.supersededBy !== undefined;
+}
+
+/** The sessions of the live run, in the order they started. */
+export function livePipelineSessions(pipeline: Pick<BuildPipeline, "sessions">): PipelineSession[] {
+  return pipeline.sessions.filter((session) => !isSupersededPipelineSession(session));
+}
+
 /** The steps a launcher can configure independently. */
 export type BuildStepKey = "build" | "review" | "address" | "verify" | "pr" | "resolve-conflicts";
 
@@ -493,6 +537,28 @@ export interface PipelineSession {
   /** This consolidation was discarded by a reviewer retry; its result is no longer usable. */
   superseded?: boolean;
   /**
+   * The {@link PipelineRewind.id} of the restart that superseded this session.
+   *
+   * Set on the restarted step's old session and on every session after it
+   * when a restart rewinds the pipeline. The session stays in the record so
+   * its transcript is readable, but the live loop, results, verdicts and
+   * late tool submissions ignore it. Absent on live sessions and on records
+   * written before rewinds existed. Distinct from {@link superseded}, which
+   * only marks a consolidation a reviewer retry replaced inside one pass.
+   */
+  supersededBy?: string;
+  /** When {@link supersededBy} was set. */
+  supersededAt?: string;
+  /**
+   * The verdict this verify session returned, kept so a rewind to the fix
+   * that followed it can hand that fix its own round's feedback. The pipeline
+   * fields hold only the newest verdict. Absent on other phases and on
+   * records written before it existed.
+   */
+  verificationResult?: "pass" | "fail";
+  /** At most {@link MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH} characters. */
+  verificationFeedback?: string;
+  /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
    * reviewer or stage that failed, retained when the pipeline moves on.
@@ -874,6 +940,8 @@ export interface BuildPipeline {
   reviewRetryRequested?: boolean;
   /** Selected historical stage to start again on the next supervisor pass. */
   restartRequest?: PipelineRestartRequest;
+  /** Restarts that rewound the pipeline, oldest first, at most {@link MAX_PIPELINE_REWINDS}. */
+  rewinds?: PipelineRewind[];
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -1211,6 +1279,16 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.sessionlessReviewers.length <= MAX_BUILD_PIPELINE_REVIEWERS &&
         value.sessionlessReviewers.every(isPipelineSessionlessReviewer))) &&
     (value.superseded === undefined || typeof value.superseded === "boolean") &&
+    (value.supersededBy === undefined ||
+      (isNonBlankString(value.supersededBy) && value.supersededBy.length <= 128)) &&
+    (value.supersededAt === undefined || isIsoDate(value.supersededAt)) &&
+    (value.verificationResult === undefined ||
+      (value.phase === "verify" &&
+        (value.verificationResult === "pass" || value.verificationResult === "fail"))) &&
+    (value.verificationFeedback === undefined ||
+      (value.phase === "verify" &&
+        typeof value.verificationFeedback === "string" &&
+        value.verificationFeedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH)) &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||
@@ -1451,6 +1529,22 @@ function isPipelineRestartRequest(value: unknown): value is PipelineRestartReque
   );
 }
 
+function isPipelineRewind(value: unknown): value is PipelineRewind {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.id) &&
+    value.id.length <= 128 &&
+    isIsoDate(value.at) &&
+    BUILD_PHASES.has(value.fromPhase as BuildPhase) &&
+    isNonNegativeInteger(value.fromIteration) &&
+    isNonNegativeInteger(value.iteration) &&
+    isPipelineRestartRequest(value.step) &&
+    (value.sessionKey === undefined ||
+      (isNonBlankString(value.sessionKey) && value.sessionKey.length <= 512)) &&
+    isNonNegativeInteger(value.supersededSessions)
+  );
+}
+
 function isNonBlankString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -1534,6 +1628,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
     (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
+    (value.rewinds !== undefined &&
+      (!Array.isArray(value.rewinds) ||
+        value.rewinds.length > MAX_PIPELINE_REWINDS ||
+        !value.rewinds.every(isPipelineRewind))) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&

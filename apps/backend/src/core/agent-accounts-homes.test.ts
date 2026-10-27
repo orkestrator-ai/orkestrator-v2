@@ -85,6 +85,35 @@ describe("linkSharedEntries", () => {
     await expect(fs.lstat(path.join(account, "agents"))).rejects.toThrow();
   });
 
+  test("moves a required directory the host lacks up to the host and links it", async () => {
+    const host = path.join(root, "host");
+    const account = path.join(root, "account");
+    // Saved by the account before the host had a `plans` directory.
+    await fs.mkdir(path.join(account, "plans"), { recursive: true });
+    await fs.writeFile(path.join(account, "plans", "plan.md"), "account plan");
+
+    await linkSharedEntries(account, host, ["plans"], ["plans"]);
+
+    expect(await fs.readlink(path.join(account, "plans"))).toBe(path.join(host, "plans"));
+    expect(await fs.readFile(path.join(host, "plans", "plan.md"), "utf8")).toBe("account plan");
+    expect(await privateSharedEntries("claude", account)).toEqual([]);
+  });
+
+  test("never merges an account directory into the host's own", async () => {
+    const host = path.join(root, "host");
+    const account = path.join(root, "account");
+    await fs.mkdir(path.join(host, "plans"), { recursive: true });
+    await fs.writeFile(path.join(host, "plans", "host.md"), "host");
+    await fs.mkdir(path.join(account, "plans"), { recursive: true });
+    await fs.writeFile(path.join(account, "plans", "account.md"), "account");
+
+    await linkSharedEntries(account, host, ["plans"], ["plans"]);
+
+    expect(await fs.readdir(path.join(host, "plans"))).toEqual(["host.md"]);
+    expect(await fs.readdir(path.join(account, "plans"))).toEqual(["account.md"]);
+    expect(await privateSharedEntries("claude", account)).toEqual(["plans"]);
+  });
+
   test("drops a link whose host target has gone", async () => {
     const host = path.join(root, "host");
     const account = path.join(root, "account");
@@ -207,10 +236,33 @@ describe("prepareAgentAccountHome", () => {
 
     expect((await fs.stat(home)).mode & 0o777).toBe(0o700);
     expect(await fs.readlink(path.join(home, "sessions"))).toBe(path.join(hostCodex, "sessions"));
+    expect(await fs.readlink(path.join(home, "skills"))).toBe(path.join(hostCodex, "skills"));
     expect(await fs.readlink(path.join(home, "config.toml"))).toBe(
       path.join(hostCodex, "config.toml"),
     );
     await expect(fs.lstat(path.join(home, "state_5.sqlite"))).rejects.toThrow();
+  });
+});
+
+describe("prepareAgentAccountHome for Claude", () => {
+  test("creates every shared directory on the host so no account grows its own", async () => {
+    const hostClaude = path.join(root, "claude-host");
+    await fs.mkdir(hostClaude, { recursive: true });
+    await fs.writeFile(path.join(hostClaude, "settings.json"), "{}");
+    const home = path.join(root, "accounts", "claude", "one");
+
+    await prepareAgentAccountHome("claude", home, {
+      claudeHome: hostClaude,
+      claudeJson: path.join(root, "claude.json"),
+      codexHome: path.join(root, "codex-host"),
+    });
+
+    for (const entry of ["plans", "agents", "commands", "todos", "projects"]) {
+      expect(await fs.readlink(path.join(home, entry))).toBe(path.join(hostClaude, entry));
+    }
+    // Files are linked only when the host has them.
+    await expect(fs.lstat(path.join(home, "keybindings.json"))).rejects.toThrow();
+    expect(await privateSharedEntries("claude", home)).toEqual([]);
   });
 });
 

@@ -63,13 +63,20 @@ on another:
   never linked: SQLite creates its `-wal`/`-shm` sidecars next to the path it
   opened, so a linked database would be written from two directories.
 
-`projects` (Claude) and `sessions` (Codex) are created on the host when
-missing, so an account's first session does not grow a private copy.
-`linkSharedEntries` is conservative: a regular file already in the account
-directory is left alone, because a CLI that saves by atomic rename replaces
-the link with one, and that content is the account's now. A link whose host
-target has gone is removed. Such an entry is reported rather than re-linked:
-`privateSharedEntries` lists it, `listAgentAccounts` returns the names as the
+Every shared entry that is a directory (`SHARED_DIRECTORIES`) is created on
+the host when missing, so an account's first transcript, saved plan or skill
+does not grow a private copy. Files are not: an empty `settings.json` or
+`config.toml` is not the same as a missing one. A directory an account already
+created while the host had none (before this rule, or from a CLI racing the
+launch) is moved to the host and linked. It is never merged into a host
+directory that exists.
+
+`linkSharedEntries` is otherwise conservative: a regular file already in the
+account directory is left alone, because a CLI that saves by atomic rename
+replaces the link with one, and that content is the account's now. A link
+whose host target has gone is removed. Such an entry, and a directory that
+could not be moved, is reported rather than re-linked: `privateSharedEntries`
+lists it, `listAgentAccounts` returns the names as the
 account's `privateEntries`, and its row in Settings says the entry is no longer
 shared with the host login. Re-linking would race a CLI still writing it.
 

@@ -191,12 +191,17 @@ description = "Preview the production renderer"
 run = "bun run --cwd apps/web preview"
 
 [tasks.test]
-description = "Run the non-iOS test suite, including the area suites this change can reach"
+description = "Run the default non-iOS test suite (deterministic tests; excludes the slow tier)"
+run = "bun scripts/test-all.ts"
+
+[tasks."test:slow"]
+description = "Run only the slow test tier: tests that wait on real processes, servers, or wall-clock time"
+env = { ORKESTRATOR_TEST_TIER = "slow" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:full"]
-description = "Run the complete non-iOS test suite, including every area suite"
-env = { ORKESTRATOR_TEST_AREAS = "all" }
+description = "Run the complete non-iOS test suite, default and slow tiers"
+env = { ORKESTRATOR_TEST_TIER = "all" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:changed"]
@@ -206,7 +211,7 @@ run = "bun scripts/test-all.ts"
 
 [tasks."test:all"]
 description = "Run the complete test suite, including iOS"
-env = { ORKESTRATOR_INCLUDE_IOS = "1", ORKESTRATOR_TEST_AREAS = "all" }
+env = { ORKESTRATOR_INCLUDE_IOS = "1", ORKESTRATOR_TEST_TIER = "all" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:logged"]

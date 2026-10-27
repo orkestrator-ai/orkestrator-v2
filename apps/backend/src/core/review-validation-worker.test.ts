@@ -257,6 +257,25 @@ test("shared resources serialize; failed dependencies skip while independent che
   expect(result.results[2]!.stdoutPath).toBeNull();
 });
 
+test("waiting for a shared workspace resource is reported as queue time with its reason", async () => {
+  const { root, run } = await fixture([
+    command("build", "sleep 1", { resources: ["dist"] }),
+    command("check", "exit 0", { resources: ["dist"] }),
+  ]);
+  await control(root, run, "start");
+  const waiting = await observeUntil(
+    root,
+    run,
+    (next) => next.results[0]?.status === "running" && next.results[1]?.status === "queued",
+    5000,
+  );
+  expect(waiting.results[1]!.queueReason).toContain("Waiting for build");
+  const done = await completed(root, run);
+  expect(done.results.map((r) => r.status)).toEqual(["passed", "passed"]);
+  expect(done.results[1]!.queuedMs).toBeGreaterThan(700);
+  expect(done.results[1]!.queueReason).toBeUndefined();
+});
+
 test("worktree drift before or during validation is recorded without failing the run", async () => {
   const before = await fixture([command("check", "exit 0")]);
   await writeFile(path.join(before.root, "source.txt"), "changed\n");

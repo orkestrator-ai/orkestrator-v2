@@ -12,6 +12,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { BRIDGE_CONTRACT_CAPABILITIES } from "../conformance/bridge-contract/capabilities";
 import { BRIDGE_IDS, CONTRACT_SCENARIOS } from "../conformance/bridge-contract/scenarios";
+import { slowTestFiles } from "../../scripts/test-tiers";
 
 const root = path.resolve(import.meta.dir, "../..");
 const RUNNER = "src/conformance-bridge-contract.test.ts";
@@ -66,7 +67,11 @@ describe("bridge contract runners", () => {
     const { scripts } = JSON.parse(readFileSync(path.join(directory, "package.json"), "utf8")) as {
       scripts: Record<string, string>;
     };
-    expect(scripts["test:bridge"]).toMatch(/^bun test src\s/);
+    expect(scripts["test:bridge"]).toMatch(
+      /^bun \.\.\/\.\.\/scripts\/bun-test-tier\.ts \S+ src --/,
+    );
+    // The default tier must keep it: the slow tier runs only on demand.
+    expect(slowTestFiles(root, path.relative(root, directory))).not.toContain(RUNNER);
   });
 
   test("a scenario change marks every bridge test task affected", () => {

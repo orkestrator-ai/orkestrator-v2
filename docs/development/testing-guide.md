@@ -15,8 +15,9 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; runs only the [area suites](#area-suites) the change can reach |
-| Test the repository, every area | `mise run test:full` | What CI runs; every area suite regardless of the change |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers) |
+| Test the slow tier | `mise run test:slow` | On demand only: tests that wait on real processes, servers, or wall-clock time |
+| Test both tiers | `mise run test:full` | What CI runs; default and slow tiers |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
 | Check format, lint, and types | `mise run test:logged -- --name check -- mise run check` | Static validation; this does not run tests |
 | Run browser component tests | `mise run test:logged -- --name browser -- mise run test:browser` | Playwright component/browser coverage |
@@ -40,30 +41,37 @@ A normal code implementation loop is:
 4. Add the relevant browser, agent, Docker, or iOS suite when the changed area
    requires it.
 
-### Area suites
+### Test tiers
 
-A few slow, self-contained test sets are area suites, declared in
-`scripts/test-areas.ts`: the real-Chromium transcript-artifact suites and the
-tmux suites. `mise run test` runs an area only when the change can reach it,
-and prints an `AREA RUN` or `AREA SKIP` line with the reason.
+The default suite is meant to be deterministic: its outcome should not depend
+on how busy the host is. Test files that wait on something outside the test
+process — real Git, tmux, Chromium, agent CLIs, servers, sockets, or
+wall-clock sleeps and long timeouts — form the slow tier, declared in
+`scripts/test-tiers.ts`. `*-live.test.ts`, `*.live.test.ts`, and
+`*.integration.test.ts` files are slow by name.
 
-An area runs when any file in its import graph differs from the merge base
-with local `main`, including uncommitted and untracked files. The graph starts
-at the area's test files and its package's preloads and follows every runtime
-import into workspace packages; type-only imports do not count. Each area also
-lists triggers for inputs an import cannot express, such as fixtures read by
-path. Dependency, lockfile, `bunfig.toml`, `tsconfig`, `mise.toml`, Turbo, and
-test-runner changes run every area, and so does anything uncertain: no merge
-base, a Git failure, or an unreadable graph.
+- `mise run test` runs the default tier and prints how to run the rest.
+- `mise run test:slow` runs only the slow tier. Run it on demand, for example
+  when changing the subsystems those tests drive; for one owning file, run that
+  file directly through `test:logged`.
+- `mise run test:full` (CI) and `mise run test:all` run both tiers.
 
-CI runs `mise run test:full`, which sets `ORKESTRATOR_TEST_AREAS=all`, so a
-coupling the graph cannot see is still caught before merge. `test:all` also
-runs every area. Set `ORKESTRATOR_TEST_AREA_BASE` to compare against a branch
-other than `main`.
+Each package's `test:workspace` or `test:bridge` script calls
+`scripts/bun-test-tier.ts`, which reads `ORKESTRATOR_TEST_TIER`
+(`default`, `slow`, or `all`) and either ignores the package's slow files or
+runs only them.
 
-Add an area only for a slow test set whose import graph is narrow. Measure
-first: an area whose graph reaches shared hubs such as storage or the protocol
-package runs on most changes and saves little.
+Prefer making a slow test deterministic (fake clocks, in-process fakes) over
+adding it to the slow tier. Add a file to the tier when it genuinely needs real
+processes or time; the list started from files whose median duration was 3 s
+or more across recent aggregate runs.
+
+Only one complete aggregate run (`test`, `test:slow`, `test:full`, `test:all`)
+holds the host at a time. Its groups share a host-wide scheduler resource, so
+another worktree's complete run queues until the first finishes; overlapping
+suites made every run slower and pushed subprocess tests into timeouts.
+`test:changed` is exempt, and `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1` opts a run
+out.
 
 `test:changed` is an optimization, not final proof. It uses Turbo's affected
 package graph and Bun's changes from the local `main` ref. Configuration files,

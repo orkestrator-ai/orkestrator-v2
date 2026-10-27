@@ -131,7 +131,7 @@ test("parallel group clocks measure wall time and exclude startup and idle gaps"
     directory,
     { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ORKESTRATOR_VALIDATION_SCHEDULER_STATE: channel },
     () => {},
-    () => now,
+    { clock: () => now },
   );
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -587,6 +587,46 @@ test("separate runners queue without starting children and cancellation removes 
   expect(await running).toMatchObject({ status: 0 });
   a.close();
   b.close();
+});
+
+test("complete aggregate runs from different worktrees never overlap", async () => {
+  const { directory } = fixture({ workers: 8, memoryMiB: 8192 });
+  const env = { ORKESTRATOR_TEST_SCHEDULER_DIR: directory };
+  const worktree = () => {
+    const root = mkdtempSync(path.join(tmpdir(), "test-admission-worktree-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    return root;
+  };
+  const first = createTestAdmission(worktree(), env, () => {}, { exclusiveSuite: true });
+  const second = createTestAdmission(worktree(), env, () => {}, { exclusiveSuite: true });
+  const affected = createTestAdmission(worktree(), env, () => {});
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const started: string[] = [];
+  const group = (name: string) => ({ name, command: "unused", args: [], workers: 1 });
+  const hold = (name: string) => async () => {
+    started.push(name);
+    await gate;
+    return { status: 0 };
+  };
+  // Groups of one run share the lease.
+  const firstRuns = [
+    first.run(group("a"), hold("first:a")),
+    first.run(group("b"), hold("first:b")),
+  ];
+  const secondRun = second.run(group("a"), hold("second:a"));
+  const affectedRun = affected.run(group("a"), hold("affected:a"));
+  await Bun.sleep(300);
+  expect(started.sort()).toEqual(["affected:a", "first:a", "first:b"]);
+  finish();
+  await Promise.all([...firstRuns, affectedRun]);
+  expect(await secondRun).toMatchObject({ status: 0 });
+  expect(started).toContain("second:a");
+  first.close();
+  second.close();
+  affected.close();
 });
 
 test("unconfigured nested aggregate commands report incomplete instead of deadlocking", async () => {

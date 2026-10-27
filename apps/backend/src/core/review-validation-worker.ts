@@ -162,13 +162,15 @@ function noteWorktreeDrift() {
   recordEnvironmentChanges(files);
 }
 
-async function execute(cmd, index) {
+// readyAt is when the command's prerequisites settled. Time spent after that
+// waiting for this review's own budget or resources is queue time too.
+async function execute(cmd, index, readyAt) {
   const result = run.results[index];
   let ticket;
   let streams = [];
-  const queuedAt = Date.now();
+  const queuedAt = readyAt ?? Date.now();
   result.status = "queued";
-  result.queuedMs = 0;
+  result.queuedMs = Date.now() - queuedAt;
   const cooperative = cmd.cwd === "." && policy.cooperativeCommands.includes(cmd.command);
   const profile = cmd.cwd === "." ? policy.profiles[cmd.command] ?? {} : {};
   // Occupy this command's local slot even while it waits on the host. Otherwise
@@ -198,6 +200,7 @@ async function execute(cmd, index) {
       const minWorkers = Math.max(1, Math.min(workers, profile.minWorkers ?? Math.ceil(workers / 4)));
       ticket = scheduler.enqueue({ owner, workers, minWorkers, memoryMiB: Math.max(1, Math.min(capacity.memoryMiB, profile.memoryMiB ?? workers * 1024)), resources });
       tickets.add(ticket);
+      const hostQueuedAt = Date.now();
       let published = false;
       while (true) {
         const status = scheduler.poll(ticket);
@@ -214,11 +217,13 @@ async function execute(cmd, index) {
         result.queuedMs = Date.now() - queuedAt;
         if (stopping) throw new Error("Validation was cancelled while queued");
         if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
-        if (result.queuedMs >= QUEUE_TIMEOUT_MS) throw new Error("Host capacity wait expired; command did not run");
+        if (Date.now() - hostQueuedAt >= QUEUE_TIMEOUT_MS) throw new Error("Host capacity wait expired; command did not run");
         await delay(100);
       }
     }
     result.queuedMs = Date.now() - queuedAt;
+    // A cooperative runner reports only its own host wait; keep the local wait.
+    const localQueuedMs = result.queuedMs;
     if (stopping) throw new Error("Validation was cancelled before execution");
     if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
     if (!headMatches()) {
@@ -246,6 +251,7 @@ async function execute(cmd, index) {
   }
   for (const stream of streams) result[stream.name + "Path"] = path.relative(root, stream.file).split(path.sep).join("/");
   result.status = "running";
+  delete result.queueReason;
   result.startedAt = new Date().toISOString();
   const started = performance.now();
   persist();
@@ -302,7 +308,7 @@ async function execute(cmd, index) {
         lastProgressAt = readAt;
         result.status = value.state === "queued" ? "queued" : "running";
         result.durationMs = value.executionMs;
-        result.queuedMs = value.queuedMs;
+        result.queuedMs = localQueuedMs + value.queuedMs;
         result.executionUpdatedAt = new Date(value.heartbeat).toISOString();
         result.queueReason = typeof value.queueReason === "string" && value.queueReason.length > 0 && value.queueReason.length <= 1024 ? value.queueReason : undefined;
         const job = active.get(cmd.id);
@@ -495,6 +501,9 @@ async function main() {
       repeats.add(index);
     }
     const pending = new Set(commands.map((_, i) => i));
+    const readyAt = new Map();
+    const exclusive = resources => resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource));
+    const conflicts = (a, b) => exclusive(a.resources) || exclusive(b.resources) || a.resources.some(resource => b.resources.includes(resource));
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
         const cmd = commands[index];
@@ -526,12 +535,22 @@ async function main() {
           continue;
         }
         const jobs = Array.from(active.values());
+        if (!readyAt.has(index)) readyAt.set(index, Date.now());
         // Host admission governs load; this bound only keeps one review from
         // flooding the host queue. Two heavy or four light commands at once.
-        if (jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > LOCAL_WEIGHT_BUDGET) continue;
-        if (jobs.some(job => cmd.resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource)) || job.cmd.resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource)) || cmd.resources.some(resource => job.cmd.resources.includes(resource)))) continue;
+        const overBudget = jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > LOCAL_WEIGHT_BUDGET;
+        const blockers = jobs.filter(job => conflicts(cmd, job.cmd)).map(job => job.cmd.id);
+        if (overBudget || blockers.length) {
+          const result = run.results[index];
+          result.status = "queued";
+          result.queuedMs = Date.now() - readyAt.get(index);
+          result.queueReason = blockers.length
+            ? "Waiting for " + blockers.join(", ") + " to release a shared workspace resource"
+            : "Waiting for this review's local command budget";
+          continue;
+        }
         pending.delete(index);
-        const task = execute(cmd, index).catch(() => {
+        const task = execute(cmd, index, readyAt.get(index)).catch(() => {
           run.error = "Validation execution or artifact capture failed";
           stop(run.error);
         }).finally(() => tasks.delete(task));

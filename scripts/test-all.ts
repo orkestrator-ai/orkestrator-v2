@@ -22,8 +22,12 @@
  * failing group: with concurrency the others have already run anyway, so
  * reporting every failure saves a second full run.
  *
- * Slow area suites run only when the change can reach them; see
- * `test-areas.ts`. CI runs them all through `mise run test:full`.
+ * Tests that wait on real processes, servers, or wall-clock time form the slow
+ * tier (`test-tiers.ts`). The default run leaves them out; `mise run test:slow`
+ * runs only them, and CI runs both through `mise run test:full`.
+ *
+ * Only one complete aggregate run holds the host at a time (see
+ * `test-admission.ts`); overlapping suites slowed each other into timeouts.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -48,7 +52,7 @@ import { pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import { createGzip } from "node:zlib";
 import { createTestAdmission } from "./test-admission";
-import { areaIgnoreEnvironment, selectTestAreas, type AreaDecision } from "./test-areas";
+import { testTier, tierArguments, type TestTier } from "./test-tiers";
 
 const root = path.resolve(import.meta.dir, "..");
 
@@ -91,8 +95,6 @@ export interface TestAllDependencies {
   /** Logical cores, used to size the per-group worker pools. */
   cores: number;
   log: (message: string) => void;
-  /** Decides which area suites this change can reach (see `test-areas.ts`). */
-  selectAreas: (root: string, env: NodeJS.ProcessEnv) => AreaDecision[];
 }
 
 export const TEST_LOG_DIRECTORY_ENV = "ORKESTRATOR_TEST_LOG_DIR";
@@ -692,7 +694,6 @@ const defaultDependencies: TestAllDependencies = {
   root,
   cores: availableParallelism(),
   log: (message) => process.stdout.write(`${message}\n`),
-  selectAreas: (repositoryRoot, env) => selectTestAreas({ root: repositoryRoot, env }),
 };
 
 /**
@@ -758,10 +759,10 @@ export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
 export const BACKEND_WORKERS_ENV = "ORKESTRATOR_BACKEND_TEST_WORKERS";
 
 /**
- * Keep port-reservation and subprocess-deadline suites at the previous pool size
- * until their higher-concurrency failure rate has been measured on an idle host.
+ * The backend package is the long pole of the default tier. Its subprocess and
+ * wall-clock suites now run in the slow tier, so the rest gets a larger pool.
  */
-export const MAX_BACKEND_TEST_WORKERS = 2;
+export const MAX_BACKEND_TEST_WORKERS = 4;
 export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 /**
@@ -810,12 +811,32 @@ export function planWorkers(cores: number): WorkerPlan {
   return { workspace, backend, workspaceConcurrency, root, bridges };
 }
 
+/**
+ * Root test discovery. A bare `tests` is a Bun substring filter and also
+ * matches packages/*\/tests. Explicit relative paths confine discovery to the
+ * repository's root tests and prevent package build/test races.
+ */
+const ROOT_TEST_PATHS = [
+  "./tests",
+  "./e2e/agent-testing/artifact-sanitizer.test.ts",
+  "./e2e/agent-testing/design-live-usage.test.ts",
+  "./e2e/agent-testing/design-live-heartbeat.test.ts",
+  "./e2e/agent-testing/paused-interactions-live-support.test.ts",
+  "./e2e/agent-testing/mcp-apply-live-support.test.ts",
+  "./e2e/agent-testing/mcp-apply-live-safety.test.ts",
+  "./e2e/agent-testing/idle-observation-live-support.test.ts",
+  "./e2e/agent-testing/coordinator-mail-tiles.test.ts",
+  "./e2e/agent-testing/bridge-builds-setup.test.ts",
+  "./scripts/opencode-live-compatibility-probe.test.ts",
+  "./test-fixtures/agent-project/server.test.ts",
+];
+
 export function buildConcurrentGroups(
   cores: number,
   affected = false,
   timingsDirectory?: string,
-  /** Package-script variables that leave unselected area suites out. */
-  areaEnvironment: Record<string, string> = {},
+  /** Which test files run; package scripts read the same tier from the environment. */
+  tier: TestTier = "default",
 ): TestGroup[] {
   const workers = planWorkers(cores);
   // Groups may queue on tiny hosts, but no individual child may exceed the
@@ -829,7 +850,8 @@ export function buildConcurrentGroups(
     workers.backend + workers.workspace * (workers.workspaceConcurrency - 1),
   );
   const changedArguments = affected ? ["--changed=main", "--pass-with-no-tests"] : [];
-  return [
+  const rootSelection = tierArguments(tier, root, ".", ROOT_TEST_PATHS);
+  const groups: (TestGroup | false | undefined)[] = [
     {
       name: "workspace (web, backend, desktop, web-public, cli, protocol, toolchain)",
       workers: workspaceReservation,
@@ -854,32 +876,17 @@ export function buildConcurrentGroups(
         ...(affected ? ["--affected"] : []),
       ],
       env: {
-        ...areaEnvironment,
         [WORKSPACE_WORKERS_ENV]: String(workers.workspace),
         [BACKEND_WORKERS_ENV]: String(workers.backend),
       },
     },
-    {
+    rootSelection && {
       name: "root and agent-support tests",
       workers: workers.root,
       command: "bun",
-      // A bare `tests` is a Bun substring filter and also matches
-      // packages/*/tests. An explicit relative path confines discovery to the
-      // repository's root tests and prevents package build/test races.
       args: [
         "test",
-        "./tests",
-        "./e2e/agent-testing/artifact-sanitizer.test.ts",
-        "./e2e/agent-testing/design-live-usage.test.ts",
-        "./e2e/agent-testing/design-live-heartbeat.test.ts",
-        "./e2e/agent-testing/paused-interactions-live-support.test.ts",
-        "./e2e/agent-testing/mcp-apply-live-support.test.ts",
-        "./e2e/agent-testing/mcp-apply-live-safety.test.ts",
-        "./e2e/agent-testing/idle-observation-live-support.test.ts",
-        "./e2e/agent-testing/coordinator-mail-tiles.test.ts",
-        "./e2e/agent-testing/bridge-builds-setup.test.ts",
-        "./scripts/opencode-live-compatibility-probe.test.ts",
-        "./test-fixtures/agent-project/server.test.ts",
+        ...rootSelection,
         "--only-failures",
         ...changedArguments,
         ...(timingsDirectory
@@ -913,7 +920,7 @@ export function buildConcurrentGroups(
       ],
       env: { [WORKSPACE_WORKERS_ENV]: "1" },
     },
-    {
+    tier !== "slow" && {
       // Always validates the committed TypeScript lockfile. On developer
       // machines with the pinned binary it additionally regenerates and checks
       // the full TypeScript + JSON Schema contract. Minimal CI environments may
@@ -926,25 +933,7 @@ export function buildConcurrentGroups(
       env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
     },
   ];
-}
-
-/**
- * Logs each area decision and returns the variables that skip unselected
- * areas. A selection failure runs every area: skipping is only an optimization.
- */
-function selectAreaEnvironment(dependencies: TestAllDependencies): Record<string, string> {
-  try {
-    const decisions = dependencies.selectAreas(dependencies.root, dependencies.env);
-    for (const { area, run, reason } of decisions) {
-      dependencies.log(`${run ? "AREA RUN" : "AREA SKIP"} ${area.name}: ${reason}`);
-    }
-    return areaIgnoreEnvironment(decisions);
-  } catch (error) {
-    dependencies.log(
-      `AREA RUN all: selection failed (${error instanceof Error ? error.message : String(error)})`,
-    );
-    return {};
-  }
+  return groups.filter((group): group is TestGroup => Boolean(group));
 }
 
 function formatDuration(ms: number): string {
@@ -954,10 +943,16 @@ function formatDuration(ms: number): string {
 export async function runAllTests(overrides: Partial<TestAllDependencies> = {}): Promise<number> {
   const dependencies = { ...defaultDependencies, ...overrides };
   const usesDefaultRunner = dependencies.runGroup === defaultRunGroup;
+  const affected = dependencies.env[TEST_AFFECTED_ENV] === "1";
+  let tier: TestTier;
   let admission: ReturnType<typeof createTestAdmission> | undefined;
   try {
+    tier = testTier(dependencies.env);
     if (usesDefaultRunner)
-      admission = createTestAdmission(dependencies.root, dependencies.env, dependencies.log);
+      admission = createTestAdmission(dependencies.root, dependencies.env, dependencies.log, {
+        // Affected runs are small; complete runs queue behind each other.
+        exclusiveSuite: !affected && dependencies.env[TEST_ALLOW_CONCURRENT_ENV] !== "1",
+      });
   } catch (error) {
     dependencies.log(`INCOMPLETE: ${error instanceof Error ? error.message : String(error)}`);
     return 75;
@@ -1017,7 +1012,6 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
 
   try {
     await pruneExpiredTestLogDirectories().catch(() => undefined);
-    const affected = dependencies.env[TEST_AFFECTED_ENV] === "1";
     const timingsDirectory =
       dependencies.env[TEST_TIMINGS_DIRECTORY_ENV] ||
       (usesDefaultRunner ? createTestTimingsDirectory(dependencies.root) : undefined);
@@ -1025,7 +1019,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
       admission?.capacity.workers ?? dependencies.cores,
       affected,
       timingsDirectory,
-      selectAreaEnvironment(dependencies),
+      tier,
     );
     const configuredLogDirectory = dependencies.env[TEST_LOG_DIRECTORY_ENV];
     const logDirectory = usesDefaultRunner
@@ -1060,8 +1054,13 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     if (timingsDirectory) runEnvironment[TEST_TIMINGS_DIRECTORY_ENV] = timingsDirectory;
 
     dependencies.log(
-      `Running ${groups.length} ${affected ? "affected " : ""}test groups concurrently…`,
+      `Running ${groups.length} ${affected ? "affected " : ""}${tier}-tier test groups concurrently…`,
     );
+    if (tier === "default") {
+      dependencies.log(
+        "Slow-tier tests (real processes, servers, or wall-clock waits) are not included; run them with `mise run test:slow`.",
+      );
+    }
     const startedAt = Date.now();
     let completedCount = 0;
 

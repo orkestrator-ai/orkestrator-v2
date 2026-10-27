@@ -4,13 +4,26 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { CommandResult, TestGroup } from "./test-all";
 
+/**
+ * Host resource held by every group of a complete aggregate run. Groups of one
+ * run share it (same admission cohort); another worktree's complete run waits
+ * until none of them is running. Overlapping full suites made each slower than
+ * running them back to back and pushed subprocess tests into timeouts.
+ */
+export const AGGREGATE_SUITE_RESOURCE = "host:aggregate-test-suite";
+
 /** Per-invocation projection; the host database remains admission authority. */
 export function createTestAdmission(
   root: string,
   env: NodeJS.ProcessEnv,
   log: (line: string) => void,
-  clock: () => number = () => performance.now(),
+  options: {
+    clock?: () => number;
+    /** Hold {@link AGGREGATE_SUITE_RESOURCE} so complete runs never overlap. */
+    exclusiveSuite?: boolean;
+  } = {},
 ) {
+  const clock = options.clock ?? (() => performance.now());
   if (env.ORKESTRATOR_TEST_PARENT_RESERVATION) {
     throw new Error(
       "Nested aggregate validation requires this exact command in .orkestrator-test-scheduler.json; no tests were started (avoided double reservation)",
@@ -40,6 +53,9 @@ export function createTestAdmission(
   });
   const capacity = scheduler.capacity();
   const owner = scheduler.owner(root);
+  const suiteResources = options.exclusiveSuite
+    ? scheduler.resources(owner, [AGGREGATE_SUITE_RESOURCE])
+    : [];
   type AdmissionJob = { state: "queued" | "running"; queueReason?: string };
   const jobs = new Map<string, AdmissionJob>();
   const channel = env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
@@ -126,6 +142,7 @@ export function createTestAdmission(
             : [
                 "worktree:" + owner + ":" + group.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 70),
                 ...resources,
+                ...suiteResources,
               ],
         });
         advanceClock();

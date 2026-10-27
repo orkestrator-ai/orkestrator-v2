@@ -55,6 +55,7 @@ function runShell(
 }
 
 const AGENT_HELPER_SED =
+  "/^staged_input_path() {/,/^}$/p; " +
   "/^log_progress() {/,/^}$/p; " +
   "/^agent_copy_warn() {/,/^}$/p; " +
   "/^report_agent_copy_skips() {/,/^}$/p; " +
@@ -434,7 +435,7 @@ describe("container runtime environment wiring", () => {
   test("container startup copies only bounded Pi configuration state", () => {
     const entrypoint = section(
       read("docker/entrypoint.sh"),
-      "if [ -d /pi-config/agent ]; then",
+      'if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then',
       "report_agent_copy_skips Pi",
     );
 
@@ -483,7 +484,7 @@ describe("container runtime environment wiring", () => {
       const entrypoint = read("docker/entrypoint.sh");
       const piSection = section(
         entrypoint,
-        "if [ -d /pi-config/agent ]; then",
+        'if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then',
         "report_agent_copy_skips Pi",
       );
       const guard = piSection.match(
@@ -510,7 +511,7 @@ describe("container runtime environment wiring", () => {
       chmodSync(join(source, "mcp.json"), 0o644);
       const piSection = section(
         read("docker/entrypoint.sh"),
-        "if [ -d /pi-config/agent ]; then",
+        'if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then',
         "report_agent_copy_skips Pi",
       );
       const guard = piSection.match(

@@ -1,3 +1,4 @@
+import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
 import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
@@ -2308,6 +2309,8 @@ export function parseIpTokens(output: string): string[] {
 export async function ensureContainerAgentToolsHost(
   containerId: string,
   signal?: AbortSignal,
+  /** RootlessKit's host address when the reachability check chose it; else the network gateway. */
+  hostAddress?: string | null,
 ): Promise<void> {
   let existing = await dockerExec(
     containerId,
@@ -2366,19 +2369,30 @@ export async function ensureContainerAgentToolsHost(
     return;
   }
 
-  const { stdout } = await runCommand(
-    "docker",
-    [
-      "inspect",
-      "--format",
-      "{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}",
-      // A runtime that joined its egress gateway's namespace has no network
-      // endpoint of its own; /etc/hosts is the gateway's, shared.
-      await networkOwnerContainer(containerId),
-    ],
-    { timeoutMs: 10_000, signal },
-  );
-  const gateway = parseIpTokens(stdout)[0];
+  // An absent discovery result is not evidence that RootlessKit's working
+  // alias is stale. Boot probes run in the background and later checks can
+  // fail transiently; preserve this concrete alias until a target is known.
+  if (!hostAddress && parseIpTokens(existing).includes(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS)) {
+    const topology = await detectDockerTopology();
+    if (topology.rootless || topology.kind === "unavailable") return;
+  }
+
+  let gateway = hostAddress;
+  if (!gateway) {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "inspect",
+        "--format",
+        "{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}",
+        // A runtime that joined its egress gateway's namespace has no network
+        // endpoint of its own; /etc/hosts is the gateway's, shared.
+        await networkOwnerContainer(containerId),
+      ],
+      { timeoutMs: 10_000, signal },
+    );
+    gateway = parseIpTokens(stdout)[0];
+  }
   if (!gateway) {
     throw new Error(`Could not determine the Docker host gateway for container ${containerId}`);
   }
@@ -2420,7 +2434,11 @@ export async function resolveContainerAgentToolConnection(
     containerId,
   );
   if (!environment) return undefined;
-  await ensureContainerAgentToolsHost(containerId);
+  await ensureContainerAgentToolsHost(
+    containerId,
+    undefined,
+    context.containerHostReachability?.containerHostAddress?.(),
+  );
   await ensureContainerHostServicePorts(containerId, context.agentTools.servicePort?.() ?? null);
   // Evidence, not a gate: an interactive agent can still work without its
   // Orkestrator tools, so a blocked path is logged and raised in the app

@@ -65,6 +65,14 @@ describe("environment inputs section", () => {
     });
   }
 
+  test("warns when a rootless container cannot read its staged inputs", async () => {
+    install({ get_environment_inputs: () => ({ ...staged, unreadableOnRootless: true }) });
+    render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Docker runs rootless");
+    expect(alert.textContent).toContain("Rebuild it on a current image");
+  });
+
   test("explains a legacy container's whole-home mounts", async () => {
     install({ get_environment_inputs: () => ({ ...staged, mode: "host-mounts", providers: [] }) });
     render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);

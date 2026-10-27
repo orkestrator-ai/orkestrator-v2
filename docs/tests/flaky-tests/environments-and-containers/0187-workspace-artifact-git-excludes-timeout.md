@@ -268,6 +268,19 @@ The unchanged owning file then passed `mise run test:logged -- --name merge-clea
 
 - **Consolidation (2026-10-20):** the per-process data directory and the copied origin/worktree template were moved from the owning test files into `apps/backend/tests/command-fixtures.ts`, so every command-fixture file now gets its own data directory (removed in the fixture's `afterAll` after cancelling scheduled cleanup and closing the ledger). The 28 command-fixture files plus the coordinator and worktree-snapshot owners passed together afterwards: 582 passed, 1 skipped, 0 failed.
 
+## Recurrence — 2026-10-26
+
+- Todo 0211 branch (`fdcb5345d`, which does not touch `apps/backend`):
+  `mise run test` on a shared macOS host at load average 23–30 failed this
+  case at 13,448 ms with "a beforeEach/afterEach hook timed out for this
+  test." The complete unchanged owner then passed alone
+  (`mise run test:logged -- --name 0211-commands-integration-owner -- bun test --cwd apps/backend ./tests/commands-integration.test.ts --parallel=1`,
+  28.7 s). It did not fail in a full `mise run test` or a focused rerun on a
+  detached `origin/main` (`ce205ad34`) worktree under the same load.
+- Reopened: the 2026-10-20 fix removed one cause, but the case still misses
+  its hook deadline in a loaded aggregate. Cause not established. See
+  [1101](../aggregate-validation-runs/1101-codex-typed-prompts-0211-validation.md).
+
 ## Recurrence during 0247 validation (2026-10-27 follow-up)
 
 The review of `b74e02ce0` captured the same artifact-excludes case timing out

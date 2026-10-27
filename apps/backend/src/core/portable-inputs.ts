@@ -934,6 +934,31 @@ export function accessOnlyLoginText(
   return "text" in restricted ? restricted.text : undefined;
 }
 
+/**
+ * Where an image's root entrypoint relays a staged mount `node` cannot read
+ * (`staged-inputs` 3, `relay_staged_inputs` in
+ * `docker/network-policy-entrypoint.sh`): under rootless Docker the backend's
+ * user is container root. Each mount keeps its target path below it.
+ */
+export const STAGED_INPUT_RELAY_DIR = "/run/orkestrator-inputs";
+
+/**
+ * The relayed copies of one provider's staged mounts inside a container.
+ * Revocation removes them with the imported files, because a running
+ * container keeps its relay until its next boot rebuilds it.
+ */
+export function stagedInputRelayPaths(provider: ProviderInputSpec["provider"]): string[] {
+  const spec = portableInputSpec({ home: "/", agentTest: false }).find(
+    (entry) => entry.provider === provider,
+  );
+  if (!spec) return [];
+  const targets = [
+    ...spec.directories.map((source) => source.target),
+    ...spec.files.map((file) => file.target),
+  ];
+  return [...new Set(targets)].map((target) => `${STAGED_INPUT_RELAY_DIR}${target}`);
+}
+
 /** Docker arguments binding exactly the staged subtrees, read-only. */
 export function stagedInputMountArguments(staged: StagedInputs): string[] {
   // `--mount` (unlike `-v`) fails on a missing source instead of creating a

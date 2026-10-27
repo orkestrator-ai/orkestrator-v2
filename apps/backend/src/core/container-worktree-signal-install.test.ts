@@ -44,6 +44,26 @@ describe("worktree signal install", () => {
     });
   });
 
+  test("forwards the selected RootlessKit host address and cancellation signal", async () => {
+    const calls: unknown[][] = [];
+    const signal = new AbortController().signal;
+    const installer = createContainerWorktreeSignalInstaller({
+      ensureHost: async (...args) => {
+        calls.push(args);
+      },
+      ensurePorts: async () => undefined,
+      exec: async () => ({ stdout: "", stderr: "" }),
+    });
+    await installer.install(
+      "container-1",
+      { ...credential, revoke: () => undefined },
+      { containerHostReachability: { containerHostAddress: () => "10.0.2.2" } } as never,
+      () => true,
+      signal,
+    );
+    expect(calls).toEqual([["container-1", signal, "10.0.2.2"]]);
+  });
+
   for (const stage of ["host", "ports", "exec"] as const) {
     for (const outcome of ["closed", "failed"] as const) {
       test(`${outcome} during ${stage} preparation stops installation and preserves lineage health`, async () => {

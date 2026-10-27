@@ -38,9 +38,11 @@ export const IMAGE_CAPABILITIES = {
   /**
    * Portable inputs staged by the backend instead of whole-home mounts (step
    * 08). Version 2 also copies Cursor's `~/.cursor/mcp.json` from
-   * `/cursor-config` (`CURSOR_MCP_STAGED_INPUTS_VERSION`).
+   * `/cursor-config` (`CURSOR_MCP_STAGED_INPUTS_VERSION`). Version 3 relays a
+   * mount the workload user cannot read, as under rootless Docker, through
+   * the root entrypoint (`STAGED_INPUT_RELAY_VERSION`).
    */
-  "staged-inputs": 2,
+  "staged-inputs": 3,
   /**
    * Per-environment network with explicit host service rules and IPv6 policy
    * (step 09, version 2); allowed traffic as address, protocol and port tuples
@@ -87,6 +89,21 @@ export function imageCopiesCursorMcpConfig(
   capabilities: Partial<Record<ImageCapability, number>> | null | undefined,
 ): boolean {
   return (capabilities?.["staged-inputs"] ?? 0) >= CURSOR_MCP_STAGED_INPUTS_VERSION;
+}
+
+/**
+ * The `staged-inputs` version from which the image's root entrypoint copies a
+ * staged mount `node` cannot read into a `node`-owned directory the
+ * entrypoint imports from. Under rootless Docker the backend's user is
+ * container root, so an older image gives that container no staged inputs.
+ */
+export const STAGED_INPUT_RELAY_VERSION = 3;
+
+/** Whether an image with these capabilities relays staged inputs `node` cannot read. */
+export function imageRelaysStagedInputs(
+  capabilities: Partial<Record<ImageCapability, number>> | null | undefined,
+): boolean {
+  return (capabilities?.["staged-inputs"] ?? 0) >= STAGED_INPUT_RELAY_VERSION;
 }
 
 export function isImageCapability(value: unknown): value is ImageCapability {

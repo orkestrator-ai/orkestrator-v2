@@ -8,6 +8,8 @@ import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { ContainerHostReachabilityService } from "../src/core/container-host-reachability";
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
 
@@ -44,6 +46,7 @@ const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
 const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
 const originalDockerDesktopGateway = process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
 const originalDockerExplicitHostEntry = process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
+const originalDockerRootless = process.env.FAKE_DOCKER_ROOTLESS;
 const originalDockerGateway = process.env.FAKE_DOCKER_GATEWAY;
 const originalClaudeAgentToolsFingerprint = process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
 const originalCodexAgentToolsFingerprint = process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
@@ -60,6 +63,9 @@ printf 'docker %s\n' "$*" >> "$FAKE_DOCKER_LOG"
 
 if [ "$1" = "info" ]; then
   [ -n "\${FAKE_DOCKER_FAIL_INFO:-}" ] && { echo "$FAKE_DOCKER_FAIL_INFO" >&2; exit 19; }
+  if [ "\${FAKE_DOCKER_ROOTLESS:-}" = "1" ]; then
+    printf '%s\n' '{"OSType":"linux","SecurityOptions":["name=rootless"]}'
+  fi
   exit 0
 fi
 if [ "$1" = "version" ]; then
@@ -456,6 +462,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   for (const key of XDG_KEYS) expect(process.env[key]).toBeUndefined();
+  resetDockerTopologyCache();
+  delete process.env.FAKE_DOCKER_ROOTLESS;
   registry = createCommandRegistry();
   fixture = createContext();
   await fs.writeFile(commandLog, "");
@@ -484,6 +492,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  resetDockerTopologyCache();
+  if (originalDockerRootless === undefined) delete process.env.FAKE_DOCKER_ROOTLESS;
+  else process.env.FAKE_DOCKER_ROOTLESS = originalDockerRootless;
   mock.restore();
 });
 
@@ -1016,6 +1027,64 @@ describe("process and platform command behavior", () => {
     );
     expect(log).toContain("docker exec --user root container-existing");
   });
+
+  test("preserves the RootlessKit alias while the initial host probe is pending", async () => {
+    process.env.FAKE_DOCKER_ROOTLESS = "1";
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.2.2 host.docker.internal\n";
+    process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const service = new ContainerHostReachabilityService({
+      platform: "linux",
+      detectTopology: async () => {
+        await gate;
+        return { kind: "unavailable" };
+      },
+      servicePort: () => 43123,
+      ownerNamespace: "pending-rootless-test",
+      fallbackImage: () => "busybox:1.37",
+      emit: () => undefined,
+      log: { info: () => undefined, warn: () => undefined },
+    });
+    const check = service.check("boot");
+    try {
+      expect(service.containerHostAddress()).toBeNull();
+      await __testing.ensureContainerAgentToolsHost(
+        "container-existing",
+        undefined,
+        service.containerHostAddress(),
+      );
+      expect(await readCommandLog()).not.toContain("docker exec --user root");
+      expect(service.containerHostAddress()).toBeNull();
+    } finally {
+      release();
+      await check;
+    }
+  });
+
+  test("preserves the RootlessKit alias when topology discovery fails", async () => {
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.2.2 host.docker.internal\n";
+    process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+    const log = await readCommandLog();
+    expect(log).not.toContain("docker exec --user root");
+    expect(log).not.toContain("docker inspect --format");
+  });
+
+  for (const existing of ["10.0.2.2", "172.17.0.1"]) {
+    test(`explicit host address overrides the namespace gateway (existing=${existing})`, async () => {
+      process.env.FAKE_DOCKER_HOSTS_OUTPUT = `${existing} host.docker.internal\n`;
+      process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
+      await __testing.ensureContainerAgentToolsHost("container-existing", undefined, "10.0.2.2");
+      const log = await readCommandLog();
+      expect(log.includes("docker exec --user root")).toBe(existing !== "10.0.2.2");
+      // A selected address does not depend on Docker's namespace gateway.
+      expect(log).not.toContain("docker inspect");
+      if (existing !== "10.0.2.2") expect(log).toContain("orkestrator-host-repair 10.0.2.2");
+    });
+  }
 
   test("fails closed when Docker does not report a usable gateway for the alias repair", async () => {
     process.env.FAKE_DOCKER_GATEWAY = "not-an-ip";

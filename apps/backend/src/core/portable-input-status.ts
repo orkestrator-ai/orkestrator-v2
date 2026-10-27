@@ -13,11 +13,18 @@ import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
-import { pruneInputRevisions, readInputsManifest, scrubStagedProvider } from "./portable-inputs.js";
+import {
+  pruneInputRevisions,
+  readInputsManifest,
+  scrubStagedProvider,
+  stagedInputRelayPaths,
+} from "./portable-inputs.js";
 import { CONTAINER_CURSOR_API_KEY_FILE } from "./agent-credential-files.js";
 import { CONTAINER_CURSOR_SDK_AUTH_FILE } from "./cursor-sdk-bridge.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import { imageRelaysStagedInputs } from "@orkestrator/protocol/image-manifest";
+import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
 
 /**
  * Which providers' portable inputs a new container receives: the enabled
@@ -162,6 +169,10 @@ export async function environmentInputStatus(
   const manifest = await readInputsManifest(context.storage.getDataDir(), environmentId, revision);
   if (!manifest) return { ...base, mode: "unknown", revision };
   const staged = new Set(manifest.providers.map((entry) => entry.provider));
+  const unreadableOnRootless = await stagedInputsUnreadableOnRootless(
+    environment.containerId,
+    context,
+  );
   return {
     environmentId,
     mode: "staged",
@@ -173,7 +184,29 @@ export async function environmentInputStatus(
       (provider) => provider !== "git" && !selected.has(provider) && !revoked.includes(provider),
     ),
     revokedProviders: [...revoked],
+    ...(unreadableOnRootless ? { unreadableOnRootless } : {}),
   };
+}
+
+/**
+ * Whether a rootless daemon runs this container from an image whose
+ * entrypoint cannot relay the owner-only staged mounts to `node`. Unknown
+ * (Docker or the manifest unreadable) is not reported as unreadable.
+ */
+async function stagedInputsUnreadableOnRootless(
+  containerId: string,
+  context: Pick<CommandContext, "storage">,
+): Promise<boolean> {
+  if (!(await detectDockerTopology()).rootless) return false;
+  try {
+    const { stdout } = await runCommand("docker", ["inspect", "-f", "{{.Image}}", containerId], {
+      timeoutMs: 10_000,
+    });
+    const capabilities = await imageCapabilities(stdout.trim() || undefined, context);
+    return capabilities !== null && !imageRelaysStagedInputs(capabilities);
+  } catch {
+    return false;
+  }
 }
 
 /** Imported credential files inside a container, per provider. */
@@ -257,9 +290,12 @@ export async function revokeProviderCredentials(
     }
     const immutableSecret = await hasImmutableProviderSecret(containerId, provider);
     const files = IMPORTED_CREDENTIAL_FILES[provider];
+    // A rootless runtime also holds node's relayed copy of the staged mounts.
+    const relayed = stagedInputRelayPaths(provider);
+    const quoted = (paths: readonly string[]) => paths.map((file) => `'${file}'`).join(" ");
     let removed = false;
     try {
-      await dockerExec(containerId, `rm -f ${files.map((file) => `'${file}'`).join(" ")}`);
+      await dockerExec(containerId, `rm -f ${quoted(files)} && rm -rf ${quoted(relayed)}`);
       removed = true;
     } catch {
       removed = false;

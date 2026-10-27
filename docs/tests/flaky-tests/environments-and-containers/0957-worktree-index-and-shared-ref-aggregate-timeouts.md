@@ -46,3 +46,18 @@ hook. The complete owner rerun alone at load average 155,
 failed only the shared-ref case (3 pass, 1 fail, 12.8 s; artifact
 `orkestrator-test-run.hAC4iW`). No assertion, timeout or skip was changed.
 
+
+## Main-merge validation recurrence (2026-10-27)
+
+The merge of `863b578217fca437c37c53372bec7a4f97719079` into
+`711de8869705b8672a214aeb4d82c408a055c2d0` was validated with
+`mise run test:logged -- --name merge-repository-tests -- mise run test`,
+using two backend workers and the concurrent workspace/root/bridge/protocol
+groups. Backend totals were 12,072 passed, 120 skipped, 18 failed and six
+between-test errors across 733 files. The aggregate remains failed; see
+[1013](../aggregate-validation-runs/1013-interactive-command-main-merge-validation.md)
+for all groups and owning-file results. Evidence:
+`orkestrator-test-run.2onpQ5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory.
+
+The file reported an `(unnamed)` beforeEach/afterEach hook timeout at 5000.79 ms, after `killed 4 dangling processes`. The complete unchanged owner passed, exit 0 in 6.1 s, with `mise run test:logged -- --name merge-worktree-snapshots-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`. This records the hook-timeout recurrence already described above, without assigning it to an individual watcher case. Cause remains unconfirmed; no assertion, timeout, skip or implementation changed.

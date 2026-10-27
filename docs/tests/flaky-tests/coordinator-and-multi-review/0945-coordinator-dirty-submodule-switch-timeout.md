@@ -11,3 +11,22 @@
 - **Aggregate evidence:** `orkestrator-test-run.VrI5KW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` (enclosing log `orkestrator-test-run.JFzi7O/full-0048.log.gz`) under the host temporary directory. Backend 11433 passed, 89 skipped and 4 failed across 11526 tests in 680 files (872.95 s); web 9760 passed; root/support, bridges and the Codex protocol lockfile passed. Test groups finished in 942.4 s; the run exited 1.
 - **Related:** resolved cases [0461](0461-coordinator-fetch-remotes-submodule-timeout.md), [0480](0480-coordinator-fetch-remotes-submodule-timeout.md) and [0490](0490-coordinator-fetch-remotes-aggregate-timeout.md) covered the earlier, combined fetch-and-submodule case in the same file.
 - **Hypothesis:** the case builds a real repository with a dirty submodule and runs several Git commands; at load average 50 they exceed five seconds. Unconfirmed. No coordinator code, assertion, deadline or skip changed.
+
+## Main-merge validation recurrence (2026-10-27)
+
+Merging `863b578217fca437c37c53372bec7a4f97719079` into
+`711de8869705b8672a214aeb4d82c408a055c2d0` and running
+`mise run test:logged -- --name merge-repository-tests -- mise run test`
+repeated `project coordinator > a dirty submodule needs enhanced confirmation
+before a discarding switch` at 5113.39 ms. The aggregate used two backend
+workers, with the other repository groups running concurrently. The owner
+and its implementation were outside the original conflict resolution.
+
+The complete unchanged owner passed, exit 0 in 15.3 s:
+`mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`.
+This supports a recurrence of the existing deadline flake; it does not
+establish its cause. No assertion, timeout, skip, or implementation changed.
+Aggregate evidence is in
+`orkestrator-test-run.2onpQ5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory; complete run results are recorded in
+[1013](../aggregate-validation-runs/1013-interactive-command-main-merge-validation.md).

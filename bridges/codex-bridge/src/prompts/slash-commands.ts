@@ -36,27 +36,44 @@ export function resolveConversationMode(body: Record<string, unknown>): Conversa
 // prompt.  The model may not enforce it perfectly and a determined user could
 // override it.  This is acceptable because plan mode is a UX convenience, not
 // a security boundary.
+//
+// The rollout keeps it, so a reload strips it again (`stripPlanModePreamble`).
+// Changing this text leaves the old wording on every earlier plan-mode turn's
+// reload unless the old text is still stripped as well.
+export const PLAN_MODE_PREAMBLE = [
+  "<system-reminder>",
+  "You are in Orkestrator plan mode.",
+  "This turn is planning-only. The user expects analysis, a concrete plan, and optional diffs before any implementation.",
+  "Treat the current session as consultative and read-only.",
+  "Do not claim to have made changes, completed implementation, or written files.",
+  "Do not attempt mutating commands or filesystem writes.",
+  "Inspect the codebase as needed, then produce:",
+  "1. a concise implementation plan,",
+  "2. important risks or open questions,",
+  "3. exact diffs or patch snippets when useful.",
+  "If the user approves the plan later, they will switch you back to build mode in a later turn.",
+  "</system-reminder>",
+].join("\n");
+
+const PLAN_MODE_PREFIX = `${PLAN_MODE_PREAMBLE}\n\n`;
+
 export function wrapPromptForConversationMode(prompt: string, mode: ConversationMode): string {
   if (mode !== "plan") {
     return prompt;
   }
 
-  const preamble = [
-    "<system-reminder>",
-    "You are in Orkestrator plan mode.",
-    "This turn is planning-only. The user expects analysis, a concrete plan, and optional diffs before any implementation.",
-    "Treat the current session as consultative and read-only.",
-    "Do not claim to have made changes, completed implementation, or written files.",
-    "Do not attempt mutating commands or filesystem writes.",
-    "Inspect the codebase as needed, then produce:",
-    "1. a concise implementation plan,",
-    "2. important risks or open questions,",
-    "3. exact diffs or patch snippets when useful.",
-    "If the user approves the plan later, they will switch you back to build mode in a later turn.",
-    "</system-reminder>",
-  ].join("\n");
+  return `${PLAN_MODE_PREFIX}${prompt}`;
+}
 
-  return `${preamble}\n\n${prompt}`;
+/**
+ * Removes the plan-mode preamble `wrapPromptForConversationMode` wrote, for
+ * display. Only the exact preamble and its separator at the very start match,
+ * so a `<system-reminder>` the user typed, or any other text, is left alone.
+ */
+export function stripPlanModePreamble(text: string): string {
+  if (text.startsWith(PLAN_MODE_PREFIX)) return text.slice(PLAN_MODE_PREFIX.length);
+  // A trimmed rollout text loses the separator when nothing followed it.
+  return text === PLAN_MODE_PREAMBLE ? "" : text;
 }
 
 export function buildPromptInput(prompt: string, attachments: PromptAttachmentInput[]): Input {

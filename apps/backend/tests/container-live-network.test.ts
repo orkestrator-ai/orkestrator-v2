@@ -137,6 +137,17 @@ describe("C22 environment networks and narrow host access", () => {
       });
       const sibling = lifecycleEnvironment({ id: `env-${RUN}-b`, networkAccessMode: "full" });
       const { context } = networkContext([restricted, sibling], servicePort);
+      const { ContainerHostReachabilityService } =
+        await import("../src/core/container-host-reachability");
+      const reachability = new ContainerHostReachabilityService({
+        servicePort: () => servicePort,
+        ownerNamespace: owner,
+        fallbackImage: () => IMAGE,
+      });
+      context.containerHostReachability = reachability;
+      // Use the backend's real host discovery before creating either runtime.
+      // RootlessKit's host address differs from the namespace bridge gateway.
+      expect((await reachability.check("manual")).status).toBe("reachable");
       const resolved = await resolveDockerImage(IMAGE);
       if (resolved.kind !== "present") throw new Error("qualification image missing");
 
@@ -203,9 +214,7 @@ describe("C22 environment networks and narrow host access", () => {
 
       // Host: exactly the service port leaves the container; any other host
       // port is rejected by the container firewall itself.
-      expect(LEFT_CONTAINER).toContain(
-        await probe(containerId, `http://host.docker.internal:${servicePort}/`),
-      );
+      expect(await probe(containerId, `http://host.docker.internal:${servicePort}/`)).toBe(0);
       expect(await probe(containerId, `http://host.docker.internal:${otherPort}/`)).toBe(7);
       // Sibling: rejected, not merely unanswered.
       expect(await probe(containerId, `http://${siblingIp}:8080/`)).toBe(7);

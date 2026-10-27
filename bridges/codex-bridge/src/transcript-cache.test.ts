@@ -77,6 +77,19 @@ function countingReducer() {
   };
 }
 
+test("streaming replay awaits asynchronous visitors before advancing", async () => {
+  const path = await createTempTranscript();
+  await writeFile(path, message(1) + message(2));
+  const snapshot = await acquireTranscriptSnapshot(path);
+  let visited = 0;
+  const ok = await forEachTranscriptBatch(snapshot, async (records) => {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    visited += records.length;
+  });
+  expect(ok).toBe(true);
+  expect(visited).toBe(2);
+});
+
 describe("rollout cache: appends and boundaries", () => {
   test("appends only complete new lines across incremental reads", async () => {
     const transcriptPath = await createTempTranscript();

@@ -916,7 +916,7 @@ const RECORDS_PER_REPLAY_YIELD = 2048;
  */
 export async function forEachTranscriptBatch(
   snapshot: TranscriptSnapshot,
-  visit: (records: readonly TranscriptRecord[]) => void,
+  visit: (records: readonly TranscriptRecord[]) => void | Promise<void>,
 ): Promise<boolean> {
   const reader = new SnapshotBlockReader(snapshot);
   let visitedSinceYield = 0;
@@ -928,7 +928,7 @@ export async function forEachTranscriptBatch(
         invalidate(snapshot.path, snapshot.generation);
         return false;
       }
-      visit(records);
+      await visit(records);
       // Resident blocks cost no I/O but still cost the visitor's CPU; a long
       // replay must not hold the event loop for the whole rollout.
       visitedSinceYield += records.length;

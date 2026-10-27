@@ -3,6 +3,7 @@ import {
   AGENT_INTERACTION_HOLD_CEILING_MS,
   type AgentInteractionHold,
 } from "@orkestrator/protocol/agent-interactions";
+import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   BACKUP_SENTINEL_NO_ORIGINAL,
@@ -1058,8 +1059,10 @@ export function titleFromTranscriptHead(head: string, truncated: boolean): strin
           : undefined;
     if (role !== "user") continue;
     const contentField = message?.content ?? record.content;
-    const text = extractTextContent(contentField);
-    if (text?.trim()) return truncateTitle(text.trim(), 80);
+    // Title the session after the user's own words, not the inert reference
+    // material an Orkestrator prompt quotes after them.
+    const text = stripTranscriptAnnotations(extractTextContent(contentField) ?? "").trim();
+    if (text) return truncateTitle(text, 80);
   }
   return null;
 }

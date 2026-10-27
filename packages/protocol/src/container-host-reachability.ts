@@ -8,6 +8,15 @@
  * before workflow stages, and the renderer shows the result.
  */
 
+/**
+ * RootlessKit's address for the host's loopback interface (slirp4netns and
+ * vpnkit). Rootless Docker refuses connections to it unless the daemon runs
+ * with `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`; the
+ * backend uses it for `host.docker.internal` only once a probe through it
+ * succeeded.
+ */
+export const ROOTLESSKIT_HOST_LOOPBACK_ADDRESS = "10.0.2.2";
+
 /** Emitted with a {@link ContainerHostReachability} whenever the snapshot changes. */
 export const CONTAINER_HOST_REACHABILITY_CHANGED_EVENT = "container-host-reachability-changed";
 
@@ -46,6 +55,12 @@ export type ContainerHostProbe = {
   elapsedMs: number;
   /** Bounded, credential-free probe output (wget/curl error text). */
   detail: string | null;
+  /**
+   * The address `host.docker.internal` named in a throwaway probe when it
+   * was not Docker's `host-gateway` (RootlessKit's host loopback). Absent
+   * from older backends.
+   */
+  hostAddress?: string | null;
 };
 
 export type HostFirewallKind = "ufw" | "firewalld" | "nftables" | "iptables" | "unknown";
@@ -94,6 +109,14 @@ export type ContainerHostReachability = {
   /** Docker network subnets containers use on this host. */
   subnets: string[];
   remediation: ContainerHostRemediation | null;
+  /** The daemon runs rootless (topology probe). Absent from older backends. */
+  dockerRootless?: boolean;
+  /**
+   * What new containers' `host.docker.internal` names when it is not
+   * Docker's `host-gateway`: RootlessKit's host loopback address, once a
+   * probe through it reached the agent tools server. Null otherwise.
+   */
+  hostAddress?: string | null;
 };
 
 export function initialContainerHostReachability(): ContainerHostReachability {
@@ -110,6 +133,8 @@ export function initialContainerHostReachability(): ContainerHostReachability {
     firewall: { kind: "unknown", detail: null },
     subnets: [],
     remediation: null,
+    dockerRootless: false,
+    hostAddress: null,
   };
 }
 

@@ -9,6 +9,7 @@ import {
   ContainerAgentToolsUnreachableError,
   ContainerHostReachabilityService,
   buildContainerHostRemediation,
+  buildRootlessHostRemediation,
   classifyProbeOutput,
   coveringCidrs,
   hostNetworkAddresses,
@@ -64,6 +65,12 @@ describe("classifyProbeOutput", () => {
     expect(
       classifyProbeOutput(
         "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (172.17.0.1): No route to host\nORK_PROBE_RC=1\n",
+      ).outcome,
+    ).toBe("unreachable");
+    // busybox's wording for a route RootlessKit refuses (host loopback disabled).
+    expect(
+      classifyProbeOutput(
+        "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (10.0.2.2): Network unreachable\nORK_PROBE_RC=1\n",
       ).outcome,
     ).toBe("unreachable");
     expect(classifyProbeOutput(BUSYBOX_DNS).outcome).toBe("dns");
@@ -588,5 +595,87 @@ describe("environment container probes and workflow preflight", () => {
     }
     expect(svc.snapshot()).toMatchObject({ status: "blocked", trigger: "recheck" });
     expect(events.at(-1)?.status).toBe("blocked");
+  });
+});
+
+// Captured on Docker 29.9.1 rootless (RootlessKit 3.3.0, slirp4netns):
+// host-gateway names the bridge inside RootlessKit's namespace, and 10.0.2.2
+// is refused while host loopback is disabled.
+const ROOTLESS_GATEWAY_REFUSED =
+  "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (172.17.0.1): Connection refused\nORK_PROBE_RC=1\n";
+const ROOTLESS_LOOPBACK_DISABLED =
+  "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (10.0.2.2): Network unreachable\nORK_PROBE_RC=1\n";
+const viaLoopback = (args: string[]) => args.includes("host.docker.internal:10.0.2.2");
+
+describe("rootless Docker", () => {
+  const rootless = async () => ({ kind: "local-engine" as const, rootless: true });
+
+  test("RootlessKit's host loopback is chosen for host.docker.internal once it answers", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result).toMatchObject({
+      status: "reachable",
+      dockerRootless: true,
+      hostAddress: "10.0.2.2",
+      remediation: null,
+    });
+    expect(result.summary).toContain("RootlessKit's host loopback (10.0.2.2)");
+    // Both networks were probed both ways; the loopback probes say so.
+    expect(result.probes.filter((probe) => probe.hostAddress === "10.0.2.2")).toHaveLength(2);
+    expect(result.probes.filter((probe) => !probe.hostAddress)).toHaveLength(2);
+    expect(svc.containerHostAddress()).toBe("10.0.2.2");
+    expect(await svc.resolveContainerHostAddress()).toBe("10.0.2.2");
+  });
+
+  test("with host loopback disabled the fix is the daemon setting, not a firewall rule", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) =>
+        viaLoopback(args) ? ROOTLESS_LOOPBACK_DISABLED : ROOTLESS_GATEWAY_REFUSED,
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result.status).toBe("blocked");
+    expect(result.hostAddress ?? null).toBeNull();
+    expect(result.summary).toContain("Docker runs rootless");
+    expect(result.remediation).toEqual(buildRootlessHostRemediation(38179));
+    expect(result.remediation?.commands.join("\n")).toContain(
+      "DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false",
+    );
+    expect(result.remediation?.commands.join("\n")).not.toContain("ufw");
+    expect(svc.containerHostAddress()).toBeNull();
+  });
+
+  test("a rootless daemon whose host-gateway answers keeps host-gateway and skips the loopback probes", async () => {
+    const runner = fakeRunner({ probeOutput: () => BUSYBOX_HTTP_405 });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result).toMatchObject({ status: "reachable", dockerRootless: true });
+    expect(result.hostAddress ?? null).toBeNull();
+    expect(runner.calls.some(viaLoopback)).toBe(false);
+  });
+
+  test("a rootful daemon never probes RootlessKit's address", async () => {
+    const runner = fakeRunner({ probeOutput: () => BUSYBOX_TIMEOUT });
+    const { svc } = service({ runner });
+    const result = await svc.check("boot");
+    expect(result.status).toBe("blocked");
+    expect(result.dockerRootless).toBe(false);
+    expect(runner.calls.some(viaLoopback)).toBe(false);
+  });
+
+  test("container creation waits for the first check, bounded", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    // No check has run yet: the call starts one and waits for its verdict.
+    expect(await svc.resolveContainerHostAddress()).toBe("10.0.2.2");
+    const stalled = service({
+      detectTopology: () => new Promise(() => undefined),
+    }).svc;
+    expect(await stalled.resolveContainerHostAddress(20)).toBeNull();
   });
 });

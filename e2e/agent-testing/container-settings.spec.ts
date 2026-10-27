@@ -104,7 +104,7 @@ for (const viewport of [
       });
       await expect(page.getByRole("button", { name: "Rebuild (keeps files)…" })).toBeVisible();
       await expect(page.getByText("Resources", { exact: true })).toBeVisible();
-      await expect(page.getByText("Applied by Docker")).toBeVisible();
+      await expect(page.getByText("Applied by Docker", { exact: true })).toBeVisible();
       await expect(page.getByText("Agent inputs", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Reset container…" })).toBeVisible();
       // A rebuild started outside this page (for example `orkestrator

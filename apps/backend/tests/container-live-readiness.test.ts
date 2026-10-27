@@ -1033,8 +1033,17 @@ describe("C22 live host-service reply", () => {
       });
       cleanups.push(() => other.stop(true));
 
+      const messages: string[] = [];
+      const service = new ContainerHostReachabilityService({
+        servicePort: () => servicePort,
+        ownerNamespace: scene.owner,
+        fallbackImage: () => IMAGE,
+        log: { info: (line) => messages.push(line), warn: (line) => messages.push(line) },
+      });
+      const host = await service.check("manual");
       const environment = lifecycleEnvironment({ id: `env-${RUN}-c22` });
       const fixture = readinessContext(scene, environment, { servicePort });
+      fixture.context.containerHostReachability = service;
       const resolved = await resolveDockerImage(IMAGE);
       if (resolved.kind !== "present") throw new Error("qualification image missing");
       const containerId = await createDockerContainer(environment, fixture.context, {
@@ -1046,19 +1055,15 @@ describe("C22 live host-service reply", () => {
       const { prepareEgressGatewayForStart } = await import("../src/core/egress-gateway");
       await prepareEgressGatewayForStart(containerId);
       await docker(["start", containerId]);
-      await waitForContainerBoot(containerId);
+      try {
+        await waitForContainerBoot(containerId);
+      } catch (error) {
+        // This credential-free boot has no server tokens or provider secrets.
+        throw new Error(
+          `C22 boot failed: ${error}\n${(await containerLogs(containerId)).slice(-8000)}`,
+        );
+      }
 
-      const messages: string[] = [];
-      const service = new ContainerHostReachabilityService({
-        servicePort: () => servicePort,
-        ownerNamespace: scene.owner,
-        fallbackImage: () => IMAGE,
-        log: {
-          info: (line) => messages.push(line),
-          warn: (line) => messages.push(line),
-        },
-      });
-      const host = await service.check("manual");
       const probe = await service.checkEnvironmentContainer(containerId, {
         reason: "qualification",
       });

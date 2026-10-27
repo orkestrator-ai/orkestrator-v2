@@ -76,7 +76,10 @@ for (const modifier of ["Meta", "Control"]) {
     await page.goto("/monaco-runtime");
     const editor = page.getByTestId("monaco-runtime-editor");
     const input = editor.getByRole("textbox", { name: "Editor content" });
-    await expect(input).toBeAttached();
+    // Monaco's lazy chunk can take longer than five seconds under parallel
+    // load (flake 0792). Only startup gets the longer budget; the shortcut
+    // assertions below keep the default deadline.
+    await expect(input).toBeAttached({ timeout: 30_000 });
     await input.focus();
     const value = page.getByTestId("monaco-runtime-value");
     const original = await value.textContent();

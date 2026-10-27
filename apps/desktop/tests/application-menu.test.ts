@@ -217,7 +217,7 @@ describe("desktop application menu", () => {
     expect(windowRadioItems(template).every((item) => item.checked === false)).toBe(true);
   });
 
-  test("View offers Keyboard Shortcuts… with its chord, shown but owned by the renderer", () => {
+  test("View offers Keyboard Shortcuts… with its chord, shown but owned by native input", () => {
     const zoom = mock((_direction: "in" | "out" | "reset") => {});
     const showKeyboardShortcuts = mock((_request: "open" | "toggle") => {});
     const template = createApplicationMenuTemplate({
@@ -242,7 +242,7 @@ describe("desktop application menu", () => {
     ]);
     const item = items.at(-1)!;
     expect(item.accelerator).toBe("CmdOrCtrl+Shift+K");
-    // Display-only on Windows and Linux: the renderer's own handler sees the key.
+    // Display-only on Windows and Linux: main's before-input-event hook owns the key.
     expect(item.registerAccelerator).toBe(false);
 
     const click = item.click as (

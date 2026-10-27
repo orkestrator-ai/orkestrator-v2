@@ -21,6 +21,7 @@
   - `rejected path commit clears the journal and preserves subsequent edits (false)` (added 2026-10-27)
   - `source cleanup failure retains a committed copy for restart retry` (added 2026-10-27)
   - `abandons a final copy without a copied-phase record and repairs the original` (added 2026-10-27, repeat sweep)
+  - `move admission waits for already admitted mutations to settle` (added 2026-10-27, acceptance verification)
 - **Tested revisions:** `1a1ef24f9` to `8268be981` on branch `test-temp-directory-4cd0548cf2b5-r1`, and the unchanged `main` at `ce205ad34` in a second checkout, macOS 27.0 arm64, Bun 1.4.4, checkout on an external volume. The branch changes only this file's teardown (it also settles terminal history) and its temporary-directory names.
 - **Commands:** the 0247 qualification sweep (`TMPDIR=<empty private dir> mise exec -- bun run --cwd apps/backend test:workspace`, two workers), and the owner alone with `mise run test:logged -- --name rerun-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts`, and the same `bun test` in the `main` checkout.
 - **Failures:** each run failed a different subset, every one at Bun's five-second deadline (5,008 to 11,103 ms), usually alongside the registered [0248](0248-move-restart-recovery-submodule-timeout.md), [0291](0291-environment-move-submodule-aggregate-timeout.md) and [0621](0621-environment-move-nested-submodules-aggregate-timeout.md) cases. Host load average was 3 to 37 across the session, from other worktrees' suites; `fseventsd` held a full core.
@@ -106,3 +107,32 @@ also failed: 13 passed, 25 failed and 23 between-test errors across 38 tests in
 289.8 s. This is a retained validation failure, not a new flake classification
 or proof of an idle-host pass. Evidence: `orkestrator-test-run.CUD1YR` and
 `orkestrator-test-run.VXqm94` beneath the host temporary directory.
+
+## 0247 acceptance verification: move admission — 2026-10-27
+
+The acceptance verification of `90c9e205a` reported that
+`move admission waits for already admitted mutations to settle` failed in its
+direct backend sweep outside Turbo (11,995 passed, 115 skipped, 40 failed)
+and in its detached `origin/main` (`863b57821`) owner run; no entry named it.
+Its artifact names were not handed over, so those results are as reported.
+
+Owner reruns of just that case on this branch at `90c9e205a`, host load
+average 173 to 228 from other worktrees' suites:
+
+- `mise run test:logged -- --name env-move-admission-0247 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts -t "move admission waits for already admitted mutations to settle"`
+  failed once at Bun's five-second deadline (5,024.49 ms, load 173), followed
+  by a between-test `fatal: cannot change to '.../ork-env-move-43967-GsYRHU/app'`
+  from `repairWorktree` as the move outlived its removed fixture
+  (`orkestrator-test-run.MTy8v5` under the host temporary directory).
+- The same command passed three times in a row straight afterwards
+  (`env-move-admission-0247-d1` to `-d3`: 4.8 s, 4.1 s, 4.3 s, load 216 to 228).
+- With `--timeout 60000` it passed five of five (3.0 s to 6.5 s), so the case
+  completes; it only crosses the five-second budget.
+
+The test fences a mutation, checks that a move is refused, releases the
+fence, then runs a full copy move with Git repair: the same Git-heavy shape
+as the other names above. It is added to the list; no assertion, timeout or
+skip was changed. This branch's edits to the owner are its teardown
+(bounded history settlement, `finally` removal) and fixture names, not this
+case or `environment-move.ts`.
+

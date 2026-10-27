@@ -426,6 +426,28 @@ Linux/Windows execution and a green, complete repository run remain unverified;
 full browser/Electron/Docker/iOS scenario suites were outside these cleanup
 changes. The real Chromium cleanup regression ran successfully on macOS.
 
+## Acceptance-verification flake registration (2026-10-27)
+
+The acceptance verification of `90c9e205a` (compared with `origin/main` at
+`863b57821`) found two failures with no owner-level flake entry. Both are now
+registered; no assertion, timeout or skip was changed.
+
+| Test | Verification result (as reported) | Owner reruns here, `90c9e205a`, load 173 to 228 | Record |
+| --- | --- | --- | --- |
+| `streamed media in Chromium > (unnamed)` (the `beforeAll` Chromium launch), `media-stream.browser.test.ts` | Timed out at 5,004 ms in `mise run test`; owner passed alone on the branch and `origin/main`. Earlier aggregates 0694, 0801 and 0825 saw the same hook but no owner case existed. | Complete owner passed 3 of 3 (1.5 s, 2.7 s, 1.6 s). | New [1108](../../tests/flaky-tests/design-canvas-and-artifacts/1108-media-stream-chromium-launch-hook-deadline.md); 0825 points to it. |
+| `move admission waits for already admitted mutations to settle`, `environment-move.test.ts` | Failed in the direct backend sweep (11,995 passed, 115 skipped, 40 failed) and in the detached `origin/main` owner run. | Alone: failed once at 5,024.49 ms (load 173), then passed 3 of 3 at the default budget and 5 of 5 with `--timeout 60000`. | Added to [1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md), the environment-move deadline family, and named in its index row. |
+
+The verification also reported the SSH askpass broker assertion failing only
+under the sweep's deliberately long private `TMPDIR`. It reproduced on
+`origin/main` with the same path and passed on both with the host `TMPDIR`,
+because the broker falls back to `/tmp` once its Unix socket path is over the
+OS limit. This is a property of the long sweep path, not a leak or a flake. A
+private-`TMPDIR` sweep should use a short path (for example
+`/tmp/ork0247/tmp`) so socket-creating tests keep their normal path. Not
+reproduced here: `apps/desktop/tests/ssh/askpass.test.ts` passed 8 of 8 under
+a 119-character private `TMPDIR`, so the threshold case is recorded as the
+verification reported it.
+
 ## Needs verification
 
 - The repeat sweep on omarchy-hp (Qualification item 2). On macOS
@@ -447,7 +469,8 @@ changes. The real Chromium cleanup regression ran successfully on macOS.
 ## Assumptions and decisions
 
 Decisions 1 to 8 were made on 2026-10-26 while working through the file;
-9 and 10 on 2026-10-27, for the leaks the verification sweep found.
+9 and 10 on 2026-10-27, for the leaks the verification sweep found; 11 on
+2026-10-27, for the acceptance verification's unregistered flakes.
 
 1. **Fix at source, or opt into `tests/temp-sweep.ts`.** Options: (a) find
    each writer and settle it before the removal; (b) rename every prefix to
@@ -487,7 +510,11 @@ Decisions 1 to 8 were made on 2026-10-26 while working through the file;
    it too. Cons: on macOS those suites now run with a longer temporary path
    (Unix socket paths are limited to 104 bytes), which both qualification
    runs covered with an even longer one, with no failure attributable to the
-   path; adding the key changes `turbo.json`, so
+   path (the acceptance verification later saw the SSH askpass broker fall
+   back to `/tmp` under its own, longer private path; it reproduced on
+   `origin/main` and passed with the host `TMPDIR`, see
+   [flake registration](#acceptance-verification-flake-registration-2026-10-27));
+   adding the key changes `turbo.json`, so
    every cached Turbo task re-runs once. `tests/unit/monorepo-scripts.test.ts`
    guards the setting.
 5. **XDG variables in `commands-process-coverage.test.ts`.** Options: (a)
@@ -534,6 +561,16 @@ Decisions 1 to 8 were made on 2026-10-26 while working through the file;
     without the helper can leak again; (c) was not taken because a write
     queued for one home must not land in another (the reason the path is
     resolved at queue time).
+11. **Where the two unregistered flakes go.** Options: (a) a new case for
+    each; (b) a new case for the media-stream hook, which no group owned,
+    and add move admission to 1106, the environment-move deadline family;
+    (c) fix their budgets here. Chose (b): 1108 and an extended 1106. Pros:
+    follows the registry rule that a recurrence updates its case; the
+    media-stream case closes the "no owner case" gap 0694, 0801 and 0825
+    each noted; nothing in the tests is loosened. Cons: 1106 grows to
+    eighteen names; (c) was not taken because neither test's code is in
+    this ticket's scope and a longer budget would hide the host-load signal
+    the records track.
 
 ## Related
 

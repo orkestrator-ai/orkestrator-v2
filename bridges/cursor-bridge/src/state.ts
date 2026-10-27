@@ -278,6 +278,19 @@ export interface SessionState {
   revision: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
+  /**
+   * `promptJournal` still holds every request id this session ever journaled,
+   * in any bridge process, since the session was created. Only then can the
+   * absence of a record prove an id never reached the SDK (`publicDispatch`
+   * answers `absent`).
+   *
+   * True only for a session this bridge created fresh, with a new SDK agent
+   * and an empty journal; an adopted or resumed agent may have been prompted
+   * without it. Cleared for good when any record is evicted, and restored
+   * from disk only from a record that carries it and whose journal loaded
+   * whole (`persistence.ts`). Absent means false.
+   */
+  promptJournalComplete?: boolean;
   steerJournal: Map<string, SteerJournalEntry>;
   /** Encoded bytes `steerJournal` holds. Maintained only by `steer-journal.ts`. */
   steerJournalBytes: number;
@@ -519,6 +532,13 @@ export interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  /**
+   * Written only while `SessionState.promptJournalComplete` holds, and never
+   * as `false`. A bridge that predates the field ignores it on read and, since
+   * its writer names every field it keeps, drops it from every record it
+   * rewrites, so a downgrade cannot leave a stale `true` behind.
+   */
+  promptJournalComplete?: true;
   steerJournal?: SteerJournalEntry[];
   /**
    * `overflow` is the legacy boolean form, still written beside

@@ -17,6 +17,7 @@ import {
   CATALOG_TIMEOUT_MS,
   COMPOSER_HYDRATION_WAIT_MS,
   MAX_BODY_BYTES,
+  MAX_REQUEST_ID_BYTES,
   PROVIDER,
   workingDirectory,
 } from "./config.js";
@@ -40,6 +41,7 @@ import {
   PromptStartupTimeoutError,
   requestTurnCancellation,
   setPromptJournal,
+  withdrawPromptJournal,
   settleCancelledBeforeSend,
 } from "./prompt.js";
 import {
@@ -619,7 +621,11 @@ async function routeSession(
     });
   }
   if (action === "dispatch" && request.method === "GET") {
-    return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));
+    return json(
+      response,
+      200,
+      publicDispatch(state, url.searchParams.get("requestId") || "", isSessionClosed(state)),
+    );
   }
   if (action === "steer" && subject === "dispatch" && request.method === "GET") {
     return json(response, 200, publicSteerDispatch(state, url.searchParams.get("requestId") || ""));
@@ -942,7 +948,7 @@ async function handleSteer(
     workingDirectory,
     state.session?.model?.inputLimits?.images?.resize,
   );
-  const requestId = readBoundedString(body.requestId, 512, "requestId");
+  const requestId = readBoundedString(body.requestId, MAX_REQUEST_ID_BYTES, "requestId");
   const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
   if (!text) throw new HttpError(400, "input is required");
   const session = state.session;
@@ -1229,7 +1235,7 @@ async function handleAdmittedPrompt(
   if (!commandFields.ok) throw new HttpError(400, commandFields.error);
   const { allowProviderCommands, command } = commandFields;
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const requestId = readBoundedString(body.requestId, 512, "requestId");
+  const requestId = readBoundedString(body.requestId, MAX_REQUEST_ID_BYTES, "requestId");
   const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
 
   // Shape validation happens before the turn is claimed: a malformed
@@ -1345,17 +1351,29 @@ async function handleAdmittedPrompt(
         "Pi would read this literal prompt as a command, so it cannot be queued behind the running turn; send it when the session is idle",
       );
     }
-    const images = await readPromptImages(
-      attachments,
-      workingDirectory,
-      session.model?.inputLimits?.images?.resize,
-    );
-    const files = await resolvePromptFiles(attachments, workingDirectory);
-    const text = providerPrompt + promptFileReferences(files);
+    // Journaled in the same synchronous step as the duplicate check above, so
+    // a second request under this id (or a `/dispatch` read) cannot slip into
+    // the attachment reads and dispatch it again.
     if (requestId) {
       setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
-      await persistBarrier();
     }
+    let images: PiPromptImage[];
+    let files: PiPromptFile[];
+    try {
+      images = await readPromptImages(
+        attachments,
+        workingDirectory,
+        session.model?.inputLimits?.images?.resize,
+      );
+      files = await resolvePromptFiles(attachments, workingDirectory);
+      if (requestId) await persistBarrier();
+    } catch (error) {
+      // Nothing was handed to Pi.
+      withdrawPromptJournal(state, requestId);
+      schedulePersist();
+      throw error;
+    }
+    const text = providerPrompt + promptFileReferences(files);
     if (
       state.session !== session ||
       state.status !== "running" ||
@@ -1364,7 +1382,7 @@ async function handleAdmittedPrompt(
       state.compacting ||
       piRunId(state) !== expectedRunId
     ) {
-      if (requestId) state.promptJournal.delete(requestId);
+      withdrawPromptJournal(state, requestId);
       await persistBarrier();
       return json(response, 409, { accepted: false, outcome: "idle" });
     }
@@ -1374,7 +1392,9 @@ async function handleAdmittedPrompt(
         images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
       );
     } catch (error) {
-      if (requestId) state.promptJournal.delete(requestId);
+      // Pi throws before it enqueues: an extension command it will not queue,
+      // or an input handler that failed. The queue push itself cannot throw.
+      withdrawPromptJournal(state, requestId);
       schedulePersist();
       throw error;
     }
@@ -1504,7 +1524,7 @@ async function handleAdmittedPrompt(
     // retry under the same request id.
     state.dispatching = false;
     releasePromptClaim(state, claim);
-    if (requestId) state.promptJournal.delete(requestId);
+    withdrawPromptJournal(state, requestId);
     schedulePersist();
     if (error instanceof CommandUnavailableError) {
       return json(response, 422, commandUnavailableResponse(error.message));
@@ -1571,7 +1591,8 @@ async function handleAdmittedPrompt(
     state.toolInputs.clear();
     state.currentTurnUsage = undefined;
     state.turnStartedAt = undefined;
-    if (requestId) state.promptJournal.delete(requestId);
+    // Refused in preflight: Pi started no run, so the id is still undelivered.
+    withdrawPromptJournal(state, requestId);
     state.revision += 1;
     schedulePersist();
     void runDeferredCommandReload(state).catch(() => undefined);

@@ -485,7 +485,8 @@ function abandonStartup(
       }
       if (input.requestId) {
         if (ran) journal(state, input.requestId, "failed");
-        else state.promptJournal.delete(input.requestId);
+        // Pi refused it in preflight: no run started.
+        else withdrawPromptJournal(state, input.requestId);
       }
       if (ran) recordTurnEnded(state, evidenceTurnId, "failed");
       else forgetEvidenceTurn(state, evidenceTurnId);
@@ -954,8 +955,26 @@ export function setPromptJournal(state: SessionState, entry: PromptJournalEntry)
     const oldest = state.promptJournal.keys().next();
     if (oldest.done) break;
     state.promptJournal.delete(oldest.value);
+    // Whatever its state, the evicted id may have reached Pi, and from now on
+    // "no record" can mean exactly that. `/dispatch` never answers `absent`
+    // for this session again.
+    state.promptJournalComplete = false;
   }
   schedulePersist();
+}
+
+/**
+ * Remove the record of an attempt that provably never reached Pi.
+ *
+ * Only for a rollback before the hand-over (a failed preparation, a durability
+ * barrier that did not publish, a follow-up whose run ended first) or after Pi
+ * refused the prompt in preflight, when no run started. The id is then free for
+ * a first delivery, which is what the route already allows and what keeps the
+ * journal complete. Anything that might have reached Pi is recorded, never
+ * removed with this.
+ */
+export function withdrawPromptJournal(state: SessionState, requestId: string | undefined): void {
+  if (requestId) state.promptJournal.delete(requestId);
 }
 
 /**

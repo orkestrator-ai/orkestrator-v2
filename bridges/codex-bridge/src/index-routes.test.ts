@@ -176,30 +176,36 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
-  test("GET /global/auth rehydrates only the live login display fields, without logging them", async () => {
-    const pendingSignIn = {
-      url: CANARY_LOGIN_URL,
-      code: CANARY_USER_CODE,
-      expiresAt: Date.now() + 60_000,
-    };
-    await withRuntimeMethod(
-      "readAuthStatus",
-      async () => ({
-        account: null,
-        requiresOpenaiAuth: true,
-        pendingSignIn: { ...pendingSignIn, ...tokens },
-      }),
-      async () => {
-        const { result: body, output } = await captureOutput(async () =>
-          (await app.request("/global/auth")).json(),
-        );
-        expectAuthStatusShape(body);
-        expect(body).toMatchObject({ state: "needs-auth", pendingSignIn });
-        expectOnlyLoginSecrets(body, "pending sign-in");
-        expectNothingSecretLogged(output, "pending sign-in");
-      },
-    );
-  });
+  test.each([null, { type: "apiKey" }])(
+    "GET /global/auth rehydrates live login display fields with account %p",
+    async (account) => {
+      const pendingSignIn = {
+        url: CANARY_LOGIN_URL,
+        code: CANARY_USER_CODE,
+        expiresAt: Date.now() + 60_000,
+      };
+      await withRuntimeMethod(
+        "readAuthStatus",
+        async () => ({
+          account,
+          requiresOpenaiAuth: true,
+          pendingSignIn: { ...pendingSignIn, ...tokens },
+        }),
+        async () => {
+          const { result: body, output } = await captureOutput(async () =>
+            (await app.request("/global/auth")).json(),
+          );
+          expectAuthStatusShape(body);
+          expect(body).toMatchObject({
+            state: account ? "signed-in" : "needs-auth",
+            pendingSignIn,
+          });
+          expectOnlyLoginSecrets(body, "pending sign-in");
+          expectNothingSecretLogged(output, "pending sign-in");
+        },
+      );
+    },
+  );
 
   test("POST /global/auth/login returns only the URL and code, and logs neither", async () => {
     await withRuntimeMethod(
@@ -1004,6 +1010,42 @@ describe("session detail route outcomes", () => {
       "never-ran",
       "absent",
       "other-session",
+    ]);
+  });
+
+  test("answers absent only on the runtime's proof, and never over a record", async () => {
+    const asked: Array<[string, string]> = [];
+    await withRuntimeMethod(
+      "getJournal",
+      () => ({
+        get: (requestId: string) =>
+          requestId === "other-session"
+            ? { state: "terminal", bridgeSessionId: "session-2" }
+            : requestId === "unresolved"
+              ? { state: "prepared", bridgeSessionId: "session-1" }
+              : undefined,
+      }),
+      () =>
+        withRuntimeMethod(
+          "promptDispatchAbsent",
+          (sessionId: string, requestId: string) => {
+            asked.push([sessionId, requestId]);
+            return requestId === "never-sent";
+          },
+          async () => {
+            const status = async (requestId: string) =>
+              (await app.request(`/session/session-1/dispatch?requestId=${requestId}`)).json();
+            expect(await status("never-sent")).toEqual({ dispatch: "absent" });
+            expect(await status("not-proven")).toEqual({ dispatch: "unknown" });
+            expect(await status("other-session")).toEqual({ dispatch: "unknown" });
+            expect(await status("unresolved")).toEqual({ dispatch: "unknown" });
+          },
+        ),
+    );
+    // A record settles the answer without asking for a proof of absence.
+    expect(asked).toEqual([
+      ["session-1", "never-sent"],
+      ["session-1", "not-proven"],
     ]);
   });
 
@@ -1843,7 +1885,8 @@ describe("steer route outcomes", () => {
 
   test("maps every steer outcome and trims the request fields", async () => {
     const calls: unknown[] = [];
-    let outcome: "accepted" | "not-found" | "idle" | "mismatch" | "unknown" = "accepted";
+    let outcome: "accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "unavailable" =
+      "accepted";
     await withRuntimeMethod(
       "steerSession",
       async (sessionId: string, input: string, expectedTurnId: string, requestId: string) => {
@@ -1871,6 +1914,8 @@ describe("steer route outcomes", () => {
               requestId: "req-steer",
             },
           ],
+          // A definite refusal, like `closing`: no `outcome` field.
+          ["unavailable", 409, { error: "Dispatch journal is unavailable; the text was not sent" }],
           ["accepted", 202, { status: "accepted" }],
         ] as const;
 

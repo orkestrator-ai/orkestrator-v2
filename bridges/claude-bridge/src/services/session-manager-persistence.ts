@@ -236,7 +236,9 @@ export async function reconcilePersistedSessions(): Promise<void> {
         : {}),
       ...(sessionPreferencesUnavailable(storedPreferences)
         ? { dispatchJournalUnavailable: true }
-        : {}),
+        : storedPreferences?.dispatchJournalComplete === true
+          ? { dispatchJournalComplete: true }
+          : {}),
     });
   }
 }
@@ -299,7 +301,11 @@ export async function materializePersistedSessionState(
     ...(preferences?.localTranscript?.length
       ? { localTranscript: localTranscriptFromPreferences(preferences.localTranscript) }
       : {}),
-    ...(sessionPreferencesUnavailable(preferences) ? { dispatchJournalUnavailable: true } : {}),
+    ...(sessionPreferencesUnavailable(preferences)
+      ? { dispatchJournalUnavailable: true }
+      : preferences?.dispatchJournalComplete === true
+        ? { dispatchJournalComplete: true }
+        : {}),
   };
   touchSession(state);
   sessions.set(sessionId, state);

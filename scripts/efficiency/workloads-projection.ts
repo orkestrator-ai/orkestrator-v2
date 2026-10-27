@@ -22,6 +22,7 @@ import {
   FIXTURE_CREATED_AT,
   nestedAgentPart,
   prose,
+  seededRandom,
   textMessages,
   toolResultPart,
   type FixtureMessage,
@@ -89,6 +90,11 @@ async function loadModules(context: WorkloadContext): Promise<Modules> {
 }
 
 type CallCounts = Record<string, number>;
+type PositionedCursorBefore = (
+  messages: readonly unknown[],
+  startIndex: number,
+  historyCursor: string,
+) => (messageId: string) => string | undefined;
 
 /** A provider stub in the shape the service reads, counting each read method. */
 function stubProvider(methods: Record<string, (...args: never[]) => Promise<unknown>>) {
@@ -200,6 +206,8 @@ function v1Snapshot(modules: Modules, history: { messages: unknown[]; revision: 
 export function v2Methods(
   summary: NonNullable<Modules["summary"]>,
   history: { messages: unknown[]; revision: number },
+  /** The HTTP bridge provider's `historyCursorBefore` mapping, where this root has one. */
+  cursorBefore?: PositionedCursorBefore,
 ) {
   return {
     transcriptSnapshot: async (
@@ -228,7 +236,20 @@ export function v2Methods(
         historyEpoch: "g1:1",
         freshness: "current",
         representation: "summary",
-        ...(value.historyCursor ? { historyCursor: value.historyCursor } : {}),
+        ...(value.historyCursor
+          ? {
+              historyCursor: value.historyCursor,
+              ...(cursorBefore
+                ? {
+                    historyCursorBefore: cursorBefore(
+                      value.messages as unknown[],
+                      value.startIndex as number,
+                      value.historyCursor as string,
+                    ),
+                  }
+                : {}),
+            }
+          : {}),
       };
     },
     transcriptDetail: async (_sessionId: string, locator: string) => {
@@ -446,6 +467,232 @@ export async function historyPagingWorkload(context: WorkloadContext): Promise<W
     method:
       "Real NativeAgentService with a counting stub provider; the joined path mirrors the renderer's Load-earlier bootstrap (forced sync-v1 snapshot, then getMessagePage). Background reads are given 50 ms to land before counting.",
     cases: [joined, direct],
+  };
+}
+
+// --- (o) History cursor coverage ----------------------------------------------------
+
+/**
+ * Tool outputs drawn from one of three mixes. `tiny` is a turn of edits and
+ * short commands, where each output is smaller than the detail reference the
+ * projection puts in its place.
+ */
+type OutputMix = "tiny" | "mixed" | "large";
+
+/** One seeded session: prompts and assistant steps with tool calls. */
+function coverageSession(seed: number, mix: OutputMix): FixtureMessage[] {
+  const random = seededRandom(seed);
+  const between = (low: number, high: number) => low + Math.floor(random() * (high - low + 1));
+  const output = () => {
+    const tiny = mix === "tiny" || (mix === "mixed" && random() < 0.5);
+    return tiny ? between(0, 40) : between(200, 6_000);
+  };
+  return Array.from({ length: between(160, 260) }, (_, index) => {
+    const id = `s${seed}-m${index}`;
+    if (index % 12 === 0) {
+      return {
+        id,
+        role: "user" as const,
+        content: prose(between(40, 600), "ascii", seed + index),
+        parts: [],
+        createdAt: FIXTURE_CREATED_AT,
+      };
+    }
+    const calls = between(0, 24);
+    return {
+      id,
+      role: "assistant" as const,
+      content: prose(between(200, 9_000), "ascii", seed * 7 + index),
+      parts: Array.from({ length: calls }, (_, call) => toolResultPart(`${id}-c${call}`, output())),
+      createdAt: FIXTURE_CREATED_AT,
+    };
+  });
+}
+
+export async function historyCursorCoverageWorkload(
+  context: WorkloadContext,
+): Promise<WorkloadDefinition> {
+  const modules = await loadModules(context);
+  const bridge = await context.loadOptional<{ positionedCursorBefore?: PositionedCursorBefore }>(
+    "apps/backend/src/core/http-bridge-transcript-v2.ts",
+  );
+  const sessions = 40;
+  const coverage = (mix: OutputMix): CaseDefinition => ({
+    id: `bridge-${mix}-outputs`,
+    description: `v2 provider, ${sessions} seeded sessions with ${mix} tool outputs: live view, then one Load earlier`,
+    repetitions: 1,
+    ...(modules.summary
+      ? {
+          run: async () => {
+            const counters = {
+              sessions,
+              directCursor: 0,
+              boundDroppedRows: 0,
+              withoutCursor: 0,
+              withoutCursorIncomplete: 0,
+              mintSnapshots: 0,
+              mintProviderMessages: 0,
+              directPages: 0,
+            };
+            const started = performance.now();
+            for (let seed = 1; seed <= sessions; seed += 1) {
+              const source = { messages: coverageSession(seed, mix), revision: 1 };
+              const { provider, calls, returned } = stubProvider({
+                ...v2Methods(modules.summary!, source, bridge?.positionedCursorBefore),
+                interactiveSnapshot: async () => ({
+                  status: "idle",
+                  messages: source.messages,
+                  messagesComplete: true,
+                }),
+                messages: async () => source.messages,
+              });
+              await withService(modules, provider, async (service) => {
+                const sent = (await (
+                  provider as unknown as {
+                    transcriptSnapshot: (id: string, options: Json) => Promise<Json>;
+                  }
+                ).transcriptSnapshot("provider-session", {
+                  limit: LIVE_WINDOW.messages,
+                  targetBytes: LIVE_WINDOW.targetBytes,
+                })) as { messages: unknown[] };
+                // The probe read above is not part of the measured session.
+                calls.transcriptSnapshot = 0;
+                const update = await service.getTranscriptUpdate({
+                  ...IDENTITY,
+                  viewVersion: 1,
+                  liveWindow: LIVE_WINDOW,
+                  forceSnapshot: true,
+                });
+                const value = (update.value ?? {}) as Json;
+                const shown = (value.messages as unknown[] | undefined)?.length ?? 0;
+                if (shown < sent.messages.length) counters.boundDroppedRows += 1;
+                if (value.historyPaging === "direct" && typeof value.historyCursor === "string") {
+                  counters.directCursor += 1;
+                  // The renderer pages straight from the provider.
+                  await service.getMessagePage({
+                    ...IDENTITY,
+                    syncVersion: 1,
+                    before: value.historyCursor,
+                    limit: 60,
+                  });
+                  counters.directPages += 1;
+                  return;
+                }
+                counters.withoutCursor += 1;
+                if (value.historyComplete === false) {
+                  counters.withoutCursorIncomplete += 1;
+                  // The renderer's click mints a joined cursor (loadEarlierMessages).
+                  const before = returned.messages;
+                  await service.getProjectionUpdate({
+                    ...IDENTITY,
+                    syncVersion: 1,
+                    liveWindow: LIVE_WINDOW,
+                    forceSnapshot: true,
+                  });
+                  counters.mintSnapshots += calls.interactiveSnapshot ?? 0;
+                  counters.mintProviderMessages += returned.messages - before;
+                }
+              });
+            }
+            return { counters, measuredMs: performance.now() - started };
+          },
+        }
+      : { unsupportedReason: "summary transcripts do not exist at this revision" }),
+  });
+  const openCode = await context.loadOptional<{
+    openCodeTranscriptSnapshot: (source: Json, options: Json) => Promise<Json>;
+    openCodeTranscriptPage: (source: Json, options: Json) => Promise<Json>;
+  }>("apps/backend/src/core/opencode-snapshots.ts");
+  const openCodeServer = await context.loadOptional<{
+    openCodeHistoryServer: (
+      count: number,
+      text?: (index: number) => string,
+    ) => {
+      messages: Array<{ info: { id: string }; parts: Json[] }>;
+      read(limit?: number, before?: string): unknown[];
+    };
+  }>("apps/backend/src/core/opencode-history-test-support.ts");
+  const openCodeCoverage: CaseDefinition = {
+    id: "opencode-tiny-outputs",
+    description: `OpenCode snapshots, ${sessions} seeded sessions of steps with short tool outputs: live view`,
+    repetitions: 1,
+    ...(openCode && openCodeServer
+      ? {
+          run: async () => {
+            const counters = { sessions, directCursor: 0, withoutCursorIncomplete: 0 };
+            const started = performance.now();
+            for (let seed = 1; seed <= sessions; seed += 1) {
+              const random = seededRandom(seed);
+              const between = (low: number, high: number) =>
+                low + Math.floor(random() * (high - low + 1));
+              const server = openCodeServer.openCodeHistoryServer(between(160, 260), (index) =>
+                prose(between(200, 9_000), "ascii", seed * 7 + index),
+              );
+              for (const message of server.messages) {
+                for (let call = between(0, 24); call > 0; call -= 1) {
+                  message.parts.push({
+                    id: `tool-${message.info.id}-${call}`,
+                    messageID: message.info.id,
+                    type: "tool",
+                    tool: "bash",
+                    callID: `call-${message.info.id}-${call}`,
+                    state: {
+                      status: "completed",
+                      input: { command: "ls" },
+                      output: "o".repeat(between(0, 40)),
+                      title: "ls",
+                    },
+                  });
+                }
+              }
+              const source = {
+                revision: () => 1,
+                currentMessages: () => undefined,
+                currentMessagesFromStart: () => false,
+                historyEpoch: () => "opencode:1",
+                readMessages: async (limit: number, before?: string) => server.read(limit, before),
+                replaceMessages: () => undefined,
+                title: () => undefined,
+                recordUnknown: () => undefined,
+              };
+              const { provider } = stubProvider({
+                transcriptSnapshot: (_sessionId: string, options: Json) =>
+                  openCode.openCodeTranscriptSnapshot(source, options),
+                transcriptPage: (_sessionId: string, options: Json) =>
+                  openCode.openCodeTranscriptPage(source, options),
+              });
+              await withService(modules, provider, async (service) => {
+                const update = await service.getTranscriptUpdate({
+                  ...IDENTITY,
+                  viewVersion: 1,
+                  liveWindow: LIVE_WINDOW,
+                  forceSnapshot: true,
+                });
+                const value = (update.value ?? {}) as Json;
+                if (value.historyPaging === "direct") counters.directCursor += 1;
+                else if (value.historyComplete === false) counters.withoutCursorIncomplete += 1;
+              });
+            }
+            return { counters, measuredMs: performance.now() - started };
+          },
+        }
+      : { unsupportedReason: "OpenCode direct paging does not exist at this revision" }),
+  };
+  return {
+    id: "o-history-cursor-coverage",
+    title:
+      "History cursor coverage: live views that can page directly, and the joined mints the rest cost",
+    findings: ["0232"],
+    fixture: {
+      sessions,
+      rows: "160-260",
+      stepText: "200-9000 bytes",
+      calls: "0-24 per step",
+      liveWindow: 100,
+    },
+    method:
+      "Real NativeAgentService over a v2 summary provider stub (the same protocol helpers a bridge uses, plus the HTTP bridge provider's cursor mapping where the root has one). Per seeded session: one forced live view; a direct cursor is paged once, otherwise an incomplete view takes the renderer's joined mint (forced sync-v1 snapshot), whose whole-transcript reads are counted.",
+    cases: [coverage("tiny"), coverage("mixed"), coverage("large"), openCodeCoverage],
   };
 }
 

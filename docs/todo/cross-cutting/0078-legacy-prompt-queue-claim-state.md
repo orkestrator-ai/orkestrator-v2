@@ -15,11 +15,11 @@ read.
 
 - Nothing writes `PersistedPromptQueue.outstandingClaim` any more.
 - It is still read: storage validation drops a record with a malformed claim
-  (`storage-shared-core.ts`), `reservePromptQueueHeadForDispatch` refuses to
+  (`storage-shared-records.ts`), `reservePromptQueueHeadForDispatch` refuses to
   reserve while a claim is outstanding (`storage-prompts.ts`), enqueue dedupes
   against the claimed id, web-annotation dispatch and `native-agent-service.ts`
   treat a claimed prompt as queued, and `recoverExpiredPromptQueueClaims`
-  (`storage-native.ts`) puts an expired claim's prompt back at the head at
+  (`storage-prompt-queue-store.ts`) puts an expired claim's prompt back at the head at
   startup and on a lease timer.
 - Each restored claim counts as `prompt-queue.legacy-claim-recovered`
   ([version-compatibility.md](../../architecture/version-compatibility.md#usage-counters)).

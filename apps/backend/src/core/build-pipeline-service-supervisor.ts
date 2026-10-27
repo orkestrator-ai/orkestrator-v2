@@ -81,6 +81,7 @@ import {
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
   addressPrompt,
+  addressValidationInstruction,
   buildPipelineReviewPackageContext,
   buildPipelineReviewPackageId,
   buildPrompt,
@@ -2014,13 +2015,25 @@ export class BuildPipelineSupervisor {
         ),
       });
       return {
-        prompt: prependReviewHandoff(handoff, addressPrompt(pipeline.structuredReview)),
+        prompt: prependReviewHandoff(
+          handoff,
+          addressPrompt(
+            pipeline.structuredReview,
+            addressValidationInstruction(pipeline.reviewPackage, target),
+          ),
+        ),
         images: [],
       };
     }
     if (phase === "verify") {
       return {
-        prompt: verificationPrompt(pipeline, notes, target, worktree),
+        prompt: verificationPrompt(
+          pipeline,
+          notes,
+          target,
+          worktree,
+          await this.latestAddressReport(pipeline),
+        ),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
@@ -2044,6 +2057,31 @@ export class BuildPipelineSupervisor {
       return { prompt: prPrompt(target), images: [] };
     }
     return { prompt: resolveConflictsPrompt(target), images: [] };
+  }
+
+  /**
+   * The final message of this round's address stage: what it fixed after the
+   * recorded validation, what it re-checked, and which failures it excused.
+   * Only an address session after the latest review counts, so an earlier
+   * round's report is never mistaken for evidence about this one.
+   */
+  private async latestAddressReport(pipeline: BuildPipeline): Promise<string | undefined> {
+    let address: PipelineSession | undefined;
+    for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
+      const session = pipeline.sessions[index]!;
+      if (session.phase === "review") break;
+      if (session.phase === "address") {
+        address = session;
+        break;
+      }
+    }
+    if (!address) return undefined;
+    const transcript = await this.ctx.transcriptCheckpoints.window(
+      pipeline.id,
+      address,
+      LAST_ASSISTANT_TEXT_READ_LIMIT,
+    );
+    return lastAssistantText(transcript.entries.map(({ message }) => message));
   }
 
   async finishReview(

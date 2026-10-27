@@ -617,10 +617,17 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     };
   }, [open, accountAgent, accountEnvironmentId, accountKey, accountSessionKey]);
   const auth = accountStatus?.key === accountKey ? accountStatus.status : null;
-  // Which of the machine's accounts the session runs on, as the account
-  // section reads it, so the quota bars can say whose limits they are.
+  // An account read only labels the live projection it was requested for.
+  // A stopped bridge reports its next-start account, while an unreachable
+  // projection can retain the previous account's quotas indefinitely.
   const sessionAccountKey =
-    accountEnvironmentId && accountAgent ? `${accountEnvironmentId}\0${accountAgent}` : undefined;
+    accountEnvironmentId && accountAgent
+      ? JSON.stringify([
+          sessionIdentity,
+          neutralProjection?.generation,
+          neutralProjection?.connection,
+        ])
+      : undefined;
   const [sessionAccount, setSessionAccount] = useState<{
     key: string;
     account: AgentSessionAccount | null;
@@ -634,7 +641,12 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const usageAccountLabel =
     sessionAccountKey &&
     sessionAccount?.key === sessionAccountKey &&
-    sessionAccount.account?.source === "account"
+    sessionAccount.account?.source === "account" &&
+    sessionAccount.account.running &&
+    sessionAccount.account.platform === accountAgent &&
+    neutralProjection?.connection === "connected" &&
+    neutralProjection.platform === accountAgent &&
+    neutralProjection.environmentId === accountEnvironmentId
       ? sessionAccount.account.account?.label
       : undefined;
 
@@ -999,6 +1011,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
               </div>
 
               <AgentInfoAccountSection
+                key={sessionAccountKey}
                 environmentId={activeSession.environmentId}
                 provider={activeSession.provider}
                 open={open}

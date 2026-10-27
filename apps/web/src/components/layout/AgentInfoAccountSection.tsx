@@ -55,7 +55,7 @@ export function AgentInfoAccountSection({
   provider: string;
   open?: boolean;
   refreshKey?: unknown;
-  /** Each read of the account this session runs on, for views that name it. */
+  /** The session's account, or null while a read is pending or unavailable. */
   onSessionAccount?: (session: AgentSessionAccount | null) => void;
 }) {
   if (!isAgentAccountPlatform(provider)) return null;
@@ -107,6 +107,7 @@ function AccountSection({
 
   const load = useCallback(async () => {
     const read = ++latest.current;
+    reportSession.current?.(null);
     try {
       const [nextSession, nextSnapshot] = await Promise.all([
         getNativeAgentSessionAccount(environmentId, platform),
@@ -118,7 +119,10 @@ function AccountSection({
       reportSession.current?.(nextSession);
       setError(null);
     } catch (cause) {
-      if (mounted.current && latest.current === read) setError(messageOf(cause));
+      if (mounted.current && latest.current === read) {
+        reportSession.current?.(null);
+        setError(messageOf(cause));
+      }
     }
   }, [environmentId, platform]);
 

@@ -25,9 +25,13 @@ export async function openMultiReviewTab(
     MultiReviewWorkflow,
     "id" | "projectId" | "environmentId" | "fixTabId" | "fixSession" | "addressPromptPending"
   >,
-  surface: "root" | "fix" = "root",
+  surface: "root" | "fix" | "reviewer" = "root",
   checkOnly = false,
+  /** The reviewer whose read-only transcript subtab to open (`reviewer` only). */
+  reviewerId?: string,
+  reviewerTitle?: string,
 ): Promise<MultiReviewActionResult["ui"]> {
+  if (surface === "reviewer" && !reviewerId) throw new Error("Name the reviewer to open");
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const environment = await storage.getEnvironment(workflow.environmentId);
     if (
@@ -74,7 +78,11 @@ export async function openMultiReviewTab(
         ? tab.type === "multi-review" &&
             data?.workflowId === workflow.id &&
             data.reviewerId === undefined
-        : tab.id === (workflow.fixTabId ?? `multi-review-fix:${workflow.id}`);
+        : surface === "reviewer"
+          ? tab.type === "multi-review" &&
+            data?.workflowId === workflow.id &&
+            data.reviewerId === reviewerId
+          : tab.id === (workflow.fixTabId ?? `multi-review-fix:${workflow.id}`);
     };
     const existingPane = panes.find((pane) => pane.tabs.some(matches));
     const existing = existingPane?.tabs.find(matches);
@@ -89,7 +97,9 @@ export async function openMultiReviewTab(
       (typeof existing?.id === "string" ? existing.id : undefined) ??
       (surface === "root"
         ? `multi-review:${workflow.id}`
-        : (workflow.fixTabId ?? `multi-review-fix:${workflow.id}`));
+        : surface === "reviewer"
+          ? `multi-review:${workflow.id}:reviewer:${reviewerId}`
+          : (workflow.fixTabId ?? `multi-review-fix:${workflow.id}`));
     if (!existing && panes.some((pane) => pane.tabs.some((tab) => tab.id === tabId)))
       throw new Error("The reserved tab ID is already in use");
     if (surface === "fix" && !workflow.fixSession)
@@ -110,14 +120,15 @@ export async function openMultiReviewTab(
     }
     if (!existing)
       pane.tabs.push(
-        surface === "root"
+        surface === "root" || surface === "reviewer"
           ? {
               id: tabId,
               type: "multi-review",
-              displayTitle: "Multi Review",
+              displayTitle: surface === "root" ? "Multi Review" : (reviewerTitle ?? "Reviewer"),
               multiReviewTabData: {
                 environmentId: environment.id,
                 workflowId: workflow.id,
+                ...(surface === "reviewer" ? { reviewerId } : {}),
                 isLocal: environment.environmentType === "local",
               },
             }

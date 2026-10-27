@@ -614,7 +614,9 @@ remain and use the same paths.
   `request_project_on_node` (with an optional location and suggested files)
   creates a request the user reviews in the same copy dialog, where the
   location and files are settled before approving; the outcome wakes the
-  coordinator.
+  coordinator. `request_root_changes` uses the same request flow (kind
+  `apply-root-changes`) for a worker on the coordinator's own node; see
+  [coordinator.md](coordinator.md#worker-surfaces).
 - Creating an environment on a leaf follows the same rules as creating a
   local environment today: a worktree (or container) is made from the
   project, then the project's `.env` files and other files selected in the

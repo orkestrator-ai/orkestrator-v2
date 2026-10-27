@@ -8,6 +8,7 @@ import {
   reviewSelection,
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
+import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
 import {
@@ -36,8 +37,8 @@ import type {
 /**
  * The tools only a coordinator credential has: repository context, workflow
  * associations, worker start and stop, build pipelines, Multi Review status
- * and cancellation, and the node and Multi Review launch tools registered by
- * their own modules. `createControlMcp` registers them through the same
+ * and cancellation, and the node, Multi Review and worker-surface tools
+ * registered by their own modules. `createControlMcp` registers them through the same
  * capability-filtered server as the shared tools.
  */
 
@@ -57,6 +58,7 @@ export function registerCoordinatorWorkflowTools(
   { invoke, coordinatorScope, onNode, environmentInvoker, onNodeResult }: CoordinatorToolContext,
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
+  registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,
     coordinatorId: coordinatorScope.coordinatorId,

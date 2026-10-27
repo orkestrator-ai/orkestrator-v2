@@ -170,7 +170,11 @@ export function registerKanbanCommands(
   // then renders the record; every step after this — environment, bridge,
   // session, dispatch, reply, parse, persist — happens without it.
   register("start_feature_planning", (args, context) => {
-    assertOnlyKeys(args, ["featureId", "kind", "storyId", "userMessage"], "arguments");
+    assertOnlyKeys(
+      args,
+      ["featureId", "kind", "storyId", "userMessage", "operationId"],
+      "arguments",
+    );
     return requireFeaturePlanning(context).start(asStartFeaturePlanningInput(args));
   });
   register("get_feature_planning_snapshot", (args, context) => {

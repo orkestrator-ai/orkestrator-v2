@@ -277,9 +277,24 @@ export async function withTemporaryClaudeHome<T>(
   try {
     return await body(directory);
   } finally {
-    setClaudeHomeForTesting(sessionManagerTestHome);
-    await rm(directory, { recursive: true, force: true });
+    await releaseTemporaryClaudeHome(directory);
   }
+}
+
+/**
+ * Restore the suite-wide Claude home, then remove a private one.
+ *
+ * A preference write resolves its path when it is queued, and a turn queues
+ * some without waiting (the turn-in-flight mark), so one can still be running
+ * against `directory` when the test's body returns. Removing the directory
+ * first lets that write re-create it under `TMPDIR` (0247). Wait for every
+ * queued Claude-home write before the removal.
+ */
+export async function releaseTemporaryClaudeHome(directory: string): Promise<void> {
+  setClaudeHomeForTesting(sessionManagerTestHome);
+  await settleSessionPreferenceWritesForTesting();
+  await terminalSlashCommandWritesForTesting();
+  await rm(directory, { recursive: true, force: true });
 }
 
 export const createdSessionIds: string[] = [];

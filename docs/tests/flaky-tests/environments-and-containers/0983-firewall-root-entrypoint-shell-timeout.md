@@ -30,3 +30,11 @@
 - **Root/support counts:** 3,520 passed, four failed, one error across 3,524 tests in 170 files (438.46 s).
 - **Evidence:** `orkestrator-test-run.pk3f2Z` (inner logs), outer wrapper `orkestrator-test-run.y6ZSym`, below the host temporary directory.
 - **Assessment:** aggregate failure remains reported; assertions, timeouts and skips are unchanged.
+
+## 0247 consolidated-review fixes — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name review-fix-suite -- mise run test`, standard workspace/root/bridge/protocol reservations 4/1/2/1 on the shared macOS host.
+- **Observation:** the unchanged root-entrypoint case timed out at 5006.66 ms, receiving `exitCode: null`. Root/support finished with 3,530 passed and three failed across 3,533 tests in 171 files (293.53 s); the other two failures are the recorded migration-copy assertions.
+- **Owner command:** `mise run test:logged -- --name review-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed in 21.6 s.
+- **Evidence:** inner `orkestrator-test-run.S3DyLI/root-and-agent-support-tests.log`, enclosing `orkestrator-test-run.OHbyVm/review-fix-suite.log` under the host temporary directory (compressed on finalization).
+- **Assessment:** recurrence of the existing aggregate deadline; no firewall code, assertion, timeout or skip changed.

@@ -118,6 +118,7 @@ ignored files. The project home cannot be moved.
 | Orphaned bridge state, empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend orphan sweeps | At start-up and hourly; branches at most daily per project |
 | `<data dir>/legacy-json/<timestamp>/` (JSON stores archived by the one-time SQLite import) | Backend database open | 14 days after the import |
 | `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 6 hourly (taken only after a change), one about 1 and one about 3 days old, and 2 pre-migration kept; none older than 7 days |
+| Artifact preview worker scratch, `ork-artifact-preview-<pid>-*` in the system temp dir | The job itself after a verified exit (which includes any Chromium still running with the scratch as its profile, even one the worker was still launching); otherwise the next backend start with process isolation | At start-up, once the owner has exited or its recorded process start identity differs from the current PID, and the directory is over an hour old. Scratch without a recorded identity uses a day-long limit if its PID is live; names without a PID also use a day. An inspection failure retains recorded scratch for a live PID. |
 | Test temporary directories in the system temp dir | The next test run | Once the creating process has exited and the directory is over an hour old |
 | Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
 

@@ -31,7 +31,7 @@ import {
   sdkSessionInfo,
   sendPrompt,
   sessionIdForClientKey,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   setSessionPreferences,
   updateSessionPreferences,
@@ -161,8 +161,7 @@ describe("session lifecycle", () => {
       followUpCall.finish();
       await followUp;
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -417,8 +416,7 @@ describe("session lifecycle", () => {
       call.finish();
       await promptTask;
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -499,8 +497,7 @@ describe("session lifecycle", () => {
       call.finish();
       await promptTask;
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -551,8 +548,7 @@ describe("session lifecycle", () => {
       expect(firstDispatch).toHaveBeenCalledTimes(1);
       expect(duplicateDispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -594,8 +590,7 @@ describe("session lifecycle", () => {
         false,
       );
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -625,8 +620,7 @@ describe("session lifecycle", () => {
       expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
       expect(getSession(session.id)).toBeUndefined();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -752,8 +746,7 @@ describe("session lifecycle", () => {
       expect(dispatch).not.toHaveBeenCalled();
       expect(await readSessionPreferences(sdkSessionId)).toEqual({ dispatchJournalComplete: true });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -775,8 +768,7 @@ describe("session lifecycle", () => {
         getSession(session.id)?.dispatchedRequestIds?.has("initial-prompt:env-1:tab-failure"),
       ).toBe(false);
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -801,8 +793,7 @@ describe("session lifecycle", () => {
       expect(session.dispatchedRequestIds?.has("initial-prompt:env-1:tab-start")).toBe(false);
       expect(await readSessionPreferences(sdkSessionId)).toEqual({ dispatchJournalComplete: true });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -849,8 +840,7 @@ describe("session lifecycle", () => {
       expect(await readSessionPreferences(sdkSessionId)).toEqual({ dispatchJournalComplete: true });
       expect(getPromptDispatchState(session.id, requestId)).toBe("new");
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -879,8 +869,7 @@ describe("session lifecycle", () => {
         data: { planMode: true },
       });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -906,8 +895,7 @@ describe("session lifecycle", () => {
         data: { planMode: true },
       });
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -943,8 +931,7 @@ describe("session lifecycle", () => {
       expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
       expect(getPromptDispatchState(session.id, requestId)).toBe("new");
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

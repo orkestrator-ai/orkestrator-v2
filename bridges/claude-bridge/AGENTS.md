@@ -29,11 +29,22 @@ writers on one `.jsonl`. When touching the prompt path:
   `CLAUDE_BRIDGE_MAX_IDLE_RUNTIMES` (default 3) idle CLIs stay warm per bridge;
   the one idle longest goes first. A hard abort with nothing running leaves a
   warm CLI alone.
+- **Background work belongs to the runtime.** `runtime.tasks` holds the live
+  tasks that process started, its unresolved Bash candidates and the
+  snapshots a level signal parked before their edge; the task hooks and the
+  `task_*` frames feed it, and `releaseClaudeRuntimeTasks` settles it when the
+  process ends. A stop reaches only the CLI that owns the task
+  (`backgroundTaskOwner`): a CLI asked to stop an id it never started answers
+  `ok` without reaching anything. Never keep task ownership on the session.
 - **A metadata read goes through `controlOnlyQuery`.** The Agent SDK drops
   `maxTurns: 0`, so a `prompt: ""` query sends an empty user message and starts
   a real turn (model calls, tools, an empty session file under
   `~/.claude/projects`) unless it is closed first. `controlOnlyQuery` sends no
-  message at all.
+  message at all. A bridge-wide read (models, account, plan usage) asks an
+  open runtime first (`live-claude-control.ts`) and probes only when none
+  answers: models and account come from its held initialize answer, which
+  sends nothing, and only a signed-in account counts, because that answer
+  predates any login since.
 - **The newest turn owns the root conversation.** Root frames, results, hooks
   and continuations go to `runtime.latestTurn`; only a subagent's frames go to
   the turn whose row holds its call (`routeClaudeFrame`). A superseded turn

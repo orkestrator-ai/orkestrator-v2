@@ -659,7 +659,7 @@ export function abortSession(sessionId: string): boolean {
   const runtimeOwesWork =
     runtime !== undefined &&
     runtime.state !== "ended" &&
-    (claudeRuntimeOwnsLiveWork(session!, runtime) || runtime.latestTurn.isAwaitingContinuation());
+    (claudeRuntimeOwnsLiveWork(runtime) || runtime.latestTurn.isAwaitingContinuation());
   if (session && (session.abortController || runtimeOwesWork)) {
     session.abortController?.abort();
     // Bank completed model calls synchronously. A replacement prompt may claim

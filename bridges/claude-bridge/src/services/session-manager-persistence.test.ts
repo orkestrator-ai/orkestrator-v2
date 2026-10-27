@@ -1578,11 +1578,7 @@ describe("evictIdleHydratedTranscripts", () => {
     expect(hydrating.messages.length).toBeGreaterThan(0);
   });
 
-  test("keeps sessions with live background task state or controls", async () => {
-    const controlled = await hydratedIdleSession();
-    markStale(controlled);
-    controlled.backgroundTaskControls = new Map([["task-controlled", { close: () => undefined }]]);
-
+  test("keeps sessions with live background task state", async () => {
     const running = await hydratedIdleSession();
     markStale(running);
     running.backgroundTasks = {
@@ -1593,14 +1589,35 @@ describe("evictIdleHydratedTranscripts", () => {
       },
     };
 
-    const candidate = await hydratedIdleSession();
-    markStale(candidate);
-    candidate.backgroundTaskCandidates = new Map([["bash-candidate", { close: () => undefined }]]);
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(running.messages.length).toBeGreaterThan(0);
+  });
+
+  test("keeps a transcript while its CLI runs, holding the work it owns", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const promptPromise = sendPrompt(state.id, "run a command");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-held-bash",
+        content: [{ type: "tool_use", id: "held-bash", name: "Bash", input: { command: "ls" } }],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => state.status === "idle");
+    // Task ownership is the CLI's own state: a Bash call with no result yet
+    // holds it, and the CLI holds the transcript its turns append to.
+    expect(state.claudeRuntime?.tasks.candidates.has("held-bash")).toBe(true);
+    expect(state.backgroundTasks).toBeUndefined();
+    state.queryControl = undefined;
+    markStale(state);
 
     expect(evictIdleHydratedTranscripts()).toEqual([]);
-    expect(controlled.messages.length).toBeGreaterThan(0);
-    expect(running.messages.length).toBeGreaterThan(0);
-    expect(candidate.messages.length).toBeGreaterThan(0);
+    expect(state.messages.length).toBeGreaterThan(0);
+    call.finish();
+    await promptPromise;
   });
 
   test("keeps a transcript referenced by a pending question", async () => {

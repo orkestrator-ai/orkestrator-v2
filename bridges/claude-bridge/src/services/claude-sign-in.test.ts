@@ -89,6 +89,80 @@ describe("Claude account normalization", () => {
 });
 
 describe("Claude prompt admission", () => {
+  test("a refused warm signed-in CLI probes the current account and locks the composer", async () => {
+    const initializationResult = mock(async () => ({
+      account: { tokenSource: "claude.ai", subscriptionType: "max" },
+    }));
+    const accountInfo = mock(async () => SIGNED_OUT);
+    queryControlOverrides.initializationResult = initializationResult;
+    queryControlOverrides.accountInfo = accountInfo;
+    const session = createSession("warm revoked login");
+    track(session.id);
+    const turn = sendPrompt(session.id, "hello", { includeLocalSettings: true });
+    const call = await nextQueryCall();
+    expect((await readClaudeAuthStatus()).state).toBe("signed-in");
+    expect(initializationResult).toHaveBeenCalledTimes(1);
+    expect(accountInfo).not.toHaveBeenCalled();
+
+    call.push({
+      type: "assistant",
+      uuid: "warm-auth-failure",
+      error: "authentication_failed",
+      message: {
+        id: "warm-auth-failure-message",
+        role: "assistant",
+        content: [{ type: "text", text: NOT_LOGGED_IN }],
+      },
+    });
+    const probe = await nextQueryCall();
+    await waitFor(() => probe.isClosed());
+
+    expect(session.claudeRuntime?.state).toBe("open");
+    expect(call.isClosed()).toBe(false);
+    expect(accountInfo).toHaveBeenCalledTimes(1);
+    expect(initializationResult).toHaveBeenCalledTimes(1);
+    expect((await readClaudeAuthStatus()).state).toBe("needs-auth");
+    expect(claudeReadiness()).toEqual(LOCKED);
+    const now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now + 31_000);
+    try {
+      expect((await readClaudeAuthStatus()).state).toBe("needs-auth");
+      expect(accountInfo).toHaveBeenCalledTimes(2);
+      expect(initializationResult).toHaveBeenCalledTimes(1);
+      expect((await nextQueryCall()).isClosed()).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+    call.push({ type: "result", subtype: "success", is_error: true, result: NOT_LOGGED_IN });
+    await expect(turn).rejects.toThrow();
+  });
+
+  test("a failure during a live account read falls through to the authoritative probe", async () => {
+    let resolveAccount!: (value: unknown) => void;
+    queryControlOverrides.initializationResult = mock(
+      () =>
+        new Promise((resolve) => {
+          resolveAccount = resolve;
+        }),
+    );
+    const accountInfo = mock(async () => SIGNED_OUT);
+    queryControlOverrides.accountInfo = accountInfo;
+    const session = createSession("auth failure during initialization read");
+    track(session.id);
+    const turn = sendPrompt(session.id, "hello", { includeLocalSettings: true });
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success" });
+    await turn;
+    const pending = readClaudeAuthStatus();
+    noteClaudeAuthenticationFailure();
+    resolveAccount({ account: { tokenSource: "claude.ai" } });
+
+    expect((await pending).state).toBe("needs-auth");
+    expect(accountInfo).toHaveBeenCalledTimes(1);
+    expect(claudeReadiness()).toEqual(LOCKED);
+    expect((await nextQueryCall()).isClosed()).toBe(true);
+  });
+
   test("stays unknown until an account read has found no login", () => {
     expect(claudeReadiness()).toBeUndefined();
   });

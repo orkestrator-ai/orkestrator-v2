@@ -444,3 +444,36 @@ test("split pipeline panes give find and shell selection to the focused pane", a
   await buildPane.getByRole("tab", { name: /^Build,/ }).click();
   await expect(selectedSession).toHaveText("build-session");
 });
+
+test("nested rewind history retains every transcript and validation across reload", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=nested-rewinds");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(graph(page).locator('[data-flow-node="attempt"]')).toHaveCount(2);
+    await node(page, "Previous attempt").click();
+    for (const label of ["outer-build label", "outer-review label"]) {
+      await page.getByRole("button", { name: `${label} · round 1`, exact: true }).click();
+      await expect(
+        page.getByText(`Transcript of ${label.replace(" label", "")}.`, { exact: true }),
+      ).toBeVisible();
+      await node(page, "Previous attempt").click();
+    }
+    await node(page, "Previous attempt 2").click();
+    for (const [index, key] of ["review-failed", "review-retry"].entries()) {
+      await page
+        .getByRole("button", { name: "Review 1 · round 1", exact: true })
+        .nth(index)
+        .click();
+      await expect(page.getByText(`Transcript of ${key}.`, { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Restart from here", exact: true }),
+      ).toHaveCount(0);
+      await node(page, "Previous attempt 2").click();
+    }
+    await page.getByRole("button", { name: "Validation", exact: true }).click();
+    await expect(page.getByText("Retained validation failure", { exact: true })).toBeVisible();
+    expect(overlapping(await boxes(page))).toBe(0);
+  }
+});

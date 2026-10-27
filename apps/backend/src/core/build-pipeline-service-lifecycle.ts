@@ -966,6 +966,7 @@ export class BuildPipelineLifecycle {
         }
       }
 
+      const previousValidationRun = candidate.validationRun;
       candidate.iteration = iteration;
       if (rewindsRound) {
         // Later rounds derived these from their own code. The rewound round
@@ -1058,9 +1059,11 @@ export class BuildPipelineLifecycle {
       }
       if (restart.kind === "session" && restart.phase === "fix") {
         // A fix answers the verification that ended the round before it.
-        // Records written before verify sessions kept their verdict fall back
-        // to the newest one, as restarts always did.
-        const feedback = verificationFeedbackBefore(candidate, iteration) ?? previousFeedback;
+        // A legacy record's pipeline-level verdict belongs to its latest
+        // round; it cannot explain a Fix in an earlier round.
+        const feedback =
+          verificationFeedbackBefore(candidate, iteration) ??
+          (rewindsRound ? undefined : previousFeedback);
         if (feedback === undefined) delete candidate.verificationFeedback;
         else candidate.verificationFeedback = feedback;
       }
@@ -1075,7 +1078,10 @@ export class BuildPipelineLifecycle {
         rewindId,
         at,
       );
-      if (supersededSessions > 0) {
+      if (
+        supersededSessions > 0 ||
+        (previousValidationRun && previousValidationRun.id !== candidate.validationRun?.id)
+      ) {
         recordRewind(candidate, {
           id: rewindId,
           at,
@@ -1085,6 +1091,9 @@ export class BuildPipelineLifecycle {
           step: { ...restart },
           ...(named ? { sessionKey: named.sessionKey } : {}),
           supersededSessions,
+          ...(previousValidationRun && previousValidationRun.id !== candidate.validationRun?.id
+            ? { validationRun: previousValidationRun }
+            : {}),
         });
       }
 
@@ -1121,6 +1130,7 @@ export class BuildPipelineLifecycle {
       delete candidate.pauseCause;
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;
+      candidate.pendingKanbanReactivation = true;
     });
     if (rejection) throw rejection;
     await this.stageSupervisor.runLocked(pipelineId);

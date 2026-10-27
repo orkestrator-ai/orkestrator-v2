@@ -195,14 +195,14 @@ export function PipelineFlowView({
   const expandedAttempts = useMemo(
     () =>
       new Set(
-        pipeline.sessions.flatMap((session) =>
-          session.supersededBy &&
-          expandedAttemptKeys.has(flowAttemptKey(pipeline.id, session.supersededBy))
-            ? [session.supersededBy]
-            : [],
-        ),
+        [
+          ...pipeline.sessions.flatMap((session) =>
+            session.supersededBy ? [session.supersededBy] : [],
+          ),
+          ...(pipeline.rewinds ?? []).map((rewind) => rewind.id),
+        ].filter((id) => expandedAttemptKeys.has(flowAttemptKey(pipeline.id, id))),
       ),
-    [expandedAttemptKeys, pipeline.id, pipeline.sessions],
+    [expandedAttemptKeys, pipeline.id, pipeline.sessions, pipeline.rewinds],
   );
   const fullModel = useMemo(
     () => pipelineFlowModel(pipeline, pullRequest, { expandedAttempts }),
@@ -617,7 +617,7 @@ export function PipelineFlowView({
                   onShowAttemptStep={showAttemptStep}
                 />
               </div>
-            ) : selected.hasValidation && pipeline.validationRun ? (
+            ) : selected.hasValidation && (selected.validationRun ?? pipeline.validationRun) ? (
               <Tabs
                 value={inspectorTab[selected.id] ?? "transcript"}
                 onValueChange={(value) =>
@@ -636,7 +636,7 @@ export function PipelineFlowView({
                 <TabsContent value="tests" className="max-h-[60vh] overflow-y-auto">
                   <ReviewValidationStatus
                     environmentId={environmentId}
-                    run={pipeline.validationRun}
+                    run={selected.validationRun ?? pipeline.validationRun!}
                     now={now}
                   />
                 </TabsContent>
@@ -781,11 +781,12 @@ function InspectorBody({
       />
     );
   }
-  if (node.hasValidation && pipeline.validationRun) {
+  if (node.hasValidation && (node.validationRun ?? pipeline.validationRun)) {
     return (
       <ReviewValidationStatus
         environmentId={environmentId}
-        run={pipeline.validationRun}
+        run={node.validationRun ?? pipeline.validationRun!}
+        stopCommand={node.superseded ? null : undefined}
         now={now}
       />
     );
@@ -874,6 +875,17 @@ function PreviousAttempt({
         results no longer count; the code they committed is still on the branch.
       </p>
       <ul className="flex flex-col gap-1">
+        {node.validationRun && (
+          <li>
+            <button
+              type="button"
+              className="w-full rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+              onClick={() => onShowStep(node.attemptId!, `validation:${node.validationRun!.id}`)}
+            >
+              Validation
+            </button>
+          </li>
+        )}
         {sessions.map((session) => (
           <li key={session.sessionKey}>
             <button

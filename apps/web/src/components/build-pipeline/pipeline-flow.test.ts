@@ -1024,6 +1024,85 @@ describe("pipelineFlowLayout", () => {
 });
 
 describe("pipelineFlowModel after a restart rewound the pipeline", () => {
+  test("interleaved rewinds have one complete group each and bypass all history", () => {
+    const pipeline = rewoundToFirstVerify();
+    const old = pipeline.sessions.filter((entry) => entry.supersededBy);
+    // A later rewind surrounds the earlier rewind's history.
+    pipeline.sessions = [
+      session("build", "before", 0),
+      session("review", "outer-review", 1, { supersededBy: "outer" }),
+      ...old,
+      session("fix", "outer-fix", 2, { supersededBy: "outer" }),
+      session("verify", "live", 3, { status: "running" }),
+    ];
+    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+    for (const expandedAttempts of [new Set<string>(), new Set(["outer", "rewind-1"])]) {
+      const model = pipelineFlowModel(pipeline, null, { expandedAttempts });
+      const ids = model.columns.flatMap((column) => column.nodeIds);
+      expect(new Set(ids).size).toBe(ids.length);
+      const attempts = model.nodes.filter((node) => node.kind === "attempt");
+      expect(attempts.map((node) => node.attemptId)).toEqual(["outer", "rewind-1"]);
+      expect(attempts[0]!.attemptSessionKeys).toEqual(["outer-review", "outer-fix"]);
+      const keys = attempts.flatMap((node) => node.attemptSessionKeys!);
+      expect(keys.sort()).toEqual(
+        pipeline.sessions
+          .filter((entry) => entry.supersededBy)
+          .map((entry) => entry.sessionKey)
+          .sort(),
+      );
+      expect(model.edges.find((edge) => edge.from === "before" && edge.to === "live")?.route).toBe(
+        "bypass",
+      );
+      if (expandedAttempts.size) {
+        for (const key of keys)
+          expect(model.nodes.find((node) => node.id === key)?.session?.sessionKey).toBe(key);
+      }
+    }
+  });
+
+  test("expanded history retains both reviewer retries in the same slot and pass", () => {
+    const superseded = { supersededBy: "rewind-1", reviewPassId: "pass" };
+    const pipeline = build({
+      sessions: [
+        reviewer(0, "failed", 1, { ...superseded, reviewerOutcome: "failed" }),
+        reviewer(0, "retry", 2, { ...superseded, reviewerOutcome: "completed" }),
+      ],
+    });
+    const model = pipelineFlowModel(pipeline, null, { expandedAttempts: new Set(["rewind-1"]) });
+    expect(
+      model.nodes
+        .filter((node) => node.kind === "reviewer" && node.superseded)
+        .map((node) => node.id),
+    ).toEqual(["failed", "retry"]);
+    expect(
+      model.columns.find((column) => column.kind === "review" && column.superseded)?.nodeIds,
+    ).toEqual(["failed", "retry"]);
+  });
+
+  test("a rewind keeps discarded validation evidence accessible when expanded", () => {
+    const pipeline = rewoundToFirstVerify();
+    const run = validationRun();
+    pipeline.rewinds![0]!.validationRun = run;
+    const model = pipelineFlowModel(pipeline, null, { expandedAttempts: new Set(["rewind-1"]) });
+    expect(model.nodes.find((node) => node.id === `validation:${run.id}`)).toMatchObject({
+      superseded: true,
+      hasValidation: true,
+      validationRun: run,
+    });
+    expect(model.nodes.find((node) => node.kind === "attempt")?.validationRun).toBe(run);
+  });
+
+  test("validation-only attempts stay expandable without superseded sessions", () => {
+    const pipeline = rewoundToFirstVerify();
+    pipeline.rewinds![0]!.validationRun = validationRun();
+    pipeline.sessions = [];
+    const model = pipelineFlowModel(pipeline, null, { expandedAttempts: new Set(["rewind-1"]) });
+    expect(model.nodes.find((node) => node.kind === "attempt")?.attemptSessionKeys).toEqual([]);
+    expect(model.nodes.find((node) => node.id === "validation:validation-1")?.superseded).toBe(
+      true,
+    );
+  });
+
   test("collapses the superseded run into one previous-attempt node before the rerun", () => {
     const model = pipelineFlowModel(rewoundToFirstVerify());
 

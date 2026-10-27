@@ -81,6 +81,8 @@ export interface PipelineFlowNode {
   passKey?: string;
   /** The prepare node carries the latest validation run. */
   hasValidation?: boolean;
+  /** The exact retained run for a historical validation node. */
+  validationRun?: BuildPipeline["validationRun"];
   agent?: BuildPipelineAgent;
   model?: string;
   reasoningEffort?: string;
@@ -543,8 +545,17 @@ export function pipelineFlowModel(
   };
   let lastPrepare: PipelineFlowNode | null = null;
 
-  // A previous attempt: the run of sessions one rewind superseded.
-  let attempt: { id: string; sessions: PipelineSession[] } | null = null;
+  // A rewind can surround an older attempt. Collect its whole history before
+  // placing it at its first session so fragments cannot overwrite each other.
+  const attemptSessions = new Map<string, PipelineSession[]>();
+  for (const session of pipeline.sessions) {
+    if (!isSupersededPipelineSession(session)) continue;
+    const id = session.supersededBy!;
+    const sessions = attemptSessions.get(id) ?? [];
+    sessions.push(session);
+    attemptSessions.set(id, sessions);
+  }
+  const emittedAttempts = new Set<string>();
   const supersededColumn = (kind: PipelineFlowColumnKind, label: string): PipelineFlowColumn => {
     const column: PipelineFlowColumn = {
       key: `superseded-${columns.length}`,
@@ -556,10 +567,7 @@ export function pipelineFlowModel(
     columns.push(column);
     return column;
   };
-  function flushAttempt() {
-    if (!attempt) return;
-    const { id, sessions } = attempt;
-    attempt = null;
+  function placeAttempt(id: string, sessions: PipelineSession[]) {
     closePass();
     lastPrepare = null;
     const expanded = options.expandedAttempts?.has(id) ?? false;
@@ -576,12 +584,35 @@ export function pipelineFlowModel(
       attemptExpanded: expanded,
       startedAt: sessions[0]?.startedAt,
       completedAt: sessions.at(-1)?.supersededAt,
+      validationRun: pipeline.rewinds?.find((rewind) => rewind.id === id)?.validationRun,
     });
     if (!expanded) return;
     // Reviewers of one superseded pass share a column, as on the live line.
     let reviewerPass: string | undefined;
     let reviewerColumn: PipelineFlowColumn | undefined;
+    const run = pipeline.rewinds?.find((rewind) => rewind.id === id)?.validationRun;
+    let validationPlaced = false;
+    function placeValidation() {
+      if (!run || validationPlaced) return;
+      validationPlaced = true;
+      reviewerColumn = undefined;
+      const outcome = validationOutcome(run);
+      place(supersededColumn("prepare", "Validation"), {
+        id: `validation:${run.id}`,
+        kind: "prepare",
+        title: "Validation",
+        state: outcome === "passed" ? "complete" : outcome === "cancelled" ? "cancelled" : "failed",
+        placeholder: false,
+        superseded: true,
+        attemptId: id,
+        hasValidation: true,
+        validationRun: run,
+        startedAt: run.startedAt,
+        completedAt: run.completedAt,
+      });
+    }
     for (const session of sessions) {
+      if (run && Date.parse(run.startedAt) < Date.parse(session.startedAt)) placeValidation();
       const kind = pipelineSessionKind(session);
       const slot =
         kind === "reviewer" ? (pipelineIndependentReviewSlot(session.label) ?? 0) : undefined;
@@ -604,30 +635,27 @@ export function pipelineFlowModel(
           reviewerPass = pass;
           reviewerColumn = supersededColumn("review", `Review · round ${session.iteration + 1}`);
         }
-        // A retry replaces the earlier attempt in its slot, as on the live line.
+        // History keeps every retry selectable, including earlier sessions in
+        // the same slot. Only the live line replaces retries with the newest.
         const column = reviewerColumn;
-        const previous = column.nodeIds.find((nodeId) => nodes.get(nodeId)?.slot === slot);
-        if (previous) {
-          nodes.delete(previous);
-          column.nodeIds = column.nodeIds.filter((nodeId) => nodeId !== previous);
-        }
         place(column, node);
         continue;
       }
       reviewerColumn = undefined;
       place(supersededColumn(kind as PipelineFlowColumnKind, node.title), node);
     }
+    placeValidation();
   }
 
   for (const item of pipelineStageItems(pipeline)) {
     if (item.kind === "session" && isSupersededPipelineSession(item.session)) {
       const id = item.session.supersededBy!;
-      if (attempt && attempt.id !== id) flushAttempt();
-      attempt ??= { id, sessions: [] };
-      attempt.sessions.push(item.session);
+      if (!emittedAttempts.has(id)) {
+        emittedAttempts.add(id);
+        placeAttempt(id, attemptSessions.get(id)!);
+      }
       continue;
     }
-    flushAttempt();
     if (item.kind === "validation") {
       // Validation checks the package its preparation produced, so it shows
       // on that node; a package prepared inside the build turn gets a
@@ -819,7 +847,13 @@ export function pipelineFlowModel(
     place(addColumn(kind as PipelineFlowColumnKind), node);
     if (kind === "prepare") lastPrepare = node;
   }
-  flushAttempt();
+  // A validation-only restart can discard evidence before any downstream
+  // session exists. It still has its own readable previous attempt.
+  for (const rewind of pipeline.rewinds ?? []) {
+    if (rewind.validationRun && !emittedAttempts.has(rewind.id)) {
+      placeAttempt(rewind.id, []);
+    }
+  }
 
   // Reviewers of the live pass with no session yet: queued, starting, or
   // failed before their session was created.

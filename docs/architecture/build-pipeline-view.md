@@ -131,13 +131,14 @@ in `build-pipeline-rewind.ts`):
 - **Invalidates what came after.** Every live session at or after the point
   (same round and later step, or a later round) gets `supersededBy` (the
   `PipelineRewind.id`) and `supersededAt`. A rewind into an earlier round also
-  drops the review package, validation run, structured review and verdict,
+  invalidates the review package, validation run, structured review and verdict,
   because they describe later code; a step whose inputs are gone reruns from
   the earliest step of its round that rebuilds them (Review prepares the
   package again; Address without that round's report reruns Review). Verify
   sessions keep their own verdict (`verificationResult`,
   `verificationFeedback`, bounded), so a restarted Fix gets the verdict that
-  ended the round before it.
+  ended the round before it. Legacy records without that session's verdict use
+  generic feedback when rewinding to an earlier Fix, never the last round's rationale.
 - **Treats superseded sessions as history.** They are never the current
   session (`sessionForCurrentPhase`), never the source of a fix baseline (a
   same-round restart still carries the first attempt's baseline), an address
@@ -145,13 +146,16 @@ in `build-pipeline-rewind.ts`):
   result slots are closed `superseded`, so a late tool submission is denied.
 - **Records the rewind.** `rewinds` (at most 50) says when, from which phase
   and round, to which round and step, which session was named and how many
-  sessions were superseded. A repeat of the same request (a double click, a
+  sessions were superseded. An invalidated validation run is retained on that
+  rewind and remains readable in its previous-attempt inspector (bounded by the
+  same 50-rewind limit). A repeat of the same request (a double click, a
   retried command) is a no-op; restarting a superseded step is refused.
 - **Works from `failed` and `complete`.** The phase is set and the request
   persisted in one locked write, so the supervisor and recovery pick it up as
   for any active pipeline. Consuming the request moves a Kanban ticket back to
-  In progress; the next terminal outcome reconciles it again and its comments
-  dedupe. A Ship after an earlier Ship is told the existing PR URL and updates
+  In progress; a durable pending flag retries transient Kanban failures on later
+  passes without dispatching the restarted stage again. The next terminal outcome
+  reconciles it again and its comments dedupe. A Ship after an earlier Ship is told the existing PR URL and updates
   (or reopens) that PR instead of creating one. A pipeline whose PR has merged
   refuses restarts.
 
@@ -163,12 +167,14 @@ restarts preparation alone.
 
 **Presentation.** Each rewind's superseded sessions are one greyed, dashed
 "Previous attempt" node (kind `attempt`, column marked `superseded`) where the
-restart rewound to, followed by the rerun to the right. The live line routes
+restart rewound to, followed by the rerun to the right. Interleaved rewinds
+collect all sessions with the same rewind ID into one group at its earliest
+session position. The live line routes
 over it (`route: "bypass"`; the stacked column draws the bypass beside it),
 and the attempt branches off the step before it. Its inspector says when and
 from where the restart rewound and lists the steps; "Show steps" expands it
 into greyed nodes titled by round ("Fix · round 2", reviewers of one pass in
-one column), each selectable with its transcript readable and a "Superseded by
+one column, including every retry), each selectable with its transcript readable and a "Superseded by
 a restart" note, and no restart or retry. Expansion is renderer-only view
 state (`flowGraphViewStore.expandedAttempts`, at most 50). Superseded nodes are
 left out of the step count, review-pass numbering, stop placement and the

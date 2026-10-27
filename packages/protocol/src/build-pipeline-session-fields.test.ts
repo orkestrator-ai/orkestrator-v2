@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { newReviewValidationRun } from "./review-workflow.js";
 import {
   MAX_PIPELINE_REWINDS,
   MAX_PIPELINE_SESSION_ERROR_LENGTH,
@@ -155,6 +156,28 @@ describe("pipeline rewind fields", () => {
     expect(isSupersededPipelineSession({ supersededBy: "rewind-1" })).toBe(true);
     expect(isSupersededPipelineSession({})).toBe(false);
     expect(isSupersededPipelineSession(undefined)).toBe(false);
+  });
+
+  test("validates retained validation runs and durable Kanban reactivation", () => {
+    const run = newReviewValidationRun("retained", {
+      headRef: "a".repeat(40),
+      commands: [],
+      limitations: ["No validation configured"],
+    });
+    expect(
+      isBuildPipeline({
+        ...pipelineWith({}),
+        rewinds: [{ ...rewind, validationRun: run }],
+        pendingKanbanReactivation: true,
+      }),
+    ).toBe(true);
+    expect(isBuildPipeline({ ...pipelineWith({}), pendingKanbanReactivation: "yes" })).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...pipelineWith({}),
+        rewinds: [{ ...rewind, validationRun: { ...run, status: "invalid" } }],
+      }),
+    ).toBe(false);
   });
 
   test("rejects malformed rewind fields", () => {

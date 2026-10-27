@@ -373,21 +373,26 @@ export class BuildPipelineSupervisor {
       return;
     }
 
+    if (pipeline.pendingKanbanReactivation || pipeline.restartRequest) {
+      // Keep reconciliation durable independently of dispatch. A transient
+      // Kanban failure must neither strand nor dispatch the replacement twice.
+      pipeline.pendingKanbanReactivation = true;
+      try {
+        await this.recovery.updateKanbanLifecycle(pipeline, { status: "in-progress" });
+        delete pipeline.pendingKanbanReactivation;
+      } catch (error) {
+        console.warn(
+          `[build-pipeline] Kanban status for restarted ${pipeline.id}:`,
+          errorMessage(error),
+        );
+      }
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+      record.revision = pipeline.backendRevision;
+    }
+
     if (pipeline.restartRequest) {
       const request = pipeline.restartRequest;
       delete pipeline.restartRequest;
-      // A restart can revive a failed or completed build, whose ticket the
-      // terminal reconciliation moved to Backlog or Review. The build is
-      // running again; the next terminal outcome reconciles the ticket again.
-      // Best effort: a Kanban fault must not strand the durable restart.
-      await this.recovery
-        .updateKanbanLifecycle(pipeline, { status: "in-progress" })
-        .catch((error: unknown) => {
-          console.warn(
-            `[build-pipeline] Kanban status for restarted ${pipeline.id}:`,
-            errorMessage(error),
-          );
-        });
       if (request.kind === "review-package") {
         pipeline.phase = request.implementationPhase === "fix" ? "fixing" : "building";
         await this.startReviewPackagePreparation(pipeline);

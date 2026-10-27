@@ -406,7 +406,9 @@ describe("a pipeline a restart rewound", () => {
     expect(
       within(inspector()).getByText(/rewound the pipeline from round 2 to Verify of round 1/),
     ).toBeTruthy();
-    expect(within(inspector()).queryByRole("button", { name: "Restart from here" })).toBeNull();
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
     fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
 
     await waitFor(() => expect(queryGraphNode("Fix · round 2")).not.toBeNull());
@@ -415,13 +417,61 @@ describe("a pipeline a restart rewound", () => {
     selectNode("Verify · round 2");
     expect(within(inspector()).getByText(/Superseded by a restart/)).toBeTruthy();
     // History is read, never restarted or retried.
-    expect(within(inspector()).queryByRole("button", { name: "Restart from here" })).toBeNull();
-    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" })).toBeNull();
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
+    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" }) === null).toBe(
+      true,
+    );
 
     selectNode("Previous attempt");
     fireEvent.click(within(inspector()).getByRole("button", { name: "Hide steps" }));
-    await waitFor(() => expect(queryGraphNode("Fix · round 2")).toBeNull());
+    await waitFor(() => expect(queryGraphNode("Fix · round 2") === null).toBe(true));
   });
+
+  test("each historical reviewer retry opens its own transcript", async () => {
+    const pipeline = rewoundToFirstVerify();
+    const superseded = { supersededBy: "rewind-1", reviewPassId: "pass", label: "Review 1" };
+    pipeline.sessions.splice(
+      3,
+      0,
+      session("review", "failed-review", 1, { ...superseded, reviewerOutcome: "failed" }),
+      session("review", "retry-review", 2, { ...superseded, reviewerOutcome: "completed" }),
+    );
+    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+    renderPipelineTab(pipeline, { isActive: true });
+    for (const [index, key] of ["failed-review", "retry-review"].entries()) {
+      selectNode("Previous attempt");
+      const buttons = within(inspector()).getAllByRole("button", { name: "Review 1 · round 1" });
+      fireEvent.click(buttons[index]!);
+      await waitFor(() =>
+        expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+          `${key}-session`,
+        ),
+      );
+    }
+  });
+
+  test.each([true, false])(
+    "retained validation opens its own checks with sessions=%s",
+    async (withSessions) => {
+      const pipeline = rewoundToFirstVerify();
+      if (!withSessions) pipeline.sessions = [];
+      pipeline.rewinds![0]!.validationRun = validationRun({
+        error: "Historical validation failure",
+        status: "failed",
+      });
+      renderPipelineTab(pipeline);
+      selectNode("Previous attempt");
+      fireEvent.click(within(inspector()).getByRole("button", { name: "Validation" }));
+      await waitFor(() =>
+        expect(within(inspector()).getByText("Historical validation failure")).toBeTruthy(),
+      );
+      expect(
+        within(inspector()).queryByRole("button", { name: "Restart from here" }) === null,
+      ).toBe(true);
+    },
+  );
 
   test("a live step still offers restart", () => {
     renderPipelineTab(rewoundToFirstVerify());

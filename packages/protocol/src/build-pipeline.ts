@@ -126,6 +126,8 @@ export interface PipelineRewind {
   sessionKey?: string;
   /** How many sessions this rewind superseded. */
   supersededSessions: number;
+  /** Validation evidence invalidated by this rewind, retained with its history. */
+  validationRun?: ReviewValidationRun;
 }
 
 /** The newest rewinds a record keeps; older entries are dropped, their sessions stay superseded. */
@@ -940,6 +942,8 @@ export interface BuildPipeline {
   reviewRetryRequested?: boolean;
   /** Selected historical stage to start again on the next supervisor pass. */
   restartRequest?: PipelineRestartRequest;
+  /** Retried independently of stage dispatch until the active ticket is reconciled. */
+  pendingKanbanReactivation?: boolean;
   /** Restarts that rewound the pipeline, oldest first, at most {@link MAX_PIPELINE_REWINDS}. */
   rewinds?: PipelineRewind[];
   createdAt: string;
@@ -1541,7 +1545,8 @@ function isPipelineRewind(value: unknown): value is PipelineRewind {
     isPipelineRestartRequest(value.step) &&
     (value.sessionKey === undefined ||
       (isNonBlankString(value.sessionKey) && value.sessionKey.length <= 512)) &&
-    isNonNegativeInteger(value.supersededSessions)
+    isNonNegativeInteger(value.supersededSessions) &&
+    (value.validationRun === undefined || isReviewValidationRun(value.validationRun))
   );
 }
 
@@ -1628,6 +1633,8 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
     (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
+    (value.pendingKanbanReactivation !== undefined &&
+      typeof value.pendingKanbanReactivation !== "boolean") ||
     (value.rewinds !== undefined &&
       (!Array.isArray(value.rewinds) ||
         value.rewinds.length > MAX_PIPELINE_REWINDS ||

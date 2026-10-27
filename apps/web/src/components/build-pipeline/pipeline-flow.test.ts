@@ -299,6 +299,96 @@ describe("pipelineFlowModel", () => {
     expect(verify).toMatchObject({ state: "failed", error: "Could not start the verifier" });
   });
 
+  test.each(["verifying", "creating-pr"] as const)(
+    "historical reviewer failure cannot mask %s startup failure",
+    (phase) => {
+      const model = pipelineFlowModel(
+        build({
+          phase: "failed",
+          error: "Could not start next stage",
+          failureContext: { phase, kind: "stage-transition" },
+          reviewers: PANEL.slice(0, 2),
+          sessions: [
+            session("build", "build", 0),
+            reviewer(0, "rev-1", 60, { reviewerOutcome: "completed" }),
+            reviewer(1, "rev-2", 60, { reviewerOutcome: "failed", error: "Old failure" }),
+            session("review", "consolidation", 120, { label: "Consolidation" }),
+            ...(phase === "creating-pr" ? [session("verify", "verify", 180)] : []),
+          ],
+        }),
+      );
+      expect(
+        model.nodes.find((node) => node.kind === (phase === "verifying" ? "verify" : "ship")),
+      ).toMatchObject({
+        placeholder: false,
+        state: "failed",
+        error: "Could not start next stage",
+      });
+      expect(model.nodes.find((node) => node.id === "rev-2")?.state).toBe("failed");
+    },
+  );
+
+  test.each(["planned", "running", "completed", "cancelled", "failed"] as const)(
+    "dedicated preparation carries %s validation status and completion time",
+    (status) => {
+      const run = validationRun({
+        status,
+        completedAt:
+          status === "planned" || status === "running" ? undefined : "2026-07-29T00:04:00.000Z",
+        error: status === "failed" ? "Runner died" : undefined,
+      });
+      const model = pipelineFlowModel(
+        build({
+          phase: "reviewing",
+          reviewers: PANEL,
+          sessions: [
+            session("build", "build", 0),
+            session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          ],
+          validationRun: run,
+        }),
+      );
+      const prep = model.nodes.find((node) => node.id === "prep")!;
+      expect(prep).toMatchObject({
+        state:
+          status === "planned" || status === "running"
+            ? "running"
+            : status === "completed"
+              ? "complete"
+              : status,
+        hasValidation: true,
+        completedAt: run.completedAt,
+      });
+      expect(prep.session?.sessionKey).toBe("prep");
+      if (status === "failed") expect(prep.error).toBe("Runner died");
+    },
+  );
+
+  test.each(["build", "fix"] as const)(
+    "single-review %s validation continues at Review without a Build placeholder",
+    (phase) => {
+      const model = pipelineFlowModel(
+        build({
+          phase: "reviewing",
+          iteration: phase === "fix" ? 1 : 0,
+          sessions: [session(phase, phase, 0, { iteration: phase === "fix" ? 1 : 0 })],
+          validationRun: validationRun({ status: "running", completedAt: undefined }),
+        }),
+      );
+      expect(model.columns.map((column) => column.kind)).toEqual([
+        "ticket",
+        "setup",
+        phase,
+        "prepare",
+        "review",
+        "verify",
+        "ship",
+        "pr",
+      ]);
+      expect(model.nodes.some((node) => node.kind === "build" && node.placeholder)).toBe(false);
+    },
+  );
+
   test("cancelled and paused pipelines mark the step they stopped in", () => {
     const cancelled = pipelineFlowModel(
       build({

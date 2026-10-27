@@ -1059,8 +1059,10 @@ export class BuildPipelineLifecycle {
         rejection = error instanceof Error ? error : new Error(String(error));
         return;
       }
-      if (candidate.phase === "failed") {
+      if (candidate.phase === "failed" || candidate.phase === "paused") {
         candidate.phase = "reviewing";
+        delete candidate.pausedFromPhase;
+        delete candidate.pauseCause;
         delete candidate.error;
         delete candidate.failureContext;
         delete candidate.reconnectAttempt;

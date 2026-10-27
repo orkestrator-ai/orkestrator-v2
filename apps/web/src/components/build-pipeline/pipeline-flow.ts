@@ -463,29 +463,33 @@ export function pipelineFlowModel(
       // on that node; a package prepared inside the build turn gets a
       // Prepare node of its own for its checks.
       const run = pipeline.validationRun!;
+      const outcome = validationOutcome(run);
+      const validationState: FlowNodeState =
+        outcome === "running"
+          ? active
+            ? "running"
+            : pipeline.phase === "paused"
+              ? "paused"
+              : "cancelled"
+          : outcome === "cancelled"
+            ? "cancelled"
+            : run.status === "failed"
+              ? "failed"
+              : "complete";
       if (lastPrepare && columns.at(-1)?.nodeIds.includes(lastPrepare.id)) {
         lastPrepare.hasValidation = true;
+        lastPrepare.state = validationState;
+        lastPrepare.completedAt = run.completedAt;
+        if (run.status === "failed" && run.error) lastPrepare.error = run.error;
         continue;
       }
       closePass();
-      const outcome = validationOutcome(run);
       const occurrence = nextOccurrence("prepare");
       const node: PipelineFlowNode = {
         id: `validation:${run.id}`,
         kind: "prepare",
         title: numbered(KIND_TITLES.prepare, occurrence),
-        state:
-          outcome === "running"
-            ? active
-              ? "running"
-              : pipeline.phase === "paused"
-                ? "paused"
-                : "cancelled"
-            : outcome === "cancelled"
-              ? "cancelled"
-              : run.status === "failed"
-                ? "failed"
-                : "complete",
+        state: validationState,
         placeholder: false,
         hasValidation: true,
         startedAt: run.startedAt,
@@ -650,11 +654,27 @@ export function pipelineFlowModel(
 
   // A stop with no node to carry it: a stage that failed or paused before its
   // session existed, or a fan-out that failed without consolidating.
-  const anyState = (state: FlowNodeState) =>
-    [...nodes.values()].some((node) => node.state === state && !node.placeholder);
-  if (pipeline.phase === "failed" && !cancelled && !anyState("failed") && stopped) {
+  const currentFailureRepresented = (phase: ResumableBuildPhase) =>
+    [...nodes.values()].some(
+      (node) =>
+        node.state === "failed" &&
+        !node.placeholder &&
+        (node.kind === PHASE_KIND[phase] ||
+          (phase === "reviewing" &&
+            (node.kind === "reviewer" ||
+              node.kind === "consolidation" ||
+              node.hasValidation === true))) &&
+        (!node.session || node.session.iteration === pipeline.iteration) &&
+        (!pipeline.failureContext?.sessionId ||
+          node.session?.sdkSessionId === pipeline.failureContext.sessionId),
+    );
+  if (pipeline.phase === "failed" && !cancelled && stopped && !currentFailureRepresented(stopped)) {
     carryStop(stopped, "failed");
-  } else if (pipeline.phase === "paused" && !anyState("paused") && stopped) {
+  } else if (
+    pipeline.phase === "paused" &&
+    stopped &&
+    ![...nodes.values()].some((node) => node.state === "paused" && !node.placeholder)
+  ) {
     carryStop(stopped, "paused");
   }
 
@@ -724,6 +744,8 @@ export function pipelineFlowModel(
     const lastKind = columns.at(-1)!.kind;
     const position: number = (() => {
       switch (lastKind) {
+        case "prepare":
+          return route.indexOf("review") - 1;
         case "fix":
           return route.indexOf("build");
         case "address":

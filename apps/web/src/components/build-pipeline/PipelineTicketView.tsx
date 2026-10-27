@@ -11,11 +11,14 @@ const IMAGE_TYPES: Record<string, string> = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
 };
 
 /**
  * A `data:` URL for a snapshot image. Kanban stores images as bare base64
  * (WebP unless the name says otherwise); anything else is not shown.
+ * SVGs stay in an img element, whose image context disables scripts and external resources.
  */
 export function ticketImageUrl(image: TaskSnapshot["images"][number]): string | null {
   if (!/^[A-Za-z0-9+/=\s]+$/.test(image.data)) return null;

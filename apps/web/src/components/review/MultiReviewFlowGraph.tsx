@@ -231,7 +231,7 @@ export function MultiReviewFlowGraph({
   );
 }
 
-function withIdleIcon(node: MultiReviewFlowNodeModel): MultiReviewFlowNodeModel {
+export function withIdleIcon(node: MultiReviewFlowNodeModel): MultiReviewFlowNodeModel {
   const idleIcon = IDLE_ICON[node.kind];
   return idleIcon && !node.idleIcon ? { ...node, idleIcon } : node;
 }

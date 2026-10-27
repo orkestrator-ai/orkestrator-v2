@@ -217,7 +217,7 @@ test("node actions run from the context menu and the inspector", async ({ page }
 
 test("collapses the graph so the inspector takes the room", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=fanout");
-  const toggle = page.getByRole("button", { name: "Pipeline" });
+  const toggle = page.getByRole("button", { name: "Pipeline", exact: true });
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const before = (await page.getByTestId("pipeline-inspector").boundingBox())!;
   await toggle.click();
@@ -234,4 +234,129 @@ test("a new pipeline shows its setup running", async ({ page }) => {
   await expect(node(page, "Setup")).toHaveAttribute("data-flow-state", "running");
   await expect(node(page, "Setup")).toHaveAttribute("aria-selected", "true");
   await expect(graph(page).locator("[data-flow-placeholder]")).toHaveCount(5);
+});
+
+async function openReviewPass(page: Page) {
+  await node(page, "Reviewer 1").click();
+  await page
+    .getByTestId("pipeline-inspector")
+    .getByRole("button", { name: "Open review as Multi Review" })
+    .click();
+  await expect(page.getByTestId("pipeline-review-header")).toBeVisible();
+  await expect(node(page, "Build")).toHaveCount(0);
+}
+
+test("a mounted pipeline-pass tab retains lifecycle controls with its graph collapsed", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=fanout");
+  await openReviewPass(page);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(graph(page)).toHaveCount(0);
+  const inspector = page.getByTestId("pipeline-inspector");
+  await inspector.getByRole("button", { name: "Pause pipeline" }).click();
+  await expect(inspector.getByRole("button", { name: "Resume pipeline" })).toBeVisible();
+  await expect(inspector.getByRole("button", { name: "Cancel pipeline" })).toBeVisible();
+  await inspector.getByRole("button", { name: "Resume pipeline" }).click();
+  await expect(inspector.getByRole("button", { name: "Pause pipeline" })).toBeVisible();
+  await inspector.getByRole("button", { name: "Cancel pipeline" }).click();
+  await expect(inspector.getByRole("button", { name: "Pause pipeline" })).toHaveCount(0);
+  await expect(inspector.getByRole("button", { name: "Cancel pipeline" })).toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      window.__pipelineCommands
+        ?.filter((entry) => /^(pause|resume|cancel)_build_pipeline$/.test(entry.command))
+        .map((entry) => entry.command),
+    ),
+  ).toEqual(["pause_build_pipeline", "resume_build_pipeline", "cancel_build_pipeline"]);
+});
+
+test("a review pass rehydrates progress missed while inactive and after reload", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=fanout");
+  await openReviewPass(page);
+  await page.getByRole("button", { name: "Switch away" }).click();
+  await page.getByRole("button", { name: "Finish in background" }).click();
+  await page.getByRole("button", { name: "Return to review" }).click();
+  await expect(node(page, "Reviewer 1")).toHaveAttribute("data-flow-state", "complete");
+  await node(page, "Reviewer 1").click();
+  await expect(page.getByTestId("pipeline-inspector")).toContainText("Finished while inactive.");
+  expect(
+    await page.evaluate(() =>
+      window.__pipelineCommands?.some((entry) => entry.command === "get_build_pipeline"),
+    ),
+  ).toBe(true);
+  await page.goto("/pipeline-flow?scenario=fanout&restore=1");
+  await page.reload();
+  await expect(page.getByTestId("pipeline-review-header")).toBeVisible();
+  await expect(node(page, "Reviewer 1")).toHaveAttribute("data-flow-state", "complete");
+  await node(page, "Reviewer 1").click();
+  await expect(page.getByTestId("pipeline-inspector")).toContainText("Finished while inactive.");
+});
+
+test("remote review passes retain their provider session and route controls to the workspace", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=fanout&remote=1");
+  await openReviewPass(page);
+  await node(page, "Reviewer 2").dblclick();
+  expect(await page.evaluate(() => window.__openedTabs?.at(-1))).toMatchObject({
+    type: "codex",
+    options: {
+      resumeSessionId: "remote-rev-2-session",
+      requireExistingResumeSession: true,
+      isReviewTab: true,
+    },
+  });
+  await page
+    .getByTestId("pipeline-inspector")
+    .getByRole("button", { name: "Retry reviewer" })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.filter(
+          (entry) => entry.command === "retry_build_pipeline_reviewer",
+        ),
+      ),
+    )
+    .toEqual([
+      {
+        command: "retry_build_pipeline_reviewer",
+        args: { pipelineId: "remote-pipeline", reviewerId: "r2" },
+      },
+    ]);
+});
+
+test("ticket references show BMP and SVG images, preview, and the changed indicator", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=images");
+  await node(page, "Ticket").click();
+  const ticket = page.getByTestId("pipeline-ticket");
+  await expect(page.getByTestId("pipeline-ticket-changed")).toBeVisible();
+  await expect(ticket.getByRole("img")).toHaveCount(2);
+  for (const filename of ["reference.svg", "reference.bmp"]) {
+    await ticket.getByRole("button", { name: `Show image ${filename}` }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("img", { name: filename })).toBeVisible();
+    await expect
+      .poll(() =>
+        dialog
+          .getByRole("img", { name: filename })
+          .evaluate((image) => (image as HTMLImageElement).naturalWidth),
+      )
+      .toBeGreaterThan(0);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  }
+});
+
+test("running package validation keeps Prepare and its display clock live", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=validation");
+  const prepare = node(page, "Prepare");
+  await expect(prepare).toHaveAttribute("data-flow-state", "running");
+  const runtime = prepare.getByLabel("Prepare runtime and token usage");
+  const before = await runtime.textContent();
+  await expect.poll(() => runtime.textContent()).not.toBe(before);
 });

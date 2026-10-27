@@ -165,6 +165,79 @@ describe("build pipeline reviewer retry", () => {
     });
   });
 
+  test("retrying a paused review dispatches without restarting its completed peer", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.failingModels.add("sonnet");
+      provider.runningConsolidation = true;
+      const started = await service.start(startInput(PANEL));
+      await advanceUntil(service, read, started.id, "reviewing");
+      let reviewing = await read(started.id);
+      for (let attempt = 0; attempt < 10 && !reviewing.reviewFanout?.consolidation; attempt += 1) {
+        await service.advanceNow(started.id);
+        reviewing = await read(started.id);
+      }
+      const [completed, failed] = reviewing.reviewFanout!.reviewers;
+      expect(completed!.status).toBe("completed");
+      expect(failed!.status).toBe("failed");
+      const paused = await service.pause(started.id);
+      expect(paused.phase).toBe("paused");
+      provider.failingModels.delete("sonnet");
+      const retried = await service.retryReviewer(started.id, failed!.id);
+      expect(retried.phase).toBe("reviewing");
+      expect(retried.pausedFromPhase).toBeUndefined();
+      expect(retried.pauseCause).toBeUndefined();
+      expect(retried.reviewFanout!.reviewers[0]).toEqual(completed);
+      expect(retried.reviewFanout!.reviewers[1]!.providerSessionId).toBeDefined();
+      expect(retried.reviewFanout!.reviewers[1]!.providerSessionId).not.toBe(
+        failed!.providerSessionId,
+      );
+      expect(reviewerSessionCreates(provider)).toHaveLength(3);
+    });
+  });
+
+  test("supersedes the failed tool-v1 reviewer slot and allocates a fresh request", async () => {
+    await withPipeline(
+      async ({ service, read, provider, workflowResults }) => {
+        provider.failingModels.add("sonnet");
+        provider.runningModels.add("opus");
+        const started = await service.start(startInput(PANEL));
+        await advanceUntil(service, read, started.id, "reviewing");
+        let reviewing = await read(started.id);
+        for (
+          let attempt = 0;
+          attempt < 10 && reviewing.reviewFanout?.reviewers[1]?.status !== "failed";
+          attempt += 1
+        ) {
+          await service.advanceNow(started.id);
+          reviewing = await read(started.id);
+        }
+        const failed = reviewing.reviewFanout!.reviewers[1]!;
+        expect(failed.resultTransport).toBe("tool-v1");
+        expect(failed.requestId).toBeDefined();
+        provider.failingModels.delete("sonnet");
+        provider.runningModels.add("sonnet");
+        const retried = await service.retryReviewer(started.id, failed.id);
+        const fresh = retried.reviewFanout!.reviewers[1]!;
+        expect(fresh.resultTransport).toBe("tool-v1");
+        expect(fresh.requestId).toBeDefined();
+        expect(fresh.requestId).not.toBe(failed.requestId);
+        expect(
+          await workflowResults!.status(
+            { environmentId: "env-1", projectId: "project-1" },
+            failed.requestId!,
+          ),
+        ).toMatchObject({ lifecycle: "superseded", completion: "blocked" });
+        const late = await workflowResults!.validate(
+          { environmentId: "env-1", projectId: "project-1" },
+          failed.requestId!,
+          reportFor("Late report"),
+        );
+        expect(late.ok).toBe(false);
+      },
+      { toolMode: true, toolKinds: ["review-report"] },
+    );
+  });
+
   test("a retried reviewer's session key never collides with an earlier attempt", () => {
     const pipeline = {
       id: "pipeline-1",

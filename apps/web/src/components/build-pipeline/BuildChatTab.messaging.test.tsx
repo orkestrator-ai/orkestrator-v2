@@ -1231,8 +1231,8 @@ describe("BuildChatTab graph", () => {
       expect(graphNode(title).hasAttribute("data-flow-placeholder")).toBe(true);
     }
     // Address, Fix and conflict resolution only appear once they start.
-    expect(queryGraphNode("Address")).toBeNull();
-    expect(queryGraphNode("Fix")).toBeNull();
+    expect(queryGraphNode("Address") === null).toBe(true);
+    expect(queryGraphNode("Fix") === null).toBe(true);
   });
 
   test("shows only the pull request ahead while the pipeline ships", () => {
@@ -1258,7 +1258,7 @@ describe("BuildChatTab graph", () => {
     expect(selectedTitle()).toBe("Ship");
     expect(nodeTitles().slice(-2)).toEqual(["Ship", "PR"]);
     expect(graphNode("PR").hasAttribute("data-flow-placeholder")).toBe(true);
-    expect(queryGraphNode("Resolve conflicts")).toBeNull();
+    expect(queryGraphNode("Resolve conflicts") === null).toBe(true);
   });
 
   test("says the newest verification's verdict", () => {
@@ -1422,7 +1422,9 @@ describe("BuildChatTab graph", () => {
     const ticket = screen.getByTestId("pipeline-ticket");
     expect(within(ticket).getByRole("heading", { name: "Backend-owned build" })).toBeTruthy();
     expect(within(ticket).getByRole("region", { name: "Description" })).toBeTruthy();
-    expect(within(ticket).queryByRole("region", { name: "Acceptance criteria" })).toBeNull();
+    expect(within(ticket).queryByRole("region", { name: "Acceptance criteria" }) === null).toBe(
+      true,
+    );
     expect(screen.queryByText(/You are building a feature/) === null).toBe(true);
   });
 

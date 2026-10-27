@@ -238,6 +238,16 @@ export function PipelineFlowView({
     pipeline.phase === "failed" && pipeline.failureContext?.kind === "interactive-request";
   const canRetryStage =
     pipeline.phase === "failed" && Boolean(pipeline.failureContext) && !interactionFailure;
+  const retryReviewPhase = paused
+    ? pipeline.pausedFromPhase
+    : pipeline.phase === "failed"
+      ? pipeline.failureContext?.phase
+      : pipeline.phase;
+  const canRetryReviewer =
+    retryReviewPhase === "reviewing" &&
+    !interactionFailure &&
+    Boolean(pipeline.reviewFanout) &&
+    !pipeline.reviewFanout?.report;
   const shipped = pipeline.sessions.some((session) => session.phase === "pr");
 
   const openSession = (node: PipelineFlowNode) => {
@@ -273,7 +283,7 @@ export function PipelineFlowView({
         onSelect: () => openReview(node.passKey!),
       });
     }
-    if (node.reviewer?.status === "failed" && node.state === "failed") {
+    if (canRetryReviewer && node.reviewer?.status === "failed" && node.state === "failed") {
       actions.push({
         key: "retry-reviewer",
         label: "Retry reviewer",
@@ -515,22 +525,20 @@ export function PipelineFlowView({
             <FlowInspectorHeader
               node={selectedView}
               testIdPrefix="pipeline"
-              actions={selectedActions
-                .filter((action) => !action.pipelineWide)
-                .map((action) => (
-                  <Button
-                    key={action.key}
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1.5 text-xs"
-                    disabled={action.disabled}
-                    onClick={action.onSelect}
-                  >
-                    <action.icon className="size-3.5" />
-                    {action.label}
-                  </Button>
-                ))}
+              actions={selectedActions.map((action) => (
+                <Button
+                  key={action.key}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 text-xs"
+                  disabled={action.disabled}
+                  onClick={action.onSelect}
+                >
+                  <action.icon className="size-3.5" />
+                  {action.label}
+                </Button>
+              ))}
             />
             <InspectorNotes node={selected} pipeline={pipeline} />
             {!showTranscript ? (

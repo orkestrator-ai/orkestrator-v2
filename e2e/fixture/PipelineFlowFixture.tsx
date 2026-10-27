@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { CreateTabOptions } from "../../apps/web/src/contexts/TerminalContext";
 import { TerminalProvider, useTerminalContext } from "../../apps/web/src/contexts/TerminalContext";
+import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
+import { BUILD_PIPELINE_VERSION } from "../../apps/web/src/stores/buildPipelineStore";
 import { BuildChatTab } from "../../apps/web/src/components/build-pipeline/BuildChatTab";
 import { useBuildPipelineStore } from "../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import { useKanbanStore } from "../../apps/web/src/stores/kanbanStore";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
+import { validationRun } from "../../apps/web/src/components/build-pipeline/pipeline-test-fixture";
 import { usePrMonitorStore } from "../../apps/web/src/stores/prMonitorStore";
 import { useFlowGraphViewStore } from "../../apps/web/src/stores/flowGraphViewStore";
 import type { Environment } from "../../apps/web/src/types";
@@ -178,20 +183,107 @@ function loops(): BuildPipeline {
 
 function scenario(): BuildPipeline {
   const name = new URLSearchParams(window.location.search).get("scenario");
+  if (name === "validation") {
+    const pipeline = fanout();
+    pipeline.sessions = pipeline.sessions.slice(0, 2);
+    pipeline.currentSessionIndex = 1;
+    delete pipeline.reviewFanout;
+    pipeline.validationRun = validationRun({
+      status: "running",
+      startedAt: at(770),
+      completedAt: undefined,
+    });
+    return pipeline;
+  }
+  if (name === "images") {
+    const pipeline = fanout();
+    pipeline.taskSnapshot = {
+      ...SNAPSHOT,
+      images: [
+        {
+          filename: "reference.svg",
+          data: btoa(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>',
+          ),
+        },
+        {
+          filename: "reference.bmp",
+          data: "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==",
+        },
+      ],
+    };
+    return pipeline;
+  }
   if (name === "loops") return loops();
   if (name === "new") return base({ phase: "waiting-for-setup", sessions: [] });
   return fanout();
 }
 
 function installBackend(pipeline: BuildPipeline) {
+  let authoritative = pipeline;
+  const save = (next: BuildPipeline) => {
+    authoritative = next;
+    sessionStorage.setItem("pipeline-flow-snapshot", JSON.stringify(next));
+    return next;
+  };
   window.__pipelineCommands = [];
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       window.__pipelineCommands!.push({ command, args });
-      const current = useBuildPipelineStore.getState().pipelines.get(pipeline.id) ?? pipeline;
+      const current = authoritative;
       const next = (changes: Partial<BuildPipeline>) =>
-        ({ ...current, ...changes, backendRevision: current.backendRevision + 1 }) as T;
+        save({ ...current, ...changes, backendRevision: current.backendRevision + 1 }) as T;
       switch (command) {
+        case "get_build_pipeline":
+          return {
+            id: current.id,
+            projectId: current.projectId,
+            environmentId: current.environmentId,
+            version: BUILD_PIPELINE_VERSION,
+            revision: current.backendRevision,
+            updatedAt: at(1800),
+            snapshot: current,
+          } as T;
+        case "cancel_build_pipeline":
+          return next({
+            phase: "failed",
+            error: "Build cancelled by user",
+            failureContext: undefined,
+            pausedFromPhase: undefined,
+          });
+        case "fixture_progress": {
+          const nextPipeline = save({
+            ...current,
+            backendRevision: current.backendRevision + 1,
+            reviewFanout: {
+              ...current.reviewFanout!,
+              reviewers: current.reviewFanout!.reviewers.map((reviewer) =>
+                reviewer.id === "r1"
+                  ? {
+                      ...reviewer,
+                      status: "completed" as const,
+                      report: TEST_STRUCTURED_REVIEW_REPORT,
+                    }
+                  : reviewer,
+              ),
+            },
+            sessions: current.sessions.map((session) =>
+              session.sessionKey === "rev-1"
+                ? {
+                    ...session,
+                    status: "idle" as const,
+                    completedAt: at(1000),
+                    reviewerOutcome: "completed" as const,
+                    messages: [message("rev-1-final", "Finished while inactive.")],
+                    messageRevision: 2,
+                  }
+                : session,
+            ),
+          });
+          // Simulate a tab eviction/missed event: the next mount must read the backend.
+          useBuildPipelineStore.setState({ pipelines: new Map() });
+          return nextPipeline as T;
+        }
         case "pause_build_pipeline":
           return next({ phase: "paused", pausedFromPhase: "reviewing" });
         case "resume_build_pipeline":
@@ -221,26 +313,55 @@ function installBackend(pipeline: BuildPipeline) {
   } as unknown as Window["orkestrator"];
 }
 
-function TabRecorder() {
+function TabRecorder({ onOpen }: { onOpen: (options: CreateTabOptions) => void }) {
   const { setCreateTab } = useTerminalContext();
   useEffect(() => {
     window.__openedTabs = [];
     setCreateTab((type, options) => {
       window.__openedTabs!.push({ type, options });
+      if (type === "multi-review" && options) onOpen(options);
       return true;
     });
     return () => setCreateTab(null);
-  }, [setCreateTab]);
+  }, [setCreateTab, onOpen]);
   return null;
 }
 
 /** Seeds the stores and the fake backend before the first render. */
 function seed(): BuildPipeline {
-  const pipeline = scenario();
+  const params = new URLSearchParams(window.location.search);
+  const stored = params.has("restore") ? sessionStorage.getItem("pipeline-flow-snapshot") : null;
+  const pipeline: BuildPipeline = stored ? JSON.parse(stored) : scenario();
+  if (params.has("remote")) {
+    pipeline.environmentId = "remote-environment";
+    pipeline.id = "remote-pipeline";
+    pipeline.environmentType = "containerized";
+    pipeline.sessions = pipeline.sessions.map((session) => ({
+      ...session,
+      sdkSessionId: `remote-${session.sessionKey}-session`,
+    }));
+    window.orkestratorWorkspaceTarget = {
+      nodeId: "bk_leaf",
+      nodeName: "Remote build node",
+      path: "direct",
+    };
+    window.orkestratorPortal = {
+      invoke: async () => {
+        throw new Error("Pipeline command reached the command node instead of its workspace");
+      },
+      listen: () => () => undefined,
+    } as unknown as Window["orkestratorPortal"];
+  }
   installBackend(pipeline);
+  useKanbanStore.setState({
+    tasks:
+      params.get("scenario") === "images"
+        ? ([{ id: pipeline.taskId, ...SNAPSHOT, title: "Edited live ticket" }] as never)
+        : [],
+  });
   useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
   useBuildPipelineStore.setState({
-    pipelines: new Map([[pipeline.id, pipeline]]),
+    pipelines: params.has("restore") ? new Map() : new Map([[pipeline.id, pipeline]]),
     buildEnvironmentIds: new Set([pipeline.environmentId]),
   });
   const shipped = pipeline.sessions.some((session) => session.phase === "pr");
@@ -250,6 +371,7 @@ function seed(): BuildPipeline {
       {
         id: pipeline.environmentId,
         projectId: pipeline.projectId,
+        containerId: params.has("remote") ? "remote-container" : undefined,
         prUrl,
         prState: shipped ? "open" : null,
       } as Environment,
@@ -280,19 +402,51 @@ function seed(): BuildPipeline {
 
 export function PipelineFlowFixture() {
   const [pipeline] = useState(seed);
+  const [review, setReview] = useState<CreateTabOptions | null>(() =>
+    new URLSearchParams(window.location.search).has("restore")
+      ? { multiReviewId: pipeline.id, multiReviewPipelinePass: "review-pass-1" }
+      : null,
+  );
+  const [visible, setVisible] = useState(true);
   return (
     <TerminalProvider>
-      <TabRecorder />
+      <TabRecorder onOpen={setReview} />
       <main className="h-screen w-full bg-background text-foreground">
-        <BuildChatTab
-          data={{
-            pipelineId: pipeline.id,
-            environmentId: pipeline.environmentId,
-            taskId: pipeline.taskId,
-            isLocal: true,
-          }}
-          isActive
-        />
+        {review ? (
+          <>
+            <button onClick={() => setVisible((value) => !value)}>
+              {visible ? "Switch away" : "Return to review"}
+            </button>
+            {!visible ? (
+              <button onClick={() => void window.orkestrator!.invoke("fixture_progress")}>
+                Finish in background
+              </button>
+            ) : null}
+            {visible ? (
+              <MultiReviewTab
+                data={{
+                  environmentId: pipeline.environmentId,
+                  workflowId: pipeline.id,
+                  pipelinePass: review.multiReviewPipelinePass!,
+                  isLocal: true,
+                }}
+                isActive
+              />
+            ) : (
+              <p>Another tab</p>
+            )}
+          </>
+        ) : (
+          <BuildChatTab
+            data={{
+              pipelineId: pipeline.id,
+              environmentId: pipeline.environmentId,
+              taskId: pipeline.taskId,
+              isLocal: true,
+            }}
+            isActive
+          />
+        )}
       </main>
     </TerminalProvider>
   );

@@ -24,6 +24,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useUIStore } from "@/stores/uiStore";
+import { MultiReviewInspectorHeader } from "./MultiReviewInspector";
 import { MultiReviewTab } from "./MultiReviewTab";
 import {
   MultiReviewFlowGraph,
@@ -1660,4 +1661,33 @@ describe("provisional findings", () => {
     );
     expect(screen.queryByTestId("multi-review-finding-standing") === null).toBe(true);
   });
+});
+
+test.each([
+  ["reviewer", "clock-3"],
+  ["consolidation", "git-merge"],
+  ["fix", "wrench"],
+  ["pr", "git-pull-request"],
+] as const)("the idle %s inspector keeps its kind icon", (kind, icon) => {
+  const view = render(
+    <MultiReviewInspectorHeader
+      node={{
+        id: "idle-node",
+        kind,
+        title: "Idle step",
+        state: "not-started",
+        statusLabel: "Not started",
+        stalled: false,
+        detail: "",
+        runtime: null,
+        runtimeLabel: "Runtime",
+        canOpen: false,
+        onOpen: () => {},
+        contextMenu: null,
+      }}
+      actions={null}
+    />,
+  );
+  expect(view.container.querySelector(`.lucide-${icon}`) !== null).toBe(true);
+  cleanup();
 });

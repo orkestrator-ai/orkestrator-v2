@@ -366,6 +366,9 @@ export class BuildPipelineReviewFanout {
       delete pipeline.structuredReviewRequestId;
     }
     if (reviewer.providerSessionId) this.deps.progress.forget(reviewer.providerSessionId);
+    if (reviewer.resultTransport === "tool-v1" && reviewer.requestId) {
+      await this.deps.workflowResults?.close(reviewer.requestId, "superseded");
+    }
     resetReviewerForRetry(reviewer);
   }
 

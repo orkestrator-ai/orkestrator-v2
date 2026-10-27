@@ -35,7 +35,7 @@ import {
   toMultiReviewSessionMessages,
 } from "./MultiReviewReviewerTab";
 import { FlowInspectorHeader } from "@/components/flow-graph/FlowInspector";
-import type { MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
+import { withIdleIcon, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
 import { provisionalFindingLabel, type MultiReviewMergedFinding } from "./multi-review-flow";
 
@@ -47,7 +47,9 @@ export function MultiReviewInspectorHeader({
   node: MultiReviewFlowNodeModel;
   actions: ReactNode;
 }) {
-  return <FlowInspectorHeader node={node} actions={actions} testIdPrefix="multi-review" />;
+  return (
+    <FlowInspectorHeader node={withIdleIcon(node)} actions={actions} testIdPrefix="multi-review" />
+  );
 }
 
 /** The tail renders at most this many messages, the latest. */

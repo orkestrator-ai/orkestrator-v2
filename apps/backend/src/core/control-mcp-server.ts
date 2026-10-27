@@ -506,6 +506,8 @@ export class ControlMcpServer {
         "move_file",
         // Only the user approves a request; a coordinator only creates one.
         "resolve_node_action_request",
+        // Runs only from the user's approval of an `apply-root-changes` request.
+        "apply_project_root_changes",
       ]);
       if (denied.has(command)) throw new Error("Coordinator capability denied");
       return this.invoke<T>(command, args);

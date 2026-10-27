@@ -51,6 +51,7 @@ export class EnvironmentMutationFence {
    * agent in the old folder nor race the activity check that admitted the move.
    */
   private readonly moving = new Set<string>();
+  private readonly closingTabs = new Map<string, number>();
   private readonly recoveryPending = new Set<string>();
   private readonly pendingMutations = new Map<string, number>();
   private readonly movingPaths = new Map<string, string[]>();
@@ -68,6 +69,14 @@ export class EnvironmentMutationFence {
     } finally {
       release();
     }
+  }
+
+  /** Refuse new submissions throughout a coordinator close's safety read and durable removal. */
+  beginTabClose(environmentId: string): () => void {
+    this.assertAcceptsAgentWork(environmentId);
+    if (this.pendingAgentWork.has(environmentId))
+      throw new Error("An agent submission is in progress; retry closing after it finishes");
+    return hold(this.closingTabs, environmentId);
   }
 
   /** Raw-path writers (including coordinator attachments) share move admission. */
@@ -121,6 +130,8 @@ export class EnvironmentMutationFence {
   /** Reserves the move fence; false when a move of this environment is already admitted. */
   beginMove(environmentId: string): boolean {
     if (this.moving.has(environmentId)) return false;
+    if (this.closingTabs.has(environmentId))
+      throw new Error("A tab is being closed; retry the move later");
     if (this.pendingMutations.has(environmentId))
       throw new Error(
         "A file mutation or worker start is in progress; retry the move when it finishes",
@@ -150,6 +161,8 @@ export class EnvironmentMutationFence {
   }
 
   assertAcceptsAgentWork(environmentId: string): void {
+    if (this.closingTabs.has(environmentId))
+      throw new Error("A worker tab is being closed; retry the prompt when closing finishes");
     if (this.recoveryPending.has(environmentId)) this.assertNotMoving(environmentId);
     if (this.moving.has(environmentId)) {
       throw new Error(

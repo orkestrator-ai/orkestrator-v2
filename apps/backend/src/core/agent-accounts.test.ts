@@ -28,10 +28,6 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
-import {
-  rememberAgentAccountUsage,
-  resetAgentAccountLastUsageForTests,
-} from "./agent-accounts-last-usage.js";
 import { contextUsageWithPlanUsage, sharedPlanUsageCache } from "./plan-usage-cache.js";
 import { StorageService } from "./storage.js";
 
@@ -181,6 +177,12 @@ beforeEach(async () => {
   } as unknown as CommandContext;
   resetAgentAccountLoginForTests();
 });
+
+/** A restarted backend: a fresh runtime, so the last-usage store reads the file again. */
+function reloadBackend(): void {
+  context.runtime.shutdown();
+  context.runtime = new BackendRuntime({ emit: () => undefined });
+}
 
 afterEach(async () => {
   sharedPlanUsageCache.clear();
@@ -419,7 +421,7 @@ describe("agent accounts", () => {
       async (identity) => {
         const id = await addActiveClaudeAccount("original");
         const reading = usageReading("claude");
-        await rememberAgentAccountUsage(
+        await context.runtime.accounts.lastUsage.remember(
           context.storage.agentAccounts.agentAccountsDirectory(),
           "claude",
           id,
@@ -432,6 +434,7 @@ describe("agent accounts", () => {
         });
         expect((await settledLogin()).state).toBe("succeeded");
         resetAgentAccountLoginForTests();
+        reloadBackend();
         const failure: PlanUsageSnapshot = {
           platform: "claude",
           status: "error",
@@ -1156,13 +1159,13 @@ describe("agent accounts", () => {
       ...usageReading("codex", 54),
       fetchedAt: new Date(clock - 60_000).toISOString(),
     };
-    await rememberAgentAccountUsage(
+    await context.runtime.accounts.lastUsage.remember(
       context.storage.agentAccounts.agentAccountsDirectory(),
       "codex",
       id,
       reading,
     );
-    resetAgentAccountLastUsageForTests();
+    reloadBackend();
     const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
       (async () =>
         new Response(null, {

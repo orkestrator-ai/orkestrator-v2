@@ -37,7 +37,6 @@ import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
-import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
@@ -56,11 +55,7 @@ import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
-import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
-import {
-  setLocalClaudeLoginRefresher,
-  setLocalCodexLoginRefresher,
-} from "./agent-accounts-active.js";
+import { backendClaudeStateSignal } from "./claude-state-signal.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -87,6 +82,7 @@ import { McpManagementService } from "./mcp-management/service.js";
 import {
   createCommandRegistry,
   scheduleMergeCleanupRecovery,
+  tmuxLocalClaudeConfigDirectory,
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
@@ -147,7 +143,6 @@ import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentRegistry } from "./agent-registry.js";
-import { tmuxManager } from "./tmux-session-manager.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import {
@@ -235,6 +230,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
+  private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
@@ -454,6 +450,17 @@ export class OrkestratorBackend {
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
         prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
+        tmux: {
+          localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
+          claudeStatePolls: { signal: backendClaudeStateSignal() },
+        },
+        // Read at call time: the keeper and the Codex refresher exist only
+        // between init() and shutdown(); outside that nothing is asked.
+        accounts: {
+          localClaudeLoginRefresher: () => this.claudeLoginKeeper?.refreshLocalLoginIfDue(),
+          hostClaudeLoginRefresher: () => this.claudeLoginKeeper?.refreshHostIfDue(),
+          localCodexLoginRefresher: (home) => this.codexLoginRefresher?.(home),
+        },
       });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
@@ -900,7 +907,8 @@ export class OrkestratorBackend {
     context.agentRegistry = new AgentRegistry(storage, {
       native: (environmentId, agent, logicalSessionKey) =>
         this.nativeAgents.sessionTurnActivitySnapshot(environmentId, agent, logicalSessionKey),
-      tmux: (environmentId, tabId) => tmuxManager.get(environmentId, tabId)?.activityState(),
+      tmux: (environmentId, tabId) =>
+        this.runtime.tmux.sessions.get(environmentId, tabId)?.activityState(),
     });
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
@@ -1384,7 +1392,7 @@ export class OrkestratorBackend {
     }
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
-    startOomEventWatcher(dockerOwnerNamespace(this.context.storage.getDataDir()));
+    this.runtime.containerOom.start(dockerOwnerNamespace(this.context.storage.getDataDir()));
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -1419,14 +1427,11 @@ export class OrkestratorBackend {
     this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
       refreshHostLogin: (account) => refreshHostClaudeLogin(this.context, account),
     });
-    const keeper = this.claudeLoginKeeper;
-    setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
-    setLocalClaudeLoginRefresher(() => keeper.refreshLocalLoginIfDue());
-    keeper.start();
+    this.claudeLoginKeeper.start();
     // Grok, OpenCode and Pi logins: pushed again whenever the host's file changes.
     this.containerLoginFileWatcher ??= new ContainerLoginFileWatcher(this.context);
     this.containerLoginFileWatcher.start();
-    setLocalCodexLoginRefresher(createCodexLoginRefresher(this.context));
+    this.codexLoginRefresher = createCodexLoginRefresher(this.context);
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -2130,12 +2135,10 @@ export class OrkestratorBackend {
     this.claudeLoginKeeper = null;
     this.containerLoginFileWatcher?.stop();
     this.containerLoginFileWatcher = null;
-    setHostClaudeLoginRefresher(undefined);
-    setLocalClaudeLoginRefresher(undefined);
-    setLocalCodexLoginRefresher(undefined);
+    this.codexLoginRefresher = null;
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
-    shutdownOomEventWatcher();
+    this.runtime.containerOom.stop();
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;

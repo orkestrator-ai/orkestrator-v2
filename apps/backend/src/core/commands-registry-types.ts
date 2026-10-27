@@ -7,7 +7,6 @@ import type {
   ResourceManifestKind,
 } from "@orkestrator/protocol/resource-events";
 import type { StorageService } from "./storage.js";
-import type { ClaudeStatePollManager } from "./tmux.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
@@ -16,7 +15,6 @@ import type { PlanUsageReader } from "./plan-usage.js";
 export type CommandRegistrar = (name: string, handler: CommandHandler) => void;
 
 export type CommandRegistryOptions = {
-  claudeStatePolls?: ClaudeStatePollManager;
   projectCreation?: {
     runCommand?: typeof runCommand;
   };

@@ -72,6 +72,7 @@ import { registerVoiceTools } from "./control-mcp-voice.js";
 import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-tools.js";
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
+import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const MAX_PROMPT_LENGTH = 100_000;
@@ -122,6 +123,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["get_multi_review", "multi-review"],
   ["cancel_multi_review", "multi-review"],
   ["address_multi_review", "multi-review"],
+  ["custom_fix_multi_review", "multi-review"],
   ["list_mailboxes", "mail"],
   ["send_message", "mail"],
   ["read_messages", "mail"],
@@ -133,6 +135,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["cancel_schedule", "schedules"],
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
+  ...COORDINATOR_SURFACE_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 

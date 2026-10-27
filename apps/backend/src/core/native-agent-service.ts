@@ -201,6 +201,15 @@ export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
  */
 const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
 
+function hasPendingTabTeardown(
+  environment: Environment | null,
+  logicalSessionKey: string,
+): boolean {
+  return Object.keys(environment?.tabTeardownIntents ?? {}).some(
+    (tabId) => logicalSessionKey === `env-${environment!.id}:${tabId}`,
+  );
+}
+
 export class NativeAgentService {
   /** Orders publication admission against dispatch and Stop for this session only. */
   withSessionWorkFence<T>(
@@ -1489,9 +1498,31 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
-    return this.promptQueues.withSessionMutationIntent(input, () =>
-      this.dispatchIntentUnderIntent(input, preserveExistingPending),
-    );
+    let release: () => void;
+    try {
+      // Reserve before identity/session reads: a close must see even a prompt
+      // whose asynchronous preflight has not reached provider dispatch yet.
+      release = this.environmentFence.beginAgentWork(input.environmentId);
+    } catch (error) {
+      return { outcome: "rejected", error: error instanceof Error ? error.message : String(error) };
+    }
+    try {
+      if (
+        hasPendingTabTeardown(
+          await this.storage.getEnvironment(input.environmentId),
+          input.logicalSessionKey,
+        )
+      )
+        return {
+          outcome: "rejected",
+          error: "This tab has pending teardown; finish closing it before sending more work",
+        };
+      return await this.promptQueues.withSessionMutationIntent(input, () =>
+        this.dispatchIntentUnderIntent(input, preserveExistingPending),
+      );
+    } finally {
+      release();
+    }
   }
 
   private async dispatchIntentUnderIntent(
@@ -3435,6 +3466,10 @@ export class NativeAgentService {
       this.assertAcceptingWork();
       // A rebuild or reset of this environment's runtime is in progress.
       this.environmentFence.assertAcceptsAgentWork(input.environmentId);
+      if (hasPendingTabTeardown(home, input.logicalSessionKey))
+        throw new PromptRejectedError(
+          "This tab has pending teardown; finish closing it before sending more work",
+        );
       const hasAttachments =
         (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {

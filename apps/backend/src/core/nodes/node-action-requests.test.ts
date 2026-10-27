@@ -93,3 +93,35 @@ test("approval parsing rejects malformed inputs and bounds paths, and trims loca
   ).toEqual({ location: "/srv/site", paths: [".env", "config/"], rememberFiles: true });
   expect(parseNodeActionApproval(null)).toEqual({});
 });
+
+test("stable approval identities survive reload, reject changed payloads, and never reopen settled requests", async () => {
+  let durable: NodeActionRequest[] = [];
+  let notices = 0;
+  const options = {
+    load: async () => structuredClone(durable),
+    save: async (requests: NodeActionRequest[]) => {
+      durable = structuredClone(requests);
+    },
+    emit: () => {},
+    executors: {},
+    notify: async () => {
+      notices++;
+    },
+  };
+  let actions = new NodeActionRequests(options);
+  const request = await actions.create({ ...input, requestId: "stable-approval" });
+  actions = new NodeActionRequests(options);
+  expect((await actions.create({ ...input, requestId: "stable-approval" })).requestId).toBe(
+    request.requestId,
+  );
+  expect(await actions.list()).toHaveLength(1);
+  await expect(
+    actions.create({ ...input, requestId: "stable-approval", reason: "changed" }),
+  ).rejects.toThrow("different payload");
+  await actions.resolve(request.requestId, "reject");
+  actions = new NodeActionRequests(options);
+  expect(await actions.create({ ...input, requestId: "stable-approval" })).toMatchObject({
+    state: "rejected",
+  });
+  expect(notices).toBe(1);
+});

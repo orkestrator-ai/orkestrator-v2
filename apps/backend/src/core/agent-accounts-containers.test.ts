@@ -23,7 +23,6 @@ import {
   markContainersForClaudeLoginRefresh,
   reconcileContainerAgentAccount,
   refreshStagedAgentAccountLogins,
-  setHostClaudeLoginRefresher,
   SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND,
   SYNC_CONTAINER_CLAUDE_LOGIN_COMMAND,
   syncContainerAgentAccountsOnStart,
@@ -76,8 +75,14 @@ let context: CommandContext;
 const runtimes: BackendRuntime[] = [];
 
 /** A backend's in-process state; a second one models a restarted backend. */
+/** What the backend's keeper would do on a host refresh; unset means no keeper. */
+let hostClaudeLoginRefresher: (() => Promise<unknown>) | undefined;
+
 function freshRuntime(): BackendRuntime {
-  const runtime = new BackendRuntime({ emit: () => undefined });
+  const runtime = new BackendRuntime({
+    emit: () => undefined,
+    accounts: { hostClaudeLoginRefresher: () => hostClaudeLoginRefresher?.() },
+  });
   runtimes.push(runtime);
   return runtime;
 }
@@ -217,7 +222,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  setHostClaudeLoginRefresher(undefined);
+  hostClaudeLoginRefresher = undefined;
   resetHostMcpRefreshDigests();
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
   for (const key of ENV_KEYS) {
@@ -1878,7 +1883,7 @@ describe("access-only Claude logins", () => {
     // The host file says something else: only the handover may be delivered.
     await writeHostLogin(hostLogin("on-disk"));
     let refreshChecks = 0;
-    setHostClaudeLoginRefresher(async () => void refreshChecks++);
+    hostClaudeLoginRefresher = async () => void refreshChecks++;
     const fake = fakeRunners(null);
     const handover = { account: { accountId: "default" }, credentials: hostLogin("handed-over") };
     expect(await syncContainerClaudeLogin(context, id, { runners: fake.runners, handover })).toBe(
@@ -1943,10 +1948,10 @@ describe("access-only Claude logins", () => {
   test("a start with an expired host token asks the host to refresh, then hands over the renewal", async () => {
     await writeHostLogin(expiredLogin);
     let refreshes = 0;
-    setHostClaudeLoginRefresher(async () => {
+    hostClaudeLoginRefresher = async () => {
       refreshes++;
       await writeHostLogin(hostLogin("renewed-on-host"));
-    });
+    };
     try {
       const fake = fakeRunners(null);
       await syncContainerAgentAccountsOnStart(
@@ -1969,7 +1974,7 @@ describe("access-only Claude logins", () => {
       );
       expect(refreshes).toBe(2);
     } finally {
-      setHostClaudeLoginRefresher(undefined);
+      hostClaudeLoginRefresher = undefined;
     }
   });
 
@@ -1979,10 +1984,10 @@ describe("access-only Claude logins", () => {
         await writeHostLogin(hostLogin("old", entry === "expired-mcp" ? 1 : Date.now() + 120_000));
         const fake = fakeRunners(null);
         let checks = 0;
-        setHostClaudeLoginRefresher(async () => {
+        hostClaudeLoginRefresher = async () => {
           checks++;
           await writeHostLogin(hostLogin("renewed"));
-        });
+        };
         if (start === "container") {
           await syncContainerAgentAccountsOnStart(
             context,

@@ -1655,6 +1655,10 @@ export async function compressBody(
   });
 }
 
+/**
+ * Process-wide on purpose: dynamic compression is CPU-bound, so the bound is
+ * per process, however many backends it hosts (docs/architecture/backend-runtime.md).
+ */
 export let activeDynamicCompressions = 0;
 
 export function canStartDynamicCompression(activeCount: number): boolean {

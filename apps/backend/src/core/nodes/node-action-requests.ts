@@ -12,6 +12,9 @@ import { randomUUID } from "node:crypto";
  * - `update-project-files`: push the command node's `.env` and selected
  *   files (or keys) to nodes.
  * - `reveal-env-value`: show one `.env` value in plain text.
+ * - `apply-root-changes`: apply a patch of the project checkout's
+ *   uncommitted changes to one worker on this node. The coordinator names
+ *   the worker and may suggest files; the user picks the files.
  *
  * Requests hold names and identifiers only, never file contents or values.
  * The outcome is mailed back to the requesting coordinator conversation.
@@ -25,7 +28,8 @@ export type NodeActionKind =
   | "delete-environment"
   | "create-project"
   | "update-project-files"
-  | "reveal-env-value";
+  | "reveal-env-value"
+  | "apply-root-changes";
 
 export interface NodeActionTarget {
   nodeId: string;
@@ -158,18 +162,35 @@ export class NodeActionRequests {
   }
 
   async create(input: {
+    requestId?: string;
     kind: NodeActionKind;
     targets: NodeActionTarget[];
     requestedBy: NodeActionRequest["requestedBy"];
     reason?: string;
   }): Promise<NodeActionRequest> {
+    if (input.requestId !== undefined && (!input.requestId.trim() || input.requestId.length > 256))
+      throw new Error("Expected a requestId of 1-256 characters");
     await this.ensureLoaded();
     if (input.targets.length === 0) throw new Error("A request needs at least one target.");
     if (input.targets.length > 64) throw new Error("A request can name at most 64 targets.");
+    if (input.requestId) {
+      const existing = this.requests.find((request) => request.requestId === input.requestId);
+      if (existing) {
+        if (
+          existing.kind !== input.kind ||
+          JSON.stringify(existing.targets) !== JSON.stringify(input.targets) ||
+          JSON.stringify(existing.requestedBy) !== JSON.stringify(input.requestedBy) ||
+          existing.reason !== (input.reason ? input.reason.slice(0, 500) : undefined)
+        )
+          throw new Error("Request ID was reused with a different payload");
+        await this.persist();
+        return structuredClone(existing);
+      }
+    }
     this.expire();
     const now = this.now();
     const request: NodeActionRequest = {
-      requestId: randomUUID(),
+      requestId: input.requestId ?? randomUUID(),
       kind: input.kind,
       targets: input.targets.map((target) => ({ ...target })),
       requestedBy: { ...input.requestedBy },
@@ -290,5 +311,9 @@ export function describeNodeAction(request: Pick<NodeActionRequest, "kind" | "ta
             `${target.keys?.join(", ")} from ${target.files?.join(", ")} on ${target.nodeName}`,
         )
         .join("; ")} in plain text`;
+    case "apply-root-changes":
+      return `Apply uncommitted checkout changes to ${request.targets
+        .map((target) => `“${names(target)}” on ${target.nodeName}`)
+        .join(", ")}`;
   }
 }

@@ -560,12 +560,15 @@ When touching the app-server engine:
   no-touch read (never omitting one: an unreadable id is `unavailable`), and
   only a 404/405 on that route means "older bridge".
 - `GET /session/:id/dispatch?requestId=` answers `dispatched` **only** on an
-  explicit positive from that bridge's own dispatch journal. No record, a record
-  that predates a bridge restart (the ACP journal's `ambiguous`, the codex
-  journal's `prepared`), an unreadable journal and a missing route are all
-  `unknown`. The backend clears a parked dispatch on `dispatched` alone, so
-  reporting a *lost* record as "never sent" would have it run the same turn
-  twice. Like `/activity`, it must never touch liveness, hydrate or re-attach.
+  explicit positive from that bridge's own dispatch journal, `lost` only for a
+  record an earlier process left without an outcome, and `absent` only while
+  the session's journal is complete and holds no record of the id
+  ([`bridges/AGENTS.md`](bridges/AGENTS.md) has the rules). No record in an
+  incomplete journal, an unreadable journal and a missing route are all
+  `unknown`. The backend re-sends a recovered request under the same id on
+  `absent` alone, so reporting a *lost* record as "never sent" would have it
+  run the same turn twice. Like `/activity`, it must never touch liveness,
+  hydrate or re-attach.
 - Prompt dispatch and `POST /session/:id/attach` share the same client timeout,
   because they do the same work. A bridge with no attached agent process pays a
   full spawn plus `initialize` plus `session/load` on whichever request arrives

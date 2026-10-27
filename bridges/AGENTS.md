@@ -40,15 +40,22 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   **only** where the prompt route would refuse the id with 410
   `dispatch-outcome-lost`: a record an earlier process left without an outcome
   (Claude's `restoredDispatchedRequestIds`, the ACP, Cursor and Pi journals'
-  `ambiguous`), never a local reply, and never over a `dispatched`. No record, a
-  record that may still run (the codex journal's `prepared`), an unreadable
-  journal and a missing route are all `unknown`. The backend confirms a parked
+  `ambiguous`), never a local reply, and never over a `dispatched`. No record
+  in a journal that is not complete (below), a record that may still run (the
+  codex journal's `prepared`), an unreadable journal and a missing route are
+  all `unknown`. The backend confirms a parked
   dispatch on `dispatched` and retires it on `lost` (cleared, never recorded as
   run, the draft's id released); `unknown` leaves it parked. Neither `lost` nor
   `unknown` means "never sent": reporting a lost record that way would have it
-  run the same turn twice. Like `/activity`, it must never touch liveness,
-  hydrate or re-attach. A bridge that reports restart interruptions (Claude,
-  Codex) adds `pending: true` beside `dispatched` while that request's turn is
+  run the same turn twice. `absent` does, and is an assertion too: answer it
+  only while the session's journal is complete — created by this bridge, every
+  claim written to disk before its handover, loaded cleanly, nothing evicted,
+  trimmed or skipped since — and the id has no record of any state. The
+  backend then re-sends a recovered request under the same id (0223), so a
+  wrong `absent` runs a turn twice: when unsure, answer `unknown`. An adopted
+  or resumed session is never complete. Like `/activity`, it must never touch
+  liveness, hydrate or re-attach. A bridge that reports restart interruptions
+  (Claude, Codex) adds `pending: true` beside `dispatched` while that request's turn is
   still in flight and `pending: false` once it finished; the backend lets a
   restart notice naming another request stand aside only for a `pending`
   request, so never report a finished request as pending.

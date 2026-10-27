@@ -16,3 +16,12 @@
 - **Disposition:** open.
 - **Evidence:** single observation. The file uses `ASYNC_TEST_BUDGET_MS` for five other cases; this case uses Bun's default five seconds while it drives the fake Docker child and its reconciliation.
 - **Next step:** give the case the same explicit budget.
+
+
+## Direct-history cursor review validation — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1; other worktrees were validating on the shared host.
+- **Failures:** `Electron backend command registry > does not expose configured credentials in Docker argv or container creation errors` exceeded five seconds (5,004.57 ms), then expected `Docker permission denied` but received the uncertain-creation/reconciliation error between tests. `matches short and full container IDs before removing orphaned Docker containers` and `resolves a container's display name through its environment id when the name label is stale` also exceeded five seconds (5,007.46 and 5,003.41 ms); late Docker list calls reported `SIGTERM`.
+- **Owning-file rerun:** `mise run test:logged -- --name docker-registry-owner -- bun test --cwd apps/backend ./tests/commands-registry-docker.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 12.7 s).
+- **Evidence:** `orkestrator-test-run.wESThp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion. Aggregate results are recorded in [1140](../aggregate-validation-runs/1140-direct-history-cursors-0232-validation.md).
+- **Assessment:** credible recurrence with two additional Docker command cases in the same owner. Shared-host subprocess contention is plausible but unproven; no implementation, assertion, deadline or skip changed.

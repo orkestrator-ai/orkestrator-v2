@@ -5,10 +5,15 @@ import {
   FEDERATED_LINK_PARAM,
   decodeResourceLink,
   environmentKey,
+  environmentRef,
+  projectKey,
+  projectRef,
+  type BackendId,
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { useUIStore } from "@/stores";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 
@@ -28,9 +33,42 @@ export function FederationEffects() {
 
 function FederationEffectsActive() {
   const machines = useMachineViews();
+  const { bound } = useFederation();
   useResourceLink(machines);
   useAttentionToasts(machines);
+  useRecentSelections(bound?.backendId ?? null);
   return null;
+}
+
+/**
+ * Records this window's own project and environment selections as recently
+ * used, by node-qualified key, next to other machines' (recorded when they
+ * are opened), so the project search ranks every machine's recents together.
+ * A local selection also ends the search's highlight of another machine's
+ * project.
+ */
+function useRecentSelections(backendId: BackendId | null) {
+  useEffect(() => {
+    if (!backendId) return;
+    return useUIStore.subscribe((state, previous) => {
+      if (
+        state.projectSelectionRevision === previous.projectSelectionRevision &&
+        state.selectedEnvironmentId === previous.selectedEnvironmentId
+      ) {
+        return;
+      }
+      const keys: string[] = [];
+      if (state.selectedEnvironmentId) {
+        keys.push(environmentKey(environmentRef(backendId, state.selectedEnvironmentId)));
+      }
+      if (state.selectedProjectId) {
+        keys.push(projectKey(projectRef(backendId, state.selectedProjectId)));
+      }
+      const views = useMachineViewStore.getState();
+      views.recordRecent(keys);
+      if (keys.length > 0) views.revealProject(null);
+    });
+  }, [backendId]);
 }
 
 /** `?resource=` names a machine and a resource; never a route, port or token. */

@@ -173,6 +173,13 @@ export class CodexRuntimeContext {
    */
   readonly transcriptHydrateInFlight = new Map<string, Promise<void>>();
   /**
+   * Prompt requests between route entry and their return, counted per request
+   * id. `/dispatch` never answers `absent` for one: it may not have journaled
+   * yet. Bounded by the prompt requests in flight; each entry is removed in a
+   * `finally`.
+   */
+  readonly promptRequestsInFlight = new Map<string, number>();
+  /**
    * Bounded, process-local steering idempotency state.
    *
    * app-server persists `clientUserMessageId` on every steered userMessage, so

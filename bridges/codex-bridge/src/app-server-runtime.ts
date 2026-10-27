@@ -229,6 +229,12 @@ export class AppServerRuntime {
     return this.sessions.steerSession(...args);
   }
 
+  promptDispatchAbsent(
+    ...args: Parameters<CodexRuntimeSessions["promptDispatchAbsent"]>
+  ): ReturnType<CodexRuntimeSessions["promptDispatchAbsent"]> {
+    return this.sessions.promptDispatchAbsent(...args);
+  }
+
   steerDispatchStatus(
     ...args: Parameters<CodexRuntimeSessions["steerDispatchStatus"]>
   ): ReturnType<CodexRuntimeSessions["steerDispatchStatus"]> {

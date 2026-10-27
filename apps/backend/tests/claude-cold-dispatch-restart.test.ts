@@ -81,7 +81,17 @@ test("a restarted Claude bridge answers a cold dispatch from disk without regist
           .filter((file) => file.endsWith(".json"))
           .map((file) => readFile(path.join(preferences, file), "utf8")),
       );
-      if (bodies.some((body) => body.includes('"lost-ack"'))) break;
+      // Killed only once the turn's own preference writes (the claim, then
+      // the in-flight mark) have landed and released their lock: a lock left
+      // by a kill mid-write blocks the next process's writes until it is
+      // stale (todo 0059), which would fail the resend below for the wrong reason.
+      const locked = files.some((file) => file.endsWith(".lock"));
+      if (
+        !locked &&
+        bodies.some((body) => body.includes('"lost-ack"') && body.includes('"turnInFlight"'))
+      ) {
+        break;
+      }
       if (Date.now() > deadline) throw new Error("Dispatch claim was never persisted");
       await Bun.sleep(20);
     }
@@ -97,12 +107,31 @@ test("a restarted Claude bridge answers a cold dispatch from disk without regist
     for (const requestId of ["lost-ack", "never-seen", "lost-ack"]) {
       const response = await request(`/session/${sessionId}/dispatch?requestId=${requestId}`);
       expect(response.status).toBe(200);
+      // The session was created by this bridge and every claim reached disk
+      // first, so an id missing from its journal provably never arrived.
       expect(await response.json()).toEqual({
-        dispatch: requestId === "lost-ack" ? "lost" : "unknown",
+        dispatch: requestId === "lost-ack" ? "lost" : "absent",
       });
       expect(await registered()).toBe(false);
     }
     // No Retry, attach, status or transcript read was needed to settle it.
+    // A resend acts on that answer: the lost id is refused for good, and the
+    // absent one is taken as a first delivery.
+    const lostResend = await request(`/session/${sessionId}/prompt`, {
+      prompt: "fixture",
+      requestId: "lost-ack",
+    });
+    expect(lostResend.status).toBe(410);
+    expect(
+      (
+        await request(`/session/${sessionId}/prompt`, {
+          prompt: "fixture",
+          requestId: "never-seen",
+        })
+      ).status,
+    ).toBe(202);
+    const after = await request(`/session/${sessionId}/dispatch?requestId=never-seen`);
+    expect(((await after.json()) as { dispatch: string }).dispatch).toBe("dispatched");
   } finally {
     clearTimeout(timeout);
     await stop();

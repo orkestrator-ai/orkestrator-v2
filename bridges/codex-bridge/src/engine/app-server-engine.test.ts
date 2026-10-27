@@ -58,6 +58,69 @@ describe("device login", () => {
     }
   });
 
+  test.each(["cancel", "expiry", "complete"])(
+    "retains replacement login through signed-in polls until %s",
+    async (ending) => {
+      const h = harness({
+        "account/login/start": () => deviceLogin,
+        "account/login/cancel": () => ({ status: "canceled" }),
+        "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
+      });
+      await h.engine.start();
+      let now: ReturnType<typeof spyOn> | undefined;
+      let expire: (() => void) | undefined;
+      const realTimeout = globalThis.setTimeout;
+      const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: () => void,
+        delay: number,
+        ...args: unknown[]
+      ) => {
+        if (delay > 14 * 60_000 && delay <= 15 * 60_000) expire = callback;
+        return realTimeout(callback, delay, ...args);
+      }) as typeof setTimeout);
+      try {
+        await h.engine.beginAccountLogin("device-code");
+        const first = await h.engine.readAccount();
+        const timer = (h.engine as unknown as { pendingSignInTimer: unknown }).pendingSignInTimer;
+        expect(timer).toBeDefined();
+        expect(first).toMatchObject({ pendingSignIn: { code: "TEST-CODE" } });
+        expect(await h.engine.readAccount()).toEqual(first);
+        expect((h.engine as unknown as { pendingSignInTimer: unknown }).pendingSignInTimer).toBe(
+          timer,
+        );
+        if (ending === "complete") {
+          h.child().notify("account/login/completed", {
+            loginId: deviceLogin.loginId,
+            success: true,
+          });
+          await settle();
+        } else if (ending === "expiry") {
+          now = spyOn(Date, "now").mockReturnValue(Date.now() + 16 * 60_000);
+          expect(expire).toBeDefined();
+          expire!();
+          await settle();
+          // Cleanup belongs to the bridge timer even with no renderer polling.
+          expect(
+            h.child().requests.filter((r) => r.method === "account/login/cancel"),
+          ).toHaveLength(1);
+        } else {
+          expect(await h.engine.cancelAccountLogin()).toBe("canceled");
+        }
+        expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+        await settle();
+        expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual(
+          ending === "complete"
+            ? []
+            : [{ method: "account/login/cancel", params: { loginId: deviceLogin.loginId } }],
+        );
+      } finally {
+        now?.mockRestore();
+        timeout.mockRestore();
+        await h.engine.stop();
+      }
+    },
+  );
+
   test.each([true, false])(
     "clears the owning login on completion (success=%s), ignoring a different login",
     async (success) => {
@@ -80,10 +143,10 @@ describe("device login", () => {
     },
   );
 
-  test.each(["expiry", "logout", "signed-in", "generation-exit", "start-failure"])(
+  test.each(["expiry", "logout", "generation-exit", "start-failure"])(
     "clears pending display on %s",
     async (reason) => {
-      let account: unknown = null;
+      const account: unknown = null;
       let failStart = false;
       const h = harness({
         "account/login/start": () => {
@@ -99,7 +162,6 @@ describe("device login", () => {
         await h.engine.beginAccountLogin("device-code");
         if (reason === "expiry") now = spyOn(Date, "now").mockReturnValue(Date.now() + 16 * 60_000);
         if (reason === "logout") await h.engine.logoutAccount();
-        if (reason === "signed-in") account = { type: "chatgpt", email: "test@example.test" };
         if (reason === "generation-exit") {
           h.child().exit(1);
           await settle();

@@ -179,6 +179,14 @@ export interface Scenario {
   concurrency: Partial<ReviewFanoutConcurrency>;
   reviewerMode: "plan" | "build";
   disruptions: Disruption[];
+  /**
+   * The provider's journal is complete (0223): it answers `absent` for an id
+   * it never took, so a recovered `dispatching` request is re-sent under the
+   * same id, and a send a crash left on the wire may land late, where the
+   * provider deduplicates it. Set by the suite, not by `planScenario`, so the
+   * other flavours keep their seeds.
+   */
+  provesAbsence?: boolean;
 }
 
 export type ScenarioFlavour = "plain" | "cancellation" | "fence-loss" | "restart" | "chaos";
@@ -439,6 +447,12 @@ export interface ReviewerLedger {
    * started, so the answer described the previous turn (0112, item 2).
    */
   lateStartReads: number;
+  /** `absent` answers given for its requests (only when the scenario proves absence). */
+  absentAnswers: number;
+  /** Sends a crash left on the wire to land later. */
+  lateDeliveries: number;
+  /** Deliveries of an id the provider had already taken, deduplicated. */
+  duplicateDeliveries: number;
 }
 
 export interface InterleavingResult {
@@ -482,6 +496,10 @@ export class InterleavingWorld {
   private readonly sessionsByKey = new Map<string, FakeSession>();
   private readonly results = new Map<string, ResultSlot>();
   private readonly acceptedRequests = new Map<string, string>();
+  /** Ids answered `absent` and not yet re-sent: each answer licenses one resend. */
+  private readonly provenAbsent = new Set<string>();
+  /** Sends from a dead owner still on the wire, delivered at a later step. */
+  private late: Array<() => void> = [];
   private readonly limits: ReviewFanoutConcurrency;
   private pending: PendingOp[] = [];
   private readonly owners: Owner[] = [];
@@ -529,6 +547,9 @@ export class InterleavingWorld {
         acceptedKinds: [],
         staleObservations: 0,
         lateStartReads: 0,
+        absentAnswers: 0,
+        lateDeliveries: 0,
+        duplicateDeliveries: 0,
       });
     }
     this.committed = {
@@ -773,7 +794,8 @@ export class InterleavingWorld {
       calls: 0,
       refused: 0,
     };
-    if (attempts.calls > attempts.refused) {
+    // A resend is allowed only after a refusal or a fresh `absent` answer.
+    if (attempts.calls > attempts.refused && !this.provenAbsent.delete(requestId)) {
       this.violate(`${reviewerId} re-sent request ${kind} that was not refused`);
     }
     attempts.calls += 1;
@@ -808,6 +830,14 @@ export class InterleavingWorld {
         // The request reached the bridge before the backend died, or it did
         // not; either way the script's own answer to it no longer applies.
         if (firstOriginal && plan.script === "ambiguous") ledger.tainted = true;
+        if (this.scenario.provesAbsence && this.rng.chance(0.6)) {
+          // Still on the wire: the bridge has not seen it, so it may answer
+          // `absent` and take a resend first.
+          ledger.tainted = true;
+          ledger.lateDeliveries += 1;
+          this.late.push(accept);
+          return;
+        }
         if (this.rng.chance(0.5)) accept();
         else ledger.tainted = true;
       },
@@ -819,6 +849,11 @@ export class InterleavingWorld {
     const plan = this.plans.get(reviewerId)!;
     const ledger = this.ledgers.get(reviewerId)!;
     if (this.acceptedRequests.has(requestId)) {
+      if (this.scenario.provesAbsence) {
+        // A complete journal deduplicates a second delivery of the same id.
+        ledger.duplicateDeliveries += 1;
+        return;
+      }
       this.violate(`${reviewerId} request ${kind} was accepted twice`);
     }
     this.acceptedRequests.set(requestId, reviewerId);
@@ -969,10 +1004,18 @@ export class InterleavingWorld {
       // Completion is unproven only while the request is still in transit.
       settleTurn: async (sessionId: string, requestId: string) =>
         !this.session(sessionId).inTransit.has(requestId),
-      // As the HTTP bridges answer: positive evidence or `unknown`, never
-      // "not sent".
+      // As the HTTP bridges answer: positive evidence or `unknown`, and
+      // `absent` only from a complete journal, for an id not mid-send.
       dispatchStatus: async (sessionId: string, requestId: string) => {
-        if (!this.acceptedRequests.has(requestId)) return "unknown" as const;
+        if (!this.acceptedRequests.has(requestId)) {
+          const session = this.session(sessionId);
+          if (!this.scenario.provesAbsence || session.inTransit.has(requestId)) {
+            return "unknown" as const;
+          }
+          this.provenAbsent.add(requestId);
+          this.ledgers.get(session.reviewerId)!.absentAnswers += 1;
+          return "absent" as const;
+        }
         const turn = this.session(sessionId).turns.find((turn) => turn.requestId === requestId);
         return turn && !turn.finished ? ("pending" as const) : ("dispatched" as const);
       },
@@ -1277,6 +1320,9 @@ export class InterleavingWorld {
           break;
         }
         this.fire();
+        if (this.late.length > 0 && this.rng.chance(0.05)) {
+          this.late.splice(this.rng.int(this.late.length), 1)[0]!();
+        }
         if (this.pending.length === 0) continue;
         const index = this.rng.int(this.pending.length);
         const [entry] = this.pending.splice(index, 1);
@@ -1290,6 +1336,8 @@ export class InterleavingWorld {
         break;
       }
     }
+    // Whatever is still on the wire lands eventually.
+    for (const deliver of this.late.splice(0)) deliver();
     const finalReviewers = this.current.reviewers;
     for (const [reviewerId, ledger] of this.ledgers) {
       ledger.unsentDispatches = ledger.durableDispatches.filter((requestId) => {
@@ -1398,7 +1446,8 @@ export function expectedStatuses(
     case "ambiguous":
       // An unaccepted ambiguous prompt stays parked and exhausts its bound;
       // a delivery-only reminder cannot stand in for its missing first turn.
-      return [plan.ambiguousRan ? "completed" : "failed"];
+      // A provider that proves it never arrived has it re-sent instead.
+      return [plan.ambiguousRan || result.scenario.provesAbsence ? "completed" : "failed"];
     case "createFail":
       // A lost `failed` commit lets the next owner create the session again.
       return ledger.switchedWhileLive ? ["failed", "completed"] : ["failed"];

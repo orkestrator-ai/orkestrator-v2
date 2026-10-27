@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DISPATCH_COMPLETENESS_VERSION,
   DISPATCH_JOURNAL_VERSION,
   DispatchJournal,
+  MAX_FRESH_SESSION_MARKERS,
   reconcileFromThreadTurns,
   type PromptDispatchRecord,
 } from "./dispatch-journal.js";
@@ -1444,5 +1446,207 @@ describe("reconcileFromThreadTurns", () => {
     const turns = [runningTurn, completedTurn];
     expect(reconcileFromThreadTurns(turns, "req-1").turnId).toBe("turn-1");
     expect(reconcileFromThreadTurns(turns, "req-2").turnId).toBe("turn-2");
+  });
+});
+
+describe("completeness: proving an id never reached Codex", () => {
+  /** A persisted journal over a private CODEX_HOME, loaded as at bridge start. */
+  async function tracked(
+    codexHome: string,
+    options: { now?: () => number; retentionMs?: number; maxRecords?: number } = {},
+  ) {
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", ...options });
+    await store.load();
+    return store;
+  }
+
+  test("a new journal proves an unseen id absent only for a fresh session", async () => {
+    const { codexHome } = journalHome("ork-journal-absent-");
+    const store = await tracked(codexHome);
+    expect(store.provesNeverJournaled("req-1", "s1")).toBe(false);
+    store.noteFreshSession("s1");
+    expect(store.provesNeverJournaled("req-1", "s1")).toBe(true);
+    // Never for a session this journal did not see created.
+    expect(store.provesNeverJournaled("req-1", "s-restored")).toBe(false);
+  });
+
+  test("a prepared record, or a record under another session, is never absent", async () => {
+    const { codexHome } = journalHome("ork-journal-absent-");
+    const store = await tracked(codexHome);
+    store.noteFreshSession("s1");
+    store.noteFreshSession("s2");
+    await store.markPrepared({ requestId: "req-1", bridgeSessionId: "s1", threadId: "t1" });
+    expect(store.provesNeverJournaled("req-1", "s1")).toBe(false);
+    expect(store.provesNeverJournaled("req-1", "s2")).toBe(false);
+    await store.markAccepted("req-1", { threadId: "t1", turnId: "turn-1" });
+    await store.markTerminal("req-1", "completed");
+    expect(store.provesNeverJournaled("req-1", "s2")).toBe(false);
+  });
+
+  test("an id removed by age, capacity or forget stays unknown, across a reload", async () => {
+    let clock = Date.parse("2026-10-27T00:00:00.000Z");
+    const { codexHome } = journalHome("ork-journal-absent-");
+    const options = { now: () => clock, retentionMs: 1_000, maxRecords: 2 };
+    const store = await tracked(codexHome, options);
+    store.noteFreshSession("s1");
+
+    await store.markPrepared({ requestId: "aged", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markTerminal("aged", "completed");
+    clock += 10_000;
+    await store.markPrepared({ requestId: "shed-1", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markTerminal("shed-1", "completed");
+    await store.markPrepared({ requestId: "shed-2", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markTerminal("shed-2", "completed");
+    // Admission sheds the oldest settled record to stay within two records.
+    await store.markPrepared({ requestId: "forgotten", bridgeSessionId: "s1", threadId: "t1" });
+    expect(store.get("aged")).toBeUndefined();
+    expect(store.get("shed-1")).toBeUndefined();
+
+    await store.forget("forgotten");
+    expect(store.get("forgotten")).toBeUndefined();
+    for (const id of ["aged", "shed-1", "forgotten"]) {
+      expect(store.provesNeverJournaled(id, "s1")).toBe(false);
+    }
+    // A removal names only the removed id: others are still provable.
+    expect(store.provesNeverJournaled("never-sent", "s1")).toBe(true);
+
+    const reloaded = await tracked(codexHome, options);
+    for (const id of ["aged", "shed-1", "forgotten"]) {
+      expect(reloaded.provesNeverJournaled(id, "s1")).toBe(false);
+    }
+    expect(reloaded.provesNeverJournaled("never-sent", "s1")).toBe(true);
+    expect(reloaded.get("shed-2")?.state).toBe("terminal");
+  });
+
+  test("absent survives a clean reload and dispatched records keep their state", async () => {
+    const { codexHome } = journalHome("ork-journal-absent-");
+    const store = await tracked(codexHome);
+    store.noteFreshSession("s1");
+    await store.markPrepared({ requestId: "running", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markAccepted("running", { threadId: "t1", turnId: "turn-1" });
+
+    const file = JSON.parse(
+      readFileSync(
+        join(codexHome, "orkestrator-bridge", `dispatch-journal-${hashCwd("/workspace")}.json`),
+        "utf8",
+      ),
+    ) as { version: number; records: unknown[]; completeness?: Record<string, unknown> };
+    expect(file.version).toBe(DISPATCH_JOURNAL_VERSION);
+    expect(file.completeness).toMatchObject({
+      version: DISPATCH_COMPLETENESS_VERSION,
+      freshSessions: ["s1"],
+    });
+
+    const reloaded = await tracked(codexHome);
+    expect(reloaded.provesNeverJournaled("other", "s1")).toBe(true);
+    expect(reloaded.get("running")).toMatchObject({ state: "accepted", turnId: "turn-1" });
+    expect(reloaded.classify("running").action).toBe("attach");
+  });
+
+  test("a steered id is recorded before the write and never answers absent", async () => {
+    const { codexHome } = journalHome("ork-journal-absent-");
+    const store = await tracked(codexHome);
+    store.noteFreshSession("s1");
+    await store.noteUntracked("req-steer");
+    expect(store.provesNeverJournaled("req-steer", "s1")).toBe(false);
+    expect((await tracked(codexHome)).provesNeverJournaled("req-steer", "s1")).toBe(false);
+  });
+
+  test("an older-format journal still loads, and nothing in it is ever absent", async () => {
+    const { codexHome, path } = journalHome("ork-journal-absent-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        {
+          requestId: "req-old",
+          bridgeSessionId: "s-old",
+          threadId: "t1",
+          turnId: "turn-1",
+          state: "terminal",
+          terminalStatus: "completed",
+          createdAt: "2026-10-27T00:00:00.000Z",
+          updatedAt: new Date().toISOString(),
+          sequence: 1,
+        },
+      ],
+    });
+    const store = await tracked(codexHome);
+    expect(store.classify("req-old").action).toBe("already-done");
+    expect(store.classify("req-new").action).toBe("dispatch");
+    store.noteFreshSession("s-old");
+    store.noteFreshSession("s-new");
+    expect(store.provesNeverJournaled("req-unseen", "s-old")).toBe(false);
+    expect(store.provesNeverJournaled("req-unseen", "s-new")).toBe(false);
+
+    // It stays untracked for good: the file is rewritten without the block.
+    await store.markPrepared({ requestId: "req-new", bridgeSessionId: "s-new", threadId: "t2" });
+    expect(JSON.parse(readFileSync(path, "utf8")).completeness).toBeUndefined();
+    expect((await tracked(codexHome)).provesNeverJournaled("req-unseen", "s-new")).toBe(false);
+  });
+
+  test("a malformed completeness block, an unnamed record or a corrupt file proves nothing", async () => {
+    const malformed = journalHome("ork-journal-absent-");
+    writeJournalFile(malformed.codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [],
+      completeness: {
+        version: DISPATCH_COMPLETENESS_VERSION,
+        freshSessions: ["s1"],
+        untracked: "",
+      },
+    });
+    const fromMalformed = await tracked(malformed.codexHome);
+    fromMalformed.noteFreshSession("s1");
+    expect(fromMalformed.provesNeverJournaled("req-1", "s1")).toBe(false);
+
+    // Start from a valid tracked file, then add a record whose id is unknowable.
+    const unnamed = journalHome("ork-journal-absent-");
+    const seed = await tracked(unnamed.codexHome);
+    seed.noteFreshSession("s1");
+    await seed.markPrepared({ requestId: "req-0", bridgeSessionId: "s1", threadId: "t1" });
+    const file = JSON.parse(readFileSync(unnamed.path, "utf8")) as { records: unknown[] };
+    file.records.push({ bridgeSessionId: "s1", state: "terminal" });
+    writeFileSync(unnamed.path, JSON.stringify(file));
+    expect((await tracked(unnamed.codexHome)).provesNeverJournaled("req-1", "s1")).toBe(false);
+
+    const corrupt = journalHome("ork-journal-absent-");
+    mkdirSync(join(corrupt.codexHome, "orkestrator-bridge"), { recursive: true });
+    writeFileSync(corrupt.path, "{not json");
+    const fromCorrupt = await tracked(corrupt.codexHome);
+    fromCorrupt.noteFreshSession("s1");
+    expect(fromCorrupt.classify("req-1").action).toBe("blocked");
+    expect(fromCorrupt.provesNeverJournaled("req-1", "s1")).toBe(false);
+  });
+
+  test("an unloaded or unpersisted journal proves nothing", async () => {
+    const { codexHome } = journalHome("ork-journal-absent-");
+    const unloaded = new DispatchJournal({ codexHome, cwd: "/workspace" });
+    unloaded.noteFreshSession("s1");
+    expect(unloaded.provesNeverJournaled("req-1", "s1")).toBe(false);
+
+    const memoryOnly = journal({ persist: false });
+    await memoryOnly.load();
+    memoryOnly.noteFreshSession("s1");
+    expect(memoryOnly.provesNeverJournaled("req-1", "s1")).toBe(false);
+  });
+
+  test("fresh-session markers are bounded, oldest first", async () => {
+    const { codexHome, path } = journalHome("ork-journal-absent-");
+    const store = await tracked(codexHome);
+    for (let index = 0; index <= MAX_FRESH_SESSION_MARKERS; index += 1) {
+      store.noteFreshSession(`s${index}`);
+    }
+    store.noteFreshSession("x".repeat(257));
+    expect(store.provesNeverJournaled("req-1", "s0")).toBe(false);
+    expect(store.provesNeverJournaled("req-1", "s1")).toBe(true);
+    expect(store.provesNeverJournaled("req-1", `s${MAX_FRESH_SESSION_MARKERS}`)).toBe(true);
+    expect(store.provesNeverJournaled("req-1", "x".repeat(257))).toBe(false);
+    await store.markPrepared({ requestId: "req-0", bridgeSessionId: "s1", threadId: "t1" });
+    const file = JSON.parse(readFileSync(path, "utf8")) as {
+      completeness: { freshSessions: string[]; untracked: string };
+    };
+    expect(file.completeness.freshSessions).toHaveLength(MAX_FRESH_SESSION_MARKERS);
+    // The filter has a fixed size, whatever it holds.
+    expect(Buffer.from(file.completeness.untracked, "base64")).toHaveLength(16 * 1024);
   });
 });

@@ -260,12 +260,24 @@ Codex put an `authNotice` on their session read (`GET /session/:id`,
 | Platform | Raised by | Cleared by |
 | --- | --- | --- |
 | Claude | `auth_status` with an `error` (`expired`) or `isAuthenticating` (`needs-auth`); a turn refused with `authentication_failed` (`expired`) | `auth_status` reporting the authentication finished; any real model answer |
-| Codex | `modelProvider/authRecoveryStarted` (`expired`) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`) |
+| Codex | `modelProvider/authRecoveryStarted` (`expired`); a turn failed with `unauthorized` or a forwarded 401 (`needs-auth`, "Codex's login was refused. …") | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`) |
 
 Codex's completion carries no outcome field (codex 0.162 says succeeded,
 failed-permanent or failed-transient only in its message), so the failure check
 reads its text; a real sign-out still locks the composer through readiness. The
 notice is in memory on the bridge: a restarted bridge starts without one.
+
+A login the API refuses outright sends no recovery at all. Codex 0.162 and
+0.164 treat an invalid API key as signed in (`account/read` reports it), retry
+the request and fail the turn with `codexErrorInfo: { httpConnectionFailed:
+{ httpStatusCode: 401 } }`. `toTurnError` keeps that status (`httpStatusCode`),
+and a turn failed with `unauthorized`, or with a 401 on any variant that
+forwards one (`httpConnectionFailed`, `responseStreamConnectionFailed`,
+`responseStreamDisconnected`, `responseTooManyFailedAttempts`), raises the
+`needs-auth` notice (`refusedLoginNotice`, `sessions/auth-recovery-notice.ts`).
+Only a 401: a failure with no status or a 5xx never locks the composer. A
+second refusal keeps the occurrence, so a dismissed notice stays dismissed.
+The in-tab sign-in replaces an API key with a ChatGPT login.
 
 How each tab shows it:
 

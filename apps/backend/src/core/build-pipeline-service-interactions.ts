@@ -284,25 +284,19 @@ export class BuildPipelineInteractions {
     pipeline.error = abortErrors.length
       ? `${errorMessage(error)} Stopping every review agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
       : errorMessage(error);
+    const preSessionFailure = error instanceof PreSessionStageStartError;
+    const failedSession = preSessionFailure
+      ? undefined
+      : pipeline.phase === "reviewing" && pipeline.reviewFanout
+        ? pipeline.sessions.find(
+            (session) => session.sessionKey === pipeline.reviewFanout?.consolidation?.sessionKey,
+          )
+        : sessionForCurrentPhase(pipeline);
     pipeline.failureContext = {
-      phase:
-        error instanceof PreSessionStageStartError
-          ? error.phase
-          : (pipeline.phase as ResumableBuildPhase),
+      phase: preSessionFailure ? error.phase : (pipeline.phase as ResumableBuildPhase),
       kind: "stage-transition",
-      sessionId:
-        pipeline.reviewFanout || error instanceof PreSessionStageStartError
-          ? undefined
-          : sessionForCurrentPhase(pipeline)?.sdkSessionId,
+      sessionId: failedSession?.sdkSessionId,
     };
-    const failedSession =
-      error instanceof PreSessionStageStartError
-        ? undefined
-        : pipeline.reviewFanout
-          ? pipeline.sessions.find(
-              (session) => session.sessionKey === pipeline.reviewFanout?.consolidation?.sessionKey,
-            )
-          : sessionForCurrentPhase(pipeline);
     if (failedSession) {
       failedSession.status = "error";
       failedSession.error = boundedPipelineSessionError(pipeline.error);

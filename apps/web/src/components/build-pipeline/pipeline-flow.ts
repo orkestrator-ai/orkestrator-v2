@@ -542,7 +542,7 @@ export function pipelineFlowModel(
       // Legacy records predate reviewPassId. A fresh reviewer ID in a used
       // slot starts another full panel; numbered attempts keep the same slot.
       if (
-        previous &&
+        previous?.session &&
         (!session.reviewPassId || !previous.session?.reviewPassId) &&
         previous.session?.sessionKey.replace(/:attempt-\d+$/, "") !==
           session.sessionKey.replace(/:attempt-\d+$/, "")
@@ -591,6 +591,28 @@ export function pipelineFlowModel(
         session.iteration,
         session.reviewPassId ?? (liveConsolidation ? fanout?.reviewers[0]?.id : undefined),
       );
+      // The live fan-out below owns retry actions and admission state.
+      // Its compact history is used only after this pass stops being live.
+      for (const reviewer of liveConsolidation && reviewingNow
+        ? []
+        : (session.sessionlessReviewers ?? [])) {
+        if (reviewPass.reviewers.has(reviewer.slot)) continue;
+        const node: PipelineFlowNode = {
+          id: `reviewer:${reviewer.id}`,
+          kind: "reviewer",
+          title: `${KIND_TITLES.reviewer} ${reviewer.slot + 1}`,
+          state: "failed",
+          placeholder: false,
+          passKey: reviewPass.key,
+          slot: reviewer.slot,
+          agent: reviewer.agent,
+          model: reviewer.model,
+          reasoningEffort: reviewer.reasoningEffort,
+          error: reviewer.error,
+        };
+        reviewPass.reviewers.set(reviewer.slot, node);
+        place(reviewPass.reviewersColumn, node);
+      }
       let state: FlowNodeState = sessionState(session, pipeline, false);
       if (liveConsolidation) {
         state = fanout?.report

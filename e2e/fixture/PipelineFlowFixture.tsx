@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import { DndContext } from "@dnd-kit/core";
+import { PaneTree } from "../../apps/web/src/components/pane-layout/PaneTree";
+import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
+import type { PaneSplit } from "../../apps/web/src/types/paneLayout";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { CreateTabOptions } from "../../apps/web/src/contexts/TerminalContext";
 import { TerminalProvider, useTerminalContext } from "../../apps/web/src/contexts/TerminalContext";
@@ -429,6 +433,83 @@ function seed(): BuildPipeline {
   return pipeline;
 }
 
+/** Production pane focus and lazy tab boundary, with deterministic pipeline data. */
+function SplitPipelineViews({ pipeline }: { pipeline: BuildPipeline }) {
+  useState(() => {
+    const root: PaneSplit = {
+      kind: "split",
+      id: "pipeline-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "pipeline-build-pane",
+          activeTabId: "build-tab",
+          tabs: [
+            {
+              id: "build-tab",
+              type: "claude-build",
+              displayTitle: "Build",
+              buildTabData: {
+                pipelineId: pipeline.id,
+                environmentId: pipeline.environmentId,
+                taskId: pipeline.taskId,
+                isLocal: true,
+              },
+            },
+          ],
+        },
+        {
+          kind: "leaf",
+          id: "pipeline-review-pane",
+          activeTabId: "review-tab",
+          tabs: [
+            {
+              id: "review-tab",
+              type: "multi-review",
+              displayTitle: "Review pass",
+              multiReviewTabData: {
+                workflowId: pipeline.id,
+                environmentId: pipeline.environmentId,
+                pipelinePass: "review-pass-1",
+                isLocal: true,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: pipeline.environmentId,
+      environments: new Map([
+        [pipeline.environmentId, { containerId: null, activePaneId: "pipeline-build-pane", root }],
+      ]),
+    });
+    return null;
+  });
+  const root = usePaneLayoutStore((state) => state.environments.get(pipeline.environmentId)?.root);
+  const viewed = useBuildPipelineStore((state) => state.viewedSessionIds.get(pipeline.id));
+  return (
+    <div className="flex h-screen flex-col">
+      <output aria-label="Shell selected session">{viewed ?? "none"}</output>
+      <div className="relative min-h-0 flex-1">
+        <DndContext>
+          {root ? (
+            <PaneTree
+              node={root}
+              containerId={null}
+              environmentId={pipeline.environmentId}
+              isActive
+            />
+          ) : null}
+        </DndContext>
+      </div>
+    </div>
+  );
+}
+
 export function PipelineFlowFixture() {
   const [pipeline] = useState(seed);
   const [review, setReview] = useState<CreateTabOptions | null>(() =>
@@ -441,7 +522,9 @@ export function PipelineFlowFixture() {
     <TerminalProvider>
       <TabRecorder onOpen={setReview} />
       <main className="h-screen w-full bg-background text-foreground">
-        {review ? (
+        {new URLSearchParams(window.location.search).has("split") ? (
+          <SplitPipelineViews pipeline={pipeline} />
+        ) : review ? (
           <>
             <button onClick={() => setVisible((value) => !value)}>
               {visible ? "Switch away" : "Return to review"}

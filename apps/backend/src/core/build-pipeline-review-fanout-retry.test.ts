@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { pipelineIndependentReviewLabel } from "@orkestrator/protocol/build-pipeline";
+import {
+  isBuildPipeline,
+  pipelineIndependentReviewLabel,
+} from "@orkestrator/protocol/build-pipeline";
 import {
   advanceUntil,
   reportFor,
@@ -16,6 +19,92 @@ const PANEL = [
 ];
 
 describe("build pipeline reviewer retry", () => {
+  test.each(["", " \n\t"])(
+    "persists blank provider errors (%j) on a single stage",
+    async (message) => {
+      await withPipeline(async ({ service, read, provider }) => {
+        provider.send = async () => {
+          throw new Error(message);
+        };
+        const started = await service.start(startInput(PANEL));
+        const failed = await advanceUntil(service, read, started.id, "failed");
+        expect(failed.phase).toBe("failed");
+        expect(isBuildPipeline(failed)).toBe(true);
+        expect(failed.sessions[failed.currentSessionIndex]?.status).toBe("error");
+        expect(failed.sessions[failed.currentSessionIndex]?.error).toBeTruthy();
+      });
+    },
+  );
+
+  test.each(["", " \n\t"])("persists blank consolidation errors (%j)", async (message) => {
+    await withPipeline(async ({ service, read, provider }) => {
+      const send = provider.send.bind(provider);
+      provider.send = async (...args) => {
+        if (args[0].includes("consolidation")) throw new Error(message);
+        return send(...args);
+      };
+      const started = await service.start(startInput(PANEL));
+      const failed = await advanceUntil(service, read, started.id, "failed");
+      expect(failed.phase).toBe("failed");
+      expect(isBuildPipeline(failed)).toBe(true);
+      const consolidation = failed.sessions.find((session) => session.label === "Consolidation");
+      expect(consolidation?.status).toBe("error");
+      expect(consolidation?.error).toBeTruthy();
+      expect(failed.failureContext?.sessionId).toBe(consolidation?.sdkSessionId);
+    });
+  });
+
+  test("an initial Address send failure belongs to Address during fan-out handoff", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      const send = provider.send.bind(provider);
+      provider.send = async (...args) => {
+        if (args[0].includes("address")) throw new Error("Address dispatch rejected");
+        return send(...args);
+      };
+      const started = await service.start(startInput(PANEL));
+      const failed = await advanceUntil(service, read, started.id, "failed");
+      expect(failed.phase).toBe("failed");
+      expect(isBuildPipeline(failed)).toBe(true);
+      const address = failed.sessions.find((session) => session.phase === "address");
+      const consolidation = failed.sessions.find((session) => session.label === "Consolidation");
+      expect(address?.status).toBe("error");
+      expect(address?.error).toBe("Address dispatch rejected");
+      expect(failed.failureContext?.sessionId).toBe(address?.sdkSessionId);
+      expect(failed.failureContext?.phase).toBe("addressing");
+      expect(consolidation?.status).toBe("idle");
+      expect(consolidation?.error).toBeUndefined();
+    });
+  });
+
+  test("retains a sessionless reviewer failure after Address handoff and reload", async () => {
+    await withPipeline(async ({ service, read, provider, createService }) => {
+      provider.failingCreateLabels.add(pipelineIndependentReviewLabel(1));
+      const started = await service.start(startInput(PANEL));
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.phase).toBe("addressing");
+      const reloaded = createService();
+      try {
+        await reloaded.init();
+        const record = await read(started.id);
+        expect(record.reviewFanout).toBeUndefined();
+        expect(isBuildPipeline(record)).toBe(true);
+        expect(
+          record.sessions.find((session) => session.label === "Consolidation")
+            ?.sessionlessReviewers,
+        ).toEqual([
+          expect.objectContaining({
+            slot: 1,
+            agent: "claude",
+            model: "sonnet",
+            error: expect.stringContaining("Refusing to create"),
+          }),
+        ]);
+      } finally {
+        await reloaded.shutdown();
+      }
+    });
+  });
+
   test("records each reviewer's outcome, error and issue counts on its session", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       provider.failingModels.add("sonnet");

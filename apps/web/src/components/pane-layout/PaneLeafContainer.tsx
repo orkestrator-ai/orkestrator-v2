@@ -59,12 +59,14 @@ const LazyBrowserTab = lazy(async () => ({
 function MultiReviewTabBoundary({
   data,
   isVisible,
+  ownsGlobalShortcuts,
   refreshRequestId,
   loadingFallback,
   renderError,
 }: {
   data: MultiReviewTabData;
   isVisible: boolean;
+  ownsGlobalShortcuts: boolean;
   refreshRequestId: number;
   loadingFallback: ReactNode;
   renderError: (details: LazyLoadErrorDetails) => ReactNode;
@@ -89,7 +91,12 @@ function MultiReviewTabBoundary({
       resetKeys={[isVisible, refreshRequestId, workflowRevision]}
       onError={handleViewFailure}
     >
-      <LazyMultiReviewTab key={refreshRequestId} data={data} isActive={isVisible} />
+      <LazyMultiReviewTab
+        key={refreshRequestId}
+        data={data}
+        isActive={isVisible}
+        ownsGlobalShortcuts={ownsGlobalShortcuts}
+      />
     </LazyLoadBoundary>
   );
 }
@@ -471,6 +478,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 <MultiReviewTabBoundary
                   data={tab.multiReviewTabData}
                   isVisible={isTabActive && isActive}
+                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   loadingFallback={renderTabFallback(isTabActive && isActive)}
                   renderError={renderTabError(isTabActive && isActive)}

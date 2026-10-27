@@ -417,3 +417,30 @@ test("Fit zooms the whole pipeline into view", async ({ page }) => {
   await level.click();
   await expect(level).toHaveText("100%");
 });
+
+test("split pipeline panes give find and shell selection to the focused pane", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/pipeline-flow?scenario=fanout&split");
+  const panes = page.locator("[data-pane-leaf]");
+  await expect(panes).toHaveCount(2);
+  const buildPane = panes.nth(0);
+  const reviewPane = panes.nth(1);
+  const selectedSession = page.getByRole("status", { name: "Shell selected session" });
+  await expect(reviewPane.getByTestId("pipeline-review-header")).toBeVisible();
+  await buildPane.getByRole("tab", { name: /^Build,/ }).click();
+  await expect(selectedSession).toHaveText("build-session");
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+f`);
+  await expect(buildPane.getByRole("textbox", { name: "Find in chat" })).toBeFocused();
+  await expect(reviewPane.getByRole("textbox", { name: "Find in chat" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await reviewPane.getByRole("tab", { name: /^Reviewer 1,/ }).click();
+  await expect(selectedSession).toHaveText("rev-1-session");
+  await page.keyboard.press(`${modifier}+f`);
+  await expect(reviewPane.getByRole("textbox", { name: "Find in chat" })).toBeFocused();
+  await expect(buildPane.getByRole("textbox", { name: "Find in chat" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  // Focus alone republishes the Build pane's independently pinned selection.
+  await buildPane.getByRole("tab", { name: /^Build,/ }).click();
+  await expect(selectedSession).toHaveText("build-session");
+});

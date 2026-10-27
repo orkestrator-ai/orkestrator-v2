@@ -835,6 +835,29 @@ export class BuildPipelineReviewFanout {
       fastMode: consolidation.fastMode,
       modelSubstitution: consolidation.modelSubstitution,
     });
+    // Sessionless failures have no transcript/session row to retain their outcome.
+    // Keep only their bounded diagnostics on this pass's consolidation session.
+    session.sessionlessReviewers = state.reviewers.flatMap((reviewer, slot) =>
+      reviewer.status === "failed" &&
+      !pipeline.sessions.some((candidate) => candidate.sessionKey === reviewer.sessionKey)
+        ? [
+            {
+              id: reviewer.id.slice(0, 128),
+              slot,
+              agent: reviewer.agent as BuildPipelineAgent,
+              ...(reviewer.model && !reviewer.modelUnpinned
+                ? { model: reviewer.model.slice(0, 256) }
+                : {}),
+              ...(reviewer.reasoningEffort
+                ? { reasoningEffort: reviewer.reasoningEffort.slice(0, 128) }
+                : {}),
+              error: boundedPipelineSessionError(
+                reviewer.error ?? "Reviewer session creation failed",
+              ),
+            },
+          ]
+        : [],
+    );
     session.model ??= consolidation.model;
     session.reasoningEffort ??= consolidation.reasoningEffort;
     provider.registerSession?.(consolidation.providerSessionId, {

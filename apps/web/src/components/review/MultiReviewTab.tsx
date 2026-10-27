@@ -129,6 +129,7 @@ const defaultCommands: MultiReviewCommands = {
 };
 
 interface MultiReviewTabProps {
+  ownsGlobalShortcuts?: boolean;
   data: MultiReviewTabData;
   isActive: boolean;
   hydrateWorkflow?: typeof hydrateMultiReviewWorkflow;
@@ -1869,6 +1870,7 @@ export function MultiReviewTab(props: MultiReviewTabProps) {
         pipelineId={props.data.workflowId}
         environmentId={props.data.environmentId}
         passKey={props.data.pipelinePass}
+        ownsGlobalShortcuts={props.ownsGlobalShortcuts ?? props.isActive}
         isActive={props.isActive}
       />
     );

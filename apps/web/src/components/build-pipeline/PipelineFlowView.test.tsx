@@ -1,11 +1,13 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { act } from "react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 import { build, session, validationRun } from "./pipeline-test-fixture";
 import {
+  BuildChatTab,
   graphNode,
   inspector,
   renderPipelineTab,
@@ -35,6 +37,100 @@ const reviewing = () =>
   });
 
 describe("pipeline inspector controls", () => {
+  test("only the focused active view publishes its session, including reactivation", () => {
+    const pipeline = build({
+      phase: "reviewing",
+      reviewers: [
+        { agent: "claude", model: "opus" },
+        { agent: "codex", model: "gpt" },
+      ],
+      sessions: [
+        session("build", "build", 0),
+        session("review", "reviewer", 60, {
+          label: "Review 1",
+          reviewPassId: "pass",
+          status: "running",
+        }),
+      ],
+      currentSessionIndex: 1,
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, pipeline]]),
+      viewedSessionIds: new Map(),
+    });
+    const Views = ({
+      active,
+      focused = active,
+    }: {
+      active: "build" | "review";
+      focused?: "build" | "review";
+    }) => (
+      <>
+        <section aria-label="Build view">
+          <BuildChatTab
+            data={{
+              pipelineId: pipeline.id,
+              environmentId: pipeline.environmentId,
+              taskId: pipeline.taskId,
+              isLocal: true,
+            }}
+            isActive={active === "build"}
+            ownsGlobalShortcuts={focused === "build"}
+          />
+        </section>
+        <section aria-label="Review view">
+          <PipelineReviewTab
+            pipelineId={pipeline.id}
+            environmentId={pipeline.environmentId}
+            passKey="review-pass-1"
+            isActive={active === "review"}
+            ownsGlobalShortcuts={focused === "review"}
+          />
+        </section>
+      </>
+    );
+    const { rerender } = render(<Views active="build" />);
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Build view" })).getByRole("tab", {
+        name: /^Build,/,
+      }),
+    );
+    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+      "build-session",
+    );
+    // Hidden review follows progress but must not overwrite the visible selection.
+    act(() =>
+      useBuildPipelineStore.getState().replacePipeline({
+        ...pipeline,
+        backendRevision: 2,
+        sessions: [
+          ...pipeline.sessions.map((entry) =>
+            entry.phase === "review"
+              ? { ...entry, status: "idle" as const, reviewerOutcome: "completed" as const }
+              : entry,
+          ),
+          session("review", "consolidation", 120, {
+            label: "Consolidation",
+            reviewPassId: "pass",
+            status: "running",
+          }),
+        ],
+        currentSessionIndex: 2,
+      }),
+    );
+    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+      "build-session",
+    );
+    rerender(<Views active="review" />);
+    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+      "consolidation-session",
+    );
+    rerender(<Views active="build" />);
+    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+      "build-session",
+    );
+  });
+
   test.each(["pending", "running"] as const)(
     "follows a %s reviewer retry instead of discarded consolidation",
     (status) => {

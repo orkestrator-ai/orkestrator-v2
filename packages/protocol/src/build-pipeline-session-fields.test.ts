@@ -76,6 +76,30 @@ describe("pipeline session graph fields", () => {
     expect(isBuildPipeline(pipelineWith({ reviewIssueCounts: { P0: 1 } as never }))).toBe(false);
   });
 
+  test("validates bounded sessionless reviewer history", () => {
+    const reviewer = {
+      id: "r2",
+      slot: 1,
+      agent: "codex" as const,
+      model: "gpt",
+      error: "Creation failed",
+    };
+    expect(isBuildPipeline(pipelineWith({ sessionlessReviewers: [reviewer] }))).toBe(true);
+    for (const invalid of [
+      { ...reviewer, slot: -1 },
+      { ...reviewer, error: "" },
+      { ...reviewer, model: "x".repeat(257) },
+      { ...reviewer, agent: "unknown" },
+    ]) {
+      expect(isBuildPipeline(pipelineWith({ sessionlessReviewers: [invalid] as never }))).toBe(
+        false,
+      );
+    }
+    expect(isBuildPipeline(pipelineWith({ sessionlessReviewers: Array(100).fill(reviewer) }))).toBe(
+      false,
+    );
+  });
+
   test("counts a report's issues by severity", () => {
     expect(
       pipelineReviewIssueCounts({
@@ -86,6 +110,11 @@ describe("pipeline session graph fields", () => {
 
   test("bounds a stored error", () => {
     expect(boundedPipelineSessionError("  short  ")).toBe("short");
+    for (const error of ["", " \n\t"]) {
+      expect(isBuildPipeline(pipelineWith({ error: boundedPipelineSessionError(error) }))).toBe(
+        true,
+      );
+    }
     const long = boundedPipelineSessionError("y".repeat(MAX_PIPELINE_SESSION_ERROR_LENGTH * 2));
     expect(long).toHaveLength(MAX_PIPELINE_SESSION_ERROR_LENGTH);
     expect(isBuildPipeline(pipelineWith({ error: long }))).toBe(true);

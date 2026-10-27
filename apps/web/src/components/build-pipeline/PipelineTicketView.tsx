@@ -22,7 +22,8 @@ const IMAGE_TYPES: Record<string, string> = {
  */
 export function ticketImageUrl(image: TaskSnapshot["images"][number]): string | null {
   if (!/^[A-Za-z0-9+/=\s]+$/.test(image.data)) return null;
-  const extension = image.filename.split(".").pop()?.toLowerCase() ?? "";
+  const dot = image.filename.lastIndexOf(".");
+  const extension = dot < 0 ? "" : image.filename.slice(dot + 1).toLowerCase();
   const type = IMAGE_TYPES[extension] ?? (extension ? null : "image/webp");
   return type ? `data:${type};base64,${image.data.replace(/\s/g, "")}` : null;
 }

@@ -53,7 +53,12 @@ a transcript.
   with no session yet are nodes too. Once the pass is retired, each reviewer
   session keeps how it ended (`reviewerOutcome`), a bounded `error` (2,000
   characters) and per-severity `reviewIssueCounts`; older records without them
-  fall back to the session status. A retried reviewer replaces its failed
+  fall back to the session status. Reviewers that failed before session creation
+  are retained in the consolidation session’s `sessionlessReviewers` summary
+  (at most one entry per panel slot, bounded model and error text), so their
+  model and diagnostic remain inspectable after the live pass is retired.
+  Blank provider diagnostics use a nonblank fallback so failure snapshots
+  remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
 - **Stops.** The current session carries a pause, failure or cancellation. A
@@ -88,7 +93,9 @@ so a missing session never opens as an empty one). The inspector shows the
 status, the actions, and for a session the full transcript with the same
 renderer, virtualization, find and report footer the tab always had
 (`PipelineSessionTranscript`). The message box shows only on the session the
-pipeline is running, under the rules the tab already had. A Prepare node with a
+pipeline is running, under the rules the tab already had. Only the active,
+focused pane publishes its selected session to the shell and owns transcript
+find shortcuts; activation republishes that pane’s independent selection. A Prepare node with a
 validation run has a Tests view; the transcript stays mounted behind it.
 
 Actions sit in each node's context menu and in the inspector: open the session

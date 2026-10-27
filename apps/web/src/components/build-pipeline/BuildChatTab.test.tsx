@@ -63,6 +63,7 @@ describe("BuildChatTab backend projection", () => {
   test("renders the same backend sessions and transcripts for every client", () => {
     render(
       <BuildChatTab
+        isActive
         data={{
           pipelineId: pipeline.id,
           environmentId: pipeline.environmentId,

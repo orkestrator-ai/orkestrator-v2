@@ -15,11 +15,13 @@ export function PipelineReviewTab({
   environmentId,
   passKey,
   isActive,
+  ownsGlobalShortcuts = isActive,
 }: {
   pipelineId: string;
   environmentId: string;
   passKey: string;
   isActive: boolean;
+  ownsGlobalShortcuts?: boolean;
 }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
   const [pinnedId, setPinnedId] = useState<string | null>(null);
@@ -56,7 +58,7 @@ export function PipelineReviewTab({
         pipeline={pipeline}
         environmentId={environmentId}
         isActive={isActive}
-        ownsGlobalShortcuts={isActive}
+        ownsGlobalShortcuts={isActive && ownsGlobalShortcuts}
         controls={controls}
         pinnedId={pinnedId}
         onPin={setPinnedId}

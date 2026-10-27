@@ -232,8 +232,8 @@ export function PipelineFlowView({
   const selectedSessionId = selected?.session?.sdkSessionId ?? null;
   // The shell's info pane reads which stage session is on screen.
   useEffect(() => {
-    setViewedSessionId(pipeline.id, selectedSessionId);
-  }, [pipeline.id, selectedSessionId, setViewedSessionId]);
+    if (isActive && ownsGlobalShortcuts) setViewedSessionId(pipeline.id, selectedSessionId);
+  }, [isActive, ownsGlobalShortcuts, pipeline.id, selectedSessionId, setViewedSessionId]);
 
   const modelLabel = (agent: string, model: string | undefined) =>
     model

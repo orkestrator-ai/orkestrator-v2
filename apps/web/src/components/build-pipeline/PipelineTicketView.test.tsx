@@ -37,6 +37,12 @@ describe("pipeline ticket references", () => {
     },
   );
 
+  test("extensionless clipboard images use the WebP fallback", () => {
+    expect(ticketImageUrl({ filename: "clipboard", data: " YQ==\n" })).toBe(
+      "data:image/webp;base64,YQ==",
+    );
+  });
+
   test("rejects non-base64 content and unknown extensions", () => {
     expect(ticketImageUrl({ filename: "bad.svg", data: "<svg onload=alert(1)>" })).toBeNull();
     expect(ticketImageUrl({ filename: "bad.html", data: "YQ==" })).toBeNull();

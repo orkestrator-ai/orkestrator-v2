@@ -494,6 +494,8 @@ export interface PipelineSession {
   reviewerOutcome?: PipelineReviewerOutcome;
   /** Identity of a full fan-out launch, shared by its reviewers and consolidation. */
   reviewPassId?: string;
+  /** Failed reviewers that never acquired a provider session, retained on consolidation. */
+  sessionlessReviewers?: PipelineSessionlessReviewer[];
   /** This consolidation was discarded by a reviewer retry; its result is no longer usable. */
   superseded?: boolean;
   /**
@@ -577,6 +579,32 @@ export interface PipelineReviewIssueCounts {
 
 export type PipelineReviewerOutcome = "completed" | "failed" | "cancelled";
 
+/** Bounded history for a reviewer whose provider session could not be created. */
+export interface PipelineSessionlessReviewer {
+  id: string;
+  slot: number;
+  agent: BuildPipelineAgent;
+  model?: string;
+  reasoningEffort?: string;
+  error: string;
+}
+
+function isPipelineSessionlessReviewer(value: unknown): value is PipelineSessionlessReviewer {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.id) &&
+    value.id.length <= 128 &&
+    isNonNegativeInteger(value.slot) &&
+    value.slot < MAX_BUILD_PIPELINE_REVIEWERS &&
+    BUILD_PIPELINE_AGENTS.includes(value.agent as BuildPipelineAgent) &&
+    (value.model === undefined || (isNonBlankString(value.model) && value.model.length <= 256)) &&
+    (value.reasoningEffort === undefined ||
+      (isNonBlankString(value.reasoningEffort) && value.reasoningEffort.length <= 128)) &&
+    isNonBlankString(value.error) &&
+    value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH
+  );
+}
+
 /** The longest per-session error kept on the record. */
 export const MAX_PIPELINE_SESSION_ERROR_LENGTH = 2_000;
 
@@ -589,9 +617,9 @@ export function pipelineReviewIssueCounts(report: {
   return counts;
 }
 
-/** Bounds an error for {@link PipelineSession.error}. */
+/** Normalizes an error to nonblank, bounded text for {@link PipelineSession.error}. */
 export function boundedPipelineSessionError(error: string): string {
-  const trimmed = error.trim();
+  const trimmed = error.trim() || "Provider failed without an error message";
   return trimmed.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH
     ? trimmed
     : `${trimmed.slice(0, MAX_PIPELINE_SESSION_ERROR_LENGTH - 1)}…`;
@@ -1176,6 +1204,11 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       value.reviewerOutcome === "failed" ||
       value.reviewerOutcome === "cancelled") &&
     isOptionalNonBlankString(value.reviewPassId) &&
+    (value.sessionlessReviewers === undefined ||
+      (value.phase === "review" &&
+        Array.isArray(value.sessionlessReviewers) &&
+        value.sessionlessReviewers.length <= MAX_BUILD_PIPELINE_REVIEWERS &&
+        value.sessionlessReviewers.every(isPipelineSessionlessReviewer))) &&
     (value.superseded === undefined || typeof value.superseded === "boolean") &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&

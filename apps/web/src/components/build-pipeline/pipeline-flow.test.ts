@@ -38,6 +38,127 @@ function reviewer(slot: number, key: string, start: number, overrides = {}) {
 }
 
 describe("pipelineFlowModel", () => {
+  test("live sessionless failures retain reviewer retry metadata while consolidating", () => {
+    const failed = {
+      id: "failed",
+      agent: "claude" as const,
+      model: "opus",
+      status: "failed" as const,
+      error: "Creation failed",
+    };
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        reviewFanout: {
+          reviewers: [
+            failed,
+            {
+              id: "survivor",
+              agent: "codex",
+              model: "gpt",
+              status: "completed",
+              sessionKey: "survivor",
+            },
+          ],
+          consolidation: {
+            sessionKey: "consolidation",
+            providerSessionId: "consolidation-session",
+            requestId: "request",
+            state: "sent",
+            agent: "claude",
+            createdAt: "2026-07-29T00:02:00.000Z",
+          },
+        },
+        sessions: [
+          reviewer(1, "survivor", 60, { reviewPassId: "failed", reviewerOutcome: "completed" }),
+          session("review", "consolidation", 120, {
+            label: "Consolidation",
+            reviewPassId: "failed",
+            sessionlessReviewers: [
+              { id: "failed", slot: 0, agent: "claude", model: "opus", error: "Creation failed" },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(model.nodes.find((node) => node.id === "reviewer:failed")?.reviewer).toBe(failed);
+  });
+
+  test("a retry of a sessionless failure stays in its original pass", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "addressing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(1, "survivor", 60, { reviewPassId: "pass", reviewerOutcome: "completed" }),
+          session("review", "old-consolidation", 120, {
+            label: "Consolidation",
+            reviewPassId: "pass",
+            superseded: true,
+            sessionlessReviewers: [
+              { id: "failed", slot: 0, agent: "claude", error: "Creation failed" },
+            ],
+          }),
+          reviewer(0, "retry", 180, { reviewPassId: "pass", reviewerOutcome: "completed" }),
+          session("review", "new-consolidation", 240, {
+            label: "Consolidation",
+            reviewPassId: "pass",
+          }),
+          session("address", "address", 300),
+        ],
+      }),
+    );
+    expect(model.columns.filter((column) => column.kind === "review")).toHaveLength(1);
+    expect(model.nodes.find((node) => node.id === "retry")).toMatchObject({
+      earlierAttempts: 1,
+      state: "complete",
+    });
+    expect(model.nodes.some((node) => node.id === "reviewer:failed")).toBe(false);
+  });
+
+  test("reload preserves sessionless failures in a retired review pass", () => {
+    const pipeline = build({
+      phase: "addressing",
+      reviewers: PANEL.slice(0, 2),
+      sessions: [
+        session("build", "build", 0),
+        reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
+        session("review", "consolidation", 120, {
+          label: "Consolidation",
+          reviewPassId: "pass-1",
+          sessionlessReviewers: [
+            {
+              id: "failed-before-session",
+              slot: 0,
+              agent: "claude",
+              model: "opus",
+              error: "Provider session creation failed",
+            },
+          ],
+        }),
+        session("address", "address", 180, { status: "running" }),
+      ],
+    });
+    const model = pipelineFlowModel(JSON.parse(JSON.stringify(pipeline)));
+    const failed = model.nodes.find((node) => node.id === "reviewer:failed-before-session");
+    expect(failed).toMatchObject({
+      kind: "reviewer",
+      state: "failed",
+      agent: "claude",
+      model: "opus",
+      error: "Provider session creation failed",
+    });
+    expect(failed?.session).toBeUndefined();
+    const pass = pipelineReviewPassNodes(model, failed!.passKey!);
+    expect(pass.filter((node) => node.kind === "reviewer")).toHaveLength(2);
+    expect(pass.map((node) => node.id)).toContain("consolidation");
+    expect(model.columns.find((column) => column.kind === "review")?.nodeIds).toEqual([
+      "reviewer:failed-before-session",
+      "survivor",
+    ]);
+  });
+
   test.each([false, true])("full panel restart preserves history (legacy=%s)", (legacy) => {
     const pass = (id: string) => (legacy ? {} : { reviewPassId: id });
     const model = pipelineFlowModel(

@@ -487,8 +487,7 @@ print("public.tiff")
     if (!nicknamesOnly && !failure) {
       // View › Keyboard Shortcuts… reaches the focused window's renderer over
       // IPC. A click opens and never closes; a delivery of the menu's key
-      // equivalent toggles, and a renderer press of the same chord right after
-      // it is taken as the same press rather than a second toggle.
+      // equivalent toggles. Every subsequent physical press toggles again.
       const clickKeyboardShortcuts = (triggeredByAccelerator: boolean) =>
         app.evaluate(({ BrowserWindow, Menu }, triggeredByAccelerator) => {
           const focusedWindow =
@@ -512,7 +511,6 @@ print("public.tiff")
       await expect(shortcutsDialog).toBeVisible();
       await expect(shortcutsSearch).toBeFocused();
       await clickKeyboardShortcuts(false);
-      await new Promise((resolve) => setTimeout(resolve, 250));
       await expect(shortcutsDialog).toBeVisible();
       await window.keyboard.press("Escape");
       await expect(shortcutsDialog).toHaveCount(0);
@@ -520,11 +518,45 @@ print("public.tiff")
       await clickKeyboardShortcuts(true);
       await expect(shortcutsDialog).toBeVisible();
       await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await expect(shortcutsDialog).toBeVisible();
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
       await expect(shortcutsDialog).toHaveCount(0);
+
+      // Electron's native input path must claim one press before either the
+      // renderer page or the menu key equivalent can toggle a second time.
+      await window.evaluate(() => {
+        const state = { count: 0 };
+        (globalThis as unknown as { shortcutPageInput: typeof state }).shortcutPageInput = state;
+        globalThis.addEventListener(
+          "keydown",
+          (event) => {
+            if (event instanceof KeyboardEvent && event.key.toLowerCase() === "k" && event.shiftKey)
+              state.count++;
+          },
+          true,
+        );
+      });
+      const nativeShortcut = () =>
+        app.evaluate(({ BrowserWindow }) => {
+          const host = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]!;
+          host.focus();
+          host.webContents.focus();
+          const modifiers: ("meta" | "control" | "shift")[] = [
+            process.platform === "darwin" ? "meta" : "control",
+            "shift",
+          ];
+          host.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
+          host.webContents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
+        });
+      await nativeShortcut();
+      await expect(shortcutsDialog).toBeVisible();
+      await nativeShortcut();
+      await expect(shortcutsDialog).toHaveCount(0);
+      expect(
+        await window.evaluate(
+          () =>
+            (globalThis as unknown as { shortcutPageInput: { count: number } }).shortcutPageInput
+              .count,
+        ),
+      ).toBe(0);
     }
     const invokeNewWindowAccelerator = () =>
       app.evaluate(({ BrowserWindow, Menu }) => {

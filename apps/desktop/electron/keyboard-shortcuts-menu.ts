@@ -36,7 +36,7 @@ export type ShortcutInput = {
 /** Whether a native view's `before-input-event` is ⌘⇧K / Ctrl+Shift+K. */
 export function isKeyboardShortcutsInput(input: ShortcutInput): boolean {
   return (
-    (input.type === "keyDown" || input.type === "rawKeyDown") &&
+    input.type === "keyDown" &&
     isKeyboardShortcutsChord({
       key: input.key,
       code: input.code,
@@ -46,4 +46,90 @@ export function isKeyboardShortcutsInput(input: ShortcutInput): boolean {
       altKey: input.alt,
     })
   );
+}
+
+export type KeyboardShortcutsTarget = {
+  renderer: KeyboardShortcutsRenderer;
+  /** Returns true only after the original, still visible native view took focus. */
+  restoreFocus?: () => boolean;
+};
+
+export type KeyboardShortcutsOwner = {
+  contents: KeyboardShortcutsRenderer & { isFocused(): boolean };
+  window: { isFocused(): boolean };
+  browserPreviewManager: {
+    ownsWebContents(id: number): boolean;
+    focusWebContents(id: number): boolean;
+  } | null;
+  artifactHosts: {
+    activeHost(): {
+      webContents(): { id: number } | null;
+      focusIfVisible(): boolean;
+    } | null;
+  } | null;
+};
+
+/** Match actual WebContents ownership; renderer focus alone misses child views. */
+export function resolveKeyboardShortcutsTarget(
+  id: number | undefined,
+  owners: Iterable<KeyboardShortcutsOwner>,
+): KeyboardShortcutsTarget | null {
+  if (id === undefined) return null;
+  for (const owner of owners) {
+    if (owner.contents.isDestroyed()) continue;
+    if (owner.contents.id === id) return { renderer: owner.contents };
+    const previews = owner.browserPreviewManager;
+    const host = owner.artifactHosts?.activeHost();
+    const restore = previews?.ownsWebContents(id)
+      ? () => previews.focusWebContents(id)
+      : host?.webContents()?.id === id
+        ? () => host.focusIfVisible()
+        : null;
+    if (restore)
+      return {
+        renderer: owner.contents,
+        restoreFocus: () =>
+          !owner.contents.isDestroyed() &&
+          owner.window.isFocused() &&
+          owner.contents.isFocused() &&
+          restore(),
+      };
+  }
+  return null;
+}
+
+/** Owns focus across the native-view → dialog → native-view round trip. */
+export class KeyboardShortcutsController {
+  private readonly origins = new Map<number, () => boolean>();
+  private readonly restores = new Map<number, ReturnType<typeof setTimeout>>();
+
+  forget(rendererId: number): void {
+    this.origins.delete(rendererId);
+    clearTimeout(this.restores.get(rendererId));
+    this.restores.delete(rendererId);
+  }
+
+  request(target: KeyboardShortcutsTarget | null, request: KeyboardShortcutsRequest): void {
+    if (!target || target.renderer.isDestroyed()) return;
+    const id = target.renderer.id;
+    clearTimeout(this.restores.get(id));
+    this.restores.delete(id);
+    if (target.restoreFocus && !this.origins.has(id)) this.origins.set(id, target.restoreFocus);
+    requestKeyboardShortcuts(target.renderer, request);
+  }
+
+  closed(rendererId: number): void {
+    const restore = this.origins.get(rendererId);
+    this.origins.delete(rendererId);
+    if (!restore) return;
+    // Overlay visibility updates travel over a different IPC channel. Wait for
+    // the live view to be shown again; a hidden/disposed view never takes focus.
+    let remaining = 20;
+    const attempt = () => {
+      this.restores.delete(rendererId);
+      if (restore() || --remaining === 0) return;
+      this.restores.set(rendererId, setTimeout(attempt, 25));
+    };
+    this.restores.set(rendererId, setTimeout(attempt, 0));
+  }
 }

@@ -10,58 +10,58 @@ app also has **View › Keyboard Shortcuts…**.
 | Catalog the dialog lists | `apps/web/src/lib/keyboard-shortcuts.ts` |
 | Chord, menu event name and request kinds | `packages/protocol/src/keyboard-shortcuts.ts` |
 | View menu item | `apps/desktop/electron/application-menu.ts` |
-| Main → renderer request, native preview chord | `apps/desktop/electron/keyboard-shortcuts-menu.ts` |
+| Native ownership and focus restoration | `apps/desktop/electron/keyboard-shortcuts-menu.ts` |
 
 The handlers for other shortcuts live next to the surfaces that own them; the
-catalog only describes them. Update the catalog when you add, change or remove
-one.
+catalog only describes them. Update the catalog when adding or changing one.
 
 ## Who sees the key
 
-- **The renderer owns the chord.** A capture-phase `keydown` listener on
-  `window` runs before every element, document and bubble listener in that
-  document, so the sidebar, the composer, xterm, Monaco and every tab see
-  nothing of it. It calls `preventDefault()`, which also stops the macOS menu
-  key equivalent from firing for the same press. The terminals' custom key
-  handlers return `false` for the chord so xterm does not consume it either.
-- **Layouts.** `event.key` decides when it is a Latin letter (so Dvorak's K is
-  the key that types K). A layout that types no Latin letter there (Cyrillic,
-  Greek, Hebrew) reports its own character, so the physical `KeyK` decides.
-- **Native preview views** (desktop browser and service tabs) are separate web
-  contents; their keys never reach the renderer. `BrowserPreviewManager`
-  claims the chord in `before-input-event` (which also hides it from the page
-  and the menu) and main sends a `toggle` request to the owning renderer, a
-  realm's when the preview belongs to one, after focusing that renderer.
-- **Workspace realms** are renderers of their own with their own dialog.
-- **Iframes and other native views** (design frames, the browser client's
-  browser tabs and artifacts, desktop interactive artifact views) keep their
-  keys from the renderer's listener, and cross-origin content cannot be
-  scripted. In the macOS desktop app the menu's key equivalent still fires for
-  a press their page does not claim, and toggles the dialog. In the browser
-  client and on Linux nothing does
-  ([0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md)).
+- **Desktop:** main intercepts `before-input-event` in every registered app
+  renderer and interactive artifact view. This also receives input destined for
+  their subframes, including opaque design frames. Browser and service preview
+  views use their preview manager's hook. All paths consume the chord before
+  page and menu dispatch. Only `keyDown` toggles; repeats are consumed, and
+  `rawKeyDown` is not a second delivery. The Electron API documents this event
+  as `keyDown`/`keyUp`.
+- **Browser client:** a capture-phase window listener claims the chord before
+  the composer, terminal or Monaco. App-owned design sandboxes relay the chord
+  through their existing source-checked frame bridge. Uncooperative cross-origin
+  browser/service preview iframes cannot be intercepted by the parent document;
+  move focus to the host UI to use the chord. The browser test covers this
+  boundary explicitly. Desktop handles it through native interception.
+- **Layouts:** a Latin `event.key` decides which letter is K, preserving Dvorak
+  mappings. For non-Latin characters the physical `KeyK` position decides.
+- **Workspace realms:** ownership is resolved from the actual focused
+  WebContents, including its preview and artifact children. Menu clicks reach
+  that realm's dialog even while its renderer itself has no native focus.
+  The last focused child is retained per window for native menu activation
+  that temporarily clears WebContents focus.
 
-## The desktop View menu item
+## Menu and press ownership
 
-Main emits `menu-keyboard-shortcuts` to the focused window's focused renderer
-(a realm if one has focus), focusing it first. The payload is a
-`KeyboardShortcutsRequest`:
+Main focuses the owning renderer and emits `menu-keyboard-shortcuts` with an
+`open` request for a menu click or `toggle` for a chord. Clicking while open
+keeps the dialog, its search text and focus. The item displays
+`CmdOrCtrl+Shift+K` with `registerAccelerator: false`; macOS retains a menu key
+equivalent as a fallback. Native input interception prevents page/menu double
+handling. A renderer DOM listener remains available for browser and synthetic
+input, but physical input consumed by main never reaches it.
+There is no elapsed-time echo window: a distinct second press always toggles.
 
-- `open` — a click. Shows the dialog; if it is already open it stays open,
-  keeps its search text, and the search takes focus. A click never closes it.
-- `toggle` — the chord, delivered by the menu's key equivalent or forwarded
-  from a native preview view. Behaves like the key pressed in the renderer.
+## Returning to a native view
 
-The item shows `CmdOrCtrl+Shift+K` with `registerAccelerator: false`. On
-Windows and Linux that makes it display-only, so the renderer's own handler
-(the one the browser client also uses) is the only owner of the key there. On
-macOS the option is ignored and the item stays a key equivalent; it fires only
-for a press that no page claimed.
+Before focusing the renderer, main retains the originating preview or artifact
+view for that renderer. The preload reports dialog dismissal after DOM focus
+restoration. Main waits up to 500 ms for overlay visibility IPC to show the
+original native view, then focuses it only if it is still live and visible and
+the owning window and renderer still have focus. Hidden, replaced or disposed
+views never receive focus. New requests cancel a pending restoration; renderer
+destruction clears retained origins. Renderer-originated opens retain the
+existing DOM focus restoration.
 
-One physical press must never both open and close the dialog. If a platform
-ever delivers the same press through both the renderer and the menu, the
-dialog takes a delivery from the other path within 500 ms
-(`KEYBOARD_SHORTCUTS_ECHO_MS`) as the same press and ignores it.
-
-The browser client has no native menu and never receives the event; the
-keyboard path is unchanged there.
+Unit coverage checks ownership, dismissal, disposal, hidden views, startup
+forwarding, keyDown/rawKeyDown and immediate second presses. Electron scenarios
+cover realm preview ownership, search focus and restored typing, artifact
+subframes, and design subframes. Packaged native OS qualification remains in
+[0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md).

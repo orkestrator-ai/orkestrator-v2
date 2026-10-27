@@ -4,6 +4,9 @@ import { BrowserPreviewManager } from "../electron/browser-preview-manager";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
 class FakeWebContents extends EventEmitter {
+  static nextId = 100;
+  readonly id = FakeWebContents.nextId++;
+  readonly focus = mock(() => undefined);
   currentUrl = "";
   destroyed = false;
   canGoBackValue = false;
@@ -417,6 +420,7 @@ describe("BrowserPreviewManager", () => {
 
     // Claimed before the page or the menu's key equivalent can see it.
     expect(press({ meta: true })).toBe(1);
+    expect(press({ meta: true, type: "rawKeyDown" })).toBe(0);
     expect(press({ control: true })).toBe(1);
     // A layout whose K key types no Latin letter still matches.
     expect(press({ meta: true, key: "Л" })).toBe(1);
@@ -435,6 +439,22 @@ describe("BrowserPreviewManager", () => {
     expect(press({ meta: true, type: "keyUp" })).toBe(0);
     expect(harness.toggleKeyboardShortcuts).toHaveBeenCalledTimes(3);
     expect(harness.focusAddressBar).not.toHaveBeenCalled();
+  });
+
+  test("restores focus only to a live, visible preview, never a replaced or hidden one", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    expect(harness.manager.ownsWebContents(contents.id)).toBe(true);
+    expect(harness.manager.focusWebContents(contents.id)).toBe(true);
+    expect(contents.focus).toHaveBeenCalledTimes(1);
+    harness.manager.setVisible(input.tabId, false);
+    expect(harness.manager.focusWebContents(contents.id)).toBe(false);
+    harness.manager.setVisible(input.tabId, true);
+    expect(harness.manager.focusWebContents(contents.id)).toBe(true);
+    harness.manager.destroy(input.tabId);
+    expect(harness.manager.focusWebContents(contents.id)).toBe(false);
+    expect(harness.manager.ownsWebContents(contents.id)).toBe(false);
   });
 
   test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {

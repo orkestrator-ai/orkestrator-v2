@@ -126,16 +126,6 @@ function KeyboardShortcutsPanel({
 }
 
 /**
- * How long after one delivery of the chord a delivery from the other path is
- * taken as the same key press. The renderer normally claims the chord and the
- * desktop menu's key equivalent stands down, but if a platform ever delivers
- * both, toggling twice would open and close the dialog in one press.
- */
-export const KEYBOARD_SHORTCUTS_ECHO_MS = 500;
-
-type ChordSource = "renderer" | "desktop";
-
-/**
  * Lists application keyboard shortcuts, searchable. ⌘⇧K / Ctrl+Shift+K
  * toggles it from anywhere in this document; the desktop app also opens it
  * from View › Keyboard Shortcuts… and forwards the chord from native preview
@@ -155,8 +145,6 @@ export function KeyboardShortcutsDialog({
   const platform = useMemo(() => platformOverride ?? detectShortcutPlatform(), [platformOverride]);
 
   useEffect(() => {
-    let lastChord: { source: ChordSource; at: number } | null = null;
-
     const show = (next: boolean) => {
       if (next && !openRef.current) {
         previousFocus.current =
@@ -166,35 +154,26 @@ export function KeyboardShortcutsDialog({
       setOpen(next);
     };
 
-    const toggleFrom = (source: ChordSource) => {
-      const now = performance.now();
-      if (
-        lastChord &&
-        lastChord.source !== source &&
-        now - lastChord.at < KEYBOARD_SHORTCUTS_ECHO_MS
-      ) {
-        return;
-      }
-      lastChord = { source, at: now };
-      show(!openRef.current);
-    };
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isKeyboardShortcutsShortcut(event)) return;
+      // Native Electron input is consumed before DOM dispatch. This remains
+      // the browser and synthetic/CDP fallback, without a time-based guard.
       // Claim the chord before Monaco (Delete Line) or xterm can process it,
       // and so the desktop menu's key equivalent does not fire as well.
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
-      toggleFrom("renderer");
+      show(!openRef.current);
     };
 
+    const handleFrameShortcut = () => show(!openRef.current);
+    window.addEventListener(KEYBOARD_SHORTCUTS_EVENT, handleFrameShortcut);
     window.addEventListener("keydown", handleKeyDown, true);
     // Desktop only: the browser client has no native menu and never emits it.
     const unlisten = listen<unknown>(KEYBOARD_SHORTCUTS_EVENT, ({ payload }) => {
       if (!isKeyboardShortcutsRequest(payload)) return;
       if (payload === "toggle") {
-        toggleFrom("desktop");
+        show(!openRef.current);
       } else if (openRef.current) {
         // A menu click never closes the dialog; it returns focus to the search.
         searchRef.current?.focus();
@@ -203,6 +182,7 @@ export function KeyboardShortcutsDialog({
       }
     });
     return () => {
+      window.removeEventListener(KEYBOARD_SHORTCUTS_EVENT, handleFrameShortcut);
       window.removeEventListener("keydown", handleKeyDown, true);
       void unlisten.then((dispose) => dispose());
     };
@@ -228,6 +208,7 @@ export function KeyboardShortcutsDialog({
           event.preventDefault();
           if (previousFocus.current?.isConnected) previousFocus.current.focus();
           previousFocus.current = null;
+          void window.orkestrator?.keyboardShortcuts?.closed().catch(() => undefined);
         }}
       >
         <DialogTitle className="sr-only">Keyboard shortcuts</DialogTitle>

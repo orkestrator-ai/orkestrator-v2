@@ -130,10 +130,9 @@ export function createApplicationMenuTemplate(
         {
           label: "Keyboard Shortcuts…",
           accelerator: KEYBOARD_SHORTCUTS_ACCELERATOR,
-          // The renderer owns the chord in every window, browser client included,
-          // so on Windows and Linux the accelerator is only shown. macOS always
-          // keeps it as a key equivalent, which fires only when the focused page
-          // did not claim the key; that delivery toggles, as the key would.
+          // Main consumes native input before both page and menu dispatch,
+          // including child views and subframes. Keep the label and macOS menu
+          // fallback without registering a second Windows/Linux delivery path.
           registerAccelerator: false,
           click: (_item, _window, event: MenuKeyboardEvent) =>
             actions.showKeyboardShortcuts(event?.triggeredByAccelerator ? "toggle" : "open"),

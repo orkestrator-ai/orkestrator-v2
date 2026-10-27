@@ -558,6 +558,24 @@ export class BrowserPreviewManager {
     return this.snapshot(tabId, preview);
   }
 
+  ownsWebContents(id: number): boolean {
+    return [...this.previews.values()].some((preview) => preview.view.webContents.id === id);
+  }
+
+  webContentsIdForTab(tabId: string): number | undefined {
+    return this.previews.get(tabId)?.view.webContents.id;
+  }
+
+  focusWebContents(id: number): boolean {
+    const preview = [...this.previews.values()].find((item) => item.view.webContents.id === id);
+    if (!preview || preview.view.webContents.isDestroyed() || !preview.view.getVisible())
+      return false;
+    const bounds = preview.view.getBounds();
+    if (bounds.width <= 0 || bounds.height <= 0) return false;
+    preview.view.webContents.focus();
+    return true;
+  }
+
   consumeClipboardWriteUserActivation(webContents: WebContents, requestingUrl: string): boolean {
     if (webContents.isDestroyed()) return false;
     const preview = [...this.previews.values()].find(

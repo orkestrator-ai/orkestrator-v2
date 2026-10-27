@@ -33,18 +33,19 @@ export interface ShortcutChord {
 }
 
 /**
- * Whether `key`/`code` name the K key. `key` wins when it is a Latin letter,
+ * ⌘⇧K / Ctrl+Shift+K; either modifier is accepted, as with ⌘K.
+ * Self-contained so app-owned design sandboxes can serialize the matcher.
+ * `key` wins when it is a Latin letter,
  * so Dvorak and other remapped Latin layouts use the K they type. A layout
  * that types no Latin letter there (Cyrillic, Greek, Hebrew…) reports its own
  * character, so the physical key position (`code`) decides instead.
  */
-function namesK(key: string | undefined, code: string | undefined): boolean {
-  if (typeof key === "string" && /^[a-z]$/i.test(key)) return key.toLowerCase() === "k";
-  return code === "KeyK";
-}
-
-/** ⌘⇧K on macOS, Ctrl+Shift+K elsewhere; either modifier is accepted, as with ⌘K. */
 export function isKeyboardShortcutsChord(chord: ShortcutChord): boolean {
+  function namesK(key: string | undefined, code: string | undefined): boolean {
+    if (typeof key === "string" && /^[a-z]$/i.test(key)) return key.toLowerCase() === "k";
+    return code === "KeyK";
+  }
+
   const hasModifier = chord.metaKey || chord.ctrlKey;
   const hasBothModifiers = chord.metaKey && chord.ctrlKey;
   return (

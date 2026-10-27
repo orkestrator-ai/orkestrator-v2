@@ -106,3 +106,44 @@ test("short viewport keeps the footer and final shortcut reachable", async ({ pa
   expect(box.y).toBeGreaterThanOrEqual(0);
   expect(box.y + box.height).toBeLessThanOrEqual(400);
 });
+
+for (const modifier of ["Meta", "Control"]) {
+  test(`${modifier} from an opaque app-owned design frame opens shortcuts`, async ({ page }) => {
+    await page.goto("/keyboard-shortcuts");
+    const input = page
+      .frameLocator('iframe[title="Design preview"]')
+      .getByRole("textbox", { name: "Design input" });
+    await input.fill("kept");
+    await page.keyboard.press(`${modifier}+Shift+K`);
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Search keyboard shortcuts" })).toBeFocused();
+    await page.keyboard.press(`${modifier}+Shift+K`);
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    await expect(input).toHaveValue("kept");
+  });
+}
+
+test("uncooperative cross-origin browser/service frames keep their keyboard events isolated", async ({
+  page,
+}) => {
+  await page.route("http://preview.invalid/", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: '<input aria-label="Preview input">',
+    }),
+  );
+  await page.goto("/keyboard-shortcuts");
+  await page.locator('iframe[title="Service preview"]').evaluate((frame: HTMLIFrameElement) => {
+    frame.src = "http://preview.invalid/";
+  });
+  const input = page.frameLocator('iframe[title="Service preview"]').getByRole("textbox");
+  await input.fill("kept");
+  await page.keyboard.press("Control+Shift+K");
+  // The browser's origin boundary prevents a parent from intercepting this
+  // chord. This limitation is explicit; Electron handles it before dispatch.
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+  await expect(input).toHaveValue("kept");
+  await page.getByRole("textbox", { name: "Composer" }).focus();
+  await page.keyboard.press("Control+Shift+K");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+});

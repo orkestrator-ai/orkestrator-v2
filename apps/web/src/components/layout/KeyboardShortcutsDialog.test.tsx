@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
 import { listen } from "@/lib/native/events";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { KEYBOARD_SHORTCUTS_ECHO_MS, KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 
 function pressShortcut(init: KeyboardEventInit = { metaKey: true }) {
   fireEvent.keyDown(window, {
@@ -28,9 +28,6 @@ function desktopMenuEvent(): (payload: unknown) => void {
       handler?.({ payload });
     });
 }
-
-const pastEchoWindow = () =>
-  new Promise((resolve) => setTimeout(resolve, KEYBOARD_SHORTCUTS_ECHO_MS + 20));
 
 afterEach(() => {
   cleanup();
@@ -214,28 +211,48 @@ describe("KeyboardShortcutsDialog", () => {
 
     emit("toggle");
     expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
-    await pastEchoWindow();
     emit("toggle");
     await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
     emit("unknown");
     expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog"));
   });
 
-  test("one press delivered by both the renderer and the menu toggles once", async () => {
+  test("a distinct quick renderer press after a forwarded toggle closes the dialog", async () => {
     render(<KeyboardShortcutsDialog platform="mac" />);
-    const emit = desktopMenuEvent();
-
-    // Opening: the menu's echo of the same press must not close it again.
-    pressShortcut();
-    emit("toggle");
+    desktopMenuEvent()("toggle");
     expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
-
-    // Closing, with the echo arriving first this time.
-    await pastEchoWindow();
-    emit("toggle");
     pressShortcut();
     await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
   });
+
+  test.each(["Escape", "toggle"])(
+    "desktop dismissal notifies native focus restoration after %s",
+    async (dismiss) => {
+      const transport = window.orkestrator;
+      let closed = 0;
+      window.orkestrator = {
+        ...transport,
+        keyboardShortcuts: {
+          closed: async () => {
+            closed++;
+          },
+        },
+      } as Window["orkestrator"];
+      try {
+        render(<KeyboardShortcutsDialog />);
+        const emit = desktopMenuEvent();
+        emit("toggle");
+        const search = await screen.findByRole("textbox", { name: "Search keyboard shortcuts" });
+        if (dismiss === "Escape") fireEvent.keyDown(search, { key: "Escape" });
+        else emit("toggle");
+        await waitFor(() => expect(closed).toBe(1));
+        expectDomAbsent(screen.queryByRole("dialog"));
+      } finally {
+        cleanup();
+        window.orkestrator = transport;
+      }
+    },
+  );
 
   test("the browser client, with no native menu, still toggles from the keyboard", async () => {
     render(<KeyboardShortcutsDialog platform="other" />);

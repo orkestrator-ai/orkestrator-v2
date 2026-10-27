@@ -191,6 +191,21 @@ describe("browser preview startup wiring", () => {
     });
     const previewView = addChildView.mock.calls[0]![0];
     const previewContents = previewView.webContents;
+    previewContents.emit(
+      "before-input-event",
+      { preventDefault: () => undefined },
+      {
+        type: "keyDown",
+        key: "K",
+        code: "KeyK",
+        meta: true,
+        control: false,
+        shift: true,
+        alt: false,
+        isAutoRepeat: false,
+      },
+    );
+    expect(toggleKeyboardShortcuts).toHaveBeenCalledWith("browser-1");
 
     const ambientWriteResult = mock(() => undefined);
     permissionRequest?.(previewContents, "clipboard-sanitized-write", ambientWriteResult, {

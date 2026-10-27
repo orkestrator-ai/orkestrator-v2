@@ -47,6 +47,7 @@ import {
   showOnlyFinalStructuredReviewMessage,
 } from "@/lib/structured-review-messages";
 import * as backend from "@/lib/backend";
+import { REVIEWER_DATA_SAVING_BACKOFF_MS } from "@/lib/data-saving-policy";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
@@ -690,25 +691,18 @@ export function MultiReviewReviewerTab({
     return fenceRequests;
   }, [fenceRequests, isActive, refresh]);
 
-  // Activation and every status change (including the final one) read once.
-  // Keyed on snapshot?.status: `snapshot` gets a new identity on real changes.
-  /* oxlint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    if (!isActive) return;
-    void refresh();
-  }, [isActive, refresh, snapshot?.status, transcriptError]);
-  /* oxlint-enable react-hooks/exhaustive-deps */
-
   // The backstop poll runs through the read coordinator: only for an active
   // tab of a running/pending reviewer, paused while the document is hidden
   // and reconciled once when it becomes visible again. Reads apply into this
-  // instance's fenced state, so the key is instance-scoped.
+  // instance's fenced state, so the key is instance-scoped. With data saving
+  // on it backs off while nothing moves; a checkpoint or a status change
+  // restores the interval. A no-op manual refresh preserves quiet backoff.
   const pollInstance = useId();
   const gone = transcriptError !== null && isGoneError(transcriptError);
   const settled = Boolean(
     snapshot && snapshot.status !== "running" && snapshot.status !== "pending",
   );
-  useCoordinatedRead<void>({
+  const { noteActivity: notePollActivity } = useCoordinatedRead<void>({
     key: {
       resource: "multi-review-reviewer-transcript",
       target: `${data.workflowId}\u0000${data.reviewerId}`,
@@ -720,9 +714,20 @@ export function MultiReviewReviewerTab({
       active: isActive && !gone && !settled,
       intervalMs: refreshIntervalMs,
       priority: "standard",
+      dataSaving: { quietBackoffMs: REVIEWER_DATA_SAVING_BACKOFF_MS },
     },
     read: () => refresh(),
   });
+
+  // Activation and every status change (including the final one) read once.
+  // Keyed on snapshot?.status: `snapshot` gets a new identity on real changes.
+  /* oxlint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    if (!isActive) return;
+    notePollActivity();
+    void refresh();
+  }, [isActive, refresh, snapshot?.status, transcriptError]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   // The workflow's revision moves when the backend checkpoints reviewer
   // progress, which is exactly when this transcript has something new. Read
@@ -731,6 +736,7 @@ export function MultiReviewReviewerTab({
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!isActive || workflowRevision === undefined) return;
+    notePollActivity();
     void refresh();
   }, [workflowRevision]);
   /* oxlint-enable react-hooks/exhaustive-deps */

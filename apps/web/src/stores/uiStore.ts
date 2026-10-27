@@ -85,6 +85,12 @@ interface UIState {
   zoomLevel: number;
   /** Multi Review graph height set by dragging its divider; null sizes it to the graph. */
   multiReviewGraphHeight: number | null;
+  /**
+   * This client's data-saving preference: slower background reads of what it
+   * shows (`setReadCoordinatorDataSaving`). Client-local by design — it never
+   * changes another client's freshness or the backend's own cadence.
+   */
+  dataSaving: boolean;
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -127,6 +133,7 @@ interface UIState {
   zoomOut: () => void;
   /** Reset zoom to 100% */
   resetZoom: () => void;
+  setDataSaving: (enabled: boolean) => void;
 }
 
 export const createUIStore = () =>
@@ -151,6 +158,7 @@ export const createUIStore = () =>
         activitySortOrder: "priority",
         zoomLevel: ZOOM_DEFAULT,
         multiReviewGraphHeight: null,
+        dataSaving: false,
 
         // Actions
         selectProject: (projectId) =>
@@ -278,6 +286,8 @@ export const createUIStore = () =>
           })),
 
         resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
+
+        setDataSaving: (enabled) => set({ dataSaving: enabled }),
       }),
       {
         name: windowStorageKey("ui-storage"),
@@ -293,6 +303,7 @@ export const createUIStore = () =>
           activitySortOrder: state.activitySortOrder,
           zoomLevel: state.zoomLevel,
           multiReviewGraphHeight: state.multiReviewGraphHeight,
+          dataSaving: state.dataSaving,
         }),
       },
     ),

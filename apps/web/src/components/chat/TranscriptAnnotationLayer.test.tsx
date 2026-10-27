@@ -271,7 +271,9 @@ describe("TranscriptAnnotationLayer", () => {
     fireEvent.keyDown(commentInput(1), { key: "Enter" });
     expect(onCommentDone).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit comment for transcript reference 1" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit comment for transcript reference 1" }),
+    );
     fireEvent.keyDown(commentInput(1), { key: "Escape" });
     expect(onCommentDone).toHaveBeenCalledTimes(2);
   });

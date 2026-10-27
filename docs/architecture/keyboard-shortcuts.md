@@ -10,6 +10,7 @@ app also has **View › Keyboard Shortcuts…**.
 | Catalog the dialog lists | `apps/web/src/lib/keyboard-shortcuts.ts` |
 | Chord, menu event name and request kinds | `packages/protocol/src/keyboard-shortcuts.ts` |
 | View menu item | `apps/desktop/electron/application-menu.ts` |
+| Native input wiring and remembered menu focus | `apps/desktop/electron/keyboard-shortcuts-routing.ts` |
 | Native ownership and focus restoration | `apps/desktop/electron/keyboard-shortcuts-menu.ts` |
 
 The handlers for other shortcuts live next to the surfaces that own them; the
@@ -49,6 +50,13 @@ handling. A renderer DOM listener remains available for browser and synthetic
 input, but physical input consumed by main never reaches it.
 There is no elapsed-time echo window: a distinct second press always toggles.
 
+Electron distinguishes the template callback (`click(menuItem, window, event)`)
+from the built item's method (`menuItem.click(event, window, webContents)`).
+The latter adapts the event into the callback's third argument. E2E helpers use
+that event-first method and assert an accelerator click closes an already-open
+dialog, so an accidental `open` request cannot pass. See Electron's
+[MenuItem API](https://www.electronjs.org/docs/latest/api/menu-item).
+
 ## Returning to a native view
 
 Before focusing the renderer, main retains the originating preview or artifact
@@ -56,12 +64,18 @@ view for that renderer. The preload reports dialog dismissal after DOM focus
 restoration. Main waits up to 500 ms for overlay visibility IPC to show the
 original native view, then focuses it only if it is still live and visible and
 the owning window and renderer still have focus. Hidden, replaced or disposed
-views never receive focus. New requests cancel a pending restoration; renderer
+views never receive focus. New requests cancel a pending restoration timer but
+retain its native origin, including when reopening during visibility retries.
+The final dismissal restores once; success, expiry, navigation or renderer
 destruction clears retained origins. Renderer-originated opens retain the
 existing DOM focus restoration.
 
-Unit coverage checks ownership, dismissal, disposal, hidden views, startup
+Unit coverage checks Close Tab and shortcut ownership with live or cleared
+WebContents focus, per-window remembered focus, dismissal sender gating, preview
+hook delegation, repeat consumption, reopen/restoration races and expiry.
+Additional checks cover dismissal, disposal, hidden views, startup
 forwarding, keyDown/rawKeyDown and immediate second presses. Electron scenarios
-cover realm preview ownership, search focus and restored typing, artifact
+cover realm preview ownership, search focus and restored typing after keyboard
+and outside-pointer dismissal, accelerator toggles on already-open dialogs, artifact
 subframes, and design subframes. Packaged native OS qualification remains in
 [0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md).

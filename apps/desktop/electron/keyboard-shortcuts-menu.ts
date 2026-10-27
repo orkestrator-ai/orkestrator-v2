@@ -112,6 +112,8 @@ export class KeyboardShortcutsController {
   request(target: KeyboardShortcutsTarget | null, request: KeyboardShortcutsRequest): void {
     if (!target || target.renderer.isDestroyed()) return;
     const id = target.renderer.id;
+    // Keep the origin while cancelling: a renderer may reopen before the
+    // overlay becomes visible, and its final dismissal still owes this focus.
     clearTimeout(this.restores.get(id));
     this.restores.delete(id);
     if (target.restoreFocus && !this.origins.has(id)) this.origins.set(id, target.restoreFocus);
@@ -120,14 +122,17 @@ export class KeyboardShortcutsController {
 
   closed(rendererId: number): void {
     const restore = this.origins.get(rendererId);
-    this.origins.delete(rendererId);
     if (!restore) return;
+    clearTimeout(this.restores.get(rendererId));
     // Overlay visibility updates travel over a different IPC channel. Wait for
     // the live view to be shown again; a hidden/disposed view never takes focus.
     let remaining = 20;
     const attempt = () => {
       this.restores.delete(rendererId);
-      if (restore() || --remaining === 0) return;
+      if (restore() || --remaining === 0) {
+        this.origins.delete(rendererId);
+        return;
+      }
       this.restores.set(rendererId, setTimeout(attempt, 25));
     };
     this.restores.set(rendererId, setTimeout(attempt, 0));

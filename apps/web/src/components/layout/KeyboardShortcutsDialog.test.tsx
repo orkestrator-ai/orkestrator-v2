@@ -225,7 +225,7 @@ describe("KeyboardShortcutsDialog", () => {
     await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
   });
 
-  test.each(["Escape", "toggle"])(
+  test.each(["Escape", "toggle", "outside pointer"])(
     "desktop dismissal notifies native focus restoration after %s",
     async (dismiss) => {
       const transport = window.orkestrator;
@@ -244,7 +244,14 @@ describe("KeyboardShortcutsDialog", () => {
         emit("toggle");
         const search = await screen.findByRole("textbox", { name: "Search keyboard shortcuts" });
         if (dismiss === "Escape") fireEvent.keyDown(search, { key: "Escape" });
-        else emit("toggle");
+        else if (dismiss === "toggle") emit("toggle");
+        else {
+          // DismissableLayer subscribes after the opening pointer has finished.
+          await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+          fireEvent.pointerDown(document.body, { pointerType: "mouse", button: 0 });
+          fireEvent.pointerUp(document.body, { pointerType: "mouse", button: 0 });
+          fireEvent.click(document.body, { button: 0 });
+        }
         await waitFor(() => expect(closed).toBe(1));
         expectDomAbsent(screen.queryByRole("dialog"));
       } finally {

@@ -150,3 +150,39 @@ test("uncooperative cross-origin browser/service frames keep their keyboard even
   await page.keyboard.press("Control+Shift+K");
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
 });
+
+test("outside pointer dismissal notifies desktop restoration once and returns typing", async ({
+  page,
+}) => {
+  await page.goto("/keyboard-shortcuts");
+  await page.evaluate(() => {
+    const state = { closed: 0 };
+    Object.assign(window, {
+      shortcutDismissal: state,
+      orkestrator: {
+        keyboardShortcuts: {
+          closed: async () => {
+            state.closed++;
+          },
+        },
+      },
+    });
+  });
+  const composer = page.getByRole("textbox", { name: "Composer" });
+  await composer.focus();
+  await page.keyboard.press("Meta+Shift+K");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 2, y: 2 } });
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { shortcutDismissal: { closed: number } }).shortcutDismissal.closed,
+      ),
+    )
+    .toBe(1);
+  await expect(composer).toBeFocused();
+  await page.keyboard.type("resumed");
+  await expect(composer).toHaveValue("resumed");
+});

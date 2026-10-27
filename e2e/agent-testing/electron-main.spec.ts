@@ -502,6 +502,8 @@ print("public.tiff")
           if (item.accelerator !== "CmdOrCtrl+Shift+K") {
             throw new Error(`Keyboard Shortcuts… shows ${String(item.accelerator)}`);
           }
+          // Built MenuItem.click takes the event first; Electron forwards it
+          // as the third argument to the template callback.
           item.click({ triggeredByAccelerator }, focusedWindow, focusedWindow.webContents);
         }, triggeredByAccelerator);
       const shortcutsDialog = window.getByTestId("keyboard-shortcuts-dialog");
@@ -516,6 +518,10 @@ print("public.tiff")
       await expect(shortcutsDialog).toHaveCount(0);
 
       await clickKeyboardShortcuts(true);
+      await expect(shortcutsDialog).toBeVisible();
+      await clickKeyboardShortcuts(true);
+      await expect(shortcutsDialog).toHaveCount(0);
+      await clickKeyboardShortcuts(false);
       await expect(shortcutsDialog).toBeVisible();
       await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
       await expect(shortcutsDialog).toHaveCount(0);

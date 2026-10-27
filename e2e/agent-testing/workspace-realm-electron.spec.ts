@@ -512,7 +512,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
       const editor = previewPage.getByRole("textbox", { name: "Preview editor" });
       const chord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`;
       try {
-        for (const source of ["menu", "preview"] as const) {
+        for (const source of ["menu", "preview", "outside"] as const) {
           await editor.focus();
           await electronApp.evaluate(({ webContents }, url) => {
             const contents = webContents
@@ -549,8 +549,26 @@ test("a leaf's workspace opens in the window's central region without moving or 
             realmPage.getByRole("textbox", { name: "Search keyboard shortcuts" }),
           ).toBeFocused();
           await expect(window.getByTestId("keyboard-shortcuts-dialog")).toHaveCount(0);
+          if (source === "menu") {
+            // The built MenuItem adapts its event-first call to the template's
+            // third event argument. An open dialog distinguishes toggle/open.
+            await electronApp.evaluate(({ BrowserWindow, Menu }) => {
+              const host = BrowserWindow.getAllWindows()[0]!;
+              const item = Menu.getApplicationMenu()!
+                .items.find((item) => item.label === "View")!
+                .submenu!.items.find((item) => item.label === "Keyboard Shortcuts…")!;
+              item.click({ triggeredByAccelerator: true }, host, host.webContents);
+            });
+            await expect(dialog).toHaveCount(0);
+            await realmPage.keyboard.press(chord);
+            await expect(dialog).toBeVisible();
+          }
           // No product echo interval or fixed test delay: a separate press closes.
-          await realmPage.keyboard.press(source === "menu" ? "Escape" : chord);
+          if (source === "outside")
+            await realmPage
+              .locator('[data-slot="dialog-overlay"]')
+              .click({ position: { x: 2, y: 2 } });
+          else await realmPage.keyboard.press(source === "menu" ? "Escape" : chord);
           await expect(dialog).toHaveCount(0);
           if (windowFocused)
             await expect

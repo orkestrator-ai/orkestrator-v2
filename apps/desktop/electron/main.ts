@@ -115,10 +115,9 @@ import {
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import {
   KeyboardShortcutsController,
-  isKeyboardShortcutsInput,
-  resolveKeyboardShortcutsTarget,
   type KeyboardShortcutsTarget,
 } from "./keyboard-shortcuts-menu.js";
+import { KeyboardShortcutsRouting } from "./keyboard-shortcuts-routing.js";
 import {
   createAutoUpdateController,
   isAutoUpdateSupported,
@@ -412,68 +411,32 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 function focusedRenderer(): Electron.WebContents | null {
   const context = focusedContext();
   if (!context) return null;
-  return (
-    (shortcutTarget(
-      webContents.getFocusedWebContents()?.id ?? lastShortcutFocus.get(context.contents.id),
-    )?.renderer as Electron.WebContents) ??
-    realmContexts.focused(context.contents.id)?.contents ??
-    context.contents
-  );
+  return shortcutRouting.focusedTarget(
+    webContents.getFocusedWebContents()?.id,
+    context.contents.id,
+    realmContexts.focused(context.contents.id)?.contents ?? context.contents,
+  ).renderer as Electron.WebContents;
 }
 
 const keyboardShortcuts = new KeyboardShortcutsController();
-// Native menu activation can temporarily clear WebContents focus. Retain the
-// last child per physical window, rather than falling back to the shell.
-const lastShortcutFocus = new Map<number, number>();
-
-/** Resolve child-view ownership before transferring native focus to the dialog. */
-function shortcutTarget(id: number | undefined): KeyboardShortcutsTarget | null {
-  return resolveKeyboardShortcutsTarget(id, [
-    ...windowContexts.values(),
-    ...realmContexts.values(),
-  ]);
-}
+const shortcutRouting = new KeyboardShortcutsRouting(
+  () => [...windowContexts.values(), ...realmContexts.values()],
+  keyboardShortcuts,
+);
 
 function focusedShortcutTarget(): KeyboardShortcutsTarget | null {
   const context = focusedContext();
-  const target = shortcutTarget(
-    webContents.getFocusedWebContents()?.id ??
-      (context ? lastShortcutFocus.get(context.window.webContents.id) : undefined),
+  if (!context) return null;
+  return shortcutRouting.focusedTarget(
+    webContents.getFocusedWebContents()?.id,
+    context.contents.id,
+    realmContexts.focused(context.contents.id)?.contents ?? context.contents,
   );
-  if (target) return target;
-  const renderer = focusedRenderer();
-  return renderer ? { renderer } : null;
 }
 
 // A WebContents receives native input for its subframes too, including opaque
 // design frames and artifact documents. Preview views retain their own hook.
-app.on("web-contents-created", (_event, contents) => {
-  const contentsId = contents.id;
-  contents.on("focus", () => {
-    const target = shortcutTarget(contentsId);
-    if (!target) return;
-    const owner = windowContexts.get(target.renderer.id) ?? realmContexts.get(target.renderer.id);
-    if (owner) lastShortcutFocus.set(owner.window.webContents.id, contentsId);
-  });
-  contents.once("destroyed", () => {
-    keyboardShortcuts.forget(contentsId);
-    for (const [owner, child] of lastShortcutFocus) {
-      if (owner === contentsId || child === contentsId) lastShortcutFocus.delete(owner);
-    }
-  });
-  contents.on("did-navigate", () => keyboardShortcuts.forget(contentsId));
-  contents.on("before-input-event", (event, input) => {
-    if (!isKeyboardShortcutsInput(input)) return;
-    const target = shortcutTarget(contents.id);
-    if (!target) return;
-    const isPreview = [...windowContexts.values(), ...realmContexts.values()].some((context) =>
-      context.browserPreviewManager?.ownsWebContents(contents.id),
-    );
-    if (isPreview) return;
-    event.preventDefault();
-    if (!input.isAutoRepeat) keyboardShortcuts.request(target, "toggle");
-  });
-});
+app.on("web-contents-created", (_event, contents) => shortcutRouting.register(contents));
 
 function emitToFocusedRenderer(event: string, payload: unknown): void {
   const contents = focusedRenderer();
@@ -645,7 +608,10 @@ function createWindowBrowserPreviews(
       emitFocus: (tabId) => emitToOwner("browser-preview-focus-address", tabId),
     }),
     toggleKeyboardShortcuts: (tabId) =>
-      keyboardShortcuts.request(shortcutTarget(manager?.webContentsIdForTab(tabId)), "toggle"),
+      keyboardShortcuts.request(
+        shortcutRouting.target(manager?.webContentsIdForTab(tabId)),
+        "toggle",
+      ),
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,
@@ -1074,9 +1040,7 @@ async function closeWindowRealms(context: DesktopWindowContext): Promise<void> {
 
 function registerIpc(): void {
   ipcMain.handle("orkestrator:keyboard-shortcuts:closed", (event) => {
-    // Native child views have no preload and cannot restore another owner's focus.
-    if (!windowContexts.has(event.sender.id) && !realmContexts.get(event.sender.id)) return;
-    keyboardShortcuts.closed(event.sender.id);
+    shortcutRouting.closed(event.sender.id);
   });
   const manager = () => {
     if (!connectionManager) throw new Error("Connections are not initialized");

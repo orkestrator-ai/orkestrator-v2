@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, jest, mock, test } from "bun:test";
 import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
 import {
   isKeyboardShortcutsInput,
@@ -80,6 +80,54 @@ describe("KeyboardShortcutsController", () => {
     const count = restore.mock.calls.length;
     await Bun.sleep(40);
     expect(restore).toHaveBeenCalledTimes(count);
+  });
+
+  test.each([0, 75])("retains the origin when reopening %s ms into restoration", (elapsed) => {
+    jest.useFakeTimers();
+    const { contents } = renderer();
+    const controller = new KeyboardShortcutsController();
+    let visible = false;
+    const restore = mock(() => visible);
+    try {
+      controller.request({ renderer: contents, restoreFocus: restore }, "open");
+      controller.closed(contents.id);
+      if (elapsed) jest.advanceTimersByTime(elapsed);
+      expect(restore.mock.calls.length > 0).toBe(elapsed > 0);
+      controller.request({ renderer: contents }, "open");
+      const attempts = restore.mock.calls.length;
+      visible = true;
+      jest.advanceTimersByTime(500);
+      expect(restore).toHaveBeenCalledTimes(attempts); // Never focus behind an open dialog.
+      controller.closed(contents.id);
+      jest.advanceTimersByTime(1);
+      expect(restore).toHaveBeenCalledTimes(attempts + 1);
+      controller.closed(contents.id);
+      jest.advanceTimersByTime(500);
+      expect(restore).toHaveBeenCalledTimes(attempts + 1); // Origin consumed on success.
+    } finally {
+      controller.forget(contents.id);
+      jest.useRealTimers();
+    }
+  });
+
+  test("expires an invisible origin instead of restoring it on a later renderer-only open", () => {
+    jest.useFakeTimers();
+    const { contents } = renderer();
+    const controller = new KeyboardShortcutsController();
+    const restore = mock(() => false);
+    try {
+      controller.request({ renderer: contents, restoreFocus: restore }, "open");
+      controller.closed(contents.id);
+      jest.advanceTimersByTime(500);
+      expect(restore).toHaveBeenCalledTimes(20);
+      controller.request({ renderer: contents }, "open");
+      controller.closed(contents.id);
+      jest.advanceTimersByTime(500);
+      expect(restore).toHaveBeenCalledTimes(20);
+    } finally {
+      controller.forget(contents.id);
+      jest.useRealTimers();
+    }
   });
 
   test("renderer-only opens have no native restoration and disposal cancels pending restoration", async () => {

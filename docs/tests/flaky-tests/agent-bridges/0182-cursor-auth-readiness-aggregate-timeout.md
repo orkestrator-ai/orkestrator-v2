@@ -251,3 +251,22 @@ groups passed; root and bridges failed only the four firewall timeouts and
 one Cursor hook timeout described above. Backend reported 11,749 passed and
 zero failed; Pi reported 649 passed and zero failed. Formatting, lint,
 typechecking, and the flake-index contract check passed.
+
+
+## Keyboard shortcuts review fixes — 2026-10-27
+
+`mise run test:logged -- --name shortcuts-unit-suite -- mise run test` on
+macOS/Bun 1.4.4 reserved workspace/root/bridge/protocol groups at 4/1/2/1
+worker slots. Each bridge package used one worker. The authenticated readiness
+case hit a 10003.48 ms hook timeout; the bridge group failed after 126.0 s.
+
+The complete unchanged owner passed alone, exit 0, in 1.5 s:
+
+```sh
+mise run test:logged -- --name cursor-http-rerun -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary directory `orkestrator-test-run.RKStpZ/bridges.log.gz`
+and outer `orkestrator-test-run.ryekIw/shortcuts-unit-suite.log.gz`. The aggregate
+failure followed by an isolated pass matches earlier recurrences; the cause
+remains unconfirmed. No Cursor implementation, assertion, deadline or skip changed.

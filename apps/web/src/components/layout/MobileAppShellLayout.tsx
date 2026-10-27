@@ -72,6 +72,7 @@ export function MobileAppShellLayout({
   const previousSelectionRef = useRef({ selectedEnvironmentId, selectedProjectId });
   const titlePointerTypeRef = useRef<string | null>(null);
   const titleTooltipWasOpenOnPointerDownRef = useRef(false);
+  const tooltipPointerTypeRef = useRef<string | null>(null);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -283,14 +284,28 @@ export function MobileAppShellLayout({
             // the touch ends, not when it starts: the bubble must still be
             // mounted so cancelling `touchend` also cancels the tap's mouse
             // events and click, which would otherwise land on the workspace
-            // control under the bubble. Pen input has no touch events, and its
-            // click still targets the bubble.
+            // control under the bubble. For pen input, remember pointer-down
+            // rather than relying on click being a PointerEvent. Keep the
+            // bubble mounted through click so that it remains the target.
+            onPointerDown={(event) => {
+              tooltipPointerTypeRef.current = event.pointerType;
+              // Avoid blurring the title and unmounting the bubble mid-press.
+              if (event.pointerType === "pen") event.preventDefault();
+            }}
+            onPointerCancel={() => {
+              tooltipPointerTypeRef.current = null;
+            }}
             onTouchEnd={(event) => {
               event.preventDefault();
+              tooltipPointerTypeRef.current = null;
               setTitleTooltipOpen(false);
             }}
             onClick={(event) => {
-              if ((event.nativeEvent as PointerEvent).pointerType === "pen") {
+              const pointerType = tooltipPointerTypeRef.current;
+              tooltipPointerTypeRef.current = null;
+              if (pointerType === "pen") {
+                event.preventDefault();
+                event.stopPropagation();
                 setTitleTooltipOpen(false);
               }
             }}

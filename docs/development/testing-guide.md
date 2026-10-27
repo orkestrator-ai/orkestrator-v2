@@ -144,9 +144,11 @@ for iOS Safari on a device or simulator. Install it with
 `mise exec -- bunx playwright install webkit`. Assertions on Electron-only CSS
 such as `-webkit-app-region` only run under Chromium.
 
-CI runs no Playwright component specs in any engine, so alternate engines stay
-opt-in. When an engine run finds a bug, also add a unit test that fails
-without the fix so CI keeps guarding it. Touch handling is the usual case:
+CI runs `MobileAppShellLayout.spec.ts` in Chromium and WebKit, including native
+touch compatibility-event suppression and Chromium's CDP pen input. Other
+component specs and alternate-engine qualification remain opt-in. When an engine
+run finds a bug, also add a unit test that fails without the fix. Touch handling
+is the usual case:
 WebKit and iOS Safari never focus a tapped button, so a dismissal that only
 works through Chromium's focus blur passes in Chromium and fails there.
 

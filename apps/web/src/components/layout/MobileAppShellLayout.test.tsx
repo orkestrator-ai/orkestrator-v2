@@ -222,8 +222,8 @@ describe("MobileAppShellLayout", () => {
     fireEvent.pointerDown(tooltip, { pointerType: "touch" });
     fireEvent.touchStart(tooltip);
     expect(screen.queryByRole("tooltip")).toBe(tooltip);
-    // `fireEvent` returns false when a handler cancelled the event, which is
-    // what stops the tap's click from reaching the workspace underneath.
+    // Cancellation is the unit-level contract. Real engine compatibility
+    // mouse/click suppression is covered by the CI browser spec.
     expect(fireEvent.touchEnd(tooltip)).toBe(false);
     await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
     expect(titleButton.getAttribute("aria-expanded")).toBe("false");
@@ -232,8 +232,26 @@ describe("MobileAppShellLayout", () => {
     fireEvent.pointerUp(titleButton, { pointerType: "pen" });
     fireEvent.click(titleButton);
     const penTooltip = await screen.findByRole("tooltip");
-    fireEvent(penTooltip, new PointerEvent("click", { bubbles: true, pointerType: "pen" }));
+    expect(fireEvent.pointerDown(penTooltip, { pointerType: "pen" })).toBe(false);
+    fireEvent.pointerUp(penTooltip, { pointerType: "pen" });
+    expect(screen.getByRole("tooltip")).toBe(penTooltip);
+    // Older engines expose click as MouseEvent, without pointerType.
+    expect(fireEvent.click(penTooltip)).toBe(false);
     await waitFor(() => expect(screen.queryByRole("tooltip") === null).toBe(true));
+  });
+
+  test("does not treat a cancelled pen press or a mouse click as a pen tap", async () => {
+    renderLayout();
+    touchTap(screen.getByRole("button", { name: "pgstack1 - feature-auth" }));
+    const tooltip = await screen.findByRole("tooltip");
+    fireEvent.pointerDown(tooltip, { pointerType: "pen" });
+    fireEvent.pointerCancel(tooltip, { pointerType: "pen" });
+    fireEvent.click(tooltip);
+    expect(screen.getByRole("tooltip")).toBe(tooltip);
+    fireEvent.pointerDown(tooltip, { pointerType: "mouse" });
+    fireEvent.pointerUp(tooltip, { pointerType: "mouse" });
+    fireEvent.click(tooltip);
+    expect(screen.getByRole("tooltip")).toBe(tooltip);
   });
 
   test("preserves Radix keyboard activation, Escape, hover, blur, and outside dismissal", async () => {

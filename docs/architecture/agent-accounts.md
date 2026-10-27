@@ -69,7 +69,14 @@ does not grow a private copy. Files are not: an empty `settings.json` or
 `config.toml` is not the same as a missing one. A directory an account already
 created while the host had none (before this rule, or from a CLI racing the
 launch) is moved to the host and linked. It is never merged into a host
-directory that exists.
+directory that exists. Directories containing relative symlinks are kept
+private, because moving them can change the links' targets. This guard is
+conservative even for apparently internal links, whose resolution may pass
+through other symlinks. A directory that cannot be inspected or moved is also
+kept private, and an empty host directory is created for other accounts.
+If a required host directory is occupied by a regular file or dangling symlink,
+that entry is left intact and not linked; preparation continues with the other
+entries and preserves any private account copy.
 
 `linkSharedEntries` is otherwise conservative: a regular file already in the
 account directory is left alone, because a CLI that saves by atomic rename

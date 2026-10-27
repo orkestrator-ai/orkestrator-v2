@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +16,24 @@ import {
 } from "./agent-accounts-homes.js";
 
 let root: string;
+
+// Keep these expectations independent of the production directory lists.
+const sharedDirectories = {
+  claude: [
+    "agents",
+    "commands",
+    "skills",
+    "plugins",
+    "hooks",
+    "rules",
+    "output-styles",
+    "projects",
+    "todos",
+    "file-history",
+    "plans",
+  ],
+  codex: ["skills", "rules", "prompts", "plugins", "sessions", "archived_sessions"],
+};
 
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "ork-agent-account-homes-")));
@@ -235,8 +253,10 @@ describe("prepareAgentAccountHome", () => {
     });
 
     expect((await fs.stat(home)).mode & 0o777).toBe(0o700);
-    expect(await fs.readlink(path.join(home, "sessions"))).toBe(path.join(hostCodex, "sessions"));
-    expect(await fs.readlink(path.join(home, "skills"))).toBe(path.join(hostCodex, "skills"));
+    for (const entry of sharedDirectories.codex) {
+      expect((await fs.stat(path.join(hostCodex, entry))).isDirectory()).toBe(true);
+      expect(await fs.readlink(path.join(home, entry))).toBe(path.join(hostCodex, entry));
+    }
     expect(await fs.readlink(path.join(home, "config.toml"))).toBe(
       path.join(hostCodex, "config.toml"),
     );
@@ -257,7 +277,8 @@ describe("prepareAgentAccountHome for Claude", () => {
       codexHome: path.join(root, "codex-host"),
     });
 
-    for (const entry of ["plans", "agents", "commands", "todos", "projects"]) {
+    for (const entry of sharedDirectories.claude) {
+      expect((await fs.stat(path.join(hostClaude, entry))).isDirectory()).toBe(true);
       expect(await fs.readlink(path.join(home, entry))).toBe(path.join(hostClaude, entry));
     }
     // Files are linked only when the host has them.
@@ -265,6 +286,145 @@ describe("prepareAgentAccountHome for Claude", () => {
     expect(await privateSharedEntries("claude", home)).toEqual([]);
   });
 });
+
+for (const platform of ["claude", "codex"] as const) {
+  describe(`prepareAgentAccountHome ${platform} adoption fallbacks`, () => {
+    function sources() {
+      return {
+        claudeHome: path.join(root, "host"),
+        claudeJson: path.join(root, "host.claude.json"),
+        codexHome: path.join(root, "host"),
+      };
+    }
+
+    test.each(["foo", "nested/foo"])(
+      "keeps skills private and readable with an external relative link at %s",
+      async (entry) => {
+        const account = path.join(root, "account");
+        const skills = path.join(account, "skills");
+        const skillStore = path.join(account, "skill-store", "foo");
+        const link = path.join(skills, entry);
+        await fs.mkdir(path.dirname(link), { recursive: true });
+        await fs.mkdir(skillStore, { recursive: true });
+        await fs.writeFile(path.join(skillStore, "SKILL.md"), "account skill");
+        const relativeTarget = path.relative(path.dirname(link), skillStore);
+        await fs.symlink(relativeTarget, link);
+
+        await prepareAgentAccountHome(platform, account, sources());
+        await prepareAgentAccountHome(platform, account, sources());
+
+        expect((await fs.lstat(skills)).isDirectory()).toBe(true);
+        expect(await fs.readlink(link)).toBe(relativeTarget);
+        expect(await fs.realpath(link)).toBe(skillStore);
+        expect(await fs.readFile(path.join(link, "SKILL.md"), "utf8")).toBe("account skill");
+        expect(await fs.readdir(path.join(root, "host", "skills"))).toEqual([]);
+        expect(await privateSharedEntries(platform, account)).toEqual(["skills"]);
+        expect(await fs.readlink(path.join(account, "rules"))).toBe(
+          path.join(root, "host", "rules"),
+        );
+      },
+    );
+
+    test("adopts skills containing absolute links without following them", async () => {
+      const account = path.join(root, "account");
+      const skills = path.join(account, "skills");
+      const store = path.join(root, "skill-store", "foo");
+      await fs.mkdir(skills, { recursive: true });
+      await fs.mkdir(store, { recursive: true });
+      await fs.writeFile(path.join(store, "SKILL.md"), "absolute skill");
+      await fs.symlink(store, path.join(skills, "foo"));
+      // A link cycle must not cause recursive traversal of linked directories.
+      await fs.symlink(skills, path.join(skills, "self"));
+
+      await prepareAgentAccountHome(platform, account, sources());
+
+      expect(await fs.readlink(skills)).toBe(path.join(root, "host", "skills"));
+      expect(await fs.readFile(path.join(skills, "foo", "SKILL.md"), "utf8")).toBe(
+        "absolute skill",
+      );
+      expect(await privateSharedEntries(platform, account)).toEqual([]);
+    });
+
+    test("leaves a non-directory account entry private and creates the host directory", async () => {
+      const account = path.join(root, "account");
+      await fs.mkdir(account, { recursive: true });
+      await fs.writeFile(path.join(account, "skills"), "account contents");
+
+      await prepareAgentAccountHome(platform, account, sources());
+
+      expect(await fs.readFile(path.join(account, "skills"), "utf8")).toBe("account contents");
+      expect((await fs.stat(path.join(root, "host", "skills"))).isDirectory()).toBe(true);
+      expect(await privateSharedEntries(platform, account)).toEqual(["skills"]);
+      expect(await fs.readlink(path.join(account, "rules"))).toBe(path.join(root, "host", "rules"));
+    });
+
+    test.each(["EXDEV", "EACCES"])(
+      "keeps account contents private and finishes preparation when adoption fails with %s",
+      async (code) => {
+        const account = path.join(root, "account");
+        const skills = path.join(account, "skills");
+        await fs.mkdir(skills, { recursive: true });
+        await fs.writeFile(path.join(skills, "SKILL.md"), "private skill");
+        const rename = spyOn(fs, "rename").mockRejectedValueOnce(
+          Object.assign(new Error("adoption failed"), { code }),
+        );
+        try {
+          await prepareAgentAccountHome(platform, account, sources());
+          expect(rename).toHaveBeenCalledWith(skills, path.join(root, "host", "skills"));
+        } finally {
+          rename.mockRestore();
+        }
+
+        expect((await fs.lstat(skills)).isDirectory()).toBe(true);
+        expect(await fs.readFile(path.join(skills, "SKILL.md"), "utf8")).toBe("private skill");
+        expect(await fs.readdir(path.join(root, "host", "skills"))).toEqual([]);
+        expect(await privateSharedEntries(platform, account)).toEqual(["skills"]);
+        expect(await fs.readlink(path.join(account, "rules"))).toBe(
+          path.join(root, "host", "rules"),
+        );
+      },
+    );
+
+    for (const obstacle of ["file", "dangling symlink"] as const) {
+      test.each(["missing", "stale link"])(
+        `continues with a host ${obstacle} and a %s account entry`,
+        async (accountEntry) => {
+          const host = path.join(root, "host");
+          const account = path.join(root, "account");
+          await fs.mkdir(host, { recursive: true });
+          await fs.mkdir(path.join(account, "skills"), { recursive: true });
+          await fs.writeFile(path.join(account, "skills", "SKILL.md"), "private skill");
+          for (const entry of ["skills", "plugins"]) {
+            const target = path.join(host, entry);
+            if (obstacle === "file") await fs.writeFile(target, "host contents");
+            else await fs.symlink(path.join(root, "missing", entry), target);
+          }
+          if (accountEntry === "stale link") {
+            await fs.symlink(path.join(host, "plugins"), path.join(account, "plugins"));
+          }
+
+          await prepareAgentAccountHome(platform, account, sources());
+          await prepareAgentAccountHome(platform, account, sources());
+
+          expect(await fs.readFile(path.join(account, "skills", "SKILL.md"), "utf8")).toBe(
+            "private skill",
+          );
+          expect(await privateSharedEntries(platform, account)).toEqual(["skills"]);
+          await expect(fs.lstat(path.join(account, "plugins"))).rejects.toThrow();
+          for (const entry of ["skills", "plugins"]) {
+            const target = path.join(host, entry);
+            if (obstacle === "file") {
+              expect(await fs.readFile(target, "utf8")).toBe("host contents");
+            } else {
+              expect(await fs.readlink(target)).toBe(path.join(root, "missing", entry));
+            }
+          }
+          expect(await fs.readlink(path.join(account, "rules"))).toBe(path.join(host, "rules"));
+        },
+      );
+    }
+  });
+}
 
 describe("claudeAccountLoginState", () => {
   const now = 1_000_000;

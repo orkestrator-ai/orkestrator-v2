@@ -137,6 +137,19 @@ function isErrno(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === code;
 }
 
+/** Do not follow directory links: their contents are not part of the move. */
+async function hasRelativeSymlink(directory: string): Promise<boolean> {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      if (!path.isAbsolute(await fs.readlink(file))) return true;
+    } else if (entry.isDirectory() && (await hasRelativeSymlink(file))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Move a directory the account created while the host had none up to the
  * host, so the link that replaces it shares its content with every account.
@@ -153,6 +166,10 @@ async function adoptAccountDirectory(link: string, target: string): Promise<void
   );
   if (targetExists) return;
   try {
+    // Moving changes the base of relative links that escape the subtree. Keep
+    // all relative links private conservatively: even an apparently internal
+    // path can escape through another symlink before resolving `..`.
+    if (await hasRelativeSymlink(link)) return;
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.rename(link, target);
   } catch {
@@ -178,12 +195,19 @@ export async function linkSharedEntries(
   for (const entry of entries) {
     const target = path.join(hostHome, entry);
     const link = path.join(accountHome, entry);
-    if (requiredDirectories.includes(entry)) {
+    const requiredDirectory = requiredDirectories.includes(entry);
+    if (requiredDirectory) {
       await adoptAccountDirectory(link, target);
-      await fs.mkdir(target, { recursive: true });
+      try {
+        await fs.mkdir(target, { recursive: true });
+      } catch (error) {
+        // A file or dangling link may occupy the host path. Leave it intact;
+        // only usable directories are shared below.
+        if (!isErrno(error, "EEXIST")) throw error;
+      }
     }
-    const targetExists = await fs.lstat(target).then(
-      () => true,
+    const targetExists = await (requiredDirectory ? fs.stat(target) : fs.lstat(target)).then(
+      (stat) => !requiredDirectory || stat.isDirectory(),
       () => false,
     );
     const current = await fs.lstat(link).catch(() => null);

@@ -11,6 +11,7 @@ import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
 import { useConfigStore } from "@/stores/configStore";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import type { Environment } from "@/types";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { isAnnouncedNewer, useFilesPanel } from "./useFilesPanel";
 
 /**
@@ -130,6 +131,23 @@ async function flush() {
 }
 
 describe("useFilesPanel worktree snapshot revisions", () => {
+  test("an announced revision restores quiet polling without explicit refresh", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    coordinator.setDataSaving(true);
+    renderHook(() => useFilesPanel());
+    await flush();
+    await act(() => clock.advance(60_000));
+    const before = listSpy.mock.calls.length;
+    listRevision += 1;
+    announce();
+    await flush();
+    expect(listSpy.mock.calls.length).toBe(before + 1);
+    await act(() => clock.advance(4_999));
+    expect(listSpy.mock.calls.length).toBe(before + 1);
+    await act(() => clock.advance(1));
+    expect(listSpy.mock.calls.length).toBe(before + 2);
+  });
+
   test("an announced list revision re-reads the list once, even with identical counts", async () => {
     renderHook(() => useFilesPanel());
     await flush();

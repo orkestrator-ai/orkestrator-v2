@@ -22,7 +22,15 @@
  *   triggers a reconcile. Visibility, focus, page-show, online and transport
  *   reconnect signals are coalesced for {@link READ_RESUME_COALESCE_MS} and
  *   reconciled once, critical keys first, lower priorities spread over a
- *   short bounded window.
+ *   short bounded window. Returning also restarts every quiet backoff: a
+ *   backed-off key goes back to its base cadence and reads at once if that
+ *   cadence is overdue.
+ * - **Data saving.** `setDataSaving` is this client's data-saving preference
+ *   as one more scheduling input. While it is on, each subscriber's demand
+ *   uses its own `dataSaving` variant (a slower interval, a quiet backoff) in
+ *   place of the base values. It changes only when this client reads: never
+ *   invalidations, explicit refreshes, resume or reconnect reconciles, and
+ *   never another client's or the backend's cadence.
  * - **Errors.** Failed reads retry with capped, jittered backoff and keep the
  *   last good value (reported as stale with its original observation time).
  *   Authentication failures are never turned into empty data. Permanently
@@ -118,6 +126,20 @@ export interface ReadDemand {
    * relevant event and recovery coverage is qualified.
    */
   quietBackoffMs?: readonly number[] | null;
+  /**
+   * Demand while the client's data-saving preference is on
+   * (`ReadCoordinator.setDataSaving`). A field given here replaces the base
+   * `intervalMs` or `quietBackoffMs`; an omitted field keeps the base value.
+   * `active` and `priority` never change with the preference. Absent means
+   * the read is the same in both modes.
+   */
+  dataSaving?: DataSavingDemand | null;
+}
+
+/** The part of a demand the data-saving preference may replace. */
+export interface DataSavingDemand {
+  intervalMs?: number | null;
+  quietBackoffMs?: readonly number[] | null;
 }
 
 export interface ReadContext {
@@ -183,6 +205,12 @@ export interface ReadSubscription<T> {
   /** Hint that the resource changed. Coalesced; deferred while paused. */
   invalidate(): void;
   /**
+   * The owner saw the resource change, or the user act on it, outside this
+   * subscription (a direct read, an announced revision, a mutation). Restores
+   * the base cadence if a quiet backoff had slowed it; it never reads.
+   */
+  noteActivity(): void;
+  /**
    * Explicit refresh. Resolves (never rejects) with the state after a read
    * that started after this call. Runs even while paused, in backoff or
    * marked unsupported.
@@ -224,6 +252,7 @@ export interface ReadCoordinatorOptions {
 
 export interface ReadCoordinatorDiagnostics {
   paused: boolean;
+  dataSaving: boolean;
   hidden: boolean;
   disconnected: boolean;
   connectionId: string | null;
@@ -257,6 +286,11 @@ export interface ReadCoordinator {
   setConnection(connectionId: string | null): void;
   /** A transport reconnected or its replay generation changed. */
   notifyReconnected(): void;
+  /**
+   * This client's data-saving preference. Switching it re-establishes every
+   * key's cadence from the matching demand variant and restarts quiet backoff.
+   */
+  setDataSaving(enabled: boolean): void;
   /** Transport-declared connectivity. Browser `online` is only a hint. */
   setDisconnected(disconnected: boolean): void;
   /** Invalidates every key matching the predicate. */
@@ -319,20 +353,24 @@ interface NormalizedDemand {
   quietBackoffMs: readonly number[] | null;
 }
 
-function normalizeDemand(demand: ReadDemand | undefined): NormalizedDemand {
-  const interval = demand?.intervalMs;
+function normalizeDemand(demand: ReadDemand | undefined, dataSaving: boolean): NormalizedDemand {
+  const saving = dataSaving ? demand?.dataSaving : undefined;
+  const interval = saving && "intervalMs" in saving ? saving.intervalMs : demand?.intervalMs;
+  const quiet =
+    saving && "quietBackoffMs" in saving ? saving.quietBackoffMs : demand?.quietBackoffMs;
   return {
     active: demand?.active ?? true,
     intervalMs: typeof interval === "number" && interval > 0 ? interval : null,
     priority: demand?.priority ?? "standard",
-    quietBackoffMs:
-      demand?.quietBackoffMs && demand.quietBackoffMs.length > 0 ? demand.quietBackoffMs : null,
+    quietBackoffMs: quiet && quiet.length > 0 ? quiet : null,
   };
 }
 
 interface Subscriber<T> {
   order: number;
   read: ReadFunction<T>;
+  /** As the owner asked for it; `demand` is it resolved for the current mode. */
+  requested: ReadDemand | undefined;
   demand: NormalizedDemand;
   classifyError: ((error: unknown) => ReadErrorKind) | undefined;
   onState: ((state: ReadState<T>) => void) | undefined;
@@ -407,6 +445,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let connectionId = options.connectionId ?? null;
   let connectionGeneration = 0;
   let disconnected = false;
+  let dataSaving = false;
   let paused = false;
   let reconnectWhilePaused = false;
   let pendingReconcile: "resume" | "reconnect" | null = null;
@@ -753,6 +792,12 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       .sort((a, b) => PRIORITY_RANK[a.demand.priority] - PRIORITY_RANK[b.demand.priority]);
     for (const { entry, demand } of ordered) {
       if (entry.unsupported) continue;
+      if (entry.quietStreak > 0) {
+        // Returning restarts quiet backoff: the base cadence decides whether
+        // the key is overdue, on the grid of its last read.
+        entry.quietStreak = 0;
+        refreshCadence(entry, entry.lastStartedAt ?? now);
+      }
       const observedSinceSignal = since !== null && entry.lastStartSeq > since;
       if (entry.inFlight) {
         // A running read that predates the reconnect is followed once.
@@ -866,7 +911,8 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     const subscriber: Subscriber<T> = {
       order: ++subscriberOrder,
       read: options.read,
-      demand: normalizeDemand(options.demand),
+      requested: options.demand,
+      demand: normalizeDemand(options.demand, dataSaving),
       classifyError: options.classifyError,
       onState: options.onState,
       disposed: disposed,
@@ -935,7 +981,8 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
         if (changes.onState) subscriber.onState = changes.onState;
         if (!changes.demand) return;
         const before = subscriber.demand;
-        const next = normalizeDemand(changes.demand);
+        const next = normalizeDemand(changes.demand, dataSaving);
+        subscriber.requested = changes.demand;
         subscriber.demand = next;
         const now = clock.now();
         if (before.active !== next.active || before.intervalMs !== next.intervalMs) {
@@ -950,6 +997,14 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       },
       invalidate() {
         if (!subscriber.disposed) invalidateEntry(owner);
+      },
+      noteActivity() {
+        if (subscriber.disposed || entries.get(owner.id) !== owner || owner.quietStreak === 0) {
+          return;
+        }
+        owner.quietStreak = 0;
+        refreshCadence(owner, clock.now());
+        schedule(owner);
       },
       refresh() {
         if (subscriber.disposed || entries.get(owner.id) !== owner || disposed) {
@@ -1013,11 +1068,29 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     }
   };
 
+  const setDataSaving = (next: boolean): void => {
+    if (next === dataSaving || disposed) return;
+    dataSaving = next;
+    const now = clock.now();
+    for (const entry of Array.from(entries.values())) {
+      for (const subscriber of entry.subscribers) {
+        subscriber.demand = normalizeDemand(subscriber.requested, dataSaving);
+      }
+      // A new cadence, as a changed demand establishes one: the grid restarts
+      // now and any quiet backoff starts over.
+      entry.quietStreak = 0;
+      entry.cadenceMs = null;
+      refreshCadence(entry, now);
+      schedule(entry);
+    }
+  };
+
   return {
     clock,
     subscribe,
     setConnection,
     notifyReconnected: () => requestReconcile("reconnect"),
+    setDataSaving,
     setDisconnected(next) {
       if (disconnected === next) return;
       disconnected = next;
@@ -1032,6 +1105,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     getDiagnostics() {
       return {
         paused,
+        dataSaving,
         hidden: isHidden(),
         disconnected,
         connectionId,
@@ -1088,6 +1162,11 @@ export function getReadCoordinator(): ReadCoordinator {
  */
 export function notifyReadCoordinatorReconnected(): void {
   sharedCoordinator?.notifyReconnected();
+}
+
+/** Applies this client's data-saving preference (see `ReadCoordinator.setDataSaving`). */
+export function setReadCoordinatorDataSaving(enabled: boolean): void {
+  getReadCoordinator().setDataSaving(enabled);
 }
 
 /** Records the active server connection (see `ReadCoordinator.setConnection`). */

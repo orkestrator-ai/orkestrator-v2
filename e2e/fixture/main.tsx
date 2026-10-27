@@ -112,6 +112,10 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const DataSavingGatewayFixture = lazy(async () => ({
+  default: (await import("./DataSavingGatewayFixture")).DataSavingGatewayFixture,
+}));
+
 const SidebarDragFixture = lazy(async () => ({
   default: (await import("../../apps/web/src/test/SidebarDragFixture")).SidebarDragFixture,
 }));
@@ -1964,6 +1968,12 @@ function fixtureForPath() {
     installTmuxComposeFocusFixture();
     return <TmuxComposeFocusFixture />;
   }
+  if (window.location.pathname === "/data-saving-gateway")
+    return (
+      <Suspense fallback={null}>
+        <DataSavingGatewayFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }

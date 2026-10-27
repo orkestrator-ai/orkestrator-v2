@@ -196,7 +196,7 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // Files panel reads, served by the worktree snapshot owner (step 03): they
   // join the owner's scan/walk; a result stays valid until a watcher hint
   // (qualified watched worktree or signalled container) or for 3 s
-  // (unwatched). Panel polls every 5 s.
+  // (unwatched). Panel polls every 5 s (slower for a client with data saving on).
   "file-list-read": backend("B04", "read", "interactive", null, "join", "snapshot-rehydrate"),
   "file-tree-read": backend("B04", "read", "interactive", null, "join", "snapshot-rehydrate"),
   // Read-driven, 5 min TTL per common git dir + ref, joined in flight.

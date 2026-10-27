@@ -3,7 +3,8 @@
  * turn through the provider's abort path (settling workflow-turn ownership),
  * reject what is still pending for that session (fail closed), keep the
  * conversation, and treat 404 as already gone. OpenCode's `DELETE
- * /session/:id` deletes the conversation and must never be called.
+ * /session/:id` deletes the conversation and must never be called. Ordinary
+ * abort (`OpenCodeProvider.abort`) rejects pending requests the same way.
  */
 import { describe, expect, test } from "bun:test";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
@@ -183,6 +184,95 @@ describe("OpenCode close retains the conversation", () => {
       expect(listed.map((entry) => entry.sessionId)).toContain(sessionId);
       // The session can be deliberately re-registered afterwards.
       provider.registerSession?.(sessionId);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});
+
+/**
+ * OpenCode publishes no deadline, so nothing else ever answers what a stopped
+ * turn left pending. Abort rejects it the way close does, but keeps the session
+ * registered: a stopped turn is not a closed tab.
+ */
+describe("OpenCode abort fails closed on pending requests", () => {
+  test("rejects pending permissions and questions of the aborted session only", async () => {
+    const fake = openCodeFake();
+    fake.setPending(
+      [
+        { id: "perm-aborted", sessionID: sessionId },
+        { id: "perm-other", sessionID: "other-session" },
+      ],
+      [
+        { id: "question-aborted", sessionID: sessionId },
+        { id: "question-other", sessionID: "other-session" },
+      ],
+    );
+    const provider = interactiveProvider(fake);
+    try {
+      await provider.abort(sessionId);
+      expect(fake.abortCalls).toEqual([{ sessionID: sessionId, directory: "/workspace" }]);
+      expect(fake.permissionReplies).toEqual([
+        { requestID: "perm-aborted", directory: "/workspace", reply: "reject" },
+      ]);
+      expect(fake.questionRejections).toEqual([
+        { requestID: "question-aborted", directory: "/workspace" },
+      ]);
+      expect(fake.questionReplies).toEqual([]);
+      expect(fake.deleteCalls).toEqual([]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("reports an abort whose pending requests cannot be read or rejected", async () => {
+    const readFailure = openCodeFake();
+    readFailure.setPendingReadErrors(null, new Error("unreachable"));
+    const unreadable = interactiveProvider(readFailure);
+    try {
+      await expect(unreadable.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+      // The turn itself was still stopped first.
+      expect(readFailure.abortCalls).toHaveLength(1);
+    } finally {
+      await unreadable.dispose?.();
+    }
+
+    const rejectFailure = openCodeFake();
+    rejectFailure.setPending([], [{ id: "question-aborted", sessionID: sessionId }]);
+    rejectFailure.setQuestionRejectResponse({
+      error: { message: "failed" },
+      response: { status: 500 },
+    });
+    const stuck = interactiveProvider(rejectFailure);
+    try {
+      await expect(stuck.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+    } finally {
+      await stuck.dispose?.();
+    }
+  });
+
+  test("a request answered between the read and the rejection is not a failure", async () => {
+    const fake = openCodeFake();
+    fake.setPending([{ id: "perm-aborted", sessionID: sessionId }], []);
+    fake.setPermissionReplyResponse({ error: { name: "NotFound" }, response: { status: 404 } });
+    const provider = interactiveProvider(fake);
+    try {
+      await expect(provider.abort(sessionId)).resolves.toBeUndefined();
+      expect(fake.permissionReplies).toHaveLength(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("a failed abort rejects nothing", async () => {
+    const fake = openCodeFake();
+    fake.setPending([{ id: "perm-aborted", sessionID: sessionId }], []);
+    fake.setAbortResponse({ error: { message: "failed" }, response: { status: 500 } });
+    const provider = interactiveProvider(fake);
+    try {
+      await expect(provider.abort(sessionId)).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fake.permissionListCallCount).toBe(0);
+      expect(fake.permissionReplies).toEqual([]);
     } finally {
       await provider.dispose?.();
     }

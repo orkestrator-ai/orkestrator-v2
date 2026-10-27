@@ -536,7 +536,9 @@ await client.session.messages({ path: { id } });
 conversation and all of its data, so tab close must never call it: ordinary
 close is `OpenCodeProvider.closeSession` (abort, settle workflow ownership,
 restore reviewer permissions, reject pending requests, forget the session;
-`apps/backend/src/core/opencode-session-close.ts`).
+`apps/backend/src/core/opencode-session-close.ts`). An ordinary
+`OpenCodeProvider.abort` rejects the session's pending requests the same way but
+keeps it registered.
 
 **The patched SSE client.** `@opencode-ai/sdk` is patched — see `patches/`,
 wired in through `patchedDependencies` in the root `package.json`. The generated
@@ -797,7 +799,12 @@ and clicking again restarts a fresh window.
   `ask_user_question` timeout the user configured; Pi pauses until its turn
   budget; a Codex question with `autoResolutionMs` until then; MCP prompts
   pause but warn that their server may stop waiting first. OpenCode publishes
-  no deadline, so there is nothing to pause.
+  no deadline, so there is nothing to pause; its requests wait until they are
+  answered, and aborting the turn or closing the tab rejects what is still
+  pending (`rejectPendingOpenCodeRequests` in `opencode-session-close.ts`).
+- The HTTP bridge adapter refuses `approve-for-session` on a card that offers
+  no session grant (`approveForSessionLabel`), before anything reaches the
+  bridge: Pi and the ACP bridges would answer it as a denial.
 - Claude in tmux mode pauses through its hook script: the blocking hooks run
   as `hook.sh <Kind> hold-v1` with a 48 h hook `timeout`, and the script's wait
   loop consumes a hold request file and rewrites its timing file

@@ -1026,7 +1026,12 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     if (request.expiresAt !== undefined && request.expiresAt <= Date.now()) {
       return outcome("stale", sessionId, interactionId, snapshot.revision);
     }
-    if (!isAgentInteractionResolution(resolution, request)) {
+    // A session-wide grant only where the card offers one. Pi and the ACP
+    // bridges would read it as a denial, which must not be reported applied.
+    if (
+      !isAgentInteractionResolution(resolution, request) ||
+      (resolution.action === "approve-for-session" && !request.presentation.approveForSessionLabel)
+    ) {
       return outcome("rejected", sessionId, interactionId, snapshot.revision);
     }
     if (this.resolvingInteractions.has(interactionId)) {

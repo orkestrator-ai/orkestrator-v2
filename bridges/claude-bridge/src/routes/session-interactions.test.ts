@@ -123,6 +123,93 @@ describe("/session/:id/interactions", () => {
     await finish();
   });
 
+  test("lists a url sign-in, a file approval and a permission, and answers each", async () => {
+    const session = createSession("route-kinds");
+    track(session.id);
+    session.executionPolicy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "ask",
+      projectResources: true,
+      networkAccess: "full",
+    };
+    const prompt = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+    const signal = new AbortController().signal;
+    const link = call.options.onElicitation!(
+      {
+        serverName: "linear",
+        message: "Authorize",
+        mode: "url",
+        url: "https://linear.app/oauth",
+        elicitationId: "e-route",
+      },
+      { signal, requestId: "route-url" },
+    );
+    const file = call.options.canUseTool!(
+      "Edit",
+      { file_path: "/repo/a.ts", old_string: "a", new_string: "b" },
+      { signal, requestId: "route-file", toolUseID: "tu-file" } as never,
+    );
+    const permission = call.options.canUseTool!("mcp__linear__create_issue", { title: "Bug" }, {
+      signal,
+      requestId: "route-permission",
+      mcpServer: { name: "linear", source: "user" },
+    } as never);
+    await waitFor(() => getPendingInteractions(session.id).length === 3);
+
+    const listed = await app.request(`/session/${session.id}/interactions`);
+    expect(listed.status).toBe(200);
+    const { interactions } = (await listed.json()) as {
+      interactions: Array<Record<string, unknown>>;
+    };
+    expect(interactions).toEqual([
+      expect.objectContaining({
+        id: "route-url",
+        kind: "mcp-url",
+        serverName: "linear",
+        url: "https://linear.app/oauth",
+        elicitationId: "e-route",
+      }),
+      expect.objectContaining({
+        id: "route-file",
+        kind: "file-approval",
+        toolName: "Edit",
+        toolUseId: "tu-file",
+        paths: ["/repo/a.ts"],
+      }),
+      expect.objectContaining({
+        id: "route-permission",
+        kind: "permission",
+        toolName: "mcp__linear__create_issue",
+        mcpServer: "linear",
+        input: '{"title":"Bug"}',
+      }),
+    ]);
+    // Every card carries the deadline the backend renders as a countdown.
+    for (const interaction of interactions) {
+      expect(interaction.expiresAt as number).toBeGreaterThan(interaction.requestedAt as number);
+    }
+
+    expect((await respond(session.id, "route-url", { action: "accept" })).status).toBe(200);
+    expect(await link).toEqual({ action: "accept" });
+    expect((await respond(session.id, "route-file", { action: "accept" })).status).toBe(200);
+    expect(await file).toEqual({
+      behavior: "allow",
+      updatedInput: { file_path: "/repo/a.ts", old_string: "a", new_string: "b" },
+    });
+    expect((await respond(session.id, "route-permission", { action: "decline" })).status).toBe(200);
+    expect(await permission).toEqual({
+      behavior: "deny",
+      message: "The user denied this tool call.",
+    });
+    expect(getPendingInteractions(session.id)).toEqual([]);
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
   test("an unknown interaction is stale and an unknown session is 404", async () => {
     const session = createSession("route-unknown");
     track(session.id);

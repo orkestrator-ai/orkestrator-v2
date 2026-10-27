@@ -50,10 +50,11 @@ live findings on real providers and a few gaps found on the way.
   grows with it, so vertical scrolling stays with the page and the inspector
   below stays reachable. It keeps its own view, under the workflow
   id plus `stacked`, so each layout restores what it was left at.
-- **Failed nodes.** A failed reviewer or step shows the first line of its
-  error in place of its model, truncated to the node. The whole text is the
-  node's accessible description and its tooltip, which also opens on keyboard
-  focus. Steps take the workflow error, or the Fix session's own once the fix
+- **Failed nodes.** A failed reviewer or step shows its error, joined onto
+  one line, in place of its model, truncated to the node (the shared
+  `FlowGraph`'s `errorFace="joined"`; the build pipeline shows only the first
+  line). The whole text is the node's accessible description and its tooltip,
+  which also opens on keyboard focus. Steps take the workflow error, or the Fix session's own once the fix
   is interactive.
 - **Inspector.** `MultiReviewInspector.tsx`. Every node has a transcript tail.
   Each step is a keyword and its subject; narrative (`say`) lines drop the

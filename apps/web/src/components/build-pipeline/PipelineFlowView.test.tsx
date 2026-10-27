@@ -200,3 +200,35 @@ describe("pipeline zoom controls", () => {
     expect(level.textContent).toBe("100%");
   });
 });
+
+describe("failed node faces", () => {
+  const error =
+    '\n  Reviewer exited with code 1\nTraceback (most recent call last):\n  File "review.py", line 4';
+
+  test("show only the error's first line and keep the whole text as the description", () => {
+    const pipeline = reviewing();
+    pipeline.reviewFanout!.reviewers[0]!.error = error;
+    renderPipelineTab(pipeline);
+    const node = graphNode("Reviewer 1");
+    expect(node.getAttribute("data-flow-state")).toBe("failed");
+    const face = node.querySelector<HTMLElement>("[data-flow-node-error]")!;
+    expect(face.textContent).toBe("Reviewer exited with code 1");
+    expect(face.className).toContain("truncate");
+    expect(face.getAttribute("aria-hidden")).toBe("true");
+    const description = document.getElementById(node.getAttribute("aria-describedby")!)!;
+    expect(description.textContent).toBe(error);
+    expect(description.className).toContain("sr-only");
+  });
+
+  test("open the whole error in the tooltip", async () => {
+    const pipeline = reviewing();
+    pipeline.reviewFanout!.reviewers[0]!.error = error;
+    renderPipelineTab(pipeline);
+    const node = graphNode("Reviewer 1");
+    fireEvent.click(node);
+    act(() => node.focus());
+    const tooltip = await screen.findByTestId("pipeline-node-error-tooltip");
+    expect(tooltip.textContent).toContain("Reviewer exited with code 1");
+    expect(tooltip.textContent).toContain('File "review.py", line 4');
+  });
+});

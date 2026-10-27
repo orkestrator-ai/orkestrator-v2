@@ -72,8 +72,9 @@ a transcript.
   polling and its bounds; the graph adds no read.
 
 Node colours and edge states follow Multi Review. Faces show the agent and
-model (or the first error line, with the whole error in the tooltip and the
-accessible description), elapsed time and tokens, and issue counts on review
+model (or the error's first non-blank line, with the whole error in the
+tooltip and, through a visually hidden element, the accessible description;
+Multi Review instead joins every line, `errorFace="joined"`), elapsed time and tokens, and issue counts on review
 nodes. Columns have a fixed width (`pipelineFlowLayout`); a long pipeline
 scrolls sideways and a short one is centred. The graph's own height starts at
 240 px and its divider height is remembered separately from Multi Review's.

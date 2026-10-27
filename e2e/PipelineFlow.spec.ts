@@ -84,7 +84,12 @@ test("shows the reviewer fan-out as Multi Review does", async ({ page }) => {
   const failed = node(page, "Reviewer 2");
   await expect(failed).toHaveAttribute("data-flow-state", "failed");
   // The first line of the error on the node; the whole text in its tooltip.
-  await expect(failed.locator("[data-flow-node-error]")).toContainText("exited with code 137");
+  await expect(failed.locator("[data-flow-node-error]")).toHaveText(
+    "Reviewer process exited with code 137",
+  );
+  await expect(failed).toHaveAccessibleDescription(
+    "Reviewer process exited with code 137 Out of memory while reading the package",
+  );
   await failed.hover();
   await expect(page.getByTestId("pipeline-node-error-tooltip")).toContainText(
     "Out of memory while reading the package",

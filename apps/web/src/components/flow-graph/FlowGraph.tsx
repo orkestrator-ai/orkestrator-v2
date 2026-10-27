@@ -73,7 +73,8 @@ export interface FlowNodeModel {
   validation?: { id: string; label: string; status: ReviewValidationResult["status"] }[];
   /**
    * Why a failed node failed. The node shows it on one line in place of the
-   * model, and its tooltip and accessible description carry the whole text.
+   * model (see {@link FlowErrorFace}), and its tooltip and accessible
+   * description carry the whole text.
    */
   error?: string;
   /** Shown while the node has not run; a hollow circle by default. */
@@ -260,6 +261,7 @@ function FlowNode({
   onSelect,
   onKeyDown,
   testIdPrefix,
+  errorFace,
 }: {
   node: FlowNodeModel;
   selected: boolean;
@@ -271,6 +273,7 @@ function FlowNode({
   onSelect: (id: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>, node: FlowNodeModel) => void;
   testIdPrefix: string;
+  errorFace: FlowErrorFace;
 }) {
   const errorId = useId();
   const failure = node.state === "failed" && node.error?.trim() ? node.error : undefined;
@@ -332,7 +335,7 @@ function FlowNode({
           ) : null}
         </span>
         <span className="mt-0.5 flex min-w-0 items-center gap-2">
-          {failure ? (
+          {failure && errorFace === "joined" ? (
             <span
               id={errorId}
               data-flow-node-error=""
@@ -340,6 +343,20 @@ function FlowNode({
             >
               {errorExcerpt(failure)}
             </span>
+          ) : failure ? (
+            <>
+              <span
+                aria-hidden
+                data-flow-node-error=""
+                className="min-w-0 flex-1 truncate text-xs text-failure"
+              >
+                {errorFirstLine(failure)}
+              </span>
+              {/* The face drops the lines after the first; the description keeps them. */}
+              <span id={errorId} data-flow-node-error-full="" className="sr-only">
+                {failure}
+              </span>
+            </>
           ) : (
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
               {node.detail}
@@ -384,11 +401,25 @@ function FlowNode({
 }
 
 /**
+ * How a failed node's face shows its error. `first-line` shows the error's
+ * first non-blank line; `joined` joins every line into one, as Multi Review
+ * always has. Either way the node truncates it to its width, and the tooltip
+ * and accessible description carry the whole text.
+ */
+export type FlowErrorFace = "first-line" | "joined";
+
+/**
  * The error on one line. The node truncates it to its width; the whole text
  * stays in the element, which is the node's accessible description.
  */
 export function errorExcerpt(error: string): string {
   return error.replace(/\s+/g, " ").trim();
+}
+
+/** The error's first non-blank line, its runs of spaces and tabs collapsed. */
+export function errorFirstLine(error: string): string {
+  const line = error.split(/\r\n|\r|\n/).find((candidate) => candidate.trim()) ?? "";
+  return errorExcerpt(line);
 }
 
 export function flowNodeElementId(panelId: string, nodeId: string): string {
@@ -635,6 +666,8 @@ export interface FlowGraphProps {
    * leaves it off: Fit was removed there in #1199.
    */
   fitControl?: boolean;
+  /** How a failed node's face shows its error; its first line by default. */
+  errorFace?: FlowErrorFace;
 }
 
 /**
@@ -681,6 +714,7 @@ export function FlowGraph({
   isActive = true,
   minHeight,
   fitControl = false,
+  errorFace = "first-line",
 }: FlowGraphProps) {
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
@@ -827,6 +861,7 @@ export function FlowGraph({
       onSelect={onSelect}
       onKeyDown={handleKeyDown}
       testIdPrefix={testIdPrefix}
+      errorFace={errorFace}
     />
   );
 

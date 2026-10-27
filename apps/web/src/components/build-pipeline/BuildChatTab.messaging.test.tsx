@@ -1351,8 +1351,10 @@ describe("BuildChatTab graph", () => {
 
     const failed = graphNode("Reviewer 2");
     expect(failed.getAttribute("data-flow-state")).toBe("failed");
-    expect(failed.querySelector("[data-flow-node-error]")?.textContent).toBe(
-      "Reviewer exited with a trace",
+    // The face shows the first line; the description keeps the rest.
+    expect(failed.querySelector("[data-flow-node-error]")?.textContent).toBe("Reviewer exited");
+    expect(document.getElementById(failed.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Reviewer exited\nwith a trace",
     );
     fireEvent.contextMenu(failed);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Retry reviewer" }));

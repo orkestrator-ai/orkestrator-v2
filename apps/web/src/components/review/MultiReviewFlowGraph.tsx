@@ -222,6 +222,8 @@ export function MultiReviewFlowGraph({
       viewKey={viewKey}
       ariaLabel="Multi Review pipeline"
       testIdPrefix="multi-review"
+      // Multi Review keeps the joined excerpt its graph has always shown.
+      errorFace="joined"
       storedHeight={storedHeight}
       onStoredHeightChange={setStoredHeight}
       layoutMode={layout}

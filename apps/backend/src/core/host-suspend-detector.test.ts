@@ -244,19 +244,21 @@ describe("RecurringDiagnosticsRegistry signals", () => {
     ).toEqual([]);
   });
 
-  test("the process-wide registry carries both production signal sources", async () => {
+  test("a backend runtime registers both production signal sources until it shuts down", async () => {
     const { recurringWorkDiagnostics } = await import("./recurring-diagnostics.js");
-    await import("./tmux-poll.js");
-    const { DiffStatsTracking } = await import("./diff-stats-tracking.js");
-    const tracking = new DiffStatsTracking({ emit: () => undefined });
+    const { BackendRuntime } = await import("./backend-runtime.js");
+    const signalNames = () =>
+      recurringWorkDiagnostics(new RecurringWorkMetrics({ enabled: false })).signals.map(
+        (signal) => signal.name,
+      );
+    const runtime = new BackendRuntime({ emit: () => undefined });
     try {
-      const names = recurringWorkDiagnostics(
-        new RecurringWorkMetrics({ enabled: false }),
-      ).signals.map((signal) => signal.name);
-      expect(names).toContain("claude-state-signal");
-      expect(names).toContain("container-worktree-signal");
+      expect(signalNames()).toContain("claude-state-signal");
+      expect(signalNames()).toContain("container-worktree-signal");
     } finally {
-      tracking.shutdown();
+      runtime.shutdown();
     }
+    expect(signalNames()).not.toContain("claude-state-signal");
+    expect(signalNames()).not.toContain("container-worktree-signal");
   });
 });

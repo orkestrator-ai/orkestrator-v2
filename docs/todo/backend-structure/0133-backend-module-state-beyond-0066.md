@@ -102,8 +102,24 @@ evidence.
   full (396 s), and the cascade file plus both tmux files passed (32 s).
 - Root guards `module-import-cycles`, `merge-cleanup-scheduler` and
   `inheritance-chains`: passed.
-- `mise run test` (full suite, once, at the end): see the branch's final
-  report; the result is recorded in decision 13.
+- `mise run test`, exit 1 both times. The first run (inside `test:logged`)
+  was killed by the wrapper's 30-minute deadline after the workspace group
+  queued 1,329 s for worker slots on this shared host. The second, with
+  `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000`, finished in 2,807 s: web,
+  web-public, CLI, protocol, toolchain, the codex protocol lockfile and four
+  of five bridges passed; backend 12,003 pass, 120 skip, 52 fail; desktop 2
+  fail; root 3 fail; claude-bridge 3 fail. One backend failure was a real
+  regression of this work: `host-suspend-detector.test.ts` expected the
+  `claude-state-signal` source to be registered at module load. It now
+  builds a `BackendRuntime` and checks that both sources are registered and
+  removed on shutdown (8 pass). Every other failure is classified in flaky
+  case
+  [1195](../../tests/flaky-tests/aggregate-validation-runs/1195-backend-module-state-0133-validation.md):
+  load deadlines that pass alone or with `--timeout 60000`, and
+  deterministic host failures (`staged-input-relay`, docker-image
+  `pinned image identity`, `migrate-copy`) that fail identically on the base
+  commit `863b5782`. None of those owning files is changed by this branch
+  beyond comments.
 - Scenario suites (`test:agent:browser:isolated`, `test:agent:docker`,
   `test:agent:electron`) were not run: the change is backend-internal state
   ownership with no renderer, Electron or Docker lifecycle change, and
@@ -230,11 +246,21 @@ evidence.
     - Chosen: keep it, as 0010, 0011, 0013 and 0066 do, so the review sees the
       decisions and evidence; the durable description is in
       `backend-runtime.md`.
-13. **Full-suite result.** Recorded in the branch's final report and the
-    coordinator mail; see "Needs verification" for anything not reproduced.
+13. **The full suite ran with a raised group deadline.**
+    - Options: rerun unchanged and hope for free worker slots; raise the
+      deadline for one invocation, as the testing guide allows.
+    - Chosen: `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000` for the second run.
+    - Why: the first run's workspace group spent 22 minutes queued behind
+      other sessions' suites and was killed with no result.
+    - Pros: a complete result for every group. Cons: it is not the default
+      configuration, and the run was not green (see Validation evidence and
+      case 1195); a green full suite on a quiet host is still needed.
 
 ## Needs verification
 
+- A green `mise run test` on a quiet host. On this host every remaining
+  failure is either a load deadline or a failure that reproduces on the base
+  commit (case 1195), but the suite as a whole did not pass.
 - A production backend run (not done: this host runs the user's live
   Orkestrator, so no backend was started against a real data directory). It
   would confirm a claude-tmux tab exports the active account's

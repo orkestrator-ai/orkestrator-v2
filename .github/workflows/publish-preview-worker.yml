@@ -82,6 +82,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      - name: Qualify publishing against a disposable registry
+        env:
+          ORKESTRATOR_TEST_LIVE_WORKER_PUBLISH: "1"
+        run: mise run test:logged -- --name preview-worker-publish -- bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-worker-publish.test.ts --parallel=1
+
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -111,9 +116,36 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  context-parity:
+    name: Verify staging on ${{ matrix.runner }}
+    needs: context
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, macos-15]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Compare independently staged context with Linux CI
+        env:
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "$(mise current bun)"
+          bun docker/artifact-preview-worker/stage-context.ts "${RUNNER_TEMP}/worker-context"
+          test "$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")" = "$CONTEXT_DIGEST"
+
   build:
     name: Build ${{ matrix.name }}
-    needs: context
+    needs: [context, context-parity]
     if: needs.context.outputs.exists != 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -195,8 +227,8 @@ jobs:
 
   publish:
     name: Publish manifest and pin
-    needs: [context, build]
-    if: always() && needs.context.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    needs: [context, context-parity, build]
+    if: always() && needs.context-parity.result == 'success' && needs.context.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -258,11 +290,14 @@ jobs:
             jq -r '.manifests[] | select(.platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)"' | sort -u)"
           grep -Fxq 'linux/amd64' <<< "$platforms"
           grep -Fxq 'linux/arm64' <<< "$platforms"
-          labels="$(docker buildx imagetools inspect "${IMAGE}@${digest}" --format '{{json .Image}}' | \
-            jq -r --arg label "$CONTEXT_LABEL" \
-              '(if has("config") then [.] else [to_entries[] | select(.key | startswith("linux/")) | .value] end)
-               | map(.config.Labels[$label] // "missing") | unique | .[]')"
-          test "$labels" = "$CONTEXT_DIGEST"
+          for platform in linux/amd64 linux/arm64; do
+            label="$(docker buildx imagetools inspect "${IMAGE}@${digest}" --format "{{json (index .Image \"${platform}\")}}" | \
+              jq -er --arg label "$CONTEXT_LABEL" '.config.Labels[$label]')"
+            test "$label" = "$CONTEXT_DIGEST"
+          done
+          # Qualify the existing-tag route after both a fresh publish and a skip.
+          existing_digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -er '.digest')"
+          test "$existing_digest" = "$digest"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
@@ -280,13 +315,21 @@ jobs:
         id: public
         env:
           REFERENCE: ${{ needs.context.outputs.image }}@${{ steps.manifest.outputs.digest }}
+          CONTEXT_DIGEST: ${{ needs.context.outputs.context-digest }}
         run: |
-          docker logout "$REGISTRY"
-          if docker buildx imagetools inspect "$REFERENCE" > /dev/null 2>&1; then
-            echo "public=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "public=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          public=true
+          for platform in linux/amd64 linux/arm64; do
+            if ! DOCKER_CONFIG="$anonymous_config" docker pull --quiet --platform "$platform" "$REFERENCE"; then
+              public=false
+              break
+            fi
+            label="$(docker image inspect --platform "$platform" --format "{{index .Config.Labels \"${CONTEXT_LABEL}\"}}" "$REFERENCE")"
+            test "$label" = "$CONTEXT_DIGEST"
+          done
+          echo "public=${public}" >> "$GITHUB_OUTPUT"
 
       - name: Record the published image
         env:
@@ -334,8 +377,13 @@ jobs:
           fi
           branch="preview-worker-pin/${CONTEXT_DIGEST#sha256:}"
           branch="${branch:0:40}"
-          if gh pr list --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
-            echo "A pull request for this pin is already open."
+          existing_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          if [[ -n "$existing_pr" ]]; then
+            remote_pin="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${pin}?ref=${branch}" --jq '.content' | base64 --decode)"
+            test "$(jq -r '.image' <<< "$remote_pin")" = "$IMAGE"
+            test "$(jq -r '.digest' <<< "$remote_pin")" = "$DIGEST"
+            test "$(jq -r '.contextDigest' <<< "$remote_pin")" = "$CONTEXT_DIGEST"
+            echo "Verified existing pin pull request #${existing_pr}."
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -348,3 +396,7 @@ jobs:
           gh pr create --base main --head "$branch" \
             --title "chore(artifacts): pin the published preview worker image" \
             --body "Records \`${IMAGE}@${DIGEST}\` (linux/amd64, linux/arm64), built from build context \`${CONTEXT_DIGEST}\` at ${GITHUB_SHA}, in \`${pin}\`. Packaged backends whose shipped worker context has this digest pull the image instead of building it. Opened by the publish-preview-worker workflow; close and reopen to run CI."
+          gh pr view "$branch" --json headRefOid --jq '.headRefOid' > "${RUNNER_TEMP}/pin-pr-head"
+          test "$(cat "${RUNNER_TEMP}/pin-pr-head")" = "$(git rev-parse HEAD)"
+          remote_pin="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${pin}?ref=${branch}" --jq '.content' | base64 --decode)"
+          diff -u "$pin" <(printf '%s\n' "$remote_pin")

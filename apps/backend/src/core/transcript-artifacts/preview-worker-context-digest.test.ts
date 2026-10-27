@@ -14,6 +14,8 @@ import {
   workerContextDigest,
 } from "./preview-worker-context-digest.js";
 
+import { prepareWorkerImage } from "./preview-worker-prepare.js";
+
 const cleanups: string[] = [];
 afterEach(() => {
   for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -108,5 +110,77 @@ describe("worker context digest", () => {
       digests.push(await workerContextDigest(target));
     }
     expect(new Set(digests).size).toBe(1);
+    // Exercise staging and published-context comparison as one preparation flow,
+    // using the same real script release builds and CI run.
+    const reference = `ghcr.io/example/worker@sha256:${"a".repeat(64)}`;
+    const calls: string[][] = [];
+    const prepared = await prepareWorkerImage({
+      docker: "docker",
+      tag: "worker:local",
+      dataDir: scratch,
+      published: {
+        reference,
+        repository: "ghcr.io/example/worker",
+        digest: `sha256:${"a".repeat(64)}`,
+        contextDigest: digests[0]!,
+      },
+      buildContext: { context: null, stageScript: script },
+      runDocker: async (_docker, args) => {
+        calls.push(args);
+        return { code: 0, stdout: args[0] === "image" ? digests[0]! : "", stderr: "" };
+      },
+    });
+    expect(prepared).toEqual({ ok: true, method: "pull", reference, pinned: true });
+    expect(calls.map((args) => args[0])).toEqual(["version", "pull", "image"]);
   }, 60_000);
 });
+
+// On macOS this compares release-host staging with Linux using the pinned Bun.
+// The publish workflow additionally compares independent macOS/ARM64 CI installs.
+test.skipIf(process.env.ORKESTRATOR_TEST_CROSS_HOST_WORKER !== "1")(
+  "native and Linux staging produce identical bytes",
+  async () => {
+    const root = path.resolve(import.meta.dir, "../../../../..");
+    const scratch = mkdtempSync(path.join(tmpdir(), "ork-cross-host-context-"));
+    cleanups.push(scratch);
+    const native = path.join(scratch, "native");
+    const linux = path.join(scratch, "linux");
+    mkdirSync(linux);
+    const staged = Bun.spawnSync(
+      [
+        process.execPath,
+        path.join(root, "docker/artifact-preview-worker/stage-context.ts"),
+        native,
+      ],
+      { stdout: "ignore", stderr: "pipe", timeout: 60_000 },
+    );
+    expect(staged.exitCode, staged.stderr.toString()).toBe(0);
+    const { packageManager } = JSON.parse(
+      await Bun.file(path.join(root, "package.json")).text(),
+    ) as { packageManager: string };
+    const container = Bun.spawnSync(
+      [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--mount",
+        `type=bind,source=${root},target=/source,readonly`,
+        "--mount",
+        `type=bind,source=${linux},target=/context`,
+        "--workdir",
+        "/source",
+        "--entrypoint",
+        "bun",
+        `oven/bun:${packageManager.split("@")[1]}`,
+        "/source/docker/artifact-preview-worker/stage-context.ts",
+        "/context",
+      ],
+      { stdout: "ignore", stderr: "pipe", timeout: 60_000 },
+    );
+    expect(container.exitCode, container.stderr.toString()).toBe(0);
+    expect(await workerContextDigest(linux)).toBe(await workerContextDigest(native));
+  },
+  120_000,
+);

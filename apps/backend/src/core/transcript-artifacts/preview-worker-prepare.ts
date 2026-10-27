@@ -201,6 +201,22 @@ export async function publishedMatchesContext(
   }
 }
 
+/** Validate source checkouts too, without keeping a stale staged context across restarts. */
+export async function publishedMatchesBuildContext(
+  published: PublishedWorkerImage,
+  buildContext: WorkerPrepareOptions["buildContext"],
+): Promise<boolean> {
+  if (buildContext.context) return publishedMatchesContext(published, buildContext.context);
+  if (!buildContext.stageScript) return false;
+  const staged = mkdtempSync(path.join(tmpdir(), "ork-preview-worker-context-"));
+  try {
+    if (!(await stageContext(buildContext.stageScript, staged))) return false;
+    return await publishedMatchesContext(published, staged);
+  } finally {
+    rmSync(staged, { recursive: true, force: true });
+  }
+}
+
 /**
  * Pull the published digest when it was built from this backend's context,
  * or build that context. Returns the content-addressed reference to run, or a

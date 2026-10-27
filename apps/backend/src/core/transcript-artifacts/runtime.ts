@@ -48,6 +48,7 @@ import { normalizeApplicationOrigins } from "./content-server.js";
 import { DESKTOP_ARTIFACT_SHELL_ORIGIN, normalizeFrameAncestors } from "./interactive-csp.js";
 import { TranscriptInteractivePreparer } from "./interactive-prepare.js";
 import { TranscriptPreviewRunner, type PreviewRunnerOptions } from "./preview-runner.js";
+import { WORKER_CONTEXT_LABEL } from "./preview-worker-context-digest.js";
 import {
   previewContainerOwner,
   reapOrphanPreviewContainers,
@@ -57,7 +58,7 @@ import {
   canPrepareWorker,
   localWorkerPinFile,
   prepareWorkerImage,
-  publishedMatchesContext,
+  publishedMatchesBuildContext,
   readPublishedWorkerImage,
   resolvePublishedPinFile,
   resolveWorkerBuildContext,
@@ -402,7 +403,7 @@ export async function createTranscriptArtifactRuntime(
     ).catch(() => ({ code: null, stdout: "" }));
 
   // A published, digest-pinned worker that is present locally is preferred
-  // over the local tag when it was built from the context this backend ships
+  // over the local tag when it was built from this backend's shipped or staged context
   // (a pin left over from another context is ignored); an explicit
   // ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins.
   let configuredImage = explicitImage ?? DEFAULT_PREVIEW_WORKER_IMAGE;
@@ -415,12 +416,21 @@ export async function createTranscriptArtifactRuntime(
   ) {
     const present = await inspectImage(published.reference);
     dockerAnswered = present.code !== null;
-    if (
-      present.code === 0 &&
-      buildContext.context &&
-      (await publishedMatchesContext(published, buildContext.context))
-    )
-      configuredImage = published.reference;
+    if (present.code === 0 && (await publishedMatchesBuildContext(published, buildContext))) {
+      const label = await runDocker(
+        docker,
+        [
+          "image",
+          "inspect",
+          "--format",
+          `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`,
+          published.reference,
+        ],
+        AUTO_DETECT_TIMEOUT_MS,
+      ).catch(() => ({ code: null, stdout: "" }));
+      if (label.code === 0 && label.stdout.trim() === published.contextDigest)
+        configuredImage = published.reference;
+    }
   }
 
   let isolation: "process" | "container" | "disabled";

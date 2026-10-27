@@ -2799,8 +2799,7 @@ export class NativeAgentService {
         session.pendingDispatch ||
         session.pendingSteer ||
         queue?.messages.length ||
-        queue?.inFlight ||
-        queue?.outstandingClaim
+        queue?.inFlight
       ) {
         return { outcome: "pending" as const };
       }

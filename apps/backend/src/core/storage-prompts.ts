@@ -313,8 +313,6 @@ export class PromptsRepository {
       }
       if (
         (isRecord(previous?.inFlight?.message) && previous.inFlight.message.id === message.id) ||
-        (isRecord(previous?.outstandingClaim?.message) &&
-          previous.outstandingClaim.message.id === message.id) ||
         previous?.messages.some((candidate) => isRecord(candidate) && candidate.id === message.id)
       ) {
         return previous;
@@ -379,11 +377,9 @@ export class PromptsRepository {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
-      const held = [
-        ...(previous?.messages ?? []),
-        previous?.outstandingClaim?.message,
-        previous?.inFlight?.message,
-      ].find((candidate) => isRecord(candidate) && candidate.id === messageId);
+      const held = [...(previous?.messages ?? []), previous?.inFlight?.message].find(
+        (candidate) => isRecord(candidate) && candidate.id === messageId,
+      );
       if (held !== undefined) {
         if (canonicalPromptQueueMessageFingerprint(held) !== expected) {
           throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
@@ -558,9 +554,6 @@ export class PromptsRepository {
       if (!previous) return null;
       if (previous.dispatchError) return null;
       if (previous.inFlight) return previous.inFlight;
-      // Only an older backend sharing this data directory writes a claim now.
-      // Leave its message alone until it settles or expiry recovery restores it.
-      if (previous.outstandingClaim) return null;
       const message = previous.messages[0];
       if (!isRecord(message) || !isNonBlankString(message.id)) return null;
       const inFlight = {
@@ -742,7 +735,6 @@ export class PromptsRepository {
         await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
         this.context.changes.announce("prompt-queue", environmentId);
       }
-      this.repos.nativeAgentSessions.schedulePromptQueueClaimRecovery(queues);
 
       // Queued prompts carry user-authored text and pasted attachments, and
       // rotating the primary file leaves them readable in its backups. Always

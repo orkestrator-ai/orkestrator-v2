@@ -182,16 +182,13 @@ function queueHoldsId(queue: PersistedPromptQueue | null, id: string): boolean {
   return Boolean(queue?.messages.some((message) => isRecord(message) && message.id === id));
 }
 
+/** The queue's in-flight reservation holds this id: delivery has started. */
 function claimHoldsId(queue: PersistedPromptQueue | null, id: string): boolean {
-  if (!queue) return false;
-  if (
-    queue.inFlight &&
-    (queue.inFlight.requestId === id ||
-      (isRecord(queue.inFlight.message) && queue.inFlight.message.id === id))
-  ) {
-    return true;
-  }
-  return isRecord(queue.outstandingClaim?.message) && queue.outstandingClaim.message.id === id;
+  const inFlight = queue?.inFlight;
+  return Boolean(
+    inFlight &&
+    (inFlight.requestId === id || (isRecord(inFlight.message) && inFlight.message.id === id)),
+  );
 }
 
 /** The queue recorded that this id was removed from `messages` before dispatch. */
@@ -697,11 +694,9 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
     text: string,
   ): Promise<boolean> {
     const queue = await this.storage.getPromptQueue(queueKey).catch(() => null);
-    const held = [
-      ...(queue?.messages ?? []),
-      queue?.outstandingClaim?.message,
-      queue?.inFlight?.message,
-    ].find((candidate) => isRecord(candidate) && candidate.id === request.id);
+    const held = [...(queue?.messages ?? []), queue?.inFlight?.message].find(
+      (candidate) => isRecord(candidate) && candidate.id === request.id,
+    );
     return (
       isRecord(held) &&
       held.text === text &&

@@ -18,6 +18,10 @@ import {
  * Only upgrades whose old shape no current writer can produce belong here.
  * Readers that default or normalize values current writers may still omit
  * (environment setup phase, agent settings, mail defaults) stay where they are.
+ *
+ * The exception is a shape an older backend sharing the same schema version
+ * can still write: its upgrade lives here too but runs on every load
+ * ({@link restoreLegacyPromptQueueClaims}).
  */
 
 /** Same fingerprint the prompt queue records for a failed dispatch. */
@@ -122,6 +126,45 @@ export function upgradePromptQueueRecords(stored: unknown): unknown {
     };
   }
   return upgraded;
+}
+
+/**
+ * Backends up to v2.28.0-beta could move a queue's head into an exclusive
+ * `outstandingClaim` through the removed prompt-queue claim commands, and such
+ * a backend can still share this schema version's database. So unlike the
+ * upgrades above, this one is applied to every load of the prompt queues
+ * (`loadPromptQueues`) rather than once at open, and nothing else reads the
+ * field. It does what the claim's lease expiry always did: the claimed message
+ * goes back to the head of its queue, replacing a copy with the same id, and
+ * the claim is dropped. It never dispatches the message (the client that
+ * claimed it may already have sent it); the queue's drainer does, as for any
+ * head. A claim without a message record has nothing to restore and is
+ * dropped. Returns `stored` itself when no queue holds a claim.
+ */
+export function restoreLegacyPromptQueueClaims(stored: unknown): unknown {
+  if (!isRecord(stored)) return stored;
+  let upgraded: Record<string, unknown> | null = null;
+  for (const [key, queue] of Object.entries(stored)) {
+    if (!isRecord(queue) || !Object.hasOwn(queue, "outstandingClaim")) continue;
+    const { outstandingClaim: claim, ...rest } = queue;
+    const message = isRecord(claim) ? claim.message : undefined;
+    const messages = rest.messages;
+    upgraded ??= { ...stored };
+    upgraded[key] =
+      isRecord(message) && Array.isArray(messages)
+        ? {
+            ...rest,
+            messages: [
+              message,
+              ...messages.filter(
+                (candidate) =>
+                  message.id === undefined || !isRecord(candidate) || candidate.id !== message.id,
+              ),
+            ],
+          }
+        : rest;
+  }
+  return upgraded ?? stored;
 }
 
 const RECORD_UPGRADES: ReadonlyArray<readonly [string, (stored: unknown) => unknown]> = [

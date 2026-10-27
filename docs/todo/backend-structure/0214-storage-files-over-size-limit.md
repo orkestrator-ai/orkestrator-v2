@@ -12,12 +12,15 @@ Two storage source files are still over the 2,000-line limit in `AGENTS.md`
 
 - `apps/backend/src/core/storage-shared-core.ts` is 2,185 lines: the record
   types and the pure helpers every repository shares (90 exports: model
-  catalogue, agent activity, interaction journal, prompt-queue claim,
+  catalogue, agent activity, interaction journal,
   feature-planning and connection parsing, pane-layout helpers, …),
   re-exported through `storage-shared.ts`.
 - `apps/backend/src/core/storage-native.ts` (`NativeAgentSessionsRepository`)
-  is 2,015 lines: native agent sessions, the interaction journal,
-  display tails, prompt-queue persistence and claim recovery.
+  was 2,015 lines: native agent sessions, the interaction journal,
+  display tails, prompt-queue persistence and claim recovery. On 2026-10-27
+  [0078](../cross-cutting/0078-legacy-prompt-queue-claim-state.md) removed
+  the claim recovery, leaving it at 1,950 lines (under the limit, with
+  little headroom); `storage-shared-core.ts` is 2,172.
 
 ## Outstanding work
 
@@ -29,8 +32,8 @@ Two storage source files are still over the 2,000-line limit in `AGENTS.md`
   change.
 - Split `NativeAgentSessionsRepository` by responsibility into collaborators
   sharing the context through the `StorageRepositories` registry, as 0163 did
-  for agent mail (for example prompt-queue persistence and claim recovery
-  apart from the session records), following "Splitting large classes" in
+  for agent mail (for example prompt-queue persistence apart from the session
+  records), following "Splitting large classes" in
   `AGENTS.md`.
 
 ### Qualification

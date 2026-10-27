@@ -51,7 +51,7 @@ the change journal.
 | `ConfigRepository` | `storage-config.ts` | `config.json`, `agent-platforms.json`, model catalogues |
 | `SessionsRepository` | `storage-sessions.ts` | Sessions, pane layouts |
 | `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
-| `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions, the interaction journal, prompt-queue persistence and claim recovery |
+| `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions, the interaction journal and prompt-queue persistence |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
@@ -80,8 +80,7 @@ uses. Repositories call each other through the registry, which is how the
 paths that cross stores work: project removal deletes compose drafts
 (`this.repos.drafts`), session removal deletes the session buffer, public
 operations write projects and environments under those stores' leases
-(`this.repos.projects.enqueueEnvironmentMutation`), and the facade's `init`
-runs prompt-queue claim recovery on the native-session repository. A lease
+(`this.repos.projects.enqueueEnvironmentMutation`). A lease
 wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
 the repository that owns its store, with its target, label and timeout
 unchanged.
@@ -352,6 +351,14 @@ prompt-queue dispatch errors) and its readers have no legacy branch. Readers
 that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
+
+One upgrade cannot run once: a backend up to v2.28.0-beta shares this schema
+version and can still write a prompt-queue claim (`outstandingClaim`). So
+`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+load of the prompt queues (`loadPromptQueues`): it puts each claimed message
+back at the head of its queue and drops the claim, and the next save persists
+that. No other reader sees a claim. A new migration for it would have made
+every older release refuse the database.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,

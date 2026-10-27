@@ -2,7 +2,6 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { StorageService } from "./storage.js";
 import {
   exportStoresAsLegacyJson,
@@ -47,14 +46,9 @@ const QUEUES = "prompt-queues.json";
 describe("StorageService prompt queues", () => {
   test("stores and reads a queue", async () => {
     await withStorage(async (storage) => {
-      const before =
-        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count ?? 0;
       const saved = await storage.savePromptQueue(KEY, "e1", [{ id: "m1" }]);
       expect(saved).toMatchObject({ queueKey: KEY, environmentId: "e1", revision: 1 });
       expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
-      expect(
-        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count ?? 0,
-      ).toBe(before);
     });
   });
 
@@ -212,81 +206,28 @@ describe("StorageService prompt queues", () => {
     });
   });
 
-  test("recovers and announces an expired sole legacy claim during backend restart", async () => {
-    await withStorage(async (storage) => {
-      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
-      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1", {
-        claimedAt: 0,
-        expiresAt: 1,
-      });
-
-      const events: Array<{ resource: string; id: string }> = [];
-      const restarted = new StorageService(storage.getDataDir());
-      restarted.setResourceChangeListener((event) => events.push(event));
-      await restarted.init();
-      expect(await restarted.getPromptQueue(KEY)).toMatchObject({
-        messages: [{ id: "m1" }],
-        revision: 3,
-      });
-      expect((await restarted.getPromptQueue(KEY))?.outstandingClaim).toBeUndefined();
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          resource: "prompt-queue",
-          id: "e1",
-        }),
-      );
-    });
-  });
-
-  test("live lease timer restores and announces a sole legacy claimed head", async () => {
-    await withStorage(async (storage) => {
-      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
-      // Loading the claim arms the recovery timer for its expiry.
-      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1", {
-        expiresAt: Date.now() + 250,
-      });
-      const events: Array<{ resource: string; id: string }> = [];
-      const restarted = new StorageService(storage.getDataDir());
-      restarted.setResourceChangeListener((event) => events.push(event));
-      await restarted.init();
-      expect((await restarted.getPromptQueue(KEY))?.outstandingClaim?.message).toEqual({
-        id: "m1",
-      });
-
-      const deadline = Date.now() + 2_000;
-      let recovered = await restarted.getPromptQueue(KEY);
-      while ((recovered?.messages.length === 0 || events.length === 0) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        recovered = await restarted.getPromptQueue(KEY);
-      }
-
-      expect(recovered).toMatchObject({
-        messages: [{ id: "m1" }],
-        revision: 3,
-      });
-      expect(recovered?.outstandingClaim).toBeUndefined();
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          resource: "prompt-queue",
-          id: "e1",
-        }),
-      );
-    });
-  });
-
-  test("does not reserve the head while a legacy claim is live", async () => {
+  test("reserves a legacy claimed head as soon as it is loaded, whatever its lease", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
+      // An older backend sharing the database claims m1 under a live lease.
       seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1");
 
-      // m1 may already be with the agent; dispatching m2 would reorder them.
-      await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toBeNull();
       expect(await storage.getPromptQueue(KEY)).toMatchObject({
-        messages: [{ id: "m2" }],
-        outstandingClaim: { message: { id: "m1" } },
+        messages: [{ id: "m1" }, { id: "m2" }],
+        revision: 3,
       });
-      expect((await storage.getPromptQueue(KEY))?.inFlight).toBeUndefined();
+      await expect(storage.reservePromptQueueHeadForDispatch(KEY)).resolves.toMatchObject({
+        message: { id: "m1" },
+        requestId: "m1",
+      });
+      // The reservation's write persists the restored queue without the claim.
+      const stored = readStoredValue<Record<string, Record<string, unknown>>>(
+        storage.getDataDir(),
+        QUEUES,
+      );
+      expect(stored?.[KEY]).toMatchObject({ messages: [{ id: "m2" }], inFlight: {} });
+      expect(stored?.[KEY]).not.toHaveProperty("outstandingClaim");
     });
   });
 
@@ -327,9 +268,10 @@ describe("StorageService prompt queues", () => {
       const claimed = await storage.getPromptQueue(KEY);
       const enqueueClaimed = await storage.enqueuePromptQueueMessage(KEY, "e1", {
         id: "m1",
+        text: "replacement must not win",
       });
       expect(enqueueClaimed.revision).toBe(claimed!.revision);
-      expect(enqueueClaimed.messages).toEqual([]);
+      expect(enqueueClaimed.messages).toEqual([{ id: "m1" }]);
     });
   });
 
@@ -679,105 +621,81 @@ describe("StorageService prompt queues", () => {
 });
 
 /**
- * Only an older backend sharing the data directory writes `outstandingClaim`
- * now (the claim commands are gone). Its claims must still validate, and
- * expiry recovery must still restore their messages to the head.
+ * Only a backend up to v2.28.0-beta sharing the database writes
+ * `outstandingClaim` (through the removed claim commands). Every load restores
+ * its message to the head (`restoreLegacyPromptQueueClaims`), so no reader
+ * sees a claim and the next write drops it.
  */
 describe("StorageService legacy prompt queue claims", () => {
-  test("recovers every expired claim and announces each owning environment", async () => {
+  test("restores every claim on load, at startup or written while running", async () => {
     await withStorage(async (storage) => {
-      const before =
-        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count ?? 0;
       const otherKey = "claude env-e2:tab-1";
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
       await storage.enqueuePromptQueueMessage(otherKey, "e2", { id: "m2" });
       seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1", { expiresAt: 1 });
-      seedLegacyPromptQueueClaim(storage.getDataDir(), otherKey, "m2", { expiresAt: 1 });
 
-      const events: Array<{ resource: string; id: string }> = [];
       const restarted = new StorageService(storage.getDataDir());
-      restarted.setResourceChangeListener((event) => events.push(event));
       await restarted.init();
-
       expect(await restarted.getPromptQueue(KEY)).toMatchObject({
         messages: [{ id: "m1" }],
+        revision: 2,
       });
+      expect(await restarted.getPromptQueue(KEY)).not.toHaveProperty("outstandingClaim");
+
+      seedLegacyPromptQueueClaim(restarted.getDataDir(), otherKey, "m2");
       expect(await restarted.getPromptQueue(otherKey)).toMatchObject({
         messages: [{ id: "m2" }],
+        revision: 2,
       });
-      const announced = events
-        .filter((event) => event.resource === "prompt-queue")
-        .map((event) => event.id);
-      expect(new Set(announced)).toEqual(new Set(["e1", "e2"]));
-      expect(
-        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count,
-      ).toBe(before + 2);
-      await restarted.getPromptQueue(KEY);
-      expect(
-        compatibilityPathUsage.snapshot().paths["prompt-queue.legacy-claim-recovered"]?.count,
-      ).toBe(before + 2);
+      // A load writes nothing: the claims stay stored until the next save.
+      const stored = readStoredValue<Record<string, Record<string, unknown>>>(
+        restarted.getDataDir(),
+        QUEUES,
+      );
+      expect(stored?.[KEY]).toHaveProperty("outstandingClaim");
+      expect(stored?.[otherKey]).toHaveProperty("outstandingClaim");
       restarted.close();
     });
   });
 
-  test("drops a whole record whose stored claim is malformed", async () => {
-    // A half-written claim cannot be reasoned about: leaving the messages
-    // readable while the claim is unusable would let the same prompt be
-    // dispatched from the queue and recovered from the claim.
-    for (const outstandingClaim of [
-      {
-        token: "  ",
-        message: { id: "m1" },
-        claimedAt: new Date(0).toISOString(),
-        expiresAt: new Date(1).toISOString(),
-      },
-      {
-        token: "t",
-        message: { id: "m1" },
-        claimedAt: "not-a-date",
-        expiresAt: new Date(1).toISOString(),
-      },
-      {
-        token: "t",
-        message: { id: "m1" },
-        claimedAt: new Date(0).toISOString(),
-        expiresAt: "not-a-date",
-      },
-      { token: "t", claimedAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString() },
-    ]) {
+  test("restores a claim whose lease fields are malformed, and drops one with no message", async () => {
+    for (const [outstandingClaim, messages] of [
+      [
+        { token: "  ", message: { id: "m1" }, claimedAt: "x", expiresAt: "not-a-date" },
+        [{ id: "m1" }, { id: "m2" }],
+      ],
+      [{ token: "t", claimedAt: new Date(0).toISOString() }, [{ id: "m2" }]],
+      ["not-a-record", [{ id: "m2" }]],
+    ] as const) {
       await withStorage(async (storage) => {
         seedStore(storage.getDataDir(), QUEUES, {
           [KEY]: {
             queueKey: KEY,
             environmentId: "e1",
-            messages: [{ id: "m1" }],
+            messages: [{ id: "m2" }],
             outstandingClaim,
             updatedAt: new Date(0).toISOString(),
             revision: 1,
           },
         });
 
-        expect(await storage.getPromptQueue(KEY)).toBeNull();
+        const queue = await storage.getPromptQueue(KEY);
+        expect(queue).toMatchObject({ messages, revision: 1 });
+        expect(queue).not.toHaveProperty("outstandingClaim");
       });
     }
   });
 
-  test("keeps the claim discarded and re-arms recovery when its queue is deleted", async () => {
+  test("deleting a queue discards its legacy claim with it", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1", text: "SENSITIVE" });
-      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1", {
-        expiresAt: Date.now() + 150,
-      });
-      // A queue edit loads the claim and arms its recovery timer.
-      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
-      expect((await storage.getPromptQueue(KEY))?.outstandingClaim).toBeDefined();
+      seedLegacyPromptQueueClaim(storage.getDataDir(), KEY, "m1");
 
       expect(await storage.deletePromptQueuesByEnvironment("e1")).toEqual([KEY]);
       expect(await storage.getPromptQueue(KEY)).toBeNull();
-
-      // Nothing is left for the lease timer to restore, even past the expiry.
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(await storage.getPromptQueue(KEY)).toBeNull();
+      expect(
+        readStoredValue<Record<string, unknown>>(storage.getDataDir(), QUEUES),
+      ).not.toHaveProperty(KEY);
     });
   });
 });

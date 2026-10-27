@@ -131,7 +131,6 @@ export class StorageService {
 
   async init(): Promise<void> {
     await this.context.open();
-    await this.repos.nativeAgentSessions.recoverExpiredPromptQueueClaims();
     this.context.startSnapshots();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();

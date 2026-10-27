@@ -648,13 +648,11 @@ describe("WebAnnotationDispatchAdapter.observe", () => {
       cancelSource: "chat-queue",
       reason: expect.stringContaining("Removed from the chat queue"),
     });
-    // An item an older backend claimed leaves `messages` for the claim, not as
-    // a removal.
+    // An item an older backend claimed is restored to the head on load: still
+    // queued, never a removal.
     await adapter.publish({ request: request({}, "req-2"), text: text("req-2") });
     seedLegacyPromptQueueClaim(dataDir, QUEUE_KEY, "req-2");
-    expect((await adapter.observe(request({ state: "queued" }, "req-2"))).state).toBe(
-      "dispatching",
-    );
+    expect((await adapter.observe(request({ state: "queued" }, "req-2"))).state).toBe("queued");
   });
 
   test("a deleted destination is surfaced as a typed hold and is cancellable", async () => {

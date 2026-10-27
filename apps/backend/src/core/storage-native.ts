@@ -99,7 +99,7 @@ import {
   NativeAgentDisplayTailStore,
   type NativeAgentDisplayTailDeletion,
 } from "./native-agent-display-tail-store.js";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { restoreLegacyPromptQueueClaims } from "./storage-record-upgrades.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -206,8 +206,6 @@ export class NativeAgentSessionsRepository {
       });
     }
   }
-
-  private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Serializes one native agent session's read-modify-write in this process
@@ -1283,7 +1281,7 @@ export class NativeAgentSessionsRepository {
         const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
         const queue = queues[queueKey];
         if (!queue || queue.environmentId !== session.environmentId) return null;
-        if (queue.inFlight || queue.outstandingClaim)
+        if (queue.inFlight)
           throw new Error("A queued prompt is already being delivered; refresh before steering");
         const index = queue.messages.findIndex((item) => isRecord(item) && item.id === messageId);
         const message = queue.messages[index];
@@ -1746,9 +1744,6 @@ export class NativeAgentSessionsRepository {
     previous?: PersistedPromptQueue,
   ): Promise<PersistedPromptQueue> {
     this.validatePromptQueueMessages(messages);
-    // Queue edits carry a claim an older backend left in place; only expiry
-    // recovery (or that backend) clears it, and nothing here creates one.
-    const outstandingClaim = previous?.outstandingClaim ?? null;
     const failedMessageStillUnchanged =
       previous?.dispatchError !== undefined &&
       messages.some(
@@ -1758,14 +1753,13 @@ export class NativeAgentSessionsRepository {
           this.repos.prompts.promptQueueMessageFingerprint(candidate) ===
             previous.dispatchError?.messageFingerprint,
       );
-    const removedOrigins = this.promptQueueRemovedOrigins(previous, messages, outstandingClaim);
+    const removedOrigins = this.promptQueueRemovedOrigins(previous, messages);
     const saved: PersistedPromptQueue = {
       queueKey,
       environmentId,
       messages,
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
       ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
-      ...(outstandingClaim ? { outstandingClaim } : {}),
       ...(removedOrigins.length > 0 ? { removedOrigins } : {}),
       updatedAt: nowIso(),
       revision: (previous?.revision ?? 0) + 1,
@@ -1773,26 +1767,24 @@ export class NativeAgentSessionsRepository {
     queues[queueKey] = saved;
     await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
     this.context.changes.announce("prompt-queue", environmentId);
-    this.schedulePromptQueueClaimRecovery(queues);
     return saved;
   }
 
   /**
    * Tombstones for backend-authored items (a typed `origin` with a request id)
-   * that leave `messages` in this save without moving into the claim or the
-   * in-flight reservation: they were removed or replaced before dispatch.
+   * that leave `messages` in this save without moving into the in-flight
+   * reservation: they were removed or replaced before dispatch.
    * Reservation writes the in-flight record directly and never comes through
    * here, so a dispatched item can never be tombstoned.
    */
   private promptQueueRemovedOrigins(
     previous: PersistedPromptQueue | undefined,
     messages: readonly unknown[],
-    outstandingClaim: PersistedPromptQueue["outstandingClaim"] | null,
   ): Array<{ requestId: string; removedAt: string }> {
     const existing = previous?.removedOrigins ?? [];
     if (!previous) return existing;
     const kept = new Set<unknown>();
-    for (const candidate of [...messages, outstandingClaim?.message, previous.inFlight?.message]) {
+    for (const candidate of [...messages, previous.inFlight?.message]) {
       if (isRecord(candidate)) kept.add(candidate.id);
     }
     const added: Array<{ requestId: string; removedAt: string }> = [];
@@ -1898,65 +1890,6 @@ export class NativeAgentSessionsRepository {
     });
   }
 
-  schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {
-    if (this.promptQueueClaimRecoveryTimer) {
-      clearTimeout(this.promptQueueClaimRecoveryTimer);
-      this.promptQueueClaimRecoveryTimer = null;
-    }
-    const nextExpiry = Object.values(queues).reduce<number | null>((soonest, queue) => {
-      if (!queue.outstandingClaim) return soonest;
-      const expiry = Date.parse(queue.outstandingClaim.expiresAt);
-      if (!Number.isFinite(expiry)) return soonest;
-      return soonest === null || expiry < soonest ? expiry : soonest;
-    }, null);
-    if (nextExpiry === null) return;
-    this.promptQueueClaimRecoveryTimer = setTimeout(
-      () => {
-        this.promptQueueClaimRecoveryTimer = null;
-        void this.recoverExpiredPromptQueueClaims().catch(() => {
-          // A future read, mutation, or backend restart retries recovery. Avoid
-          // logging queue errors because their values may contain prompt data.
-        });
-      },
-      Math.max(0, nextExpiry - Date.now()),
-    );
-    this.promptQueueClaimRecoveryTimer.unref?.();
-  }
-
-  async recoverExpiredPromptQueueClaims(): Promise<void> {
-    await this.enqueuePromptQueueMutation(async () => {
-      const queues = await this.loadPromptQueues();
-      const now = Date.now();
-      const changedEnvironmentIds = new Set<string>();
-      let changed = false;
-      for (const queue of Object.values(queues)) {
-        const claim = queue.outstandingClaim;
-        if (!claim || Date.parse(claim.expiresAt) > now) continue;
-        compatibilityPathUsage.record("prompt-queue.legacy-claim-recovered");
-        const messageId = isRecord(claim.message) ? claim.message.id : undefined;
-        queue.messages = [
-          claim.message,
-          ...queue.messages.filter(
-            (candidate) =>
-              messageId === undefined || !isRecord(candidate) || candidate.id !== messageId,
-          ),
-        ];
-        delete queue.outstandingClaim;
-        queue.updatedAt = nowIso();
-        queue.revision += 1;
-        changedEnvironmentIds.add(queue.environmentId);
-        changed = true;
-      }
-      if (changed) {
-        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-        for (const environmentId of changedEnvironmentIds) {
-          this.context.changes.announce("prompt-queue", environmentId);
-        }
-      }
-      this.schedulePromptQueueClaimRecovery(queues);
-    });
-  }
-
   async assertEnvironmentAcceptsBackgroundState(
     environmentId: string,
     label: string,
@@ -2006,9 +1939,11 @@ export class NativeAgentSessionsRepository {
     );
     // A first-generation dispatch error was upgraded once at import
     // (storage-record-upgrades.ts); every stored error identifies its item.
+    // A claim an older backend sharing the database wrote is restored to the
+    // head on every load, so no reader sees one.
     return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, queue]) =>
-        isPersistedPromptQueue(queue, storedKey),
+      Object.entries(restoreLegacyPromptQueueClaims(stored) as typeof stored).filter(
+        ([storedKey, queue]) => isPersistedPromptQueue(queue, storedKey),
       ),
     );
   }

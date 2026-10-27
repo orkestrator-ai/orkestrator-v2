@@ -830,21 +830,8 @@ export interface PersistedPromptQueue {
     failedAt: string;
   };
   /**
-   * A durable, exclusive claim on the message an older renderer was handing to
-   * an agent through the removed prompt-queue claim commands. Only backends
-   * older than this one write it now, into a shared data directory. It still
-   * validates, blocks dispatch of the queue while live, and expiry recovery
-   * (`recoverExpiredPromptQueueClaims`) restores the message to the head.
-   */
-  outstandingClaim?: {
-    token: string;
-    message: unknown;
-    claimedAt: string;
-    expiresAt: string;
-  };
-  /**
    * Bounded tombstones for backend-authored items (typed `origin`) that left
-   * `messages` without being reserved or claimed — i.e. removed or replaced
+   * `messages` without being reserved — i.e. removed or replaced
    * before dispatch. Lets the owner tell "removed" from "already sent".
    */
   removedOrigins?: Array<{ requestId: string; removedAt: string }>;

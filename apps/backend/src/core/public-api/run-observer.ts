@@ -122,11 +122,9 @@ async function evaluateQueuedRun(
       error: { code: "operation-failed", message },
     };
   }
-  const held = [
-    ...(queue?.messages ?? []),
-    queue?.inFlight?.message,
-    queue?.outstandingClaim?.message,
-  ].some((message) => isRecord(message) && message.id === id);
+  const held = [...(queue?.messages ?? []), queue?.inFlight?.message].some(
+    (message) => isRecord(message) && message.id === id,
+  );
   const session = await storage.getNativeAgentSession(
     nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),
   );

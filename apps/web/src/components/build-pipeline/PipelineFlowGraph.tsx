@@ -8,6 +8,7 @@ import {
   GitMerge,
   GitPullRequest,
   Hammer,
+  History,
   PackageCheck,
   Rocket,
   Server,
@@ -59,6 +60,7 @@ export const PIPELINE_IDLE_ICON: Record<PipelineFlowNodeKind, LucideIcon> = {
   ship: Rocket,
   conflicts: GitBranch,
   pr: GitPullRequest,
+  attempt: History,
 };
 
 const STATE_LABEL = {
@@ -87,6 +89,8 @@ export function pipelineNodeStatusLabel(
   pullRequest: PipelinePullRequest | null,
 ): string {
   if (node.kind === "ticket") return "Started with";
+  if (node.kind === "attempt") return "Superseded by a restart";
+  if (node.superseded) return `Superseded · ${STATE_LABEL[node.state]}`;
   if (node.kind === "pr") {
     if (!pullRequest || node.state === "not-started") return "Not created yet";
     return pullRequest.state === "merged"
@@ -118,6 +122,8 @@ function nodeDetail(
       return pullRequest && node.state !== "not-started"
         ? pullRequest.url.replace(/^https?:\/\/(www\.)?github\.com\//, "")
         : "No pull request yet";
+    case "attempt":
+      return attemptDetail(node, pipeline);
     default:
       break;
   }
@@ -129,6 +135,13 @@ function nodeDetail(
   return [node.agent, modelLabel(node.agent, node.model), node.reasoningEffort]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** "6 steps · from round 4", what a previous attempt holds and where it was left. */
+function attemptDetail(node: PipelineFlowNode, pipeline: BuildPipeline): string {
+  const steps = plural(node.attemptSessionKeys?.length ?? 0, "step");
+  const rewind = pipeline.rewinds?.find((entry) => entry.id === node.attemptId);
+  return rewind ? `${steps} · left at round ${rewind.fromIteration + 1}` : steps;
 }
 
 function issueTotal(counts: PipelineFlowNode["issueCounts"]): number | undefined {
@@ -166,8 +179,13 @@ export function pipelineNodeView({
         );
   const issues = issueTotal(node.issueCounts);
   const liveReviewers = pipeline.reviewFanout?.reviewers ?? [];
-  const statusWord: FlowNodeModel["statusWord"] =
-    node.reviewer && node.state !== "complete"
+  const statusWord: FlowNodeModel["statusWord"] = node.superseded
+    ? {
+        text:
+          node.kind === "attempt" ? (node.attemptExpanded ? "shown" : "collapsed") : "superseded",
+        tone: "muted",
+      }
+    : node.reviewer && node.state !== "complete"
       ? reviewerStatusWord(node.reviewer)
       : node.state === "running"
         ? { text: "running", tone: "running" }
@@ -207,6 +225,7 @@ export function pipelineNodeView({
     error: node.error,
     idleIcon: PIPELINE_IDLE_ICON[node.kind],
     placeholder: node.placeholder,
+    superseded: node.superseded,
     extra:
       node.kind === "pr" && pullRequest && node.state !== "not-started" ? (
         <PipelinePullRequestChecks checks={pullRequest.checks} />
@@ -272,14 +291,33 @@ export function PipelineFlowGraph({
     const ids = new Set(model.columns[columnIndex]!.nodeIds);
     return model.edges.filter((edge) => ids.has(edge.to)).map((edge) => edge.state);
   };
-  const stages: FlowStackStage[] = model.columns.map((column, index) => ({
-    key: column.key,
-    label: columnLabel(column),
-    nodes: column.nodeIds.map((id) => views.get(id)!),
-    ...(index > 0
-      ? { edgeIn: { id: `into-${column.key}`, state: summarizeFlowEdges(edgesInto(index)) } }
-      : {}),
-  }));
+  // In the stacked column the live line runs beside a previous attempt.
+  const bypassOver = (columnIndex: number) => {
+    const next = model.columns.findIndex(
+      (column, index) => index > columnIndex && !column.superseded,
+    );
+    if (next < 0) return undefined;
+    const ids = new Set(model.columns[next]!.nodeIds);
+    const bypass = model.edges.filter((edge) => edge.route === "bypass" && ids.has(edge.to));
+    if (bypass.length === 0) return undefined;
+    return {
+      id: `bypass-${model.columns[columnIndex]!.key}`,
+      source: bypass[0]!.from,
+      state: summarizeFlowEdges(bypass.map((edge) => edge.state)),
+    };
+  };
+  const stages: FlowStackStage[] = model.columns.map((column, index) => {
+    const bypass = column.superseded ? bypassOver(index) : undefined;
+    return {
+      key: column.key,
+      label: columnLabel(column),
+      nodes: column.nodeIds.map((id) => views.get(id)!),
+      ...(index > 0
+        ? { edgeIn: { id: `into-${column.key}`, state: summarizeFlowEdges(edgesInto(index)) } }
+        : {}),
+      ...(bypass ? { bypass } : {}),
+    };
+  });
   // Ports where the line fans out to a column of reviewers or back in.
   const ports: { nodeId: string; side: "in" | "out" }[] = [];
   model.columns.forEach((column, index) => {

@@ -5,11 +5,19 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
-import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
+import {
+  build,
+  rewoundToFirstVerify,
+  session,
+  sessionlessReviewerRetry,
+  validationRun,
+} from "./pipeline-test-fixture";
 import {
   BuildChatTab,
   graphNode,
   inspector,
+  nodeTitles,
+  queryGraphNode,
   renderPipelineTab,
   retryReviewerMock,
   restoreBuildChatTabMocks,
@@ -19,7 +27,11 @@ import {
 afterAll(restoreBuildChatTabMocks);
 afterEach(() => {
   cleanup();
-  useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
+  useFlowGraphViewStore.setState({
+    views: new Map(),
+    collapsed: new Set(),
+    expandedAttempts: new Set(),
+  });
 });
 
 const reviewing = () =>
@@ -368,5 +380,52 @@ describe("failed node faces", () => {
     const tooltip = await screen.findByTestId("pipeline-node-error-tooltip");
     expect(tooltip.textContent).toContain("Reviewer exited with code 1");
     expect(tooltip.textContent).toContain('File "review.py", line 4');
+  });
+});
+
+describe("a pipeline a restart rewound", () => {
+  test("shows the superseded run as one previous attempt that expands into greyed steps", async () => {
+    renderPipelineTab(rewoundToFirstVerify());
+
+    expect(nodeTitles()).toEqual([
+      "Ticket",
+      "Setup",
+      "Build",
+      "Review",
+      "Previous attempt",
+      "Verify",
+      "Ship",
+      "PR",
+    ]);
+    // The rerun is followed, not the history.
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Running");
+    // The step count is the live run's; the previous attempt is history.
+    expect(screen.getByText(/^5 of 7 steps/)).toBeTruthy();
+
+    selectNode("Previous attempt");
+    expect(
+      within(inspector()).getByText(/rewound the pipeline from round 2 to Verify of round 1/),
+    ).toBeTruthy();
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" })).toBeNull();
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
+
+    await waitFor(() => expect(queryGraphNode("Fix · round 2")).not.toBeNull());
+    const fix = graphNode("Fix · round 2");
+    expect(fix.hasAttribute("data-flow-superseded")).toBe(true);
+    selectNode("Verify · round 2");
+    expect(within(inspector()).getByText(/Superseded by a restart/)).toBeTruthy();
+    // History is read, never restarted or retried.
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" })).toBeNull();
+    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" })).toBeNull();
+
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Hide steps" }));
+    await waitFor(() => expect(queryGraphNode("Fix · round 2")).toBeNull());
+  });
+
+  test("a live step still offers restart", () => {
+    renderPipelineTab(rewoundToFirstVerify());
+    selectNode("Review");
+    expect(within(inspector()).getByRole("button", { name: "Restart from here" })).toBeTruthy();
   });
 });

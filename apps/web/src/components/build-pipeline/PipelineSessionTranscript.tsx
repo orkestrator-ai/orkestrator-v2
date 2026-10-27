@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
+  isSupersededPipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -58,10 +59,12 @@ export function reviewReportSession(pipeline: BuildPipeline): PipelineSession | 
   const linked = requestId
     ? pipeline.sessions.find((session) => session.structuredRequestId === requestId)
     : undefined;
+  // A rewind's superseded passes never own the live report.
+  const live = pipeline.sessions.filter((session) => !isSupersededPipelineSession(session));
   return (
     linked ??
-    [...pipeline.sessions].reverse().find((session) => session.reviewReport !== undefined) ??
-    [...pipeline.sessions].reverse().find((session) => session.phase === "review")
+    [...live].reverse().find((session) => session.reviewReport !== undefined) ??
+    [...live].reverse().find((session) => session.phase === "review")
   );
 }
 

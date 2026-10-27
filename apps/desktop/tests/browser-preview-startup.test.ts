@@ -139,6 +139,7 @@ describe("browser preview startup wiring", () => {
     const openExternal = mock(() => undefined);
     const writeClipboardText = mock(() => undefined);
     const focusAddressBar = mock(() => undefined);
+    const toggleKeyboardShortcuts = mock(() => undefined);
     const menuTemplates: Array<Array<{ label?: string; click?: (...args: never[]) => void }>> = [];
     const buildFromTemplate = mock(
       (template: Array<{ label?: string; click?: (...args: never[]) => void }>) => {
@@ -158,6 +159,7 @@ describe("browser preview startup wiring", () => {
       openExternal,
       writeClipboardText,
       focusAddressBar,
+      toggleKeyboardShortcuts,
       getAuthorization: (url) =>
         url.startsWith("https://desk.example/__orkestrator/") ? "Bearer test" : null,
     });
@@ -189,6 +191,21 @@ describe("browser preview startup wiring", () => {
     });
     const previewView = addChildView.mock.calls[0]![0];
     const previewContents = previewView.webContents;
+    previewContents.emit(
+      "before-input-event",
+      { preventDefault: () => undefined },
+      {
+        type: "keyDown",
+        key: "K",
+        code: "KeyK",
+        meta: true,
+        control: false,
+        shift: true,
+        alt: false,
+        isAutoRepeat: false,
+      },
+    );
+    expect(toggleKeyboardShortcuts).toHaveBeenCalledWith("browser-1");
 
     const ambientWriteResult = mock(() => undefined);
     permissionRequest?.(previewContents, "clipboard-sanitized-write", ambientWriteResult, {

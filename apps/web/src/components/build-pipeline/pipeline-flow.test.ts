@@ -11,7 +11,13 @@ import {
 } from "./pipeline-flow";
 import { pipelineFlowLayout } from "./pipeline-flow-layout";
 import { flowNodeHeight } from "@/components/flow-graph/flow-graph-model";
-import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
+import {
+  CREATED,
+  build,
+  session,
+  sessionlessReviewerRetry,
+  validationRun,
+} from "./pipeline-test-fixture";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const PANEL = [
@@ -801,6 +807,56 @@ describe("pipelineFlowModel", () => {
       if (status === "failed") expect(prep.error).toBe("Runner died");
     },
   );
+
+  test("a completed stage with no recorded end ends when the next stage started", () => {
+    const at = (seconds: number) => new Date(Date.parse(CREATED) + seconds * 1_000).toISOString();
+    const model = pipelineFlowModel(
+      build({
+        phase: "verifying",
+        reviewers: PANEL,
+        currentSessionIndex: 4,
+        sessions: [
+          session("build", "build", 0, { completedAt: undefined }),
+          session("fix", "prep", 60, {
+            label: REVIEW_PACKAGE_SESSION_LABEL,
+            completedAt: undefined,
+          }),
+          reviewer(0, "rev-1", 125),
+          reviewer(1, "rev-2", 120),
+          session("address", "address", 400, { completedAt: undefined }),
+          session("verify", "verify", 500, { status: "running", completedAt: undefined }),
+        ],
+        validationRun: validationRun({ startedAt: at(70), completedAt: at(110) }),
+      }),
+    );
+    const node = (id: string) => model.nodes.find((candidate) => candidate.id === id)!;
+    expect(node("build").completedAt).toBe(at(60));
+    // The validation run's own end wins over the next stage's start.
+    expect(node("prep").completedAt).toBe(at(110));
+    // A recorded end is kept.
+    expect(node("rev-1").completedAt).toBe(at(175));
+    expect(node("address").completedAt).toBe(at(500));
+    expect(node("verify").completedAt).toBeUndefined();
+    // The record itself is not rewritten.
+    expect(node("build").session?.completedAt).toBeUndefined();
+  });
+
+  test("failed and stopped stages are not given an end they never recorded", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "verifying",
+        currentSessionIndex: 2,
+        sessions: [
+          session("build", "build", 0, { status: "error", completedAt: undefined }),
+          session("build", "rebuild", 3_600, { superseded: true, completedAt: undefined }),
+          session("verify", "verify", 7_200, { status: "running", completedAt: undefined }),
+        ],
+      }),
+    );
+    expect(model.nodes.find((node) => node.id === "build")).toMatchObject({ state: "failed" });
+    expect(model.nodes.find((node) => node.id === "build")?.completedAt).toBeUndefined();
+    expect(model.nodes.find((node) => node.id === "rebuild")?.completedAt).toBeUndefined();
+  });
 
   test.each(["build", "fix"] as const)(
     "single-review %s validation continues at Review without a Build placeholder",

@@ -5,7 +5,14 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
-import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
+import { formatObservedAt } from "@/lib/view-freshness";
+import {
+  CREATED,
+  build,
+  session,
+  sessionlessReviewerRetry,
+  validationRun,
+} from "./pipeline-test-fixture";
 import {
   BuildChatTab,
   graphNode,
@@ -434,6 +441,28 @@ describe("node face rows", () => {
     } finally {
       Date.now = dateNow;
     }
+  });
+
+  test("every step that ran has its clock on the third row, the ticket its start", () => {
+    renderPipelineTab(
+      build({
+        phase: "verifying",
+        agentType: "claude",
+        currentSessionIndex: 1,
+        sessions: [
+          // Recorded before stage sessions kept their end time.
+          session("build", "build", 0, { completedAt: undefined }),
+          session("verify", "verify", 3_420, { status: "running", completedAt: undefined }),
+        ],
+      }),
+    );
+    const runtimeRow = (title: string) =>
+      graphNode(title).querySelector<HTMLElement>('[data-flow-node-row="runtime"]')?.textContent;
+    const started = formatObservedAt(CREATED)!;
+    expect(runtimeRow("Ticket")).toBe(started);
+    expect(screen.getByLabelText(`Pipeline started ${started}`)).toBeTruthy();
+    expect(runtimeRow("Setup")).toBe("0s");
+    expect(runtimeRow("Build")).toBe("57m 0s");
   });
 
   test("steps ahead keep two rows, with their badge beside the title", () => {

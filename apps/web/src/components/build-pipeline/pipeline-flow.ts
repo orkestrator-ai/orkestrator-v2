@@ -910,11 +910,45 @@ export function pipelineFlowModel(
     column.label = numbered(COLUMN_LABELS.review, reviewPassNumber);
   }
 
+  settleUnrecordedEnds(columns, nodes);
   for (const node of nodes.values()) {
     node.activityAt = latestActivityAt(node);
   }
   const ordered = columns.flatMap((column) => column.nodeIds.map((id) => nodes.get(id)!));
   return { nodes: ordered, columns, edges: pipelineFlowEdges(columns, nodes) };
+}
+
+/**
+ * Records written before stage sessions kept their end time (and a stage that
+ * finished between the backend's observations) have a start but no end, so the
+ * node would show no clock. The pipeline runs one stage at a time, so a
+ * completed stage ended when the next stage on the line began. Only completed
+ * nodes are settled this way: a failed or stopped one may have sat idle
+ * before whatever followed it.
+ */
+function settleUnrecordedEnds(
+  columns: readonly PipelineFlowColumn[],
+  nodes: ReadonlyMap<string, PipelineFlowNode>,
+): void {
+  const startsByColumn = columns.map((column) =>
+    column.nodeIds.flatMap((id) => {
+      const parsed = Date.parse(nodes.get(id)!.startedAt ?? "");
+      return Number.isFinite(parsed) ? [parsed] : [];
+    }),
+  );
+  columns.forEach((column, index) => {
+    for (const id of column.nodeIds) {
+      const node = nodes.get(id)!;
+      if (node.state !== "complete" || node.completedAt || !node.startedAt) continue;
+      const started = Date.parse(node.startedAt);
+      if (!Number.isFinite(started)) continue;
+      const next = startsByColumn
+        .slice(index + 1)
+        .flat()
+        .filter((start) => start >= started);
+      if (next.length > 0) node.completedAt = new Date(Math.min(...next)).toISOString();
+    }
+  });
 }
 
 /**

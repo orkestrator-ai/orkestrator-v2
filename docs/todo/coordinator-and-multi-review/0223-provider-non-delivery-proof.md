@@ -257,6 +257,9 @@ found.
   the recovery rules this builds on.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   where the live check is batched.
+- [0059-claude-preference-lock-after-restart.md](../agent-engines/0059-claude-preference-lock-after-restart.md):
+  a Claude bridge killed mid-write delays the re-send of an `absent` request
+  until its preference lock ages out (safe, but slow).
 
 ## Replaces
 

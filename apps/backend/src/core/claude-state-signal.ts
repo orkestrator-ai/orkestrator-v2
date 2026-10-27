@@ -121,3 +121,12 @@ export const claudeStateSignalInstaller: ClaudeStateSignalInstaller = {
     await runCommand(command, args, options);
   },
 };
+
+/**
+ * The doorbell installer the backend builds its Claude state polls with
+ * (`index.ts`, `tmux.claudeStatePolls.signal`). Docker-backed, so unit tests
+ * keep the plain poll unless they inject one.
+ */
+export function backendClaudeStateSignal(): ClaudeStateSignalInstaller | undefined {
+  return process.env.NODE_ENV === "test" ? undefined : claudeStateSignalInstaller;
+}

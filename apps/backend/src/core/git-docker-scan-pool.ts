@@ -8,5 +8,8 @@ import { WorkAdmissionPool } from "./work-admission.js";
  * global bound holds across owners: worktree snapshot scans and tree walks
  * (`DiffStatsService`) today; later owners of the same resource class must
  * acquire here rather than construct their own pool.
+ *
+ * Process-wide on purpose: it bounds Git and Docker work on this host, so a
+ * pool per backend would multiply that bound (docs/architecture/backend-runtime.md).
  */
 export const gitDockerScanPool = new WorkAdmissionPool({ name: "git-docker-scan" });

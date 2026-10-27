@@ -13,7 +13,6 @@ import {
   classifyVolume,
   executeDockerCleanup,
   previewDockerCleanup,
-  resetCleanupGrants,
 } from "../src/core/docker-cleanup-preview";
 import { loadProtection } from "../src/core/docker-cleanup-inventory";
 import { buildEnvironmentCleanupEntry } from "../src/core/environment-cleanup";
@@ -31,7 +30,6 @@ import {
 
 const cleanup: string[] = [];
 afterEach(async () => {
-  resetCleanupGrants();
   resetDockerTopologyCache();
   resetResourceCaches();
   resetContainerOwnershipCache();

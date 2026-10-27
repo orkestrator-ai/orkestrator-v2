@@ -62,20 +62,6 @@ import {
 } from "./tmux-hooks.js";
 type CommandContext = shared.CommandContext;
 
-/**
- * Supplies the Claude configuration directory a local tmux launch should use.
- * The agent-account owner registers it (see `commands-servers`): tmux does not
- * depend on the account modules, whose imports lead back here.
- */
-type LocalClaudeConfigDirectoryProvider = (context: CommandContext) => Promise<string | undefined>;
-let localClaudeConfigDirectory: LocalClaudeConfigDirectoryProvider = async () => undefined;
-
-export function setLocalClaudeConfigDirectoryProvider(
-  provider: LocalClaudeConfigDirectoryProvider,
-): void {
-  localClaudeConfigDirectory = provider;
-}
-
 export function localClaudeAccountPrefix(accountDirectory: string | undefined): string {
   return accountDirectory
     ? `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY CODEX_API_KEY; export CLAUDE_CONFIG_DIR=${shellArg(accountDirectory)}; `
@@ -394,7 +380,9 @@ export class TmuxSession {
         // A local tmux server keeps the environment it was first started
         // with, so the active Claude account is exported per session instead.
         const accountDirectory =
-          this.backend.kind === "local" ? await localClaudeConfigDirectory(context) : undefined;
+          this.backend.kind === "local"
+            ? await context.runtime.tmux.localClaudeConfigDirectory(context)
+            : undefined;
         const accountPrefix = localClaudeAccountPrefix(accountDirectory);
         // The managed binary stays on its pin; see CLAUDE_PINNED_RUNTIME_ENV.
         const pinnedPrefix =
@@ -713,18 +701,19 @@ export class TmuxSession {
           if (tick % LIVENESS_CHECK_EVERY_TICKS !== 0) continue;
           if (!(await this.tmuxAlive().catch(() => false))) {
             let removed = false;
-            await tmuxManager.installLock(this.environmentId).runExclusive(async () => {
+            const sessions = context.runtime.tmux.sessions;
+            await sessions.installLock(this.environmentId).runExclusive(async () => {
               // A replace/stop may have won while the liveness process was in
               // flight. It owns the transition and any newer session under the
               // same tab key; never emit a stale stopped frame for that case.
               if (this.stopRequested) return;
               if (await this.tmuxAlive().catch(() => false)) return;
-              removed = tmuxManager.removeIfSame(this.environmentId, this.tabId, this);
+              removed = sessions.removeIfSame(this.environmentId, this.tabId, this);
               if (!removed) return;
               this.accountHomeOwner?.forgetAccountHome(this.accountHomeKey());
               this.setBusyState(false);
               await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
-              if (tmuxManager.sessionsInEnvironment(this.environmentId) === 0) {
+              if (sessions.sessionsInEnvironment(this.environmentId) === 0) {
                 await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch(
                   (error) => {
                     console.warn("[tmux] uninstallWorkspaceHooks failed", error);
@@ -741,7 +730,7 @@ export class TmuxSession {
               tab_id: this.tabId,
               environment_id: this.environmentId,
             });
-            await persistTmuxEnvironmentActivity(context, this.environmentId);
+            await context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
             break;
           }
         }
@@ -790,7 +779,7 @@ export class TmuxSession {
         ...(next.prompt ? { prompt: next.prompt } : { previous_prompt: previousPrompt }),
       });
     }
-    await persistTmuxEnvironmentActivity(context, this.environmentId);
+    await context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
   }
 
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
@@ -858,7 +847,7 @@ export class TmuxSession {
     if (previous !== this.busy) {
       // Do not make the stdout/hook loop wait for storage; the next observation
       // also reconciles this source if the write fails.
-      void persistTmuxEnvironmentActivity(context, this.environmentId);
+      void context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
     }
   }
 
@@ -1532,56 +1521,6 @@ export class TmuxSessionManager {
   }
 }
 
-export const tmuxManager = new TmuxSessionManager();
-export const tmuxActivityWrites = new Map<string, Promise<void>>();
-export const orphanedTmuxMissingSince = new Map<string, number>();
-export let lastTmuxOrphanSweepAt = 0;
-
-/** Serialize aggregate writes so an older pane observation cannot land last. */
-export function persistTmuxEnvironmentActivity(
-  context: CommandContext,
-  environmentId: string,
-): Promise<void> {
-  const storage = context.storage as unknown as {
-    getEnvironment?: CommandContext["storage"]["getEnvironment"];
-    setEnvironmentAgentActivity?: CommandContext["storage"]["setEnvironmentAgentActivity"];
-  };
-  // Several command-unit harnesses intentionally provide only the storage
-  // methods exercised by that test. Activity persistence is orthogonal there.
-  if (!storage.getEnvironment || !storage.setEnvironmentAgentActivity) {
-    return Promise.resolve();
-  }
-  const previous = tmuxActivityWrites.get(environmentId) ?? Promise.resolve();
-  const operation = previous
-    .catch(() => undefined)
-    .then(async () => {
-      const state = tmuxManager.activityState(environmentId);
-      const environment = await storage.getEnvironment!(environmentId);
-      const persisted = environment?.agentActivitySources?.["claude-tmux"];
-      if (persisted?.state === state) return;
-      await storage.setEnvironmentAgentActivity!(
-        environmentId,
-        state,
-        new Date().toISOString(),
-        "claude-tmux",
-      );
-    });
-  const settled = operation
-    .catch((error) => {
-      console.warn(
-        `[tmux] failed to persist activity for ${environmentId}:`,
-        error instanceof Error ? error.message : String(error),
-      );
-    })
-    .finally(() => {
-      if (tmuxActivityWrites.get(environmentId) === settled) {
-        tmuxActivityWrites.delete(environmentId);
-      }
-    });
-  tmuxActivityWrites.set(environmentId, settled);
-  return settled;
-}
-
 export function workspaceAndClaudeHome(backend: TmuxBackend): {
   workspace: string;
   claudeHome: string;
@@ -1630,7 +1569,8 @@ export async function getOrCreateSession(
   resumeSessionId: string | undefined,
   timing?: TmuxSessionTimingOptions,
 ): Promise<TmuxSession> {
-  const existing = tmuxManager.get(environmentId, tabId);
+  const sessions = context.runtime.tmux.sessions;
+  const existing = sessions.get(environmentId, tabId);
   if (existing) return existing;
 
   const backend = await resolveBackend(environmentId, context);
@@ -1643,7 +1583,7 @@ export async function getOrCreateSession(
     resolvePinnedClaudeCommand(context, backend),
     timing,
   );
-  tmuxManager.insert(environmentId, tabId, session);
+  sessions.insert(environmentId, tabId, session);
   return session;
 }
 
@@ -1664,7 +1604,7 @@ export async function killOrphanSession(
 
 /**
  * Kills every tmux session that belongs to `environmentId`, including ones this
- * process never registered — a backend restart empties `tmuxManager` while the
+ * process never registered — a backend restart empties `runtime.tmux.sessions` while the
  * tmux server keeps running the sessions it started.
  *
  * A tmux server with no sessions exits non-zero from `list-sessions`, which is
@@ -1729,11 +1669,3 @@ export async function killEnvironmentTmuxSessions(
  * Ordering matters at the call site — this needs the container to still exist
  * and the worktree to still be on disk, so it runs before either is removed.
  */
-
-export function getLastTmuxOrphanSweepAt(): number {
-  return lastTmuxOrphanSweepAt;
-}
-
-export function setLastTmuxOrphanSweepAt(value: number): void {
-  lastTmuxOrphanSweepAt = value;
-}

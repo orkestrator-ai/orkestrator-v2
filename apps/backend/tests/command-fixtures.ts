@@ -113,6 +113,11 @@ export async function createCommandFixtures() {
         scheduleMergeCleanupRecovery(environmentId, context),
       ...options.prMonitor,
     },
+    // As in the backend, so a local tmux launch exports the active account.
+    tmux: {
+      localClaudeConfigDirectory: (context) => tmuxLocalClaudeConfigDirectory(context),
+      ...options.tmux,
+    },
   });
   /** A runtime for a hand-built context, released with the fixture's own. */
   const createRuntime = (
@@ -173,6 +178,7 @@ export async function createCommandFixtures() {
     resolveBrowserOpenCommand,
     resolveFileManagerRevealCommands,
     scheduleMergeCleanupRecovery,
+    tmuxLocalClaudeConfigDirectory,
     toClientEnvironment,
   } = await import("../src/core/commands");
 

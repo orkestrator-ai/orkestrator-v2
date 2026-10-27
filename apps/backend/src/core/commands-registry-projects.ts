@@ -1017,12 +1017,12 @@ export function registerProjectCommands(
     // is never returned.
     return cursorSdkLoginProgress(context, config.global.cursorApiKey);
   });
-  register("cursor_sdk_login_cancel", async () => {
-    cancelCursorSdkLogin();
+  register("cursor_sdk_login_cancel", async (_payload, context) => {
+    cancelCursorSdkLogin(context);
     return { cancelled: true };
   });
   register("cursor_sdk_logout", async (_payload, context) => {
-    cancelCursorSdkLogin();
+    cancelCursorSdkLogin(context);
     await cursorSdkLogout(context);
     const config = await context.storage.loadConfig();
     return cursorSdkAuthStatus(context, config.global.cursorApiKey);

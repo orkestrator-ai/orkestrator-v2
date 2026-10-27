@@ -618,7 +618,7 @@ export async function quiesceRuntime(
     await stopRuntimeContainer(containerId);
     return result;
   });
-  shutdownClaudeStatePolling(containerId);
+  shutdownClaudeStatePolling(context, containerId);
   // The bridges stopped with the runtime, and their turns and parked requests
   // with them. Before a commit too: a failed rebuild leaves it stopped.
   await settleStoppedRuntimeAgents(environmentId, context);

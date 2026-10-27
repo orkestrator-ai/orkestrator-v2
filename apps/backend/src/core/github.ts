@@ -2,6 +2,7 @@ import {
   parseGitHubRepositoryRemote,
   type GitHubRepositoryRef,
 } from "@orkestrator/protocol/github-repository";
+import type { GitHubWriteLocks } from "./integration-locks.js";
 
 export const GITHUB_STATUS_LABELS = {
   todo: "ork:todo",
@@ -118,8 +119,6 @@ export const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 const STATUS_LABEL_NAMES = Object.values(GITHUB_STATUS_LABELS);
-const ensureLabelLocks = new Map<string, Promise<void>>();
-const issueStatusLocks = new Map<string, Promise<unknown>>();
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -606,28 +605,24 @@ async function ensureWorkflowLabelsUnlocked(
 }
 
 export async function ensureGitHubWorkflowLabels(
+  locks: GitHubWriteLocks,
   token: string,
   ref: GitHubRepositoryRef,
   fetchImpl: GitHubFetch = fetch,
 ): Promise<void> {
   const key = `${ref.owner.toLowerCase()}/${ref.name.toLowerCase()}`;
-  const existing = ensureLabelLocks.get(key);
-  if (existing) return existing;
-  const task = ensureWorkflowLabelsUnlocked(token, ref, fetchImpl);
-  ensureLabelLocks.set(key, task);
-  try {
-    await task;
-  } finally {
-    if (ensureLabelLocks.get(key) === task) ensureLabelLocks.delete(key);
-  }
+  await locks.joinWorkflowLabelSetup(key, () =>
+    ensureWorkflowLabelsUnlocked(token, ref, fetchImpl),
+  );
 }
 
 export async function listGitHubIssues(
+  locks: GitHubWriteLocks,
   token: string,
   ref: GitHubRepositoryRef,
   fetchImpl: GitHubFetch = fetch,
 ): Promise<GitHubIssuesSnapshot> {
-  await ensureGitHubWorkflowLabels(token, ref, fetchImpl);
+  await ensureGitHubWorkflowLabels(locks, token, ref, fetchImpl);
   const [identity, issueValues] = await Promise.all([
     loadRepositoryIdentity(token, ref, fetchImpl),
     githubPaginatedArray(
@@ -738,6 +733,7 @@ export async function updateGitHubIssue(
 }
 
 export async function updateGitHubIssueStatus(
+  locks: GitHubWriteLocks,
   token: string,
   ref: GitHubRepositoryRef,
   issueNumber: number,
@@ -749,7 +745,6 @@ export async function updateGitHubIssueStatus(
   }
   requirePositiveInteger(issueNumber, "Issue number");
   const key = `${ref.owner.toLowerCase()}/${ref.name.toLowerCase()}#${issueNumber}`;
-  const previous = issueStatusLocks.get(key) ?? Promise.resolve();
   const update = async () => {
     const base = `${repositoryPath(ref)}/issues/${issueNumber}/labels`;
     for (const label of STATUS_LABEL_NAMES) {
@@ -781,14 +776,7 @@ export async function updateGitHubIssueStatus(
     }
     return getIssue(token, ref, issueNumber, fetchImpl);
   };
-  // A failed queued update must not poison the next user attempt.
-  const current = previous.then(update, update);
-  issueStatusLocks.set(key, current);
-  try {
-    return await current;
-  } finally {
-    if (issueStatusLocks.get(key) === current) issueStatusLocks.delete(key);
-  }
+  return locks.withIssueStatusUpdate(key, update);
 }
 
 export async function closeGitHubIssue(

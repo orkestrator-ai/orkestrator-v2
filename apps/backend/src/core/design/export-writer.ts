@@ -266,6 +266,9 @@ function errnoOf(error: unknown): string | undefined {
 // Per-destination serialization
 // ---------------------------------------------------------------------------
 
+// Process-wide on purpose: the locks serialise writes to one file on this
+// host, which two backends in one process must share, and the operation cap
+// bounds the process (docs/architecture/backend-runtime.md).
 let destinationOperations = 0;
 const destinationLocks = new Map<string, Promise<void>>();
 

@@ -118,8 +118,8 @@ async function evaluateQueuedRun(
   }
   const held = [
     ...(queue?.messages ?? []),
-    queue?.inFlight?.message,
     queue?.outstandingClaim?.message,
+    queue?.inFlight?.message,
   ].some((message) => isRecord(message) && message.id === id);
   const session = await storage.getNativeAgentSession(
     nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),

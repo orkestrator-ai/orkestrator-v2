@@ -1758,11 +1758,9 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
           const queue = await invoke<{
             messages: Array<{ id: string }>;
             inFlight?: unknown;
-            outstandingClaim?: unknown;
           } | null>("get_prompt_queue", { queueKey: request.queueKey });
           expect(queue?.messages.some((message) => message.id === request.id) ?? false).toBe(false);
           expect(queue?.inFlight ?? null).toBeNull();
-          expect(queue?.outstandingClaim ?? null).toBeNull();
         }
         await expectNoCodexLaunch();
         await invoke("delete_compose_draft", { draftKey });

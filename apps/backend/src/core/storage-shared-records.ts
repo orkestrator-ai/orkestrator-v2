@@ -60,20 +60,6 @@ export function isPersistedMultiReviewWorkflow(
   );
 }
 
-export function isPersistedPromptQueueClaim(
-  value: unknown,
-): value is NonNullable<PersistedPromptQueue["outstandingClaim"]> {
-  return (
-    isRecord(value) &&
-    isNonBlankString(value.token) &&
-    Object.hasOwn(value, "message") &&
-    typeof value.claimedAt === "string" &&
-    Number.isFinite(Date.parse(value.claimedAt)) &&
-    typeof value.expiresAt === "string" &&
-    Number.isFinite(Date.parse(value.expiresAt))
-  );
-}
-
 export function isPersistedPromptQueue(
   value: unknown,
   expectedKey?: string,
@@ -85,6 +71,14 @@ export function isPersistedPromptQueue(
     isNonBlankString(value.environmentId) &&
     promptQueueKeyMatchesEnvironment(value.queueKey, value.environmentId) &&
     Array.isArray(value.messages) &&
+    (value.outstandingClaim === undefined ||
+      (isRecord(value.outstandingClaim) &&
+        isRecord(value.outstandingClaim.message) &&
+        isNonBlankString(value.outstandingClaim.token) &&
+        typeof value.outstandingClaim.claimedAt === "string" &&
+        Number.isFinite(Date.parse(value.outstandingClaim.claimedAt)) &&
+        typeof value.outstandingClaim.expiresAt === "string" &&
+        Number.isFinite(Date.parse(value.outstandingClaim.expiresAt)))) &&
     (value.inFlight === undefined ||
       (isRecord(value.inFlight) &&
         Object.hasOwn(value.inFlight, "message") &&
@@ -111,7 +105,6 @@ export function isPersistedPromptQueue(
         isNonBlankString(value.dispatchError.message) &&
         typeof value.dispatchError.failedAt === "string" &&
         Number.isFinite(Date.parse(value.dispatchError.failedAt)))) &&
-    (value.outstandingClaim === undefined || isPersistedPromptQueueClaim(value.outstandingClaim)) &&
     typeof value.updatedAt === "string" &&
     Number.isFinite(Date.parse(value.updatedAt)) &&
     isPositiveInteger(value.revision)

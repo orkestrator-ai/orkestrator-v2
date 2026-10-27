@@ -869,6 +869,83 @@ describe("WorkflowResultService", () => {
       });
     });
 
+    for (const transport of ["full", "digest"] as const) {
+      for (const lifecycle of ["accepted", "consumed"] as const) {
+        test(`an overlapping ${transport} submission replays the ${lifecycle} receipt after a late refusal`, async () => {
+          const resultKey = await prepare();
+          const validation = await service.validate(scope, resultKey, valid);
+          if (!validation.ok) throw new Error("expected a valid result");
+          const probe = Promise.withResolvers<typeof refusal | null>();
+          let checks = 0;
+          service.setAcceptanceCheck("feature-plan-state", () =>
+            ++checks === 1 ? probe.promise : Promise.resolve(null),
+          );
+          const pending =
+            transport === "full"
+              ? service.submit(scope, resultKey, valid)
+              : service.submitValidated(scope, resultKey, validation.validatedDigest!);
+          const accepted = await service.submit(scope, resultKey, valid);
+          if (!accepted.ok) throw new Error("expected an accepted result");
+          if (lifecycle === "consumed") await service.consume(resultKey);
+          probe.resolve(refusal);
+          expect(await pending).toEqual({ ...accepted, lifecycle, duplicate: true });
+        });
+      }
+    }
+
+    test("an overlapping different result wins over a late refusal with a conflict", async () => {
+      const resultKey = await prepare();
+      const probe = Promise.withResolvers<typeof refusal | null>();
+      let checks = 0;
+      service.setAcceptanceCheck("feature-plan-state", () =>
+        ++checks === 1 ? probe.promise : Promise.resolve(null),
+      );
+      const pending = service.submit(scope, resultKey, valid);
+      expect(
+        await service.submit(scope, resultKey, { ...valid, title: "Different" }),
+      ).toMatchObject({ ok: true });
+      probe.resolve(refusal);
+      expect(await pending).toMatchObject({ ok: false, error: { code: "submission_conflict" } });
+    });
+
+    for (const lifecycle of ["cancelled", "superseded"] as const) {
+      test(`closing an attempt as ${lifecycle} during the probe wins over refusal`, async () => {
+        const resultKey = await prepare();
+        const probe = Promise.withResolvers<typeof refusal | null>();
+        service.setAcceptanceCheck("feature-plan-state", () => probe.promise);
+        const pending = service.submit(scope, resultKey, valid);
+        await service.close(resultKey, lifecycle);
+        probe.resolve(refusal);
+        expect(await pending).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+      });
+    }
+
+    for (const identical of [false, true]) {
+      for (const refused of [false, true]) {
+        test(`an older ${refused ? "refused" : "successful"} validation preserves the newer ${identical ? "identical" : "different"} candidate`, async () => {
+          const resultKey = await prepare();
+          const probe = Promise.withResolvers<typeof refusal | null>();
+          let checks = 0;
+          service.setAcceptanceCheck("feature-plan-state", () =>
+            ++checks === 1 ? probe.promise : Promise.resolve(null),
+          );
+          const pending = service.validate(scope, resultKey, valid);
+          // A pending probe must never expose a candidate for digest submission.
+          expect(service.heldValidation(resultKey)).toBeUndefined();
+          const newer = identical ? valid : { ...valid, title: "Newer" };
+          const validation = await service.validate(scope, resultKey, newer);
+          if (!validation.ok) throw new Error("expected a valid result");
+          probe.resolve(refused ? refusal : null);
+          expect((await pending).ok).toBe(!refused);
+          expect((await service.status(scope, resultKey))?.delivery?.lastValidation).toBe("valid");
+          expect(
+            await service.submitValidated(scope, resultKey, validation.validatedDigest!),
+          ).toMatchObject({ ok: true });
+          expect(await service.structured(resultKey)).toMatchObject({ value: newer });
+        });
+      }
+    }
+
     test("lets the result through when the check throws, and ignores other kinds", async () => {
       const resultKey = await prepare();
       service.setAcceptanceCheck("verification-result", async () => refusal);

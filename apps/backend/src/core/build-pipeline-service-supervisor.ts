@@ -717,9 +717,9 @@ export class BuildPipelineSupervisor {
   /**
    * Observes the worktree a validation stage is about to run in.
    *
-   * The build stage is only *asked* to commit, so a review that re-derived this
-   * inside its own turn could quietly decide the tree was dirty and skip
-   * validation. Probing here makes the state the pipeline's own evidence.
+   * Addressing can leave uncommitted paths behind. Capturing them before the
+   * verification turn makes the state the pipeline's own evidence and tells
+   * the verifier exactly which paths it must preserve.
    *
    * The probe is one command round trip into a container or worktree and can
    * fail transiently, so it is retried a bounded number of times before the
@@ -838,6 +838,7 @@ export class BuildPipelineSupervisor {
   async assertValidationWorktreeUnchanged(
     pipeline: BuildPipeline,
     session: PipelineSession,
+    options: { repairableOnly?: boolean } = {},
   ): Promise<void> {
     const stage = VALIDATION_STAGE_LABELS[session.phase === "review" ? "review" : "verify"];
     // Without a baseline there is nothing to compare, so do not spend a probe.
@@ -847,6 +848,7 @@ export class BuildPipelineSupervisor {
         ? await this.reviewWorktreeSnapshot(pipeline)
         : { status: "unknown", reason: "no baseline" },
     );
+    if (options.repairableOnly && !validationWorktreeRefusal(change)) return;
     const error = validationWorktreeError(stage, change);
     if (error) throw new Error(error);
   }
@@ -1380,7 +1382,7 @@ export class BuildPipelineSupervisor {
       });
       const stagePrompt = override
         ? { prompt: override.prompt, images: override.images, schema: override.schema }
-        : await this.promptFor(pipeline, sessionPhase, agent);
+        : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
       const prompt = withUnattendedPolicy(stagePrompt.prompt);
       const { schema, images } = stagePrompt;
       const requestId = randomUUID();
@@ -1848,13 +1850,14 @@ export class BuildPipelineSupervisor {
 
   /**
    * The baseline is passed in rather than probed here: the same observation has
-   * to reach both the prompt the reviewer reads and the session field the guard
+   * to reach both the prompt the verifier reads and the session field the guard
    * later compares against, and two probes could disagree.
    */
   async promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
     agent: BuildPipelineAgent,
+    worktree?: ReviewWorktreeSnapshot,
   ): Promise<{
     prompt: string;
     schema?: JsonSchema;
@@ -1919,7 +1922,7 @@ export class BuildPipelineSupervisor {
     }
     if (phase === "verify") {
       return {
-        prompt: verificationPrompt(pipeline, notes, target),
+        prompt: verificationPrompt(pipeline, notes, target, worktree),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };

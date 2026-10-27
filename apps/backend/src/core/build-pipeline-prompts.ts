@@ -534,6 +534,7 @@ export function verificationPrompt(
   pipeline: BuildPipeline,
   notes: string,
   targetBranch: string,
+  worktree?: ReviewWorktreeSnapshot,
 ): string {
   return [
     "Verify the committed branch changes against this ticket:",
@@ -541,6 +542,14 @@ export function verificationPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
     preexistingFailureInstruction(targetBranch),
+    worktree
+      ? worktreeSnapshotSection(worktree, {
+          clean:
+            "**Verification certification baseline**: the backend captured a clean checkout. Preserve the listed HEAD and the empty set of Git-visible uncommitted paths.",
+          dirty:
+            "**Verification certification baseline**: the backend captured the listed HEAD and Git-visible uncommitted paths, including any leftovers from addressing. Preserve this exact HEAD and path set; do not commit, remove or clean up these pre-existing paths.",
+        })
+      : "",
     VERIFICATION_WORKTREE_INSTRUCTION,
     VERIFICATION_OUTPUT_CONTRACT,
   ]

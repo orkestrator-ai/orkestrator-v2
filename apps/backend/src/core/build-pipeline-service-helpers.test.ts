@@ -703,6 +703,11 @@ describe("BuildPipelineService", () => {
         validationWorktreeStatusAtStart: "dirty",
         validationUncommittedPathsAtStart: ["notes/scratch.md"],
       });
+      expect(provider.sent.at(-1)?.prompt).toContain(
+        `**Captured environment HEAD**: \`${controls.currentHead}\``,
+      );
+      expect(provider.sent.at(-1)?.prompt).toContain("- `notes/scratch.md`");
+      expect(provider.sent.at(-1)?.prompt).toContain("Verification certification baseline");
     });
   });
 
@@ -806,6 +811,84 @@ describe("BuildPipelineService", () => {
     );
   });
 
+  for (const ignored of [
+    "stale-key",
+    "superseded-session",
+    "other-environment",
+    "other-project",
+    "other-pipeline-phase",
+    "other-session-phase",
+    "missing-session",
+    "missing-baseline",
+  ] as const) {
+    test(`verification acceptance ignores ${ignored} without probing the worktree`, async () => {
+      await withService(
+        async (service, storage, provider, invocations, controls) => {
+          const results = controls.workflowResults!;
+          const send = provider.send.bind(provider);
+          provider.send = async (sessionId, prompt, options) => {
+            if (provider.phases.get(sessionId) !== "verify")
+              return send(sessionId, prompt, options);
+            return FakeProvider.prototype.send.call(provider, sessionId, prompt, options);
+          };
+          const verifying = await startVerifying(service, storage);
+          let resultKey = verifying.sessions[verifying.currentSessionIndex]!.structuredRequestId!;
+          const scope = { environmentId: "env-1", projectId: "project-1" };
+          if (ignored === "other-environment" || ignored === "other-project") {
+            if (ignored === "other-environment") scope.environmentId = "other-env";
+            else scope.projectId = "other-project";
+            resultKey = crypto.randomUUID();
+            await results.prepare({
+              resultKey,
+              ...scope,
+              kind: "verification-result",
+              provider: "claude",
+            });
+          }
+          await mutateStored(storage, verifying.id, (stored) => {
+            const session = stored.sessions[stored.currentSessionIndex]!;
+            session.structuredRequestId = resultKey;
+            switch (ignored) {
+              case "stale-key":
+                session.structuredRequestId = "newer-result-key";
+                break;
+              case "superseded-session":
+                stored.sessions.push({
+                  ...session,
+                  sessionKey: "new-session",
+                  structuredRequestId: "newer-result-key",
+                });
+                stored.currentSessionIndex = stored.sessions.length - 1;
+                break;
+              case "other-pipeline-phase":
+                stored.phase = "reviewing";
+                break;
+              case "other-session-phase":
+                session.phase = "review";
+                break;
+              case "missing-session":
+                stored.currentSessionIndex = stored.sessions.length;
+                break;
+              case "missing-baseline":
+                delete session.validationHeadAtStart;
+                break;
+            }
+          });
+          controls.uncommittedPaths = ["would-refuse-if-probed"];
+          const probes = () =>
+            invocations.filter(({ command }) => command === "get_environment_uncommitted_paths")
+              .length;
+          const before = probes();
+          const verdict = { complete: true, rationale: "Complete." };
+          expect(await results.validate(scope, resultKey, verdict)).toMatchObject({ ok: true });
+          expect(await results.submit(scope, resultKey, verdict)).toMatchObject({ ok: true });
+          expect(probes()).toBe(before);
+        },
+        { toolMode: true },
+      );
+    });
+  }
+
   test("a verdict that never arrives fails on the worktree change that blocked it", async () => {
     await withService(
       async (service, storage, provider, _invocations, controls) => {
@@ -830,6 +913,36 @@ describe("BuildPipelineService", () => {
       { structuredResultDeadlineMs: 0 },
     );
   });
+
+  for (const state of ["unchanged", "unknown", "unrecorded"] as const) {
+    test(`a missing verdict preserves its original error with ${state} Git state`, async () => {
+      await withService(
+        async (service, storage, provider, _invocations, controls) => {
+          const structured = provider.structured.bind(provider);
+          provider.structured = async <T>(sessionId: string, requestId: string) =>
+            provider.phases.get(sessionId) === "verify"
+              ? (null as unknown as StructuredOutputResult<T>)
+              : structured<T>(sessionId, requestId);
+          const verifying = await startVerifying(service, storage);
+          if (state === "unknown") controls.failCommands.add("get_environment_uncommitted_paths");
+          if (state === "unrecorded") {
+            await mutateStored(storage, verifying.id, (stored) => {
+              const session = stored.sessions[stored.currentSessionIndex]!;
+              delete session.validationHeadAtStart;
+              delete session.validationWorktreeStatusAtStart;
+              delete session.validationUncommittedPathsAtStart;
+            });
+          }
+          await service.advanceNow(verifying.id);
+          await service.advanceNow(verifying.id);
+          const failed = await pipeline(storage, verifying.id);
+          expect(failed.phase).toBe("failed");
+          expect(failed.error).toContain("without returning its required structured result");
+        },
+        { structuredResultDeadlineMs: 0 },
+      );
+    });
+  }
 
   test("fails closed when Git state cannot be verified after validation", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {

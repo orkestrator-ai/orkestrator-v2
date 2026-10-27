@@ -339,6 +339,7 @@ export class WorkflowResultService {
   private pendingBytes = 0;
   private readonly pendingCallsByKey = new Map<string, number>();
   private readonly held = new Map<string, HeldValidation>();
+  private readonly pendingValidations = new Map<string, symbol>();
   private readonly nudgedResults = new Set<string>();
   private heldBytes = 0;
   private readonly deliveryCounters = new Map<string, DeliveryCounters>();
@@ -673,6 +674,7 @@ export class WorkflowResultService {
     }
     let outcome: WorkflowResultPreflightOutcome = "invalid_result";
     let validEntry: StoredWorkflowResult | undefined;
+    const generation = Symbol();
     try {
       // Read-only: the entry's row, never the whole store.
       const evaluate = (): WorkflowResultValidation => {
@@ -731,22 +733,35 @@ export class WorkflowResultService {
         outcome = "valid";
         validEntry = entry;
         const validatedDigest = createHash("sha256").update(serialized).digest("hex");
-        this.hold(resultKey, validatedDigest, result, validationBytes);
+        this.pendingValidations.set(resultKey, generation);
         return { ok: true, valid: true, validatedDigest };
       };
       const validation = evaluate();
       if (!validation.ok || !validEntry) return validation;
       const refused = await this.runAcceptanceCheck(resultKey, validEntry);
-      if (!refused) return validation;
-      // A held payload would let the model commit by digest past the refusal.
-      this.releaseHeld(resultKey);
-      this.counters(resultKey).lastValidation = "invalid";
+      if (!refused) {
+        // Publish only after the probe succeeds. An older completion must not
+        // replace a candidate from a newer validation, even for equal digests.
+        if (
+          this.pendingValidations.get(resultKey) === generation &&
+          this.readEntry(resultKey)?.lifecycle === "open"
+        ) {
+          this.hold(resultKey, validation.validatedDigest!, result, validationBytes);
+        }
+        return validation;
+      }
+      if (this.pendingValidations.get(resultKey) === generation) {
+        this.counters(resultKey).lastValidation = "invalid";
+      }
       outcome = refused.code;
       return { ok: false, error: refused };
     } catch (error) {
       outcome = "storage_unavailable";
       throw error;
     } finally {
+      if (this.pendingValidations.get(resultKey) === generation) {
+        this.pendingValidations.delete(resultKey);
+      }
       this.metrics.recordPreflight(outcome);
       this.endPending(resultKey, validationBytes);
     }
@@ -792,10 +807,10 @@ export class WorkflowResultService {
    * from another scope, a closed slot or one that already holds a receipt is
    * left to the submission's own rules, so a duplicate still deduplicates.
    */
-  private async refuseSubmission(
+  private async submissionRefusal(
     scope: WorkflowResultCallerScope,
     resultKey: string,
-  ): Promise<WorkflowResultSubmission | null> {
+  ): Promise<WorkflowResultError | null> {
     if (this.acceptanceChecks.size === 0) return null;
     const entry = this.readEntry(resultKey);
     if (
@@ -807,16 +822,7 @@ export class WorkflowResultService {
     ) {
       return null;
     }
-    const error = await this.runAcceptanceCheck(resultKey, entry);
-    if (!error) return null;
-    this.counters(resultKey).submissionCalls += 1;
-    this.metrics.recordSubmission({
-      provider: entry.provider,
-      kind: entry.kind,
-      outcome: "rejected",
-      code: error.code,
-    });
-    return { ok: false, error };
+    return this.runAcceptanceCheck(resultKey, entry);
   }
 
   /**
@@ -915,8 +921,7 @@ export class WorkflowResultService {
       };
     }
     try {
-      const refused = await this.refuseSubmission(scope, resultKey);
-      if (refused) return refused;
+      const refused = await this.submissionRefusal(scope, resultKey);
       return this.mutateEntry<WorkflowResultSubmission>(
         resultKey,
         (entry) => {
@@ -1012,6 +1017,17 @@ export class WorkflowResultService {
                 },
               } satisfies WorkflowResultSubmission,
             };
+          }
+          // The probe awaited outside this transaction. Re-read lifecycle and
+          // receipt first so an overlapping acceptance or closure wins.
+          if (refused) {
+            this.metrics.recordSubmission({
+              provider: entry.provider,
+              kind: entry.kind,
+              outcome: "rejected",
+              code: refused.code,
+            });
+            return { result: { ok: false, error: refused } };
           }
           if (validatedDigest !== undefined) {
             const held = this.held.get(resultKey);

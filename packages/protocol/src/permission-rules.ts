@@ -383,7 +383,13 @@ export function commandPrefixRefusal(argv: readonly string[]): string | null {
   if (argv[0]!.includes("=") || WRAPPERS.has(name)) {
     return `\`${name}\` runs other commands, so it can't be remembered.`;
   }
-  if (INTERPRETERS.has(name) && argv[1]!.startsWith("-")) {
+  if (
+    (INTERPRETERS.has(name) ||
+      /^(?:python|pypy|node(?:js)?|ruby|perl|php|lua|luajit|deno|bun)(?:\d+(?:\.\d+)*)?$/.test(
+        name,
+      )) &&
+    argv[1]!.startsWith("-")
+  ) {
     return `\`${name}\` with an option first could run anything, so it can't be remembered.`;
   }
   return null;
@@ -423,7 +429,8 @@ function isProtectedSegment(segment: string): boolean {
 /**
  * Lexically normalise an absolute POSIX path, or `null` when it is not one or
  * climbs above `/`. Symlinks are not resolved: a container path cannot be
- * resolved from the host, and a rule is only ever relative to the workspace.
+ * resolved from the host. Runtime enforcers must additionally reject symlink
+ * targets and ancestors in the agent filesystem before offering or applying file rules.
  */
 export function normalizeAbsolutePath(path: string): string | null {
   if (typeof path !== "string" || !path.startsWith("/")) return null;
@@ -829,10 +836,14 @@ export function permissionRuleOffer(
           reason ??= refusal;
           continue;
         }
-        patterns.push(prefix.join(" "));
+        const pattern = prefix.join(" ");
+        if (isPermissionRulePattern("command-prefix", pattern)) patterns.push(pattern);
       }
       if (patterns.length === 0) {
-        return unavailable("command-prefix", reason ?? commandPrefixRefusal(argv)!);
+        return unavailable(
+          "command-prefix",
+          reason ?? "This command has no prefix within the rule size limits.",
+        );
       }
       const proposed = options.proposal ? patterns.indexOf(options.proposal.join(" ")) : -1;
       return { kind: "command-prefix", patterns, suggested: Math.max(0, proposed) };
@@ -869,6 +880,7 @@ export function permissionRuleOffer(
         const pattern = `${common.slice(0, length).join("/")}/`;
         if (isFilePathPattern(pattern)) patterns.push(pattern);
       }
+      patterns.splice(PERMISSION_RULE_LIMITS.maxRuleTokens - 1);
       patterns.push("./");
       return { kind: "file-path", patterns, suggested: 0 };
     }

@@ -70,6 +70,7 @@ export class CodexRuntimeApprovals {
             changes: item.changes.map((change) => ({
               path: change.path,
               kind: change.kind,
+              ...(change.move_path !== undefined ? { movePath: change.move_path } : {}),
             })),
             actionable: true,
           }

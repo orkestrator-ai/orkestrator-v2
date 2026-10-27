@@ -401,7 +401,19 @@ describe("tool approvals under an ask policy", () => {
       ),
       call.options.canUseTool!("Bash", { command: "x".repeat(40_000) }, context("req-r5")),
     ];
-    await waitFor(() => getPendingInteractions(session.id).length === 5);
+    decisions.push(
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm test", dangerouslyDisableSandbox: true },
+        context("req-r6"),
+      ),
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm test", unknownApprovalFlag: true },
+        context("req-r7"),
+      ),
+    );
+    await waitFor(() => getPendingInteractions(session.id).length === 7);
     const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
     expect(pending.get("req-r1")).toMatchObject({
       ruleEligible: true,
@@ -417,7 +429,9 @@ describe("tool approvals under an ask policy", () => {
     // A truncated command is never matched.
     expect(pending.get("req-r5")).not.toHaveProperty("ruleEligible");
 
-    for (const id of ["req-r1", "req-r2", "req-r3", "req-r4", "req-r5"]) {
+    expect(pending.get("req-r6")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r7")).not.toHaveProperty("ruleEligible");
+    for (const id of ["req-r1", "req-r2", "req-r3", "req-r4", "req-r5", "req-r6", "req-r7"]) {
       respondToInteraction(id, { action: "accept" });
     }
     // Allow once, even where the SDK suggested a rule.

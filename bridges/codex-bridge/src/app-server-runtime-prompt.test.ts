@@ -2024,43 +2024,52 @@ describe("interactive approvals", () => {
     });
   });
 
-  test("v2 file-change approvals are enriched from the active item", async () => {
-    const h = await harness();
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(sessionId, {
-      prompt: "go",
-      requestId: "req-1",
-      attachments: [],
-    });
-    h.child().notify("item/started", {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      item: {
-        id: "item-file",
-        type: "fileChange",
-        status: "inProgress",
-        changes: [{ path: "src/index.ts", kind: { type: "update", move_path: null } }],
-      },
-    });
-    await h.drain();
-    h.child().stdout.pushMessage({
-      jsonrpc: "2.0",
-      id: 9010,
-      method: "item/fileChange/requestApproval",
-      params: {
+  test.each([null, "/outside/target", "/workspace/.env"])(
+    "v2 file-change approvals retain rename destination %s",
+    async (destination) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, {
+        prompt: "go",
+        requestId: "req-1",
+        attachments: [],
+      });
+      h.child().notify("item/started", {
         threadId: "thread-1",
         turnId: "turn-1",
-        itemId: "item-file",
-        startedAtMs: 1,
-      },
-    });
-    await h.drain();
+        item: {
+          id: "item-file",
+          type: "fileChange",
+          status: "inProgress",
+          changes: [{ path: "src/index.ts", kind: { type: "update", move_path: destination } }],
+        },
+      });
+      await h.drain();
+      h.child().stdout.pushMessage({
+        jsonrpc: "2.0",
+        id: 9010,
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-file",
+          startedAtMs: 1,
+        },
+      });
+      await h.drain();
 
-    expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
-      actionable: true,
-      changes: [{ path: "src/index.ts", kind: "update" }],
-    });
-  });
+      expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
+        actionable: true,
+        changes: [
+          {
+            path: "src/index.ts",
+            kind: "update",
+            ...(destination ? { movePath: destination } : {}),
+          },
+        ],
+      });
+    },
+  );
 
   test("a pause moves the listed deadline at once and never answers the approval", async () => {
     const { h, sessionId } = await withPendingApproval();

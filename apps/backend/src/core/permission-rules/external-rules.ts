@@ -145,8 +145,9 @@ async function codexRuleFiles(directory: string): Promise<string[]> {
 }
 
 /** A container's own Codex rules, read with one bounded `docker exec`. */
-async function containerCodexRules(
+export async function containerCodexRules(
   environment: Environment,
+  exec: typeof dockerExec = dockerExec,
 ): Promise<ExternalPermissionRuleFile[]> {
   if (!environment.containerId || environment.status !== "running") return [];
   const marker = "@@orkestrator-rules-file@@";
@@ -154,14 +155,14 @@ async function containerCodexRules(
   const script = [
     'for f in "$HOME"/.codex/rules/*.rules; do',
     '  [ -f "$f" ] || continue',
-    `  printf '%s %s\\n' '${marker}' "$f"`,
+    `  printf '%s %s %s\\n' '${marker}' "$(wc -c < "$f")" "$f"`,
     `  head -c ${MAX_FILE_BYTES} "$f"`,
     "  printf '\\n'",
     "done",
   ].join("\n");
   let output: string;
   try {
-    output = await dockerExec(environment.containerId, script, CONTAINER_READ_TIMEOUT_MS);
+    output = await exec(environment.containerId, script, CONTAINER_READ_TIMEOUT_MS);
   } catch {
     return [
       {
@@ -180,9 +181,18 @@ async function containerCodexRules(
   const files: ExternalPermissionRuleFile[] = [];
   for (const chunk of output.split(`${marker} `).slice(1, MAX_CODEX_RULE_FILES + 1)) {
     const newline = chunk.indexOf("\n");
-    const file = (newline === -1 ? chunk : chunk.slice(0, newline)).trim();
-    const parsed = codexRuleEntries(newline === -1 ? "" : chunk.slice(newline + 1));
-    if (!file || parsed.length === 0) continue;
+    const header = /^(\d+) (.+)$/.exec(newline === -1 ? "" : chunk.slice(0, newline));
+    if (!header) continue;
+    const file = header[2]!;
+    const byteTruncated = Number(header[1]) > MAX_FILE_BYTES;
+    let content = chunk.slice(newline + 1);
+    // The script appends a framing newline, which does not complete a cut rule.
+    if (byteTruncated) {
+      content = content.slice(0, -1);
+      content = content.slice(0, content.lastIndexOf("\n") + 1);
+    }
+    const parsed = codexRuleEntries(content);
+    if (!file || (parsed.length === 0 && !byteTruncated)) continue;
     const { entries, truncated } = bounded(parsed);
     files.push({
       provider: "codex",
@@ -191,7 +201,7 @@ async function containerCodexRules(
       path: file,
       environmentId: environment.id,
       entries,
-      truncated,
+      truncated: truncated || byteTruncated,
       guidance: CODEX_GUIDANCE,
     });
   }

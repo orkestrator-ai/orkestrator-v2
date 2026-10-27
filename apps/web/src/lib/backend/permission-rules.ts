@@ -58,7 +58,11 @@ export function approveNativeAgentInteractionAndRemember(
     logicalSessionKey: string;
     interactionId: string;
   } & PermissionRuleChoiceInput,
-): Promise<{ outcome: AgentInteractionApplyOutcome; rule?: NativeAgentPermissionRule }> {
+): Promise<{
+  outcome: AgentInteractionApplyOutcome;
+  rule?: NativeAgentPermissionRule;
+  ruleSaveWarning?: string;
+}> {
   return invoke("approve_native_agent_interaction_and_remember", { ...input });
 }
 

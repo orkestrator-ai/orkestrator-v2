@@ -35,7 +35,7 @@ function proposal(value: unknown): string[] | undefined {
 /** `path` as an absolute path, resolving a relative one against `cwd` when that is absolute. */
 export function absolutePath(path: unknown, cwd: unknown): string | null {
   const value = exactString(path, PERMISSION_RULE_LIMITS.maxPathLength);
-  if (!value) return null;
+  if (!value || /^(?:~|@|file:)/i.test(value)) return null;
   if (value.startsWith("/")) return value;
   const base = exactString(cwd, PERMISSION_RULE_LIMITS.maxPathLength);
   if (!base || !base.startsWith("/")) return null;
@@ -86,9 +86,11 @@ export function codexRuleDetail(
     if (request.grantRoot !== undefined) return null;
     const changes = Array.isArray(request.changes) ? request.changes : [];
     const resolved = paths(
-      changes.map((change) =>
-        change && typeof change === "object" ? (change as Raw).path : undefined,
-      ),
+      changes.flatMap((change) => {
+        if (!change || typeof change !== "object") return [undefined];
+        const entry = change as Raw;
+        return entry.movePath === undefined ? [entry.path] : [entry.path, entry.movePath];
+      }),
       request.cwd,
     );
     return detail(resolved ? { kind: "file-change", paths: resolved } : null);

@@ -11,6 +11,7 @@ import {
   PERMISSION_RULE_EXPIRY_CHOICES_MS,
   findPermissionRule,
   permissionRuleKindFor,
+  parsePermissionRule,
   permissionRuleOffer,
   type NativeAgentPermissionRule,
   type PermissionRuleApplication,
@@ -22,6 +23,7 @@ import type {
   PermissionRuleRequestDetail,
 } from "../agent-provider-contract.js";
 import type { Environment, PersistedNativeAgentSession } from "../models.js";
+import { safeFileTargets } from "./file-targets.js";
 import type { PermissionRuleStore } from "./store.js";
 
 /**
@@ -133,12 +135,12 @@ export class PermissionRuleEnforcer {
   }
 
   /** The detail a rule may match for `request`, when the session's policy would ask. */
-  private requestDetail(
+  private async requestDetail(
     session: PersistedNativeAgentSession,
     provider: PermissionRuleProvider,
     scope: PermissionRuleSessionScope,
     request: AgentInteractionRequest,
-  ): PermissionRuleRequestDetail | null {
+  ): Promise<PermissionRuleRequestDetail | null> {
     if (!AUTHORIZATION_KINDS.has(request.kind)) return null;
     if (request.state !== "pending") return null;
     if (request.presentation.confirmDisabled === true) return null;
@@ -156,6 +158,20 @@ export class PermissionRuleEnforcer {
       return null;
     }
     if (!detail || !scope.kinds.has(permissionRuleKindFor(detail.subject))) return null;
+    if (detail.subject.kind === "file-change") {
+      let environment: Environment | null | undefined;
+      try {
+        environment = await this.options.getEnvironment(session.environmentId);
+      } catch {
+        return null;
+      }
+      if (
+        !environment ||
+        !scope.workspaceRoot ||
+        !(await safeFileTargets(environment, scope.workspaceRoot, detail.subject.paths))
+      )
+        return null;
+    }
     return detail;
   }
 
@@ -182,7 +198,7 @@ export class PermissionRuleEnforcer {
     const kept: AgentInteractionRequest[] = [];
     let answered = 0;
     for (const request of snapshot.requests) {
-      const detail = this.requestDetail(session, provider, scope, request);
+      const detail = await this.requestDetail(session, provider, scope, request);
       if (!detail) {
         kept.push(request);
         continue;
@@ -266,10 +282,12 @@ export class PermissionRuleEnforcer {
   ): Promise<AgentInteractionRequest[]> {
     const scope = await this.sessionScope(session);
     if (!scope) return requests;
-    return requests.map((request) => {
-      const detail = this.requestDetail(session, provider, scope, request);
-      return detail ? withOffer(request, detail, scope) : request;
-    });
+    return Promise.all(
+      requests.map(async (request) => {
+        const detail = await this.requestDetail(session, provider, scope, request);
+        return detail ? withOffer(request, detail, scope) : request;
+      }),
+    );
   }
 
   /**
@@ -284,7 +302,40 @@ export class PermissionRuleEnforcer {
     provider: PermissionRuleProvider,
     interactionId: string,
     choice: PermissionRuleChoice,
-  ): Promise<{ outcome: AgentInteractionApplyOutcome; rule?: NativeAgentPermissionRule }> {
+  ): Promise<{
+    outcome: AgentInteractionApplyOutcome;
+    rule?: NativeAgentPermissionRule;
+    ruleSaveWarning?: string;
+  }> {
+    const flightKey = `${session.key}\0${interactionId}`;
+    if (this.inFlight.has(flightKey)) {
+      return {
+        outcome: {
+          result: "already-resolved",
+          interactionId,
+          sessionId: session.providerSessionId,
+          revision: 0,
+        },
+      };
+    }
+    this.inFlight.add(flightKey);
+    try {
+      return await this.approveAndRememberClaimed(session, provider, interactionId, choice);
+    } finally {
+      this.inFlight.delete(flightKey);
+    }
+  }
+
+  private async approveAndRememberClaimed(
+    session: PersistedNativeAgentSession,
+    provider: PermissionRuleProvider,
+    interactionId: string,
+    choice: PermissionRuleChoice,
+  ): Promise<{
+    outcome: AgentInteractionApplyOutcome;
+    rule?: NativeAgentPermissionRule;
+    ruleSaveWarning?: string;
+  }> {
     const interactions = provider.interactions;
     if (!interactions?.listPendingInteractions) {
       throw new PermissionRuleRefusedError("This agent cannot answer requests here");
@@ -314,7 +365,7 @@ export class PermissionRuleEnforcer {
         },
       };
     }
-    const detail = this.requestDetail(session, provider, scope, request);
+    const detail = await this.requestDetail(session, provider, scope, request);
     if (!detail) throw new PermissionRuleRefusedError("This request can't be remembered");
     const offer = permissionRuleOffer(
       detail.subject,
@@ -342,6 +393,9 @@ export class PermissionRuleEnforcer {
       useCount: 0,
       ...(choice.expiresInMs === undefined ? {} : { expiresAt: now + choice.expiresInMs }),
     };
+    if (!parsePermissionRule(rule)) {
+      throw new PermissionRuleRefusedError("This rule is invalid");
+    }
     const outcome = await interactions.resolveInteraction(session.providerSessionId, request.id, {
       version: AGENT_INTERACTION_CONTRACT_VERSION,
       interactionId: request.id,
@@ -357,7 +411,16 @@ export class PermissionRuleEnforcer {
     });
     // A rule is saved only for a request the user's click actually approved.
     if (outcome.result !== "applied") return { outcome };
-    return { outcome, rule: this.options.store().create(rule) };
+    try {
+      return { outcome, rule: this.options.store().create(rule) };
+    } catch {
+      // The approval already took effect. Return it so callers clean up the
+      // answered card; retrying must never answer the provider again.
+      return {
+        outcome,
+        ruleSaveWarning: "Approved once, but the permission rule could not be saved.",
+      };
+    }
   }
 
   private async answer(

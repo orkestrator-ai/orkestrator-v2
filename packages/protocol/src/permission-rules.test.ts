@@ -1,3 +1,7 @@
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  isAgentInteractionRequest,
+} from "./agent-interactions.js";
 import { describe, expect, test } from "bun:test";
 import {
   commandArgv,
@@ -397,6 +401,21 @@ describe("offers", () => {
     ]);
     expect(offer.patterns[offer.suggested]).toBe("npm run test");
     expect(parsePermissionRuleOffer(offer)).toEqual(offer);
+    expect(
+      isAgentInteractionRequest({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        id: "offer",
+        provider: "pi",
+        kind: "file-approval",
+        origin: "interactive-native",
+        sessionId: "session",
+        state: "pending",
+        revision: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        presentation: { title: "Approve", questions: [], ruleOffer: offer },
+      }),
+    ).toBe(true);
   });
 
   test("an invalid proposal only falls back to the narrowest pattern", () => {
@@ -413,6 +432,21 @@ describe("offers", () => {
       expect(offer.patterns).toEqual([]);
       expect(offer.unavailableReason).toBeString();
       expect(parsePermissionRuleOffer(offer)).toEqual(offer);
+      expect(
+        isAgentInteractionRequest({
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          id: "offer",
+          provider: "pi",
+          kind: "file-approval",
+          origin: "interactive-native",
+          sessionId: "session",
+          state: "pending",
+          revision: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          presentation: { title: "Approve", questions: [], ruleOffer: offer },
+        }),
+      ).toBe(true);
     }
   });
 
@@ -478,4 +512,77 @@ test("the provider list mirrors the interaction contract's", async () => {
   const { AGENT_INTERACTION_PROVIDERS } = await import("./agent-interactions.js");
   const { PERMISSION_RULE_PROVIDERS } = await import("./permission-rules.js");
   expect([...PERMISSION_RULE_PROVIDERS].sort()).toEqual([...AGENT_INTERACTION_PROVIDERS].sort());
+});
+
+describe("offer contract boundaries", () => {
+  test("joined command prefixes always validate, even past the total size limit", () => {
+    const command = ["tool", ...Array.from({ length: 15 }, () => "x".repeat(100))].join(" ");
+    const offer = permissionRuleOffer({ kind: "command", command });
+    expect(offer.patterns.length).toBeGreaterThan(0);
+    expect(parsePermissionRuleOffer(offer)).toEqual(offer);
+    expect(
+      isAgentInteractionRequest({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        id: "offer",
+        provider: "pi",
+        kind: "file-approval",
+        origin: "interactive-native",
+        sessionId: "session",
+        state: "pending",
+        revision: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        presentation: { title: "Approve", questions: [], ruleOffer: offer },
+      }),
+    ).toBe(true);
+    expect(offer.patterns.every((pattern) => isPermissionRulePattern(offer.kind, pattern))).toBe(
+      true,
+    );
+  });
+  test.each([14, 15, 16, 17, 30])("deep file offers round trip (%s directories)", (depth) => {
+    const offer = permissionRuleOffer(
+      { kind: "file-change", paths: [`${ROOT}/${"dir/".repeat(depth)}file.ts`] },
+      { workspaceRoot: ROOT },
+    );
+    expect(offer.patterns.length).toBeLessThanOrEqual(16);
+    expect(offer.patterns[0]).toEndWith("file.ts");
+    expect(offer.patterns.at(-1)).toBe("./");
+    expect(parsePermissionRuleOffer(offer)).toEqual(offer);
+    expect(
+      isAgentInteractionRequest({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        id: "offer",
+        provider: "pi",
+        kind: "file-approval",
+        origin: "interactive-native",
+        sessionId: "session",
+        state: "pending",
+        revision: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        presentation: { title: "Approve", questions: [], ruleOffer: offer },
+      }),
+    ).toBe(true);
+  });
+  test.each([
+    "python3.12",
+    "/usr/bin/python3.12",
+    "nodejs",
+    "ruby3.3",
+    "php8.4",
+    "lua5.4",
+    "pypy3",
+  ])("refuses option-bearing interpreter %s", (interpreter) => {
+    const pattern = `${interpreter} -c`;
+    expect(commandPrefixRefusal([interpreter, "-c"])).not.toBeNull();
+    expect(
+      permissionRuleOffer({ kind: "command", command: `${pattern} 'print(1)'` }).patterns,
+    ).toEqual([]);
+    expect(
+      permissionRuleCovers(
+        { kind: "command-prefix", pattern },
+        { kind: "command", command: `${pattern} evil` },
+      ),
+    ).toBe(false);
+  });
 });

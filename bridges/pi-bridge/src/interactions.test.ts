@@ -162,3 +162,17 @@ describe("resolution", () => {
     expect(second.decisions).toEqual([{ block: true, reason: "shutting down" }]);
   });
 });
+
+test.each([
+  "~/.ssh/config",
+  "file:///outside/target",
+  "@.env",
+  "@../outside",
+  " src/file.ts ",
+  "src/\u00a0file.ts",
+])("alternate Pi path %s cannot be remembered", (path) => {
+  const state = newSessionState();
+  for (const tool of ["edit", "write"]) park(state, tool, { path });
+  const payload = publicApprovals(state) as { approvals: Array<Record<string, unknown>> };
+  for (const approval of payload.approvals) expect(approval).not.toHaveProperty("ruleEligible");
+});

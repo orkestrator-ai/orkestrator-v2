@@ -2688,6 +2688,7 @@ export class NativeAgentService {
   ): Promise<{
     outcome: AgentInteractionApplyOutcome;
     rule?: import("@orkestrator/protocol/permission-rules").NativeAgentPermissionRule;
+    ruleSaveWarning?: string;
   }> {
     if (!nonBlank(input.interactionId)) {
       throw new Error("Native agent interaction ID must not be blank");

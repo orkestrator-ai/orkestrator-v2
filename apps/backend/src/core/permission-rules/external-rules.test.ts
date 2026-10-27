@@ -118,3 +118,81 @@ test("lists host and project rule files read-only, once each, and never edits th
     codexRules,
   );
 });
+
+test("container marker frames carry byte truncation and omit a cut final rule", async () => {
+  const { containerCodexRules } = await import("./external-rules.js");
+  const environment = {
+    id: "env",
+    name: "fixture",
+    containerId: "container",
+    status: "running",
+  } as import("../models.js").Environment;
+  const complete = 'prefix_rule(pattern=["npm", "test"], decision="allow")';
+  const content = `${complete}\nprefix_rule(${"x".repeat(262144 - complete.length - 13)}`;
+  const read = async (_container: string, script: string) => {
+    expect(script).toContain("wc -c");
+    return `@@orkestrator-rules-file@@ 262200 /home/user/.codex/rules/big.rules\n${content}\n@@orkestrator-rules-file@@ 8 /home/user/.codex/rules/small.rules\nanother\n\n`;
+  };
+  const files = await containerCodexRules(environment, read);
+  expect(files).toEqual([
+    expect.objectContaining({
+      path: "/home/user/.codex/rules/big.rules",
+      truncated: true,
+      entries: [complete],
+    }),
+    expect.objectContaining({
+      path: "/home/user/.codex/rules/small.rules",
+      truncated: false,
+      entries: ["another"],
+    }),
+  ]);
+  expect(
+    await containerCodexRules(environment, async () => {
+      throw new Error("offline");
+    }),
+  ).toEqual([expect.objectContaining({ error: "Could not read the container" })]);
+});
+
+test("added accounts expose independent rule files and deduplicate linked host files", async () => {
+  const root = await tempDir();
+  process.env.CODEX_HOME = path.join(root, "host-codex");
+  process.env.CLAUDE_CONFIG_DIR = path.join(root, "host-claude");
+  const { agentAccountHome } = await import("../agent-accounts-homes.js");
+  const codex = agentAccountHome(root, "codex", "codex-account");
+  const claude = agentAccountHome(root, "claude", "claude-account");
+  await fs.mkdir(path.join(codex, "rules"), { recursive: true });
+  await fs.mkdir(claude, { recursive: true });
+  await fs.writeFile(path.join(codex, "rules", "default.rules"), "account_rule\n");
+  await fs.writeFile(
+    path.join(claude, "settings.json"),
+    JSON.stringify({ permissions: { allow: ["Bash(npm test:*)"] } }),
+  );
+  const context = {
+    storage: {
+      agentAccounts: {
+        agentAccountsDirectory: () => root,
+        loadAgentAccounts: async () => ({
+          accounts: [
+            { id: "codex-account", platform: "codex", label: "Codex fixture" },
+            { id: "claude-account", platform: "claude", label: "Claude fixture" },
+          ],
+        }),
+      },
+      loadEnvironments: async () => [],
+    },
+  } as unknown as CommandContext;
+  const { files } = await listExternalPermissionRules(context);
+  expect(files).toEqual([
+    expect.objectContaining({ location: "account", provider: "codex", entries: ["account_rule"] }),
+    expect.objectContaining({
+      location: "account",
+      provider: "claude",
+      entries: ["Bash(npm test:*)"],
+    }),
+  ]);
+  await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
+  await fs.symlink(path.join(codex, "rules"), path.join(process.env.CODEX_HOME, "rules"));
+  expect(
+    (await listExternalPermissionRules(context)).files.filter((file) => file.provider === "codex"),
+  ).toHaveLength(1);
+});

@@ -86,6 +86,8 @@ export type ApprovalResolution =
 
 /** One parsed file change in an approval request. */
 export interface ApprovalFileChange {
+  /** Every rename destination participates in rule matching. */
+  movePath?: string;
   path: string;
   kind: "add" | "delete" | "update";
 }
@@ -247,6 +249,9 @@ export function describeApproval(options: {
     ? Object.entries(params.fileChanges).map(([path, change]) => ({
         path,
         kind: changeKind(isRecord(change) ? change.type : undefined),
+        ...(isRecord(change) && change.move_path != null
+          ? { movePath: typeof change.move_path === "string" ? change.move_path : "" }
+          : {}),
       }))
     : undefined;
 

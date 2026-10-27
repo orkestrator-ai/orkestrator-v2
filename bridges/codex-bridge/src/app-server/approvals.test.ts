@@ -418,3 +418,17 @@ describe("isApprovalDecision", () => {
     }
   });
 });
+
+test.each(["/outside/target", "/workspace/.env", "src/renamed.ts"])(
+  "legacy patch retains rename destination %s",
+  (destination) => {
+    const request = describeWith("applyPatchApproval", {
+      fileChanges: {
+        "src/allowed.ts": { type: "update", move_path: destination, unified_diff: "" },
+      },
+    });
+    expect(request.changes).toEqual([
+      { path: "src/allowed.ts", kind: "update", movePath: destination },
+    ]);
+  },
+);

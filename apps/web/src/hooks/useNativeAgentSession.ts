@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -3115,11 +3116,12 @@ export function useNativeAgentSession<TMessage = unknown>({
       interactionId: string,
       choice: PermissionRuleChoiceInput,
     ): Promise<AgentInteractionApplyOutcome> => {
-      const { outcome } = await approveNativeAgentInteractionAndRemember({
+      const { outcome, ruleSaveWarning } = await approveNativeAgentInteractionAndRemember({
         ...identity,
         interactionId,
         ...choice,
       });
+      if (ruleSaveWarning) toast.warning(ruleSaveWarning);
       await refresh();
       return outcome;
     },

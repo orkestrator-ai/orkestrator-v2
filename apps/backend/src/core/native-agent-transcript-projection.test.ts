@@ -357,3 +357,123 @@ describe("NativeAgentTranscriptProjection", () => {
     });
   });
 });
+
+describe("permission rules on projection reads", () => {
+  test.each(["covered", "unmatched", "transient", "failure"] as const)(
+    "%s pending interaction read",
+    async (scenario) => {
+      const { INTERACTIVE_AGENT_INTERACTION_POLICY, AGENT_INTERACTION_CONTRACT_VERSION: version } =
+        await import("@orkestrator/protocol/agent-interactions");
+      const { PermissionRuleEnforcer } = await import("./permission-rules/enforcer.js");
+      const request = {
+        version,
+        id: "permission-read",
+        provider: "opencode" as const,
+        kind: "command-approval" as const,
+        origin: "interactive-native" as const,
+        sessionId: "provider-session",
+        state: "pending" as const,
+        revision: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        presentation: { title: "Run", questions: [] },
+      };
+      let pending = [request];
+      const resolve = mock(async () => {
+        pending = [];
+        return {
+          result: "applied" as const,
+          interactionId: request.id,
+          sessionId: request.sessionId,
+          revision: 2,
+        };
+      });
+      const stub = createProviderStub("opencode", {
+        interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+        interactions: {
+          listPendingInteractions: async () => ({ version, revision: 1, requests: pending }),
+          resolveInteraction: resolve,
+          permissionRuleDetail: () => ({
+            subject: {
+              kind: "command",
+              command: scenario === "unmatched" ? "npm publish" : "npm test",
+            },
+            allowOnceAnswers: [],
+          }),
+        },
+      });
+      await withProjection(stub.provider, async ({ projection, storage, host }) => {
+        const originalResolve = host.resolveProjectionSession;
+        host.resolveProjectionSession = async (input) => {
+          const resolved = await originalResolve(input);
+          return resolved
+            ? {
+                ...resolved,
+                transient: false,
+                session: {
+                  ...resolved.session,
+                  origin: "interactive-native",
+                  interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+                  policy: {
+                    id: "interactive-host",
+                    sandbox: "none",
+                    approvals: "ask",
+                    projectResources: true,
+                    networkAccess: "full",
+                  },
+                },
+              }
+            : null;
+        };
+        host.permissionRules = new PermissionRuleEnforcer({
+          store: () => storage.permissionRuleStore(),
+          getEnvironment: (id) => storage.getEnvironment(id),
+          now: () => 10_000,
+        });
+        const environment = await storage.getEnvironment(identity.environmentId);
+        storage.permissionRuleStore().create({
+          id: "projection-rule",
+          provider: "opencode",
+          scope: "project",
+          projectId: environment!.projectId,
+          kind: "command-prefix",
+          pattern: "npm test",
+          createdAt: 1,
+          createdFrom: {
+            environmentId: identity.environmentId,
+            agent: "opencode",
+            interactionId: "origin",
+          },
+          useCount: 0,
+        });
+        const originalApply = host.permissionRules.apply.bind(host.permissionRules);
+        const apply = mock(
+          scenario === "failure"
+            ? async () => {
+                throw new Error("unavailable");
+              }
+            : originalApply,
+        );
+        host.permissionRules.apply = apply;
+        const resolved = await host.resolveProjectionSession(identity);
+        const result = await projection.refreshProjection(
+          identity,
+          true,
+          scenario === "transient" && resolved ? { ...resolved, transient: true } : undefined,
+        );
+        expect(result?.interactions).toHaveLength(scenario === "covered" ? 0 : 1);
+        expect(resolve).toHaveBeenCalledTimes(scenario === "covered" ? 1 : 0);
+        if (scenario === "transient") expect(apply).not.toHaveBeenCalled();
+        if (scenario === "failure" || scenario === "transient")
+          expect(result?.interactions?.[0]).toEqual(request);
+        if (scenario === "unmatched")
+          expect(result?.interactions?.[0]?.presentation.ruleOffer?.patterns).toEqual([
+            "npm publish",
+          ]);
+        expect(storage.permissionRuleStore().listApplications()).toHaveLength(
+          scenario === "covered" ? 1 : 0,
+        );
+      });
+    },
+  );
+});

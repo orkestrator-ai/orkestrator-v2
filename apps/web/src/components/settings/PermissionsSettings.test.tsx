@@ -93,3 +93,20 @@ describe("PermissionsSettings", () => {
     await waitFor(() => expect(screen.getAllByTestId("permission-rule-row")).toHaveLength(1));
   });
 });
+
+test("shows an ellipsis when a container rule file was cut at the byte limit", async () => {
+  const original = external[0]!;
+  external[0] = {
+    ...original,
+    location: "container",
+    label: "Fixture (container)",
+    truncated: true,
+  };
+  try {
+    render(<PermissionsSettings />);
+    const file = await screen.findByTestId("external-rule-file");
+    expect(file.querySelector("pre")?.textContent).toEndWith("\n…");
+  } finally {
+    external[0] = original;
+  }
+});

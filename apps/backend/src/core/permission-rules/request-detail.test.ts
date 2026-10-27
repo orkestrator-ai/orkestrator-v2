@@ -278,3 +278,41 @@ describe("bridge adapters", () => {
     });
   });
 });
+
+test.each(["~/.ssh/config", "file:///outside/target", "@.env", "@../outside"])(
+  "Pi alternate path fails closed at backend: %s",
+  (path) => {
+    expect(
+      codexRuleDetail(
+        { ruleEligible: true, cwd: "/workspace", changes: [{ path }] },
+        "file-approval",
+        true,
+      ),
+    ).toBeNull();
+  },
+);
+
+test("Codex source and rename destination both enter rule matching", () => {
+  expect(
+    codexRuleDetail(
+      {
+        ruleEligible: true,
+        cwd: "/workspace",
+        changes: [{ path: "src/allowed.ts", movePath: "/outside/target" }],
+      },
+      "file-approval",
+      true,
+    )?.subject,
+  ).toEqual({ kind: "file-change", paths: ["/workspace/src/allowed.ts", "/outside/target"] });
+  expect(
+    codexRuleDetail(
+      {
+        ruleEligible: true,
+        cwd: "/workspace",
+        changes: [{ path: "src/allowed.ts", movePath: 42 }],
+      },
+      "file-approval",
+      true,
+    ),
+  ).toBeNull();
+});

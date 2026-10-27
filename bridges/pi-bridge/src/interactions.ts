@@ -260,7 +260,13 @@ export function publicApprovals(state: SessionState): JsonObject {
             [],
         // A relative path is resolved against this, by Pi and by a rule.
         cwd: workingDirectory,
-        ...(path ? { ruleEligible: true } : { actionable: false }),
+        ...(path &&
+        path === pending.input.path &&
+        !/^(?:~|@|file:)/i.test(path) &&
+        !/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/.test(path)
+          ? { ruleEligible: true }
+          : {}),
+        ...(!path ? { actionable: false } : {}),
       };
     }
     return {

@@ -480,3 +480,120 @@ describe("approve and remember", () => {
     expect(store.list()).toEqual([]);
   });
 });
+
+describe("file target containment", () => {
+  test("links to protected files and external directories never get offers or answers", async () => {
+    const store = await openStore();
+    const root = await fs.mkdtemp(path.join(tmpdir(), "permission-targets-"));
+    const outside = await fs.mkdtemp(path.join(tmpdir(), "permission-outside-"));
+    directories.push(root, outside);
+    await fs.mkdir(path.join(root, "src"));
+    await fs.writeFile(path.join(root, ".env"), "fixture");
+    await fs.mkdir(path.join(root, ".git"));
+    await fs.symlink(path.join(root, ".git"), path.join(root, "src", "settings"));
+    await fs.writeFile(path.join(outside, "external.ts"), "fixture");
+    await fs.symlink(path.join(outside, "external.ts"), path.join(root, "src", "outside.ts"));
+    await fs.symlink(path.join(root, ".env"), path.join(root, "src", "linked.ts"));
+    await fs.symlink(outside, path.join(root, "src", "external"));
+    await fs.symlink(path.join(root, "missing"), path.join(root, "src", "dangling"));
+    store.create(rule({ kind: "file-path", pattern: "src/" }));
+    const provider = new FakeProvider();
+    const { instance } = enforcer(() => store, { ...ENVIRONMENT, worktreePath: root });
+    for (const [index, paths] of [
+      [`${root}/src/linked.ts`],
+      [`${root}/src/settings/hooks/new-hook`],
+      [`${root}/src/outside.ts`],
+      [`${root}/src/external/new/file.ts`],
+      [`${root}/src/dangling/file.ts`],
+      [`${root}/src/allowed.ts`, `${root}/.env`],
+      [`${root}/src/allowed.ts`, `${outside}/renamed.ts`],
+    ].entries()) {
+      const id = `file-${index}`;
+      provider.pending = [request(id, { kind: "file-approval" })];
+      provider.details.set(id, { subject: { kind: "file-change", paths }, allowOnceAnswers: [] });
+      const result = await instance.apply(session(), provider, provider.snapshot());
+      expect(result.answered).toBe(0);
+      expect(result.snapshot.requests[0]!.presentation.ruleOffer).toBeUndefined();
+      expect(
+        (await instance.offers(session(), provider, provider.pending))[0]!.presentation.ruleOffer,
+      ).toBeUndefined();
+      await expect(
+        instance.approveAndRemember(session(), provider, id, {
+          pattern: "src/",
+          scope: "project",
+          anyProvider: false,
+        }),
+      ).rejects.toBeInstanceOf(PermissionRuleRefusedError);
+    }
+    expect(provider.resolutions).toEqual([]);
+    provider.pending = [request("safe", { kind: "file-approval" })];
+    provider.details.set("safe", {
+      subject: { kind: "file-change", paths: [`${root}/src/new/file.ts`] },
+      allowOnceAnswers: [],
+    });
+    expect((await instance.apply(session(), provider, provider.snapshot())).answered).toBe(1);
+  });
+});
+
+describe("approval persistence failures", () => {
+  test.each(["capacity", "database"])(
+    "%s failure still returns applied once, without a saved rule",
+    async (failure) => {
+      const store = await openStore();
+      if (failure === "capacity") {
+        for (let index = 0; index < 512; index += 1)
+          store.create(rule({ id: `full-${index}`, pattern: `tool task${index}` }));
+      } else {
+        store.create = () => {
+          throw new Error("database unavailable");
+        };
+      }
+      const provider = new FakeProvider();
+      provider.ask("save-fail", "npm test");
+      const { instance } = enforcer(() => store);
+      const choice = { pattern: "npm test", scope: "project" as const, anyProvider: false };
+      const result = await instance.approveAndRemember(session(), provider, "save-fail", choice);
+      expect(result.outcome.result).toBe("applied");
+      expect(result.rule).toBeUndefined();
+      expect(result.ruleSaveWarning).toContain("could not be saved");
+      expect(
+        (await instance.approveAndRemember(session(), provider, "save-fail", choice)).outcome
+          .result,
+      ).toBe("stale");
+      expect(provider.resolutions).toHaveLength(1);
+    },
+  );
+});
+
+test("simultaneous remember clicks answer the provider at most once", async () => {
+  const store = await openStore();
+  const provider = new FakeProvider();
+  provider.ask("simultaneous", "npm test");
+  const { instance } = enforcer(() => store);
+  const choice = { pattern: "npm test", scope: "project" as const, anyProvider: false };
+  const results = await Promise.all([
+    instance.approveAndRemember(session(), provider, "simultaneous", choice),
+    instance.approveAndRemember(session(), provider, "simultaneous", choice),
+  ]);
+  expect(results.map((result) => result.outcome.result).sort()).toEqual([
+    "already-resolved",
+    "applied",
+  ]);
+  expect(provider.resolutions).toHaveLength(1);
+  expect(store.list()).toHaveLength(1);
+});
+
+test("a constructed rule must validate before the provider is answered", async () => {
+  const store = await openStore();
+  const provider = new FakeProvider();
+  provider.ask("invalid-rule", "npm test");
+  const { instance } = enforcer(() => store, { ...ENVIRONMENT, projectId: "x".repeat(1025) });
+  await expect(
+    instance.approveAndRemember(session(), provider, "invalid-rule", {
+      pattern: "npm test",
+      scope: "project",
+      anyProvider: false,
+    }),
+  ).rejects.toBeInstanceOf(PermissionRuleRefusedError);
+  expect(provider.resolutions).toEqual([]);
+});

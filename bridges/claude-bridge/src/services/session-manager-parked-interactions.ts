@@ -263,7 +263,19 @@ export async function requestClaudeToolApproval(
   // rule must never be matched against.
   const ruleEligible =
     detail.kind === "command-approval"
-      ? rawCommand !== undefined && rawCommand === command
+      ? rawCommand !== undefined &&
+        rawCommand === command &&
+        (input.dangerouslyDisableSandbox === undefined ||
+          input.dangerouslyDisableSandbox === false) &&
+        Object.keys(input).every((key) =>
+          [
+            "command",
+            "description",
+            "timeout",
+            "run_in_background",
+            "dangerouslyDisableSandbox",
+          ].includes(key),
+        )
       : detail.kind === "file-approval"
         ? rawPath !== undefined && rawPath === path && rawPath.startsWith("/")
         : (toolName.startsWith("mcp__") &&

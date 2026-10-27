@@ -34,3 +34,12 @@
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts tests/container-replacement.test.ts` from `apps/backend`: 23 passed, 0 failed.
 - **Disposition:** recurrence confirmed by the isolated pass. No assertion,
   deadline or skip was changed.
+
+
+## Direct-history cursor review validation — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 worker slots. Other worktrees were validating on the shared host.
+- **Failure:** `restart reconciliation > a kill at any phase before the commit write leaves the original authoritative` exceeded the five-second budget (5,023.10 ms), followed by the between-test assertion at line 599: expected `settled`, received `unreachable`.
+- **Isolated rerun:** `mise run test:logged -- --name container-owner -- bun test --cwd apps/backend ./tests/container-replacement.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 31.0 s).
+- **Evidence:** `orkestrator-test-run.wESThp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion. Aggregate results and other owner reruns are recorded in [1140](../aggregate-validation-runs/1140-direct-history-cursors-0232-validation.md).
+- **Assessment:** credible recurrence of the existing timing flake. Host contention remains plausible but unproven; no implementation, assertion, deadline or skip changed.

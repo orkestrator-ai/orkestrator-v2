@@ -3263,11 +3263,16 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (progressive && !historyCursorRef.current) {
         if (historyUnpageableRef.current) return projectionRef.current;
         /*
-         * The progressive transcript can know that history is incomplete long
-         * before the paging cache exists: only a sync-v1 read fills that cache,
-         * and this tab may never have issued one. A click is the request to
-         * mint a cursor even when the live tail itself reported that it could
-         * not page — the joined snapshot is what turns "not shown" into a page.
+         * No direct cursor to page from. With 0232 a pageable provider names one
+         * when the byte-bounded view retains a usable whole-message boundary.
+         * Joined paging still serves an OpenCode view keeping only a failed
+         * message's error row (its main row was byte-omitted), a cursor too
+         * long to wrap, a backend before 0232, or a source with no direct pages
+         * (the Claude bridge's `/messages` fallback, 0050). It mints a joined
+         * cursor from the sync-v1 projection, a whole transcript read, which runs
+         * only on a click. A click is the request to mint one even when the
+         * live tail reported that it could not page — the joined snapshot is
+         * what turns "not shown" into a page. Retirement: version-compatibility.md.
          */
         const update = await getNativeAgentProjectionUpdate<TMessage>({
           ...identity,

@@ -74,6 +74,7 @@ mise exec -- bun test tests/unit/efficiency/harness.test.ts
 | `l` | Files panel tree cache: 20 reads under qualified watcher coverage (unchanged, a hint, a mutation) and under the age bound | Walks, walked nodes, cache hits, misses and joins, revisions |
 | `m` | Progress probes and reviewer windows over 200 messages: unchanged, moved, and a provider without a snapshot surface | Reads by kind (`unchanged`, `snapshot`, `fallback`), provider calls, messages and bytes returned |
 | `n` | Build-pipeline transcript checkpoints over 20 passes: unchanged, moving, and no snapshot surface | Probes by kind, whole reads, saves, transcript-store commits, chunk writes and bytes |
+| `o` | History cursor coverage: 40 seeded sessions each of tool steps with short, mixed and large outputs over a v2 bridge stub, plus OpenCode steps with short outputs | Live views with a direct cursor, views whose byte bound dropped rows the provider sent, joined mints (whole transcript reads) and messages they returned |
 
 ## Method
 

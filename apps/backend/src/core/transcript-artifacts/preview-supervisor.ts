@@ -394,7 +394,9 @@ export function superviseWorker(
     const roots = child?.pid ? [child.pid] : [];
     if (browserPid) roots.push(browserPid);
     const groups = [...(child?.pid ? [child.pid] : []), ...(browserPid ? [browserPid] : [])];
-    const tree = await killTree(roots, groups);
+    // The scratch path is on Chromium's command line (`--user-data-dir`), so
+    // a browser the worker launched after the last scan is still found.
+    const tree = await killTree(roots, groups, undefined, scratchPath ?? undefined);
     if (child?.pid && !childExited) child.kill("SIGKILL");
     await Promise.race([childExit, new Promise((resolve) => setTimeout(resolve, 2_000))]);
     return { verified: tree.verified && childExited, pids: tree.pids, browserPid };

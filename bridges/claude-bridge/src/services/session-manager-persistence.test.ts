@@ -55,7 +55,7 @@ import {
   sdkSessionInfo,
   sendPrompt,
   sessionIdForClientKey,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   setSessionPreferences,
   startIdleTranscriptSweep,
@@ -249,8 +249,7 @@ describe("reconcilePersistedSessions", () => {
       expect(getSession(alias)).toMatchObject({ sdkSessionId });
       expect(getSession(`session-${sdkSessionId}`)).toBeUndefined();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -394,8 +393,7 @@ describe("reconcilePersistedSessions", () => {
       );
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -426,8 +424,7 @@ describe("reconcilePersistedSessions", () => {
       });
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -695,8 +692,7 @@ describe("ensurePersistedSession", () => {
       expect(state.dispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
       expect(state.restoredDispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, jest, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
@@ -22,7 +22,7 @@ import {
   readSessionPreferences,
   respondToPlanApproval,
   sendPrompt,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   track,
   waitFor,
@@ -846,8 +846,7 @@ describe("plan approval flow", () => {
         stop();
       }
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -884,8 +883,7 @@ describe("plan approval flow", () => {
         stop();
       }
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

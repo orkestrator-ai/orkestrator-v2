@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
@@ -7,7 +7,7 @@ import type { PromptOptions, SessionState } from "../types/index.js";
 import {
   createSession,
   mockQuery,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   track,
   blockClaudeConfigDir,
@@ -147,8 +147,7 @@ describe("prompt admission", () => {
       expect(mockQuery).not.toHaveBeenCalled();
       expect(admitPrompt(session.id, options)).toBeDefined();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

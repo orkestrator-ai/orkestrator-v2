@@ -12,7 +12,7 @@ import {
   nextQueryCall,
   sendPrompt,
   setClaudeHomeForTesting,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   track,
   waitFor,
   blockClaudeConfigDir,
@@ -283,8 +283,7 @@ describe("status frames", () => {
         stop();
       }
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

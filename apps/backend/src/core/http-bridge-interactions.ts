@@ -717,10 +717,13 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const requestedAt = request?.requestedAt;
     const expiresAt = request?.expiresAt;
     const kind = request?.kind;
-    // A parked requestUserInput RPC needs an answer even when Codex's Default
-    // mode reports isBlocking:false. This is distinct from transcript async
-    // questions, which do not pass through this adapter and keep running.
-    // Preserve non-blocking MCP elicitations and the legacy omitted-field default.
+    // A parked requestUserInput RPC holds its turn even when Codex's Default
+    // mode reports isBlocking:false: Codex awaits the answer with no timeout of
+    // its own. Current bridges publish such a question as blocking; bridges
+    // before todo 0161 passed the wire's false through, so a question is
+    // blocking whatever it says. Transcript async questions do not pass through
+    // this adapter and keep running. An MCP elicitation keeps the bridge's
+    // flag, and an omitted one is blocking, as before the field existed.
     const isBlocking = kind === "question" || request?.isBlocking !== false;
     if (
       !request ||

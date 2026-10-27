@@ -37,6 +37,14 @@ const PROVIDERS = new Set(
     .map((provider) => provider.trim())
     .filter(Boolean),
 );
+// A question qualification should not depend on an unrelated approval turn.
+// Empty means every case for the selected providers, preserving the full run.
+const SELECTED_CASES = new Set(
+  (process.env.ORKESTRATOR_AGENT_TEST_PAUSE_CASES ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
 /** Past the old five-minute default and Claude's 600 s hook limit. */
 const WAIT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS ?? 10.5 * 60_000);
 /**
@@ -188,8 +196,18 @@ test("a paused question and approval wait past ten minutes on every provider, th
   page,
 }, testInfo) => {
   test.skip(!ENABLED, "requires ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1");
-  const cases = CASES.filter((testCase) => PROVIDERS.has(testCase.agent));
-  expect(cases.length, "no provider selected").toBeGreaterThan(0);
+  for (const id of SELECTED_CASES) {
+    expect(
+      CASES.some((testCase) => testCase.id === id),
+      `unknown pause case: ${id}`,
+    ).toBe(true);
+  }
+  const cases = CASES.filter(
+    (testCase) =>
+      PROVIDERS.has(testCase.agent) &&
+      (SELECTED_CASES.size === 0 || SELECTED_CASES.has(testCase.id)),
+  );
+  expect(cases.length, "no pause case selected for the selected providers").toBeGreaterThan(0);
   page.setDefaultTimeout(20_000);
   await withDesignLiveHeartbeat("paused-interactions", async () => {
     await page.setViewportSize({ width: 1440, height: 1000 });

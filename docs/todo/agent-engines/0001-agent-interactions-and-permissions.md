@@ -404,9 +404,11 @@ or a person.
     model as the tool output with no resample in between; the `pipeline`
     control still gets "unavailable in Default mode". With the config
     removed the first case fails, so the test is not passing by accident.
-    Codex sends these questions with `isBlocking: false`, so the session does
-    not show as waiting while one is pending; tracked in
-    [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md).
+    Codex sends these questions with `isBlocking: false` but still waits for
+    the answer; since
+    [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
+    (2026-10-27) the bridge publishes them as blocking, so the session shows
+    as waiting.
     `upgrade-agents.md` now runs the live test on every Codex bump, because
     the feature is marked under development and could be renamed.
 
@@ -439,8 +441,9 @@ or a person.
   ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex mise run test:logged -- --name
   paused-codex-question -- mise run test:agent:paused-interactions`. The
   `codex-question` case must raise a card, stay pending past ten minutes
-  while paused, and finish with the chosen codeword after a reload. It also
-  shows whether Codex has its own timeout on a held question (0161).
+  while paused, and finish with the chosen codeword after a reload. Codex
+  0.164.0 has no timeout of its own on a held question (0161, from source and
+  an 11-minute run against the real app-server).
 - Live Claude tmux pause (item 9): in a Claude tmux tab of a disposable
   profile, raise a PermissionRequest (a Bash `touch`), pause it from the card,
   wait past ten minutes (Claude Code's default 600 s hook limit), then

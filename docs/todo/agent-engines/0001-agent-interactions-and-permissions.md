@@ -809,6 +809,9 @@ Decisions made on 2026-10-25 while working through the file.
   [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md),
   [0162-interaction-test-matrix-gaps.md](0162-interaction-test-matrix-gaps.md)
   (split out on 2026-10-25).
+- [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md)
+  (Orkestrator-owned "always allow" rules, applied as allow-once; meets decision 1's
+  list-and-revoke constraint without a provider rule).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
 - [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md)
   (coordinator safety tiers, `coordinator-providers.ts`).

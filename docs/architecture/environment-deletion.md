@@ -117,7 +117,9 @@ Inside the local-server queue:
    succeeded, the `branch` step.
 10. Delete environment-keyed records, design canvases and web annotations;
     delete the schedules its agents own and pause other owners' schedules
-    aimed at it ([scheduled-jobs.md](scheduled-jobs.md#when-the-owner-or-the-target-goes-away)).
+    aimed at it ([scheduled-jobs.md](scheduled-jobs.md#when-the-owner-or-the-target-goes-away));
+    delete its environment-scoped permission rules and their application
+    record ([permission-rules.md](permission-rules.md)).
 11. Remove the environment record, then run the `state-dirs` step (bridges are
     already stopped, so nothing is writing there) and delete the pane layout.
 12. Close any terminal that became visible during deletion and release

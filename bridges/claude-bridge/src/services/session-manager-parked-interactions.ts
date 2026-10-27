@@ -159,6 +159,60 @@ export async function answerClaudeElicitation(
   return { action: outcome.action === "decline" ? "decline" : "cancel" };
 }
 
+/** Bounds on a forwarded prefix suggestion; anything larger is dropped. */
+const MAX_PROPOSED_PREFIX_TOKENS = 16;
+const MAX_PROPOSED_PREFIX_TOKEN_LENGTH = 256;
+
+/**
+ * The Bash command prefix the SDK suggests remembering (`addRules` allow
+ * `Bash(npm test:*)`), as words. Only a hint for the card's preselection: the
+ * backend offers nothing its own matcher would not accept.
+ */
+export function proposedBashPrefix(suggestions: unknown): string[] | undefined {
+  if (!Array.isArray(suggestions)) return undefined;
+  for (const suggestion of suggestions) {
+    if (
+      !suggestion ||
+      typeof suggestion !== "object" ||
+      (suggestion as { type?: unknown }).type !== "addRules" ||
+      (suggestion as { behavior?: unknown }).behavior !== "allow"
+    ) {
+      continue;
+    }
+    const rules = (suggestion as { rules?: unknown }).rules;
+    if (!Array.isArray(rules)) continue;
+    for (const rule of rules) {
+      if (!rule || typeof rule !== "object") continue;
+      const { toolName, ruleContent } = rule as { toolName?: unknown; ruleContent?: unknown };
+      if (toolName !== "Bash" || typeof ruleContent !== "string") continue;
+      const prefix = ruleContent.endsWith(":*") ? ruleContent.slice(0, -2) : ruleContent;
+      const words = prefix.trim().split(/\s+/);
+      if (
+        words.length === 0 ||
+        words.length > MAX_PROPOSED_PREFIX_TOKENS ||
+        words.some((word) => word.length === 0 || word.length > MAX_PROPOSED_PREFIX_TOKEN_LENGTH)
+      ) {
+        continue;
+      }
+      return words;
+    }
+  }
+  return undefined;
+}
+
+/** The host a `WebFetch` input fetches, or undefined when its URL does not parse. */
+function webFetchHost(input: Record<string, unknown>): string | undefined {
+  if (typeof input.url !== "string" || input.url.length > 8_192) return undefined;
+  try {
+    const url = new URL(input.url);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.hostname
+      ? url.hostname
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Ask the user whether a tool call may run, under the `ask` policy.
  *
@@ -197,6 +251,29 @@ export async function requestClaudeToolApproval(
   const reason = bounded(permissionContext?.decisionReason, 1_024);
   const blockedPath = bounded(permissionContext?.blockedPath, 1_024);
   const mcpServer = bounded(permissionContext?.mcpServer?.name, 256);
+  const rawCommand = typeof input.command === "string" ? input.command : undefined;
+  const rawPath =
+    typeof input.file_path === "string"
+      ? input.file_path
+      : typeof input.notebook_path === "string"
+        ? input.notebook_path
+        : undefined;
+  const networkHost = toolName === "WebFetch" ? webFetchHost(input) : undefined;
+  // Exact detail only: `bounded` marks a cut value with an ellipsis, which a
+  // rule must never be matched against.
+  const ruleEligible =
+    detail.kind === "command-approval"
+      ? rawCommand !== undefined && rawCommand === command
+      : detail.kind === "file-approval"
+        ? rawPath !== undefined && rawPath === path && rawPath.startsWith("/")
+        : (toolName.startsWith("mcp__") &&
+            mcpServer !== undefined &&
+            mcpServer === permissionContext?.mcpServer?.name) ||
+          networkHost !== undefined;
+  const proposedCommandPrefix =
+    detail.kind === "command-approval"
+      ? proposedBashPrefix(permissionContext?.suggestions)
+      : undefined;
   const request: ClaudeToolApprovalRequest = {
     id: permissionContext?.requestId || generateMessageId(),
     sessionId,
@@ -210,6 +287,9 @@ export async function requestClaudeToolApproval(
     ...(reason ? { reason } : {}),
     ...(blockedPath ? { blockedPath } : {}),
     ...(mcpServer ? { mcpServer } : {}),
+    ...(networkHost ? { networkHost } : {}),
+    ...(ruleEligible ? { ruleEligible: true } : {}),
+    ...(proposedCommandPrefix ? { proposedCommandPrefix } : {}),
   };
   const outcome = await parkInteraction(request, permissionContext?.signal);
   switch (outcome.action) {

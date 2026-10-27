@@ -1,3 +1,4 @@
+import { AgentInfoPermissionRules } from "./AgentInfoPermissionRules";
 import { resolveAgentHandoffChangeSummaries } from "@/lib/changes/handoff";
 import {
   useCallback,
@@ -1723,6 +1724,13 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   kinds={neutralProjection?.capabilities?.interactions?.kinds}
                   providerLabel={activeSession.providerLabel}
                 />
+                {activeSession.buildPipelineId ? null : (
+                  <AgentInfoPermissionRules
+                    environmentId={activeSession.environmentId}
+                    agent={activeSession.provider}
+                    logicalSessionKey={activeSession.sessionKey}
+                  />
+                )}
               </div>
             </div>
           ) : (

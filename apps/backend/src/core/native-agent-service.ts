@@ -143,6 +143,7 @@ import {
   NativeAgentTranscriptProjection,
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
+import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/enforcer.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -302,6 +303,8 @@ export class NativeAgentService {
   private readonly catalogs: NativeAgentCatalogCache;
   /** Renderer views of provider sessions and every cache behind them. */
   private readonly projections: NativeAgentTranscriptProjection;
+  /** Orkestrator's permission rules (todo 0723); absent with a narrow storage double. */
+  private readonly permissionRules: PermissionRuleEnforcer | undefined;
   /** Pending approvals and questions: observation records and the monitor sweep. */
   private readonly interactions: NativeAgentInteractionTracker;
   /** Activity sweeps, exact turn edges and the startup-launch scan. */
@@ -532,9 +535,26 @@ export class NativeAgentService {
       dispatchPrompt: (input, prepare) => this.dispatchPromptInternal(input, prepare),
       observedActivity: (key) => this.launches.observedActivity(key),
     });
+    // Optional because narrow test doubles of the storage omit the store.
+    this.permissionRules =
+      typeof storage.permissionRuleStore === "function"
+        ? new PermissionRuleEnforcer({
+            store: () => storage.permissionRuleStore(),
+            getEnvironment: (environmentId) => storage.getEnvironment(environmentId),
+            now: () => this.now(),
+            onApplied: (application) => {
+              if (this.stopped) return;
+              this.storage.announceNativeAgentSessionProjection(application.environmentId, {
+                agent: application.agent,
+                logicalSessionKey: application.logicalSessionKey,
+              });
+            },
+          })
+        : undefined;
     this.projections = new NativeAgentTranscriptProjection({
       storage,
       options,
+      ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
       catalogs: this.catalogs,
       observedActivity: (sessionKey) => this.launches.observedActivity(sessionKey),
       providerGeneration: (input) =>
@@ -588,6 +608,12 @@ export class NativeAgentService {
         this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
       withdrawEnvironmentInteractions: (environmentId) =>
         this.withdrawEnvironmentInteractions(environmentId),
+      ...(this.permissionRules
+        ? {
+            applyPermissionRules: (session, provider) =>
+              this.permissionRules!.applyToWaitingSession(session, provider),
+          }
+        : {}),
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchPromptWithPreparation: (input, prepare) =>
         this.dispatchPromptInternal(input, prepare),
@@ -2649,6 +2675,37 @@ export class NativeAgentService {
     this.interactions.forgetPendingInteractions(resolved.key);
     void this.projections.refreshProjection(input, true).catch(() => undefined);
     return outcome;
+  }
+
+  /**
+   * The card's "Approve and remember" (todo 0723): answers the request
+   * allow-once and saves the Orkestrator rule the user chose. Only reachable
+   * from a person's click in the renderer; no agent, CLI or MCP surface
+   * creates a rule.
+   */
+  async approveProjectionInteractionAndRemember(
+    input: NativeAgentProjectionInput & { interactionId: string; choice: PermissionRuleChoice },
+  ): Promise<{
+    outcome: AgentInteractionApplyOutcome;
+    rule?: import("@orkestrator/protocol/permission-rules").NativeAgentPermissionRule;
+  }> {
+    if (!nonBlank(input.interactionId)) {
+      throw new Error("Native agent interaction ID must not be blank");
+    }
+    if (!this.permissionRules) throw new Error("Permission rules are unavailable");
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) {
+      throw new Error("Native agent session was not found");
+    }
+    const result = await this.permissionRules.approveAndRemember(
+      resolved.session,
+      resolved.provider,
+      input.interactionId,
+      input.choice,
+    );
+    this.interactions.forgetPendingInteractions(resolved.key);
+    void this.projections.refreshProjection(input, true).catch(() => undefined);
+    return result;
   }
 
   /**

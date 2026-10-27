@@ -14,6 +14,12 @@
  * the next turn. A control answers the same request with the amendment
  * itself, written straight to app-server's stdin as the bridge did before,
  * and finds the saved rule; that proves the check looks in the right place.
+ * A third run applies an Orkestrator permission rule (todo 0723) the way the
+ * backend does: the first approval is answered by a person and remembered as
+ * a rule in Orkestrator's own (here in-memory) store, the identical command in
+ * the next turn is answered allow-once by the rule, and after the rule is
+ * removed the third turn asks the person again. Codex asks every time and its
+ * rules folder stays empty: the rule never reaches Codex's own files.
  * Nothing reaches a model and no credits are spent. Gated like the other live
  * contract tests because it needs the pinned binary:
  *
@@ -27,6 +33,12 @@ import { mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  commandArgv,
+  findPermissionRule,
+  permissionRuleOffer,
+  type NativeAgentPermissionRule,
+} from "@orkestrator/protocol/permission-rules";
 import { codexAppServerConfigOverrides } from "../codex-config.js";
 import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineEvent, EngineTurnConfig } from "../engine/types.js";
@@ -180,7 +192,7 @@ async function savedRules(codexHome: string): Promise<string[]> {
  * writes app-server's own amendment straight to its stdin, which is what the
  * bridge sent for "Approve with command policy" before todo 0160.
  */
-async function runProbe(answer: "bridge" | "raw-amendment") {
+async function runProbe(answer: "bridge" | "raw-amendment" | "orkestrator-rule", turns = 2) {
   const codexHome = await mkdtemp(join(tmpdir(), "ork-amendment-home-"));
   const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-amendment-ws-")));
   await mkdir(join(workspace, ".git"), { recursive: true });
@@ -207,10 +219,53 @@ async function runProbe(answer: "bridge" | "raw-amendment") {
   });
   const presented: ApprovalRequest[] = [];
   const rulesAfterTurn: string[][] = [];
+  // Orkestrator's rule store and who answered each approval, for the rule run.
+  const rules: NativeAgentPermissionRule[] = [];
+  const answeredBy: Array<"person" | "rule"> = [];
   engine.setApprovalHandlers({
     present: (request) => {
       presented.push(request);
       setTimeout(() => {
+        if (answer === "orkestrator-rule") {
+          const subject = { kind: "command" as const, command: request.command ?? "" };
+          const context = {
+            provider: "codex" as const,
+            projectId: "project-1",
+            environmentId: "env-1",
+            workspaceRoot: workspace,
+            now: Date.now(),
+          };
+          const rule = request.ruleEligible ? findPermissionRule(rules, subject, context) : null;
+          if (!rule && request.ruleEligible) {
+            // A person clicks "Approve and remember" with the preselected pattern.
+            const offer = permissionRuleOffer(
+              subject,
+              request.proposedCommandPrefix ? { proposal: request.proposedCommandPrefix } : {},
+            );
+            const pattern = offer.patterns[offer.suggested];
+            if (pattern && rules.length === 0 && answeredBy.length === 0) {
+              rules.push({
+                id: "rule-1",
+                provider: "codex",
+                scope: "project",
+                projectId: "project-1",
+                kind: offer.kind,
+                pattern,
+                createdAt: Date.now(),
+                createdFrom: {
+                  environmentId: "env-1",
+                  agent: "codex",
+                  interactionId: request.approvalId,
+                },
+                useCount: 0,
+              });
+            }
+          }
+          answeredBy.push(rule ? "rule" : "person");
+          // Either way the wire answer is the plain allow-once approve.
+          engine.resolveApproval(request.approvalId, "approve");
+          return;
+        }
         if (answer === "bridge") {
           // Approve alone: the card's only approve button.
           engine.resolveApproval(request.approvalId, "approve");
@@ -248,7 +303,9 @@ async function runProbe(answer: "bridge" | "raw-amendment") {
   try {
     await engine.start();
     const thread = await engine.startThread({ config });
-    for (let turn = 0; turn < 2; turn += 1) {
+    for (let turn = 0; turn < turns; turn += 1) {
+      // The rule is removed before the last turn of the rule run.
+      if (answer === "orkestrator-rule" && turn === turns - 1) rules.length = 0;
       const turnCompleted = new Promise<void>((resolve) => {
         completed = resolve;
       });
@@ -260,7 +317,12 @@ async function runProbe(answer: "bridge" | "raw-amendment") {
       await withTimeout(turnCompleted, 60_000, "the turn to complete");
       rulesAfterTurn.push(await savedRules(codexHome));
     }
-    return { raw: probe.seen.map((entry) => entry.params), presented, rulesAfterTurn };
+    return {
+      raw: probe.seen.map((entry) => entry.params),
+      presented,
+      rulesAfterTurn,
+      answeredBy,
+    };
   } finally {
     await engine.stop();
     await responses.stop();
@@ -294,4 +356,17 @@ describeLive("live policy amendment", () => {
     expect(result.raw).toHaveLength(1);
     expect(result.presented).toHaveLength(1);
   }, 180_000);
+
+  test("an Orkestrator rule answers the identical command, and asks again once removed", async () => {
+    const result = await runProbe("orkestrator-rule", 3);
+    // Codex asked every time: the rule lives only in Orkestrator.
+    expect(result.raw).toHaveLength(3);
+    expect(result.presented).toHaveLength(3);
+    // The real Codex command is exact enough for a rule to match it.
+    expect(result.presented[0]?.ruleEligible).toBe(true);
+    expect(commandArgv(result.presented[0]!.command!)).toEqual(["touch", TOUCHED]);
+    expect(result.answeredBy).toEqual(["person", "rule", "person"]);
+    // Every answer was allow-once, so Codex saved nothing.
+    expect(result.rulesAfterTurn).toEqual([[], [], []]);
+  }, 240_000);
 });

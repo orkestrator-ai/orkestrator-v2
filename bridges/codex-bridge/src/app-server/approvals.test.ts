@@ -89,9 +89,65 @@ describe("describeApproval", () => {
     });
 
     expect(approval).not.toHaveProperty("amendments");
-    expect(JSON.stringify(approval)).not.toContain("allow curl");
     expect(JSON.stringify(approval)).not.toContain("two.example");
+    // The command prefix survives only as a hint for an Orkestrator rule
+    // (todo 0723); no answer can send it back as an amendment.
+    expect(approval.proposedCommandPrefix).toEqual(["allow curl"]);
     expect(approval.actionable).toBe(true);
+  });
+
+  test("marks only exactly-known operations as rule-eligible", () => {
+    const command = describeWith("item/commandExecution/requestApproval", {
+      threadId: "thread-1",
+      kind: "command",
+      command: "/bin/zsh -lc 'npm test'",
+    });
+    expect(command.ruleEligible).toBe(true);
+    // Older servers omit `kind`; it defaults to `command`.
+    expect(
+      describeWith("item/commandExecution/requestApproval", { command: "npm test" }).ruleEligible,
+    ).toBe(true);
+    // Input to a running terminal is never a command a rule may answer.
+    expect(
+      describeWith("item/commandExecution/requestApproval", {
+        kind: "writeStdin",
+        command: "npm test",
+      }),
+    ).not.toHaveProperty("ruleEligible");
+    // A command rebuilt from commandActions, or a lossy legacy argv join.
+    expect(
+      describeWith("item/commandExecution/requestApproval", {
+        commandActions: [{ type: "unknown", command: "npm test" }],
+      }),
+    ).not.toHaveProperty("ruleEligible");
+    expect(
+      describeWith("execCommandApproval", { command: ["bash", "-lc", "npm test"] }),
+    ).not.toHaveProperty("ruleEligible");
+    // A file change asking for a write root widens the sandbox.
+    expect(describeWith("item/fileChange/requestApproval", { grantRoot: "/" })).not.toHaveProperty(
+      "ruleEligible",
+    );
+    expect(describeWith("item/fileChange/requestApproval", {}).ruleEligible).toBe(true);
+    expect(
+      describeWith("item/permissions/requestApproval", { permissions: { network: {} } }),
+    ).not.toHaveProperty("ruleEligible");
+  });
+
+  test("drops an oversized or malformed prefix proposal", () => {
+    for (const proposal of [
+      [],
+      [""],
+      Array.from({ length: 17 }, () => "a"),
+      ["x".repeat(257)],
+      "npm",
+    ]) {
+      expect(
+        describeWith("item/commandExecution/requestApproval", {
+          command: "npm test",
+          proposedExecpolicyAmendment: proposal,
+        }),
+      ).not.toHaveProperty("proposedCommandPrefix");
+    }
   });
 
   test("uses commandActions when the top-level command is absent", () => {

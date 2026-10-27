@@ -303,6 +303,7 @@ const createEnvironmentFields: Record<string, PublicJsonSchema> = {
 };
 
 const scheduleId = id("Scheduled job ID (sch_...), from schedule.list.");
+const permissionRuleId = id("Permission rule ID, from permission.rule.list.");
 const scheduleTiming: Record<string, PublicJsonSchema> = {
   at: {
     type: "string",
@@ -1464,6 +1465,20 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       confirmation: "never",
       input: schema({}),
       examples: [{}],
+    },
+    "permission.rule.list": {
+      capability: "settings",
+      confirmation: "never",
+      input: schema({
+        projectId: { ...projectId, description: "Only rules of this project." },
+      }),
+      examples: [{}, { projectId: "2a9eac68-2f68-4852-bcf6-11812a0b3a24" }],
+    },
+    "permission.rule.remove": {
+      capability: "settings",
+      confirmation: "never",
+      input: schema({ ruleId: permissionRuleId }, ["ruleId"]),
+      examples: [{ ruleId: "6f1c2b9e-3a4d-4c5e-8f70-112233445566" }],
     },
     "schedule.list": {
       capability: "schedules",

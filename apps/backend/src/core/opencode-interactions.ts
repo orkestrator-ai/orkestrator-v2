@@ -9,7 +9,10 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
+import {
+  type PermissionRuleRequestDetail,
+  ProviderUnavailableError,
+} from "./agent-provider-contract.js";
 import {
   asRecord,
   assertSdkResponse,
@@ -25,6 +28,7 @@ import {
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import { boundedOwnedOpenCodeCollection } from "./opencode-snapshots.js";
+import { openCodeRuleDetail } from "./permission-rules/request-detail.js";
 
 export class OpenCodeInteractionAdapter {
   private readonly providerInteractionIds = new Map<
@@ -32,6 +36,8 @@ export class OpenCodeInteractionAdapter {
     { providerRequestId: string; sessionId: string; actionable?: boolean }
   >();
   private readonly resolvingInteractions = new Set<string>();
+  /** What a permission rule may match per listed permission request. */
+  private readonly ruleDetails = new Map<string, PermissionRuleRequestDetail>();
 
   constructor(
     private readonly client: OpencodeClient,
@@ -39,6 +45,14 @@ export class OpenCodeInteractionAdapter {
     private readonly requestOptions: () => { signal: AbortSignal },
     private readonly interactionTracker: InteractionSnapshotTracker,
   ) {}
+
+  permissionRuleDetail(
+    sessionId: string,
+    interactionId: string,
+  ): PermissionRuleRequestDetail | null {
+    if (this.providerInteractionIds.get(interactionId)?.sessionId !== sessionId) return null;
+    return this.ruleDetails.get(interactionId) ?? null;
+  }
 
   private openCodeInteractionId(
     sessionId: string,
@@ -151,6 +165,14 @@ export class OpenCodeInteractionAdapter {
       { providerRequestId, sessionId, actionable },
       MAX_TRACKED_PROVIDER_INTERACTIONS,
     );
+    const ruleDetail = actionable
+      ? openCodeRuleDetail(request!, permission, patterns, this.directory)
+      : null;
+    if (ruleDetail) {
+      setBoundedMapEntry(this.ruleDetails, id, ruleDetail, MAX_TRACKED_PROVIDER_INTERACTIONS);
+    } else {
+      this.ruleDetails.delete(id);
+    }
     const createdAt = this.interactionTracker.firstSeen(id);
     return {
       version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -216,7 +238,11 @@ export class OpenCodeInteractionAdapter {
       for (const [interactionId, identity] of this.providerInteractionIds) {
         if (identity.sessionId === sessionId && !currentIds.has(interactionId)) {
           this.providerInteractionIds.delete(interactionId);
+          this.ruleDetails.delete(interactionId);
         }
+      }
+      for (const interactionId of this.ruleDetails.keys()) {
+        if (!this.providerInteractionIds.has(interactionId)) this.ruleDetails.delete(interactionId);
       }
       return snapshot;
     } catch (error) {

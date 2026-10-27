@@ -6,6 +6,7 @@
  * not on Claude/OpenCode/Codex SDK payloads.
  */
 
+import type { PermissionRuleApplication } from "@orkestrator/protocol/permission-rules";
 import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 import type {
   NativeAgentBackgroundTaskKind,
@@ -352,6 +353,18 @@ export interface NativeUserCommandPart extends NativeBasePart {
   userCommand: UserCommandRecord;
 }
 
+/**
+ * An approval an Orkestrator permission rule answered (todo 0723),
+ * backend-owned (`list_permission_rules`). Synthesized by the tab: the
+ * provider only saw a one-time approval.
+ */
+export interface NativePermissionRulePart extends NativeBasePart {
+  type: "permission-rule";
+  application: PermissionRuleApplication;
+  /** Whether the rule still exists, so the row can offer to remove it. */
+  ruleExists: boolean;
+}
+
 export interface NativeAgentGroupPart extends NativeBasePart {
   type: "agent-group";
   parts: NativeAgentActivityPart[];
@@ -374,7 +387,8 @@ export type NativeMessagePart =
   | NativeImagePart
   | NativeStatusPart
   | NativeArtifactPart
-  | NativeUserCommandPart;
+  | NativeUserCommandPart
+  | NativePermissionRulePart;
 
 export interface NativeMessage {
   id: string;

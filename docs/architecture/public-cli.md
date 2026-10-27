@@ -196,6 +196,8 @@ not advertise at its version before sending it.
 | `mail send ENV TAB` | `mail.send` | external agent mail, inbox-only, never injected | metadata |
 | `schedule list/get` | `schedule.list/get` | `ScheduledJobService` ([scheduled-jobs.md](scheduled-jobs.md)) | read |
 | `schedule create/update/pause/resume/run/delete` | `schedule.*` | `ScheduledJobService`; the schedule fires later as its owner | metadata |
+| `permissions rules list` | `permission.rule.list` | `PermissionRuleStore` ([permission-rules.md](permission-rules.md)) | read |
+| `permissions rules remove` | `permission.rule.remove` | `PermissionRuleStore`; removal only, a rule is created only from an approval card | metadata |
 | `run get/wait` | `run.get` | operation store + reconciler | read |
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |

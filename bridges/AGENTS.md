@@ -163,6 +163,22 @@ never a bare `setTimeout`. When touching one:
 - **Never persist a deadline.** It holds a live timer; parked requests do not
   survive a bridge restart, and neither does their pause.
 
+## Permission rule eligibility
+
+Orkestrator's own "always allow" rules
+([`permission-rules.md`](../docs/architecture/permission-rules.md)) are applied
+by the backend, which answers a matching approval with the bridge's ordinary
+allow-once. A bridge's only part is the `ruleEligible` marker on an approval:
+
+- **Mark only exact detail.** Set `ruleEligible: true` only when the command
+  string, every path, the host or the MCP server and tool are exactly what will
+  run: never on a truncated value, a lossy argv join, a relative path the
+  backend cannot place, input to a running terminal, or a request that also
+  widens a sandbox (a write root). Without the marker the backend asks.
+- **Never answer for a rule.** A bridge never applies or stores a rule, and a
+  provider suggestion it forwards (`proposedCommandPrefix`) is a hint for the
+  card only, never sent back to the provider.
+
 ## Native slash commands
 
 The contract is [`docs/architecture/native-agent-commands.md`](../docs/architecture/native-agent-commands.md).

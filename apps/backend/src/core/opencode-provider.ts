@@ -148,6 +148,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.interactionAdapter.listPendingInteractions(sessionId),
     resolveInteraction: (sessionId, interactionId, resolution) =>
       this.interactionAdapter.resolveInteraction(sessionId, interactionId, resolution),
+    permissionRuleDetail: (sessionId, interactionId) =>
+      this.interactionAdapter.permissionRuleDetail(sessionId, interactionId),
   };
   private readonly lifecycle: OpenCodeSessionLifecycle;
   private readonly capabilitiesAdapter: OpenCodeCapabilities;

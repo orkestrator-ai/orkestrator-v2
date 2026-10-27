@@ -99,6 +99,15 @@ export interface NativeAgentLaunchActivityReconcilerHost {
   ): Promise<void>;
   /** Drop a stopped environment's outstanding requests from every cached view. */
   withdrawEnvironmentInteractions(environmentId: string): void;
+  /**
+   * Answer the requests of a session seen `waiting` that an Orkestrator
+   * permission rule covers (todo 0723), so a rule applies with no tab mounted
+   * and before the waiting edge is announced. `null` when nothing was read.
+   */
+  applyPermissionRules?(
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<{ answered: number; remaining: number } | null>;
   /** The service's public prompt dispatch. */
   dispatchPrompt(input: DispatchNativeAgentPromptInput): Promise<PersistedNativeAgentSession>;
   /** Prompt dispatch with a preparation step run against the resolved session. */
@@ -809,7 +818,20 @@ export class NativeAgentLaunchActivityReconciler {
                   );
                 }
               }
-              await applyObservation(session, activity, {
+              // A rule that answered every parked request leaves the turn
+              // running: no waiting edge, no attention badge for a card
+              // nobody needs to see. Anything left still waits on the user.
+              let observedActivity = activity;
+              const ruleProvider = provider;
+              if (activity === "waiting" && ruleProvider && this.host.applyPermissionRules) {
+                const ruled = await this.host
+                  .applyPermissionRules(session, ruleProvider)
+                  .catch(() => null);
+                if (ruled && ruled.answered > 0 && ruled.remaining === 0) {
+                  observedActivity = "working";
+                }
+              }
+              await applyObservation(session, observedActivity, {
                 ...(observation?.readyForInput !== undefined
                   ? { readyForInput: observation.readyForInput }
                   : {}),
@@ -820,7 +842,8 @@ export class NativeAgentLaunchActivityReconciler {
                   ? { contentRevision: observation.contentRevision }
                   : {}),
                 pendingInteraction:
-                  activity === "waiting" || (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+                  observedActivity === "waiting" ||
+                  (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
               });
             },
           });

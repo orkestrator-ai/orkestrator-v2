@@ -780,3 +780,9 @@ export interface PublicTicketDetail extends PublicTicketSummary {
   /** The latest 50. */
   comments: Array<{ id: string; text: string; createdAt: string }>;
 }
+
+/** `permission.rule.list`: this node's Orkestrator permission rules (todo 0723). */
+export interface PublicPermissionRuleList {
+  rules: import("./permission-rules.js").NativeAgentPermissionRule[];
+  total: number;
+}

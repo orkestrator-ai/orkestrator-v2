@@ -6,6 +6,8 @@
  * generation identity and response mapper in {@link AgentInteractionAdapterRequest}.
  */
 
+import { parsePermissionRuleOffer, type PermissionRuleOffer } from "./permission-rules.js";
+
 export const AGENT_INTERACTION_CONTRACT_VERSION = 1 as const;
 export const AGENT_INTERACTION_POLICY_VERSION = 1 as const;
 export const AGENT_INTERACTION_JOURNAL_VERSION = 1 as const;
@@ -224,6 +226,14 @@ export interface AgentInteractionPresentation {
   planAvailable?: boolean;
   /** Optional broader authorization supported by the provider. */
   approveForSessionLabel?: string;
+  /**
+   * "Approve and remember" as an Orkestrator rule (todo 0723): the patterns
+   * the user may save, or why this request can't be remembered. Absent when
+   * the request is not one a rule could answer at all. The backend re-derives
+   * the offer before saving; a pattern the client sends that is not in it is
+   * refused.
+   */
+  ruleOffer?: PermissionRuleOffer;
 }
 
 /**
@@ -562,6 +572,7 @@ const PRESENTATION_KEYS = new Set([
   "confirmDisabled",
   "planAvailable",
   "approveForSessionLabel",
+  "ruleOffer",
 ]);
 const QUESTION_KEYS = new Set([
   "id",
@@ -656,7 +667,9 @@ function presentationTextLength(presentation: AgentInteractionPresentation): num
     (presentation.url?.length ?? 0) +
     (presentation.confirmLabel?.length ?? 0) +
     (presentation.declineLabel?.length ?? 0) +
-    (presentation.approveForSessionLabel?.length ?? 0);
+    (presentation.approveForSessionLabel?.length ?? 0) +
+    (presentation.ruleOffer?.patterns.reduce((sum, pattern) => sum + pattern.length, 0) ?? 0) +
+    (presentation.ruleOffer?.unavailableReason?.length ?? 0);
   for (const question of presentation.questions) {
     total += question.id.length + question.prompt.length + (question.description?.length ?? 0);
     for (const option of question.options) {
@@ -753,6 +766,7 @@ function isPresentation(
     (value.confirmDisabled !== undefined && typeof value.confirmDisabled !== "boolean") ||
     (value.planAvailable !== undefined && typeof value.planAvailable !== "boolean") ||
     !isOptionalBoundedString(value.approveForSessionLabel) ||
+    (value.ruleOffer !== undefined && parsePermissionRuleOffer(value.ruleOffer) === null) ||
     !Array.isArray(value.questions) ||
     value.questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest ||
     !value.questions.every(isQuestion)

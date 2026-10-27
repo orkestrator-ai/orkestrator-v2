@@ -168,6 +168,9 @@ Decisions made on 2026-10-27.
 ## Related
 
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md) item 1.
+- [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md): the
+  "always allow" this file removed, rebuilt as Orkestrator's own allow-once rules;
+  it also lists the rules saved by the removed options, read-only.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   item 4 (a profile shares the host Codex home).
 

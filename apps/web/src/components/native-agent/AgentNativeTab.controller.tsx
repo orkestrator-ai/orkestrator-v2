@@ -3,6 +3,8 @@ import { runUserCommand } from "@/lib/backend";
 import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { withUserCommandRows } from "@/lib/chat/user-command-rows";
+import { withPermissionRuleRows } from "@/lib/chat/permission-rule-rows";
+import { usePermissionRuleSession } from "@/hooks/usePermissionRuleSession";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import {
   useCallback,
@@ -477,6 +479,7 @@ export function SharedNativeAgentController({
     updateControls,
     resolveInteraction,
     holdInteraction,
+    approveInteractionAndRemember,
     enqueue,
     removeQueued,
     steerQueued,
@@ -897,6 +900,8 @@ export function SharedNativeAgentController({
     data.environmentId,
     tabId,
   );
+  // Requests an Orkestrator permission rule answered in this session (todo 0723).
+  const ruleSession = usePermissionRuleSession(data.environmentId, platform, sessionKey);
   /*
    * A shell command the agent ran here that waits on the user (a sign-in link,
    * a code, a password). The user's own `!` commands show theirs on the card.
@@ -918,8 +923,18 @@ export function SharedNativeAgentController({
     );
     const base =
       backgroundTaskRows.length === 0 ? withNotices : [...withNotices, ...backgroundTaskRows];
-    return userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
-  }, [backgroundTaskRows, displayMessages, projection?.backgroundTasks, userCommands]);
+    const withCommands = userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
+    return ruleSession.applications.length === 0
+      ? withCommands
+      : withPermissionRuleRows(withCommands, ruleSession.applications, ruleSession.rules);
+  }, [
+    backgroundTaskRows,
+    displayMessages,
+    projection?.backgroundTasks,
+    ruleSession.applications,
+    ruleSession.rules,
+    userCommands,
+  ]);
   const agentActivityAnnouncement = useNativeAgentActivityAnnouncement(
     transcriptMessages,
     sessionKey,
@@ -3169,6 +3184,7 @@ export function SharedNativeAgentController({
             interaction={interaction}
             onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
             onHold={(held) => holdInteraction(interaction.id, held)}
+            onApproveAndRemember={(choice) => approveInteractionAndRemember(interaction.id, choice)}
           />
         )),
       ]}

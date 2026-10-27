@@ -367,6 +367,71 @@ describe("tool approvals under an ask policy", () => {
     await promptPromise;
   });
 
+  test("marks exact requests rule-eligible and forwards a Bash suggestion only as a hint", async () => {
+    const session = createSession("ask-rule-eligible");
+    track(session.id);
+    session.executionPolicy = ASK_POLICY;
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+    const suggestions = [
+      {
+        type: "addRules",
+        behavior: "allow",
+        destination: "localSettings",
+        rules: [{ toolName: "Bash", ruleContent: "npm run test:*" }],
+      },
+    ];
+
+    const decisions = [
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm run test -- --watch" },
+        context("req-r1", { suggestions }),
+      ),
+      call.options.canUseTool!("Edit", { file_path: "relative.ts" }, context("req-r2")),
+      call.options.canUseTool!(
+        "mcp__linear__create_issue",
+        { title: "Bug" },
+        context("req-r3", { mcpServer: { name: "linear", source: "user" } }),
+      ),
+      call.options.canUseTool!(
+        "WebFetch",
+        { url: "https://Docs.Example.com/page", prompt: "summarise" },
+        context("req-r4"),
+      ),
+      call.options.canUseTool!("Bash", { command: "x".repeat(40_000) }, context("req-r5")),
+    ];
+    await waitFor(() => getPendingInteractions(session.id).length === 5);
+    const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
+    expect(pending.get("req-r1")).toMatchObject({
+      ruleEligible: true,
+      proposedCommandPrefix: ["npm", "run", "test"],
+    });
+    // A relative path cannot be placed in the workspace.
+    expect(pending.get("req-r2")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r3")).toMatchObject({ ruleEligible: true, mcpServer: "linear" });
+    expect(pending.get("req-r4")).toMatchObject({
+      ruleEligible: true,
+      networkHost: "docs.example.com",
+    });
+    // A truncated command is never matched.
+    expect(pending.get("req-r5")).not.toHaveProperty("ruleEligible");
+
+    for (const id of ["req-r1", "req-r2", "req-r3", "req-r4", "req-r5"]) {
+      respondToInteraction(id, { action: "accept" });
+    }
+    // Allow once, even where the SDK suggested a rule.
+    expect(await decisions[0]).toEqual({
+      behavior: "allow",
+      updatedInput: { command: "npm run test -- --watch" },
+    });
+    await Promise.all(decisions);
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
   test("denies an unanswered approval after five minutes", async () => {
     const session = createSession("ask-timeout");
     track(session.id);

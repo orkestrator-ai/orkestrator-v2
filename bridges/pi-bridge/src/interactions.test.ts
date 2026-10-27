@@ -79,6 +79,27 @@ describe("approval projection", () => {
     });
   });
 
+  test("marks only bash commands and named file changes as rule-eligible", () => {
+    const state = newSessionState();
+    park(state, "bash", { command: "npm test" });
+    park(state, "powershell", { command: "Get-ChildItem" });
+    park(state, "bash", {});
+    park(state, "write", { path: "src/b.ts" });
+    park(state, "edit", {});
+    park(state, "deploy_service", { service: "api" });
+
+    const payload = publicApprovals(state) as { approvals: Array<Record<string, unknown>> };
+    expect(payload.approvals.map((approval) => approval.ruleEligible === true)).toEqual([
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+    ]);
+    expect(payload.approvals[3]!.cwd).toBeString();
+  });
+
   test("marks a file change with no path unactionable rather than approvable", () => {
     const state = newSessionState();
     park(state, "edit", {});

@@ -587,14 +587,13 @@ verification reported it.
   old; legacy names without an owner are eligible after a day. Whether the Linux
   `ork-artifact-preview-*` leftovers had the same cause as the macOS ones
   (the untracked probe) is also unproven there.
-- The escaped-browser ownership marker on Linux: `ps -A -ww -o ...,command=`
-  is also valid for procps, and Chromium carries `--user-data-dir` there
-  too, but the reproduction and the unit test ran only on macOS.
-- Linux and Windows execution of the new process-marker regressions remains
-  unqualified on this macOS host. The real-Chromium test is collected by the
-  existing transcript-artifacts area suite and follows its Chromium availability
-  prerequisite. Windows execution is not established by the Unix `ps`
-  implementation.
+- The escaped-browser ownership marker is now qualified against Linux procps
+  and real Chromium in Docker; see the pinned-review follow-up below. The
+  original Arch-host private-TMPDIR sweep remains outstanding.
+- Windows execution of the process-marker regressions remains unqualified.
+  The real-Chromium test is collected by the existing transcript-artifacts
+  area suite and follows its Chromium availability prerequisite. Windows
+  execution is not established by the Unix `ps` implementation.
 
 ## Assumptions and decisions
 
@@ -742,3 +741,120 @@ Decisions 1 to 8 were made on 2026-10-26 while working through the file;
 ## Replaces
 
 Nothing; new work found on 2026-10-26.
+
+## Pinned-review implementation follow-up — 2026-10-27
+
+The two remaining cleanup defects from the review of `7517bac5c` are fixed:
+
+- `removeFixturesAfterSettlement` retains its writer promise after the
+  foreground two-second deadline. It still removes roots and reports the
+  timeout immediately, then removes roots synchronously after the writer's
+  last write, whether the writer resolves or rejects. Callers that need to
+  observe that final teardown can await the returned promise's `settled`
+  property. The PID-owned fixture names and existing startup sweep remain
+  the recovery path if the test process exits before a stalled owner finishes.
+  The new regression releases a writer only after timeout, recursively
+  recreates the root and writes a manifest, and checks final removal on both
+  success and rejection. No test deadline was loosened.
+- New preview scratch records `.ork-preview-owner`, containing the backend's
+  process start identity. Linux uses the kernel boot ID and `/proc/<pid>/stat`
+  start ticks; macOS uses locale-stable `ps lstart`. A reused live PID with a
+  different identity no longer protects hour-old scratch. Matching live
+  owners remain protected; failed inspection of a recorded live owner is
+  conservative. Older scratch without a recorded identity expires after a
+  day even if its PID is live. Tests cover reused PIDs (including the current
+  PID), fresh scratch, legacy migration, unavailable inspection, and the
+  real host identity lookup while preserving active backend scratch.
+
+Focused qualification:
+
+- `mise run test:logged -- --name review-0247-regressions-final -- bun test --cwd apps/backend ./tests/fixture-cleanup.test.ts ./src/core/transcript-artifacts/preview-supervisor.test.ts ./src/core/transcript-artifacts/preview-process-tree.test.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/tmp/review-0247-macos.xml`
+  passed all 22 tests, 88 assertions, 10.3 s, macOS arm64 / Bun 1.4.4.
+- The same three owners passed in Linux arm64 Docker: 21 passed, one skipped,
+  zero failed, 86 assertions, 6.9 s. Only the Python fork/SIGSTOP case was
+  skipped because the image has no Python. The real escaped-Chromium test
+  ran and passed, as did real procps scans and kills with tabs, consecutive
+  spaces, and the new marker placed beyond 4 KiB of argv. The fixed-output
+  row test also checks preservation of literal backslashes.
+  Supervisor process-identity tests exercised the actual Linux `/proc` branch.
+  Image `orkestrator-v2:latest`, immutable ID
+  `sha256:46493b64bac5bd2233a4456e53841e3548aa77e07b6a2069eaf423e1fca0019a`.
+  JUnit evidence was moved to `/tmp/review-0247-linux-evidence/results.xml`.
+- `mise run test:logged -- --name review-0247-startup-scratch -- bun test --cwd apps/backend ./src/core/transcript-artifacts/runtime-scratch.test.ts --parallel=1 --only-failures`
+  passed (20.7 s), including production startup's live-owner negative case.
+- `mise run test:logged -- --name review-0247-check-fixed -- mise run check`
+  passed format, lint and all package typechecks (2.5 s); existing lint
+  warnings outside the touched files remain.
+
+The Linux run used the existing image, a read-only checkout mount, a private
+writable evidence directory and no network. Reproduce from this checkout
+with the image ID above (set `image` to that ID):
+
+```sh
+mkdir -p /tmp/review-0247-linux-evidence
+mise run test:logged -- --name review-0247-linux-final -- \
+  docker run --rm --network none \
+  --mount "type=bind,source=$PWD,target=/work,readonly" \
+  --mount type=bind,source=/tmp/review-0247-linux-evidence,target=/evidence \
+  --workdir /work/apps/backend \
+  --env ORKESTRATOR_DESIGN_CHROMIUM_PATH=/ms-playwright/chromium-1248/chrome-linux-arm64/chrome \
+  --entrypoint /usr/local/bin/bun "$image" test \
+  ./tests/fixture-cleanup.test.ts \
+  ./src/core/transcript-artifacts/preview-process-tree.test.ts \
+  ./src/core/transcript-artifacts/preview-supervisor.test.ts \
+  --parallel=1 --only-failures --reporter=junit \
+  --reporter-outfile=/evidence/results.xml
+```
+
+All three failures that the pinned review found unregistered now have exact
+names, aggregate evidence and follow-up results in
+[1106](../../tests/flaky-tests/environments-and-containers/1106-environment-move-git-fixtures-under-host-load.md)
+and [1110](../../tests/flaky-tests/coordinator-and-multi-review/1110-diff-stats-reset-baseline-deadline.md),
+with matching group index rows. The name-filtered branch rerun passed all
+three; the exact pinned base reproduced the provider/restart timeout and
+passed the other two. Complete owning-file runs retained other deadline and
+teardown failures. The diff-stats assertion's cause remains unconfirmed;
+registration does not establish pre-existence or close aggregate acceptance.
+No move or diff-stats assertion, timeout or skip was changed.
+
+### Required repository validation for this follow-up
+
+`mise run test:logged -- --name review-0247-full -- mise run test` completed
+in 649.4 s, exit 1. The runner selected both artifact and tmux area suites
+because the branch changes Turbo. The bridge and Codex protocol-lockfile
+groups passed. Workspace and root groups remained red:
+
+- Backend: 12,030 passed, 115 skipped, 14 failed, ten between-test errors
+  across 727 files, 586.37 s. Failures were the existing environment-move
+  deadline family (including 0695, submodules and 1106), two real-Git
+  snapshot deadlines (0947/0957), project-init (1109), two worktree-location
+  deadlines (1107), and the watcher zero-change assertion (0091). The three
+  newly registered names did not fail in this aggregate, nor did the focused
+  cleanup, scratch ownership or process-marker regressions.
+- Desktop: 1369 passed, 16 skipped, two failed. Both existing `pruneProfiles`
+  expectations omit macOS's `keychainWarning`. The unchanged owning file
+  failed the same two assertions alone (20 passed, two failed, 1.1 s), via
+  `mise run test:logged -- --name review-0247-profile-owner -- bun test --cwd apps/desktop ./scripts/dev/profile-cleanup.test.ts --parallel=1 --only-failures`.
+  Artifact: `orkestrator-test-run.BLfKXH` below the host temporary directory.
+- Root: 3531 passed, two failed across 171 files, 170.85 s. The same two
+  `migrate-copy` extraction-status assertions failed alone (ten passed, two
+  failed, 2.1 s), via
+  `mise run test:logged -- --name review-0247-migrate-owner -- bun test ./tests/unit/migrate-copy.test.ts --parallel=1 --only-failures`.
+  Artifact: `orkestrator-test-run.73IxO4` below the host temporary directory.
+
+Full failure evidence is retained below the host temporary directory in
+`orkestrator-test-run.monOSi/summary.json` and its per-group compressed logs;
+the outer logged command is `orkestrator-test-run.sUnfcJ/review-0247-full.log.gz`.
+Final static validation,
+`mise run test:logged -- --name review-0247-final-static -- mise run check`,
+passed (3.9 s). The detached pinned-base checkout was removed after its
+qualification runs; Docker used `--rm`. No browser/Electron/Docker-lifecycle,
+CLI-scenario or iOS suite was added because those product paths did not change;
+the Linux Docker process test above is focused platform qualification.
+A green repository acceptance run and the original Arch sweep remain pending.
+
+The final post-aggregate diff-stats owner rerun (`review-0247-diff-owner-post-suite`)
+retained one sibling Git deadline (20 passed, one failed, one between-test
+error, 31.41 s; `orkestrator-test-run.dwZUzT`). The newly registered reset
+case passed again; [1110](../../tests/flaky-tests/coordinator-and-multi-review/1110-diff-stats-reset-baseline-deadline.md)
+retains this result and the matching sibling timeout on the pinned base.

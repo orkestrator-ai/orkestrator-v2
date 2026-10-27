@@ -22,6 +22,8 @@
   - `source cleanup failure retains a committed copy for restart retry` (added 2026-10-27)
   - `abandons a final copy without a copied-phase record and repairs the original` (added 2026-10-27, repeat sweep)
   - `move admission waits for already admitted mutations to settle` (added 2026-10-27, acceptance verification)
+  - `move failure boundaries > reports provider failure and retries migration and source cleanup after restart` (added 2026-10-27, pinned-review reconciliation)
+  - `a raw-path write admitted first blocks copying until its acknowledged edit is present` (added 2026-10-27, pinned-review reconciliation)
 - **Tested revisions:** `1a1ef24f9` to `8268be981` on branch `test-temp-directory-4cd0548cf2b5-r1`, and the unchanged `main` at `ce205ad34` in a second checkout, macOS 27.0 arm64, Bun 1.4.4, checkout on an external volume. The branch changes only this file's teardown (it also settles terminal history) and its temporary-directory names.
 - **Commands:** the 0247 qualification sweep (`TMPDIR=<empty private dir> mise exec -- bun run --cwd apps/backend test:workspace`, two workers), and the owner alone with `mise run test:logged -- --name rerun-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts`, and the same `bun test` in the `main` checkout.
 - **Failures:** each run failed a different subset, every one at Bun's five-second deadline (5,008 to 11,103 ms), usually alongside the registered [0248](0248-move-restart-recovery-submodule-timeout.md), [0291](0291-environment-move-submodule-aggregate-timeout.md) and [0621](0621-environment-move-nested-submodules-aggregate-timeout.md) cases. Host load average was 3 to 37 across the session, from other worktrees' suites; `fseventsd` held a full core.
@@ -135,4 +137,47 @@ as the other names above. It is added to the list; no assertion, timeout or
 skip was changed. This branch's edits to the owner are its teardown
 (bounded history settlement, `finally` removal) and fixture names, not this
 case or `environment-move.ts`.
+
+## Pinned-review reconciliation — 2026-10-27
+
+The pinned review of `7517bac5c` reported two further names from
+`validation-05.stdout.txt`: `move failure boundaries > reports provider
+failure and retries migration and source cleanup after restart` (8290 ms)
+and `a raw-path write admitted first blocks copying until its acknowledged
+edit is present` (5367 ms). Both are now listed above. These were part of
+the red `mise run test` backend result (12,008 passed, 120 skipped, 27 failed,
+19 between-test errors), with two workspace desktop failures and two root
+migrate-copy failures recorded separately.
+
+The complete owning file was rerun, without changing its assertions or
+deadline:
+
+`mise run test:logged -- --name review-0247-env-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+
+It retained deadline and follow-on fixture errors: 25 passed, 13 failed,
+11 between-test errors, 148.9 s; artifact
+`orkestrator-test-run.3LrHQy/review-0247-env-owner.log.gz` below the host
+temporary directory. The raw-path case failed its hook after 9238.79 ms.
+This is retained non-green owner evidence, not a new passing-owner claim.
+
+A name-filtered rerun of both cases and the diff-stats reset case passed
+all three on this branch (15.7 s; the move cases took 2993 / 8029 ms
+including teardown):
+
+`mise run test:logged -- --name review-0247-three-names -- bun test --cwd apps/backend ./src/core/environment-move.test.ts ./src/core/diff-stats-tracking.test.ts --parallel=1 -t 'reports provider failure and retries migration and source cleanup after restart|a raw-path write admitted first blocks copying until its acknowledged edit is present|a successful reset to creation clears the advanced baseline and retargets scans' --reporter=junit --reporter-outfile=/tmp/review-0247-three.xml`
+
+The same filtered command (`review-0247-base-three`) in a disposable detached
+checkout of the pinned base `863b57821`, using Bun 1.4.4, reproduced the
+provider/restart timeout (8464.89 ms), followed by a SQLite I/O error as
+unfinished work outlived its fixture. The raw-path case passed (2907.96 ms)
+and the diff-stats case passed (2617.12 ms): two passed, one failed, one
+between-test error, 14.4 s. Artifact:
+`orkestrator-test-run.shEnkk/review-0247-base-three.log.gz` below the host
+temporary directory; JUnit `/tmp/review-0247-base-three.xml`.
+
+This establishes a base recurrence for the provider/restart case and an
+isolated pass for raw-path admission, consistent with the existing deadline
+family. The full owner remains non-green. No timeout, assertion, skip or
+move implementation was changed. The diff-stats assertion has its own
+[1110 evidence record](../coordinator-and-multi-review/1110-diff-stats-reset-baseline-deadline.md).
 

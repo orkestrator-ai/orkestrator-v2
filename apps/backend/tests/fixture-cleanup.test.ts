@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { removeFixturesAfterSettlement } from "./fixture-cleanup.js";
@@ -26,6 +26,35 @@ for (const outcome of ["settled", "rejected", "stalled"] as const) {
       expect(existsSync(root)).toBe(false);
     } finally {
       pending.resolve();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const rejects of [false, true]) {
+  test(`a writer resuming after timeout cannot leave its root behind (rejects=${rejects})`, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `ork-fixture-cleanup-${process.pid}-`));
+    const gate = Promise.withResolvers<void>();
+    const cleanup = removeFixturesAfterSettlement(
+      async () => {
+        await gate.promise;
+        await mkdir(root, { recursive: true });
+        await writeFile(path.join(root, "manifest.json"), "{}");
+        if (rejects) throw new Error("late writer failed");
+      },
+      [root],
+      0,
+    );
+    try {
+      await expect(cleanup).rejects.toThrow("did not settle");
+      expect(existsSync(root)).toBe(false);
+      gate.resolve();
+      if (rejects) await expect(cleanup.settled).rejects.toThrow("late writer failed");
+      else await cleanup.settled;
+      expect(existsSync(root)).toBe(false);
+    } finally {
+      gate.resolve();
+      await cleanup.settled.catch(() => undefined);
       await rm(root, { recursive: true, force: true });
     }
   });

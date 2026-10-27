@@ -89,6 +89,29 @@ describe("killTree", () => {
     }, 10_000);
   }
 
+  test("finds and kills an escaped tree whose tabbed marker follows a long command line", async () => {
+    const marker = `${path.join(tmpdir(), `ork-preview-${randomUUID()}`)}-two  spaces-a\ttab`;
+    // Beyond normal ps display widths: exercise actual BSD/procps rendering,
+    // rather than only a mocked row or a marker at the beginning of argv.
+    const child = spawnEscaped(`${"padding-".repeat(700)}${marker}`);
+    try {
+      const pids = await waitForMarked(marker);
+      const report = await killTree([], [], 3_000, marker);
+      expect(report.verified).toBe(true);
+      expect(report.pids).toEqual(expect.arrayContaining(pids));
+      const entries = await listProcesses();
+      for (const pid of pids) expect(isAlive(pid, entries)).toBe(false);
+    } finally {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  }, 10_000);
+
   // Python provides a real fork/setsid/stop boundary without running unsafe
   // post-fork JavaScript in Bun's multithreaded runtime.
   const python = "/usr/bin/python3";

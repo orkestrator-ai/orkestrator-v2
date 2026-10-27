@@ -965,7 +965,7 @@ export function extractPersistedMessageContent(
   // must not trigger heuristic filtering.
   const typed = role === "user" ? options.typedPrompt?.(sentText) : undefined;
   if (typed !== undefined) {
-    return typed || parts.length > 0 ? { text: typed, attachments: parts } : null;
+    return { text: typed, attachments: parts };
   }
 
   // Codex writes its instructions and environment blocks as separate segments

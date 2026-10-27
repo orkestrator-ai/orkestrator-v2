@@ -204,8 +204,8 @@ own verdicts (a rejected structured result, a lost rebind) add none.
   template and a recovered-context turn the runtime records the live row's
   text after `markAccepted` (`sessions/typed-prompts.ts`). A record applies
   only to the first matching user message of its turn, before synthetic-block
-  heuristics are applied. Independent per-turn files retain every record; legacy
-  JSONL journals remain readable, and replay loads one turn at a time. Codex's
+  heuristics are applied. Independent per-turn files retain every record, and
+  replay loads one turn at a time. Codex's
   balanced image framing is excluded from matching an attached prompt;
   anything else, a thread from the Codex CLI included, shows the rollout's
   text. Changing `PLAN_MODE_PREAMBLE` needs the old wording stripped too, or

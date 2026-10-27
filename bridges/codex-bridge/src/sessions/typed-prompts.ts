@@ -2,11 +2,10 @@
  * Typed forms of rewritten prompts, retained for as long as their rollout.
  * Each turn has an independent file: writing another turn never replaces an
  * older record, and independent bridge processes cannot compact away appends.
- * Old JSONL journals remain readable. Replay loads only its current turn;
+ * Replay loads only its current turn;
  * neither long histories nor fork inheritance require an in-memory index.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { mkdir, open, opendir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { codexBridgeStateDir } from "../bridge-state-dir.js";
@@ -51,11 +50,10 @@ function parseLine(line: string): TypedPromptRecord | undefined {
   }
 }
 
-/** Legacy location; kept readable, never compacted or rewritten. */
-export function typedPromptJournalPath(codexHome: string, threadId: string): string | undefined {
+function typedPromptDirectory(codexHome: string, threadId: string): string | undefined {
   const safe = threadId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 200);
   if (!safe || safe === "." || safe === "..") return undefined;
-  return join(codexBridgeStateDir(codexHome), "typed-prompts", `${safe}.jsonl`);
+  return join(codexBridgeStateDir(codexHome), "typed-prompts", `${safe}.jsonl.d`);
 }
 
 export function typedPromptRecordPath(
@@ -63,44 +61,11 @@ export function typedPromptRecordPath(
   threadId: string,
   turnId: string,
 ): string | undefined {
-  const legacy = typedPromptJournalPath(codexHome, threadId);
-  return legacy && turnId ? join(`${legacy}.d`, `${typedPromptDigest(turnId)}.json`) : undefined;
+  const directory = typedPromptDirectory(codexHome, threadId);
+  return directory && turnId ? join(directory, `${typedPromptDigest(turnId)}.json`) : undefined;
 }
 
-/** Stream old journals, bounding even a malformed line without a newline. */
-async function* legacyRecords(path: string): AsyncGenerator<TypedPromptRecord> {
-  let line = "";
-  let oversized = false;
-  const stream = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 });
-  try {
-    for await (const chunk of stream) {
-      const pieces = String(chunk).split("\n");
-      for (let index = 0; index < pieces.length; index += 1) {
-        if (!oversized) {
-          line += pieces[index];
-          if (line.length > MAX_RECORD_BYTES) {
-            line = "";
-            oversized = true;
-          }
-        }
-        if (index < pieces.length - 1) {
-          const record = oversized ? undefined : parseLine(line);
-          if (record) yield record;
-          line = "";
-          oversized = false;
-        }
-      }
-    }
-    const record = oversized ? undefined : parseLine(line);
-    if (record) yield record;
-  } catch {
-    // Missing or unreadable display metadata falls back to rollout text.
-  } finally {
-    stream.destroy();
-  }
-}
-
-// Only unfinished writes live here, never LRU-evicted journal instances. A
+// Only unfinished writes live here, never LRU-evicted records. A
 // same-process read waits for its turn's write, including during fork copying.
 const writes = new Map<string, Promise<void>>();
 
@@ -150,12 +115,7 @@ export async function readTypedPrompt(
   const path = typedPromptRecordPath(codexHome, threadId, turnId);
   if (!path) return undefined;
   const current = await readRecord(path);
-  if (current?.turnId === turnId) return current;
-  let legacy: TypedPromptRecord | undefined;
-  for await (const record of legacyRecords(typedPromptJournalPath(codexHome, threadId)!)) {
-    if (record.turnId === turnId) legacy = record;
-  }
-  return legacy;
+  return current?.turnId === turnId ? current : undefined;
 }
 
 /** Record an accepted rewrite. Display metadata failures never reject dispatch. */
@@ -179,23 +139,21 @@ export async function inheritTypedPrompts(
   forkThreadId: string,
 ): Promise<void> {
   if (parentThreadId === forkThreadId) return;
-  const parent = typedPromptJournalPath(codexHome, parentThreadId);
-  const fork = typedPromptJournalPath(codexHome, forkThreadId);
+  const parent = typedPromptDirectory(codexHome, parentThreadId);
+  const fork = typedPromptDirectory(codexHome, forkThreadId);
   if (!parent || !fork) return;
   const copy = async (record: TypedPromptRecord) => {
     await writeRecord(typedPromptRecordPath(codexHome, forkThreadId, record.turnId)!, record);
   };
-  // Legacy first, so current per-turn records take precedence.
-  for await (const record of legacyRecords(parent)) await copy(record);
   // Pending records must be published before enumerating the directory.
   for (const [path, pending] of writes) {
-    if (dirname(path) === `${parent}.d`) await pending;
+    if (dirname(path) === parent) await pending;
   }
   try {
-    const directory = await opendir(`${parent}.d`);
+    const directory = await opendir(parent);
     for await (const entry of directory) {
       if (!entry.isFile() || !/^[0-9a-f]{64}\.json$/.test(entry.name)) continue;
-      const record = await readRecord(join(`${parent}.d`, entry.name));
+      const record = await readRecord(join(parent, entry.name));
       if (record) await copy(record);
     }
   } catch {

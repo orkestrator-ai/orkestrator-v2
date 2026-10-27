@@ -1,13 +1,20 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   codexHome,
   harness,
   threadPayload,
   type Harness,
 } from "./app-server-runtime-test-harness.js";
-import { recordTypedPrompt } from "./sessions/typed-prompts.js";
+import {
+  MAX_TYPED_PROMPT_CHARS,
+  readTypedPrompt,
+  recordTypedPrompt,
+  typedPromptDigest,
+  typedPromptRecordPath,
+} from "./sessions/typed-prompts.js";
 import type { NormalizedMessage } from "./messages/types.js";
 
 const TIDY_PATH = "/tmp/ws/.codex/skills/tidy/SKILL.md";
@@ -190,6 +197,150 @@ describe("resumed transcript of rewritten prompts", () => {
       ...liveUsers,
       { content: "$tidy from the CLI", turnId: "turn-cli" },
     ]);
+  });
+
+  test.each([
+    { mode: "build", prompt: "" },
+    { mode: "plan", prompt: "" },
+    { mode: "plan", prompt: "Continue with a plan" },
+  ] as const)(
+    "recovered context in $mode mode retains the typed row '$prompt'",
+    async ({ mode, prompt }) => {
+      writeRollout("thread-gone", [user("Remember the parser constraint"), assistant("Kept.")]);
+      const live = await harness({
+        "thread/resume": () => {
+          const error = new Error("thread/resume: no rollout found for thread id thread-gone");
+          (error as { rpcCode?: number }).rpcCode = -32600;
+          throw error;
+        },
+      });
+      const recovered = await live.runtime.resumeSession({ threadId: "thread-gone", mode });
+      const sessionId = recovered!.sessionId;
+      expect(
+        await live.runtime.prompt(sessionId, { prompt, requestId: "recovered", attachments: [] }),
+      ).toMatchObject({ ok: true });
+      const sent = sentTexts(live)[0]!;
+      expect(sent).toContain("<recovered_conversation>");
+      if (mode === "plan") {
+        expect(sent).toStartWith("<system-reminder>\nYou are in Orkestrator plan mode.");
+      }
+      const liveUsers = userRows(await live.runtime.getMessages(sessionId))
+        .filter((message) => message.turnId)
+        .map((message) => ({ content: message.content, turnId: message.turnId }));
+      expect(liveUsers).toEqual([{ content: prompt, turnId: "turn-1" }]);
+      expect(await readTypedPrompt(codexHome, "thread-1", "turn-1")).toMatchObject({
+        typed: prompt,
+      });
+      live.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await live.drain();
+      writeRollout("thread-1", [turnContext("turn-1"), user(sent), assistant("Done.")]);
+      expect(await live.runtime.closeSessionRetaining(sessionId)).toBe("closed");
+      const fresh = await harness();
+      const resumed = await fresh.runtime.resumeSession({ threadId: "thread-1", mode });
+      const resumedUsers = userRows(await fresh.runtime.getMessages(resumed!.sessionId));
+      expect(
+        resumedUsers.map((message) => ({ content: message.content, turnId: message.turnId })),
+      ).toEqual(liveUsers);
+      expect(resumedUsers[0]!.parts.filter((part) => part.type === "file")).toEqual([]);
+    },
+  );
+
+  test.each(["mkdir", "writeFile", "rename"] as const)(
+    "%s failure does not reject dispatch and replay falls back to rollout text",
+    async (operation) => {
+      writeUserPrompt("review", "Expanded review request.");
+      const live = await harness();
+      const session = await live.runtime.createSession({ mode: "build" });
+      const sessionId = session.sessionId;
+      await live.runtime.getCommandCatalogue(sessionId);
+      const path = typedPromptRecordPath(codexHome, "thread-1", "turn-1")!;
+      let failures = 0;
+      const fail = () => {
+        failures += 1;
+        throw new Error("display metadata unavailable");
+      };
+      const originalMkdir = fs.mkdir.bind(fs);
+      const originalWriteFile = fs.writeFile.bind(fs);
+      const originalRename = fs.rename.bind(fs);
+      const mkdir = spyOn(fs, "mkdir").mockImplementation((directory, options) => {
+        if (operation === "mkdir" && String(directory) === dirname(path)) fail();
+        return originalMkdir(directory, options);
+      });
+      const write = spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+        if (operation === "writeFile" && String(file).startsWith(`${path}.`)) fail();
+        return originalWriteFile(file, data, options);
+      });
+      const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (operation === "rename" && String(destination) === path) fail();
+        return originalRename(source, destination);
+      });
+      try {
+        expect(
+          await live.runtime.prompt(sessionId, {
+            prompt: "/review",
+            requestId: "failed-metadata",
+            attachments: [],
+          }),
+        ).toMatchObject({ ok: true });
+        // Wait for the background write to settle before restoring the spies.
+        expect(await readTypedPrompt(codexHome, "thread-1", "turn-1")).toBeUndefined();
+        expect(failures).toBe(1);
+      } finally {
+        mkdir.mockRestore();
+        write.mockRestore();
+        rename.mockRestore();
+      }
+      expect(await fs.readdir(dirname(path)).catch(() => [])).toEqual([]);
+      expect(
+        userRows(await live.runtime.getMessages(sessionId)).map((message) => message.content),
+      ).toEqual(["/review"]);
+      const sent = sentTexts(live);
+      expect(sent).toEqual(["Expanded review request."]);
+      live.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await live.drain();
+      writeRollout("thread-1", [turnContext("turn-1"), user(sent[0]!), assistant("Done.")]);
+      expect(await live.runtime.closeSessionRetaining(sessionId)).toBe("closed");
+      const fresh = await harness();
+      const resumed = await fresh.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+      expect(
+        userRows(await fresh.runtime.getMessages(resumed!.sessionId)).map(
+          (message) => message.content,
+        ),
+      ).toEqual(sent);
+    },
+  );
+
+  test("an oversized per-turn record falls back to rollout text during replay", async () => {
+    const path = typedPromptRecordPath(codexHome, "thread-1", "turn-1")!;
+    mkdirSync(dirname(path), { recursive: true });
+    // A valid record with enough trailing whitespace to exceed the byte bound.
+    writeFileSync(
+      path,
+      JSON.stringify({ turnId: "turn-1", sent: typedPromptDigest("Expanded"), typed: "/review" }) +
+        " ".repeat(6 * MAX_TYPED_PROMPT_CHARS + 2_049),
+    );
+    await recordTypedPrompt(codexHome, "thread-1", "turn-2", "Next expanded", "/next");
+    writeRollout("thread-1", [
+      turnContext("turn-1"),
+      user("Expanded"),
+      assistant("Done."),
+      turnContext("turn-2"),
+      user("Next expanded"),
+      assistant("Done again."),
+    ]);
+    const fresh = await harness();
+    const resumed = await fresh.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    expect(
+      userRows(await fresh.runtime.getMessages(resumed!.sessionId)).map(
+        (message) => message.content,
+      ),
+    ).toEqual(["Expanded", "/next"]);
   });
 
   test("a record applies only to the message it was written for", async () => {

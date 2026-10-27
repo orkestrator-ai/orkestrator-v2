@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -9,7 +9,6 @@ import {
   recordTypedPrompt,
   typedPromptDigest,
   typedPromptFor,
-  typedPromptJournalPath,
   typedPromptRecordPath,
 } from "./typed-prompts.js";
 
@@ -54,42 +53,33 @@ describe("typed prompts", () => {
       "x".repeat(MAX_TYPED_PROMPT_CHARS + 1),
     );
     await recordTypedPrompt(home, "thread", "", "sent", "typed");
-    expect(await stat(`${typedPromptJournalPath(home, "thread")}.d`).catch(() => null)).toBeNull();
-    expect(typedPromptJournalPath(home, "..")).toBeUndefined();
+    expect(
+      await stat(dirname(typedPromptRecordPath(home, "thread", "turn-1")!)).catch(() => null),
+    ).toBeNull();
+    expect(typedPromptRecordPath(home, "..", "turn-1")).toBeUndefined();
     await recordTypedPrompt(home, "..", "turn-1", "sent", "typed");
     expect(await readTypedPrompt(home, "..", "turn-1")).toBeUndefined();
   });
 
-  test("legacy journals are streamed completely, ignoring malformed and oversized lines", async () => {
+  test("malformed, mismatched and oversized per-turn records are ignored", async () => {
     const home = await temporaryCodexHome();
-    const path = typedPromptJournalPath(home, "thread")!;
+    const path = typedPromptRecordPath(home, "thread", "turn-1")!;
     await mkdir(dirname(path), { recursive: true });
-    const line = (turnId: string, typed: unknown) =>
-      JSON.stringify({ turnId, sent: typedPromptDigest("a"), typed });
-    await appendFile(
-      path,
-      [
-        "not json",
-        line("turn-1", 7),
-        line("turn-1", "first"),
-        line("turn-old", "before tail"),
-        // More than the former 4 MiB tail limit, without allocating it in the reader.
-        "x".repeat(5 * 1024 * 1024),
-        line("turn-2", "last"),
-        line("turn-1", "second"),
-        "",
-      ].join("\n"),
-    );
-    expect((await readTypedPrompt(home, "thread", "turn-old"))?.typed).toBe("before tail");
-    expect((await readTypedPrompt(home, "thread", "turn-1"))?.typed).toBe("second");
-    expect((await readTypedPrompt(home, "thread", "turn-2"))?.typed).toBe("last");
-    const before = await readFile(path);
-    await recordTypedPrompt(home, "thread", "turn-1", "a", "current");
-    expect((await readTypedPrompt(home, "thread", "turn-1"))?.typed).toBe("current");
-    expect(await readFile(path)).toEqual(before);
+    const record = { turnId: "turn-1", sent: typedPromptDigest("sent"), typed: "/template" };
+    for (const invalid of [
+      "not json",
+      JSON.stringify({ ...record, typed: 7 }),
+      JSON.stringify({ ...record, turnId: "another-turn" }),
+      // Valid JSON and valid fields, but the file exceeds the read-side byte bound.
+      `${JSON.stringify(record)}${" ".repeat(6 * MAX_TYPED_PROMPT_CHARS + 2_049)}`,
+    ]) {
+      await writeFile(path, invalid);
+      expect(await readTypedPrompt(home, "thread", "turn-1")).toBeUndefined();
+    }
+    await writeFile(path, JSON.stringify(record));
+    expect(await readTypedPrompt(home, "thread", "turn-1")).toEqual(record);
     await inheritTypedPrompts(home, "thread", "fork");
-    expect((await readTypedPrompt(home, "fork", "turn-1"))?.typed).toBe("current");
-    expect((await readTypedPrompt(home, "fork", "turn-2"))?.typed).toBe("last");
+    expect(await readTypedPrompt(home, "fork", "turn-1")).toEqual(record);
   });
 
   test("more than 500 turns remain readable by a fresh process and a fork", async () => {
@@ -162,7 +152,7 @@ describe("typed prompts", () => {
     expect((await readTypedPrompt(home, "parent", "turn"))?.typed).toBe("/skill:tidy");
     await inheritTypedPrompts(home, "empty", "empty-fork");
     expect(
-      await stat(`${typedPromptJournalPath(home, "empty-fork")}.d`).catch(() => null),
+      await stat(dirname(typedPromptRecordPath(home, "empty-fork", "turn")!)).catch(() => null),
     ).toBeNull();
   });
 });

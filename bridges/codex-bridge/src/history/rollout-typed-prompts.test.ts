@@ -67,6 +67,14 @@ describe("a persisted user message shows the prompt as typed", () => {
     expect(persisted?.attachments).toHaveLength(1);
   });
 
+  test("a matched empty typed prompt retains a user row without attachments", () => {
+    expect(
+      extractPersistedMessageContent(content("Recovered conversation and latest request"), "user", {
+        typedPrompt: () => "",
+      }),
+    ).toEqual({ text: "", attachments: [] });
+  });
+
   test("image framing matches the original text item without swallowing unrelated segments", () => {
     const sent = appendAttachmentTags("expanded", [{ path: "/tmp/shot.png" }]);
     const resolve = (text: string) => (text === sent ? "/template" : undefined);

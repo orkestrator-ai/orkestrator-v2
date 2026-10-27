@@ -31,6 +31,7 @@ import {
   validationChips,
 } from "@/components/review/multi-review-steps";
 import { runtimeParts } from "@/lib/review/runtime-summary";
+import { formatObservedAt } from "@/lib/view-freshness";
 import { useUIStore } from "@/stores/uiStore";
 import { PIPELINE_FLOW_MIN_HEIGHT, pipelineFlowLayout } from "./pipeline-flow-layout";
 import type {
@@ -164,11 +165,17 @@ export function pipelineNodeView({
   contextMenu: ReactNode;
 }): FlowNodeModel {
   const running = node.state === "running";
+  // The ticket did not run; its clock is when the pipeline picked it up.
+  const ticketStarted = node.kind === "ticket" ? formatObservedAt(pipeline.createdAt) : null;
   const runtime =
     node.kind === "ticket" || node.placeholder
       ? null
       : runtimeParts(
-          { startedAt: node.startedAt, completedAt: node.completedAt, tokenCount: node.tokenCount },
+          {
+            startedAt: node.startedAt,
+            completedAt: node.completedAt,
+            tokenCount: node.tokenCount,
+          },
           running,
           now,
         );
@@ -202,6 +209,9 @@ export function pipelineNodeView({
     detail: nodeDetail(node, pipeline, pullRequest, modelLabel),
     runtime,
     runtimeLabel: `${node.title} runtime and token usage`,
+    startTime: ticketStarted
+      ? { dateTime: pipeline.createdAt, text: `Started ${ticketStarted}` }
+      : undefined,
     pendingLabel:
       node.state === "not-started" && node.kind !== "pr"
         ? node.reviewer

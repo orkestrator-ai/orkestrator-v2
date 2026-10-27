@@ -5,7 +5,9 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
+import { formatObservedAt } from "@/lib/view-freshness";
 import {
+  CREATED,
   build,
   rewoundToFirstVerify,
   session,
@@ -577,6 +579,49 @@ describe("node face rows", () => {
       Date.now = dateNow;
     }
   });
+
+  test("every step that ran has its clock on the third row, the ticket its start", () => {
+    renderPipelineTab(
+      build({
+        phase: "verifying",
+        agentType: "claude",
+        currentSessionIndex: 1,
+        sessions: [
+          // Recorded before stage sessions kept their end time.
+          session("build", "build", 0, { completedAt: undefined }),
+          session("verify", "verify", 3_420, { status: "running", completedAt: undefined }),
+        ],
+      }),
+    );
+    const runtimeRow = (title: string) =>
+      graphNode(title).querySelector<HTMLElement>('[data-flow-node-row="runtime"]')?.textContent;
+    const started = formatObservedAt(CREATED)!;
+    const ticket = graphNode("Ticket");
+    expect(runtimeRow("Ticket")).toBeUndefined();
+    const startRow = ticket.querySelector('[data-flow-node-row="start"]');
+    expect(startRow?.tagName).toBe("TIME");
+    expect(startRow?.getAttribute("datetime")).toBe(CREATED);
+    expect(startRow?.textContent).toBe(`Started ${started}`);
+    expect(ticket.getAttribute("aria-label")).toBe(`Ticket, Started with, Started ${started}`);
+    expect(ticket.style.height).toBe("82px");
+    expect(runtimeRow("Setup")).toBe("0s");
+    expect(runtimeRow("Build")).toBe("57m 0s");
+  });
+
+  test.each([undefined, "not-a-date"])(
+    "a ticket with invalid or missing createdAt (%s) has no start or runtime row",
+    (createdAt) => {
+      const pipeline = build({});
+      if (createdAt === undefined) Reflect.deleteProperty(pipeline, "createdAt");
+      else pipeline.createdAt = createdAt;
+      renderPipelineTab(pipeline);
+      const ticket = graphNode("Ticket");
+      expect(ticket.querySelector('[data-flow-node-row="start"]') === null).toBe(true);
+      expect(ticket.querySelector('[data-flow-node-row="runtime"]') === null).toBe(true);
+      expect(ticket.getAttribute("aria-label")).toBe("Ticket, Started with");
+      expect(ticket.style.height).toBe("64px");
+    },
+  );
 
   test("steps ahead keep two rows, with their badge beside the title", () => {
     renderPipelineTab(running());

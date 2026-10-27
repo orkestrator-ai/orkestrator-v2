@@ -423,6 +423,8 @@ export function pipelineFlowModel(
 ): PipelineFlowModel {
   const nodes = new Map<string, PipelineFlowNode>();
   const columns: PipelineFlowColumn[] = [];
+  // Keep boundaries even when the visible slot replaces an earlier attempt.
+  const startsByColumn = new Map<PipelineFlowColumn, number[]>();
   const occurrences = new Map<string, number>();
   const nextOccurrence = (kind: string) => {
     const next = (occurrences.get(kind) ?? 0) + 1;
@@ -443,6 +445,12 @@ export function pipelineFlowModel(
   const place = (column: PipelineFlowColumn, node: PipelineFlowNode) => {
     nodes.set(node.id, node);
     column.nodeIds.push(node.id);
+    const started = Date.parse(node.startedAt ?? "");
+    if (Number.isFinite(started)) {
+      const starts = startsByColumn.get(column) ?? [];
+      starts.push(started);
+      startsByColumn.set(column, starts);
+    }
   };
   const active = isActiveBuildPhase(pipeline.phase);
   const complete = pipeline.phase === "complete";
@@ -774,8 +782,7 @@ export function pipelineFlowModel(
         reviewPass.reviewersColumn.nodeIds.splice(index, 1);
       }
       reviewPass.reviewers.set(slot, node);
-      nodes.set(node.id, node);
-      reviewPass.reviewersColumn.nodeIds.push(node.id);
+      place(reviewPass.reviewersColumn, node);
       continue;
     }
 
@@ -903,7 +910,7 @@ export function pipelineFlowModel(
       // The live retry replaces the failed attempt it follows.
       if (existing) nodes.delete(existing.id);
       livePass.reviewers.set(slot, node);
-      nodes.set(node.id, node);
+      place(livePass.reviewersColumn, node);
     });
     livePass.reviewersColumn.nodeIds = [...livePass.reviewers.entries()]
       .sort(([left], [right]) => left - right)
@@ -1110,11 +1117,46 @@ export function pipelineFlowModel(
     column.label = numbered(COLUMN_LABELS.review, reviewPassNumber);
   }
 
+  settleUnrecordedEnds(columns, nodes, startsByColumn);
   for (const node of nodes.values()) {
     node.activityAt = latestActivityAt(node);
   }
   const ordered = columns.flatMap((column) => column.nodeIds.map((id) => nodes.get(id)!));
   return { nodes: ordered, columns, edges: pipelineFlowEdges(columns, nodes) };
+}
+
+/**
+ * A completed sequential stage with no recorded end is bounded by the first
+ * started successor column. Retain starts from replaced attempts so retries
+ * cannot extend an earlier stage. Parallel reviewers may finish well before
+ * consolidation; leave their missing ends unknown rather than claim an exact
+ * duration. Failed/stopped nodes and final stages also keep unknown ends.
+ */
+function settleUnrecordedEnds(
+  columns: readonly PipelineFlowColumn[],
+  nodes: ReadonlyMap<string, PipelineFlowNode>,
+  startsByColumn: ReadonlyMap<PipelineFlowColumn, readonly number[]>,
+): void {
+  columns.forEach((column, index) => {
+    for (const id of column.nodeIds) {
+      const node = nodes.get(id)!;
+      if (
+        node.kind === "reviewer" ||
+        node.state !== "complete" ||
+        node.completedAt ||
+        !node.startedAt
+      )
+        continue;
+      const started = Date.parse(node.startedAt);
+      if (!Number.isFinite(started)) continue;
+      for (const successor of columns.slice(index + 1)) {
+        const starts = (startsByColumn.get(successor) ?? []).filter((start) => start >= started);
+        if (starts.length === 0) continue;
+        node.completedAt = new Date(Math.min(...starts)).toISOString();
+        break;
+      }
+    }
+  });
 }
 
 /**

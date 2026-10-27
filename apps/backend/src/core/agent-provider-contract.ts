@@ -571,6 +571,14 @@ export interface ProviderTranscriptSnapshot {
    */
   historyCursor?: string;
   /**
+   * A provider page cursor for the history before the row of `messages` with
+   * this id, in the same epoch as `historyCursor`; undefined for a row that
+   * cannot name one (not in `messages`, or not where a page can end). A
+   * reader that holds fewer rows than the snapshot sent names its first kept
+   * row this way, since `historyCursor` would page from before rows it dropped.
+   */
+  historyCursorBefore?: (messageId: string) => string | undefined;
+  /**
    * Rows from before `messages` that changed recently, newest change first,
    * in the same representation as `messages`. A row is one model response,
    * so a late tool result or subagent report can land on a row newer ones

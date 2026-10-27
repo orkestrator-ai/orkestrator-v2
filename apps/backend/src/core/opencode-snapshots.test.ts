@@ -145,6 +145,36 @@ describe("OpenCode history paging", () => {
     });
   });
 
+  test("names a cursor before any kept message, but never inside one", async () => {
+    const server = openCodeHistoryServer(150);
+    const failed = server.messages[70]!;
+    failed.info.error = { name: "ProviderError", data: { message: "upstream failed" } };
+    const snapshot = await snapshotOf(server);
+    const before = snapshot.historyCursorBefore!;
+    expect(before(rowIds(snapshot.messages)[0]!)).toBe(snapshot.historyCursor);
+    expect(decodeCursor(before(openCodeMessageId(80)))).toEqual({
+      id: openCodeMessageId(80),
+      time: 1_000 + Math.floor(80 / 3),
+    });
+    // A failed message renders as its row and an error row; a page can end
+    // before the message, not between the two.
+    expect(rowIds(snapshot.messages)).toContain(`error-opencode-${failed.info.id}`);
+    expect(before(failed.info.id)).toBeDefined();
+    expect(before(`error-opencode-${failed.info.id}`)).toBeUndefined();
+    // Outside the window: older rows and unknown ids name nothing.
+    expect(before(openCodeMessageId(10))).toBeUndefined();
+    expect(before("unknown")).toBeUndefined();
+    const page = await pageOf(server, before(openCodeMessageId(80))!, {
+      limit: 40,
+      targetBytes: 1 << 20,
+    });
+    if (page.status !== "page") throw new Error("expected a page");
+    // Forty rows: the failed message's two rows cost one message.
+    expect(rowIds(page.messages).filter((id) => !id.startsWith("error-"))).toEqual(
+      server.messages.slice(41, 80).map((message) => message.info.id),
+    );
+  });
+
   test("a session that fits is complete and offers no cursor", async () => {
     const snapshot = await snapshotOf(openCodeHistoryServer(12));
     expect(snapshot.messages).toHaveLength(12);

@@ -578,6 +578,20 @@ function displayMessage<T>(raw: T, coordinator: boolean): T {
   return projected as T;
 }
 
+/** The provider cursor before the oldest of `rows` that can name one. */
+function firstNamedCursor(
+  rows: readonly unknown[],
+  cursorBefore: ProviderTranscriptSnapshot["historyCursorBefore"],
+): string | undefined {
+  if (!cursorBefore) return undefined;
+  for (const row of rows) {
+    const id = (row as { id?: unknown } | null)?.id;
+    const cursor = typeof id === "string" ? cursorBefore(id) : undefined;
+    if (cursor) return cursor;
+  }
+  return undefined;
+}
+
 function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string {
   if (snapshot.sourceToken) return snapshot.sourceToken;
   const first = snapshot.messages[0] as { id?: unknown } | undefined;
@@ -2155,8 +2169,9 @@ export class NativeAgentTranscriptProjection {
      * A page cursor the view adopted says the same as a summary: the provider
      * has already said where the rest of the history is, so its window is
      * short on purpose. One merely offered says nothing — a view that could
-     * not hold the whole window dropped the row the cursor names, and without
-     * this read the history before what it kept is unreachable.
+     * not hold the whole window, and could not name a cursor at a row it kept
+     * either, dropped the row the cursor names, and without this read the
+     * history before what it kept is unreachable.
      */
     if (
       (snapshot.representation === "summary" || directPagingAdopted) &&
@@ -2453,13 +2468,26 @@ export class NativeAgentTranscriptProjection {
       snapshot.historyStartIndex === undefined
         ? normalized.messages.length === snapshot.messages.length && droppedProjectedMessages === 0
         : boundedStartIndex !== undefined && boundedStartIndex <= snapshot.historyStartIndex;
+    /*
+     * Otherwise the provider names a cursor for the first row the view kept
+     * (or, for a provider that pages by message, the first kept row a page can
+     * end at). Rows between the view's start and that position come back on
+     * the first page as well, and the client deduplicates them by id; rows the
+     * bound dropped come back after them. Without this, the client could only
+     * page by minting a joined cursor, a whole transcript read (0232).
+     */
+    const providerHistoryCursor = !snapshot.historyCursor
+      ? undefined
+      : viewStartsAtSnapshot
+        ? snapshot.historyCursor
+        : firstNamedCursor(bounded.messages, snapshot.historyCursorBefore);
     const directHistoryCursor =
-      snapshot.historyCursor && snapshot.historyEpoch !== undefined && viewStartsAtSnapshot
+      providerHistoryCursor && snapshot.historyEpoch !== undefined
         ? encodeDirectHistoryCursor({
             sessionKey,
             providerSessionId,
             historyEpoch: snapshot.historyEpoch,
-            providerCursor: snapshot.historyCursor,
+            providerCursor: providerHistoryCursor,
           })
         : undefined;
     const localPageable =

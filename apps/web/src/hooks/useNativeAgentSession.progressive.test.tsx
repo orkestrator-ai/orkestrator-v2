@@ -3089,3 +3089,217 @@ test("an overflow delta trims a remount's reconstructed held view before accepti
   );
   expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
 });
+
+/**
+ * Views whose own byte bound dropped rows the provider sent. The backend names
+ * a direct cursor at the first row the view kept (0232), so Load earlier pages
+ * straight from the provider; the joined sync-v1 mint, a whole transcript
+ * read, is never asked (its mock throws if it is).
+ */
+describe("direct cursors a bounded view names", () => {
+  const boundedWindow = (limit: number, omittedMessages: number) => ({
+    limit,
+    truncated: true,
+    truncationReason: "bytes" as const,
+    omittedMessages,
+    canLoadEarlier: true,
+  });
+
+  test("a byte-bounded view pages from the first row it kept", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m4"), message("m5")], {
+          historyCursor: "direct-before-m4",
+          historyPaging: "direct",
+          messageWindow: boundedWindow(2, 4),
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [
+      () => ({
+        ...historyPage([message("m2"), message("m3")], { nextCursor: "direct-before-m2" }),
+        historyEpoch: "epoch-1",
+      }),
+      () => ({ ...historyPage([message("m0"), message("m1")]), historyEpoch: "epoch-1" }),
+    ];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m2",
+      "m3",
+      "m4",
+      "m5",
+    ]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+    expect(messagePageCalls).toEqual([
+      { before: "direct-before-m4" },
+      { before: "direct-before-m2" },
+    ]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m0",
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+      "m5",
+    ]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeFalsy();
+  });
+
+  test("an OpenCode window that starts inside a message pages from the next message", async () => {
+    // The view kept only the error row of m3; a page can end only before a
+    // whole OpenCode message, so the cursor names m4 and the first page
+    // returns m3 with its error row again.
+    const openCode = { ...identity, platform: "opencode" as const };
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("error-opencode-m3"), message("m4")], {
+          identity: openCode,
+          historyCursor: "direct-before-m4",
+          historyPaging: "direct",
+          messageWindow: boundedWindow(2, 3),
+        }),
+    ];
+    stateUpdates = [
+      () =>
+        stateSnapshot("state-1", {
+          identity: openCode,
+          capabilities: nativeAgentCapabilities("opencode"),
+        }),
+    ];
+    messagePages = [
+      () => ({
+        ...historyPage([message("m1"), message("m2"), message("m3"), message("error-opencode-m3")]),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    const { result } = renderHook(() =>
+      useNativeAgentSession<TestMessage>({
+        platform: "opencode",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive: true,
+        enabled: true,
+      }),
+    );
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+    expect(messagePageCalls).toEqual([{ before: "direct-before-m4" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "error-opencode-m3",
+      "m4",
+    ]);
+  });
+
+  test("after a prefix collapse a click pages from the bounded tail's own cursor", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m4"), message("m5")], {
+          historyCursor: "direct-before-m4",
+          historyPaging: "direct",
+          messageWindow: boundedWindow(2, 4),
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [
+      () => ({
+        ...historyPage([message("m3")], { nextCursor: "direct-before-m3" }),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4", "m5"]);
+
+    // The tail jumps past every row the tab holds: the held cursor would page
+    // from before m3 and skip m4..m7, so the new tail's cursor replaces it.
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-2", [message("m8"), message("m9")], {
+          historyCursor: "direct-before-m8",
+          historyPaging: "direct",
+          messageWindow: boundedWindow(2, 8),
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m8", "m9"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    messagePageCalls = [];
+    messagePages = [
+      () => ({
+        ...historyPage([message("m6"), message("m7")], { nextCursor: "direct-before-m6" }),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+    expect(messagePageCalls).toEqual([{ before: "direct-before-m8" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m6",
+      "m7",
+      "m8",
+      "m9",
+    ]);
+  });
+
+  test("the first page leaves the rows on screen as they were and only adds above them", async () => {
+    const onScreen = [message("m4", "four"), message("m5", "five")];
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", onScreen, {
+          historyCursor: "direct-before-m4",
+          historyPaging: "direct",
+          messageWindow: boundedWindow(2, 4),
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [
+      () => ({
+        ...historyPage([message("m2"), message("m3")], { nextCursor: "direct-before-m2" }),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    const before = result.current.projection!.messages;
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    // The held place is the rows already on screen: same rows, same order,
+    // same content, with the page above them. The list keeps its anchor on
+    // them (`useHeldTranscriptPlace`); the browser spec checks the pixels.
+    const after = result.current.projection!.messages;
+    expect(after.slice(-before.length)).toEqual(before);
+    expect(after.slice(0, -before.length).map(({ id }) => id)).toEqual(["m2", "m3"]);
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+  });
+});

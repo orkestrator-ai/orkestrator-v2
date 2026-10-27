@@ -23,7 +23,11 @@ const identity = {
   logicalSessionKey: "env-env-1:opencode-history",
 };
 
-function openCodeProviderStub(server: ReturnType<typeof openCodeHistoryServer>) {
+function openCodeProviderStub(
+  server: ReturnType<typeof openCodeHistoryServer>,
+  /** Scales the byte target the snapshot windows to, as a measure that undercounts would. */
+  windowBytesScale = 1,
+) {
   const history = { epoch: 1, revision: 1 };
   const messages = mock(async () => {
     throw new Error("a paged OpenCode view must not take the legacy read");
@@ -44,7 +48,7 @@ function openCodeProviderStub(server: ReturnType<typeof openCodeHistoryServer>) 
           title: () => undefined,
           recordUnknown: () => undefined,
         },
-        options,
+        { ...options, targetBytes: options.targetBytes * windowBytesScale },
       ),
     transcriptPage: async (_sessionId, options) =>
       openCodeTranscriptPage(
@@ -181,6 +185,48 @@ describe("OpenCode history through the native projection", () => {
           cursor = page.nextCursor;
         }
         expect(ids).toEqual(server.messages.map((message) => message.info.id));
+      },
+    );
+  });
+
+  test("a window the view cannot hold whole pages directly from the first message it kept", async () => {
+    // Snapshot windows measured against twice the live target: the view's own
+    // byte bound then drops the oldest steps the snapshot sent.
+    const server = openCodeHistoryServer(200, (index) => `${index}:`.padEnd(8_000, "x"));
+    const { stub, messages, interactiveSnapshot } = openCodeProviderStub(server, 2);
+    await withService(
+      { prefix: "orkestrator-opencode-history-bounded-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const ids = update.value.messages.map((entry) => (entry as { id: string }).id);
+        expect(ids.length).toBeLessThan(100);
+        expect(update.value.historyPaging).toBe("direct");
+        expect(update.value.messageWindow?.canLoadEarlier).toBe(true);
+        let cursor = update.value.historyCursor;
+        let pages = 0;
+        while (cursor) {
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: cursor,
+            limit: 60,
+          });
+          ids.unshift(...page.messages.map((entry) => (entry as { id: string }).id));
+          cursor = page.nextCursor;
+          pages += 1;
+          expect(pages).toBeLessThan(20);
+        }
+        expect(ids).toEqual(server.messages.map((message) => message.info.id));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(messages).not.toHaveBeenCalled();
+        expect(interactiveSnapshot).not.toHaveBeenCalled();
       },
     );
   });

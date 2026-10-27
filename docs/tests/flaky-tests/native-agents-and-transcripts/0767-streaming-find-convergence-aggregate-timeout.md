@@ -16,3 +16,13 @@
 - **Disposition:** open.
 - **Evidence:** single observation, in the nine-worker component suite.
 - **Next step:** run the owner with two workers and `--repeat-each=5` to see whether it reproduces without the nine-worker suite; if not, and it does not recur, reclassify it as environmental (see [0382](../web-ui/0382-component-browser-parallel-load.md)).
+
+## Recurrence during search review fixes, 2026-10-27
+
+The nine-worker component run reproduced the same unresolved-versus-converged
+five-second failure on mobile. The original case passed in the complete
+one-worker owner rerun, but that owner failed two different reflow cases
+(mobile detached reader and desktop follower). This follow-up therefore does
+not establish a complete isolated owner pass. Commands, counts, and artifacts
+are recorded in [1126](../aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md#review-fix-validation-2026-10-27).
+Status remains open; no assertion, timeout, or skip changed.

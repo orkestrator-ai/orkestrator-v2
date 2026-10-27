@@ -253,9 +253,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * Ask the bridge whether it already holds this request id.
    *
    * Answers `dispatched` only on an explicit positive from the bridge's own
-   * dispatch journal. A missing route, an unknown session, an unparseable body
-   * and a record lost to a bridge restart all read as `unknown`, because none
-   * of them is evidence that the prompt did not run.
+   * dispatch journal, and `absent` only on the bridge's explicit proof that the
+   * id never reached it. A missing route, an unknown session and an
+   * unparseable body all read as `unknown`, because none of them is evidence
+   * that the prompt did not run.
    */
   async dispatchStatus(sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
     const response = await bridgeFetch(
@@ -272,8 +273,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     // The additive flag preserves `dispatched` for older backends, while a
     // newer backend can distinguish a pending turn from a completed one.
     if (body?.dispatch === "dispatched" && body.pending === true) return "pending";
-    // `lost` is additive: a bridge that predates it answers `unknown` there.
-    return body?.dispatch === "dispatched" || body?.dispatch === "lost" ? body.dispatch : "unknown";
+    // `lost` and `absent` are additive: a bridge that predates them answers
+    // `unknown` there.
+    return body?.dispatch === "dispatched" ||
+      body?.dispatch === "lost" ||
+      body?.dispatch === "absent"
+      ? body.dispatch
+      : "unknown";
   }
 
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {

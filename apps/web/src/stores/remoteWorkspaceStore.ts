@@ -1,4 +1,12 @@
 import { create } from "zustand";
+import {
+  environmentKey,
+  environmentRef,
+  projectKey,
+  projectRef,
+  type BackendId,
+} from "@orkestrator/protocol/federation";
+import { useMachineViewStore } from "./machineViewStore";
 import type {
   RealmPanel,
   RealmSelectRequest,
@@ -138,6 +146,7 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
       panelRequests: pick(get().panelRequests, realms),
     });
     clearLocalSelection();
+    noteRemoteSelection(nodeId, request.projectId ?? null, request.environmentId ?? null);
   },
   showLocal: () => {
     if (get().active) set({ active: null });
@@ -152,6 +161,7 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
       return;
     }
     set({ active: { nodeId, ...selection } });
+    noteRemoteSelection(nodeId, selection.projectId, selection.environmentId);
   },
   closeRealm: (nodeId) => {
     const { active, realms, requests, titleBars, panelRequests } = get();
@@ -192,6 +202,24 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
     });
   },
 }));
+
+/** Shell-owned bookkeeping also covers navigation reported by the active realm. */
+function noteRemoteSelection(
+  nodeId: string,
+  projectId: string | null,
+  environmentId: string | null,
+): void {
+  const views = useMachineViewStore.getState();
+  const backendId = nodeId as BackendId;
+  const selectedProjectKey = projectId ? projectKey(projectRef(backendId, projectId)) : null;
+  views.recordRecent([
+    ...(environmentId ? [environmentKey(environmentRef(backendId, environmentId))] : []),
+    ...(selectedProjectKey ? [selectedProjectKey] : []),
+  ]);
+  if (environmentId || views.revealedProject?.key !== selectedProjectKey) {
+    views.revealProject(null);
+  }
+}
 
 function clearLocalSelection(): void {
   const ui = useUIStore.getState();

@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 import type { SidebarGrouping } from "@/lib/federation/aggregate";
 
 const MAX_COLLAPSED_ENTRIES = 2048;
+/** Recently used projects and environments, newest first, across machines. */
+export const MAX_RECENT_KEYS = 64;
 
 function toggled(list: readonly string[], key: string, collapsed?: boolean): string[] {
   const has = list.includes(key);
@@ -49,6 +51,19 @@ interface MachineViewState {
   seededMachines: string[];
   knownProjectKeys: string[];
   knownFolderKeys: string[];
+  /**
+   * Node-qualified project and environment keys (`projectKey`,
+   * `environmentKey`), most recently used first, on any machine. The project
+   * search ranks by it. View state of this client only, like the sidebar's
+   * own recent projects, and never resolved against this window's stores.
+   */
+  recentKeys: string[];
+  /**
+   * The other machine's project the search last revealed, highlighted in the
+   * sidebar until something else is selected. `revision` re-scrolls to it
+   * when the same project is chosen again. Not persisted.
+   */
+  revealedProject: { key: string; revision: number } | null;
   setMachineFilter: (filter: string) => void;
   setGrouping: (grouping: Exclude<SidebarGrouping, "activity">) => void;
   setCompactMachineLabels: (compact: boolean) => void;
@@ -57,6 +72,16 @@ interface MachineViewState {
   setFolderKeyCollapsed: (key: string, collapsed?: boolean) => void;
   /** Replaces one machine's collapsed projects and folders. */
   setMachineCollapseState: (machineId: string, state: MachineCollapseState) => void;
+  /** Moves keys to the front of `recentKeys`, the first one newest. */
+  recordRecent: (keys: readonly string[]) => void;
+  revealProject: (key: string | null) => void;
+}
+
+export function withRecentKeys(list: readonly string[], keys: readonly string[]): string[] {
+  const fresh = keys.filter((key, index) => key && keys.indexOf(key) === index);
+  if (fresh.length === 0) return list as string[];
+  if (fresh.every((key, index) => list[index] === key)) return list as string[];
+  return [...fresh, ...list.filter((key) => !fresh.includes(key))].slice(0, MAX_RECENT_KEYS);
 }
 
 /**
@@ -79,6 +104,8 @@ export const useMachineViewStore = create<MachineViewState>()(
       seededMachines: [],
       knownProjectKeys: [],
       knownFolderKeys: [],
+      recentKeys: [],
+      revealedProject: null,
       setMachineFilter: (machineFilter) => set({ machineFilter }),
       setGrouping: (grouping) => set({ grouping }),
       setCompactMachineLabels: (compactMachineLabels) => set({ compactMachineLabels }),
@@ -123,6 +150,22 @@ export const useMachineViewStore = create<MachineViewState>()(
               : [...state.seededMachines, machineId].slice(-MAX_COLLAPSED_ENTRIES),
           };
         }),
+      recordRecent: (keys) =>
+        set((state) => {
+          const recentKeys = withRecentKeys(state.recentKeys, keys);
+          return recentKeys === state.recentKeys ? state : { recentKeys };
+        }),
+      revealProject: (key) =>
+        set((state) =>
+          key === null && state.revealedProject === null
+            ? state
+            : {
+                revealedProject:
+                  key === null
+                    ? null
+                    : { key, revision: (state.revealedProject?.revision ?? 0) + 1 },
+              },
+        ),
     }),
     {
       name: "machine-view-storage",
@@ -136,6 +179,7 @@ export const useMachineViewStore = create<MachineViewState>()(
         seededMachines: state.seededMachines,
         knownProjectKeys: state.knownProjectKeys,
         knownFolderKeys: state.knownFolderKeys,
+        recentKeys: state.recentKeys,
       }),
     },
   ),

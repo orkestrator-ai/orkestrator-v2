@@ -79,14 +79,48 @@ export async function createOrRecoverSession(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
   const stableId = sessionIdForClientKey(clientSessionKey);
+  let journal: Partial<SessionState> = {};
   if (stableId) {
     const existing = sessions.get(stableId) ?? (await ensurePersistedSession(stableId));
     if (existing) {
       existing.executionPolicy = policy;
       return existing;
     }
+    journal = await stableIdDispatchJournal(stableId);
   }
+  const resident = stableId ? sessions.get(stableId) : undefined;
   const created = createSession(title, clientSessionKey);
+  // Only a state this call created takes the journal read above; one a
+  // concurrent request registered meanwhile already has its own.
+  if (!resident) Object.assign(created, journal);
   created.executionPolicy = policy;
   return created;
+}
+
+/**
+ * The prompt journal a client-key id may already have with no SDK rollout to
+ * recover (a claim written before its turn reached the CLI). Its ids are
+ * restored, so they are refused as lost rather than run again, and the
+ * session is complete only with no file at all or one that says so.
+ */
+async function stableIdDispatchJournal(stableId: string): Promise<Partial<SessionState>> {
+  const sdkSessionId = core.sdkSessionIdFromBridgeId(stableId);
+  if (!sdkSessionId) return {};
+  let preferences: SessionPreferences | undefined;
+  try {
+    preferences = await readSessionPreferences(sdkSessionId);
+  } catch {
+    return {};
+  }
+  if (!preferences) return { dispatchJournalComplete: true };
+  if (sessionPreferencesUnavailable(preferences)) return { dispatchJournalUnavailable: true };
+  return {
+    ...(preferences.dispatchedRequestIds?.length
+      ? {
+          dispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
+          restoredDispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
+        }
+      : {}),
+    ...(preferences.dispatchJournalComplete === true ? { dispatchJournalComplete: true } : {}),
+  };
 }

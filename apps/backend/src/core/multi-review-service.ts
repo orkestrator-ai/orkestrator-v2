@@ -1,3 +1,4 @@
+import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import {
   newReviewValidationRun,
   parseReviewValidationPlan,
@@ -3990,10 +3991,25 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (request.state === "dispatching") {
       // Only this request's acceptance can settle a recovered dispatch intent.
       // An idle/error session may still describe its superseded request.
-      const acceptance = await provider
-        .dispatchStatus?.(session.providerSessionId, request.requestId)
-        .catch(() => "unknown" as const);
+      const acceptance = await recoveredDispatchAcceptance(
+        provider,
+        session.providerSessionId,
+        request.requestId,
+        request.resultTransport === "tool-v1"
+          ? () => this.options.workflowResults?.structured<unknown>(request.requestId)
+          : undefined,
+      );
       await this.assertFence(workflow.id, token);
+      if (acceptance === "absent") {
+        // Proven never delivered: back to `prepared`, as after a send refused
+        // before the prompt was written, so the next pass sends it again under
+        // the same id.
+        delete request.idleResultPolls;
+        this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
+        request.state = "prepared";
+        await this.save(workflow, token);
+        return;
+      }
       if (acceptance !== "dispatched" && acceptance !== "pending") {
         const scope = `${request.requestId}\0idle`;
         if (!this.countPoll(workflow.id, scope)) return;

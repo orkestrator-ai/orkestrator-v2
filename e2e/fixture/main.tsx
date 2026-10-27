@@ -2,6 +2,7 @@ import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
 import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
+import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
@@ -1015,6 +1016,7 @@ function installMobileAppShellFixture() {
 
 function MobileAppShellFixture() {
   const [dragStarts, setDragStarts] = useState(0);
+  const [workspaceClicks, setWorkspaceClicks] = useState(0);
   const withoutInbox = new URLSearchParams(window.location.search).has("withoutInbox");
 
   return (
@@ -1036,10 +1038,19 @@ function MobileAppShellFixture() {
         filesPanel={<div>Files</div>}
         onTitleBarMouseDown={() => setDragStarts((count) => count + 1)}
       >
-        <div>Workspace</div>
+        <button
+          type="button"
+          className="h-full w-full"
+          onClick={() => setWorkspaceClicks((count) => count + 1)}
+        >
+          Workspace action
+        </button>
       </MobileAppShellLayout>
       <output data-testid="mobile-shell-drag-starts" className="sr-only">
         {dragStarts}
+      </output>
+      <output data-testid="mobile-shell-workspace-clicks" className="sr-only">
+        {workspaceClicks}
       </output>
     </main>
   );
@@ -1812,6 +1823,8 @@ function fixtureForPath() {
     );
   }
   if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/project-search-machines")
+    return <ProjectSearchMachinesFixture />;
   if (window.location.pathname === "/environment-status-marker")
     return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;

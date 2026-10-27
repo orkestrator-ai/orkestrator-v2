@@ -431,6 +431,18 @@ export async function route(
    * lost its acknowledgement can settle the question from the journal instead
    * of asking the user to. `dispatched` is only ever an explicit positive;
    * `lost` is exactly the prompt route's 410 `DISPATCH_OUTCOME_LOST_KIND`.
+   *
+   * `absent` asserts the id never reached the agent, in this process or an
+   * earlier one, so the caller may send it again under the same id. It needs
+   * no entry for the id in a journal that is complete for the session
+   * (`promptJournalComplete`: created by this bridge, every entry still in
+   * memory and on disk, the prompt route's awaited write before every
+   * handover), a session that is not closing, and an id the prompt route would
+   * journal as given. The duplicate check and the `prepared` entry run in one
+   * synchronous step, so a send already in flight and the re-send it licenses
+   * still dispatch only once. The write is not fsync'd, so the proof covers a
+   * bridge restart, not an OS crash. Everything else without an entry is
+   * `unknown`.
    */
   if (action === "dispatch" && request.method === "GET") {
     const requestId = url.searchParams.get("requestId") || "";
@@ -445,7 +457,9 @@ export async function route(
         ? "dispatched"
         : entry?.state === "ambiguous"
           ? "lost"
-          : "unknown";
+          : !entry && promptJournalProvesAbsent(state, requestId)
+            ? "absent"
+            : "unknown";
     return json(response, 200, {
       dispatch,
       // How the turn ended, once it has: the backend's `turnTerminalError`.
@@ -616,7 +630,7 @@ export async function route(
     if (state.subagentLimitExceeded) {
       return json(response, 409, { error: "Session exceeded the active sub-agent limit" });
     }
-    if (Buffer.byteLength(requestId) > 512)
+    if (Buffer.byteLength(requestId) > MAX_PROMPT_REQUEST_ID_BYTES)
       return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
       const journaled = state.promptJournal.get(requestId)!;
@@ -1099,6 +1113,24 @@ function decodePathSegment(segment: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** The longest `requestId` the prompt route journals; a longer one is refused. */
+const MAX_PROMPT_REQUEST_ID_BYTES = 512;
+
+/**
+ * Whether `/dispatch` may answer `absent` for an id the journal has no entry
+ * for. The id must be one the prompt route would journal unchanged (it trims
+ * and caps ids), or "no entry" would be about a different id.
+ */
+function promptJournalProvesAbsent(state: SessionState, requestId: string): boolean {
+  return (
+    state.promptJournalComplete === true &&
+    !state.closing &&
+    requestId.length > 0 &&
+    requestId === requestId.trim() &&
+    Buffer.byteLength(requestId) <= MAX_PROMPT_REQUEST_ID_BYTES
+  );
 }
 
 function storeAgentMcp(state: SessionState, value: unknown): void {

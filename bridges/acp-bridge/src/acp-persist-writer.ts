@@ -143,7 +143,13 @@ export function persistedSnapshot(): PersistedState {
         if (isUnfinished !== unfinished) continue;
         const entry = isUnfinished ? { ...rawEntry, state: "ambiguous" as const } : rawEntry;
         const bytes = Buffer.byteLength(JSON.stringify(entry));
-        if (retainedPromptJournalBytes + bytes > MAX_PERSISTED_PROMPT_JOURNAL_BYTES) continue;
+        if (retainedPromptJournalBytes + bytes > MAX_PERSISTED_PROMPT_JOURNAL_BYTES) {
+          // Off disk, so a restart could not tell this id was ever taken.
+          // Cleared before the flag is read below, so this very write already
+          // records the session as incomplete.
+          state.promptJournalComplete = false;
+          continue;
+        }
         retained.unshift(entry);
         retainedPromptJournalBytes += bytes;
       }
@@ -194,6 +200,7 @@ export function persistedSnapshot(): PersistedState {
       revision: state.revision,
       structured: structuredBySession.get(state.id) ?? [],
       promptJournal: promptJournalBySession.get(state.id) ?? [],
+      ...(state.promptJournalComplete === true ? { promptJournalComplete: true as const } : {}),
       ...(grokInterjectionBySession.get(state.id)!.length > 0
         ? { grokInterjectionJournal: grokInterjectionBySession.get(state.id)! }
         : {}),

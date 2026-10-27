@@ -124,6 +124,10 @@ export async function createSession(
 
   const work = (async () => {
     const state = newSessionState(clientSessionKey, resolveCursorExecutionPolicy(policy));
+    // The only session whose journal starts complete: it has no agent id, so
+    // its first attach creates a new SDK agent that nothing but this journal
+    // has ever sent to. Resume and restore never set this here.
+    state.promptJournalComplete = true;
     if (typeof readOnly === "boolean") state.readOnly = readOnly;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposer(state.composer);

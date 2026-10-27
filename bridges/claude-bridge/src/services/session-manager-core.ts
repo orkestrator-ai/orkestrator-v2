@@ -1633,6 +1633,9 @@ export function createSession(title?: string, clientSessionKey?: string): Sessio
     status: "idle",
     createdAt: now,
     lastActivity: now,
+    // A fresh random id has never had a journal anywhere. A client-key id may
+    // name one an earlier process wrote; `createOrRecoverSession` decides.
+    ...(clientSessionKey === undefined ? { dispatchJournalComplete: true } : {}),
   };
 
   sessions.set(id, session);
@@ -1677,9 +1680,13 @@ export async function persistSessionMetadata(
     }));
   }
   if (session.dispatchedRequestIds?.size) {
+    if (session.dispatchedRequestIds.size > MAX_DISPATCHED_REQUEST_IDS) {
+      session.dispatchJournalComplete = false;
+    }
     update.dispatchedRequestIds = [...session.dispatchedRequestIds].slice(
       -MAX_DISPATCHED_REQUEST_IDS,
     );
+    update.dispatchJournalComplete = session.dispatchJournalComplete === true ? true : undefined;
   }
   if (Object.keys(update).length === 0) return;
   await updateSessionPreferences(sdkSessionId, update);

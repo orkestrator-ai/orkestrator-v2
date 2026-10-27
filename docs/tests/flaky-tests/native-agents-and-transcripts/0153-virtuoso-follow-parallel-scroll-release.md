@@ -106,3 +106,8 @@ assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name follow-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/resume-follow-owner` passed (4.2 s logged).
 - **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
 - **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.
+
+
+## Mobile-title coverage review — 2026-10-27
+
+The nine-worker component suite repeated the desktop small-wheel `false` instead of `auto` assertion. The complete unchanged owner passed with one worker in 9.5 seconds. Exact command, aggregate counts and related failure evidence are in [1155](../aggregate-validation-runs/1155-webkit-title-tooltip-0202-validation.md#coverage-review-validation--2026-10-27). No follow implementation, assertion, timeout or skip changed.

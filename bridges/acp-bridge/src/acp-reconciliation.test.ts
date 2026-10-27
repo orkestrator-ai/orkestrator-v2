@@ -911,11 +911,12 @@ describe("ACP bridge", () => {
     const first = await firstPending;
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ error: "fake agent cannot load that session" });
+    // Released before it reached the agent, so the id provably never arrived.
     expect(
       await nativeFetch(`${bridge.base}/session/${created.id}/dispatch?requestId=retry-me`, {
         headers: bridge.headers,
       }).then((response) => response.json()),
-    ).toEqual({ dispatch: "unknown" });
+    ).toEqual({ dispatch: "absent" });
     // The turn provably never ran, so the claim must be released rather than
     // leaving the requestId permanently journaled as a duplicate.
     const second = await send();

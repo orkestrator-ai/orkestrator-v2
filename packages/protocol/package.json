@@ -86,6 +86,7 @@
     "./multi-review": "./src/multi-review.ts",
     "./multi-review-launch": "./src/multi-review-launch.ts",
     "./native-agent": "./src/native-agent.ts",
+    "./native-terminal-rows": "./src/native-terminal-rows.ts",
     "./native-agent-observation": "./src/native-agent-observation.ts",
     "./native-agent-transcript-patch": "./src/native-agent-transcript-patch.ts",
     "./network-allowlist": "./src/network-allowlist.ts",

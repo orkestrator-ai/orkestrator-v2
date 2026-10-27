@@ -3,6 +3,7 @@ import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollo
 import { BridgeSessionStore } from "./sessions/persistence.js";
 import { readPersistedSessionTitleEntries } from "./session-titles.js";
 import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
+import { CODEX_LOGIN_REFUSED_MESSAGE } from "./sessions/auth-recovery-notice.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
@@ -124,6 +125,194 @@ describe("turn-time auth notice", () => {
     await waitUntil(
       () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
       "a successful sign-in did not clear the auth notice",
+    );
+  });
+});
+
+describe("refused-login auth notice", () => {
+  const refusedError = (codexErrorInfo: unknown) => ({
+    message: "unexpected status 401 Unauthorized: Incorrect API key provided: sk-fake***1234.",
+    codexErrorInfo,
+  });
+
+  async function failTurn(error: unknown, turnId = "turn-1", requestId = "req-refused") {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      "turn/start": () => ({ turn: { id: turnId } }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hi", requestId, attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: turnId, status: "failed", error },
+    });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.phase === "failed",
+      "the refused turn did not fail",
+    );
+    return { h, sessionId };
+  }
+
+  test("replacement device login survives refused-account polling, cancellation, and matching completion", async () => {
+    let attempt = 0;
+    const h = await harness({
+      "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
+      "account/login/start": () => ({
+        loginId: `replacement-${++attempt}`,
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "REPLACEMENT-CODE",
+      }),
+      "account/login/cancel": () => ({ status: "canceled" }),
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+    });
+    try {
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "refused", attachments: [] });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "failed", error: refusedError("unauthorized") },
+      });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.authNotice?.state === "needs-auth",
+        "refusal missing",
+      );
+      await h.runtime.beginAuthLogin("device-code");
+      const pending = await h.runtime.readAuthStatus();
+      expect(pending).toMatchObject({
+        account: { type: "apiKey" },
+        pendingSignIn: { code: "REPLACEMENT-CODE" },
+      });
+      expect(await h.runtime.readAuthStatus()).toEqual(pending);
+      h.child().notify("account/login/completed", { loginId: "prior-login", success: true });
+      await h.drain();
+      expect(await h.runtime.readAuthStatus()).toEqual(pending);
+      expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+      expect(await h.runtime.cancelAuthLogin()).toBe("canceled");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual([
+        { method: "account/login/cancel", params: { loginId: "replacement-1" } },
+      ]);
+      expect(await h.runtime.readAuthStatus()).not.toHaveProperty("pendingSignIn");
+      expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+      await h.runtime.beginAuthLogin("device-code");
+      h.child().notify("account/login/completed", { loginId: "replacement-2", success: true });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+        "matching sign-in did not unlock session",
+      );
+      expect(await h.runtime.readAuthStatus()).not.toHaveProperty("pendingSignIn");
+    } finally {
+      await h.runtime.stop();
+    }
+  });
+
+  test("a turn failed with a 401 asks for a sign-in until the user signs in", async () => {
+    const { h, sessionId } = await failTurn(
+      refusedError({ httpConnectionFailed: { httpStatusCode: 401 } }),
+    );
+    const notice = h.runtime.getStatus(sessionId)?.authNotice;
+    expect(notice).toMatchObject({
+      state: "needs-auth",
+      message: CODEX_LOGIN_REFUSED_MESSAGE,
+    });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.updated" &&
+          event.sessionId === sessionId &&
+          (event.data as { authNotice?: unknown }).authNotice === notice,
+      ),
+    ).toBe(true);
+    // The reason stays on the session and on the turn's last row.
+    expect(h.runtime.getStatus(sessionId)?.error).toContain("401 Unauthorized");
+    expect(
+      ((await h.runtime.getMessages(sessionId)) ?? [])
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.parts),
+    ).toEqual([
+      {
+        type: "status",
+        severity: "error",
+        content: "unexpected status 401 Unauthorized: Incorrect API key provided: sk-fake***1234.",
+      },
+    ]);
+
+    h.child().notify("account/login/completed", { loginId: "login-1", success: true });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "a successful sign-in did not clear the refused-login notice",
+    );
+  });
+
+  test.each([
+    [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }],
+    [{ responseStreamDisconnected: { httpStatusCode: 401 } }],
+    [{ responseTooManyFailedAttempts: { httpStatusCode: 401 } }],
+    ["unauthorized"],
+  ] as const)("a failure with %p is a refused login", async (info) => {
+    const { h, sessionId } = await failTurn(refusedError(info));
+    expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+  });
+
+  test.each([
+    [{ httpConnectionFailed: { httpStatusCode: null } }],
+    [{ httpConnectionFailed: { httpStatusCode: 503 } }],
+    [{ responseStreamDisconnected: { httpStatusCode: 500 } }],
+    [{ responseStreamConnectionFailed: { httpStatusCode: 403 } }],
+    ["internalServerError"],
+    [undefined],
+  ] as const)("a failure with %p never locks the tab behind a sign-in", async (info) => {
+    const { h, sessionId } = await failTurn({
+      message: "stream disconnected",
+      codexErrorInfo: info,
+    });
+    expect(h.runtime.getStatus(sessionId)?.authNotice).toBeUndefined();
+  });
+
+  test("a second refusal keeps the occurrence, and a completed turn clears it", async () => {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      "turn/start": (() => {
+        let turn = 0;
+        return () => ({ turn: { id: `turn-${++turn}` } });
+      })(),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const refuse = async (turnId: string, requestId: string) => {
+      await h.runtime.prompt(sessionId, { prompt: "hi", requestId, attachments: [] });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: {
+          id: turnId,
+          status: "failed",
+          error: refusedError({ httpConnectionFailed: { httpStatusCode: 401 } }),
+        },
+      });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.phase === "failed",
+        `${turnId} did not fail`,
+      );
+    };
+    await refuse("turn-1", "req-1");
+    const first = h.runtime.getStatus(sessionId)?.authNotice;
+    expect(first?.state).toBe("needs-auth");
+    await refuse("turn-2", "req-2");
+    // A notice the user dismissed stays dismissed for the same refusal.
+    expect(h.runtime.getStatus(sessionId)?.authNotice?.occurrenceId).toBe(first!.occurrenceId);
+
+    await h.runtime.prompt(sessionId, { prompt: "again", requestId: "req-3", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-3", status: "completed" },
+    });
+    await h.drain();
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+      "a completed turn did not clear the refused-login notice",
     );
   });
 });

@@ -55,7 +55,7 @@ import {
   sdkSessionInfo,
   sendPrompt,
   sessionIdForClientKey,
-  sessionManagerTestHome,
+  releaseTemporaryClaudeHome,
   setClaudeHomeForTesting,
   setSessionPreferences,
   startIdleTranscriptSweep,
@@ -249,8 +249,7 @@ describe("reconcilePersistedSessions", () => {
       expect(getSession(alias)).toMatchObject({ sdkSessionId });
       expect(getSession(`session-${sdkSessionId}`)).toBeUndefined();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -394,8 +393,38 @@ describe("reconcilePersistedSessions", () => {
       );
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
+    }
+  });
+
+  test("restores journal completeness only from a marked journal, on both restore paths", async () => {
+    for (const marked of [true, false]) {
+      const directory = await mkdtemp(join(tmpdir(), "claude-restore-complete-"));
+      setClaudeHomeForTesting(directory);
+      try {
+        await updateSessionPreferences(PERSISTED_SDK_ID, {
+          dispatchedRequestIds: ["before-restart"],
+          ...(marked ? { dispatchJournalComplete: true as const } : {}),
+        });
+        mockSdkListSessions.mockImplementation(async () => [
+          sdkSessionInfo({ cwd: "/repo/env-a" }),
+        ]);
+        await withWorkspaceCwd("/repo/env-a", async () => {
+          await reconcilePersistedSessions();
+        });
+        const id = track(`session-${PERSISTED_SDK_ID}`);
+        expect(getSession(id)?.dispatchJournalComplete).toBe(marked ? true : undefined);
+        expect(getSession(id)?.restoredDispatchedRequestIds?.has("before-restart")).toBe(true);
+        deleteSession(id);
+
+        const materialized = await materializePersistedSession();
+        expect(materialized.dispatchJournalComplete).toBe(marked ? true : undefined);
+        expect(materialized.restoredDispatchedRequestIds?.has("before-restart")).toBe(true);
+        deleteSession(materialized.id);
+      } finally {
+        setClaudeHomeForTesting(sessionManagerTestHome);
+        await rm(directory, { recursive: true, force: true });
+      }
     }
   });
 
@@ -426,8 +455,7 @@ describe("reconcilePersistedSessions", () => {
       });
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 
@@ -695,8 +723,7 @@ describe("ensurePersistedSession", () => {
       expect(state.dispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
       expect(state.restoredDispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

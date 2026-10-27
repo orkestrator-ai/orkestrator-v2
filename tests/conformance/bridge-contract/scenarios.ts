@@ -353,20 +353,22 @@ export const CONTRACT_SCENARIOS = [
     },
   },
   {
-    id: "dispatch-probe-unknown",
-    title: "an unknown prompt request id on a known session probes as unknown",
+    id: "dispatch-probe-absent",
+    title: "an unseen prompt request id on a freshly created session probes as absent",
     requires: [],
     async run(bridge) {
       const id = await bridge.createSession();
       const requestId = unseenId("never-sent");
-      // Never `dispatched` (it was not) and never `absent`: this process cannot
-      // prove a request id it has no record of was not taken by a predecessor.
+      // Never `dispatched` (it was not) and never `lost`. A session this bridge
+      // created has a complete journal, so it can prove the id never arrived;
+      // a journal that lost completeness answers `unknown` instead (each
+      // bridge's own tests cover that half).
       expect(
         await bridge.request(
           "GET",
           `/session/${encode(id)}/dispatch?requestId=${encode(requestId)}`,
         ),
-      ).toEqual({ status: 200, body: { dispatch: "unknown" } });
+      ).toEqual({ status: 200, body: { dispatch: "absent" } });
     },
   },
   {

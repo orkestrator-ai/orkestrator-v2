@@ -38,6 +38,12 @@ import {
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import { overlayCommandChanges, readCommandChanges } from "../sessions/command-changes.js";
+import {
+  readTypedPrompt,
+  typedPromptFor,
+  type TypedPromptRecord,
+} from "../sessions/typed-prompts.js";
+import { stripPlanModePreamble } from "../prompts/slash-commands.js";
 import { cellOutputText, codeModeCellOutcome } from "../sessions/refused-cell-tail.js";
 import {
   codeModeMcpCalleeKey,
@@ -896,10 +902,17 @@ function isSyntheticPersistedUserText(text: string): boolean {
  * bounded `<attached-files source="orkestrator">` marker into the prompt text
  * for exactly this reason, and that marker is what rebuilds the attachment
  * rows. An unqualified block is text the user wrote and is left alone.
+ *
+ * A user message shows what the live row showed: the plan-mode preamble the
+ * bridge wrapped it in is stripped exactly, and `typedPrompt`, given the
+ * joined text as sent, answers the typed form of a prompt the bridge rewrote
+ * (a command or a recovered-context turn). Without an answer, the sent text
+ * is shown, which is all a thread from another client has.
  */
 export function extractPersistedMessageContent(
   content: unknown,
   role: MessageRole,
+  options: { typedPrompt?: (sentText: string) => string | undefined } = {},
 ): { text: string; attachments: NormalizedPart[] } | null {
   if (!Array.isArray(content)) {
     return null;
@@ -918,6 +931,43 @@ export function extractPersistedMessageContent(
     return null;
   }
 
+  const joined = segments.join("\n").trim();
+  if (!joined) {
+    return null;
+  }
+
+  const { text, parts } =
+    role === "user"
+      ? extractAttachmentTags(stripCoordinatorContext(stripPlanModePreamble(joined)))
+      : { text: joined, parts: [] as NormalizedPart[] };
+
+  // Codex persists one bridge text item followed by image framing segments
+  // (and input_image data, or a preparation-error segment). The digest covers
+  // the original text item. Try that item only when all remaining text is
+  // balanced image framing and the bridge's attachment marker is present.
+  let imageFraming = false;
+  let insideImage = false;
+  let onlyImageFraming = segments.length > 1 && parts.length > 0;
+  for (const segment of segments.slice(1)) {
+    if (!insideImage) {
+      if (!/^<image name=\[Image #\d+\](?: [^\n>]*)?>$/.test(segment.trim())) {
+        onlyImageFraming = false;
+        break;
+      }
+      insideImage = true;
+      imageFraming = true;
+    } else if (segment.trim() === "</image>") {
+      insideImage = false;
+    }
+  }
+  const sentText = onlyImageFraming && imageFraming && !insideImage ? segments[0]!.trim() : joined;
+  // The stored live row's text is already stripped; user-written tags in it
+  // must not trigger heuristic filtering.
+  const typed = role === "user" ? options.typedPrompt?.(sentText) : undefined;
+  if (typed !== undefined) {
+    return { text: typed, attachments: parts };
+  }
+
   // Codex writes its instructions and environment blocks as separate segments
   // of one message. Judging each segment means a message is dropped only when
   // nothing in it is the user's own text.
@@ -927,16 +977,6 @@ export function extractPersistedMessageContent(
   ) {
     return null;
   }
-
-  const joined = segments.join("\n").trim();
-  if (!joined) {
-    return null;
-  }
-
-  const { text, parts } =
-    role === "user"
-      ? extractAttachmentTags(stripCoordinatorContext(joined))
-      : { text: joined, parts: [] as NormalizedPart[] };
 
   // An attachment-only prompt has no text left after stripping, but it is still
   // a message the user sent.
@@ -1332,6 +1372,11 @@ async function replayPersistedRollout(
     if (!indexed) return null;
   }
 
+  // What the user typed for the turns whose prompt this bridge rewrote; the
+  // rollout holds only what was sent.
+  const codexHome = getCodexHomeDir();
+  let typedPrompt: TypedPromptRecord | undefined;
+  let typedPromptConsumed = false;
   const isCollaborationRecord = createCollaborationRecordFilter();
   const collaborationRecords: TranscriptRecord[] = [];
   /**
@@ -1616,6 +1661,7 @@ async function replayPersistedRollout(
     if (recordTurnId && recordTurnId !== currentTurnId) {
       settleOpenCells();
       currentTurnId = recordTurnId;
+      typedPromptConsumed = false;
       currentTurnModel = undefined;
       closeAssistantRow();
     }
@@ -1730,7 +1776,16 @@ async function replayPersistedRollout(
         : null;
     if (!role) return;
 
-    const persisted = extractPersistedMessageContent(payload.content, role);
+    const persisted = extractPersistedMessageContent(payload.content, role, {
+      typedPrompt: (sentText) => {
+        if (typedPromptConsumed) return undefined;
+        const typed = typedPromptFor(typedPrompt, sentText);
+        // A steer can repeat the initial prompt's wire text. Only the first
+        // matching chronological occurrence belongs to the accepted prompt.
+        if (typed !== undefined) typedPromptConsumed = true;
+        return typed;
+      },
+    });
     if (!persisted) return;
     const { text, attachments } = persisted;
 
@@ -1764,8 +1819,12 @@ async function replayPersistedRollout(
   };
 
   let recordIndex = 0;
-  const replayed = await forEachTranscriptBatch(snapshot, (records) => {
+  const replayed = await forEachTranscriptBatch(snapshot, async (records) => {
     for (const record of records) {
+      const turnId = readTurnId(record.payload);
+      if (turnId && turnId !== currentTurnId) {
+        typedPrompt = await readTypedPrompt(codexHome, threadId, turnId);
+      }
       visit(record, recordIndex);
       recordIndex += 1;
     }

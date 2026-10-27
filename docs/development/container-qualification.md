@@ -43,6 +43,8 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | --- | --- | --- |
 | Unit and integration | `mise run test` | Every scenario without a live suite below, against a fake `docker` |
 | Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
+| Live start recovery | same command, `./tests/container-start-docker.test.ts` | Fixed-port collision and two detached automatic-port failures, then network and HTTP publication recovery. Add `RUN_ROOTLESS_MOUNT_TESTS=1` on rootless to exercise read-only file mounts; use `TMPDIR` on `nosuid,nodev` for that topology. |
+| All staged mount consumers | same command, `./tests/staged-input-relay-docker.test.ts` | Every declared mount through the full root bootstrap, node entrypoint and workspace setup; rootless raw-mount denial, relayed imports and unchanged owner-only host files. |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Set `ORKESTRATOR_EGRESS=in-container` for the in-container firewall |
@@ -243,6 +245,134 @@ this run found are tracked in
   host's own running Orkestrator Claude bridge held, and the rebuild failed
   `port-conflict` with the original kept. The rerun drew other ports and
   passed.
+
+### Rootless follow-up (2026-10-26)
+
+The fixes for those gaps were exercised on the same host and daemon build
+(Docker 29.9.1, runc 1.5.2, RootlessKit 3.3.0, slirp4netns 1.3.3) without a
+full environment image: the host had 16 GB free and runs a live Orkestrator,
+so the image was not rebuilt there. Each check ran the branch's own code
+against the user's rootless daemon (host loopback disabled, the default) or a
+disposable second rootless daemon started with
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false` under a temporary
+`XDG_RUNTIME_DIR` and data root, removed afterwards.
+
+- **Staged inputs.** A real revision from `stagePortableInputs` (Codex,
+  Claude, Git), bound read-only into a `debian:bookworm-slim` container with
+  a UID 1000 `node`: the mounts showed `root:root 0700/0600` and `node` got
+  `Permission denied`. The branch's `relay_staged_inputs`, run as root with the
+  real `setpriv`, produced `node`-owned `0700`/`0600` copies under
+  `/run/orkestrator-inputs`, and the entrypoint's `staged_input_path` and
+  `copy_agent_file` imported `~/.codex/auth.json` and `config.toml` (`node
+  600`) and the Git identity from them. On the rootful daemon the same
+  mounts showed `node 600`, `node` read them directly and no relay was made;
+  the host revision stayed `0600`.
+- **Agent tools.** The real `ContainerHostReachabilityService` against a
+  loopback listener: with host loopback enabled, `host-gateway` was refused on
+  both networks and `10.0.2.2` answered on both, so the verdict was
+  `reachable` with `hostAddress` `10.0.2.2`; on the user's daemon `10.0.2.2`
+  gave busybox's `Network unreachable` (now classified `unreachable`; it was
+  `error` before) and the verdict was `blocked` with the rootless remediation.
+- **Read-only binds from `nosuid`/`nodev`.** Not reproduced: file and
+  directory binds, `--mount …,readonly` and `-v …:ro`, from the tmpfs `/tmp`,
+  `/dev/shm` and `/run/user/1000` (all `nosuid,nodev`), alone and with the
+  runtime's and gateway's other options (`--init`, `--tmpfs /run`, own
+  network, sysctl, `NET_ADMIN`, `--read-only`, volumes), all mounted. The
+  GitHub seed is now copied in rather than bound, and a refusal elsewhere is a
+  typed error naming the mount.
+- **Port collisions.** Rootless dockerd hands out automatic ports
+  sequentially, so the next one was held by a host listener. The first start
+  failed with `RootlessKit PortManager.AddPort(): listen tcp4
+  127.0.0.1:<port>: bind: address already in use`, and that failed start
+  detached the container from its network: a bare second start ran it with
+  no network and `Ports={}`. `startDockerContainer` reconnects the network
+  and retries; live, on the default bridge and on a user network, the retry
+  ran with an address and fresh ports for both mappings. A collision on a
+  fixed port was returned without a retry.
+
+### Rootless review qualification (2026-10-26)
+
+The review follow-up ran on a disposable **host** rootless Docker 29.9.1
+daemon (RootlessKit 3.3.0, slirp4netns, builtin port driver), launched by a
+delegated user service with host loopback enabled. Its socket and execution
+state were private under `/run/user/1000`, its data root was on tmpfs, and
+the user's daemon and configuration were left alone.
+
+The full environment image was `orkestrator-review-rootless:d03790`
+(`sha256:407894b5befe…`), carrying `staged-inputs=3`. Its installed
+`entrypoint.sh` and `network-policy-entrypoint.sh` matched this checkout
+byte-for-byte (SHA-256 `a5da5071…ba461` and `eb385fec…ffe24`). This was an
+existing complete image with older pinned agent versions, not a fresh
+toolchain build; the claims below concern the installed bootstrap scripts
+and current backend lifecycle code, with synthetic credentials only.
+
+- **C20:** passed, including actual rootless UID mapping, relayed Claude
+  plugin settings, shipped bridge readiness, credential revocation and a
+  restart that did not restore the revoked credential.
+- **C22 network:** passed behind the real egress gateway after the fixture
+  adopted production host discovery. The selected host-service port answered
+  through `10.0.2.2`; unrelated host ports and sibling access were refused.
+- **C09/readiness and C22 authenticated service:** three passed with
+  `TMPDIR=/tmp` on `nosuid,nodev` tmpfs: interrupted status write, restart
+  during launch, and the real agent-tools HTTP/MCP reply.
+- **Every staged mount:** all 13 declared mounts passed through the full
+  image bootstrap and workspace setup. Node could read none of the raw input
+  files and could read every relayed copy. Imported provider configuration,
+  Claude credentials/JSON/plugin settings, Git identity and project inputs
+  matched, while every host file stayed `0600`.
+- **Start recovery:** four passed, including a genuine fixed-port bind
+  collision and two injected collision failures that disconnected real
+  Docker endpoints, followed by successful HTTP publication. Both initial
+  start and restart paths ran. Network IDs as well as names are recognized.
+  A two-file parallel run with the all-mount suite also passed (five tests).
+- **Read-only remount:** the daemon accepted the file bind from tmpfs and
+  the test proved even root could not write it. The user's rootless daemon
+  with on-disk storage also accepted it in a tiny disposable fixture. The
+  historical refusal was not reproduced; its typed classification remains
+  covered with the captured error, and the live test checks it when returned.
+
+The start and all-mount suites now run in the Linux amd64/arm64 qualification
+workflow as well. Use the command table above through `mise run test:logged`,
+with `--parallel` and `DOCKER_HOST` selecting the disposable daemon.
+
+The rootless Docker browser fixture initially finished with 11 passed, four
+skipped (live provider credentials required) and three failed. Two failures
+were the settings test's ambiguous `Applied by Docker` text locator: the
+rootless explanation also contains that text. The selector now matches the
+label exactly, and the complete settings owner passed (three tests, 59.9 s).
+The remaining failure is the existing annotation-filename expectation in
+`web-annotations-gateway.spec.ts:904` (request ID versus its sanitized hash),
+outside these runtime changes. The disposable application profile and daemon
+were stopped and their resources removed afterwards.
+
+Format, lint, typechecking and the focused runtime regressions passed. The
+non-iOS aggregate also ran; the existing OpenCode research-server test timed
+out after 40 seconds, and its complete unchanged owner timed out alone
+(40.8 s). The same host/main failure is recorded in
+[0785](../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md).
+No timeout or assertion in that unrelated test was changed.
+
+### Validation follow-up (2026-10-26)
+
+The two remaining validation failures were subsequently addressed. Both
+local and Docker annotation evidence tests now expect the full request hash
+in materialized filenames, matching the existing collision-resistant
+ownership format. The local case passed (3.5 s), and the full rootless
+`test:agent:docker` suite passed (14 passed, four live-provider skips,
+160.1 s) against the same complete environment image in a new disposable
+host daemon and application profile. Those resources were removed afterwards.
+
+The OpenCode test's initial HTTP readiness request could remain pending
+past its own 20-second deadline. It now uses the backend's bounded health
+probe before bootstrapping MCP and gives the MCP response and body the
+remaining readiness budget. The unchanged permission/registration
+assertions passed once and in ten stress repetitions; see the resolution
+in [0785](../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md).
+
+The final non-iOS `mise run test` passed all four groups (380.2 s).
+Formatting, lint, typechecking and the flake-registry integrity check also
+passed. The earlier aggregate and Docker limitations above are historical;
+the completed follow-up has no failing validation checks.
 
 ## Docker Desktop on Apple Silicon (2026-10-23)
 

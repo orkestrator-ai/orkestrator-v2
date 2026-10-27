@@ -67,3 +67,13 @@ No watcher implementation, assertion, deadline or skip changed.
 - **Unchanged owner:** `mise run test:logged -- --name worktree-watcher-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.2 s.
 - **Evidence:** `orkestrator-test-run.iPZEJ3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.BxYW3V/repository-tests.log.gz` under the host temporary directory.
 - **Assessment:** another intermittent recurrence. Watcher delivery or host contention remain hypotheses; no watcher implementation, assertion, deadline or skip changed. The aggregate remains failed.
+
+
+## Annotation-only title coverage validation — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name annotation-coverage-suite -- mise run test` on `session-title-fence-3a8424ed080d-r1` (coverage committed as `6e36aadd9`). Standard workspace/root/bridges/protocol reservations were 4/1/2/1 slots with two backend workers.
+- **Failure:** `startWorktreeWatcher > observes a real file write` received zero changes after its bounded write loop (2003.10 ms, `apps/backend/tests/worktree-watcher.test.ts:294`).
+- **Suite counts:** backend 12,006 passed, 115 skipped, five failed and four between-test errors across 720 files (553.34 s); desktop 1,369 passed, 16 skipped and two failed; root/support 3,526 passed and two failed. Web passed all 9,937 active tests. Bridges and the protocol lockfile check passed. Aggregate exit 1 after 576.5 s.
+- **Complete unchanged owner rerun:** `mise run test:logged -- --name worktree-watcher-owner -- bun test --cwd apps/backend ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.2 s.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pbtfTr/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; enclosing log `orkestrator-test-run.cChC3V/annotation-coverage-suite.log.gz` under the same temporary root. Passing owner output was removed by the logged runner.
+- **Assessment:** intermittent watcher recurrence; cause remains unconfirmed. The environment-move, worktree Git, profile-cleanup and migration owning files retained failures in separate runs. No watcher code, assertion, deadline or skip changed; the aggregate remains failed.

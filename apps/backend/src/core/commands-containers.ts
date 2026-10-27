@@ -98,7 +98,7 @@ import {
   ensureEnvironmentNetwork,
   ingressPorts,
 } from "./container-network.js";
-import { githubRangesSeed } from "./github-ranges-cache.js";
+import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   EGRESS_OVERRIDE_ENV,
@@ -116,6 +116,7 @@ import {
   sharedMemoryMiB,
 } from "./container-resources.js";
 import {
+  STAGED_INPUT_RELAY_DIR,
   defaultInputSourceRoots,
   grokStagingConfig,
   grokStagingHome,
@@ -124,7 +125,10 @@ import {
 } from "./portable-inputs.js";
 import { pruneEnvironmentInputRevisions, selectedInputProviders } from "./portable-input-status.js";
 import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
-import { imageCopiesCursorMcpConfig } from "@orkestrator/protocol/image-manifest";
+import {
+  imageCopiesCursorMcpConfig,
+  imageRelaysStagedInputs,
+} from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 
@@ -270,6 +274,12 @@ export async function createDockerContainer(
     override: process.env[EGRESS_OVERRIDE_ENV],
   });
   const addHostGatewayAlias = shouldAddDockerHostGatewayAlias(process.platform, topology.kind);
+  // Rootless: host-gateway is inside RootlessKit's namespace. Name its host
+  // loopback address instead once the reachability check proved it answers.
+  const hostAliasTarget =
+    (addHostGatewayAlias && topology.rootless
+      ? await context.containerHostReachability?.resolveContainerHostAddress?.()
+      : null) ?? "host-gateway";
   const args = [
     "create",
     "--name",
@@ -341,7 +351,7 @@ export async function createDockerContainer(
     // A gateway owns /etc/hosts for the namespace it shares, so it gets the
     // alias instead (Docker refuses one on a joined namespace).
     ...(addHostGatewayAlias && enforcement !== "gateway"
-      ? ["--add-host", "host.docker.internal:host-gateway"]
+      ? ["--add-host", `host.docker.internal:${hostAliasTarget}`]
       : []),
     ...(identity.storage?.format === "volume-v1"
       ? [
@@ -433,6 +443,11 @@ export async function createDockerContainer(
         includeClaudeCredentials: allowClaudeCredentials,
       })
     : null;
+  if (stagedInputs && topology.rootless && !imageRelaysStagedInputs(stagingCapabilities)) {
+    console.warn(
+      `[portable-inputs] Docker is rootless and image ${identity.imageId?.slice(0, 19) ?? "unknown"} predates the staged-input relay; the container's node user cannot read its staged inputs until it is rebuilt on a current image`,
+    );
+  }
   if (anthropicApiKey && stagedInputs) {
     const keyDir = path.join(stagedInputs.directory, "claude-config");
     await mkdir(keyDir, { recursive: true, mode: 0o700 });
@@ -551,6 +566,7 @@ export async function createDockerContainer(
   // The namespace owner publishes: the gateway when there is one.
   if (enforcement !== "gateway") args.push(...publishArgs);
   let gatewayId: string | null = null;
+  let inContainerGithubSeed: string | null = null;
   // Network policy 2: the environment's own network, IPv6 disabled, and a
   // firewall that allows the host only on the backend's service port and
   // inbound connections only on the published ports. Never the shared
@@ -584,6 +600,7 @@ export async function createDockerContainer(
         network,
         publishArguments: publishArgs,
         addHostGateway: addHostGatewayAlias,
+        hostAliasTarget,
         githubSeed,
         policyEnvironment: {
           NETWORK_MODE: "restricted",
@@ -605,12 +622,8 @@ export async function createDockerContainer(
         "ORKESTRATOR_EGRESS=gateway",
       );
     } else {
-      if (githubSeed) {
-        args.push(
-          "--mount",
-          `type=bind,src=${githubSeed},dst=/etc/orkestrator-seed/github-ranges,readonly`,
-        );
-      }
+      // Copied in once the container exists (`copyGithubRangesSeed`), never bound.
+      inContainerGithubSeed = githubSeed;
       args.push("--network", network, "--sysctl", "net.ipv6.conf.all.disable_ipv6=1");
     }
     args.push(
@@ -666,6 +679,7 @@ export async function createDockerContainer(
     }
   }
   context.runtime.containerStates.invalidate();
+  if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   if (stagedInputs) {
     // Earlier revisions no container binds any more (recovery copies keep
     // theirs) are removed. Best effort: a failure only leaves a revision for
@@ -914,9 +928,12 @@ export async function startContainerClaudeServer(
       }
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
-      if [ -r /claude-config/.orkestrator-anthropic-key ]; then
-        export ANTHROPIC_API_KEY="$(cat /claude-config/.orkestrator-anthropic-key)"
-      fi
+      for key_file in /claude-config/.orkestrator-anthropic-key ${STAGED_INPUT_RELAY_DIR}/claude-config/.orkestrator-anthropic-key; do
+        if [ -r "$key_file" ]; then
+          export ANTHROPIC_API_KEY="$(cat "$key_file")"
+          break
+        fi
+      done
       export ${CLAUDE_GITHUB_CREDENTIAL_FILE_ENV}=${quoteShell(CONTAINER_GITHUB_CREDENTIAL_FILE)}
       unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}

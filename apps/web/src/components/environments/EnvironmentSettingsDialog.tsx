@@ -71,6 +71,7 @@ import { EnvironmentInputsSection } from "./EnvironmentInputsSection";
 import { EnvironmentResourcesSection } from "./EnvironmentResourcesSection";
 import { ContainerLogViewer } from "./ContainerLogViewer";
 import { EnvironmentNetworkPolicyStatus } from "./EnvironmentNetworkPolicyStatus";
+import { EnvironmentAgentToolsStatus } from "./EnvironmentAgentToolsStatus";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
   LEGACY_CONTAINER_DISCARD_WARNING,
@@ -1032,7 +1033,10 @@ export function EnvironmentSettingsDialog({
         return (
           <div className="max-w-2xl space-y-4">
             {environment.environmentType !== "local" && environment.containerId ? (
-              <EnvironmentNetworkPolicyStatus environmentId={environment.id} />
+              <>
+                <EnvironmentAgentToolsStatus />
+                <EnvironmentNetworkPolicyStatus environmentId={environment.id} />
+              </>
             ) : null}
             <div className="flex items-center gap-2 p-3 rounded-md bg-zinc-800 border border-zinc-700">
               {isFullAccess ? (

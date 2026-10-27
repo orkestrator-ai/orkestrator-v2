@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import {
   CONTAINER_HOST_REACHABILITY_CHANGED_EVENT,
+  ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
   initialContainerHostReachability,
   type ContainerHostProbe,
   type ContainerHostProbeOutcome,
@@ -25,6 +26,14 @@ import { CommandFailedError, runCommand } from "./shell.js";
  * name proves it broken. A host firewall that drops Docker traffic (ufw's
  * default on many Linux desktops) otherwise only surfaces when a workflow
  * agent silently fails to submit its result many minutes later.
+ *
+ * Under rootless Docker `host-gateway` names a bridge inside RootlessKit's
+ * network namespace, where nothing of the host listens. The only way back to
+ * the host is RootlessKit's host loopback address, which the daemon refuses
+ * unless it runs with host loopback enabled. On a rootless daemon the check
+ * therefore also probes through that address; when it answers, new
+ * containers' `host.docker.internal` names it (`hostAddress`), and when it
+ * does not, the remediation is the daemon setting, not a host firewall rule.
  *
  * Three checks share one parser:
  * - at startup (Linux), from a throwaway ~1 MB busybox container on the
@@ -111,7 +120,7 @@ export function classifyProbeOutput(output: string): ProbeClassification {
     return { outcome: "timeout", httpStatus: null, detail };
   }
   if (/refused/i.test(text)) return { outcome: "refused", httpStatus: null, detail };
-  if (/no route to host|network is unreachable|host is unreachable/i.test(text)) {
+  if (/no route to host|network (?:is )?unreachable|host is unreachable/i.test(text)) {
     return { outcome: "unreachable", httpStatus: null, detail };
   }
   if (
@@ -334,6 +343,33 @@ export function buildContainerHostRemediation(input: {
   }
 }
 
+/** The systemd drop-in that enables RootlessKit's host loopback for the user's daemon. */
+export const ROOTLESS_HOST_LOOPBACK_DROP_IN =
+  "~/.config/systemd/user/docker.service.d/orkestrator-host-loopback.conf";
+
+/**
+ * Remediation for a rootless daemon whose containers cannot reach the agent
+ * tools server: traffic from its containers never reaches a host firewall,
+ * so the fix is RootlessKit's host loopback, with its cost stated.
+ */
+export function buildRootlessHostRemediation(port: number): ContainerHostRemediation {
+  return {
+    title: "Let rootless Docker containers reach Orkestrator",
+    steps: [
+      `Docker runs rootless, so containers reach this computer only through RootlessKit, which by default refuses connections to its loopback addresses, where Orkestrator's agent tools server answers on port ${port}. A host firewall rule cannot help: this traffic never reaches it. Container agents use that server to submit review results, send mail and update tickets.`,
+      "Allow host loopback for your Docker user service with the commands below, which restart it. Restarting Docker stops every running container, Orkestrator's included; start the environments again afterwards. If you start dockerd-rootless.sh yourself, set DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false in its environment instead.",
+      `This lets every container on this Docker daemon connect to services that listen on this computer's loopback addresses. Orkestrator's restricted containers still reach only port ${port} through their firewall; full-access containers and containers Orkestrator does not manage can reach all of them.`,
+      `Then press “Check again”. New containers reach Orkestrator through RootlessKit's host address (${ROOTLESSKIT_HOST_LOOPBACK_ADDRESS}); rebuild existing environments so their network policy includes it.`,
+    ],
+    commands: [
+      "mkdir -p ~/.config/systemd/user/docker.service.d",
+      `printf '[Service]\nEnvironment="DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false"\n' > ${ROOTLESS_HOST_LOOPBACK_DROP_IN}`,
+      "systemctl --user daemon-reload",
+      "systemctl --user restart docker",
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -412,7 +448,9 @@ export type ContainerHostReachabilityDependencies = {
   emit?: (event: string, payload: unknown) => void;
   platform?: NodeJS.Platform;
   run?: typeof runCommand;
-  detectTopology?: () => Promise<Pick<DockerTopology, "kind">>;
+  detectTopology?: () => Promise<
+    Pick<DockerTopology, "kind"> & Partial<Pick<DockerTopology, "rootless">>
+  >;
   readTextFile?: (path: string) => Promise<string | null>;
   /** This computer's non-Docker IPv4 addresses; defaults to its interfaces. */
   hostAddresses?: () => string[];
@@ -448,6 +486,34 @@ export class ContainerHostReachabilityService {
 
   snapshot(): ContainerHostReachability {
     return structuredClone(this.state);
+  }
+
+  /**
+   * The address containers' `host.docker.internal` should name when it is
+   * not Docker's `host-gateway` (RootlessKit's host loopback), from the last
+   * check. Null means `host-gateway`.
+   */
+  containerHostAddress(): string | null {
+    return this.state.hostAddress ?? null;
+  }
+
+  /**
+   * {@link containerHostAddress} for a container about to be created on a
+   * rootless daemon: waits for the first check (started now when none ran),
+   * bounded, so the new container's alias and firewall name the address that
+   * works. A check that does not finish in time leaves `host-gateway`.
+   */
+  async resolveContainerHostAddress(timeoutMs = 45_000): Promise<string | null> {
+    if (this.platform === "linux" && (this.inFlight || this.state.checkedAt === null)) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        (this.inFlight ?? this.check("boot")).catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+    }
+    return this.containerHostAddress();
   }
 
   /** Coalesced host check. A call during a running check shares its result. */
@@ -657,7 +723,8 @@ export class ContainerHostReachabilityService {
     const topology = await (this.deps.detectTopology
       ? this.deps.detectTopology()
       : import("./docker-image.js").then((module) => module.detectDockerTopology()));
-    this.log.info(`${LOG_PREFIX} docker topology kind=${topology.kind}`);
+    const rootless = topology.rootless === true;
+    this.log.info(`${LOG_PREFIX} docker topology kind=${topology.kind} rootless=${rootless}`);
     if (topology.kind === "unavailable") {
       return this.finish(startedAt, {
         ...base,
@@ -702,26 +769,34 @@ export class ContainerHostReachabilityService {
     }
     await this.reapStaleProbes();
 
-    const addHostGateway = topology.kind !== "desktop";
+    const hostGateway = topology.kind !== "desktop" ? "host-gateway" : null;
     // Both paths at once: a dropped connection costs the full connect timeout.
     const network = await this.createProbeNetwork();
     let probes: ContainerHostProbe[];
+    let loopbackProbes: ContainerHostProbe[] = [];
     try {
-      probes = await Promise.all([
-        this.probeThrowaway(image, "default-bridge", "bridge", port, addHostGateway, subnets),
-        ...(network
-          ? [
-              this.probeThrowaway(
-                image,
-                "environment-network",
-                network.name,
-                port,
-                addHostGateway,
-                network.subnet ? [network.subnet] : [],
-              ),
-            ]
-          : []),
-      ]);
+      const probeBoth = (hostTarget: string | null) =>
+        Promise.all([
+          this.probeThrowaway(image, "default-bridge", "bridge", port, hostTarget, subnets),
+          ...(network
+            ? [
+                this.probeThrowaway(
+                  image,
+                  "environment-network",
+                  network.name,
+                  port,
+                  hostTarget,
+                  network.subnet ? [network.subnet] : [],
+                ),
+              ]
+            : []),
+        ]);
+      probes = await probeBoth(hostGateway);
+      // Rootless: host-gateway is inside RootlessKit's namespace; try its
+      // host loopback address before calling the path blocked.
+      if (rootless && !probes.every((probe) => probe.outcome === "reachable")) {
+        loopbackProbes = await probeBoth(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS);
+      }
     } finally {
       if (network) {
         await this.run("docker", ["network", "rm", network.name], { timeoutMs: 20_000 }).catch(
@@ -735,10 +810,29 @@ export class ContainerHostReachabilityService {
     const allSubnets = [
       ...new Set([...subnets, ...probes.map((probe) => probe.subnet).filter(isString)]),
     ];
+    if (rootless && !probes.every((probe) => probe.outcome === "reachable")) {
+      return this.finishRootless(startedAt, {
+        ...base,
+        firewall,
+        subnets: allSubnets,
+        probes: [...probes, ...loopbackProbes],
+        probeImage: image,
+        dockerRootless: true,
+        port,
+        loopbackProbes,
+      });
+    }
 
     const blocking = probes.filter((probe) => isBlockingOutcome(probe.outcome));
     const reachable = probes.filter((probe) => probe.outcome === "reachable");
-    const common = { ...base, firewall, subnets: allSubnets, probes, probeImage: image };
+    const common = {
+      ...base,
+      firewall,
+      subnets: allSubnets,
+      probes,
+      probeImage: image,
+      dockerRootless: rootless,
+    };
     if (blocking.length > 0) {
       const remediation = buildContainerHostRemediation({
         firewall: firewall.kind,
@@ -773,6 +867,42 @@ export class ContainerHostReachabilityService {
       status: "unverified",
       reason: "probe-failed",
       summary: `Couldn't check whether Docker containers can reach Orkestrator: the probe container failed to run${probes[0]?.detail ? ` (${probes[0].detail})` : ""}.`,
+    });
+  }
+
+  /** The verdict on a rootless daemon whose `host-gateway` probes did not all answer. */
+  private finishRootless(
+    startedAt: number,
+    input: ContainerHostReachability & { port: number; loopbackProbes: ContainerHostProbe[] },
+  ): ContainerHostReachability {
+    const { loopbackProbes, ...common } = input;
+    const { port } = input;
+    if (
+      loopbackProbes.length > 0 &&
+      loopbackProbes.every((probe) => probe.outcome === "reachable")
+    ) {
+      return this.finish(startedAt, {
+        ...common,
+        status: "reachable",
+        reason: null,
+        hostAddress: ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
+        summary: `Docker containers can reach Orkestrator's agent tools server on port ${port} through RootlessKit's host loopback (${ROOTLESSKIT_HOST_LOOPBACK_ADDRESS}).`,
+      });
+    }
+    if (!loopbackProbes.some((probe) => isBlockingOutcome(probe.outcome))) {
+      return this.finish(startedAt, {
+        ...common,
+        status: "unverified",
+        reason: "probe-failed",
+        summary: `Couldn't check whether Docker containers can reach Orkestrator: the probe container failed to run${loopbackProbes[0]?.detail ? ` (${loopbackProbes[0].detail})` : ""}.`,
+      });
+    }
+    return this.finish(startedAt, {
+      ...common,
+      status: "blocked",
+      reason: null,
+      summary: `Agents in Docker containers can't reach Orkestrator's agent tools server on port ${port}: Docker runs rootless, and RootlessKit refuses connections from containers to this computer's loopback addresses. Container agents won't be able to submit review results, send mail or update tickets until host loopback is enabled.`,
+      remediation: buildRootlessHostRemediation(port),
     });
   }
 
@@ -874,7 +1004,8 @@ export class ContainerHostReachabilityService {
     scope: ContainerHostProbeScope,
     network: string,
     port: number,
-    addHostGateway: boolean,
+    /** `--add-host` target for the probe host name: `host-gateway`, an address, or none. */
+    hostTarget: string | null,
     subnets: readonly string[],
   ): Promise<ContainerHostProbe> {
     const url = containerAgentToolsUrl(port);
@@ -894,8 +1025,8 @@ export class ContainerHostReachabilityService {
           ...this.probeLabels(),
           "--network",
           network,
-          ...(addHostGateway
-            ? ["--add-host", `${CONTAINER_AGENT_TOOLS_PROBE_HOST}:host-gateway`]
+          ...(hostTarget
+            ? ["--add-host", `${CONTAINER_AGENT_TOOLS_PROBE_HOST}:${hostTarget}`]
             : []),
           "--memory",
           "64m",
@@ -929,6 +1060,7 @@ export class ContainerHostReachabilityService {
       httpStatus: classification.httpStatus,
       elapsedMs: Math.max(0, this.now() - started),
       detail: classification.detail,
+      ...(hostTarget && hostTarget !== "host-gateway" ? { hostAddress: hostTarget } : {}),
     };
   }
 
@@ -1070,6 +1202,7 @@ function probeFields(probe: ContainerHostProbe): string {
     `scope=${probe.scope}`,
     `network=${probe.network ?? "-"}`,
     `subnet=${probe.subnet ?? "-"}`,
+    `host=${probe.hostAddress ?? "host-gateway"}`,
     `outcome=${probe.outcome}`,
     `http=${probe.httpStatus ?? "-"}`,
     `elapsedMs=${probe.elapsedMs}`,

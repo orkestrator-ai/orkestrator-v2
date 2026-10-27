@@ -21,6 +21,9 @@ on:
       - "apps/backend/tests/container-xattr-fixture.js"
       - "apps/backend/tests/claude-state-signal-docker.test.ts"
       - "apps/backend/tests/container-worktree-signal-docker.test.ts"
+      - "apps/backend/tests/container-start-docker.test.ts"
+      - "apps/backend/tests/staged-input-relay-docker.test.ts"
+      - "apps/backend/src/core/container-start.ts"
       - "apps/backend/scripts/container-exec-cost.ts"
       - "docker/orkestrator-state-signal.sh"
       - "docker/orkestrator-worktree-signal.sh"
@@ -103,6 +106,14 @@ jobs:
       # even when an earlier one fails.
       - name: Live lifecycle (C09, C11, C12, C20)
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts --parallel=1
+
+      - name: Live start and port recovery
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name container-start -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-start-docker.test.ts --parallel=1
+
+      - name: Live staged mount consumers
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name staged-input-relay -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/staged-input-relay-docker.test.ts --parallel=1
 
       - name: Live replacement (C14-C19)
         if: ${{ !cancelled() }}

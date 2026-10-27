@@ -1,4 +1,5 @@
 import { prepareEgressGatewayForStart } from "./egress-gateway.js";
+import { startDockerContainer } from "./container-start.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -481,7 +482,7 @@ export async function startContainerWithAgentAccounts(
     await refreshStagedAgentAccountLogins(context, environment, containerId, runners);
   }
   try {
-    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+    await startDockerContainer(containerId);
   } finally {
     // Docker may have started even when its client failed. Try before project
     // access setup or readiness waiting can fail. A stopped container refuses

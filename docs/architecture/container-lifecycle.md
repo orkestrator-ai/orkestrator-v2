@@ -652,6 +652,26 @@ sessions get no user MCP servers until the environment is rebuilt on a newer
 image. Backend code that needs to know checks
 `imageCopiesCursorMcpConfig` (`packages/protocol/src/image-manifest.ts`).
 
+`staged-inputs=3` adds the rootless relay. A revision is owned by the
+backend's user and owner-only; on a rootful daemon that user is the
+container's `node` (UID 1000), but under rootless Docker it is container root
+and `node` is a subordinate UID that cannot open the mounts. Before dropping
+privileges, the root entrypoint (`relay_staged_inputs` in
+`network-policy-entrypoint.sh`) checks each staged mount, and the project seed
+binds `/project-env` and `/opencode-project-json`, as `node`. One `node`
+cannot read in full is streamed with `tar`, root reading and `node` writing,
+into `node`'s own `/run/orkestrator-inputs/<mount>` (`0700`/`0600`, links kept
+as links, within the revision bounds). `entrypoint.sh` and
+`workspace-setup.sh` read a relayed copy in place of its mount
+(`staged_input_path`), and the Claude key file is read from either. Nothing is
+widened on the host or for another user, and nothing is relayed on a rootful
+daemon, where `node` reads the mounts directly. The relay is rebuilt from the
+mounts on every boot, and revocation also removes the provider's relayed
+copies from the running container (`stagedInputRelayPaths`). On a rootless
+daemon an older image gets nothing readable: the backend logs it at creation
+and the environment's inputs section says to rebuild (`unreadableOnRootless`,
+`imageRelaysStagedInputs`).
+
 - Reading: the host home entry itself is resolved (a dotfiles manager may link
   it, and the bind mount it replaces followed that link); nothing below it is
   followed. Every file is opened `O_NOFOLLOW` and re-checked against the
@@ -788,11 +808,30 @@ three policy inputs the root bootstrap captures once, root-owned:
 | `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
 
 GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`,
-refreshed at most hourly and mounted read-only at
-`/etc/orkestrator-seed/github-ranges`) when it is under a day old, else a live
+refreshed at most hourly and copied into the created container, or its egress
+gateway, at `/etc/orkestrator-seed/github-ranges` with `docker cp` before the
+first start) when it is under a day old, else a live
 fetch cached in the container, else either copy under a week old; with none
 the firewall fails closed. Reachability is verified against `github.com`, not
 the rate-limited API. The report's `githubRanges` says which source applied.
+The seed is copied rather than bound because a rootless daemon may be unable
+to mount a read-only file bind from a `nosuid`/`nodev` filesystem; a file
+bind already pinned the seed as it was at creation (the backend replaces it by
+rename), so nothing is lost. A failed copy leaves the container to fetch the
+ranges itself.
+
+Every start of a runtime, rebuild candidate or egress gateway goes through
+`startDockerContainer` (`container-start.ts`). A read-only bind Docker refuses
+to remount (`remount-ro … operation not permitted`) becomes an
+`unsupported-topology` error naming the source and target. Rootless dockerd
+picks an automatic host port inside RootlessKit's namespace, which cannot see
+host listeners, so RootlessKit's bind on the host can collide (`address
+already in use`); when the colliding port is not one the user fixed, the
+start is retried once. Docker 29.9 detaches the container from its network
+on that failed start, and a bare retry ran it with no network and no published
+ports, so the helper connects the container's own network again first and
+stops it if the retry still has none. A second collision, or one on a fixed
+port, is the existing `port-conflict`.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
@@ -901,7 +940,7 @@ and the Network section says whether a root terminal can change the rules.
   report. It holds everything that belongs to a namespace: the environment
   network, `net.ipv6.conf.all.disable_ipv6=1`, the published ports, the
   Linux Engine `host.docker.internal` alias (the runtime shares its
-  `/etc/hosts` and `resolv.conf`), the GitHub seed and the policy
+  `/etc/hosts` and `resolv.conf`), the GitHub seed (copied in) and the policy
   environment. It carries the owner label, role `egress-gateway`,
   `orkestrator-egress-environment` and `orkestrator-egress-workload` (the
   runtime's name), and neither the app label nor `environment-id`, so no
@@ -989,6 +1028,25 @@ check; leftovers are reaped by the next one. Every step is logged with the
 `[container-host-reachability]` prefix, one fixed-shape line per probe. The
 probe URL carries no credential. Commands: `get_container_host_reachability`,
 `check_container_host_reachability`.
+
+On a rootless daemon (`dockerRootless`) `host-gateway` names a bridge inside
+RootlessKit's network namespace, where nothing of the host listens. When
+those probes do not all answer, the check probes again through RootlessKit's
+host loopback address (`10.0.2.2`, `ROOTLESSKIT_HOST_LOOPBACK_ADDRESS`), which
+the daemon refuses unless it runs with
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. If that answers,
+the snapshot's `hostAddress` is set and new containers and gateways get
+`--add-host host.docker.internal:10.0.2.2` (creation waits up to 45 s for the
+first check, `resolveContainerHostAddress`), so the firewall's host-service
+rule names it; the in-container alias repair before a bridge start uses it
+too. If not, the verdict is `blocked` with a rootless remediation (a systemd
+drop-in for the user's Docker service and its cost: a Docker restart, and
+every container of that daemon reaching the host's loopback services)
+instead of firewall rules, which cannot help. The environment settings
+network pane shows "Agent tools unavailable" for a container environment
+while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
+gateway runtimes snapshot their host address at gateway boot and need a
+rebuild after host loopback is enabled.
 
 ## Resource budgets and usage (`container-resources.ts`)
 

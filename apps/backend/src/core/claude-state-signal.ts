@@ -110,7 +110,11 @@ export const claudeStateSignalInstaller: ClaudeStateSignalInstaller = {
   async install(containerId, credential, context, isCurrent) {
     // The same host preparation a bridge start does: the host alias, and the
     // backend's current service port in a restricted container's firewall.
-    await ensureContainerAgentToolsHost(containerId);
+    await ensureContainerAgentToolsHost(
+      containerId,
+      undefined,
+      context.containerHostReachability?.containerHostAddress?.(),
+    );
     await ensureContainerHostServicePorts(containerId, context.agentTools?.servicePort?.() ?? null);
     if (!isCurrent()) return;
     const { command, args, options } = claudeStateSignalInstallCommand(containerId, credential);

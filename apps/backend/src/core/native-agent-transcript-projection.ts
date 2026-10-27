@@ -123,6 +123,7 @@ import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-cat
 import { fileURLToPath } from "node:url";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
+import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import {
   parseCoordinatorDelegatedPrompt,
   stripSystemInstructions,
@@ -5067,8 +5068,11 @@ export class NativeAgentTranscriptProjection {
       const fallbackTitle = transcript.messages.flatMap((candidate) => {
         const message = candidate as { role?: unknown; content?: unknown };
         if (message.role !== "user" || typeof message.content !== "string") return [];
-        // Name the session after the user's own words, not provider-only guidance.
-        const normalized = stripSystemInstructions(message.content).replace(/\s+/g, " ").trim();
+        // Name the session after the user's own words, not provider-only
+        // guidance or the inert reference material quoted after them.
+        const normalized = stripTranscriptAnnotations(stripSystemInstructions(message.content))
+          .replace(/\s+/g, " ")
+          .trim();
         return normalized ? [normalized.slice(0, 80)] : [];
       })[0];
       const snapshotTitle = snapshot.title?.trim();

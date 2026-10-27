@@ -138,6 +138,12 @@ export interface EnvironmentInputStatus {
   disabledProviders: string[];
   /** Revoked for this environment: never staged or synced until allowed again. */
   revokedProviders: string[];
+  /**
+   * Docker runs rootless and the container's image predates the staged-input
+   * relay (`staged-inputs` 3), so its `node` user cannot read what was staged:
+   * rebuild on a current image. Absent from older backends.
+   */
+  unreadableOnRootless?: boolean;
 }
 
 export interface CredentialRevocationResult {

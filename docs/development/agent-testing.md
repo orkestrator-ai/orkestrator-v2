@@ -79,6 +79,22 @@ run it against a manual profile, export those two variables and
 `ORKESTRATOR_TEST_HOST_MEMORY_MIB=2048` for both `dev:test` and the browser
 suite.
 
+## Codex typed-prompt resume qualification
+
+`e2e/agent-testing/codex-typed-prompts-live.spec.ts` sends three short real Codex
+turns through the composer (plan mode, a skill and a prompt template). It checks
+that user rows keep the typed text after an inactive-environment round trip,
+reload, tab close and picker resume. Skills/templates are planted only in the
+disposable worktree. Traces and screenshots are disabled.
+
+```bash
+mise run dev:test --profile codex-typed-qa --fixture --credential-source codex --agent-platforms codex
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=codex-typed-qa ORKESTRATOR_AGENT_TEST_LIVE_TYPED_PROMPTS=1 mise run test:logged -- --name codex-typed-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts codex-typed-prompts-live.spec.ts --workers=1
+mise run dev:stop --profile codex-typed-qa
+mise run dev:reset --profile codex-typed-qa
+```
+
 ## Claude warm-runtime qualification
 
 `e2e/agent-testing/claude-warm-runtime.spec.ts` exercises real Claude follow-up

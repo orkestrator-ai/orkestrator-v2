@@ -151,6 +151,7 @@
     "./tool-diff": "./src/tool-diff.ts",
     "./tmux-prompt": "./src/tmux-prompt.ts",
     "./tmux-observation": "./src/tmux-observation.ts",
+    "./transcript-annotations": "./src/transcript-annotations.ts",
     "./transcript-part-ids": "./src/transcript-part-ids.ts",
     "./node/transcript-budget": "./src/node/transcript-budget.ts",
     "./node/transcript-window": "./src/node/transcript-window.ts",

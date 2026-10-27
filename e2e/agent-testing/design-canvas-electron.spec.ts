@@ -338,6 +338,19 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
       await expect(window.frameLocator('iframe[title="Mobile"]').locator("main")).toBeAttached({
         timeout: 30_000,
       });
+      const designFrame = window.frameLocator('iframe[title="Mobile"]');
+      await designFrame.locator("main").evaluate((element) => {
+        element.setAttribute("tabindex", "0");
+        (element as HTMLElement).focus();
+      });
+      const shortcutsChord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`;
+      await window.keyboard.press(shortcutsChord);
+      await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+      await expect(
+        window.getByRole("textbox", { name: "Search keyboard shortcuts" }),
+      ).toBeFocused();
+      await window.keyboard.press(shortcutsChord);
+      await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
       const entries = await libraryIds(DESIGN_NAME);
       expect(entries).toHaveLength(1);
       canvasId = entries[0]!.id;

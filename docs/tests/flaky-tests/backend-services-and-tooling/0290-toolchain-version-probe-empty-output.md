@@ -43,3 +43,11 @@ Final aggregate counts: toolchain 90 passed and one failed across 91 tests in tw
 - `ORKESTRATOR_TEST_AREA_BASE=8454d18b8648d7482897c2544b538f0d915bc18c mise run test:logged -- --name merge-repository -- mise run test` repeated `codex reported an unexpected version: no output` after 163.04 ms. The toolchain package reported 90 passed and one failed across 91 tests (5.26 s), using two isolated workers alongside the other repository groups and nine component-browser workers on the shared macOS host, Bun 1.4.3.
 - `mise run test:logged -- --name merge-toolchain-owner -- bun test --cwd packages/toolchain --preload ../../tests/setup-node.ts ./src/manager.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 5.2 s.
 - Evidence: host temporary artifact `orkestrator-test-run.GCa83B/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No implementation, assertion, timeout or skip changed; the original aggregate remains failed.
+
+## 0247 consolidated-review fixes — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name review-fix-suite -- mise run test`, standard 4/1/2/1 workspace/root/bridge/protocol reservations on the shared macOS host, Bun 1.4.4.
+- **Observation:** the same unchanged case failed at 121.44 ms with `codex reported an unexpected version: no output`; toolchain reported 90 passed and one failed.
+- **Owner rerun:** `mise run test:logged -- --name review-toolchain-owner -- bun test --cwd packages/toolchain ./src/manager.test.ts --parallel=1 --only-failures` passed unchanged in 2.5 s.
+- **Evidence:** inner `orkestrator-test-run.S3DyLI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`, outer `orkestrator-test-run.OHbyVm/review-fix-suite.log` under the host temporary directory (compressed on finalization).
+- No toolchain implementation, assertion, timeout or skip changed; the aggregate remains failed.

@@ -32,13 +32,15 @@ import {
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
 
 import { createMessageId, createSessionId, type NormalizedMessage } from "./messages/types.js";
+import { externalRevertCut } from "./sessions/external-revert.js";
 
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
+  clearTranscriptPathCache,
 } from "./history/rollout.js";
-import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-titles.js";
+import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-title-index.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 
@@ -109,8 +111,10 @@ export class CodexRuntimeSessions {
       config: this.lifecycle.toEngineConfig(body),
       title,
       titleSource: title ? "explicit" : undefined,
-      titleGenerationAttempted: Boolean(title),
     });
+    // Created here with no thread, so every id it is sent passes through the
+    // dispatch journal. Resumed and forked sessions never get this marker.
+    this.ctx.journal.noteFreshSession(session.id);
     return { sessionId: session.id, title };
   }
 
@@ -136,7 +140,6 @@ export class CodexRuntimeSessions {
       id: sessionId,
       threadId: null,
       config,
-      titleGenerationAttempted: true,
     });
 
     let thread: EngineThread;
@@ -269,7 +272,6 @@ export class CodexRuntimeSessions {
       config: { ...parent.config },
       title: parent.title ? `${parent.title} (fork)` : "Forked session",
       titleSource: "explicit",
-      titleGenerationAttempted: true,
       confirmedModelsByTurn: { ...parent.confirmedModelsByTurn },
       structuredOutputTurns: parent.structuredOutputTurns?.map((entry) => ({ ...entry })),
     });
@@ -488,7 +490,9 @@ export class CodexRuntimeSessions {
     input: string,
     expectedTurnId: string,
     requestId: string,
-  ): Promise<"accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "closing"> {
+  ): Promise<
+    "accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "closing" | "unavailable"
+  > {
     const session = this.ctx.registry.getSession(sessionId);
     const context = this.ctx.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
@@ -576,6 +580,14 @@ export class CodexRuntimeSessions {
       return "unknown";
     }
 
+    // `turn/steer` carries the request id to Codex with no dispatch-journal
+    // record, so note it first: `/dispatch` must never answer `absent` for it.
+    // Nothing is sent if that write fails.
+    try {
+      await this.ctx.journal.noteUntracked(requestId);
+    } catch {
+      return "unavailable";
+    }
     const attemptedAt = new Date(this.ctx.now()).toISOString();
     try {
       await this.ctx.options.engine.steerTurn(
@@ -641,6 +653,25 @@ export class CodexRuntimeSessions {
       });
       return "unknown";
     }
+  }
+
+  /**
+   * The read-only proof behind `/dispatch` answering `absent`: this request id
+   * never reached Codex for any session, and a prompt sent under it now would
+   * be its first delivery. Touches nothing and reads no thread.
+   *
+   * Beyond the journal's own proof (`provesNeverJournaled`), the session must
+   * be registered and not closing, and no prompt request for the id may be in
+   * flight: one that has not journaled yet could still send it. Two prompts
+   * for one id on one session never both send either way: each classifies the
+   * id under the session's dispatch lock, after the other has journaled.
+   */
+  promptDispatchAbsent(sessionId: string, requestId: string): boolean {
+    const session = this.ctx.registry.getSession(sessionId);
+    if (!session || this.ctx.closingSessionIds.has(sessionId)) return false;
+    if (this.ctx.promptRequestsInFlight.has(requestId)) return false;
+    if (this.ctx.steerRequests.has(requestId)) return false;
+    return this.ctx.journal.provesNeverJournaled(requestId, sessionId);
   }
 
   /**
@@ -1014,6 +1045,8 @@ export class CodexRuntimeSessions {
     const beforeTurnId = context.messages[index]?.turnId;
     if (index < 0 || !beforeTurnId) return "unavailable";
     await this.ctx.options.engine.revertThread(session.threadId, beforeTurnId);
+    clearTranscriptPathCache();
+    invalidateTranscriptCatalogCache();
     context.messages.splice(index);
     context.error = undefined;
     this.ctx.registry.setPhase(context, "idle");
@@ -1023,6 +1056,66 @@ export class CodexRuntimeSessions {
       this.ctx.options.emit({ type: "session.reconcile-required", sessionId: id });
     }
     return "rewound";
+  }
+
+  /**
+   * Adopts a rewind made by another client (`thread/reverted`): trims the
+   * transcript this bridge serves to the turns app-server still has. Our own
+   * `rewindMessages` has already trimmed, so its echo finds nothing to cut.
+   * Never throws: it runs detached from the notification that started it.
+   */
+  async reconcileExternalRevert(context: ThreadContext): Promise<void> {
+    clearTranscriptPathCache();
+    invalidateTranscriptCatalogCache();
+    const engineHandle = context.engineHandle;
+    const generation = context.engineGeneration;
+    const revisions = [...context.bridgeSessionIds].map((id) => {
+      const session = this.ctx.registry.getSession(id);
+      return { id, session, revision: session?.messageRevision };
+    });
+    let turns: { id: string }[] | undefined;
+    try {
+      turns = (await this.ctx.options.engine.readThread(context.threadId, { includeTurns: true }))
+        ?.turns;
+    } catch (error) {
+      console.warn(
+        `[codex-bridge] Could not read turns after a revert of thread ${context.threadId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return;
+    }
+    // Detached or replaced while reading: the next attach rehydrates from the
+    // rollout, which records the rollback itself. A turn running now may have
+    // started after the read and be missing from it, so nothing is cut under
+    // one. The revision fence also rejects a turn that started and finished
+    // during the read; the transcript catches up on the next hydration.
+    if (!turns || this.ctx.registry.getThread(context.threadId) !== context) return;
+    if (
+      phaseToExternalStatus(context.phase) === "running" ||
+      context.dispatchInFlight ||
+      context.engineHandle !== engineHandle ||
+      context.engineGeneration !== generation ||
+      revisions.some(
+        ({ id, session, revision }) =>
+          this.ctx.registry.getSession(id) !== session || session?.messageRevision !== revision,
+      )
+    )
+      return;
+    const cut = externalRevertCut(
+      context.messages,
+      turns.map((turn) => turn.id),
+      false,
+    );
+    if (cut === undefined) return;
+    context.messages.splice(cut);
+    for (const id of context.bridgeSessionIds) {
+      const session = this.ctx.registry.getSession(id);
+      if (session) this.ctx.registry.bumpContentEpoch(session);
+    }
+    this.ctx.callbacks.bumpMessageRevision(context);
+    for (const id of context.bridgeSessionIds) {
+      this.ctx.options.emit({ type: "session.reconcile-required", sessionId: id });
+    }
   }
 
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
@@ -1036,8 +1129,6 @@ export class CodexRuntimeSessions {
     for (const entry of siblings) {
       entry.title = title;
       entry.titleSource = "explicit";
-      entry.titleGenerationAttempted = true;
-      entry.titleGenerationToken = undefined;
     }
     if (session.threadId) {
       await this.ctx.options.engine.setThreadName(session.threadId, title);
@@ -1318,7 +1409,9 @@ export class CodexRuntimeSessions {
       status: phaseToExternalStatus(phase),
       ...(session.config.policy ? { policy: session.config.policy } : {}),
       phase,
-      title: session.title,
+      // A title read back from the first prompt is a resume-list label, not a
+      // title: leaving it out lets the backend name the session.
+      title: session.titleSource === "prompt" ? undefined : session.title,
       error,
       // Structured so a workflow can continue the turn without matching text.
       // The notice clears when the next turn is accepted, and the error check

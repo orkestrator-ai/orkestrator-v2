@@ -60,7 +60,9 @@ export interface WorkflowResultError {
     | "correction_budget_exhausted"
     | "storage_unavailable"
     | "backpressure"
-    | "result_status_unavailable";
+    | "result_status_unavailable"
+    /** The workflow's own precondition on the environment failed; fix it and retry. */
+    | "worktree_changed";
   nextAction: "correct" | "lookup_or_resubmit" | "reconcile" | "stop";
   message: string;
   issues?: WorkflowResultValidationIssue[];

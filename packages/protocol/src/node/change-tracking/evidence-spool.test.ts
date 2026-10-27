@@ -187,9 +187,15 @@ describe("change evidence spool", () => {
     recorder(first).turn({ conversationId: "s", turnId: "t" }, "succeeded", "quiescent");
     await first.flush();
     const restarted = new ChangeEvidenceSpool({ directory });
-    const read = restarted.read(0);
-    expect(read.entries).toHaveLength(1);
-    expect(read.runtimeEpoch).not.toBe(first.runtimeEpoch);
+    try {
+      const read = restarted.read(0);
+      expect(read.entries).toHaveLength(1);
+      expect(read.runtimeEpoch).not.toBe(first.runtimeEpoch);
+    } finally {
+      // Restoring queues a compaction rewrite of the entries file; let it land
+      // before the directory is removed, or it re-creates it (0247).
+      await restarted.flush();
+    }
   });
 
   test("an acknowledgment from another epoch releases nothing", () => {

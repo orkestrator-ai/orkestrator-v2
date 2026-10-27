@@ -37,13 +37,19 @@ describe("OrkestratorBackend", () => {
 
     await backend.init();
 
-    await expect(backend.invoke("check_codex_cli")).resolves.toBe(true);
-    await expect(backend.invoke<{ version: string }>("get_config")).resolves.toMatchObject({
-      version: "1.0.0",
-    });
-    await expect(backend.invoke("unknown-command")).rejects.toThrow(
-      "Unknown backend command: unknown-command",
-    );
+    try {
+      await expect(backend.invoke("check_codex_cli")).resolves.toBe(true);
+      await expect(backend.invoke<{ version: string }>("get_config")).resolves.toMatchObject({
+        version: "1.0.0",
+      });
+      await expect(backend.invoke("unknown-command")).rejects.toThrow(
+        "Unknown backend command: unknown-command",
+      );
+    } finally {
+      // Startup work (the design canvas sweep among it) still writes into the
+      // data directory; shutting down settles it before the directory goes.
+      await backend.shutdown();
+    }
   });
 
   test("shuts down idempotently and rejects later command invocations", async () => {

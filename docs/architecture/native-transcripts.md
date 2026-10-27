@@ -21,6 +21,7 @@ native transcript windows keep the contract below instead.
 | `apps/backend/src/core/http-bridge-transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
 | `apps/backend/src/core/http-bridge-progressive.ts` | Snapshot reads, with the v1 and pre-`/transcript` fallbacks |
 | `apps/backend/src/core/native-agent-transcript-projection.ts` | Projection, conditional reads, deltas, history pages |
+| `apps/backend/src/core/native-terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
 | `apps/backend/src/core/native-agent-direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
 | `packages/protocol/src/native-agent-transcript-patch.ts` | Part-level patches inside a delta |
 | `apps/backend/src/core/native-agent-display-tail-scheduler.ts` | Restart-preview checkpoints |
@@ -105,8 +106,32 @@ The backend has two cursor namespaces that never mix
 - **v1 joined (`sync-v1`).** A cursor names a message id in the backend's own
   joined projection, which is refreshed and fingerprinted before a page is
   served. Every bundled bridge and OpenCode serve direct pages, so this path
-  now serves only an older bridge behind a newer backend. It is a retained
-  compatibility path; see the end of this document.
+  serves only a source without them and renderers that mint a cursor where a
+  view has none. It is a retained compatibility path; see the end of this
+  document.
+
+A progressive view carries a direct cursor (`historyPaging: "direct"`) when
+its provider pages and a usable whole-message boundary remains. The
+provider's `historyCursor` names the position of its snapshot's first row,
+which is usable while the view starts at or before it. When the view's own
+byte bound drops leading rows the provider sent, the view names its first
+kept row instead through the snapshot's `historyCursorBefore`: a bridge
+cursor moved to that row's absolute position
+(`bridgeTranscriptPageCursorAt`), or, for OpenCode, which pages by whole
+message, the cursor before the first kept row that starts a message. Rows
+between the view's start and that position come back on the first page too,
+and the renderer drops them by id. Byte bounding happens to ordinary
+sessions: a tool call's detail reference is larger than a short output the
+bridge summary kept inline, so a window of edits and short commands is
+larger once projected than the bridge measured it. Before 0232 such a view
+had no cursor, and **Load earlier messages** minted a joined one, a whole
+transcript read (the `o` efficiency workload measures both).
+
+If an OpenCode view retains only a failed message's inline error row after
+dropping its oversized main row, no kept row can name a whole-message cursor.
+That view uses joined `sync-v1` paging instead; naming a cursor before the
+failed message would strand its main row. A provider cursor too long to wrap
+also requires joined paging.
 
 ## Changed rows outside the live window
 
@@ -161,6 +186,23 @@ smaller than the message it replaces. A patch keeps, appends to, or replaces
 each part; anything that does not line up (a missing message, an index out of
 range, a part digest or length that differs) rejects the whole delta and the
 client falls back to a snapshot. Other clients keep whole-message deltas.
+
+### Terminal rows
+
+A turn's ending (a provider error, an `error` or `stopped` notice, a kept stop
+result) is not a transcript row: the provider reports it with session state.
+The backend turns each into a system row with a `native-terminal:<kind>:<hash>`
+id (`native-terminal-messages.ts`). The full projection appends them to its
+messages. The progressive transcript read never sees session state, so the
+state view carries them as `terminalMessages`, and the tab shows them after the
+transcript; before that field (2026-10-27) a progressive tab never showed a
+failed turn's reason, on any bridge platform. Both paths place the rows with
+`withNativeTerminalMessages` (`packages/protocol/src/native-terminal-rows.ts`),
+which drops a row whose id the messages hold and an error the last row already
+states: OpenCode's inline error row, or the error `status` line Codex and Pi
+put on a failed turn's last row. A kept stop result is consumed by the full
+read the stop answers with, so it is not on the state view. The transcript
+view, its tokens and the restart preview stay the provider's rows only.
 
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
@@ -238,17 +280,23 @@ These are ceilings, not targets to raise.
 
 Both are in the register of
 [version-compatibility.md](version-compatibility.md#register), with their
-removal conditions. Checked on 2026-10-26: neither serves only bridges outside
-the support window.
+removal conditions. Checked on 2026-10-26 and again on 2026-10-27: neither
+serves only peers outside the support window.
 
 - **Joined `sync-v1` history paging.** `getMessagePage` serves a v1 cursor by
   refreshing the sync-v1 projection, which reads the whole transcript, and
-  paging the backend's own joined copy. It serves a bridge without page
-  routes, and also the renderer: when the progressive view carries no direct
-  cursor, **Load earlier messages** mints one from the sync-v1 projection,
-  which only mints v1 cursors, so a v2 bridge or OpenCode then pages through
-  the joined copy too. [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
-  owns moving that onto direct pages.
+  paging the backend's own joined copy. Every renderer reaches it the same
+  way: when the progressive view carries no direct cursor, **Load earlier
+  messages** mints one from the sync-v1 projection, which only mints v1
+  cursors. Since 0232 a view whose provider pages carries a direct cursor
+  when a usable whole-message boundary remains, and every renderer in the
+  window adopts it. On this backend the joined path serves sources without
+  direct pages (the `/messages` fallback below, a bridge without page routes),
+  a provider cursor too long to wrap, and an OpenCode view retaining only a
+  failed message's inline error row after its main row was byte-omitted. The
+  renderer keeps the mint for those and for backends before 0232.
+  [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
+  owns removing it.
 - **The `/messages` fallback.** When `/transcript` answers 404 or 405,
   `readHttpBridgeTranscriptSnapshot` reads the whole `/messages` body and
   keeps the newest window itself, so a progress probe there also costs a

@@ -14,16 +14,21 @@
  *
  *   RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-request-user-input.test.ts
+ *
+ * Add `RUN_LIVE_CODEX_QUESTION_DEADLINES=1` for a fixed 10.5-minute
+ * qualification: a held question survives the bridge's five-minute deadline
+ * and the TUI's two-minute auto-resolution, while an unheld control expires.
+ * Both use real elapsed time and run together against separate app-servers.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { codexAppServerConfigOverrides } from "../codex-config.js";
 import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineEvent, EngineTurnConfig } from "../engine/types.js";
-import type { InteractionRequest } from "./interactions.js";
+import type { InteractionRequest, InteractionResolution } from "./interactions.js";
 import { resolveCodexBinary } from "./live-binary.js";
 
 // See `live-contract.test.ts`: the test preload replaces `Response`, and
@@ -39,7 +44,10 @@ const describeLive = LIVE ? describe : describe.skip;
 
 const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9" };
 const CALL_ID = "call_question_probe";
-const ANSWER_DELAY_MS = 2_000;
+// A separate opt-in keeps the quick contract check useful while making the
+// elapsed-time qualification impossible to shorten accidentally.
+const DEADLINES = process.env.RUN_LIVE_CODEX_QUESTION_DEADLINES === "1";
+const PAUSED_WAIT_MS = 10.5 * 60_000;
 const QUESTION_ARGUMENTS = JSON.stringify({
   questions: [
     {
@@ -157,7 +165,10 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Pr
   }
 }
 
-async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
+async function runQuestionTurn(
+  id: NativeAgentExecutionPolicy["id"],
+  behavior: "answer" | "hold-past-deadline" | "expire" = "answer",
+) {
   const codexHome = await mkdtemp(join(tmpdir(), "ork-question-home-"));
   const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-question-ws-")));
   await mkdir(join(workspace, ".git"), { recursive: true });
@@ -182,28 +193,70 @@ async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
     supervisorOverrides: { pidFileEnabled: false },
   });
   const questions: InteractionRequest[] = [];
+  const resolutions: InteractionResolution[] = [];
   let samplesBeforeAnswer: number | undefined;
   let held: string | undefined;
+  let answerAccepted: boolean | undefined;
+  let pendingWork: Promise<void> = Promise.resolve();
+  const abort = new AbortController();
   engine.setInteractionHandlers({
     present: (request) => {
       questions.push(request);
-      // Pause it and answer a while later, as a person at the card would. The
-      // model must not be sampled again until the answer is in.
-      setTimeout(() => {
+      // The router registers the question after present returns. Promise.then
+      // also keeps assertion failures on a promise awaited by this test.
+      pendingWork = Promise.resolve().then(async () => {
+        if (behavior === "expire") return;
+        const hold = engine.holdInteraction(request.interactionId, true);
+        held = hold.status;
+        expect(held).toBe("applied");
+        const waitMs = behavior === "hold-past-deadline" ? PAUSED_WAIT_MS : 2_000;
+        const until = Date.now() + waitMs;
+        while (Date.now() < until) {
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              clearTimeout(timer);
+              abort.signal.removeEventListener("abort", finish);
+              resolve();
+            };
+            const timer = setTimeout(finish, Math.min(30_000, until - Date.now()));
+            abort.signal.addEventListener("abort", finish, { once: true });
+          });
+          if (abort.signal.aborted) return;
+          const parked = engine.getParkedInteractions();
+          expect(parked).toHaveLength(1);
+          expect(parked[0]?.interactionId).toBe(request.interactionId);
+          expect(parked[0]?.hold?.heldAt).toBeNumber();
+          expect(parked[0]?.expiresAt).toBeGreaterThan(Date.now());
+          expect(resolutions).toEqual([]);
+          expect(responses.sampled()).toBe(1);
+          if (behavior === "hold-past-deadline") {
+            console.log("[live-question] held question still parked; model sampled once");
+          }
+        }
+        if (behavior === "hold-past-deadline") {
+          expect(Date.now() - request.requestedAt).toBeGreaterThanOrEqual(PAUSED_WAIT_MS);
+          expect(Date.now()).toBeGreaterThan(request.expiresAt!);
+        }
         samplesBeforeAnswer = responses.sampled();
-        held = engine.holdInteraction(request.interactionId, true).status;
-        engine.resolveInteraction(request.interactionId, {
+        answerAccepted = engine.resolveInteraction(request.interactionId, {
           action: "accept",
           answers: { codeword: ["PROBE_BETA"] },
         });
-      }, ANSWER_DELAY_MS);
+      });
+      // Attach immediately: a failed observation must fail the turn wait rather
+      // than becoming an unhandled rejection while Codex remains parked.
+      void pendingWork.catch(failed);
       return true;
     },
-    resolved: () => undefined,
+    resolved: (_request, _answer, resolution) => {
+      resolutions.push(resolution);
+    },
   });
   let completed!: () => void;
-  const turnCompleted = new Promise<void>((resolve) => {
+  let failed!: (error: unknown) => void;
+  const turnCompleted = new Promise<void>((resolve, reject) => {
     completed = resolve;
+    failed = reject;
   });
   engine.subscribe((event: EngineEvent) => {
     if (event.kind === "turn.completed") completed();
@@ -223,17 +276,27 @@ async function runQuestionTurn(id: NativeAgentExecutionPolicy["id"]) {
       input: [{ type: "text", text: "Ask me which codeword to use." }],
       config,
     });
-    await withTimeout(turnCompleted, 60_000, "the turn to complete");
+    await withTimeout(turnCompleted, 60_000 + PAUSED_WAIT_MS, "the turn to complete");
+    await pendingWork;
     return {
       questions,
+      resolutions,
       samplesBeforeAnswer,
       held,
+      answerAccepted,
+      pending: engine.getParkedInteractions(),
+      elapsedMs: Date.now() - (questions[0]?.requestedAt ?? Date.now()),
       toolOutput: responses.toolOutput(),
       offeredTools: responses.offeredTools(),
     };
   } finally {
+    abort.abort();
     await engine.stop();
     await responses.stop();
+    await Promise.all([
+      rm(codexHome, { recursive: true, force: true }),
+      rm(workspace, { recursive: true, force: true }),
+    ]);
   }
 }
 
@@ -241,16 +304,23 @@ describeLive("live request_user_input", () => {
   test("a watched session's question parks as a card and its answer reaches the model", async () => {
     const result = await runQuestionTurn("interactive-host");
     expect(result.questions).toHaveLength(1);
+    // Codex 0.164.0 sends it with `isBlocking: false` but still waits for the
+    // answer, so the bridge publishes it blocking, with a deadline the card
+    // can pause.
     expect(result.questions[0]).toMatchObject({
       kind: "question",
       method: "item/tool/requestUserInput",
-      isBlocking: false,
+      isBlocking: true,
     });
     expect(JSON.stringify(result.questions[0])).toContain("Which codeword should I use?");
-    // Codex 0.164.0 marks it non-blocking but still waits for the answer, and
-    // the question carries a deadline the card can pause.
+    // Only a wire `isBlocking: true` drops the deadline, so this proves the
+    // hint was still false.
     expect(result.questions[0]?.expiresAt).toBeNumber();
     expect(result.held).toBe("applied");
+    expect(result.answerAccepted).toBe(true);
+    expect(result.pending).toEqual([]);
+    // Neither app-server nor the bridge settled it before the answer.
+    expect(result.resolutions).toEqual(["answered"]);
     expect(result.samplesBeforeAnswer).toBe(1);
     expect(result.toolOutput).toContain("PROBE_BETA");
     expect(result.toolOutput).not.toContain("unavailable in Default mode");
@@ -261,4 +331,34 @@ describeLive("live request_user_input", () => {
     expect(result.questions).toEqual([]);
     expect(result.toolOutput).toContain("unavailable in Default mode");
   }, 120_000);
+});
+
+const describeDeadlines = LIVE && DEADLINES ? describe : describe.skip;
+describeDeadlines("live request_user_input elapsed deadlines", () => {
+  test(
+    "a paused question survives 10.5 minutes while an unheld control expires",
+    async () => {
+      const [held, expired] = await Promise.all([
+        runQuestionTurn("interactive-host", "hold-past-deadline"),
+        runQuestionTurn("interactive-host", "expire"),
+      ]);
+      expect(held.questions).toHaveLength(1);
+      expect(held.answerAccepted).toBe(true);
+      expect(held.resolutions).toEqual(["answered"]);
+      expect(held.samplesBeforeAnswer).toBe(1);
+      expect(held.toolOutput).toContain("PROBE_BETA");
+      expect(held.elapsedMs).toBeGreaterThanOrEqual(PAUSED_WAIT_MS);
+      expect(held.pending).toEqual([]);
+
+      expect(expired.questions).toHaveLength(1);
+      const question = expired.questions[0]!;
+      expect(question.expiresAt! - question.requestedAt).toBe(5 * 60_000);
+      expect(expired.elapsedMs).toBeGreaterThanOrEqual(5 * 60_000);
+      expect(expired.resolutions).toEqual(["timed-out"]);
+      expect(JSON.parse(JSON.parse(expired.toolOutput!))).toEqual({ answers: {} });
+      expect(expired.toolOutput).not.toContain("PROBE_BETA");
+      expect(expired.pending).toEqual([]);
+    },
+    PAUSED_WAIT_MS + 120_000,
+  );
 });

@@ -27,7 +27,11 @@ import type {
   TranscriptRead,
   TranscriptReadWindow,
 } from "./build-pipeline-transcript-store.js";
-import type { EnvironmentUnreadReason, IncompleteTurnNotice } from "./models.js";
+import type {
+  EnvironmentUnreadReason,
+  IncompleteTurnNotice,
+  NativeAgentSessionBackendTitle,
+} from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
 import type { NativeAgentDisplayTail } from "./native-agent-display-tails.js";
 import type { AgentMailboxDirectory } from "./storage-agent-mail-directory.js";
@@ -131,7 +135,7 @@ export class StorageService {
 
   async init(): Promise<void> {
     await this.context.open();
-    await this.repos.nativeAgentSessions.recoverExpiredPromptQueueClaims();
+    await this.repos.promptQueues.recoverExpiredPromptQueueClaims();
     this.context.startSnapshots();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
@@ -984,6 +988,13 @@ export class StorageService {
     );
   }
 
+  recordNativeAgentSessionBackendTitle(
+    key: string,
+    title: NativeAgentSessionBackendTitle,
+  ): Promise<boolean> {
+    return this.repos.nativeAgentSessions.recordNativeAgentSessionBackendTitle(key, title);
+  }
+
   invalidateNativeAgentSession(key: string, providerSessionId: string): Promise<boolean> {
     return this.repos.nativeAgentSessions.invalidateNativeAgentSession(key, providerSessionId);
   }
@@ -1014,6 +1025,8 @@ export class StorageService {
     return this.repos.nativeAgentSessions.deleteNativeAgentSessionsByEnvironment(environmentId);
   }
 
+  // NativeAgentDeliveries
+
   dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
@@ -1029,7 +1042,7 @@ export class StorageService {
     session: PersistedNativeAgentSession;
     dispatched: boolean;
   }> {
-    return this.repos.nativeAgentSessions.dispatchNativeAgentPromptOnce(
+    return this.repos.nativeAgentDeliveries.dispatchNativeAgentPromptOnce(
       key,
       requestId,
       dispatch,
@@ -1039,7 +1052,7 @@ export class StorageService {
   }
 
   confirmNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
-    return this.repos.nativeAgentSessions.confirmNativeAgentDispatch(key, requestId);
+    return this.repos.nativeAgentDeliveries.confirmNativeAgentDispatch(key, requestId);
   }
 
   clearPendingNativeAgentDispatch(
@@ -1047,7 +1060,7 @@ export class StorageService {
     requestId: string,
     onlyMailRefused = false,
   ): Promise<boolean> {
-    return this.repos.nativeAgentSessions.clearPendingNativeAgentDispatch(
+    return this.repos.nativeAgentDeliveries.clearPendingNativeAgentDispatch(
       key,
       requestId,
       onlyMailRefused,
@@ -1055,7 +1068,7 @@ export class StorageService {
   }
 
   retireNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
-    return this.repos.nativeAgentSessions.retireNativeAgentDispatch(key, requestId);
+    return this.repos.nativeAgentDeliveries.retireNativeAgentDispatch(key, requestId);
   }
 
   reservePromptQueueSteer(
@@ -1063,7 +1076,7 @@ export class StorageService {
     messageId: string,
     expectedRunId: string,
   ): Promise<PersistedNativeAgentPendingSteer | null> {
-    return this.repos.nativeAgentSessions.reservePromptQueueSteer(key, messageId, expectedRunId);
+    return this.repos.nativeAgentDeliveries.reservePromptQueueSteer(key, messageId, expectedRunId);
   }
 
   reconcileNativeAgentSteer(
@@ -1071,11 +1084,11 @@ export class StorageService {
     requestId: string,
     readStatus: () => Promise<"dispatched" | "absent" | "unknown">,
   ): Promise<"dispatched" | "absent" | undefined> {
-    return this.repos.nativeAgentSessions.reconcileNativeAgentSteer(key, requestId, readStatus);
+    return this.repos.nativeAgentDeliveries.reconcileNativeAgentSteer(key, requestId, readStatus);
   }
 
   recoverPromptQueueSteer(key: string, requestId: string): Promise<void> {
-    return this.repos.nativeAgentSessions.recoverPromptQueueSteer(key, requestId);
+    return this.repos.nativeAgentDeliveries.recoverPromptQueueSteer(key, requestId);
   }
 
   dispatchNativeAgentSteerOnce(
@@ -1083,16 +1096,22 @@ export class StorageService {
     pendingSteer: PersistedNativeAgentPendingSteer,
     dispatch: (session: PersistedNativeAgentSession) => Promise<NativeAgentSessionActionOutcome>,
   ): Promise<NativeAgentSessionActionOutcome> {
-    return this.repos.nativeAgentSessions.dispatchNativeAgentSteerOnce(key, pendingSteer, dispatch);
+    return this.repos.nativeAgentDeliveries.dispatchNativeAgentSteerOnce(
+      key,
+      pendingSteer,
+      dispatch,
+    );
   }
 
   confirmNativeAgentSteer(key: string, requestId: string): Promise<boolean> {
-    return this.repos.nativeAgentSessions.confirmNativeAgentSteer(key, requestId);
+    return this.repos.nativeAgentDeliveries.confirmNativeAgentSteer(key, requestId);
   }
 
   clearPendingNativeAgentSteer(key: string, requestId: string, discard = false): Promise<boolean> {
-    return this.repos.nativeAgentSessions.clearPendingNativeAgentSteer(key, requestId, discard);
+    return this.repos.nativeAgentDeliveries.clearPendingNativeAgentSteer(key, requestId, discard);
   }
+
+  // NativeAgentSessionsRepository
 
   setIncompleteTurnNotice(
     key: string,

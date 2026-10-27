@@ -65,3 +65,10 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
 - **Complete unchanged owner:** `mise run test:logged -- --name tool-group-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/resume-tool-group-owner` passed (100.3 s logged).
 - **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
 - **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.
+
+## Title-tooltip (todo 0202) validation recurrence — 2026-10-27
+
+- **Failure:** Mobile `a waiting group that fits its cap follows appended calls as it starts overflowing` retained inner scrollTop 704 instead of zero (`ToolGroupFold.spec.ts:471`) in `mise run test:browser` with nine Playwright workers (774 passed, 103 skipped, three failed).
+- **Complete unchanged owner:** `mise run test:logged -- --name toolgroupfold -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts` passed (23.9 s logged).
+- **Aggregate evidence:** [1155](../aggregate-validation-runs/1155-webkit-title-tooltip-0202-validation.md). The branch changes only `MobileAppShellLayout` and its tests, which this spec does not render.
+- **Assessment:** intermittent recurrence; no owning source, assertion, deadline or skip changed.

@@ -64,6 +64,7 @@ export class AppServerRuntime {
       messagesForSession: (...args) => this.prompts.messagesForSession(...args),
       clearCompactionBackstop: (...args) => this.sessions.clearCompactionBackstop(...args),
       finishCompaction: (...args) => this.sessions.finishCompaction(...args),
+      reconcileExternalRevert: (...args) => this.sessions.reconcileExternalRevert(...args),
 
       abort: (...args) => this.abort(...args),
       listModels: (...args) => this.listModels(...args),
@@ -227,6 +228,12 @@ export class AppServerRuntime {
     ...args: Parameters<CodexRuntimeSessions["steerSession"]>
   ): ReturnType<CodexRuntimeSessions["steerSession"]> {
     return this.sessions.steerSession(...args);
+  }
+
+  promptDispatchAbsent(
+    ...args: Parameters<CodexRuntimeSessions["promptDispatchAbsent"]>
+  ): ReturnType<CodexRuntimeSessions["promptDispatchAbsent"]> {
+    return this.sessions.promptDispatchAbsent(...args);
   }
 
   steerDispatchStatus(
@@ -430,6 +437,12 @@ export class AppServerRuntime {
     ...args: Parameters<CodexRuntimeTail["listSessions"]>
   ): ReturnType<CodexRuntimeTail["listSessions"]> {
     return this.tail.listSessions(...args);
+  }
+
+  setResumableArchived(
+    ...args: Parameters<CodexRuntimeTail["setResumableArchived"]>
+  ): ReturnType<CodexRuntimeTail["setResumableArchived"]> {
+    return this.tail.setResumableArchived(...args);
   }
 
   reloadMcpConfigurationIfRunning(

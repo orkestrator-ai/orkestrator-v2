@@ -18,6 +18,26 @@ test("a device code survives browser-open failure, environment switching and ren
   await expect(code).toBeVisible();
   await expect(link).toHaveAttribute("href", "https://auth.example.test/device");
   expect(await page.evaluate(() => sessionStorage.getItem("held-sign-in-count"))).toBe("1");
+  // Account status continues to report the refused API key as signed in.
+  // Polling must keep the replacement cancellable and the composer locked.
+  const reads = Number(await page.evaluate(() => sessionStorage.getItem("held-auth-reads")));
+  await expect
+    .poll(async () => Number(await page.evaluate(() => sessionStorage.getItem("held-auth-reads"))))
+    .toBeGreaterThan(reads);
+  await expect(code).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign in to Codex before sending", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel sign-in" }).click();
+  await expect(code).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem("held-sign-in-cancelled"))).toBe("true");
+  await page.getByRole("button", { name: "Sign in to Codex", exact: true }).click();
+  await expect(code).toBeVisible();
+  await page.getByRole("button", { name: "Complete sign in" }).click();
+  await expect(code).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sign in to Codex", exact: true })).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Message Codex" }).fill("Recovered draft");
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
 });
 
 test("a held send survives switching environments, dispatches once on return and stays settled after reload", async ({

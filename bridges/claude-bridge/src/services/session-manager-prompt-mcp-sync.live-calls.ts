@@ -6,6 +6,7 @@ import {
   type Query,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -239,11 +240,27 @@ export async function runMcpCallProbe(open: Set<Query>) {
       }
     },
   };
+  // The CLI writes its MCP logs under `HOME` while it shuts down, so the root
+  // is removed only once the process has exited (0247).
+  let exited: Promise<void> = Promise.resolve();
   const control = query({
     prompt,
     options: {
       cwd,
       ...claudeExecutableOptions(),
+      spawnClaudeCodeProcess: (options) => {
+        const child = spawn(options.command, options.args, {
+          cwd: options.cwd,
+          env: options.env,
+          signal: options.signal,
+          stdio: ["pipe", "pipe", "ignore"],
+        });
+        exited = new Promise((resolve) => {
+          child.once("exit", () => resolve());
+          child.once("error", () => resolve());
+        });
+        return child;
+      },
       settingSources: ["user"],
       mcpServers: keep,
       permissionMode: "bypassPermissions",
@@ -339,6 +356,7 @@ export async function runMcpCallProbe(open: Set<Query>) {
     control.close();
     open.delete(control);
     await consuming;
+    await exited;
     await server.stop(true);
     await rm(root, { recursive: true, force: true });
   }

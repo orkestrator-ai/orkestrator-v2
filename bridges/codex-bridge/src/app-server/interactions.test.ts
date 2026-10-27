@@ -94,14 +94,16 @@ describe("describeInteraction: questions", () => {
     ).toBeUndefined();
   });
 
-  test("a non-blocking question retains the bounded product deadline", () => {
+  test("a Default-mode question (wire isBlocking false) blocks with the bounded deadline", () => {
+    // Codex 0.164.0 awaits the answer whatever the hint says; the hint only
+    // lets a client auto-resolve, so it chooses the deadline, not the flag.
     expect(
       describeWith(QUESTION, {
         threadId: "thread-1",
         isBlocking: false,
         questions: [question()],
       }),
-    ).toMatchObject({ isBlocking: false, expiresAt: DEFAULT_EXPIRES_AT });
+    ).toMatchObject({ isBlocking: true, expiresAt: DEFAULT_EXPIRES_AT });
   });
 
   test("a legacy question remains blocking but keeps its bounded deadline", () => {
@@ -292,14 +294,29 @@ describe("describeInteraction: the autoResolutionMs clamp", () => {
 });
 
 describe("describeInteraction: the blocking flag", () => {
-  test("isBlocking is authoritative over the deprecated autoResolutionMs", () => {
+  test("every parked question is published blocking", () => {
+    for (const params of [
+      { isBlocking: false },
+      { isBlocking: false, autoResolutionMs: 60_000 },
+      { isBlocking: true },
+      { autoResolutionMs: 60_000 },
+      {},
+    ]) {
+      expect(
+        describeWith(QUESTION, { threadId: "thread-1", questions: [question()], ...params })
+          ?.isBlocking,
+      ).toBe(true);
+    }
+  });
+
+  test("a non-blocking hint with no auto-resolution keeps the default deadline", () => {
     const described = describeWith(QUESTION, {
       threadId: "thread-1",
       questions: [question()],
       isBlocking: false,
       autoResolutionMs: null,
     });
-    expect(described?.isBlocking).toBe(false);
+    expect(described?.expiresAt).toBe(DEFAULT_EXPIRES_AT);
   });
 
   test("isBlocking true wins even when an auto-resolution deadline is present", () => {
@@ -313,17 +330,17 @@ describe("describeInteraction: the blocking flag", () => {
     expect(described?.expiresAt).toBeUndefined();
   });
 
-  test("an app-server that omits isBlocking falls back to the deprecated field", () => {
+  test("an app-server that omits isBlocking keeps a deadline, shortened by the deprecated field", () => {
     expect(
       describeWith(QUESTION, {
         threadId: "thread-1",
         questions: [question()],
         autoResolutionMs: 60_000,
-      })?.isBlocking,
-    ).toBe(false);
+      })?.expiresAt,
+    ).toBe(REQUESTED_AT + 60_000);
     expect(
-      describeWith(QUESTION, { threadId: "thread-1", questions: [question()] })?.isBlocking,
-    ).toBe(true);
+      describeWith(QUESTION, { threadId: "thread-1", questions: [question()] })?.expiresAt,
+    ).toBe(DEFAULT_EXPIRES_AT);
   });
 
   test("a non-boolean isBlocking is not trusted", () => {

@@ -703,6 +703,23 @@ function decodePageCursor(cursor: string): PageCursorBody | undefined {
   }
 }
 
+/**
+ * The page cursor for the history before absolute `position`, in the same
+ * generation and content epoch as `cursor`.
+ *
+ * A reader that shows fewer rows than a snapshot sent (its own byte bound
+ * dropped the oldest) names the first row it kept this way: the snapshot's
+ * cursor would page from before rows nobody holds. A position can only move
+ * forward from the cursor's own, towards rows the reader holds, never behind
+ * it. The bridge still checks the position against the history it holds, so
+ * a position past its end answers `expired`, as any stale cursor does.
+ */
+export function bridgeTranscriptPageCursorAt(cursor: string, position: number): string | undefined {
+  const body = decodePageCursor(cursor);
+  if (!body || !Number.isSafeInteger(position) || position < body.b) return undefined;
+  return encodePageCursor({ ...body, b: position });
+}
+
 export interface BridgeTranscriptPageOptions {
   generation: string | number;
   contentEpoch: string | number;

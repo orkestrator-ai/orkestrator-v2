@@ -484,6 +484,86 @@ print("public.tiff")
         ),
       )
       .toBe(`${profile.electronTitle} — Local`);
+    if (!nicknamesOnly && !failure) {
+      // View › Keyboard Shortcuts… reaches the focused window's renderer over
+      // IPC. A click opens and never closes; a delivery of the menu's key
+      // equivalent toggles. Every subsequent physical press toggles again.
+      const clickKeyboardShortcuts = (triggeredByAccelerator: boolean) =>
+        app.evaluate(({ BrowserWindow, Menu }, triggeredByAccelerator) => {
+          const focusedWindow =
+            BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          const viewMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "View");
+          const item = viewMenu?.submenu?.items.find(
+            (candidate) => candidate.label === "Keyboard Shortcuts…",
+          );
+          if (!focusedWindow || !item?.click) {
+            throw new Error("Keyboard Shortcuts… menu item is unavailable");
+          }
+          if (item.accelerator !== "CmdOrCtrl+Shift+K") {
+            throw new Error(`Keyboard Shortcuts… shows ${String(item.accelerator)}`);
+          }
+          // Built MenuItem.click takes the event first; Electron forwards it
+          // as the third argument to the template callback.
+          item.click({ triggeredByAccelerator }, focusedWindow, focusedWindow.webContents);
+        }, triggeredByAccelerator);
+      const shortcutsDialog = window.getByTestId("keyboard-shortcuts-dialog");
+      const shortcutsSearch = window.getByRole("textbox", { name: "Search keyboard shortcuts" });
+
+      await clickKeyboardShortcuts(false);
+      await expect(shortcutsDialog).toBeVisible();
+      await expect(shortcutsSearch).toBeFocused();
+      await clickKeyboardShortcuts(false);
+      await expect(shortcutsDialog).toBeVisible();
+      await window.keyboard.press("Escape");
+      await expect(shortcutsDialog).toHaveCount(0);
+
+      await clickKeyboardShortcuts(true);
+      await expect(shortcutsDialog).toBeVisible();
+      await clickKeyboardShortcuts(true);
+      await expect(shortcutsDialog).toHaveCount(0);
+      await clickKeyboardShortcuts(false);
+      await expect(shortcutsDialog).toBeVisible();
+      await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
+      await expect(shortcutsDialog).toHaveCount(0);
+
+      // Electron's native input path must claim one press before either the
+      // renderer page or the menu key equivalent can toggle a second time.
+      await window.evaluate(() => {
+        const state = { count: 0 };
+        (globalThis as unknown as { shortcutPageInput: typeof state }).shortcutPageInput = state;
+        globalThis.addEventListener(
+          "keydown",
+          (event) => {
+            if (event instanceof KeyboardEvent && event.key.toLowerCase() === "k" && event.shiftKey)
+              state.count++;
+          },
+          true,
+        );
+      });
+      const nativeShortcut = () =>
+        app.evaluate(({ BrowserWindow }) => {
+          const host = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]!;
+          host.focus();
+          host.webContents.focus();
+          const modifiers: ("meta" | "control" | "shift")[] = [
+            process.platform === "darwin" ? "meta" : "control",
+            "shift",
+          ];
+          host.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
+          host.webContents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
+        });
+      await nativeShortcut();
+      await expect(shortcutsDialog).toBeVisible();
+      await nativeShortcut();
+      await expect(shortcutsDialog).toHaveCount(0);
+      expect(
+        await window.evaluate(
+          () =>
+            (globalThis as unknown as { shortcutPageInput: { count: number } }).shortcutPageInput
+              .count,
+        ),
+      ).toBe(0);
+    }
     const invokeNewWindowAccelerator = () =>
       app.evaluate(({ BrowserWindow, Menu }) => {
         const focusedWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];

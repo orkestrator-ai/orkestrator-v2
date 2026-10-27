@@ -29,8 +29,8 @@ beforeEach(() => {
   fixture = createFixture();
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 function claudeServers(servers: Record<string, unknown>) {

@@ -59,7 +59,7 @@ older backends wrote) is owned by
   the `claimPromptQueueHead` helper and its unused types
   (`prompt-queue-persistence.ts`), and the `promptQueueClaimLeaseMs` option and
   `PROMPT_QUEUE_CLAIM_LEASE_MS` (`storage-base.ts`, `storage-shared-core.ts`)
-  are gone. `savePromptQueueMutation` (`storage-native.ts`) no longer takes a
+  are gone. `savePromptQueueMutation` (`storage-prompt-queue-store.ts`) no longer takes a
   claim: it only carries forward one an older backend left. The persisted
   `outstandingClaim` is still validated, still blocks a second dispatch in
   `reservePromptQueueHeadForDispatch`, and is still restored to the head when
@@ -78,7 +78,7 @@ older backends wrote) is owned by
   `bridge-session-close.ts` (two), `http-bridge-progressive.ts`,
   `native-agent-transcript-projection.ts`, `http-bridge-runtime-health.ts`,
   `mcp-management/evidence.ts`, `multi-review-reviewer-transcript.ts`,
-  `gateway-proxy.ts` and `storage-native.ts`. The slash-catalogue legacy
+  `gateway-proxy.ts` and `storage-prompt-queue-store.ts`. The slash-catalogue legacy
   routes were retired by 0016; session-route 404 rejections now record
   `slash-catalogue.outdated-bridge`, alongside the per-agent count and
   warning, without reading a global list.

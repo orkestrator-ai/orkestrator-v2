@@ -565,6 +565,25 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Use Bun.");
   });
 
+  test("verificationPrompt discloses the exact certification baseline", () => {
+    for (const snapshot of [
+      { status: "clean" as const, head: "captured-head" },
+      { status: "dirty" as const, head: "captured-head", paths: ["notes/scratch.md", "odd`name"] },
+    ]) {
+      const prompt = verificationPrompt(pipeline(), "", "main", snapshot);
+      expect(prompt).toContain("**Verification certification baseline**");
+      expect(prompt).toContain("**Captured environment HEAD**: `captured-head`");
+      if (snapshot.status === "dirty") {
+        expect(prompt).toContain("- `notes/scratch.md`");
+        expect(prompt).toContain("- `odd'name`");
+        expect(prompt).toContain("including any leftovers from addressing");
+        expect(prompt).toContain("Preserve this exact HEAD and path set");
+      } else {
+        expect(prompt).toContain("empty set of Git-visible uncommitted paths");
+      }
+    }
+  });
+
   test("verificationPrompt requires evidence to excuse unrelated failures", () => {
     const prompt = verificationPrompt(pipeline(), "", "release/2026.07-hotfix");
 
@@ -580,6 +599,17 @@ describe("build pipeline prompts", () => {
     expect(
       prompt.indexOf("Only failures unrelated to the ticket acceptance criteria"),
     ).toBeLessThan(prompt.indexOf("make the final assistant response the only JSON object"));
+  });
+
+  test("verificationPrompt keeps a temporary worktree from writing back into this checkout", () => {
+    const prompt = verificationPrompt(pipeline(), "", "main");
+
+    expect(prompt).toContain("Leave this checkout's Git-visible state exactly as you found it");
+    expect(prompt).toContain("`ln -s` then creates the link inside that directory");
+    expect(prompt).toContain("git status --porcelain --untracked-files=all");
+    expect(prompt.indexOf("Leave this checkout's Git-visible state")).toBeLessThan(
+      prompt.indexOf("make the final assistant response the only JSON object"),
+    );
   });
 
   test("fixPrompt leaves failures the branch did not cause alone", () => {

@@ -247,3 +247,13 @@ The complete unchanged owner passed: `mise run test:logged -- --name cleanup-dis
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 2.1 s).
 - **Evidence:** `orkestrator-test-run.uWXxA5/root-and-agent-support-tests.log.gz` and enclosing `orkestrator-test-run.doKdov/merge-repository.log.gz` under the host temporary directory.
 - **Assessment:** another timing recurrence; cause unconfirmed. No disk-report implementation, assertion, timeout or skip changed. The aggregate remains non-green.
+
+## Refused-login recovery review validation — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name review-suite -- mise run test`, standard workspace/root/bridge/protocol reservations 4/1/2/1, alongside other checkout suites on the shared host.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded the five-second deadline (5035.91 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name review-disk-isolated -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 5.1 s).
+- **Evidence:** `orkestrator-test-run.N1xM18/root-and-agent-support-tests.log.gz` under the host temporary directory after aggregate finalization; outer wrapper `orkestrator-test-run.x0gyYb`.
+- **Assessment:** recurrence of the existing timing failure. No disk-report code, assertion, deadline or skip changed. The aggregate also contains unrelated persistent migration and macOS profile-cleanup failures; its result remains non-green.
+
+- **Root/support counts:** 3,513 passed, 15 failed and one between-test error across 3,528 tests in 170 files (427.68 s). One new diagnostic-bounds assertion was corrected in `99f0842c3` and its complete owner passed separately; the other failures are in untouched owners.

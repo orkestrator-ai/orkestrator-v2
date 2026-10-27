@@ -71,6 +71,7 @@ import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
+import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
@@ -530,6 +531,7 @@ export function HierarchicalSidebar() {
   // projection when grouped by project/repository or sorted by activity.
   const federation = useFederation();
   const machineViews = useMachineViews();
+  const revealMachineProject = useRevealMachineProject();
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
@@ -1573,6 +1575,7 @@ export function HierarchicalSidebar() {
         environments={sidebarEnvironments}
         onSelectProject={handleSearchSelectProject}
         onSelectEnvironment={handleSearchSelectEnvironment}
+        onSelectMachineProject={revealMachineProject}
       />
 
       {/* Projects List */}

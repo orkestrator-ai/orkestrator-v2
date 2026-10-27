@@ -44,8 +44,12 @@ afterAll(() => {
   console.warn = originalWarn;
 });
 
-async function runSeed(seed: number, flavour: ScenarioFlavour): Promise<InterleavingResult> {
-  const scenario = planScenario(seed, flavour);
+async function runSeed(
+  seed: number,
+  flavour: ScenarioFlavour,
+  provesAbsence = false,
+): Promise<InterleavingResult> {
+  const scenario = { ...planScenario(seed, flavour), ...(provesAbsence ? { provesAbsence } : {}) };
   const result = await runInterleaving(scenario);
   const failures = invariantFailures(result);
   if (failures.length > 0) {
@@ -54,7 +58,9 @@ async function runSeed(seed: number, flavour: ScenarioFlavour): Promise<Interlea
       .join(", ");
     throw new Error(
       [
-        `seed ${seed} (${flavour}) broke ${failures.length} invariant(s).`,
+        `seed ${seed} (${flavour}${provesAbsence ? ", proves absence" : ""}) broke ${
+          failures.length
+        } invariant(s).`,
         `Replay: ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS=${seed}`,
         `panel: ${panel}`,
         `limits: ${JSON.stringify(scenario.concurrency)}, mode ${scenario.reviewerMode}`,
@@ -66,11 +72,18 @@ async function runSeed(seed: number, flavour: ScenarioFlavour): Promise<Interlea
   return result;
 }
 
-function suite(flavour: ScenarioFlavour, coverage: (results: InterleavingResult[]) => void) {
+function suite(
+  flavour: ScenarioFlavour,
+  coverage: (results: InterleavingResult[]) => void,
+  provesAbsence = false,
+) {
   const results: InterleavingResult[] = [];
-  test.each([...SEEDS, ...(REGRESSION_SEEDS[flavour] ?? [])])("seed %i", async (seed) => {
-    results.push(await runSeed(seed, flavour));
-  });
+  test.each([...SEEDS, ...(provesAbsence ? [] : (REGRESSION_SEEDS[flavour] ?? []))])(
+    "seed %i",
+    async (seed) => {
+      results.push(await runSeed(seed, flavour, provesAbsence));
+    },
+  );
   // Guards the harness itself: the seeds must actually reach the interleavings
   // the suite is named for, or a green run proves nothing.
   test("the seeds exercise what the suite is named for", () => {
@@ -128,6 +141,26 @@ describe("review fan-out interleavings", () => {
     suite("chaos", (results) => {
       expect(results.some((result) => result.fired.length >= 3)).toBe(true);
     });
+  });
+
+  // 0223: the provider proves an id never arrived, so a recovered request is
+  // re-sent under the same id; a crash can leave the first send on the wire,
+  // and its late delivery must be the provider's duplicate, never a turn.
+  describe("a provider that proves an id never arrived", () => {
+    for (const flavour of ["restart", "chaos"] as const) {
+      describe(flavour, () => {
+        suite(
+          flavour,
+          (results) => {
+            const ledgers = results.flatMap((result) => Object.values(result.ledgers));
+            expect(ledgers.some((ledger) => ledger.absentAnswers > 0)).toBe(true);
+            expect(ledgers.some((ledger) => ledger.lateDeliveries > 0)).toBe(true);
+            expect(ledgers.some((ledger) => ledger.duplicateDeliveries > 0)).toBe(true);
+          },
+          true,
+        );
+      });
+    }
   });
 
   // Regression seeds for recovery bugs found by these interleavings.

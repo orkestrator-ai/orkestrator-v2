@@ -48,6 +48,21 @@ after a login exists, and `applyComposerPatch` only records a selection until
 then. Code that reads `acpSessionId` must treat the empty string as "not
 created yet", never as a session to load.
 
+## Proving a prompt never arrived
+
+`/dispatch` answers `absent` only while the session's prompt journal is
+complete (`promptJournalComplete`): set on a session `session/new` created,
+never on one adopted with `session/load`, restored only from a record that
+carries it and whose journal loaded without a dropped entry, and cleared for
+good when an entry is evicted at `MAX_PROMPT_JOURNAL` or left off disk by the
+byte budget (`persistedSnapshot` clears it in the write that drops the
+entry). It also holds because the prompt route journals the id in the same
+synchronous step as its duplicate check and awaits the state-file write before
+handing the prompt over; a new path that hands a prompt over must do both, or
+leave the session incomplete. Unset means incomplete, so a constructor that
+forgets the field fails safe. The write is a rename without fsync, so this
+covers a bridge restart, not an OS crash.
+
 ## Standard ACP first
 
 Implement standard ACP generically, so every ACP agent benefits; only a

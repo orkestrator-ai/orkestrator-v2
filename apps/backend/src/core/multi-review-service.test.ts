@@ -54,7 +54,10 @@ import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
-import { ProviderUnreachableError } from "./agent-provider-contract.js";
+import {
+  ProviderUnreachableError,
+  type ProviderDispatchStatus,
+} from "./agent-provider-contract.js";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
@@ -149,8 +152,11 @@ const consolidatedReport: StructuredReviewReport = {
 };
 
 class Provider implements BuildPipelineProvider {
-  async dispatchStatus(_sessionId: string, requestId: string) {
-    return this.sends.has(requestId) ? ("dispatched" as const) : ("unknown" as const);
+  /** Answer `absent` for an id never sent: a bridge whose journal is complete. */
+  provesAbsence = false;
+  async dispatchStatus(_sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
+    if (this.sends.has(requestId)) return "dispatched" as const;
+    return this.provesAbsence ? ("absent" as const) : ("unknown" as const);
   }
   readonly agent: BuildPipelineProvider["agent"] = "claude";
   readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
@@ -12041,6 +12047,81 @@ test.each(["queued", "dispatch"] as const)(
 );
 
 for (const kind of ["prepare", "consolidate", "fix"] as const) {
+  test(`${kind} re-sends a recovered dispatch the provider proves never arrived, once`, async () => {
+    const provider = new Provider(false);
+    provider.statusValue = "running";
+    const environmentId = `env-dispatch-absent-${kind}`;
+    await withService(
+      environmentId,
+      provider,
+      async (context) => {
+        const { service, storage, snapshot, workflowResults } = context;
+        let first: MultiReviewWorkflow;
+        if (kind === "consolidate") {
+          const selection = { agent: "codex" as const, model: "default" };
+          const started = await context.start([selection], selection);
+          const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+            Boolean(workflow.reviewers[0]?.requestId),
+          );
+          provider.statusValue = "idle";
+          await workflowResults!.submit(
+            { environmentId, projectId: "project-1" },
+            reviewing.reviewers[0]!.requestId!,
+            cleanReport,
+          );
+          first = await advanceUntil(
+            service,
+            snapshot,
+            started.id,
+            (workflow) =>
+              workflow.activeRequest?.kind === "consolidate" &&
+              workflow.activeRequest.state === "sent",
+          );
+        } else {
+          first = await startFollowUpStep(kind, context, environmentId, true);
+        }
+        provider.statusValue = "running";
+        const requestId = first.activeRequest!.requestId;
+        const initial = provider.sends.get(requestId)!;
+        // The checkpoint before the send reached the provider.
+        provider.sends.delete(requestId);
+        first.activeRequest!.state = "dispatching";
+        const stored = (await storage.getMultiReviewWorkflow(first.id))!;
+        await storage.saveMultiReviewWorkflow(first.id, environmentId, 1, first, stored.revision);
+        await service.shutdown();
+        provider.provesAbsence = true;
+        const restored = new MultiReviewService(storage, stableReviewInvoker, {
+          autoAdvance: false,
+          provider: async () => provider,
+          workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+        });
+        try {
+          await restored.init();
+          await restored.advanceNow(first.id);
+          expect((await snapshot(first.id))!.activeRequest).toMatchObject({
+            requestId,
+            state: "prepared",
+          });
+          expect(provider.sends.has(requestId)).toBe(false);
+          await restored.advanceNow(first.id);
+          const resent = (await snapshot(first.id))!;
+          expect(resent.activeRequest).toMatchObject({ requestId, state: "sent" });
+          expect(resent.phase).toBe(first.phase);
+          expect(provider.sends.get(requestId)?.prompt).toBe(initial.prompt);
+        } finally {
+          await restored.shutdown();
+        }
+      },
+      { toolMode: true },
+    );
+  });
+}
+
+for (const kind of ["prepare", "consolidate", "fix"] as const) {
   test.each([false, true])(
     `${kind} reconciles a recovered dispatch before observing the old restart (continuation %s)`,
     async (continuation) => {
@@ -12168,4 +12249,123 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
       );
     },
   );
+}
+
+for (const kind of ["prepare", "consolidate", "fix"] as const) {
+  for (const toolMode of [false, true]) {
+    test.each(["absent", "lost"] as const)(
+      `${kind} accepts a saved ${toolMode ? "tool-v1" : "structured"} result over %s dispatch status`,
+      async (answer) => {
+        const provider = new Provider(false);
+        provider.statusValue = "running";
+        const environmentId = `env-result-proof-${kind}-${toolMode}-${answer}`;
+        await withService(
+          environmentId,
+          provider,
+          async (context) => {
+            const { service, storage, snapshot, workflowResults } = context;
+            let first: MultiReviewWorkflow;
+            if (kind === "consolidate") {
+              const selection = { agent: "codex" as const, model: "default" };
+              const started = await context.start([selection], selection);
+              const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+                Boolean(workflow.reviewers[0]?.requestId),
+              );
+              provider.statusValue = "idle";
+              if (toolMode) {
+                await workflowResults!.submit(
+                  { environmentId, projectId: "project-1" },
+                  reviewing.reviewers[0]!.requestId!,
+                  cleanReport,
+                );
+              } else {
+                provider.structured = async <T>(_sessionId: string, requestId: string) => ({
+                  ok: true,
+                  provider: "codex",
+                  requestId,
+                  value: cleanReport as T,
+                });
+              }
+              await advanceUntil(service, snapshot, started.id, (workflow) =>
+                workflow.reviewers.every((reviewer) => reviewer.status === "completed"),
+              );
+              provider.statusValue = "running";
+              first = await advanceUntil(
+                service,
+                snapshot,
+                started.id,
+                (workflow) =>
+                  workflow.activeRequest?.kind === "consolidate" &&
+                  workflow.activeRequest.state === "sent",
+              );
+            } else {
+              first = await startFollowUpStep(kind, context, environmentId, toolMode);
+            }
+            provider.statusValue = "running";
+            const requestId = first.activeRequest!.requestId;
+            const sessionId = (first.reviewSession ?? first.fixSession)!.providerSessionId;
+            const value =
+              kind === "prepare"
+                ? toolMode
+                  ? {
+                      headRef: REVIEW_HEAD,
+                      commands: [],
+                      limitations: ["No validation commands were discovered"],
+                    }
+                  : TEST_REVIEW_PREPARATION
+                : kind === "fix"
+                  ? completedFix
+                  : cleanReport;
+            if (toolMode) {
+              expect(
+                await workflowResults!.submit(
+                  { environmentId, projectId: "project-1" },
+                  requestId,
+                  value,
+                ),
+              ).toMatchObject({ ok: true });
+            }
+            first.activeRequest!.state = "dispatching";
+            const stored = (await storage.getMultiReviewWorkflow(first.id))!;
+            await storage.saveMultiReviewWorkflow(
+              first.id,
+              environmentId,
+              1,
+              first,
+              stored.revision,
+            );
+            await service.shutdown();
+            const dispatch = jest.spyOn(provider, "dispatchStatus").mockResolvedValue(answer);
+            const result = toolMode
+              ? undefined
+              : jest
+                  .spyOn(provider, "structured")
+                  .mockResolvedValue({ ok: true, provider: "codex", requestId, value });
+            const send = jest.spyOn(provider, "send");
+            const restored = new MultiReviewService(storage, stableReviewInvoker, {
+              autoAdvance: false,
+              provider: async () => provider,
+              workflowResults,
+            });
+            try {
+              await restored.init();
+              await restored.advanceNow(first.id);
+              expect((await snapshot(first.id))!.activeRequest).toMatchObject({
+                requestId,
+                state: "sent",
+              });
+              expect(dispatch).toHaveBeenCalledWith(sessionId, requestId);
+              expect(send).not.toHaveBeenCalled();
+            } finally {
+              dispatch.mockRestore();
+              result?.mockRestore();
+              send.mockRestore();
+              await restored.shutdown();
+            }
+          },
+          { toolMode },
+        );
+      },
+    );
+  }
 }

@@ -108,6 +108,7 @@ export class BuildPipelineRecovery {
     // the corrected result instead of re-reading the one already refused.
     pipeline.structuredReviewRequestId = requestId;
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: randomUUID(),
       sessionId: session.sdkSessionId,
       requestId,

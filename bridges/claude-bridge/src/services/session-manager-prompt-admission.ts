@@ -69,17 +69,21 @@ export function admitPrompt(
   const structuredRequestId = options?.outputSchema
     ? (dispatchRequestId ?? crypto.randomUUID())
     : undefined;
-  const claimedRequestId = !options?.outputSchema ? options?.requestId?.trim() : undefined;
+  // Plain and structured prompts with a request id both arrive through the
+  // route's durable claim, which marks the session running before this runs.
   const ownsClaimedDispatch =
-    claimedRequestId !== undefined && claimedPromptDispatches.get(sessionId) === claimedRequestId;
+    dispatchRequestId !== undefined && claimedPromptDispatches.get(sessionId) === dispatchRequestId;
   // At-most-once dispatch, for plain prompts as much as structured ones. The
   // HTTP response may have been lost; reusing a request id attaches to the
   // original turn and never launches another SDK query.
   if (dispatchRequestId && getPromptDispatchRecord(sessionId, dispatchRequestId)) {
     return undefined;
   }
+  // The claim already deduplicated an owned dispatch against the journal, and
+  // set the running status this check would otherwise mistake for its turn.
   if (
     structuredRequestId &&
+    !ownsClaimedDispatch &&
     session.structuredOutputRequestId === structuredRequestId &&
     (session.status === "running" || session.structuredOutput !== undefined)
   ) {

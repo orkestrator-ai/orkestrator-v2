@@ -3,6 +3,7 @@
  * lock, and the state machine each pass advances (provisioning, stage start and
  * dispatch, review packages, validation and the multi-model review).
  */
+import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -914,6 +915,7 @@ export class BuildPipelineSupervisor {
       session.structuredResultStatus = "pending";
       session.turnStartedAt = startedAt;
       pipeline.pendingPromptAttempt = {
+        dispatchVersion: 1,
         id: randomUUID(),
         sessionId: session.sdkSessionId,
         requestId,
@@ -1160,6 +1162,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: next.id,
       sessionId: session.sdkSessionId,
       requestId,
@@ -1440,6 +1443,7 @@ export class BuildPipelineSupervisor {
       delete pipeline.failureContext;
 
       pipeline.pendingPromptAttempt = {
+        dispatchVersion: 1,
         id: randomUUID(),
         sessionId,
         requestId,
@@ -1541,6 +1545,12 @@ export class BuildPipelineSupervisor {
         : undefined,
     );
     try {
+      await this.openDispatchWindow(pipeline, requestId);
+    } catch (error) {
+      this.ctx.settleArtifactTurn(pipeline, stageSession, requestId);
+      throw error;
+    }
+    try {
       await provider.send(
         sessionId,
         resultTransport === "tool-v1" && resultKind
@@ -1571,11 +1581,12 @@ export class BuildPipelineSupervisor {
       }
       if (error instanceof AmbiguousPromptDispatchError) {
         // The bridge may have accepted the stable request before the response
-        // was lost. Keep the durable attempt; the next tick reconciles status
-        // and, if still idle, retries this exact request ID through bridge
-        // deduplication.
+        // was lost. Keep the durable attempt; the next tick settles it on the
+        // provider's dispatch answer and re-sends this exact request id only
+        // when the provider proves it never arrived.
         return;
       }
+      await this.closeDispatchWindow(pipeline, requestId);
       throw error;
     }
   }
@@ -1697,6 +1708,7 @@ export class BuildPipelineSupervisor {
       if (phase === "reviewing") pipeline.structuredReviewRequestId = requestId;
     }
     pipeline.pendingPromptAttempt = {
+      dispatchVersion: 1,
       id: randomUUID(),
       sessionId: session.sdkSessionId,
       requestId,
@@ -1723,6 +1735,12 @@ export class BuildPipelineSupervisor {
   async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
     const attempt = pipeline.pendingPromptAttempt;
     if (!attempt) return;
+    if (
+      (attempt.dispatchVersion !== 1 || attempt.dispatchingAt !== undefined) &&
+      !(await this.resendProvenSafe(pipeline, provider))
+    ) {
+      return;
+    }
     const schema = attempt.structuredReview
       ? attempt.phase === "building" || attempt.phase === "fixing"
         ? attempt.validationPlan === true
@@ -1810,6 +1828,12 @@ export class BuildPipelineSupervisor {
         : undefined,
     );
     try {
+      await this.openDispatchWindow(pipeline, attempt.requestId);
+    } catch (error) {
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      throw error;
+    }
+    try {
       await provider.send(
         attempt.sessionId,
         attempt.resultTransport === "tool-v1" && resultKind
@@ -1843,8 +1867,81 @@ export class BuildPipelineSupervisor {
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) return;
       this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      await this.closeDispatchWindow(pipeline, attempt.requestId);
       throw error;
     }
+  }
+
+  /**
+   * The at-most-once window opens here, durably and just before the send:
+   * from now on a later pass re-sends this id only on the provider's proof
+   * that it never arrived. Every preparation step before it stays retryable.
+   */
+  private async openDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
+    const attempt = pipeline.pendingPromptAttempt;
+    if (attempt?.requestId !== requestId) return;
+    attempt.dispatchingAt = new Date().toISOString();
+    await this.ctx.save(pipeline, pipeline.backendRevision);
+  }
+
+  /**
+   * A send refused before the prompt was written: a retry is a first send.
+   * A failed save leaves the mark, which only costs a proof read.
+   */
+  private async closeDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
+    const attempt = pipeline.pendingPromptAttempt;
+    if (attempt?.requestId !== requestId || attempt.dispatchingAt === undefined) return;
+    attempt.dispatchVersion = 1;
+    delete attempt.dispatchingAt;
+    await this.ctx.save(pipeline, pipeline.backendRevision).catch(() => undefined);
+  }
+
+  /**
+   * Whether a prompt attempt that may already have reached the provider can be
+   * sent again under its id. Only the provider's proof that it never arrived
+   * (`absent`) allows it; acceptance settles the attempt as sent, `lost` fails
+   * the stage, and anything else waits within the reconnect deadline and then
+   * fails closed, as the fan-out does (0223). Bridges deduplicate a resend only
+   * while they still hold the id, which a restart or eviction can end.
+   */
+  private async resendProvenSafe(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+  ): Promise<boolean> {
+    const attempt = pipeline.pendingPromptAttempt!;
+    const session = pipeline.sessions.find(
+      (candidate) => candidate.sdkSessionId === attempt.sessionId,
+    );
+    const label = session?.label.toLowerCase() ?? `${attempt.phase} step`;
+    const acceptance = await recoveredDispatchAcceptance(
+      provider,
+      attempt.sessionId,
+      attempt.requestId,
+      attempt.resultTransport === "tool-v1"
+        ? () => this.ctx.options.workflowResults?.structured<unknown>(attempt.requestId)
+        : undefined,
+    );
+    if (acceptance === "absent") return true;
+    if (acceptance === "dispatched" || acceptance === "pending") {
+      if (session) session.status = "running";
+      delete pipeline.pendingPromptAttempt;
+      delete pipeline.reconnectAttempt;
+      delete pipeline.error;
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+      return false;
+    }
+    if (acceptance === "lost") {
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      throw new Error(
+        `The ${label} dispatch was lost in a provider restart and cannot be resent safely`,
+      );
+    }
+    const elapsed = Date.now() - Date.parse(attempt.dispatchingAt ?? attempt.startedAt);
+    if (elapsed >= this.ctx.reconnectDeadlineMs) {
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
+      throw new Error(`The ${label} dispatch acceptance could not be confirmed`);
+    }
+    return false;
   }
 
   /**

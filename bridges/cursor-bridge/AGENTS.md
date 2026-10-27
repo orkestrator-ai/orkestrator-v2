@@ -62,6 +62,16 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   transcript copies are shed (`src/persistence-budget.ts`). If the recovery
   metadata alone does not fit, the publication fails with a typed error rather
   than being skipped.
+- `GET /session/:id/dispatch` answers `absent` only when the prompt journal
+  has no record of the id and is complete for the session
+  (`promptJournalComplete`): the bridge created the session with a new agent,
+  every restart loaded its journal whole, and no record was ever evicted. It is
+  never answered for a resumed or adopted agent, a closing session, or while a
+  prompt claim is in flight. The flag is persisted only as `true`, so an older
+  bridge, which rewrites only the fields it knows, drops it and leaves the
+  safe answer. Any new way of forgetting a journal record must clear the flag;
+  the only deletion that keeps it is the rollback of an attempt that never
+  reached the SDK.
 - The steer journal is bounded by count and bytes (`src/steer-journal.ts`).
   Records that could still be retried against the running turn are never
   evicted. A new steer that does not fit is refused with 429

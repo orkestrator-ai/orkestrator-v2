@@ -1013,6 +1013,42 @@ describe("session detail route outcomes", () => {
     ]);
   });
 
+  test("answers absent only on the runtime's proof, and never over a record", async () => {
+    const asked: Array<[string, string]> = [];
+    await withRuntimeMethod(
+      "getJournal",
+      () => ({
+        get: (requestId: string) =>
+          requestId === "other-session"
+            ? { state: "terminal", bridgeSessionId: "session-2" }
+            : requestId === "unresolved"
+              ? { state: "prepared", bridgeSessionId: "session-1" }
+              : undefined,
+      }),
+      () =>
+        withRuntimeMethod(
+          "promptDispatchAbsent",
+          (sessionId: string, requestId: string) => {
+            asked.push([sessionId, requestId]);
+            return requestId === "never-sent";
+          },
+          async () => {
+            const status = async (requestId: string) =>
+              (await app.request(`/session/session-1/dispatch?requestId=${requestId}`)).json();
+            expect(await status("never-sent")).toEqual({ dispatch: "absent" });
+            expect(await status("not-proven")).toEqual({ dispatch: "unknown" });
+            expect(await status("other-session")).toEqual({ dispatch: "unknown" });
+            expect(await status("unresolved")).toEqual({ dispatch: "unknown" });
+          },
+        ),
+    );
+    // A record settles the answer without asking for a proof of absence.
+    expect(asked).toEqual([
+      ["session-1", "never-sent"],
+      ["session-1", "not-proven"],
+    ]);
+  });
+
   test("serves structured output and trims the optional request identifier", async () => {
     const calls: Array<{ sessionId: string; requestId?: string }> = [];
     let outcome: unknown = {
@@ -1849,7 +1885,8 @@ describe("steer route outcomes", () => {
 
   test("maps every steer outcome and trims the request fields", async () => {
     const calls: unknown[] = [];
-    let outcome: "accepted" | "not-found" | "idle" | "mismatch" | "unknown" = "accepted";
+    let outcome: "accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "unavailable" =
+      "accepted";
     await withRuntimeMethod(
       "steerSession",
       async (sessionId: string, input: string, expectedTurnId: string, requestId: string) => {
@@ -1877,6 +1914,8 @@ describe("steer route outcomes", () => {
               requestId: "req-steer",
             },
           ],
+          // A definite refusal, like `closing`: no `outcome` field.
+          ["unavailable", 409, { error: "Dispatch journal is unavailable; the text was not sent" }],
           ["accepted", 202, { status: "accepted" }],
         ] as const;
 

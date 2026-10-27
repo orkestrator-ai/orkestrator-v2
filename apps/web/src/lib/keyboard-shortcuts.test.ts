@@ -34,6 +34,7 @@ describe("keyboard shortcut catalog", () => {
     expect(ids(filterKeyboardShortcuts("files panel", "mac"))).toEqual(["toggle-files-panel"]);
     expect(ids(filterKeyboardShortcuts("design canvas undo", "mac"))).toEqual(["design-undo"]);
     expect(ids(filterKeyboardShortcuts("vscode", "mac"))).toEqual(["open-in-editor"]);
+    expect(ids(filterKeyboardShortcuts("view menu", "other"))).toEqual(["show-shortcuts"]);
   });
 
   test("matches key names and symbols", () => {
@@ -90,6 +91,19 @@ describe("isKeyboardShortcutsShortcut", () => {
         ),
       ).toBe(true);
     }
+  });
+
+  test("falls back to the physical K key on a layout that types no Latin letter there", () => {
+    expect(
+      isKeyboardShortcutsShortcut(
+        keydown({ key: "Л", code: "KeyK", metaKey: true, shiftKey: true }),
+      ),
+    ).toBe(true);
+    expect(
+      isKeyboardShortcutsShortcut(
+        keydown({ key: "Л", code: "KeyE", metaKey: true, shiftKey: true }),
+      ),
+    ).toBe(false);
   });
 
   test("leaves Cmd+K and other combinations alone", () => {

@@ -408,6 +408,19 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("set_native_agent_resumable_session_archived", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (typeof args.archived !== "boolean") throw new Error("archived must be a boolean");
+    await context.nativeAgents.setProjectionResumableSessionArchived({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      resumableSessionId: asNonBlankString(args.resumableSessionId, "resumableSessionId"),
+      archived: args.archived,
+    });
+    return { archived: args.archived };
+  });
+
   register("resume_native_agent_session", async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.resumeProjectionSession({

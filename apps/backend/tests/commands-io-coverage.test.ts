@@ -7,6 +7,7 @@ import type { CommandContext } from "../src/core/commands";
 import { MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_SIZE_LABEL } from "../src/core/path-safety";
 import * as realPty from "../src/core/pty";
 import { runCommand } from "../src/core/shell";
+import { removeFixturesAfterSettlement } from "./fixture-cleanup.js";
 
 type ExitEvent = { exitCode: number; signal?: number };
 
@@ -80,6 +81,8 @@ const { BackendRuntime } = await import("../src/core/backend-runtime");
 
 const tempDirs: string[] = [];
 const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
+/** Terminal history every context writes; removed once the file's runtimes have settled. */
+const historyDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-commands-io-history-"));
 
 function createContext(
   environment: Record<string, unknown> | null = null,
@@ -96,7 +99,7 @@ function createContext(
       loadEnvironments: mock(async () =>
         ["container-1", "container-tree-cap"].map((containerId) => ({ containerId })),
       ),
-      getDataDir: () => path.join(os.tmpdir(), `ork-commands-io-history-${process.pid}`),
+      getDataDir: () => historyDataDir,
     },
   } as unknown as CommandContext;
   context.runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
@@ -156,16 +159,23 @@ async function withFakeDocker(
 }
 
 afterEach(async () => {
-  for (const runtime of runtimes.splice(0)) runtime.shutdown();
-  spawnedPtys.length = 0;
-  spawnPty.mockClear();
-  await Promise.all(
-    tempDirs.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
+  const finished = runtimes.splice(0);
+  for (const runtime of finished) runtime.shutdown();
+  // Closed terminals finish their history writes after the command returns.
+  try {
+    await removeFixturesAfterSettlement(
+      () => Promise.all(finished.map((runtime) => runtime.terminals.history.settled())),
+      tempDirs.splice(0),
+    );
+  } finally {
+    spawnedPtys.length = 0;
+    spawnPty.mockClear();
+  }
 });
 
-afterAll(() => {
+afterAll(async () => {
   mock.module("../src/core/pty", () => realPtySnapshot);
+  await fs.rm(historyDataDir, { recursive: true, force: true });
 });
 
 describe("backend command I/O coverage", () => {
@@ -794,7 +804,10 @@ describe("backend command I/O coverage", () => {
   });
 
   test("reads base64 from the active profile's configured worktree directory", async () => {
-    const profileWorktrees = await createTempDir("ork-profile-worktrees-");
+    // The outside file sits next to the worktree directory, inside a directory
+    // the test owns rather than the shared temporary root.
+    const profileWorktrees = path.join(await createTempDir("ork-profile-root-"), "worktrees");
+    await fs.mkdir(profileWorktrees);
     const filePath = path.join(
       profileWorktrees,
       "environment",

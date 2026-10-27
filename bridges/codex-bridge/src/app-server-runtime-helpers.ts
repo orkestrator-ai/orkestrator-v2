@@ -1,78 +1,8 @@
-import { createHash } from "node:crypto";
-import type { AppServerEngine } from "./engine/app-server-engine.js";
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  ApprovalResolution,
-} from "./app-server/approvals.js";
-import {
-  isInteractionAnswerMap,
-  type InteractionAnswer,
-  type InteractionRequest,
-  type InteractionResolution,
-} from "./app-server/interactions.js";
-import type {
-  EngineEvent,
-  EngineGeneration,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-  EngineThread,
-  EngineTurnConfig,
-  EngineUsageSnapshot,
-  EngineUserInput,
-} from "./engine/types.js";
-import {
-  OverlappingTurnError,
-  ThreadRegistry,
-  phaseToExternalStatus,
-  type BridgeSession,
-  type PromptAttachmentInput,
-  type SessionPhase,
-  type SessionTitleSource,
-  type ThreadContext,
-} from "./sessions/thread-registry.js";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-  type AssistantSegment,
-} from "./sessions/turn-accumulator.js";
-import {
-  compareDispatchRecordsNewestFirst,
-  DispatchJournal,
-  DispatchJournalAdmissionError,
-} from "./sessions/dispatch-journal.js";
-import { BridgeSessionStore } from "./sessions/persistence.js";
-import { UpdateCoalescer } from "./messages/coalescer.js";
-import { getTranscriptCacheStats } from "./transcript-cache.js";
-import {
-  createMessageId,
-  createSessionId,
-  type MessagePatchEventData,
-  type NormalizedMessage,
-  type NormalizedPart,
-} from "./messages/types.js";
+import type { EngineUserInput } from "./engine/types.js";
+import { type PromptAttachmentInput, type SessionTitleSource } from "./sessions/thread-registry.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
-import {
-  getWorkingDirectory,
-  hydrateMessagesFromPersistedSession,
-  invalidateTranscriptCatalogCache,
-  listPersistedSessionsWithTitlesForCwd,
-  type PersistedSessionMeta,
-} from "./history/rollout.js";
-import {
-  buildFallbackSessionTitle,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
-  type PersistedSessionTitleSource,
-} from "./session-titles.js";
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+import type { PersistedSessionTitleSource } from "./session-title-index.js";
 import type { BridgeModel } from "./models-cache.js";
-import {
-  structuredOutputFailure,
-  tryParseStructuredOutputText,
-  type JsonSchema,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
 export function toEngineInput(

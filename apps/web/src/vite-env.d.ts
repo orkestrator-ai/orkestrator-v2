@@ -49,6 +49,8 @@ interface Window {
     portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
   };
   orkestrator?: {
+    /** Electron owns physical shortcut input and restores native-view focus. */
+    keyboardShortcuts?: { closed(): Promise<void> };
     /** Electron windows keep focus and renderer storage independent. */
     isolatedViewState?: true;
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;

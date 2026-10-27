@@ -30,8 +30,8 @@ beforeEach(() => {
   fixture = createFixture({ env: {} });
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 /** Install a plugin the way `claude plugin install` records it, under the fixture home. */
@@ -366,7 +366,7 @@ describe("Claude plugin MCP sources", () => {
   test("user settings come from CLAUDE_CONFIG_DIR when the backend sets it, as the CLI reads them", async () => {
     const configDir = mkdtempSync(path.join(tmpdir(), "mcp-claude-config-"));
     try {
-      fixture.cleanup();
+      await fixture.cleanup();
       fixture = createFixture({ env: { CLAUDE_CONFIG_DIR: configDir } });
       writeInstalled(
         {

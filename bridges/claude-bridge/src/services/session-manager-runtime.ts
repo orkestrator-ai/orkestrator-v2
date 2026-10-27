@@ -41,7 +41,11 @@ import {
   resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
-import { claudeRuntimeOwnsLiveWork } from "./session-manager-background-tasks.js";
+import {
+  claudeRuntimeOwnsLiveWork,
+  type ClaudeRuntimeTasks,
+  createClaudeRuntimeTasks,
+} from "./session-manager-background-tasks.js";
 import { sessionOperationError } from "./session-manager-core.js";
 import { sessionHasPendingInteractions } from "./session-manager-lifecycle.js";
 import type { ClaudeRuntimeIdleTimer } from "./session-manager-runtime-idle.js";
@@ -284,6 +288,8 @@ export interface ClaudeRuntime {
   /** Shared by every turn, so a report finds its tool row whoever started it. */
   readonly toolTracker: ToolTracker;
   readonly activeTaskIds: Set<string>;
+  /** The background work this process owns: its tasks, Bash candidates and parked edges. */
+  readonly tasks: ClaudeRuntimeTasks;
   /** The turn whose transcript row holds each tool call. */
   readonly toolOwners: Map<string, ClaudeRuntimeTurn>;
   /** Turns whose `sendPrompt` is still waiting on this runtime. */
@@ -342,6 +348,7 @@ export function createClaudeRuntime(input: {
     abortController: input.abortController,
     toolTracker: input.toolTracker,
     activeTaskIds: input.activeTaskIds,
+    tasks: createClaudeRuntimeTasks(),
     toolOwners: new Map(),
     waitingTurns: new Set([input.firstTurn]),
     launch: input.launch,
@@ -372,7 +379,7 @@ export function openClaudeRuntime(session: SessionState): ClaudeRuntime | undefi
  */
 export function claudeRuntimeOwesWork(runtime: ClaudeRuntime): boolean {
   return (
-    claudeRuntimeOwnsLiveWork(runtime.session, runtime) ||
+    claudeRuntimeOwnsLiveWork(runtime) ||
     runtime.latestTurn.isAwaitingContinuation() ||
     sessionHasPendingInteractions(runtime.session.id)
   );

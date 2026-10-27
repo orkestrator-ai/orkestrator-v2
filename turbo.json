@@ -3,6 +3,7 @@
   "agentGuidance": false,
   "cacheMaxAge": "7d",
   "cacheMaxSize": "10GB",
+  "globalPassThroughEnv": ["TMPDIR"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

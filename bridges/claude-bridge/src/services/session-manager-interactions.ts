@@ -1,7 +1,9 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
+import type { ModelInfo as SdkModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { controlOnlyQuery } from "./control-only-query.js";
+import { liveInitializationResult, readFromLiveClaude } from "./live-claude-control.js";
 import type {
   ModelInfo,
   QuestionRequest,
@@ -219,14 +221,53 @@ export function getSessionInitData(sessionId: string): SessionInitData | undefin
   return session?.initData;
 }
 
+function catalogModels(models: readonly SdkModelInfo[]): ModelInfo[] {
+  return models.map((model) => ({
+    id: model.value,
+    resolvedModel: model.resolvedModel,
+    name: model.displayName,
+    description: model.description,
+    supportsFastMode: model.supportsFastMode,
+    supportsEffort: model.supportsEffort,
+    supportedEffortLevels: model.supportedEffortLevels,
+    supportsAdaptiveThinking: model.supportsAdaptiveThinking,
+    supportsAutoMode: model.supportsAutoMode,
+  }));
+}
+
 /**
- * Get available models from the Claude Agent SDK
- * through a control-only query (see control-only-query.ts).
+ * The models a running CLI listed in its initialize answer, if one is running.
+ *
+ * An empty or malformed list is no answer: the probe decides then. The list
+ * is the one that CLI started with, so a sign-in since it launched shows up
+ * once it is released or a probe reads again.
+ */
+function liveModels(): Promise<SdkModelInfo[] | undefined> {
+  return readFromLiveClaude((control) =>
+    liveInitializationResult(control)?.then((result) =>
+      Array.isArray(result?.models) && result.models.length > 0
+        ? (result.models as SdkModelInfo[])
+        : undefined,
+    ),
+  );
+}
+
+/**
+ * Get available models from the Claude Agent SDK: from a CLI already running
+ * on this bridge when there is one, else through a control-only query (see
+ * control-only-query.ts), which spawns a CLI for the answer.
  */
 export async function getAvailableModelCatalog(): Promise<{
   models: ModelInfo[];
   source: "sdk" | "fallback";
 }> {
+  const live = await liveModels();
+  if (live) {
+    debugLog("[session-manager] Supported models read from a running CLI", {
+      count: live.length,
+    });
+    return { source: "sdk", models: catalogModels(live) };
+  }
   let q: ReturnType<typeof controlOnlyQuery> | undefined;
   try {
     const cwd = process.env.CWD || process.cwd();
@@ -242,20 +283,7 @@ export async function getAvailableModelCatalog(): Promise<{
     const models = await q.supportedModels();
     debugLog("[session-manager] Supported models fetched", { count: models.length });
 
-    return {
-      source: "sdk",
-      models: models.map((model) => ({
-        id: model.value,
-        resolvedModel: model.resolvedModel,
-        name: model.displayName,
-        description: model.description,
-        supportsFastMode: model.supportsFastMode,
-        supportsEffort: model.supportsEffort,
-        supportedEffortLevels: model.supportedEffortLevels,
-        supportsAdaptiveThinking: model.supportsAdaptiveThinking,
-        supportsAutoMode: model.supportsAutoMode,
-      })),
-    };
+    return { source: "sdk", models: catalogModels(models) };
   } catch (error) {
     console.error("[session-manager] Error fetching supported models:", error);
     // Return the shared fallback if SDK discovery fails. The renderer projects

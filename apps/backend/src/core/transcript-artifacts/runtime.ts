@@ -53,6 +53,7 @@ import {
   previewContainerOwner,
   reapOrphanPreviewContainers,
   runDocker,
+  sweepStalePreviewScratch,
 } from "./preview-supervisor.js";
 import {
   canPrepareWorker,
@@ -506,6 +507,12 @@ export async function createTranscriptArtifactRuntime(
     workerImage = { reference: image.reference, pinned: image.pinned };
     runner = containerRunner(workerImage);
   } else {
+    // Startup recovery: a crash can leave this backend's worker scratch behind.
+    const swept = await sweepStalePreviewScratch();
+    if (swept.length > 0)
+      options.logger?.warn(
+        `[transcript-artifacts] removed ${swept.length} stale preview scratch director${swept.length === 1 ? "y" : "ies"}`,
+      );
     runner = new TranscriptPreviewRunner({
       isolation: "process",
       isolationSelection,

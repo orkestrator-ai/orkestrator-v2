@@ -72,6 +72,7 @@ async function workloadFactories(): Promise<Record<string, WorkloadFactory>> {
     l: supervision.fileTreeCacheWorkload,
     m: supervision.probeWorkload,
     n: supervision.pipelineCheckpointWorkload,
+    o: projection.historyCursorCoverageWorkload,
   };
 }
 

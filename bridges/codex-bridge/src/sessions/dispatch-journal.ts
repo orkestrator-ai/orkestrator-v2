@@ -21,7 +21,18 @@
  * `clientId`, so `thread/read` can answer "did this exact request run?" without
  * guessing. Matching on prompt *text* would be wrong — the same text sent twice
  * is two legitimate turns.
+ *
+ * Completeness, for `/dispatch` answering `absent`: a journal is *tracked* when
+ * a bridge of this version has kept it since its file was created. A tracked
+ * file carries a `completeness` block beside the records: the bridge sessions
+ * created fresh since (at most 256), and a fixed 16 KiB Bloom filter of every
+ * request id that left the journal (age, capacity, `forget`, admission) or was
+ * steered. A file without the block (an older bridge wrote it last), a merged
+ * legacy file, a record with no id, or a load failure leaves the journal
+ * untracked for good, and an untracked journal never answers `absent`. The
+ * file has no fsync, so this holds across a bridge restart, not an OS crash.
  */
+import { createHash } from "node:crypto";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
@@ -49,9 +60,33 @@ export interface PromptDispatchRecord {
 
 export const DISPATCH_JOURNAL_VERSION = 1;
 
+/**
+ * Version of the optional `completeness` block. The block is additive: an older
+ * bridge reads only `version` and `records`, ignores it, and drops it the next
+ * time it rewrites the file, which a newer bridge then reads as "not tracked".
+ */
+export const DISPATCH_COMPLETENESS_VERSION = 1;
+/** Fresh-session markers kept, oldest evicted first. */
+export const MAX_FRESH_SESSION_MARKERS = 256;
+/** A longer session id is simply never marked, so it answers `unknown`. */
+export const MAX_FRESH_SESSION_ID_LENGTH = 256;
+/** Fixed size of the filter of ids that left the journal (16 KiB, ~22 KB as base64). */
+export const UNTRACKED_FILTER_BITS = 1 << 17;
+const UNTRACKED_FILTER_BYTES = UNTRACKED_FILTER_BITS / 8;
+const UNTRACKED_FILTER_HASHES = 4;
+
+interface PersistedCompleteness {
+  version: number;
+  /** Bridge sessions created fresh while this journal was tracked, oldest first. */
+  freshSessions: string[];
+  /** Base64 Bloom filter of every request id that may have reached Codex without a record. */
+  untracked: string;
+}
+
 interface JournalFile {
   version: number;
   records: unknown[];
+  completeness?: PersistedCompleteness;
 }
 
 export interface DispatchJournalOptions {
@@ -189,6 +224,22 @@ export class DispatchJournal {
   private nextSequence = 0;
   private integrityError: string | null = null;
   private capacityError: string | null = null;
+  /** `load()` sets `loaded` before its first await; this is set once it has finished. */
+  private loadSettled = false;
+  /**
+   * True only while this journal has accounted for every request id since its
+   * file was created: no record was ever removed without being added to
+   * `untracked`, and no older bridge has rewritten the file since. Only a
+   * tracked journal can prove that an id never reached Codex.
+   */
+  private tracked = false;
+  private readonly freshSessions = new Set<string>();
+  private readonly untracked = new Uint8Array(UNTRACKED_FILTER_BYTES);
+  private untrackedBase64: string | null = null;
+  /** The block restored by the last non-merging `loadPath`, if it was valid. */
+  private restoredCompleteness = false;
+  /** A persisted record had no usable request id, so its id is unknowable. */
+  private unnamedRecordSkipped = false;
 
   constructor(options: DispatchJournalOptions) {
     this.codexHome = options.codexHome;
@@ -207,15 +258,30 @@ export class DispatchJournal {
   async load(): Promise<void> {
     if (this.loaded) return;
     this.loaded = true;
-    if (!this.persist) return;
+    if (!this.persist) {
+      // Nothing survives this process, so nothing can be proved after a restart.
+      this.loadSettled = true;
+      return;
+    }
 
     const legacy = join(
       codexLoginBridgeDir(this.codexHome),
       `dispatch-journal-${this.cwdHash}.json`,
     );
     try {
-      await this.loadPath(this.path());
-      if (legacy !== this.path() && (await this.loadPath(legacy, true))) {
+      const hadCurrent = await this.loadPath(this.path());
+      const mergedLegacy = legacy !== this.path() && (await this.loadPath(legacy, true));
+      // A missing file is a new journal: the file is created by the first
+      // `prepared` write and never deleted, so no prompt was ever handed over
+      // here. A file without a valid completeness block was written (or last
+      // rewritten) by an older bridge, whose removals went unrecorded. A merged
+      // legacy journal has the same gap.
+      this.tracked =
+        !mergedLegacy &&
+        !this.unnamedRecordSkipped &&
+        (hadCurrent ? this.restoredCompleteness : true);
+      if (!this.tracked) this.resetCompleteness();
+      if (mergedLegacy) {
         // Publish the union before retiring the source. A crash between these
         // operations safely merges it again on restart.
         this.collectGarbage();
@@ -231,6 +297,10 @@ export class DispatchJournal {
         error instanceof DispatchJournalIntegrityError
           ? error.message
           : "Dispatch journal could not be safely decoded";
+      this.tracked = false;
+      this.resetCompleteness();
+    } finally {
+      this.loadSettled = true;
     }
   }
 
@@ -248,13 +318,17 @@ export class DispatchJournal {
         "Dispatch journal has an unsupported or malformed file shape",
       );
     }
+    if (!merging) this.restoredCompleteness = this.restoreCompleteness(parsed.completeness);
     for (const persisted of parsed.records) {
       const candidate =
         persisted && typeof persisted === "object"
           ? (persisted as Record<string, unknown>)
           : undefined;
       const requestId = typeof candidate?.requestId === "string" ? candidate.requestId : "";
-      if (!requestId) continue;
+      if (!requestId) {
+        this.unnamedRecordSkipped = true;
+        continue;
+      }
       const sequence =
         Number.isSafeInteger(candidate?.sequence) && Number(candidate?.sequence) > 0
           ? Number(candidate!.sequence)
@@ -489,7 +563,10 @@ export class DispatchJournal {
   async forget(requestId: string): Promise<void> {
     if (this.integrityError) throw new DispatchJournalIntegrityError(this.integrityError);
     if (this.records.get(requestId)?.quarantined) return;
-    if (this.records.delete(requestId)) await this.flush();
+    if (this.records.delete(requestId)) {
+      this.noteRemoved(requestId);
+      await this.flush();
+    }
   }
 
   /** Records still in flight, i.e. what recovery has to reconcile. */
@@ -501,6 +578,124 @@ export class DispatchJournal {
 
   allRecords(): PromptDispatchRecord[] {
     return [...this.records.values()];
+  }
+
+  /**
+   * True only when this journal proves `requestId` was never handed to Codex
+   * for `bridgeSessionId` (or any other session): the journal finished loading
+   * cleanly and is tracked, the session was created fresh while it was
+   * tracked, no record of the id exists under any session, and the id is not
+   * in the filter of ids that left the journal or were steered. Every
+   * `turn/start` is preceded by an awaited `prepared` write and every
+   * `turn/steer` by an awaited filter write, so an id with no trace was never
+   * written to app-server. A filter false positive answers `false`.
+   */
+  provesNeverJournaled(requestId: string, bridgeSessionId: string): boolean {
+    return (
+      this.loadSettled &&
+      this.persist &&
+      this.tracked &&
+      this.integrityError === null &&
+      this.capacityError === null &&
+      this.freshSessions.has(bridgeSessionId) &&
+      !this.records.has(requestId) &&
+      !this.filterHas(requestId)
+    );
+  }
+
+  /**
+   * Records a bridge session this bridge has just created with no Codex
+   * thread, so every id it is ever sent passes through this journal. Never
+   * call it for a resumed, forked or restored session. Persisted with the next
+   * write; a marker lost to a restart only makes the session answer `unknown`.
+   */
+  noteFreshSession(bridgeSessionId: string): void {
+    if (!this.loadSettled || !this.tracked || this.integrityError !== null) return;
+    if (!bridgeSessionId || bridgeSessionId.length > MAX_FRESH_SESSION_ID_LENGTH) return;
+    if (this.freshSessions.has(bridgeSessionId)) return;
+    this.freshSessions.add(bridgeSessionId);
+    while (this.freshSessions.size > MAX_FRESH_SESSION_MARKERS) {
+      const oldest = this.freshSessions.values().next().value;
+      if (oldest === undefined) break;
+      this.freshSessions.delete(oldest);
+    }
+  }
+
+  /**
+   * Durably records that `requestId` may reach Codex without a journal record
+   * (a `turn/steer` carries it as `clientUserMessageId`). Awaited before the
+   * write; a failure throws so the caller does not send.
+   */
+  async noteUntracked(requestId: string): Promise<void> {
+    // An unpersisted journal never answers `absent`, so there is nothing to keep.
+    if (!this.persist) return;
+    if (!this.loadSettled)
+      throw new DispatchJournalIntegrityError("Dispatch journal is not loaded");
+    if (!this.tracked) return;
+    this.filterAdd(requestId);
+    // Always written, even when the bit is already set: an earlier attempt's
+    // write may have failed, leaving the bit in memory only.
+    await this.flush({ failClosed: true });
+  }
+
+  private restoreCompleteness(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const block = value as Partial<PersistedCompleteness>;
+    if (
+      block.version !== DISPATCH_COMPLETENESS_VERSION ||
+      !Array.isArray(block.freshSessions) ||
+      block.freshSessions.length > MAX_FRESH_SESSION_MARKERS ||
+      block.freshSessions.some(
+        (id) =>
+          typeof id !== "string" || id.length === 0 || id.length > MAX_FRESH_SESSION_ID_LENGTH,
+      ) ||
+      typeof block.untracked !== "string"
+    ) {
+      return false;
+    }
+    const filter = Buffer.from(block.untracked, "base64");
+    if (filter.length !== UNTRACKED_FILTER_BYTES || filter.toString("base64") !== block.untracked) {
+      return false;
+    }
+    this.freshSessions.clear();
+    for (const id of block.freshSessions) this.freshSessions.add(id);
+    this.untracked.set(filter);
+    this.untrackedBase64 = block.untracked;
+    return true;
+  }
+
+  private resetCompleteness(): void {
+    this.freshSessions.clear();
+    this.untracked.fill(0);
+    this.untrackedBase64 = null;
+  }
+
+  /** Every removal of a record, whatever its state, lands here. */
+  private noteRemoved(requestId: string): void {
+    if (this.tracked) this.filterAdd(requestId);
+  }
+
+  private filterPositions(requestId: string): number[] {
+    const digest = createHash("sha256").update(requestId, "utf8").digest();
+    const positions: number[] = [];
+    for (let index = 0; index < UNTRACKED_FILTER_HASHES; index += 1) {
+      positions.push(digest.readUInt32BE(index * 4) % UNTRACKED_FILTER_BITS);
+    }
+    return positions;
+  }
+
+  private filterAdd(requestId: string): void {
+    for (const bit of this.filterPositions(requestId)) {
+      const byte = bit >>> 3;
+      this.untracked[byte] = (this.untracked[byte] ?? 0) | (1 << (bit & 7));
+    }
+    this.untrackedBase64 = null;
+  }
+
+  private filterHas(requestId: string): boolean {
+    return this.filterPositions(requestId).every(
+      (bit) => ((this.untracked[bit >>> 3] ?? 0) & (1 << (bit & 7))) !== 0,
+    );
   }
 
   /**
@@ -529,6 +724,7 @@ export class DispatchJournal {
       if (!record.bridgeSessionId) continue;
       if (record.state === "retryable" && latestBySession.get(record.bridgeSessionId) !== record) {
         this.records.delete(requestId);
+        this.noteRemoved(requestId);
       }
     }
 
@@ -541,6 +737,7 @@ export class DispatchJournal {
         updatedAt < cutoff
       ) {
         this.records.delete(requestId);
+        this.noteRemoved(requestId);
       }
     }
 
@@ -558,6 +755,7 @@ export class DispatchJournal {
       )
         break;
       this.records.delete(record.requestId);
+      this.noteRemoved(record.requestId);
     }
   }
 
@@ -594,22 +792,32 @@ export class DispatchJournal {
       );
     }
 
+    for (const requestId of this.records.keys()) {
+      if (!candidate.has(requestId)) this.noteRemoved(requestId);
+    }
     this.records.clear();
     for (const [requestId, entry] of candidate) this.records.set(requestId, entry);
   }
 
   private serializedBytes(records: ReadonlyMap<string, PromptDispatchRecord>): number {
-    return Buffer.byteLength(
-      `${JSON.stringify(
-        {
-          version: DISPATCH_JOURNAL_VERSION,
-          records: [...records.values()],
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    return Buffer.byteLength(`${JSON.stringify(this.fileSnapshot(records), null, 2)}\n`, "utf8");
+  }
+
+  /** The exact file contents, so the byte caps count the completeness block too. */
+  private fileSnapshot(records: ReadonlyMap<string, PromptDispatchRecord>): JournalFile {
+    return {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [...records.values()],
+      ...(this.tracked
+        ? {
+            completeness: {
+              version: DISPATCH_COMPLETENESS_VERSION,
+              freshSessions: [...this.freshSessions],
+              untracked: (this.untrackedBase64 ??= Buffer.from(this.untracked).toString("base64")),
+            },
+          }
+        : {}),
+    };
   }
 
   /** Capacity is recoverable: startup reconciliation may settle enough safety state. */
@@ -630,10 +838,7 @@ export class DispatchJournal {
     this.refreshCapacityError();
     if (!this.persist) return Promise.resolve();
 
-    const snapshot: JournalFile = {
-      version: DISPATCH_JOURNAL_VERSION,
-      records: [...this.records.values()],
-    };
+    const snapshot = this.fileSnapshot(this.records);
     const attempt = this.writeChain.then(async () => {
       try {
         const path = this.path();

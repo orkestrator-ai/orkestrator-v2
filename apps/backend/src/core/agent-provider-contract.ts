@@ -338,12 +338,16 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * `lost` is the other assertion: an
  * earlier provider process recorded the id, this one cannot tell whether its
  * turn ran, and it will refuse the id for good (the read-only twin of a prompt
- * refused with `requestIdRetired`). Neither is "never sent". Everything else —
- * no record, an unreadable journal, a provider that predates `lost` — is
- * `unknown`, so a lost record can never be mistaken for a prompt that was never
- * sent.
+ * refused with `requestIdRetired`). Neither is "never sent". `absent` is the
+ * only negative and an assertion too: the provider can prove the id never
+ * reached it and that a send under it now would be its first delivery, so a
+ * recovered `dispatching` request may be re-sent under the same id (0223). A
+ * provider answers it only while its journal is complete for the session.
+ * Everything else — no record, an unreadable or incomplete journal, a provider
+ * that predates `lost` or `absent` — is `unknown`, so a lost record can never
+ * be mistaken for a prompt that was never sent.
  */
-export type ProviderDispatchStatus = "dispatched" | "pending" | "unknown" | "lost";
+export type ProviderDispatchStatus = "dispatched" | "pending" | "unknown" | "lost" | "absent";
 /**
  * Steering reports positive evidence that a queued instruction was removed,
  * and never `lost`: a steer journal has no retired state.
@@ -571,6 +575,14 @@ export interface ProviderTranscriptSnapshot {
    */
   historyCursor?: string;
   /**
+   * A provider page cursor for the history before the row of `messages` with
+   * this id, in the same epoch as `historyCursor`; undefined for a row that
+   * cannot name one (not in `messages`, or not where a page can end). A
+   * reader that holds fewer rows than the snapshot sent names its first kept
+   * row this way, since `historyCursor` would page from before rows it dropped.
+   */
+  historyCursorBefore?: (messageId: string) => string | undefined;
+  /**
    * Rows from before `messages` that changed recently, newest change first,
    * in the same representation as `messages`. A row is one model response,
    * so a late tool result or subagent report can land on a row newer ones
@@ -655,7 +667,8 @@ export interface AgentSessionProvider {
    *
    * Read-only. It exists so an ambiguous dispatch can be settled from the
    * provider's own durable journal instead of being parked for the user:
-   * `dispatched` and `pending` confirm it, `lost` retires it, `unknown` leaves it parked.
+   * `dispatched` and `pending` confirm it, `lost` retires it, `absent` lets the
+   * caller re-send it under the same id, `unknown` leaves it parked.
    */
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   /**
@@ -838,6 +851,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     update: NativeAgentControlUpdate,
   ): Promise<NativeAgentComposerState | undefined>;
   listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
+  /**
+   * Take a resume-list conversation out of the list, or put it back. Keeps the
+   * provider's history: implementations must never delete a conversation.
+   */
+  setResumableSessionArchived?(resumableSessionId: string, archived: boolean): Promise<void>;
   /**
    * Restate trusted session-held permissions before dispatch and after restart.
    * Process-held authority is refreshed by the launcher instead.

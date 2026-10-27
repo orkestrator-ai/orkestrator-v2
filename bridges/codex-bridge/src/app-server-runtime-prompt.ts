@@ -42,9 +42,7 @@ import {
 import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
 import { invalidateTranscriptCatalogCache } from "./history/rollout.js";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
-import { buildFallbackSessionTitle, persistSessionTitle } from "./session-titles.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
-import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 
 import type { BridgeModel } from "./models-cache.js";
 import { structuredOutputFailure, type JsonSchema } from "@orkestrator/protocol/structured-output";
@@ -101,6 +99,26 @@ export class CodexRuntimePrompt {
       /** A selection resolved against this bridge's own catalogue. */
       command?: NativeAgentBridgeCommandInvocation;
     },
+  ): Promise<PromptDispatchOutcome> {
+    // The exact id the journal records (the route has already trimmed it).
+    const claimed = input.requestId?.trim() ? input.requestId : undefined;
+    if (!claimed) return this.promptUnclaimed(sessionId, input);
+    // Held from route entry to return, so `/dispatch` cannot answer `absent`
+    // for an id this request may still journal and send.
+    const inFlight = this.ctx.promptRequestsInFlight;
+    inFlight.set(claimed, (inFlight.get(claimed) ?? 0) + 1);
+    try {
+      return await this.promptUnclaimed(sessionId, input);
+    } finally {
+      const remaining = (inFlight.get(claimed) ?? 1) - 1;
+      if (remaining > 0) inFlight.set(claimed, remaining);
+      else inFlight.delete(claimed);
+    }
+  }
+
+  private async promptUnclaimed(
+    sessionId: string,
+    input: Parameters<CodexRuntimePrompt["prompt"]>[1],
   ): Promise<PromptDispatchOutcome> {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return { ok: false, status: 404, error: "Session not found" };
@@ -238,6 +256,11 @@ export class CodexRuntimePrompt {
         await this.ctx.journal.forget(requestId);
       }
     }
+    // What the journal held for this id when it was classified. Checked again
+    // at the claim below: the dispatch lock is keyed by the thread once one
+    // exists, so a first prompt that is still creating this session's thread
+    // does not exclude a second one for the same id.
+    const classifiedRecord = this.ctx.journal.get(requestId);
 
     // Literal intent (workflows, mail, structured requests from the backend)
     // skips every bridge resolver: the text goes to Codex exactly as written.
@@ -498,6 +521,12 @@ export class CodexRuntimePrompt {
     // close that fenced the session during any of the awaits above must not
     // find a turn starting after it decided the thread was quiet.
     if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
+    // Another prompt claimed this thread, or journaled this id, during the
+    // awaits above. Without this both could write `turn/start` for one id.
+    this.ctx.registry.assertNoActiveTurn(context);
+    if (this.ctx.journal.get(requestId) !== classifiedRecord) {
+      throw new OverlappingTurnError(context.threadId);
+    }
     context.dispatchInFlight = true;
     this.ctx.registry.setPhase(context, "starting");
 
@@ -527,7 +556,6 @@ export class CodexRuntimePrompt {
     context.messages.push(assistantMessage);
     this.bumpMessageRevision(context);
 
-    this.applyPromptTitle(session, context, input.prompt);
     const provisionalSessionIds = [...context.bridgeSessionIds];
     let provisionalMessagesRetracted = false;
     const retractProvisionalMessages = () => {
@@ -1325,73 +1353,6 @@ export class CodexRuntimePrompt {
     return message;
   }
 
-  /**
-   * Title precedence: explicit app-server name → explicit Orkestrator title →
-   * generated → prompt fallback. The generated title is dual-written to Codex
-   * (`thread/name/set`) and the bridge's own index so rollback keeps titles.
-   */
-  applyPromptTitle(session: BridgeSession, context: ThreadContext, prompt: string): void {
-    // Both title paths name the user's request, so neither may see the injected
-    // coordinator preamble or framed provider guidance: either would dominate
-    // the generated title and leak internal context to the separate `codex exec`.
-    const titleSource = stripSystemInstructions(stripCoordinatorContext(prompt));
-    if (!session.title) {
-      const fallback = buildFallbackSessionTitle(titleSource);
-      for (const id of context.bridgeSessionIds) {
-        const attached = this.ctx.registry.getSession(id);
-        if (attached && !attached.title) {
-          attached.title = fallback;
-          attached.titleSource = "prompt";
-        }
-        this.ctx.options.emit({
-          type: "session.title-updated",
-          sessionId: id,
-          data: { title: fallback },
-        });
-      }
-    }
-
-    const shouldGenerate =
-      session.titleGenerationAttempted !== true &&
-      (session.titleSource === "prompt" || !session.titleSource);
-    if (!shouldGenerate || !this.ctx.options.generateTitle) return;
-
-    session.titleGenerationAttempted = true;
-    const token = Symbol("title");
-    session.titleGenerationToken = token;
-
-    void this.ctx.options
-      .generateTitle(titleSource)
-      .then(async (title) => {
-        if (session.titleGenerationToken !== token) return;
-
-        const threadId = session.threadId;
-        if (threadId) {
-          // Dual write: Codex owns the display name, but the bridge index is what
-          // the SDK engine reads, so rollback must still see the title.
-          await this.ctx.options.engine.setThreadName(threadId, title).catch(() => false);
-          await persistSessionTitle(this.ctx.options.codexHome, threadId, title, {
-            source: "generated",
-          }).catch(() => undefined);
-        }
-        for (const id of context.bridgeSessionIds) {
-          const attached = this.ctx.registry.getSession(id);
-          if (attached) {
-            attached.title = title;
-            attached.titleSource = "generated";
-            attached.titleGenerationAttempted = true;
-            attached.titleGenerationToken = undefined;
-            await this.ctx.callbacks.persistSession(attached);
-          }
-          this.ctx.options.emit({ type: "session.title-updated", sessionId: id, data: { title } });
-        }
-      })
-      .catch(() => {
-        if (session.titleGenerationToken === token) session.titleGenerationToken = undefined;
-        console.warn("[codex-bridge] Failed to generate session title; using prompt fallback");
-      });
-  }
-
   // ------------------------------------------------------------ commands
 
   /**
@@ -1456,15 +1417,6 @@ export class CodexRuntimePrompt {
     // they are the one transcript buffer nothing else ever evicts.
     this.ctx.registry.appendLocalMessages(session, userMessage, assistantMessage);
 
-    if (!session.title) {
-      session.title = buildFallbackSessionTitle(prompt);
-      session.titleSource = "prompt";
-      this.ctx.options.emit({
-        type: "session.title-updated",
-        sessionId: session.id,
-        data: { title: session.title },
-      });
-    }
     for (const message of [userMessage, assistantMessage]) {
       this.ctx.options.emit({
         type: "message.updated",

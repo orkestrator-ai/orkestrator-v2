@@ -20,8 +20,8 @@ beforeEach(() => {
   fixture = createFixture();
 });
 
-afterEach(() => {
-  fixture.cleanup();
+afterEach(async () => {
+  await fixture.cleanup();
 });
 
 const CLAUDE_JSON = JSON.stringify(

@@ -340,6 +340,20 @@ export interface SessionState {
   transcriptEpoch?: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
+  /**
+   * Whether `promptJournal` still holds every request id this bridge session
+   * has ever journaled, in this or any earlier bridge process. Only then can
+   * `/dispatch` answer `absent` (see `publicDispatch`).
+   *
+   * True only for a session `createSession` built fresh, with an empty journal,
+   * and for one restored from a record that carried the flag and whose journal
+   * loaded without losing an entry. False from the start for a resumed, forked
+   * or otherwise adopted session, which Pi may have been prompted in without
+   * this journal. Cleared for good the moment an entry is evicted; withdrawing
+   * an attempt that provably never reached Pi (`withdrawPromptJournal`) keeps
+   * it.
+   */
+  promptJournalComplete: boolean;
   steerJournal: Map<string, SteerJournalEntry>;
   /** Live FIFO used to correlate Pi's authoritative user delivery event. */
   pendingSteerDeliveries: Array<{ requestId: string; text: string; expectedRunId: string }>;
@@ -545,6 +559,11 @@ export interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  /**
+   * Written only when true. Older bridges ignore the field and never write it
+   * back, so any state file they rewrite restores as incomplete.
+   */
+  promptJournalComplete?: true;
   steerJournal?: SteerJournalEntry[];
   composer?: NativeAgentComposerState;
   usage?: PersistedUsage;

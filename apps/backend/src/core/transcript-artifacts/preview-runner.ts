@@ -360,6 +360,8 @@ export class TranscriptPreviewRunner implements PreviewRunner {
   private closing: Promise<void> | undefined;
   private probeRecord: { at: number; status: PreviewRunnerStatus } | undefined;
   private probing: Promise<PreviewRunnerStatus> | undefined;
+  /** The probe's worker while it runs; `close()` stops it with the job workers. */
+  private probeJob: SupervisedJob | undefined;
   private lastBrowserBuild = "unknown";
   private unverifiedExits = 0;
   private readonly reaperTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -521,13 +523,16 @@ export class TranscriptPreviewRunner implements PreviewRunner {
           browserBuild: "unknown",
           reason: "The preview worker entry is missing",
         };
+      if (this.stopping) return this.status();
       const supervised = this.supervise(
         launch,
         this.workerPackage({ kind: "probe" }, this.budgets.workerWallMs),
         this.deadlines(this.budgets.workerWallMs),
       );
+      this.probeJob = supervised;
       const outcome = await supervised.outcome;
       const exit = await supervised.exited;
+      if (this.probeJob === supervised) this.probeJob = undefined;
       if (!exit.verified && !(await supervised.reap())) {
         this.unverifiedExits++;
         return {
@@ -720,6 +725,12 @@ export class TranscriptPreviewRunner implements PreviewRunner {
         );
         ticket.supervised?.cancel();
         if (ticket.supervised) exits.push(ticket.supervised.exited);
+      }
+      // A probe's worker holds a scratch directory like a job's; the backend
+      // must not exit before its verified exit removes it.
+      if (this.probeJob) {
+        this.probeJob.cancel();
+        exits.push(this.probeJob.exited);
       }
       await Promise.race([
         Promise.allSettled(exits),

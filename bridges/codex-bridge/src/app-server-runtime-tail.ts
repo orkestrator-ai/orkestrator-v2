@@ -6,12 +6,15 @@ import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { EngineAccountUsageWindow } from "./engine/types.js";
 import type { SessionPhase } from "./sessions/thread-registry.js";
 import type { TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { join, relative, isAbsolute } from "node:path";
 import {
+  clearTranscriptPathCache,
   getWorkingDirectory,
+  invalidateTranscriptCatalogCache,
   listPersistedSessionsWithTitlesForCwd,
   type PersistedSessionMeta,
 } from "./history/rollout.js";
-import { readPersistedSessionTitleEntries } from "./session-titles.js";
+import { readPersistedSessionTitleEntries } from "./session-title-index.js";
 import type { BridgeModel } from "./models-cache.js";
 import { toBridgeModel } from "./app-server-runtime-helpers.js";
 
@@ -253,9 +256,11 @@ export class CodexRuntimeTail {
   /**
    * Native `thread/list` first, then the rollout parser.
    *
-   * The fallback is not belt-and-braces: archived, malformed and partially-written
+   * The fallback is not belt-and-braces: malformed and partially-written
    * threads are only visible on disk, and legacy `exec` sessions must keep
-   * appearing after the migration.
+   * appearing after the migration. Archived threads stay out: `thread/list`
+   * omits them, and the fallback skips both what app-server lists as archived
+   * and rollouts under `archived_sessions`.
    */
   async listSessions(): Promise<{
     sessions: Array<{ id: string; title?: string; detail?: string; updatedAt: string }>;
@@ -285,6 +290,30 @@ export class CodexRuntimeTail {
       );
     }
 
+    // A failed archived listing only loses the id filter; the path filter stays.
+    const archived = new Set<string>();
+    try {
+      let cursor: string | undefined;
+      do {
+        const page = await this.ctx.options.engine.listThreads({
+          cwd,
+          onlyArchived: true,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const thread of page.threads) if (thread.id) archived.add(thread.id);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    } catch {
+      // Keep IDs from pages already read, plus the path filter below.
+    }
+    const archivedRoot = join(this.ctx.options.codexHome, "archived_sessions");
+    const isArchived = (meta: PersistedSessionMeta) => {
+      if (archived.has(meta.id)) return true;
+      if (!meta.transcriptPath) return false;
+      const fromRoot = relative(archivedRoot, meta.transcriptPath);
+      return fromRoot !== "" && !fromRoot.startsWith("..") && !isAbsolute(fromRoot);
+    };
+
     let persisted: PersistedSessionMeta[] = [];
     // The listing already read and parsed the generated-title index; reuse its
     // map instead of paying a second read + line parse per request.
@@ -297,6 +326,10 @@ export class CodexRuntimeTail {
       persisted = [];
     }
     for (const meta of persisted) {
+      if (isArchived(meta)) {
+        merged.delete(meta.id);
+        continue;
+      }
       const existing = merged.get(meta.id);
       if (!existing) {
         merged.set(meta.id, { id: meta.id, title: meta.title, updatedAt: meta.updatedAt });
@@ -324,6 +357,36 @@ export class CodexRuntimeTail {
       ),
       cwd,
     };
+  }
+
+  /**
+   * Takes a conversation out of the resume list (`thread/archive`), or puts it
+   * back. Its rollout stays: archive is the explicit "remove from list", and
+   * nothing here may ever call `thread/delete`. A thread a tab in this
+   * environment still holds is refused rather than archived under it.
+   */
+  async setResumableArchived(
+    threadId: string,
+    archived: boolean,
+  ): Promise<"archived" | "unarchived" | "in-use" | "failed"> {
+    if (archived && this.ctx.registry.listSessions().some((entry) => entry.threadId === threadId)) {
+      return "in-use";
+    }
+    try {
+      if (archived) await this.ctx.options.engine.archiveThread(threadId);
+      else await this.ctx.options.engine.unarchiveThread(threadId);
+    } catch (error) {
+      console.warn(
+        `[codex-bridge] thread/${archived ? "archive" : "unarchive"} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+      return "failed";
+    } finally {
+      // Codex moves the rollout between `sessions` and `archived_sessions`.
+      invalidateTranscriptCatalogCache();
+      clearTranscriptPathCache();
+    }
+    return archived ? "archived" : "unarchived";
   }
 
   /**

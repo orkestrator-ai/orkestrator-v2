@@ -26,6 +26,9 @@ export function newSessionState(
     revision: 0,
     structured: new Map(),
     promptJournal: new Map(),
+    // Fail safe: only `createSession`'s fresh path and a clean restore of a
+    // complete record may set it.
+    promptJournalComplete: false,
     steerJournal: new Map(),
     pendingSteerDeliveries: [],
     approvals: new Map(),

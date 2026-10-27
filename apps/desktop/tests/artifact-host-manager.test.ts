@@ -54,6 +54,7 @@ class FakeWebContents extends EventEmitter {
   static nextId = 100;
   readonly id = FakeWebContents.nextId++;
   readonly mainFrame = new FakeFrame(1);
+  readonly focus = mock(() => undefined);
   destroyed = false;
   zoomFactor = 1;
   windowOpenHandler: (() => unknown) | null = null;
@@ -141,6 +142,7 @@ function createHarness(
     readonly setBounds = mock((bounds: typeof this.bounds) => {
       this.bounds = bounds;
     });
+    readonly getVisible = mock(() => this.visible);
     readonly setVisible = mock((visible: boolean) => {
       this.visible = visible;
     });
@@ -995,4 +997,18 @@ test("a content frame that never sends ready is terminated by the readiness dead
   expect(harness.events.some((event) => event.type === "unresponsive")).toBe(true);
   expect(contents.forcefullyCrashRenderer).toHaveBeenCalledTimes(1);
   expectTornDown(harness, view, session);
+});
+
+test("native focus restoration requires a live, visible artifact host", async () => {
+  const harness = createHarness();
+  const { contents } = await openLive(harness);
+  const host = harness.manager.activeHost()!;
+  expect(host.focusIfVisible()).toBe(true);
+  expect(contents.focus).toHaveBeenCalledTimes(1);
+  host.setVisible(false);
+  expect(host.focusIfVisible()).toBe(false);
+  host.setVisible(true);
+  expect(host.focusIfVisible()).toBe(true);
+  harness.manager.close(host.hostId);
+  expect(host.focusIfVisible()).toBe(false);
 });

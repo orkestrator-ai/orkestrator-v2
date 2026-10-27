@@ -25,3 +25,17 @@
 Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. The missing-destination and empty-destination alert cases failed after 2487.49 and 1893.61 ms; the error-toast-after-unmount case failed after 1511.16 ms. `mise run test:logged -- --name merge-owner-github -- bun test ./tests/unit/components/GitHubCloneIntegration.test.tsx --parallel=1 --only-failures` passed the complete unchanged owner (8.7 s).
 
 Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
+
+## OpenCode abort-cleanup review validation — 2026-10-27
+
+`mise run test:logged -- --name abort-repository-tests -- mise run test`
+repeated the non-git-destination `findByRole("alert")` failure at 1,996.17 ms
+in the root group (`--parallel=1`) on the shared host, at a load average of
+227.27 during triage. The complete unchanged owner passed with
+`mise run test:logged -- --name abort-rerun-github-clone -- bun test ./tests/unit/components/GitHubCloneIntegration.test.tsx --parallel=1`
+(6.3 s). The failing evidence is
+`orkestrator-test-run.EI9pye/root-and-agent-support-tests.log.gz`, below the
+host temporary directory. Aggregate counts and the other failures from the
+same run are tracked in
+[1180](../aggregate-validation-runs/1180-interaction-test-matrix-0162-validation.md).
+No implementation, assertion, timeout, or skip changed.

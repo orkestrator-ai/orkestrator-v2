@@ -10,6 +10,7 @@
  * into a sign-in card.
  */
 import { controlOnlyQuery } from "./control-only-query.js";
+import { liveInitializationResult, readFromLiveClaude } from "./live-claude-control.js";
 import type { AccountInfo, Query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAuthStatus,
@@ -51,6 +52,8 @@ let authGeneration = 0;
  * successful turn first. That never locks the composer; only `needs-auth` does.
  */
 let turnAuthenticationFailedUntil = 0;
+/** Launch-time accounts stay suspect until a model proves authentication works. */
+let reuseLiveAccounts = true;
 
 function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
   return Date.now() < turnAuthenticationFailedUntil && value.state === "signed-in"
@@ -65,6 +68,7 @@ export function resetClaudeSignInForTesting(): void {
   authRefreshPending = false;
   authGeneration += 1;
   turnAuthenticationFailedUntil = 0;
+  reuseLiveAccounts = true;
 }
 
 /** Claude reports an absent source as the literal string "none". */
@@ -97,7 +101,33 @@ export function normalizeClaudeAccount(account: AccountInfo): NativeAgentAuthSta
   };
 }
 
+/**
+ * The account a running CLI signed in with, read from its initialize answer.
+ *
+ * Only a signed-in answer counts. That answer is from the CLI's launch, so it
+ * cannot show a login made since: a `needs-auth` one would keep the composer
+ * locked after the user signed in from a terminal, which only a probe sees.
+ * A login revoked since is caught by the turn that fails on it
+ * (`noteClaudeAuthenticationFailure`).
+ */
+function liveSignedInAccount(): Promise<NativeAgentAuthStatus | undefined> {
+  return readFromLiveClaude((control) =>
+    liveInitializationResult(control)?.then((result) => {
+      const account = result?.account;
+      if (!account || typeof account !== "object") return undefined;
+      const status = normalizeClaudeAccount(account as AccountInfo);
+      return status.state === "signed-in" ? status : undefined;
+    }),
+  );
+}
+
 async function probeAccount(): Promise<NativeAgentAuthStatus> {
+  // A warm CLI's launch-time account cannot prove that a refused login still
+  // exists. Check again after awaiting it in case a turn failed mid-read.
+  if (reuseLiveAccounts) {
+    const live = await liveSignedInAccount();
+    if (live && reuseLiveAccounts) return live;
+  }
   let probe: Query | undefined;
   try {
     probe = controlOnlyQuery({
@@ -155,6 +185,7 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
  * composer before the user sends into the same failure again.
  */
 export function noteClaudeAuthenticationFailure(): void {
+  reuseLiveAccounts = false;
   turnAuthenticationFailedUntil = Date.now() + AUTH_CACHE_TTL_MS;
   authCache = undefined;
   // Failures share the active probe. If success already fenced it, queue one
@@ -165,6 +196,7 @@ export function noteClaudeAuthenticationFailure(): void {
 
 /** A model answered, so a cached "no login" is stale. */
 export function noteClaudeAuthenticationWorked(): void {
+  reuseLiveAccounts = true;
   // Success also fences a probe that has not published any cache entry yet.
   // Keep its slot until cleanup completes so another read cannot spawn a
   // second CLI while the obsolete probe is still running.

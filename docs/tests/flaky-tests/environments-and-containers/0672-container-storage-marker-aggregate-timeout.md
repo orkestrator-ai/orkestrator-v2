@@ -13,3 +13,5 @@
 - **Evidence:** `orkestrator-test-run.TfxXYL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; the outer summary is in `orkestrator-test-run.tzIUpX`.
 - **Hypothesis:** the fixture deadline was exceeded under aggregate load; the isolated pass establishes intermittence but does not establish the cause. No helper implementation, test assertion, deadline or skip changed.
 - **Recurrence (2026-10-24, node mbp3, load average 19 to 31):** the todo-0050 branch's complete `mise run test` failed it at 5000.61 ms. Rerun alone (`bun test --cwd apps/backend --preload ../../tests/setup-node.ts tests/container-storage.test.ts`), the unchanged owner passed (8 of 8). The branch does not touch container storage.
+
+- **Recurrence (2026-10-27, node mbp3):** the todo-0214 branch's complete `mise run test` failed it at 5001.41 ms. Rerun alone (`bun test ./tests/container-storage.test.ts --parallel=1` from `apps/backend`), the unchanged owner passed (9 of 9). The branch does not touch container storage. See [1150](../aggregate-validation-runs/1150-storage-files-size-0214-validation.md).

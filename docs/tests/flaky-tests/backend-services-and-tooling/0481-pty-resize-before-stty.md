@@ -39,3 +39,8 @@ PTY implementation, assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name main-refresh-pty-owner -- bun --cwd=apps/backend test ./src/core/pty.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (0.1 s logged).
 - **Evidence:** host temporary artifact `orkestrator-test-run.YR13Ws/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; passing owner summary `orkestrator-test-run.Iq5ovQ/summary.json`.
 - **Assessment:** recurrence of the recorded resize-before-stty race; the complete unchanged owner passed. No implementation, assertion, timeout or skip changed during resolution.
+
+
+## Mobile-title coverage review — 2026-10-27
+
+The repository suite repeated `24 80` instead of `31 93` (46.53 ms). `mise run test:logged -- --name pty-owner -- bun test --cwd apps/backend ./src/core/pty.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 0.1 seconds. Aggregate counts, commands and evidence are in [1155](../aggregate-validation-runs/1155-webkit-title-tooltip-0202-validation.md#coverage-review-validation--2026-10-27). No PTY implementation, assertion, timeout or skip changed.

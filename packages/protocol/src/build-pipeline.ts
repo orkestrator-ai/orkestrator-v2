@@ -488,15 +488,13 @@ export interface PipelineSession {
    */
   structuredResultStatus?: "pending" | "accepted";
   /**
-   * Immutable Git state captured before a writable validation turn starts.
+   * Immutable Git state captured before a writable verification turn starts.
    *
-   * Review and verification may write ignored compiler output and caches, but
-   * the backend refuses to accept their result if HEAD moves or the set of
-   * Git-visible uncommitted paths changes. The baseline is a *set*, not a
-   * cleanliness flag: the build stage is only asked to commit, so a review can
-   * legitimately start on a dirty tree, and only the paths validation itself
-   * adds or removes are a violation. Persisting it keeps the guard valid across
-   * backend restarts.
+   * Verification may write ignored compiler output and caches, but its result
+   * is certified only if HEAD and the set of Git-visible uncommitted paths stay
+   * unchanged. Addressing can leave paths in this baseline; verification must
+   * preserve them. Persisting it keeps the guard valid across backend restarts.
+   * Packaged review reads an immutable package and has no live-worktree baseline.
    */
   validationHeadAtStart?: string;
   validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";

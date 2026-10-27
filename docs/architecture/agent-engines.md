@@ -1066,6 +1066,18 @@ completion: the controller still owns turn settlement, worktree and package
 checks, validation execution, pool application, stage changes, and PR
 verification, and consumes an accepted result exactly once.
 
+A controller can also register an acceptance check for one result kind
+(`WorkflowResultService.setAcceptanceCheck`). The service runs it on
+`validate_workflow_result` and on submission, and a refusal is a
+`worktree_changed` error with `nextAction: "correct"` that spends no correction
+budget, so the model can repair the environment and retry inside its turn. The
+build pipeline uses this for `verification-result`: the verifier is told which
+Git-visible paths it added or removed, or that HEAD moved, against the baseline
+recorded when the stage started (`build-pipeline-validation-worktree.ts`). The
+check is advisory: one that throws lets the result through, and the supervisor
+still compares the worktree when it reads the result and fails the stage,
+naming the paths, if it changed afterwards.
+
 **Delivery failures that never reach the backend.** A model reaches these tools
 through its client's own wrapper (Cursor's `CallDynamicTool`, for one), and that
 wrapper rejects a call whose arguments do not parse before the backend sees it.

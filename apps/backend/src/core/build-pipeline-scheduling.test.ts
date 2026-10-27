@@ -361,6 +361,7 @@ describe("BuildPipelineService keyed scheduling", () => {
         consume: async () => {
           consumeCalls += 1;
         },
+        setAcceptanceCheck: () => {},
       } as unknown as WorkflowResultService;
       const time = new ManualTime(0);
       const supervisor = service(context, mode, time, { workflowResults });

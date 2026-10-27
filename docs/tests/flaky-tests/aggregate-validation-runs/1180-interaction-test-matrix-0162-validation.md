@@ -62,3 +62,62 @@ deterministic on this host in their own cases. The two Claude live
 conformance owners and the root, web and script owners failed only in the
 aggregate under a load average above 100. No assertion, deadline, skip or
 implementation was changed.
+
+## Abort-cleanup review follow-up (`b982bd610`)
+
+On 2026-10-27, the abort cleanup fixes passed `mise run check`, the focused
+OpenCode/provider/service regressions, and the opt-in live OpenCode abort
+owner against CLI 1.19.4 in a disposable profile with a scripted local model.
+The live owner verified permission and question rejection with HTTP 200,
+concurrent-responder HTTP 404, and rejection of stale answers.
+
+The follow-up aggregate command was
+`mise run test:logged -- --name abort-repository-tests -- mise run test`.
+The root group used `--parallel=1`; the scheduler initially reported 18/18
+slots reserved and the root group waited 132.7 s. The host load average was
+227.27, 166.17, 165.10 during failure triage. The outer logged run is
+`orkestrator-test-run.M2tTuc`, with group logs in
+`orkestrator-test-run.EI9pye`, below the host temporary directory.
+
+The outer logged command reached its 1,800,000 ms absolute watchdog and
+terminated its owned process tree (exit 1 after 1800.1 s). This run is
+**incomplete**, not a full-suite pass. Workspace execution started only after
+1,283.7 s waiting for four slots; backend execution had no final summary when
+the outer deadline fired. The outer artifact is
+`orkestrator-test-run.M2tTuc/abort-repository-tests.log.gz`; inner group logs
+remain in `orkestrator-test-run.EI9pye`. The bridge group waited 1,009.9 s and
+then passed all five packages (6,313 passed, 57 skipped, zero failed).
+
+Completed workspace packages: web 9,941 passed/10 skipped; public web 41
+passed; CLI 329 passed; protocol 1,939 passed/2 skipped; toolchain 91 passed.
+Desktop completed with 1,369 passed, 16 skipped, and the two existing
+profile-cleanup failures. The unfinished backend log contains 24 failure
+records in command integration, environment moves, environment registry, and
+worktree-location owners already covered by the earlier validation above;
+this is not a final backend count. No new abort/retry/stop owner failed.
+The existing stop-ladder and stopped-runtime owners also passed directly:
+`mise run test:logged -- --name abort-existing-stop-flows -- bun test --cwd apps/backend ./src/core/native-agent-service-abort-ladder.test.ts ./src/core/native-agent-service-stopped-runtime.test.ts --parallel=2`
+(1.6 s).
+
+| Owner | Aggregate observation | Logged isolated rerun |
+| --- | --- | --- |
+| `tests/unit/change-tracking-boundaries.test.ts` | `renderer code has no counting, diffing or provider-classification engine` timed out at 5,988.07 ms against a 5,000 ms deadline | `mise run test:logged -- --name abort-rerun-boundaries -- bun test ./tests/unit/change-tracking-boundaries.test.ts --parallel=1` passed (2.0 s) |
+| `tests/unit/codex-app-server-protocol.test.ts` | `a nonexistent CODEX_PROTOCOL_BINARY fails instead of falling back` timed out at 5,002.15 ms; the abandoned process returned 143 instead of 1 | `mise run test:logged -- --name abort-rerun-protocol -- bun test ./tests/unit/codex-app-server-protocol.test.ts --parallel=1` passed (2.9 s) |
+| `tests/unit/migrate-copy.test.ts` | Both missing listing/root completion cases reported extract status 2 instead of 0 | `mise run test:logged -- --name abort-rerun-migrate-copy -- bun test ./tests/unit/migrate-copy.test.ts --parallel=1` repeated the existing host failure (10 passed, 2 failed; 6.2 s; artifact `orkestrator-test-run.h9Lm0f`) |
+| `tests/unit/components/GitHubCloneIntegration.test.tsx` | Non-git destination `findByRole("alert")` failed after 1,996.17 ms | `mise run test:logged -- --name abort-rerun-github-clone -- bun test ./tests/unit/components/GitHubCloneIntegration.test.tsx --parallel=1` passed (6.3 s); recurrence recorded in [0352](../web-ui/0352-github-picker-non-git-destination-alert.md) |
+| `apps/desktop/scripts/dev/profile-cleanup.test.ts` | The same two unexpected `keychainWarning` fields as [1100](../electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md) | `mise run test:logged -- --name abort-rerun-desktop-cleanup -- bun test --cwd apps/desktop ./scripts/dev/profile-cleanup.test.ts --parallel=1` repeated them (20 passed, 2 failed; 1.2 s; artifact `orkestrator-test-run.3KCws6`) |
+| `apps/backend/tests/commands-integration.test.ts` | PR-polling setup, artifact Git excludes, config-retarget scanning, and Git scan-cache setup timed out | `mise run test:logged -- --name abort-rerun-commands -- bun test --cwd apps/backend ./tests/commands-integration.test.ts --parallel=1` remained non-green (52 passed, 3 failed, one error; 107.9 s; artifact `orkestrator-test-run.mKmMKg`): PR-polling setup, artifact excludes, and config retarget repeated; the cache-setup case passed |
+
+
+The root/support group finished with 3,523 passed, 5 failed, and one error
+across 170 files (541.80 s of execution; 675.6 s including the capacity wait).
+The between-test error is the timed-out protocol owner's expected-exit
+assertion observing the terminated child, as described in the table.
+The Codex protocol lockfile group passed.
+
+The first two owners pass alone and are aggregate-load flakes. The copy owner
+remains a reproducible host failure already recorded above; it is not being
+classified as a flake. The desktop and command owners also remain non-green
+on their isolated reruns; their failures are not being classified as flakes.
+No assertion, timeout, skip, or unrelated product code was changed to
+accommodate these results.

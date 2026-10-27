@@ -21,6 +21,7 @@ native transcript windows keep the contract below instead.
 | `apps/backend/src/core/http-bridge-transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
 | `apps/backend/src/core/http-bridge-progressive.ts` | Snapshot reads, with the v1 and pre-`/transcript` fallbacks |
 | `apps/backend/src/core/native-agent-transcript-projection.ts` | Projection, conditional reads, deltas, history pages |
+| `apps/backend/src/core/native-terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
 | `apps/backend/src/core/native-agent-direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
 | `packages/protocol/src/native-agent-transcript-patch.ts` | Part-level patches inside a delta |
 | `apps/backend/src/core/native-agent-display-tail-scheduler.ts` | Restart-preview checkpoints |
@@ -161,6 +162,23 @@ smaller than the message it replaces. A patch keeps, appends to, or replaces
 each part; anything that does not line up (a missing message, an index out of
 range, a part digest or length that differs) rejects the whole delta and the
 client falls back to a snapshot. Other clients keep whole-message deltas.
+
+### Terminal rows
+
+A turn's ending (a provider error, an `error` or `stopped` notice, a kept stop
+result) is not a transcript row: the provider reports it with session state.
+The backend turns each into a system row with a `native-terminal:<kind>:<hash>`
+id (`native-terminal-messages.ts`). The full projection appends them to its
+messages. The progressive transcript read never sees session state, so the
+state view carries them as `terminalMessages`, and the tab shows them after the
+transcript; before that field (2026-10-27) a progressive tab never showed a
+failed turn's reason, on any bridge platform. Both paths place the rows with
+`withNativeTerminalMessages` (`packages/protocol/src/native-terminal-rows.ts`),
+which drops a row whose id the messages hold and an error the last row already
+states: OpenCode's inline error row, or the error `status` line Codex and Pi
+put on a failed turn's last row. A kept stop result is consumed by the full
+read the stop answers with, so it is not on the state view. The transcript
+view, its tokens and the restart preview stay the provider's rows only.
 
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases

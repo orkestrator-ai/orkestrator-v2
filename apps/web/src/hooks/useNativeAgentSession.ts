@@ -1801,6 +1801,10 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.completionBlockedByBackgroundTasks !== undefined
           ? { completionBlockedByBackgroundTasks: current.completionBlockedByBackgroundTasks }
           : {}),
+        // How the last turn ended belongs to session state, like the turn.
+        ...(hasAuthoritativeState && current.terminalMessages
+          ? { terminalMessages: current.terminalMessages }
+          : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
         ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         // Ordered after whatever is on screen, not after `current`: a new
@@ -1933,6 +1937,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.completionBlockedByBackgroundTasks === undefined
           ? {}
           : { completionBlockedByBackgroundTasks: value.completionBlockedByBackgroundTasks }),
+        ...(value.terminalMessages?.length
+          ? { terminalMessages: value.terminalMessages as TMessage[] }
+          : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
         ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         revision: (current?.revision ?? 0) + 1,

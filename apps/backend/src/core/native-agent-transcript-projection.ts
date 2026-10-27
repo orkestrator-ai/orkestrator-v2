@@ -108,7 +108,6 @@ import {
   type NativeAgentContextUsage,
   type NativeAgentNotice,
   type NativeAgentRetiredDispatch,
-  isNativeInlineErrorMessageId,
   nativeAgentApprovalModes,
   normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
@@ -192,6 +191,8 @@ import {
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
+import { nativeTerminalMessages } from "./native-terminal-messages.js";
 
 interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
@@ -3333,6 +3334,14 @@ export class NativeAgentTranscriptProjection {
       sessionIncompleteTurnNotice(resolved.session),
       retiredDispatch,
     );
+    // The transcript read never sees session state, so the rows saying how the
+    // turn ended travel here. A kept stop result stays with the full read the
+    // stop answers with, which consumes it.
+    const terminalMessages = nativeTerminalMessages({
+      notices: stateSnapshot.notices,
+      error: stateSnapshot.error,
+      turnStartedAt: stateSnapshot.turnStartedAt,
+    });
     return {
       identity: this.progressiveIdentity(
         input,
@@ -3443,6 +3452,7 @@ export class NativeAgentTranscriptProjection {
         : {
             completionBlockedByBackgroundTasks: stateSnapshot.completionBlockedByBackgroundTasks,
           }),
+      ...(terminalMessages.length > 0 ? { terminalMessages } : {}),
     };
   }
 
@@ -5015,55 +5025,19 @@ export class NativeAgentTranscriptProjection {
             )
           : normalized;
       const stopNotice = this.stopNotices.get(sessionKey);
-      const terminalNotices = [
-        ...(snapshot.notices ?? []).filter(
-          (notice) => notice.kind === "error" || notice.kind === "stopped",
-        ),
-        ...(snapshot.error &&
-        !(snapshot.notices ?? []).some(
-          (notice) => notice.kind === "error" && notice.message === snapshot.error,
-        )
-          ? [{ kind: "error" as const, message: snapshot.error }]
-          : []),
-        ...(stopNotice ? [{ kind: "stopped" as const, message: stopNotice }] : []),
-      ];
+      const terminalMessages = nativeTerminalMessages({
+        notices: snapshot.notices,
+        error: snapshot.error,
+        stopNotice,
+        turnStartedAt: snapshot.turnStartedAt,
+      });
       if (stopNotice) this.stopNotices.delete(sessionKey);
-      const messageIds = new Set(
-        transcript.messages.map((message) => (message as { id?: unknown })?.id),
+      // A provider that already says why the turn failed (OpenCode's inline
+      // error row, Codex and Pi's error status line) gets no second row.
+      const messagesWithNotices = withNativeTerminalMessages(
+        transcript.messages,
+        terminalMessages as unknown[],
       );
-      // A provider that already renders its failure inline (OpenCode today)
-      // ends the transcript with an inline error row; a second terminal row
-      // would repeat it.
-      const lastMessageId = (transcript.messages.at(-1) as { id?: unknown } | undefined)?.id;
-      const inlineError = isNativeInlineErrorMessageId(lastMessageId)
-        ? (transcript.messages.at(-1) as { content?: unknown })
-        : undefined;
-      const terminalMessages = terminalNotices
-        .filter(
-          (notice) =>
-            notice.kind !== "error" ||
-            typeof inlineError?.content !== "string" ||
-            (inlineError.content !== notice.message &&
-              !inlineError.content.endsWith(`: ${notice.message}`)),
-        )
-        .map((notice) => ({
-          id: `native-terminal:${notice.kind}:${createHash("sha256")
-            .update(notice.message)
-            .digest("hex")
-            .slice(0, 16)}`,
-          role: "system" as const,
-          content: notice.message,
-          parts: [{ type: "text" as const, content: notice.message }],
-          // Provider terminal metadata does not consistently carry a time.
-          // A fixed value keeps repeated authoritative reads byte-stable.
-          createdAt: "1970-01-01T00:00:00.000Z",
-        }))
-        .filter((message) => {
-          if (messageIds.has(message.id)) return false;
-          messageIds.add(message.id);
-          return true;
-        });
-      const messagesWithNotices = [...transcript.messages, ...terminalMessages];
       const renderedTranscript = { messages: messagesWithNotices, window: transcript.window };
       const fallbackTitle = transcript.messages.flatMap((candidate) => {
         const message = candidate as { role?: unknown; content?: unknown };

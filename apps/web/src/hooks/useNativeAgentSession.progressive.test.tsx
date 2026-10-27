@@ -379,6 +379,55 @@ afterEach(() => {
 });
 
 describe("useNativeAgentSession progressive view", () => {
+  test.each(["state-first", "transcript-first"])(
+    "retains terminal rows through transcript polls and clears them from authoritative state (%s)",
+    async (order) => {
+      const row = { id: "native-terminal:error:refused", text: "Login refused" };
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      transcriptUpdates = [
+        async () => {
+          if (order === "state-first") await gate;
+          return transcriptSnapshot("transcript-1", [message("m1")]);
+        },
+      ];
+      stateUpdates = [
+        async () => {
+          if (order === "transcript-first") await gate;
+          return stateSnapshot("state-1", { terminalMessages: [row] });
+        },
+      ];
+      const { result } = renderSession();
+      if (order === "state-first") {
+        await waitFor(() => expect(result.current.projection?.terminalMessages).toEqual([row]));
+      } else {
+        await waitFor(() => expect(result.current.projection?.messages).toEqual([message("m1")]));
+      }
+      await act(async () => {
+        release();
+      });
+      await waitFor(() => {
+        expect(result.current.projection?.messages).toEqual([message("m1")]);
+        expect(result.current.projection?.terminalMessages).toEqual([row]);
+      });
+      transcriptUpdates = [
+        () => transcriptSnapshot("transcript-2", [message("m1"), message("m2")]),
+      ];
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.projection?.messages).toHaveLength(2);
+      expect(result.current.projection?.terminalMessages).toEqual([row]);
+      stateUpdates = [() => stateSnapshot("state-2")];
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.projection?.terminalMessages).toBeUndefined();
+    },
+  );
+
   test("installs transcript text without waiting for held discovery", async () => {
     let releaseDiscovery!: () => void;
     const heldDiscovery = new Promise<NativeAgentDiscoveryUpdate>((resolve) => {

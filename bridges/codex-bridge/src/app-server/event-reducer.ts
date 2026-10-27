@@ -11,7 +11,7 @@
  * environment for something purely additive.
  */
 import { adaptAppServerItem, planUpdateToTodoList } from "./item-adapter.js";
-import { codexErrorInfoToCode } from "./errors.js";
+import { codexErrorInfoHttpStatus, codexErrorInfoToCode } from "./errors.js";
 import type { InboundNotification } from "./envelope-validation.js";
 import type {
   EngineError,
@@ -73,10 +73,12 @@ export function toTurnError(raw: unknown): EngineError {
     return { message: typeof raw === "string" ? raw : "Codex reported an error" };
   }
   const code = codexErrorInfoToCode(raw.codexErrorInfo);
+  const httpStatusCode = codexErrorInfoHttpStatus(raw.codexErrorInfo);
   return {
     message: str(raw.message) ?? "Codex reported an error",
     ...(code ? { code } : {}),
     ...(str(raw.additionalDetails) ? { details: str(raw.additionalDetails) } : {}),
+    ...(httpStatusCode === undefined ? {} : { httpStatusCode }),
   };
 }
 

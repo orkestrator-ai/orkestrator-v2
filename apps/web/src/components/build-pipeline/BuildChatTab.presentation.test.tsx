@@ -237,6 +237,8 @@ describe("BuildChatTab presentation", () => {
       label: pipelineIndependentReviewLabel(0),
       sessionKey: "stale-a",
       sdkSessionId: "stale-a-session",
+      // Individual retries retain the full panel's identity.
+      reviewPassId: "live-1",
       completedAt: "2026-07-29T00:01:00.000Z",
       tokenCount: 1_000,
     };

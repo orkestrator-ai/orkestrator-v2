@@ -256,6 +256,41 @@ describe("collectPaneDependencyIds", () => {
 });
 
 describe("hydratePaneLayoutDependencies", () => {
+  test("hydrates a persisted pipeline pass before reconciliation, including on reload", async () => {
+    const root = leaf("default", [
+      {
+        id: "pipeline-pass",
+        type: "multi-review",
+        multiReviewTabData: {
+          environmentId: "env-1",
+          workflowId: "pipeline-1",
+          pipelinePass: "review-pass-1",
+          isLocal: true,
+        },
+      },
+    ]);
+    for (let reload = 0; reload < 2; reload++) {
+      useBuildPipelineStore.setState({ pipelines: new Map() });
+      hydrateBuildPipeline.mockImplementationOnce(async (id) => {
+        useBuildPipelineStore.setState({
+          pipelines: new Map([[id, { id, environmentId: "env-1" } as never]]),
+        });
+      });
+      expect([...collectPaneDependencyIds(root).pipelineIds]).toEqual(["pipeline-1"]);
+      await hydratePaneLayoutDependencies(root);
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(root),
+        paneState(leaf("default", [{ id: "plain", type: "plain" }])),
+      );
+      expect(restored?.root).toMatchObject({
+        tabs: [{ id: "pipeline-pass", multiReviewTabData: { pipelinePass: "review-pass-1" } }],
+      });
+    }
+    expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["pipeline-1", "pipeline-1"]);
+    expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
+  });
+
   test("loads only the records this client is missing", async () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([["known-pipeline", {} as never]]),

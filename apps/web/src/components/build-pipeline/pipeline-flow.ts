@@ -278,6 +278,7 @@ function sessionState(
   pipeline: BuildPipeline,
   current: boolean,
 ): FlowNodeState {
+  if (session.superseded) return "cancelled";
   if (session.status === "error") return "failed";
   if (pipeline.phase === "failed" && pipeline.failureContext?.sessionId === session.sdkSessionId) {
     return "failed";
@@ -338,6 +339,7 @@ function issueCountsOf(
 
 interface ReviewPass {
   key: string;
+  identity?: string;
   /** One-based, counting every review pass on the line. */
   number: number;
   iteration: number;
@@ -421,22 +423,35 @@ export function pipelineFlowModel(
     ...(setupState === "failed" && pipeline.error ? { error: pipeline.error } : {}),
   });
 
+  // Current pipeline errors belong only to their recorded session, never to
+  // every historical failure. Older snapshots may have no retained detail.
+  function sessionError(session: PipelineSession): string | undefined {
+    if (session.superseded) return undefined;
+    return (
+      session.error ??
+      (pipeline.phase === "failed" && pipeline.failureContext?.sessionId === session.sdkSessionId
+        ? pipeline.error
+        : undefined)
+    );
+  }
   // The live fan-out belongs to the newest pass of the current iteration.
+  const reviewingNow = pipeline.phase === "reviewing" || stopped === "reviewing";
   const fanout = pipeline.reviewFanout;
   const liveBySessionKey = new Map(
-    (fanout?.reviewers ?? []).flatMap((reviewer) =>
+    (reviewingNow ? (fanout?.reviewers ?? []) : []).flatMap((reviewer) =>
       reviewer.sessionKey ? [[reviewer.sessionKey, reviewer] as const] : [],
     ),
   );
-  const liveConsolidationKey = fanout?.consolidation?.sessionKey;
+  const liveConsolidationKey = reviewingNow ? fanout?.consolidation?.sessionKey : undefined;
 
   const passes: ReviewPass[] = [];
   const lastPass = (): ReviewPass | null => passes.at(-1) ?? null;
-  const openPass = (iteration: number): ReviewPass => {
+  const openPass = (iteration: number, identity?: string): ReviewPass => {
     const number = passes.length + 1;
     const key = `review-pass-${number}`;
     const created: ReviewPass = {
       key,
+      identity,
       number,
       iteration,
       reviewers: new Map(),
@@ -447,9 +462,18 @@ export function pipelineFlowModel(
     return created;
   };
   /** The open pass of an iteration, or a new one. */
-  const continuePass = (iteration: number): ReviewPass => {
+  const continuePass = (iteration: number, identity?: string): ReviewPass => {
     const open = lastPass();
-    return open && !open.closed && open.iteration === iteration ? open : openPass(iteration);
+    if (
+      open &&
+      !open.closed &&
+      open.iteration === iteration &&
+      (!identity || !open.identity || open.identity === identity)
+    ) {
+      open.identity ??= identity;
+      return open;
+    }
+    return openPass(iteration, identity);
   };
   const closePass = () => {
     const open = lastPass();
@@ -506,9 +530,26 @@ export function pipelineFlowModel(
 
     if (kind === "reviewer") {
       const slot = pipelineIndependentReviewSlot(session.label) ?? 0;
-      const reviewPass = continuePass(session.iteration);
       const live = liveBySessionKey.get(session.sessionKey);
-      const previous = reviewPass.reviewers.get(slot);
+      const legacyPrefix = `${pipeline.id}:review:${session.iteration}:`;
+      const legacyIdentity =
+        slot === 0 && session.sessionKey.startsWith(legacyPrefix)
+          ? session.sessionKey.slice(legacyPrefix.length).split(":")[0]
+          : undefined;
+      const identity = session.reviewPassId ?? (live ? fanout?.reviewers[0]?.id : legacyIdentity);
+      let reviewPass = continuePass(session.iteration, identity);
+      let previous = reviewPass.reviewers.get(slot);
+      // Legacy records predate reviewPassId. A fresh reviewer ID in a used
+      // slot starts another full panel; numbered attempts keep the same slot.
+      if (
+        previous &&
+        (!session.reviewPassId || !previous.session?.reviewPassId) &&
+        previous.session?.sessionKey.replace(/:attempt-\d+$/, "") !==
+          session.sessionKey.replace(/:attempt-\d+$/, "")
+      ) {
+        reviewPass = openPass(session.iteration, identity);
+        previous = undefined;
+      }
       const node: PipelineFlowNode = {
         id: session.sessionKey,
         kind: "reviewer",
@@ -545,8 +586,11 @@ export function pipelineFlowModel(
     }
 
     if (kind === "consolidation") {
-      const reviewPass = continuePass(session.iteration);
       const liveConsolidation = session.sessionKey === liveConsolidationKey;
+      const reviewPass = continuePass(
+        session.iteration,
+        session.reviewPassId ?? (liveConsolidation ? fanout?.reviewers[0]?.id : undefined),
+      );
       let state: FlowNodeState = sessionState(session, pipeline, false);
       if (liveConsolidation) {
         state = fanout?.report
@@ -574,9 +618,11 @@ export function pipelineFlowModel(
         passKey: reviewPass.key,
         ...sessionFields(session, pipeline),
         issueCounts: issueCountsOf(session, pipeline),
-        ...(state === "failed" && pipeline.phase === "failed" && pipeline.error
-          ? { error: pipeline.error }
-          : {}),
+        model: session.model ?? (liveConsolidation ? fanout?.consolidation?.model : undefined),
+        reasoningEffort:
+          session.reasoningEffort ??
+          (liveConsolidation ? fanout?.consolidation?.reasoningEffort : undefined),
+        error: sessionError(session),
       });
       continue;
     }
@@ -592,7 +638,7 @@ export function pipelineFlowModel(
       placeholder: false,
       ...sessionFields(session, pipeline),
       ...(kind === "review" ? { issueCounts: issueCountsOf(session, pipeline) } : {}),
-      ...(state === "failed" && pipeline.error ? { error: pipeline.error } : {}),
+      error: sessionError(session),
     };
     if (kind === "review") {
       // A one-model review is a pass of its own.
@@ -608,12 +654,8 @@ export function pipelineFlowModel(
 
   // Reviewers of the live pass with no session yet: queued, starting, or
   // failed before their session was created.
-  const reviewingNow =
-    pipeline.phase === "reviewing" ||
-    stopped === "reviewing" ||
-    (fanout !== undefined && !complete);
-  if (fanout && reviewingNow) {
-    const livePass = continuePass(pipeline.iteration);
+  if (fanout && (reviewingNow || passes.length === 0)) {
+    const livePass = continuePass(pipeline.iteration, fanout.reviewers[0]?.id);
     fanout.reviewers.forEach((reviewer, slot) => {
       const existing = livePass.reviewers.get(slot);
       if (existing && existing.session?.sessionKey === reviewer.sessionKey) return;
@@ -659,7 +701,9 @@ export function pipelineFlowModel(
       (node) =>
         node.state === "failed" &&
         !node.placeholder &&
-        (node.kind === PHASE_KIND[phase] ||
+        ((pipeline.failureContext?.sessionId &&
+          node.session?.sdkSessionId === pipeline.failureContext.sessionId) ||
+          node.kind === PHASE_KIND[phase] ||
           (phase === "reviewing" &&
             (node.kind === "reviewer" ||
               node.kind === "consolidation" ||
@@ -685,6 +729,18 @@ export function pipelineFlowModel(
     const error = state === "failed" ? pipeline.error : undefined;
     if (kind === "review" && usesReviewFanout(pipeline)) {
       const reviewPass = continuePass(pipeline.iteration);
+      if (reviewPass.reviewersColumn.nodeIds.length === 0) {
+        place(reviewPass.reviewersColumn, {
+          id: `${reviewPass.key}:startup`,
+          kind: "review",
+          title: numbered(KIND_TITLES.review, reviewPass.number),
+          state,
+          placeholder: false,
+          passKey: reviewPass.key,
+          ...(error ? { error } : {}),
+        });
+        return;
+      }
       const column = (reviewPass.consolidationColumn ??= addColumn("consolidation"));
       const existing = column.nodeIds[0] ? nodes.get(column.nodeIds[0]) : undefined;
       if (existing) {
@@ -804,17 +860,18 @@ export function pipelineFlowModel(
     }
   }
 
-  // The pull request: always last. It belongs to this pipeline only once the
-  // pipeline has reached Ship.
+  // The pull request: last when reached, or still ahead of an unfinished run.
+  // It belongs to this pipeline only once the pipeline has reached Ship.
   const shipped = pipeline.sessions.some((session) => session.phase === "pr");
   const pr = shipped ? pullRequest : null;
-  place(addColumn("pr", "pr"), {
-    id: PIPELINE_PR_NODE_ID,
-    kind: "pr",
-    title: KIND_TITLES.pr,
-    state: pr ? (pr.state === "closed" ? "cancelled" : "complete") : "not-started",
-    placeholder: !pr && !complete && !cancelled,
-  });
+  if (!cancelled || shipped)
+    place(addColumn("pr", "pr"), {
+      id: PIPELINE_PR_NODE_ID,
+      kind: "pr",
+      title: KIND_TITLES.pr,
+      state: pr ? (pr.state === "closed" ? "cancelled" : "complete") : "not-started",
+      placeholder: !pr && !complete && !cancelled,
+    });
 
   // Review columns are headed by their pass, with reviewer progress.
   let reviewPassNumber = 0;

@@ -67,12 +67,14 @@ export function FlowInspectorHeader({
 export function FlowInspectorPanel({
   panelId,
   selectedId,
+  ariaLabel,
   testId,
   className,
   children,
 }: {
   panelId: string;
   selectedId: string;
+  ariaLabel?: string;
   testId: string;
   className?: string;
   children: ReactNode;
@@ -81,7 +83,8 @@ export function FlowInspectorPanel({
     <section
       role="tabpanel"
       id={panelId}
-      aria-labelledby={flowNodeElementId(panelId, selectedId)}
+      aria-label={ariaLabel}
+      aria-labelledby={ariaLabel ? undefined : flowNodeElementId(panelId, selectedId)}
       data-testid={testId}
       className={className}
     >

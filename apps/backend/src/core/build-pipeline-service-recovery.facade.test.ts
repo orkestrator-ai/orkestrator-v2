@@ -750,6 +750,8 @@ describe("BuildPipelineService", () => {
         ],
       });
 
+      const stageFailure = (await pipeline(storage, started.id)).error;
+      expect((await pipeline(storage, started.id)).sessions[0]!.error).toBe(stageFailure);
       provider.status = async () => "idle";
       const retried = await service.retryStage(started.id);
 
@@ -758,6 +760,7 @@ describe("BuildPipelineService", () => {
         currentSessionIndex: 1,
       });
       expect(retried.error).toBeUndefined();
+      expect(retried.sessions[0]!.error).toBe(stageFailure);
       expect(retried.failureContext).toBeUndefined();
       expect(retried.stageRetryRequested).toBeUndefined();
       expect(retried.sessions).toHaveLength(2);

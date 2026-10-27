@@ -19,7 +19,10 @@ describe("build pipeline reviewer retry", () => {
   test("records each reviewer's outcome, error and issue counts on its session", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       provider.failingModels.add("sonnet");
-      const started = await service.start(startInput(PANEL));
+      const started = await service.start({
+        ...startInput(PANEL),
+        reviewPreparation: { agent: "claude", model: "opus", reasoningEffort: "high" },
+      });
       const addressing = await advanceUntil(service, read, started.id, "addressing");
 
       const completed = addressing.sessions.find(
@@ -37,6 +40,10 @@ describe("build pipeline reviewer retry", () => {
         session.label.includes("Consolidation"),
       );
       expect(consolidation?.reviewIssueCounts).toBeDefined();
+      expect(consolidation?.model).toBe("opus");
+      expect(consolidation?.reasoningEffort).toBe("high");
+      expect(consolidation?.reviewPassId).toBe(completed?.reviewPassId);
+      expect(consolidation?.reviewPassId).toBeTruthy();
     });
   });
 
@@ -134,6 +141,13 @@ describe("build pipeline reviewer retry", () => {
       );
       expect(provider.aborted).toContain(consolidation.providerSessionId);
       expect(retried.structuredReview).toBeUndefined();
+      const discarded = retried.sessions.find(
+        (session) => session.sessionKey === consolidation.sessionKey,
+      );
+      expect(discarded?.superseded).toBe(true);
+      expect(discarded?.reviewReport).toBeUndefined();
+      expect(discarded?.reviewIssueCounts).toBeUndefined();
+      expect(discarded?.reviewOverlap).toBeUndefined();
     });
   });
 
@@ -194,6 +208,105 @@ describe("build pipeline reviewer retry", () => {
       expect(reviewerSessionCreates(provider)).toHaveLength(3);
     });
   });
+
+  test("retry from pause reruns interrupted peers with fresh tool result slots", async () => {
+    await withPipeline(
+      async ({ service, read, provider, workflowResults }) => {
+        provider.runningModels.add("opus");
+        provider.failingModels.add("sonnet");
+        const started = await service.start(startInput(PANEL));
+        await advanceUntil(service, read, started.id, "reviewing");
+        let reviewing = await read(started.id);
+        for (
+          let attempt = 0;
+          attempt < 10 && reviewing.reviewFanout?.reviewers[1]?.status !== "failed";
+          attempt++
+        ) {
+          await service.advanceNow(started.id);
+          reviewing = await read(started.id);
+        }
+        const [interrupted, failed] = reviewing.reviewFanout!.reviewers;
+        expect(interrupted!.status).toBe("running");
+        expect(failed!.status).toBe("failed");
+        const paused = await service.pause(started.id);
+        expect(paused.reviewFanout!.reviewers[0]!.status).toBe("cancelled");
+        provider.runningModels.clear();
+        provider.failingModels.clear();
+        const retried = await service.retryReviewer(started.id, failed!.id);
+        for (const reviewer of retried.reviewFanout!.reviewers) {
+          expect(reviewer.requestId).toBeTruthy();
+          expect(
+            await workflowResults!.submit(
+              { environmentId: "env-1", projectId: "project-1" },
+              reviewer.requestId!,
+              reportFor("Fresh review"),
+            ),
+          ).toMatchObject({ ok: true });
+        }
+        const addressing = await advanceUntil(service, read, started.id, "addressing", 24);
+        const attempts = addressing.sessions.filter(
+          (session) => session.label === pipelineIndependentReviewLabel(0),
+        );
+        expect(attempts).toHaveLength(2);
+        expect(attempts[0]!.reviewerOutcome).toBe("cancelled");
+        expect(attempts[1]!.reviewerOutcome).toBe("completed");
+        expect(
+          new Set(
+            addressing.sessions.filter((s) => s.phase === "review").map((s) => s.reviewPassId),
+          ).size,
+        ).toBe(1);
+        expect(
+          await workflowResults!.status(
+            { environmentId: "env-1", projectId: "project-1" },
+            interrupted!.requestId!,
+          ),
+        ).toMatchObject({ lifecycle: "superseded" });
+        expect(reviewerSessionCreates(provider)).toHaveLength(4);
+      },
+      { toolMode: true, toolKinds: ["review-report"] },
+    );
+  });
+
+  test.each(["restart", "pause-resume"] as const)(
+    "%s gives the next full panel a distinct persisted identity",
+    async (action) => {
+      await withPipeline(async ({ service, read, provider }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        const started = await service.start(startInput(PANEL));
+        await advanceUntil(service, read, started.id, "reviewing");
+        await service.advanceNow(started.id);
+        const first = await read(started.id);
+        const firstSessions = first.sessions.filter((session) => session.phase === "review");
+        expect(firstSessions).toHaveLength(2);
+        const firstId = firstSessions[0]!.reviewPassId;
+        expect(firstId).toBeTruthy();
+        if (action === "restart") await service.restartCurrentStep(started.id);
+        else {
+          await service.pause(started.id);
+          await service.resume(started.id);
+        }
+        let next = await read(started.id);
+        for (
+          let attempt = 0;
+          attempt < 15 && next.sessions.filter((s) => s.phase === "review").length < 4;
+          attempt++
+        ) {
+          await service.advanceNow(started.id);
+          next = await read(started.id);
+        }
+        expect(next.iteration).toBe(first.iteration);
+        const panels = next.sessions.filter((session) => session.phase === "review");
+        expect(panels).toHaveLength(4);
+        expect(panels.slice(0, 2).map((s) => s.sessionKey)).toEqual(
+          firstSessions.map((s) => s.sessionKey),
+        );
+        expect(new Set(panels.slice(2).map((s) => s.reviewPassId)).size).toBe(1);
+        expect(panels[2]!.reviewPassId).toBeTruthy();
+        expect(panels[2]!.reviewPassId).not.toBe(firstId);
+      });
+    },
+  );
 
   test("supersedes the failed tool-v1 reviewer slot and allocates a fresh request", async () => {
     await withPipeline(

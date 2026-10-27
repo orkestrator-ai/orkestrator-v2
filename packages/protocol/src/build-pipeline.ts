@@ -492,10 +492,14 @@ export interface PipelineSession {
    * sessions, and for snapshots written before it existed.
    */
   reviewerOutcome?: PipelineReviewerOutcome;
+  /** Identity of a full fan-out launch, shared by its reviewers and consolidation. */
+  reviewPassId?: string;
+  /** This consolidation was discarded by a reviewer retry; its result is no longer usable. */
+  superseded?: boolean;
   /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
-   * reviewer that failed; other stages report failures on the pipeline.
+   * reviewer or stage that failed, retained when the pipeline moves on.
    */
   error?: string;
   /**
@@ -564,16 +568,6 @@ export interface PipelineSession {
   producedReviewPackagePlan?: boolean;
 }
 
-/**
- * Whether this session is the turn that produced the review-package plan.
- *
- * The dedicated session is labelled {@link REVIEW_PACKAGE_SESSION_LABEL}. The
- * default single-review path reuses a build or fix session and records that
- * with {@link PipelineSession.producedReviewPackagePlan}. Older snapshots
- * without that field still fall back to live structured-request bookkeeping,
- * but only on the single-review path: fan-out and explicit review-preparation
- * pipelines stamp those fields on resume of ordinary build turns.
- */
 /** Issue counts by severity, as a review session's report filed them. */
 export interface PipelineReviewIssueCounts {
   P0: number;
@@ -612,6 +606,16 @@ function isPipelineReviewIssueCounts(value: unknown): value is PipelineReviewIss
   );
 }
 
+/**
+ * Whether this session is the turn that produced the review-package plan.
+ *
+ * The dedicated session is labelled {@link REVIEW_PACKAGE_SESSION_LABEL}. The
+ * default single-review path reuses a build or fix session and records that
+ * with {@link PipelineSession.producedReviewPackagePlan}. Older snapshots
+ * without that field still fall back to live structured-request bookkeeping,
+ * but only on the single-review path: fan-out and explicit review-preparation
+ * pipelines stamp those fields on resume of ordinary build turns.
+ */
 export function isReviewPackagePreparationSession(
   session:
     | Pick<
@@ -1171,6 +1175,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       value.reviewerOutcome === "completed" ||
       value.reviewerOutcome === "failed" ||
       value.reviewerOutcome === "cancelled") &&
+    isOptionalNonBlankString(value.reviewPassId) &&
+    (value.superseded === undefined || typeof value.superseded === "boolean") &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||

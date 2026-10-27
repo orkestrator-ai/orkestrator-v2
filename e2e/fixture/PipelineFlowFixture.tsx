@@ -183,6 +183,35 @@ function loops(): BuildPipeline {
 
 function scenario(): BuildPipeline {
   const name = new URLSearchParams(window.location.search).get("scenario");
+  if (name === "failed-review") {
+    const pipeline = fanout();
+    pipeline.phase = "failed";
+    pipeline.error = "Consolidation could not read the review package";
+    pipeline.failureContext = {
+      phase: "reviewing",
+      kind: "stage-transition",
+      sessionId: "consolidation-session",
+    };
+    pipeline.sessions = [
+      ...pipeline.sessions.map((session) =>
+        session.phase === "review"
+          ? {
+              ...session,
+              status: "idle" as const,
+              reviewerOutcome: "completed" as const,
+            }
+          : session,
+      ),
+      stage("review", "consolidation", 900, 30, { label: "Consolidation", status: "error" }),
+    ];
+    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+    pipeline.reviewFanout!.reviewers = pipeline.reviewFanout!.reviewers.map((reviewer) => ({
+      ...reviewer,
+      status: "completed",
+      report: TEST_STRUCTURED_REVIEW_REPORT,
+    }));
+    return pipeline;
+  }
   if (name === "validation") {
     const pipeline = fanout();
     pipeline.sessions = pipeline.sessions.slice(0, 2);

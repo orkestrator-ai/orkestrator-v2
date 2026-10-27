@@ -264,6 +264,7 @@ export function BuildChatTab({
         pinnedId={pinnedId}
         onPin={setPinnedId}
         layout={layout}
+        visibleError={interactionFailure ? undefined : pipeline.error}
         notices={
           <>
             {pipeline.error && !interactionFailure && (

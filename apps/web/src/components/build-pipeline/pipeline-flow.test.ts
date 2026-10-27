@@ -38,6 +38,255 @@ function reviewer(slot: number, key: string, start: number, overrides = {}) {
 }
 
 describe("pipelineFlowModel", () => {
+  test.each([false, true])("full panel restart preserves history (legacy=%s)", (legacy) => {
+    const pass = (id: string) => (legacy ? {} : { reviewPassId: id });
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          session("build", "build", 0),
+          reviewer(0, "pipeline-1:review:0:old-1", 60, pass("old")),
+          reviewer(1, "pipeline-1:review:0:old-2", 60, pass("old")),
+          session("review", "old-consolidation", 120, { label: "Consolidation", ...pass("old") }),
+          reviewer(0, "pipeline-1:review:0:new-1", 180, {
+            ...pass("new"),
+            status: "running",
+            completedAt: undefined,
+          }),
+          reviewer(1, "pipeline-1:review:0:new-2", 180, {
+            ...pass("new"),
+            status: "running",
+            completedAt: undefined,
+          }),
+        ],
+      }),
+    );
+    const reviews = model.columns.filter((c) => c.kind === "review");
+    expect(reviews).toHaveLength(2);
+    const old = pipelineReviewPassNodes(model, reviews[0]!.key);
+    const fresh = pipelineReviewPassNodes(model, reviews[1]!.key);
+    expect(old.map((n) => n.id)).toContain("old-consolidation");
+    expect(old.filter((n) => n.kind === "reviewer")).toHaveLength(2);
+    expect(fresh.some((n) => n.id === "old-consolidation")).toBe(false);
+    expect(fresh.filter((n) => n.kind === "reviewer")).toHaveLength(2);
+  });
+
+  test("a full panel relaunched before its first session does not replace the previous panel", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(0, "old-1", 60, { reviewPassId: "old", reviewerOutcome: "cancelled" }),
+          reviewer(1, "old-2", 60, { reviewPassId: "old", reviewerOutcome: "failed" }),
+        ],
+        reviewFanout: {
+          reviewers: [
+            { id: "new", agent: "claude", model: "opus", status: "pending" },
+            { id: "new-2", agent: "codex", model: "gpt", status: "pending" },
+          ],
+        },
+      }),
+    );
+    expect(model.columns.filter((c) => c.kind === "review")).toHaveLength(2);
+    expect(model.nodes.some((n) => n.id === "old-1")).toBe(true);
+    expect(model.nodes.some((n) => n.id === "old-2")).toBe(true);
+  });
+
+  test("a single reviewer retry stays in its durable panel", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(0, "old", 60, { reviewPassId: "panel", reviewerOutcome: "failed" }),
+          reviewer(1, "peer", 60, { reviewPassId: "panel", reviewerOutcome: "completed" }),
+          reviewer(0, "old:attempt-2", 180, {
+            reviewPassId: "panel",
+            status: "running",
+            completedAt: undefined,
+          }),
+        ],
+      }),
+    );
+    expect(model.columns.filter((c) => c.kind === "review")).toHaveLength(1);
+    expect(model.nodes.find((n) => n.id === "old:attempt-2")?.earlierAttempts).toBe(1);
+  });
+
+  test("discarded consolidation stays cancelled and loses its accepted report", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(0, "rev-1", 60, { reviewPassId: "panel", reviewerOutcome: "completed" }),
+          reviewer(1, "rev-2", 60, { reviewPassId: "panel", reviewerOutcome: "failed" }),
+          session("review", "discarded", 120, {
+            label: "Consolidation",
+            reviewPassId: "panel",
+            superseded: true,
+          }),
+        ],
+        reviewFanout: {
+          reviewers: [
+            {
+              id: "panel",
+              agent: "claude",
+              model: "opus",
+              status: "completed",
+              sessionKey: "rev-1",
+            },
+            { id: "r2", agent: "codex", model: "gpt", status: "pending" },
+          ],
+        },
+      }),
+    );
+    expect(model.nodes.find((n) => n.id === "discarded")).toMatchObject({
+      state: "cancelled",
+      issueCounts: undefined,
+    });
+  });
+
+  test("Address handoff ignores leftover live fanout and preserves its completed pass", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "addressing",
+        reviewers: PANEL.slice(0, 2),
+        currentSessionIndex: 3,
+        sessions: [
+          reviewer(0, "rev-1", 60),
+          reviewer(1, "rev-2", 60),
+          session("review", "consolidation", 120, { label: "Consolidation" }),
+          session("address", "address", 180, { status: "running", completedAt: undefined }),
+        ],
+        reviewFanout: {
+          reviewers: [
+            { id: "r1", agent: "claude", model: "opus", status: "completed", sessionKey: "rev-1" },
+            { id: "r2", agent: "codex", model: "gpt", status: "completed", sessionKey: "rev-2" },
+          ],
+          consolidation: {
+            sessionKey: "consolidation",
+            providerSessionId: "sdk",
+            requestId: "request",
+            state: "prepared",
+            agent: "claude",
+            createdAt: "2026-07-29T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+    expect(model.columns.filter((c) => c.kind === "review")).toHaveLength(1);
+    expect(model.nodes.find((n) => n.id === "consolidation")?.state).toBe("complete");
+  });
+
+  test("historical failures keep only their own error", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "failed",
+        error: "Verify failed",
+        currentSessionIndex: 3,
+        failureContext: {
+          phase: "verifying",
+          kind: "stage-transition",
+          sessionId: "verify-session",
+        },
+        sessions: [
+          session("build", "first-build", 0, { status: "error", error: "Build failed" }),
+          session("review", "old-consolidation", 60, { label: "Consolidation", status: "error" }),
+          session("build", "build-retry", 120),
+          session("verify", "verify", 180, { status: "error" }),
+        ],
+      }),
+    );
+    expect(model.nodes.find((n) => n.id === "first-build")?.error).toBe("Build failed");
+    expect(model.nodes.find((n) => n.id === "old-consolidation")?.error).toBeUndefined();
+    expect(model.nodes.find((n) => n.id === "verify")?.error).toBe("Verify failed");
+  });
+
+  test("live consolidation falls back to the configured model and effort on old sessions", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(0, "rev-1", 60),
+          reviewer(1, "rev-2", 60),
+          session("review", "consolidation", 120, { label: "Consolidation" }),
+        ],
+        reviewFanout: {
+          reviewers: [
+            { id: "r1", agent: "claude", model: "opus", status: "completed", sessionKey: "rev-1" },
+            { id: "r2", agent: "codex", model: "gpt", status: "completed", sessionKey: "rev-2" },
+          ],
+          consolidation: {
+            sessionKey: "consolidation",
+            providerSessionId: "sdk",
+            requestId: "request",
+            state: "prepared",
+            agent: "claude",
+            model: "opus",
+            reasoningEffort: "high",
+            createdAt: "2026-07-29T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+    expect(model.nodes.find((n) => n.id === "consolidation")).toMatchObject({
+      model: "opus",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("failed preparation carries the failure without a synthetic Fix or another Prepare", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "failed",
+        reviewers: PANEL,
+        error: "Preparation failed",
+        currentSessionIndex: 1,
+        failureContext: { phase: "fixing", kind: "stage-transition", sessionId: "prep-session" },
+        sessions: [
+          session("build", "build", 0),
+          session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL, status: "error" }),
+        ],
+      }),
+    );
+    expect(model.nodes.filter((n) => n.kind === "prepare")).toHaveLength(1);
+    expect(model.nodes.some((n) => n.kind === "fix")).toBe(false);
+    expect(model.nodes.find((n) => n.id === "prep")).toMatchObject({
+      state: "failed",
+      error: "Preparation failed",
+    });
+  });
+
+  test("review startup failure has no empty columns and remains connected", () => {
+    const model = pipelineFlowModel(
+      build({
+        phase: "failed",
+        reviewers: PANEL,
+        error: "Settings unavailable",
+        failureContext: { phase: "reviewing", kind: "stage-transition" },
+        sessions: [session("build", "build", 0)],
+      }),
+    );
+    expect(model.columns.every((column) => column.nodeIds.length > 0)).toBe(true);
+    for (let index = 1; index < model.columns.length; index++) {
+      expect(
+        model.edges.some(
+          (edge) =>
+            model.columns[index - 1]!.nodeIds.includes(edge.from) &&
+            model.columns[index]!.nodeIds.includes(edge.to),
+        ),
+      ).toBe(true);
+    }
+    expect(model.nodes.find((n) => n.id.endsWith(":startup"))).toMatchObject({
+      kind: "review",
+      state: "failed",
+      error: "Settings unavailable",
+    });
+  });
+
   test("a new pipeline shows Ticket and Setup, then every definite step faded", () => {
     const model = pipelineFlowModel(build({ phase: "waiting-for-setup", sessions: [] }));
     expect(line(model)).toEqual([
@@ -400,6 +649,7 @@ describe("pipelineFlowModel", () => {
     );
     expect(cancelled.nodes.find((node) => node.kind === "build")?.state).toBe("cancelled");
     expect(cancelled.nodes.some((node) => node.placeholder)).toBe(false);
+    expect(cancelled.nodes.some((node) => node.kind === "pr")).toBe(false);
 
     const paused = pipelineFlowModel(
       build({

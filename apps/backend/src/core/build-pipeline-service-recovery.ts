@@ -10,6 +10,7 @@ import {
   type PendingPipelineInteractionResolution,
   type PipelineInteractionTranscriptEntry,
   isVerificationVerdict,
+  boundedPipelineSessionError,
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
@@ -793,6 +794,7 @@ export class BuildPipelineRecovery {
       requestId: pending.interactionId,
     };
     session.status = "error";
+    session.error = boundedPipelineSessionError(pipeline.error);
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
     delete pipeline.pendingInteractionResolution;

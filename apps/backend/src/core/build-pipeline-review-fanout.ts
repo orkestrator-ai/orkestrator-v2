@@ -359,17 +359,30 @@ export class BuildPipelineReviewFanout {
       );
       if (session) {
         session.status = "idle";
+        session.superseded = true;
+        delete session.reviewReport;
+        delete session.reviewIssueCounts;
+        delete session.reviewOverlap;
+        delete session.structuredResultStatus;
+        delete session.resultSubmission;
+        delete session.error;
         session.completedAt ??= reviewFanoutNowIso();
       }
       delete state.consolidation;
       delete pipeline.structuredReview;
       delete pipeline.structuredReviewRequestId;
     }
-    if (reviewer.providerSessionId) this.deps.progress.forget(reviewer.providerSessionId);
-    if (reviewer.resultTransport === "tool-v1" && reviewer.requestId) {
-      await this.deps.workflowResults?.close(reviewer.requestId, "superseded");
+    // Pause interrupts the other queued/running reviewers too. Requeue those
+    // peers under fresh result slots before resuming, preserving completed reports.
+    for (const retry of state.reviewers.filter(
+      (candidate) => candidate === reviewer || candidate.status === "cancelled",
+    )) {
+      if (retry.providerSessionId) this.deps.progress.forget(retry.providerSessionId);
+      if (retry.resultTransport === "tool-v1" && retry.requestId) {
+        await this.deps.workflowResults?.close(retry.requestId, "superseded");
+      }
+      resetReviewerForRetry(retry);
     }
-    resetReviewerForRetry(reviewer);
   }
 
   // -------------------------------------------------------------------------
@@ -686,13 +699,18 @@ export class BuildPipelineReviewFanout {
     const existing = pipeline.sessions.find(
       (candidate) => candidate.sessionKey === fields.sessionKey,
     );
-    if (existing) return existing;
+    if (existing) {
+      existing.reviewPassId ??= pipeline.reviewFanout?.reviewers[0]?.id;
+      return existing;
+    }
     const session: PipelineSession = {
       phase: "review",
       agent: fields.agent,
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       iteration: pipeline.iteration,
+      // Reviewer IDs are allocated once per full launch and survive individual retries.
+      reviewPassId: pipeline.reviewFanout?.reviewers[0]?.id,
       sessionKey: fields.sessionKey,
       sdkSessionId: fields.sdkSessionId,
       status: "running",
@@ -812,9 +830,13 @@ export class BuildPipelineReviewFanout {
       sdkSessionId: consolidation.providerSessionId,
       agent: consolidation.agent as BuildPipelineAgent,
       label: "Consolidation",
+      model: consolidation.model,
+      reasoningEffort: consolidation.reasoningEffort,
       fastMode: consolidation.fastMode,
       modelSubstitution: consolidation.modelSubstitution,
     });
+    session.model ??= consolidation.model;
+    session.reasoningEffort ??= consolidation.reasoningEffort;
     provider.registerSession?.(consolidation.providerSessionId, {
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,

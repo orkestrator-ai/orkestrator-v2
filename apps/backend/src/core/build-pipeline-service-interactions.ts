@@ -8,6 +8,7 @@ import {
   type PipelineSession,
   type ResumableBuildPhase,
   isBuildPipeline,
+  boundedPipelineSessionError,
   isActiveBuildPhase,
   type PendingPipelineInteractionResolution,
 } from "@orkestrator/protocol/build-pipeline";
@@ -295,10 +296,17 @@ export class BuildPipelineInteractions {
           : sessionForCurrentPhase(pipeline)?.sdkSessionId,
     };
     const failedSession =
-      pipeline.reviewFanout || error instanceof PreSessionStageStartError
+      error instanceof PreSessionStageStartError
         ? undefined
-        : sessionForCurrentPhase(pipeline);
-    if (failedSession) failedSession.status = "error";
+        : pipeline.reviewFanout
+          ? pipeline.sessions.find(
+              (session) => session.sessionKey === pipeline.reviewFanout?.consolidation?.sessionKey,
+            )
+          : sessionForCurrentPhase(pipeline);
+    if (failedSession) {
+      failedSession.status = "error";
+      failedSession.error = boundedPipelineSessionError(pipeline.error);
+    }
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
     delete pipeline.stageRetryRequested;

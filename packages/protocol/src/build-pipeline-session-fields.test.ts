@@ -52,6 +52,8 @@ describe("pipeline session graph fields", () => {
     expect(
       isBuildPipeline(
         pipelineWith({
+          reviewPassId: "panel-1",
+          superseded: true,
           reviewerOutcome: "failed",
           error: "Provider crashed",
           reviewIssueCounts: { P0: 1, P1: 0, P2: 2 },
@@ -62,6 +64,8 @@ describe("pipeline session graph fields", () => {
 
   test("rejects malformed values", () => {
     expect(isBuildPipeline(pipelineWith({ reviewerOutcome: "stalled" as never }))).toBe(false);
+    expect(isBuildPipeline(pipelineWith({ reviewPassId: "" }))).toBe(false);
+    expect(isBuildPipeline(pipelineWith({ superseded: "yes" as never }))).toBe(false);
     expect(isBuildPipeline(pipelineWith({ error: "" }))).toBe(false);
     expect(
       isBuildPipeline(pipelineWith({ error: "x".repeat(MAX_PIPELINE_SESSION_ERROR_LENGTH + 1) })),

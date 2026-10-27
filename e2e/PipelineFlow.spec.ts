@@ -219,10 +219,12 @@ test("collapses the graph so the inspector takes the room", async ({ page }) => 
   await page.goto("/pipeline-flow?scenario=fanout");
   const toggle = page.getByRole("button", { name: "Pipeline", exact: true });
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("tabpanel", { name: /^Reviewer 1,/ })).toBeVisible();
   const before = (await page.getByTestId("pipeline-inspector").boundingBox())!;
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(graph(page)).toHaveCount(0);
+  await expect(page.getByRole("tabpanel", { name: "Reviewer 1", exact: true })).toBeVisible();
   const after = (await page.getByTestId("pipeline-inspector").boundingBox())!;
   expect(after.y).toBeLessThan(before.y);
   await toggle.click();
@@ -245,6 +247,22 @@ async function openReviewPass(page: Page) {
   await expect(page.getByTestId("pipeline-review-header")).toBeVisible();
   await expect(node(page, "Build")).toHaveCount(0);
 }
+
+test("failed standalone review retains its reason and accessible inspector when collapsed", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=failed-review");
+  await openReviewPass(page);
+  await node(page, "Consolidation").click();
+  const inspector = page.getByTestId("pipeline-inspector");
+  await expect(page.getByRole("tabpanel", { name: /^Consolidation,/ })).toBeVisible();
+  await expect(inspector).toContainText("Consolidation could not read the review package");
+  await expect(inspector.getByRole("button", { name: "Retry failed step" })).toBeEnabled();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "Consolidation", exact: true })).toBeVisible();
+  await expect(inspector).toContainText("Consolidation could not read the review package");
+  await expect(inspector.getByRole("button", { name: "Retry failed step" })).toBeEnabled();
+});
 
 test("a mounted pipeline-pass tab retains lifecycle controls with its graph collapsed", async ({
   page,

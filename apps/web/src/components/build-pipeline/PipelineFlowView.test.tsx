@@ -35,6 +35,43 @@ const reviewing = () =>
   });
 
 describe("pipeline inspector controls", () => {
+  test.each(["pending", "running"] as const)(
+    "follows a %s reviewer retry instead of discarded consolidation",
+    (status) => {
+      const pipeline = reviewing();
+      pipeline.reviewFanout!.reviewers[0] = { id: "r1", agent: "claude", model: "opus", status };
+      pipeline.reviewFanout!.reviewers[1]!.status = "completed";
+      pipeline.sessions = [
+        session("review", "failed", 60, {
+          label: "Review 1",
+          reviewPassId: "r1",
+          reviewerOutcome: "failed",
+        }),
+        session("review", "completed", 60, {
+          label: "Review 2",
+          reviewPassId: "r1",
+          reviewerOutcome: "completed",
+        }),
+        session("review", "discarded", 120, {
+          label: "Consolidation",
+          reviewPassId: "r1",
+          superseded: true,
+        }),
+      ];
+      pipeline.reviewFanout!.reviewers[1]!.sessionKey = "completed";
+      renderPipelineTab(pipeline);
+      expect(graphNode("Reviewer 1").getAttribute("aria-selected")).toBe("true");
+      expect(graphNode("Consolidation").getAttribute("data-flow-state")).toBe("cancelled");
+    },
+  );
+
+  test("collapsed inspector retains an accessible name", () => {
+    renderPipelineTab(reviewing());
+    expect(screen.getByRole("tabpanel", { name: /^Reviewer 2,/ })).toBe(inspector());
+    fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
+    expect(screen.getByRole("tabpanel", { name: "Reviewer 2" })).toBe(inspector());
+  });
+
   test.each(["cancelled", "interactive-request", "consolidated", "other-stage"])(
     "does not offer reviewer retry for %s",
     (reason) => {

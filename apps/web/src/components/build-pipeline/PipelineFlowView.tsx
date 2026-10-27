@@ -143,6 +143,8 @@ export interface PipelineFlowViewProps {
   layout?: "graph" | "stacked";
   /** Rendered above the graph, e.g. the tab's banners. */
   notices?: ReactNode;
+  /** The error already rendered in this view's notices, to avoid repeating it. */
+  visibleError?: string;
 }
 
 /**
@@ -164,6 +166,7 @@ export function PipelineFlowView({
   passKey,
   layout,
   notices,
+  visibleError,
 }: PipelineFlowViewProps) {
   const panelId = `${useId()}inspector`;
   const graphId = `${panelId}-graph`;
@@ -205,15 +208,23 @@ export function PipelineFlowView({
   model.columns.forEach((column, index) => {
     for (const id of column.nodeIds) columnOf.set(id, index);
   });
+  const pendingRetry =
+    pipeline.phase === "reviewing" && !model.nodes.some((node) => node.state === "running")
+      ? model.nodes.find((node) => node.reviewer?.status === "pending" && node.earlierAttempts)
+      : undefined;
   const followed =
+    pendingRetry?.id ??
     defaultFlowSelection(
-      model.nodes.map((node) => ({
-        id: node.id,
-        state: node.placeholder ? "not-started" : node.state,
-        stage: columnOf.get(node.id) ?? 0,
-        activityAt: node.activityAt,
-      })),
-    ) ?? model.nodes[0]?.id;
+      model.nodes
+        .filter((node) => !node.session?.superseded)
+        .map((node) => ({
+          id: node.id,
+          state: node.placeholder ? "not-started" : node.state,
+          stage: columnOf.get(node.id) ?? 0,
+          activityAt: node.activityAt,
+        })),
+    ) ??
+    model.nodes[0]?.id;
   const selected =
     model.nodes.find((node) => node.id === pinnedId) ??
     model.nodes.find((node) => node.id === followed) ??
@@ -519,6 +530,7 @@ export function PipelineFlowView({
           <FlowInspectorPanel
             panelId={panelId}
             selectedId={selected.id}
+            ariaLabel={collapsed ? selected.title : undefined}
             testId="pipeline-inspector"
             className="flex min-h-[28rem] min-w-0 flex-1 flex-col px-4 pt-4 sm:px-6"
           >
@@ -540,7 +552,7 @@ export function PipelineFlowView({
                 </Button>
               ))}
             />
-            <InspectorNotes node={selected} pipeline={pipeline} />
+            <InspectorNotes node={selected} pipeline={pipeline} visibleError={visibleError} />
             {!showTranscript ? (
               <div className="min-h-0 flex-1 overflow-y-auto pb-4">
                 <InspectorBody
@@ -599,7 +611,15 @@ export function PipelineFlowView({
 }
 
 /** What the record says about a stage beyond its status: substitutions, declines, retries. */
-function InspectorNotes({ node, pipeline }: { node: PipelineFlowNode; pipeline: BuildPipeline }) {
+function InspectorNotes({
+  node,
+  pipeline,
+  visibleError,
+}: {
+  node: PipelineFlowNode;
+  pipeline: BuildPipeline;
+  visibleError?: string;
+}) {
   const session = node.session;
   const notes: ReactNode[] = [];
   if (session?.modelSubstitution?.message) {
@@ -624,8 +644,7 @@ function InspectorNotes({ node, pipeline }: { node: PipelineFlowNode; pipeline: 
       </p>,
     );
   }
-  // The pipeline's own error is already in the banner above.
-  if (node.state === "failed" && node.error && node.error !== pipeline.error) {
+  if (node.state === "failed" && node.error && node.error !== visibleError) {
     notes.push(
       <p key="error" className="break-words whitespace-pre-wrap text-failure">
         {node.error}

@@ -75,8 +75,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type JsonRead =
-  | { state: "absent" | "unavailable" | "oversized" | "invalid" }
-  | { state: "ok"; value: unknown };
+  { state: "absent" | "unavailable" | "oversized" | "invalid" } | { state: "ok"; value: unknown };
 
 async function readJson(
   input: ClaudePluginSourceInput,

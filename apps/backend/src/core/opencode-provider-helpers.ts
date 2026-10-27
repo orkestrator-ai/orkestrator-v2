@@ -83,9 +83,7 @@ export interface OpenCodeProviderDependencies {
   /** See `ProviderCommonDependencies.onObservationHint`. */
   onObservationHint?: (sessionId: string | undefined) => void;
   resolveOpenCodeModelProviders?: () =>
-    | readonly string[]
-    | undefined
-    | Promise<readonly string[] | undefined>;
+    readonly string[] | undefined | Promise<readonly string[] | undefined>;
   /**
    * Measure what each shell call changed in the worktree (the row's +N −M
    * badge). Opt-in, and effective only when the connection names a

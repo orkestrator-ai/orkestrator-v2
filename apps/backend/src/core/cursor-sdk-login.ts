@@ -19,8 +19,7 @@ interface CursorSdkLoginStartup {
  */
 export class CursorSdkLoginSlot {
   private active:
-    | { handle: CursorSdkLoginHandle; state: CursorSdkLoginState; error?: string }
-    | undefined;
+    { handle: CursorSdkLoginHandle; state: CursorSdkLoginState; error?: string } | undefined;
   private startup: CursorSdkLoginStartup | undefined;
 
   /** Joins the pending login, or begins one with `begin`. */

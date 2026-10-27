@@ -93,8 +93,7 @@ async function historyBase(
     }
     if (record.type !== "session_meta" || !record.payload) return null;
     const base = record.payload.history_base as
-      | { thread_id?: unknown; end_byte_offset?: unknown }
-      | undefined;
+      { thread_id?: unknown; end_byte_offset?: unknown } | undefined;
     if (base && typeof base === "object") {
       if (typeof base.thread_id !== "string") return "unreadable";
       return {

@@ -76,13 +76,7 @@ export type ReadPriority = "critical" | "standard" | "auxiliary";
  * explicit waiter) report `context.explicit === true`.
  */
 export type ReadReason =
-  | "mount"
-  | "interval"
-  | "invalidate"
-  | "explicit"
-  | "resume"
-  | "reconnect"
-  | "retry";
+  "mount" | "interval" | "invalidate" | "explicit" | "resume" | "reconnect" | "retry";
 
 /**
  * - `transient`: retried with capped jittered backoff.

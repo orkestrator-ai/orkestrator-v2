@@ -132,13 +132,7 @@ export interface ClaudeModelCatalogSnapshot {
 }
 
 export type CodexReasoningEffort =
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultra";
+  "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface CodexModelCatalogEntry {
   id: string;

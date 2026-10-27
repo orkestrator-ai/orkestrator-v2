@@ -27,13 +27,7 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
  * the rest are the project board.
  */
 export type ProjectBoardTab =
-  | "home"
-  | "coordinator"
-  | "kanban"
-  | "github"
-  | "linear"
-  | "features"
-  | "pull-requests";
+  "home" | "coordinator" | "kanban" | "github" | "linear" | "features" | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
 /**
  * How "By activity" orders environments: `priority` puts unread work, then

@@ -76,12 +76,7 @@ export class WebAnnotationRollout {
  * `disabled` allows only `always`. Unlisted commands are `author`.
  */
 export type WebAnnotationCommandAccess =
-  | "always"
-  | "read"
-  | "resolve"
-  | "draft"
-  | "recover"
-  | "author";
+  "always" | "read" | "resolve" | "draft" | "recover" | "author";
 
 const c = WEB_ANNOTATION_COMMANDS;
 const ACCESS: Record<string, WebAnnotationCommandAccess> = {

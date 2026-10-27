@@ -237,8 +237,7 @@ export function refreshCommandCatalogue(state: SessionState | undefined): {
 }
 
 export type SelectedCommandResolution =
-  | { ok: true; text: string; command: NativeAgentSlashCommand }
-  | { ok: false; message: string };
+  { ok: true; text: string; command: NativeAgentSlashCommand } | { ok: false; message: string };
 
 /**
  * Check a backend-selected command against the live inventory and build the

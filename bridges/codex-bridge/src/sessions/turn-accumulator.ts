@@ -28,12 +28,7 @@ import {
 import { turnFailureItemId, turnFailureText } from "../messages/turn-failure.js";
 
 export type TurnPhase =
-  | "starting"
-  | "running"
-  | "cancelling"
-  | "completed"
-  | "interrupted"
-  | "failed";
+  "starting" | "running" | "cancelling" | "completed" | "interrupted" | "failed";
 
 /**
  * A progress line is one row in a collapsed transcript, so it is capped well

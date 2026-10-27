@@ -23,11 +23,7 @@ import type {
 } from "./preview-service-registry.js";
 
 export type PreviewAccessRevocationReason =
-  | PreviewRevocationReason
-  | "credential-rotated"
-  | "operator-revoked"
-  | "released"
-  | "expired";
+  PreviewRevocationReason | "credential-rotated" | "operator-revoked" | "released" | "expired";
 
 /** Publication hooks supplied by the private-origin manager (`preview-publication.ts`). */
 export interface PreviewPublicationPort {

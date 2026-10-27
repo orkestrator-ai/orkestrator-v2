@@ -205,8 +205,7 @@ export function replacementCopyPlan(sourceFormat: ContainerStorageIdentity["form
 }
 
 export type CopyResult =
-  | { ok: true; files: number; bytes: number; absent?: boolean }
-  | { ok: false; reason: string };
+  { ok: true; files: number; bytes: number; absent?: boolean } | { ok: false; reason: string };
 
 export function parseCopyOutput(output: string): CopyResult {
   const match = /ORKESTRATOR_COPY status=([a-z-]+)((?: [a-z_]+=\S+)*)/.exec(output);

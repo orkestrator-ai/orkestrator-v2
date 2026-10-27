@@ -19,12 +19,7 @@ export const MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE =
 
 /** How the interactive Fix tab's handoff turn ended, as the native-agent layer records it. */
 export type InteractiveFixTurnOutcome =
-  | "completed"
-  | "failed"
-  | "interrupted"
-  | "superseded"
-  | "pending"
-  | "unknown";
+  "completed" | "failed" | "interrupted" | "superseded" | "pending" | "unknown";
 
 const INTERACTIVE_FIX_AUTO_PR_SKIPPED: Record<
   Exclude<InteractiveFixTurnOutcome, "completed" | "pending">,

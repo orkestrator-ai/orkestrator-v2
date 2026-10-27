@@ -508,16 +508,14 @@ export async function loadPersistedState(): Promise<void> {
   }
 }
 export function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
-  if (
-    !(
-      isObject(value) &&
-      typeof value.id === "string" &&
-      (value.role === "user" || value.role === "assistant") &&
-      typeof value.content === "string" &&
-      Array.isArray(value.parts) &&
-      typeof value.createdAt === "string"
-    )
-  )
+  if (!(
+    isObject(value) &&
+    typeof value.id === "string" &&
+    (value.role === "user" || value.role === "assistant") &&
+    typeof value.content === "string" &&
+    Array.isArray(value.parts) &&
+    typeof value.createdAt === "string"
+  ))
     return null;
   const messageId = value.id.slice(0, 256);
   const modelId = boundedModelId(value.modelId);

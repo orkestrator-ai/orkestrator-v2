@@ -108,11 +108,7 @@ export interface DesignFrameIdentity {
 }
 
 export type DesignValidationState =
-  | "unvalidated"
-  | "validating"
-  | "valid"
-  | "invalid"
-  | "renderer-unavailable";
+  "unvalidated" | "validating" | "valid" | "invalid" | "renderer-unavailable";
 
 export type DesignValidationReason =
   | "scripts-removed"
@@ -267,10 +263,7 @@ export interface DesignRecordProblem {
 }
 
 export type DesignSnapshotResult =
-  | DesignSnapshotEnvelope
-  | DesignTombstone
-  | DesignMissing
-  | DesignRecordProblem;
+  DesignSnapshotEnvelope | DesignTombstone | DesignMissing | DesignRecordProblem;
 
 // ---------------------------------------------------------------------------
 // Operations
@@ -487,12 +480,7 @@ export interface DesignSyncReset {
   generation: string;
   revision: number;
   reason:
-    | "generation"
-    | "future-cursor"
-    | "expired-range"
-    | "too-large"
-    | "unsupported"
-    | "restored";
+    "generation" | "future-cursor" | "expired-range" | "too-large" | "unsupported" | "restored";
 }
 
 export type DesignSyncResult =

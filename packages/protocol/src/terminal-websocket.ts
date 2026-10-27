@@ -164,9 +164,7 @@ export type TerminalWebSocketServerControlFrame =
     };
 
 export type TerminalWebSocketControlFrameErrorCode =
-  | "frame-too-large"
-  | "malformed-frame"
-  | "unsupported-version";
+  "frame-too-large" | "malformed-frame" | "unsupported-version";
 
 /** A wire-validation failure that maps directly to a protocol error code. */
 export class TerminalWebSocketControlFrameError extends Error {

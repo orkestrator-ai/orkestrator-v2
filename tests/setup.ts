@@ -22,8 +22,7 @@ mock.module("@/lib/native/events", () => ({
   listenOn: mock(
     (
       source:
-        | { listen(event: string, callback: (payload: unknown) => void): () => void }
-        | undefined,
+        { listen(event: string, callback: (payload: unknown) => void): () => void } | undefined,
       event: string,
       handler: (event: { payload: unknown }) => unknown,
     ) =>

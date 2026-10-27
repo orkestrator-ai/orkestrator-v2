@@ -87,8 +87,7 @@ class FakeProvider {
   sendImpl: (sessionId: string, options: ProviderSendOptions) => Promise<void> = async () => {};
   readonly sends: string[] = [];
   contextUsage:
-    | { usedTokens: number; sessionTokens?: number; cacheReadTokens?: number }
-    | undefined = {
+    { usedTokens: number; sessionTokens?: number; cacheReadTokens?: number } | undefined = {
     usedTokens: 1,
     sessionTokens: 1,
   };

@@ -32,8 +32,7 @@ export interface WorkspaceAttachmentContext {
 }
 
 export type WorkspaceAttachmentResult =
-  | { attachment: WorkspaceAttachment }
-  | { error: string; description?: string };
+  { attachment: WorkspaceAttachment } | { error: string; description?: string };
 
 /**
  * Turn a picked workspace file into a prompt attachment, or explain why not.

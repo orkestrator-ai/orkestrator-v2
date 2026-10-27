@@ -1,4 +1,0 @@
-{
-  "printWidth": 100,
-  "ignorePatterns": ["bridges/codex-bridge/src/app-server/generated/**", "docs/**", "**/*.md"]
-}

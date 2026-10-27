@@ -4,13 +4,7 @@
 // catalogue for launchers and settings, hydrated from the backend cache.
 
 export type CodexReasoningEffort =
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultra";
+  "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;

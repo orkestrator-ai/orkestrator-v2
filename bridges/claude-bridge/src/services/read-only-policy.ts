@@ -726,8 +726,7 @@ export function createCoordinatorReadOnlyHook(
     }
     if (toolName === "Bash") {
       const toolInput = input.tool_input as
-        | { command?: unknown; dangerouslyDisableSandbox?: unknown }
-        | undefined;
+        { command?: unknown; dangerouslyDisableSandbox?: unknown } | undefined;
       if (toolInput?.dangerouslyDisableSandbox === true) {
         return deny("Coordinator commands may not run outside the sandbox.");
       }

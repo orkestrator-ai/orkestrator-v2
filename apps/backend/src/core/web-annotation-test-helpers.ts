@@ -133,8 +133,7 @@ export function readStoredEnvironment(
     dataDir,
     (database) =>
       database.readStore(webAnnotationStoreName(environmentId))?.value as
-        | Record<string, any>
-        | undefined,
+        Record<string, any> | undefined,
   );
 }
 

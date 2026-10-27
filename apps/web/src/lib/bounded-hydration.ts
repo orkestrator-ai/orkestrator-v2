@@ -101,12 +101,7 @@ export interface HydrationFetchRequest {
  * - `unsupported`: the peer does not have the snapshot command.
  */
 export type HydrationStatus =
-  | "idle"
-  | "hydrating"
-  | "current"
-  | "stale"
-  | "degraded"
-  | "unsupported";
+  "idle" | "hydrating" | "current" | "stale" | "degraded" | "unsupported";
 
 export interface BoundedHydrationLimits {
   /** Distinct keys buffered while a snapshot is in flight. */

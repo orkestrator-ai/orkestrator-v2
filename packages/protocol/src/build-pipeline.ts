@@ -93,13 +93,7 @@ export type BuildPhase =
 
 export type ResumableBuildPhase = Exclude<BuildPhase, "paused" | "complete" | "failed">;
 export type PipelineSessionPhase =
-  | "build"
-  | "review"
-  | "address"
-  | "verify"
-  | "fix"
-  | "pr"
-  | "resolve-conflicts";
+  "build" | "review" | "address" | "verify" | "fix" | "pr" | "resolve-conflicts";
 
 /** Durable handoff from an explicit UI restart to the background supervisor. */
 export type PipelineRestartRequest =

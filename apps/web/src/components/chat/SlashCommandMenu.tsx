@@ -59,8 +59,7 @@ export interface SlashCommandMenuStatus {
 
 /** The explicit ordinary-text path offered when a query matches nothing. */
 export type SlashCommandLiteralEscape =
-  | { kind: "offer"; onSendAsText: () => void }
-  | { kind: "explain"; message: string };
+  { kind: "offer"; onSendAsText: () => void } | { kind: "explain"; message: string };
 
 interface SlashCommandMenuProps<TCommand extends SlashCommandOption> {
   /** Already-filtered commands to display, in navigation order. */

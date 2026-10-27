@@ -45,11 +45,7 @@ export interface ProtectedRichCache {
 }
 
 export type ProtectedRichClearReason =
-  | "logout"
-  | "credentials"
-  | "connection"
-  | "gateway-replaced"
-  | "backend-identity";
+  "logout" | "credentials" | "connection" | "gateway-replaced" | "backend-identity";
 
 const registered = new Map<string, ProtectedRichCache>();
 

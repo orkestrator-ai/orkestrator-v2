@@ -191,12 +191,7 @@ export type RecurringJobUpdate = Partial<
 >;
 
 export type RecurringRejectReason =
-  | "capacity"
-  | "pending-capacity"
-  | "stale-generation"
-  | "disposed"
-  | "invalid"
-  | "unknown-key";
+  "capacity" | "pending-capacity" | "stale-generation" | "disposed" | "invalid" | "unknown-key";
 
 export type RecurringRegisterResult =
   | { ok: true; status: "registered" | "updated" | "replaced" }

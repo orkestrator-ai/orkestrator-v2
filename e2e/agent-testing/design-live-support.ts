@@ -23,8 +23,7 @@ export type LayoutTab = {
   designCanvasData?: { canvasId: string };
 };
 export type LayoutNode =
-  | { kind: "leaf"; tabs: LayoutTab[] }
-  | { kind: "split"; children: LayoutNode[] };
+  { kind: "leaf"; tabs: LayoutTab[] } | { kind: "split"; children: LayoutNode[] };
 export type SessionLink = {
   id?: string;
   tabId: string;

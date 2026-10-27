@@ -482,13 +482,7 @@ export type CodexMode = "terminal" | "native";
 export type AgentStyle = "terminal" | "native";
 /** Codex reasoning effort preference */
 export type CodexReasoningEffortPreference =
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultra";
+  "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 /** Terminal appearance settings */
 export interface TerminalAppearance {

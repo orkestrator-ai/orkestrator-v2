@@ -5,12 +5,7 @@
 export type ProgressiveReadDomain = "transcript" | "state" | "discovery";
 export type ProgressiveCacheTier = "memory" | "persisted" | "provider" | "degraded";
 export type ProgressiveReadOutcome =
-  | "snapshot"
-  | "delta"
-  | "unchanged"
-  | "cached"
-  | "missing"
-  | "unavailable";
+  "snapshot" | "delta" | "unchanged" | "cached" | "missing" | "unavailable";
 
 export interface ProgressiveReadMetric {
   domain: ProgressiveReadDomain;

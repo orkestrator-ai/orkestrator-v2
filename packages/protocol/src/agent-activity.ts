@@ -13,11 +13,7 @@ export type AgentActivityState = "idle" | "working" | "waiting";
 
 /** Who observed an activity state. Renderers may only ever report `frontend`. */
 export type AgentActivitySource =
-  | "frontend"
-  | "claude-terminal"
-  | "claude-tmux"
-  | "native-agent"
-  | "multi-review";
+  "frontend" | "claude-terminal" | "claude-tmux" | "native-agent" | "multi-review";
 
 export interface AgentActivitySourceSnapshot {
   state: AgentActivityState;

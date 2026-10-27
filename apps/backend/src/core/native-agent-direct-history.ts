@@ -54,9 +54,7 @@ export function encodeDirectHistoryCursor(input: {
 }
 
 export type DecodedHistoryCursor =
-  | { version: 1 }
-  | { version: 2; epoch: string; providerCursor: string }
-  | { version: "invalid" };
+  { version: 1 } | { version: 2; epoch: string; providerCursor: string } | { version: "invalid" };
 
 /**
  * Classify a page cursor and, for a direct one, check it belongs to this

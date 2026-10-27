@@ -56,10 +56,7 @@ import {
 } from "./github-pull-requests.js";
 
 export type GitHubPullRequestStateAction =
-  | "close"
-  | "reopen"
-  | "ready-for-review"
-  | "convert-to-draft";
+  "close" | "reopen" | "ready-for-review" | "convert-to-draft";
 
 export const MAX_COMMENT_BODY_LENGTH = 65_536;
 const MAX_PATH_LENGTH = 4_096;

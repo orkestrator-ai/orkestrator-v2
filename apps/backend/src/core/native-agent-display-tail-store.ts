@@ -53,8 +53,7 @@ const MAX_LEGACY_TEMP_SCAN = 4_096;
 const STORE = NATIVE_AGENT_DISPLAY_TAIL_STORE;
 
 export type NativeAgentDisplayTailDeletion =
-  | { kind: "key"; key: string }
-  | { kind: "environment"; environmentId: string };
+  { kind: "key"; key: string } | { kind: "environment"; environmentId: string };
 
 export interface NativeAgentDisplayTailStoreOptions {
   /** The backend database; called per operation so a reopened connection is used. */

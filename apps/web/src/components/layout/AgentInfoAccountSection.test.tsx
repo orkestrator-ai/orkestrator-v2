@@ -14,8 +14,7 @@ let snapshot: AgentAccountsSnapshot;
 let session: AgentSessionAccount | null;
 let readSession: (() => Promise<AgentSessionAccount | null>) | undefined;
 let deferredRead:
-  | ((command: string, args: Record<string, unknown>) => Promise<unknown> | undefined)
-  | undefined;
+  ((command: string, args: Record<string, unknown>) => Promise<unknown> | undefined) | undefined;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args: Record<string, unknown> = {}) => {

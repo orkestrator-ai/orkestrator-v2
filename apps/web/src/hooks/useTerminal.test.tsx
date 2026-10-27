@@ -2294,8 +2294,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("delivers both Uint8Array wire payload forms without cursors", async () => {
     let outputHandler:
-      | ((event: { payload: Uint8Array | { bytes: Uint8Array } }) => void)
-      | undefined;
+      ((event: { payload: Uint8Array | { bytes: Uint8Array } }) => void) | undefined;
     listenMock.mockImplementation(async (event, handler) => {
       if (event === "terminal-output-session-old") outputHandler = handler;
       return unlistenMock;
@@ -2669,8 +2668,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("does not report normal type-ahead while a terminal connection is pending", async () => {
     let resolveCreate:
-      | ((value: { sessionId: string; created: boolean; bootstrapped: boolean }) => void)
-      | undefined;
+      ((value: { sessionId: string; created: boolean; bootstrapped: boolean }) => void) | undefined;
     createTerminalSessionMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {

@@ -5,8 +5,7 @@ import type { StorageService } from "./storage.js";
 export async function workerSessionActivity(
   storage: StorageService,
   nativeAgents:
-    | Pick<NativeAgentService, "sessionActivitySnapshot" | "sessionTurnActivitySnapshot">
-    | undefined,
+    Pick<NativeAgentService, "sessionActivitySnapshot" | "sessionTurnActivitySnapshot"> | undefined,
   environmentId: string,
   tabId: string,
 ) {

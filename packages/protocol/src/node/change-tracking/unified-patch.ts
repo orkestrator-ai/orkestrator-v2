@@ -73,8 +73,7 @@ export interface ParsedPatch {
 }
 
 export type PatchParseResult =
-  | ParsedPatch
-  | { kind: "unsupported"; reason: "combined-diff" | "input-too-large" | "empty" };
+  ParsedPatch | { kind: "unsupported"; reason: "combined-diff" | "input-too-large" | "empty" };
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/;
 const COMBINED_HEADER = /^@@@+ /;

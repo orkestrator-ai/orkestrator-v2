@@ -192,9 +192,7 @@ function restoreJitter(input: DelayInput, config: PrMonitorPolicyConfig): number
 }
 
 export type PrDetectionFailure =
-  | { kind: "rate-limited"; retryAfterMs: number | null }
-  | { kind: "timeout" }
-  | { kind: "failed" };
+  { kind: "rate-limited"; retryAfterMs: number | null } | { kind: "timeout" } | { kind: "failed" };
 
 const RATE_LIMIT_PATTERN =
   /\b(?:api rate limit exceeded|secondary rate limit|rate limit(?:ed)?|abuse detection|http 429|too many requests)\b/i;

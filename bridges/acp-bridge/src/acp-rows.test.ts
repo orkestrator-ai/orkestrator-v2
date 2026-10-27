@@ -517,8 +517,7 @@ describe("ACP transcript rows", () => {
     const after = read(before.token);
     expect(after.status).toBe("snapshot");
     const revised = ("value" in after ? after.value.revisedMessages : undefined) as
-      | BridgeMessage[]
-      | undefined;
+      BridgeMessage[] | undefined;
     expect(revised?.map((message) => message.id)).toEqual([state.messages[1]!.id]);
     expect(revised?.[0]?.parts[0]).toMatchObject({ toolUseId: "build-1", toolState: "success" });
   });

@@ -222,8 +222,7 @@ function recurringKinds(metrics: Record<string, unknown> | null) {
 /** A malformed/missing counter is not a usable cumulative baseline. */
 function diffChanged(metrics: Record<string, unknown> | null): number | null {
   const block = metrics?.recurringWork as
-    | { metrics?: { kinds?: Record<string, { changed?: unknown }> } }
-    | undefined;
+    { metrics?: { kinds?: Record<string, { changed?: unknown }> } } | undefined;
   const changed = block?.metrics?.kinds?.["diff-scan"]?.changed;
   return typeof changed === "number" && Number.isSafeInteger(changed) && changed >= 0
     ? changed

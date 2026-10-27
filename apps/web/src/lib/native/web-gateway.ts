@@ -63,10 +63,7 @@ type EventCallback<T> = (payload: T) => unknown;
  *   reconnect attempts until one opens.
  */
 export type GatewayEventStreamConnectionState =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "disconnected";
+  "idle" | "connecting" | "connected" | "disconnected";
 type GatewayWindow = Pick<
   Window,
   | "location"
@@ -459,8 +456,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     clearBootMetricsTimers();
 
     const navigation = performance.getEntriesByType("navigation")[0] as
-      | PerformanceNavigationTiming
-      | undefined;
+      PerformanceNavigationTiming | undefined;
     const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
     const paintEntries = performance.getEntriesByType("paint");
     const firstPaint = paintEntries.find((entry) => entry.name === "first-paint");

@@ -4,10 +4,7 @@ export type GitHubRepositoryRef = {
 };
 
 export type GitHubRepositoryParseFailureReason =
-  | "missing"
-  | "invalid-url"
-  | "unsupported-host-or-protocol"
-  | "invalid-path";
+  "missing" | "invalid-url" | "unsupported-host-or-protocol" | "invalid-path";
 
 export type GitHubRepositoryParseResult =
   | { ok: true; repository: GitHubRepositoryRef }

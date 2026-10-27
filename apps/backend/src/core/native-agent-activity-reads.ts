@@ -59,8 +59,7 @@ async function readOne(
 }
 
 type Unit<S> =
-  | { kind: "batch"; sessions: S[]; sessionIds: string[] }
-  | { kind: "single"; session: S };
+  { kind: "batch"; sessions: S[]; sessionIds: string[] } | { kind: "single"; session: S };
 
 /**
  * Read every session of one activity group and hand each answer to `apply`.

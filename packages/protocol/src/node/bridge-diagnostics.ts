@@ -63,13 +63,7 @@ const UPDATE_KINDS = new Set([
 ]);
 
 export type Phase =
-  | "sending"
-  | "following"
-  | "draining"
-  | "send-failed"
-  | "finished"
-  | "attached"
-  | "cancelling";
+  "sending" | "following" | "draining" | "send-failed" | "finished" | "attached" | "cancelling";
 type Counter =
   | "stderrBytes"
   | "requestsSent"

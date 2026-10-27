@@ -16,3 +16,10 @@ pathIgnorePatterns = [
   "bridges/**/dist/**",
   "release/**",
 ]
+
+# `bun fmt` options, on top of Prettier's defaults. Do not add an
+# .oxfmtrc.json or .prettierrc: either takes precedence over this section.
+# See docs/development/linting.md.
+[fmt]
+printWidth = 100
+ignorePatterns = ["bridges/codex-bridge/src/app-server/generated/**", "docs/**", "**/*.md"]

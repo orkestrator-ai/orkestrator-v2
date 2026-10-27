@@ -217,9 +217,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   /** Stream liveness and wakeup hints for the backend observer (step 07). */
   private readonly observation: OpenCodeObservationStream;
   private readonly resolveOpenCodeModelProviders?: () =>
-    | readonly string[]
-    | undefined
-    | Promise<readonly string[] | undefined>;
+    readonly string[] | undefined | Promise<readonly string[] | undefined>;
 
   constructor(
     private readonly connection: BridgeConnection,

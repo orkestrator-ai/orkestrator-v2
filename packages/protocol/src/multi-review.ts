@@ -472,8 +472,7 @@ export interface MultiReviewWorkflow {
   presentationError?: string;
   /** How Fix was most recently launched, retained so an upstream restart can replay it. */
   fixLaunch?:
-    | { kind: "default" }
-    | { kind: "custom"; instruction: string; model: MultiReviewModelSelection };
+    { kind: "default" } | { kind: "custom"; instruction: string; model: MultiReviewModelSelection };
   /** Relaunch Fix after an explicitly restarted upstream step reconsolidates. */
   restartFixAfterConsolidation?: boolean;
   activeRequest?: {

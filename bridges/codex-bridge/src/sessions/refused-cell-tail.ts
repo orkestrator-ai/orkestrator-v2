@@ -122,8 +122,7 @@ export function cellOutputText(output: unknown): string {
 function recordTimeMs(record: Record<string, unknown>, payload: Record<string, unknown>): number {
   const written = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
   const passthrough = payload.internal_chat_message_metadata_passthrough as
-    | { create_time?: unknown }
-    | undefined;
+    { create_time?: unknown } | undefined;
   const created =
     typeof passthrough?.create_time === "number" ? passthrough.create_time * 1000 : NaN;
   // A record is written a little after it is created, so the earlier of the
@@ -134,8 +133,7 @@ function recordTimeMs(record: Record<string, unknown>, payload: Record<string, u
 
 function turnIdOf(payload: Record<string, unknown>): string | undefined {
   const passthrough = payload.internal_chat_message_metadata_passthrough as
-    | { turn_id?: unknown }
-    | undefined;
+    { turn_id?: unknown } | undefined;
   return typeof passthrough?.turn_id === "string" ? passthrough.turn_id : undefined;
 }
 

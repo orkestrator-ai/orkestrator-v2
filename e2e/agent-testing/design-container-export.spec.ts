@@ -21,8 +21,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 
 type DesignResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; failure: { code: string; message: string } };
+  { ok: true; value: T } | { ok: false; failure: { code: string; message: string } };
 
 function mise(args: string[]) {
   const command = spawnSync("mise", ["run", ...args, "--profile", profile, "--json"], {

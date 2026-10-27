@@ -25,11 +25,7 @@ export type CommandExecutionStatus = "in_progress" | "completed" | "failed";
  * Open-ended: app-server is experimental and may add sources.
  */
 export type CommandExecutionSource =
-  | "agent"
-  | "userShell"
-  | "unifiedExecStartup"
-  | "unifiedExecInteraction"
-  | (string & {});
+  "agent" | "userShell" | "unifiedExecStartup" | "unifiedExecInteraction" | (string & {});
 
 export interface CommandExecutionItem {
   id: string;

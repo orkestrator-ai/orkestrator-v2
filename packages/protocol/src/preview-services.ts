@@ -743,10 +743,7 @@ export function isPreviewServiceRef(value: unknown): value is PreviewServiceRef 
  * guesses between them.
  */
 export type PreviewUrlSource =
-  | "container-terminal"
-  | "worktree-terminal"
-  | "address-bar"
-  | "agent-link";
+  "container-terminal" | "worktree-terminal" | "address-bar" | "agent-link";
 
 export interface PreviewUrlIntent {
   source: PreviewUrlSource;

@@ -76,9 +76,7 @@ export interface SessionActivityObservation {
  * observation did not fit the response budget; read it individually.
  */
 export type SessionActivityBatchEntry =
-  | SessionActivityObservation
-  | { activity: "unavailable" }
-  | { activity: "deferred" };
+  SessionActivityObservation | { activity: "unavailable" } | { activity: "deferred" };
 
 export interface SessionActivityBatchRequest {
   version: typeof SESSION_ACTIVITY_BATCH_VERSION;

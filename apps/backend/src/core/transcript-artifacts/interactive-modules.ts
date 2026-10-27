@@ -150,8 +150,7 @@ export interface ModuleBundleDiagnostic {
 }
 
 export type ModuleBundleResult =
-  | { ok: true; code: string }
-  | { ok: false; diagnostics: ModuleBundleDiagnostic[] };
+  { ok: true; code: string } | { ok: false; diagnostics: ModuleBundleDiagnostic[] };
 
 export class ModuleBundlerUnavailableError extends Error {
   constructor(reason: string) {

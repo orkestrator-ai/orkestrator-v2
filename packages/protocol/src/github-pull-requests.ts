@@ -64,11 +64,7 @@ export type GitHubPullRequestListResult = {
 };
 
 export type GitHubPullRequestReviewState =
-  | "approved"
-  | "changes-requested"
-  | "commented"
-  | "dismissed"
-  | "pending";
+  "approved" | "changes-requested" | "commented" | "dismissed" | "pending";
 
 export type GitHubPullRequestReviewer = {
   /** A user login, or `org/team-slug` for a team. */

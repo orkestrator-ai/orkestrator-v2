@@ -111,8 +111,7 @@ function optionToken(option: QuestionCardOption, index: number): string {
 }
 
 type AnswerEntry =
-  | { kind: "option"; token: string; value: string }
-  | { kind: "custom"; value: string };
+  { kind: "option"; token: string; value: string } | { kind: "custom"; value: string };
 
 function questionDraftId(question: QuestionCardQuestion, index: number): string {
   return question.id ?? `question-${index}`;

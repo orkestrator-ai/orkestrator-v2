@@ -269,10 +269,7 @@ export function fixSessionRuntimeSummary(
 }
 
 export type FixSessionOpenOutcome =
-  | "opened"
-  | "no-session"
-  | "environment-unavailable"
-  | "tab-rejected";
+  "opened" | "no-session" | "environment-unavailable" | "tab-rejected";
 
 /** Status copy for the backend-owned PR launch that follows a successful Fix or a clean report. */
 export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>): {

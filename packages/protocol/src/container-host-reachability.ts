@@ -29,12 +29,7 @@ export const CONTAINER_HOST_REACHABILITY_CHANGED_EVENT = "container-host-reachab
  * - `error`: the probe itself could not run; says nothing about the path.
  */
 export type ContainerHostProbeOutcome =
-  | "reachable"
-  | "timeout"
-  | "refused"
-  | "unreachable"
-  | "dns"
-  | "error";
+  "reachable" | "timeout" | "refused" | "unreachable" | "dns" | "error";
 
 export type ContainerHostProbeScope =
   /** A throwaway container on Docker's default `bridge` network (`docker0`). */

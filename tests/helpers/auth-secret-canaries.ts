@@ -165,8 +165,7 @@ export async function captureOutput<T>(
   const recordWrite = (chunk: unknown, ...rest: unknown[]): boolean => {
     lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString());
     const callback = rest.find((entry) => typeof entry === "function") as
-      | ((error?: Error | null) => void)
-      | undefined;
+      ((error?: Error | null) => void) | undefined;
     callback?.();
     return true;
   };

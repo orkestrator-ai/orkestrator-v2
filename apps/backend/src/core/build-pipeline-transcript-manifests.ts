@@ -114,9 +114,7 @@ export function isTranscriptManifestRow(value: unknown): value is TranscriptMani
 }
 
 export type ManifestRowRead =
-  | { status: "found"; row: TranscriptManifestRow }
-  | { status: "missing" }
-  | { status: "corrupt" };
+  { status: "found"; row: TranscriptManifestRow } | { status: "missing" } | { status: "corrupt" };
 
 function parseRow(serialized: string): TranscriptManifestRow | null {
   try {

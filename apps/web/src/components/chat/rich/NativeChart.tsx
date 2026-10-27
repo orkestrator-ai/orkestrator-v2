@@ -42,8 +42,7 @@ import { RichPinRecoveryNotice, useRichViewPin } from "./CodeBlockViewer";
  */
 
 export type NativeChartProvenance =
-  | { kind: "inline" }
-  | { kind: "published"; revision: number; detail?: string };
+  { kind: "inline" } | { kind: "published"; revision: number; detail?: string };
 
 export interface NativeChartProps {
   spec: ChartSpecV1;

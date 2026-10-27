@@ -321,12 +321,7 @@ export interface ContainerOperationOutcome {
 }
 
 export type ContainerBootPhase =
-  | "starting"
-  | "initializing"
-  | "ready"
-  | "failed"
-  | "draining"
-  | "stopped";
+  "starting" | "initializing" | "ready" | "failed" | "draining" | "stopped";
 
 export interface ContainerBootRecord {
   /** Boot id from the entrypoint; absent for a legacy image. */

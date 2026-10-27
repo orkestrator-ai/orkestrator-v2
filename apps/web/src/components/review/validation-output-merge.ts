@@ -85,8 +85,7 @@ function mergeStream(
 }
 
 export type ValidationOutputMerge =
-  | { output: ReviewValidationOutput; resync: false }
-  | { output: null; resync: true };
+  { output: ReviewValidationOutput; resync: false } | { output: null; resync: true };
 
 export function mergeValidationOutput(
   previous: ReviewValidationOutput | null,

@@ -66,10 +66,7 @@ export async function mergeGitHubPullRequest(
 }
 
 export type GitHubPullRequestStateAction =
-  | "close"
-  | "reopen"
-  | "ready-for-review"
-  | "convert-to-draft";
+  "close" | "reopen" | "ready-for-review" | "convert-to-draft";
 
 export async function updateGitHubPullRequestState(
   ref: GitHubPullRequestRef,

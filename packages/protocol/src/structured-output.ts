@@ -19,10 +19,7 @@ export interface StructuredOutputTurnRecord {
 export type StructuredOutputProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 
 export type StructuredOutputFailureCode =
-  | "schema_retry_exhausted"
-  | "malformed_output"
-  | "provider_error"
-  | "interrupted";
+  "schema_retry_exhausted" | "malformed_output" | "provider_error" | "interrupted";
 
 const STRUCTURED_OUTPUT_FAILURE_CODES: ReadonlySet<string> = new Set([
   "schema_retry_exhausted",

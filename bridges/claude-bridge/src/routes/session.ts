@@ -710,12 +710,7 @@ session.post("/:id/prompt", async (c) => {
         rawPermissionMode,
       )
         ? (rawPermissionMode as
-            | "default"
-            | "acceptEdits"
-            | "bypassPermissions"
-            | "plan"
-            | "dontAsk"
-            | "auto")
+            "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto")
         : undefined;
     const approvalMode = claudeApprovalMode(body.approvalMode);
     const attachments = body.attachments as

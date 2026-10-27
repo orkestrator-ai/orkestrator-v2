@@ -870,12 +870,7 @@ export interface NativeAgentRecoverableDispatch {
 }
 
 export type NativeAgentTurnPhase =
-  | "idle"
-  | "running"
-  | "blocked"
-  | "cancelling"
-  | "recovering"
-  | "error";
+  "idle" | "running" | "blocked" | "cancelling" | "recovering" | "error";
 
 /**
  * What the provider reports it is doing inside a running turn, when that is
@@ -1444,10 +1439,7 @@ export interface NativeAgentAccountUsageWindow {
 }
 
 export type NativeAgentExecutionPolicyId =
-  | "interactive-host"
-  | "interactive-container"
-  | "coordinator-read-only"
-  | "pipeline";
+  "interactive-host" | "interactive-container" | "coordinator-read-only" | "pipeline";
 
 /**
  * A thing an agent can do, named independently of any provider's tool names.
@@ -1711,11 +1703,7 @@ export const OPENCODE_MCP_SIGN_IN_GUIDANCE =
   "Sign in from a terminal where this environment's OpenCode runs: opencode mcp auth <server>, then reconnect the server.";
 
 export type NativeAgentAuthState =
-  | "signed-in"
-  | "signed-out"
-  | "needs-auth"
-  | "expired"
-  | "unknown";
+  "signed-in" | "signed-out" | "needs-auth" | "expired" | "unknown";
 
 export const NATIVE_AGENT_SIGN_IN_KINDS = [
   "browser-url",
@@ -1913,13 +1901,7 @@ export interface NativeAgentBackgroundTaskSummary {
 }
 
 export type NativeAgentBackgroundTaskKind =
-  | "shell"
-  | "agent"
-  | "workflow"
-  | "remote-agent"
-  | "mcp"
-  | "teammate"
-  | "other";
+  "shell" | "agent" | "workflow" | "remote-agent" | "mcp" | "teammate" | "other";
 
 export interface NativeAgentBackgroundTaskUsage {
   totalTokens: number;

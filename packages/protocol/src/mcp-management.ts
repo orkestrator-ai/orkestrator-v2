@@ -383,8 +383,7 @@ export type McpDefinitionStatus =
 
 /** A value the renderer may see verbatim, or only know exists. */
 export type McpVisibleValue =
-  | { kind: "visible"; value: string }
-  | { kind: "redacted"; display: string };
+  { kind: "visible"; value: string } | { kind: "redacted"; display: string };
 
 export interface McpMapEntrySummary {
   key: string;
@@ -484,9 +483,7 @@ export interface McpTargetList {
 
 /** A value the backend already holds, by identity. Never a masked string. */
 export type McpSecretEdit =
-  | { kind: "keep"; fromKey?: string }
-  | { kind: "set"; value: string }
-  | { kind: "clear" };
+  { kind: "keep"; fromKey?: string } | { kind: "set"; value: string } | { kind: "clear" };
 
 export interface McpMapEdit {
   key: string;

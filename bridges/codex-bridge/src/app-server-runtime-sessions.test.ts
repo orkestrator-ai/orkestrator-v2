@@ -154,6 +154,60 @@ describe("refused-login auth notice", () => {
     return { h, sessionId };
   }
 
+  test("replacement device login survives refused-account polling, cancellation, and matching completion", async () => {
+    let attempt = 0;
+    const h = await harness({
+      "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
+      "account/login/start": () => ({
+        loginId: `replacement-${++attempt}`,
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "REPLACEMENT-CODE",
+      }),
+      "account/login/cancel": () => ({ status: "canceled" }),
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+    });
+    try {
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "refused", attachments: [] });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "failed", error: refusedError("unauthorized") },
+      });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.authNotice?.state === "needs-auth",
+        "refusal missing",
+      );
+      await h.runtime.beginAuthLogin("device-code");
+      const pending = await h.runtime.readAuthStatus();
+      expect(pending).toMatchObject({
+        account: { type: "apiKey" },
+        pendingSignIn: { code: "REPLACEMENT-CODE" },
+      });
+      expect(await h.runtime.readAuthStatus()).toEqual(pending);
+      h.child().notify("account/login/completed", { loginId: "prior-login", success: true });
+      await h.drain();
+      expect(await h.runtime.readAuthStatus()).toEqual(pending);
+      expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+      expect(await h.runtime.cancelAuthLogin()).toBe("canceled");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual([
+        { method: "account/login/cancel", params: { loginId: "replacement-1" } },
+      ]);
+      expect(await h.runtime.readAuthStatus()).not.toHaveProperty("pendingSignIn");
+      expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
+      await h.runtime.beginAuthLogin("device-code");
+      h.child().notify("account/login/completed", { loginId: "replacement-2", success: true });
+      await h.drain();
+      await waitUntil(
+        () => h.runtime.getStatus(sessionId)?.authNotice === undefined,
+        "matching sign-in did not unlock session",
+      );
+      expect(await h.runtime.readAuthStatus()).not.toHaveProperty("pendingSignIn");
+    } finally {
+      await h.runtime.stop();
+    }
+  });
+
   test("a turn failed with a 401 asks for a sign-in until the user signs in", async () => {
     const { h, sessionId } = await failTurn(
       refusedError({ httpConnectionFailed: { httpStatusCode: 401 } }),

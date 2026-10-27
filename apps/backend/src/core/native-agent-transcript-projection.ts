@@ -3340,6 +3340,7 @@ export class NativeAgentTranscriptProjection {
     const terminalMessages = nativeTerminalMessages({
       notices: stateSnapshot.notices,
       error: stateSnapshot.error,
+      turnStartedAt: stateSnapshot.turnStartedAt,
     });
     return {
       identity: this.progressiveIdentity(
@@ -5028,6 +5029,7 @@ export class NativeAgentTranscriptProjection {
         notices: snapshot.notices,
         error: snapshot.error,
         stopNotice,
+        turnStartedAt: snapshot.turnStartedAt,
       });
       if (stopNotice) this.stopNotices.delete(sessionKey);
       // A provider that already says why the turn failed (OpenCode's inline

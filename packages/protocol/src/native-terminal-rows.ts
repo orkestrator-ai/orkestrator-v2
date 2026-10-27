@@ -42,7 +42,17 @@ function lastRowStatesFailure(last: unknown, message: string): boolean {
     if (row.content === message || row.content.endsWith(`: ${message}`)) return true;
   }
   if (!Array.isArray(row.parts)) return false;
-  const error = message.trim();
+  let error = message.trim();
+  // Compare the same decoded reason that providers render in a status part.
+  // Keep the raw text for non-JSON errors and the existing bounded-text match.
+  try {
+    const body = record(JSON.parse(error));
+    const nested = record(body?.error)?.message;
+    const decoded = typeof nested === "string" ? nested : body?.message;
+    if (typeof decoded === "string" && decoded.trim()) error = decoded.trim();
+  } catch {
+    // Plain provider error text.
+  }
   return row.parts.some((candidate) => {
     const part = record(candidate);
     if (part?.type !== "status" || part.severity !== "error") return false;

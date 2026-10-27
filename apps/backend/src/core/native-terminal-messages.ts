@@ -20,6 +20,7 @@ export function nativeTerminalMessages(input: {
   notices?: readonly NativeAgentNotice[];
   error?: string;
   stopNotice?: string;
+  turnStartedAt?: number;
 }): NativeTerminalMessage[] {
   const notices = input.notices ?? [];
   const terminal: Array<{ kind: "error" | "stopped"; message: string }> = [
@@ -48,9 +49,12 @@ export function nativeTerminalMessages(input: {
         role: "system" as const,
         content: notice.message,
         parts: [{ type: "text" as const, content: notice.message }],
-        // Provider terminal metadata does not consistently carry a time.
-        // A fixed value keeps repeated authoritative reads byte-stable.
-        createdAt: "1970-01-01T00:00:00.000Z",
+        // Use a stable real time when available so auth cards can reject a
+        // sign-in completed before this failure. The sentinel is only a fallback.
+        createdAt:
+          input.turnStartedAt && Number.isFinite(input.turnStartedAt)
+            ? new Date(input.turnStartedAt).toISOString()
+            : "1970-01-01T00:00:00.000Z",
       },
     ];
   });

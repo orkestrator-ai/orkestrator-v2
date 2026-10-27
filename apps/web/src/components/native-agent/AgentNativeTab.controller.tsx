@@ -1090,12 +1090,9 @@ export function SharedNativeAgentController({
         });
         if (cancelled) return;
         if (!status?.signIn?.kind) throw new Error("Sign-in options are unavailable");
-        const pending =
-          status.state === "signed-in" ? undefined : normalizePendingSignIn(status.pendingSignIn);
+        const pending = normalizePendingSignIn(status.pendingSignIn);
         setSignInDetails(
-          (previous) =>
-            pending ??
-            (status.pendingSignIn === null || status.state === "signed-in" ? null : previous),
+          (previous) => pending ?? (status.pendingSignIn === null ? null : previous),
         );
         if (pending)
           timer = setTimeout(() => void read(), Math.min(2_000, pending.expiresAt - Date.now()));

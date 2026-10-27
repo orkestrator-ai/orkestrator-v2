@@ -61,13 +61,22 @@ export function useAgentAccountReauth(
   useEffect(() => {
     const version = ++epoch.current;
     current.current = IDLE;
+    // Older bridges use an epoch sentinel for terminal rows. Such a row has
+    // no trustworthy failure time; only a sign-in from this visit can recover it.
+    const parsedFailureAt = failureAt ? Date.parse(failureAt) : undefined;
+    const failureTime =
+      parsedFailureAt === undefined
+        ? undefined
+        : Number.isFinite(parsedFailureAt) && parsedFailureAt > 0
+          ? parsedFailureAt
+          : Date.now();
     if (enabled) {
       void getAgentAccountLogin(machine)
         .then(async (existing) => {
           if (
             existing.completedAt &&
-            failureAt &&
-            Date.parse(existing.completedAt) < Date.parse(failureAt)
+            failureTime !== undefined &&
+            Date.parse(existing.completedAt) < failureTime
           )
             return;
           if (existing.operationId && existing.accountId && existing.state !== "pending") {

@@ -176,30 +176,36 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
-  test("GET /global/auth rehydrates only the live login display fields, without logging them", async () => {
-    const pendingSignIn = {
-      url: CANARY_LOGIN_URL,
-      code: CANARY_USER_CODE,
-      expiresAt: Date.now() + 60_000,
-    };
-    await withRuntimeMethod(
-      "readAuthStatus",
-      async () => ({
-        account: null,
-        requiresOpenaiAuth: true,
-        pendingSignIn: { ...pendingSignIn, ...tokens },
-      }),
-      async () => {
-        const { result: body, output } = await captureOutput(async () =>
-          (await app.request("/global/auth")).json(),
-        );
-        expectAuthStatusShape(body);
-        expect(body).toMatchObject({ state: "needs-auth", pendingSignIn });
-        expectOnlyLoginSecrets(body, "pending sign-in");
-        expectNothingSecretLogged(output, "pending sign-in");
-      },
-    );
-  });
+  test.each([null, { type: "apiKey" }])(
+    "GET /global/auth rehydrates live login display fields with account %p",
+    async (account) => {
+      const pendingSignIn = {
+        url: CANARY_LOGIN_URL,
+        code: CANARY_USER_CODE,
+        expiresAt: Date.now() + 60_000,
+      };
+      await withRuntimeMethod(
+        "readAuthStatus",
+        async () => ({
+          account,
+          requiresOpenaiAuth: true,
+          pendingSignIn: { ...pendingSignIn, ...tokens },
+        }),
+        async () => {
+          const { result: body, output } = await captureOutput(async () =>
+            (await app.request("/global/auth")).json(),
+          );
+          expectAuthStatusShape(body);
+          expect(body).toMatchObject({
+            state: account ? "signed-in" : "needs-auth",
+            pendingSignIn,
+          });
+          expectOnlyLoginSecrets(body, "pending sign-in");
+          expectNothingSecretLogged(output, "pending sign-in");
+        },
+      );
+    },
+  );
 
   test("POST /global/auth/login returns only the URL and code, and logs neither", async () => {
     await withRuntimeMethod(

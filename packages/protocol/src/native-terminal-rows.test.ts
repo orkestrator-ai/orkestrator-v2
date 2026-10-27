@@ -68,6 +68,29 @@ describe("native terminal rows", () => {
     expect(withNativeTerminalMessages(reduced, [terminal("error", body)])).toBe(reduced);
   });
 
+  test.each([
+    'Model "private" is unavailable',
+    "First line\nSecond line",
+    "Cannot access C:\\models\\private",
+  ])("suppresses decoded JSON error %p", (message) => {
+    for (const body of [{ error: { message } }, { message }]) {
+      const rows = [user, assistantWithStatus(message)];
+      expect(withNativeTerminalMessages(rows, [terminal("error", JSON.stringify(body))])).toBe(
+        rows,
+      );
+      const bounded = [user, assistantWithStatus(`${message.slice(0, 12)}…`)];
+      expect(withNativeTerminalMessages(bounded, [terminal("error", JSON.stringify(body))])).toBe(
+        bounded,
+      );
+    }
+  });
+
+  test("suppresses Pi's matching bounded output with its truncation notice", () => {
+    const message = "Provider failed: " + "reason ".repeat(50) + "\n\n[output truncated]";
+    const rows = [user, assistantWithStatus(message)];
+    expect(withNativeTerminalMessages(rows, [terminal("error", message)])).toBe(rows);
+  });
+
   test("keeps a failure the last row does not state", () => {
     const messages = [user, assistantWithStatus("A different failure")];
     const row = terminal("error", REFUSED);

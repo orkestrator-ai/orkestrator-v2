@@ -92,28 +92,31 @@ describe.each(CONNECTIONS)("%s bridge auth boundary", (_agent, connection) => {
     expectNothingSecretLogged(output, "sign-in");
   });
 
-  test("rehydrates only the bounded pending-login display fields and logs neither code nor URL", async () => {
-    const pendingSignIn = {
-      url: CANARY_LOGIN_URL,
-      code: CANARY_USER_CODE,
-      expiresAt: Date.now() + 60_000,
-    };
-    const { provider } = httpProvider(
-      () =>
-        Response.json({
-          state: "needs-auth",
-          pendingSignIn: { ...pendingSignIn, ...TOKENS, loginId: AUTH_SECRET_CANARIES.oauthCode },
-        }),
-      connection,
-    );
-    const { result: status, output } = await captureOutput(() => provider.authStatus!());
-    expect(status.pendingSignIn).toEqual(pendingSignIn);
-    expectAuthStatusShape(status);
-    expectOnlyLoginSecrets(status, "pending sign-in");
-    expectNothingSecretLogged(output, "pending sign-in");
-  });
+  test.each(["needs-auth", "signed-in"])(
+    "rehydrates only bounded pending-login display fields while %s",
+    async (state) => {
+      const pendingSignIn = {
+        url: CANARY_LOGIN_URL,
+        code: CANARY_USER_CODE,
+        expiresAt: Date.now() + 60_000,
+      };
+      const { provider } = httpProvider(
+        () =>
+          Response.json({
+            state,
+            pendingSignIn: { ...pendingSignIn, ...TOKENS, loginId: AUTH_SECRET_CANARIES.oauthCode },
+          }),
+        connection,
+      );
+      const { result: status, output } = await captureOutput(() => provider.authStatus!());
+      expect(status.pendingSignIn).toEqual(pendingSignIn);
+      expectAuthStatusShape(status);
+      expectOnlyLoginSecrets(status, "pending sign-in");
+      expectNothingSecretLogged(output, "pending sign-in");
+    },
+  );
 
-  test.each(["expired", "unbounded", "invalid-url", "oversized-code", "signed-in"])(
+  test.each(["expired", "unbounded", "invalid-url", "oversized-code"])(
     "drops a %s pending login",
     async (reason) => {
       const pendingSignIn = {
@@ -128,7 +131,7 @@ describe.each(CONNECTIONS)("%s bridge auth boundary", (_agent, connection) => {
       const { provider } = httpProvider(
         () =>
           Response.json({
-            state: reason === "signed-in" ? "signed-in" : "needs-auth",
+            state: "needs-auth",
             pendingSignIn,
           }),
         connection,

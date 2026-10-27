@@ -12,7 +12,7 @@ import {
   readAgentsMdSectionFromBase,
   type AgentsMdPrDependencies,
 } from "./agents-md-pr.js";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 
 // Real Git against a local bare "origin"; only `gh` is faked, so nothing
 // reaches GitHub.
@@ -43,6 +43,7 @@ let checkout: string;
 let prs: Array<{ url: string; head: string; base: string; body: string }>;
 let ghCalls: string[][];
 let ghAuthOk: boolean;
+let ghMissing: boolean;
 let failCreateOnce: boolean;
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -71,6 +72,7 @@ function deps(): AgentsMdPrDependencies {
     gh: async (args) => {
       ghCalls.push(args);
       if (args[0] === "auth") {
+        if (ghMissing) throw new CommandFailedError("spawn gh ENOENT", { executableMissing: true });
         if (!ghAuthOk) throw new Error("You are not logged into any GitHub hosts.");
         return "";
       }
@@ -126,6 +128,7 @@ beforeEach(async () => {
   prs = [];
   ghCalls = [];
   ghAuthOk = true;
+  ghMissing = false;
   failCreateOnce = false;
   await git(root, "init", "-q", "--bare", "-b", "main", origin);
   await git(root, "init", "-q", "-b", "main", seed);
@@ -271,6 +274,10 @@ describe("openAgentsMdPullRequest", () => {
       const error = await open([{ action: "add", text: "Use bun." }]).catch((caught) => caught);
       expect((error as AgentsMdPrError).code).toBe("gh-auth");
       expect((error as Error).message).toContain("gh auth login");
+      ghMissing = true;
+      const missing = await open([{ action: "add", text: "Use bun." }]).catch((caught) => caught);
+      expect((missing as AgentsMdPrError).code).toBe("gh-missing");
+      expect((missing as Error).message).toContain("not installed");
       expect(await git(checkout, "ls-remote", "--heads", "origin", agentsMdBranchName(KEY))).toBe(
         "",
       );

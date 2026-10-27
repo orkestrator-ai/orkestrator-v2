@@ -299,7 +299,12 @@ async function openOnce(input: {
 
   // Fail before any change when the GitHub CLI cannot open the pull request.
   try {
-    await deps.gh(["auth", "status"], { cwd: root, timeoutMs: 30_000 });
+    // Scoped to github.com when that is the remote: a bare `gh auth status`
+    // also fails for a problem with any other host the user signed in to.
+    await deps.gh(["auth", "status", ...(parsed.ok ? ["--hostname", "github.com"] : [])], {
+      cwd: root,
+      timeoutMs: 30_000,
+    });
   } catch (error) {
     if (error instanceof CommandFailedError && error.executableMissing)
       throw new AgentsMdPrError(

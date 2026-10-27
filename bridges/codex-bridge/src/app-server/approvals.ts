@@ -86,6 +86,8 @@ export type ApprovalResolution =
 
 /** One parsed file change in an approval request. */
 export interface ApprovalFileChange {
+  /** Every rename destination participates in rule matching. */
+  movePath?: string;
   path: string;
   kind: "add" | "delete" | "update";
 }
@@ -139,6 +141,43 @@ export interface ApprovalRequest {
    * approval. The renderer may still offer deny/cancel, but must not approve it.
    */
   actionable: boolean;
+  /**
+   * True only when the request is exactly one operation an Orkestrator
+   * permission rule may answer (todo 0723): a v2 command with app-server's own
+   * command string (not input to a running terminal, not rebuilt from
+   * `commandActions` or a legacy argv), a file change that asks for no
+   * write root, or a managed-network host. The backend auto-answers nothing
+   * without it, so a bridge that predates the field keeps asking.
+   */
+  ruleEligible?: boolean;
+  /**
+   * app-server's `proposedExecpolicyAmendment`, an argv prefix, forwarded only
+   * so the card can preselect the same prefix for an Orkestrator rule. It is
+   * never sent back: no answer carries an amendment ("No answer saves a
+   * durable rule" above).
+   */
+  proposedCommandPrefix?: string[];
+}
+
+/** Bounds on a forwarded prefix proposal; anything larger is dropped. */
+const MAX_PROPOSED_PREFIX_TOKENS = 16;
+const MAX_PROPOSED_PREFIX_TOKEN_LENGTH = 256;
+
+function proposedPrefix(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PROPOSED_PREFIX_TOKENS) {
+    return undefined;
+  }
+  if (
+    !value.every(
+      (token) =>
+        typeof token === "string" &&
+        token.length > 0 &&
+        token.length <= MAX_PROPOSED_PREFIX_TOKEN_LENGTH,
+    )
+  ) {
+    return undefined;
+  }
+  return [...(value as string[])];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -210,6 +249,9 @@ export function describeApproval(options: {
     ? Object.entries(params.fileChanges).map(([path, change]) => ({
         path,
         kind: changeKind(isRecord(change) ? change.type : undefined),
+        ...(isRecord(change) && change.move_path != null
+          ? { movePath: typeof change.move_path === "string" ? change.move_path : "" }
+          : {}),
       }))
     : undefined;
 
@@ -225,6 +267,23 @@ export function describeApproval(options: {
     : undefined;
 
   const command = commandText(params.command) ?? commandActionsText(params.commandActions);
+  // Only the v2 command method sends app-server's own command string; the
+  // fallbacks above are for display. `writeStdin` is input to a running
+  // terminal, which no command rule may answer.
+  const exactCommand =
+    options.method === "item/commandExecution/requestApproval" &&
+    (params.kind === undefined || params.kind === null || params.kind === "command") &&
+    typeof params.command === "string" &&
+    params.command.length > 0;
+  const ruleEligible =
+    networkContext !== undefined
+      ? kind === "command" && exactCommand
+      : kind === "command"
+        ? exactCommand
+        : kind === "file-change"
+          ? str(params.grantRoot) === undefined
+          : false;
+  const proposal = exactCommand ? proposedPrefix(params.proposedExecpolicyAmendment) : undefined;
   const actionable =
     kind === "command"
       ? command !== undefined
@@ -259,8 +318,11 @@ export function describeApproval(options: {
      */
     supportsApproveForSession: true,
     // app-server's proposed policy amendments are deliberately not described:
-    // see "No answer saves a durable rule" above.
+    // see "No answer saves a durable rule" above. The command prefix is
+    // forwarded as a hint only (`proposedCommandPrefix`).
     actionable,
+    ...(ruleEligible ? { ruleEligible: true } : {}),
+    ...(proposal ? { proposedCommandPrefix: proposal } : {}),
   };
 }
 

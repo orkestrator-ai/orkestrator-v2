@@ -19,6 +19,7 @@ import {
   SlidersHorizontal,
   Cable,
   CalendarClock,
+  ShieldCheck,
   MessagesSquare,
   Network,
   MonitorPlay,
@@ -41,6 +42,7 @@ import { MessagingSettings } from "./MessagingSettings";
 import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
 import { SchedulesSettings } from "./SchedulesSettings";
+import { PermissionsSettings } from "./PermissionsSettings";
 import {
   AccountMachineProvider,
   useAccountMachineStore,
@@ -97,6 +99,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "mcp", label: "Control MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
   { id: "schedules", label: "Schedules", icon: <CalendarClock className="h-4 w-4" /> },
+  { id: "permissions", label: "Permissions", icon: <ShieldCheck className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
@@ -281,6 +284,8 @@ export function SettingsPage({
                 <MessagingSettings />
               ) : activeSection === "schedules" ? (
                 <SchedulesSettings />
+              ) : activeSection === "permissions" ? (
+                <PermissionsSettings />
               ) : isLoading && !initialLoadDone ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

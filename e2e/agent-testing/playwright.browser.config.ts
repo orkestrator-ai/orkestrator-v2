@@ -11,6 +11,7 @@ export default defineConfig({
   testMatch: [
     "browser-gateway.spec.ts",
     "agent-accounts.spec.ts",
+    "permission-rules.spec.ts",
     "design-canvas.spec.ts",
     "design-container-export.spec.ts",
     "design-live.spec.ts",

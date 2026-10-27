@@ -624,6 +624,24 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Delete a scheduled job and its history.",
   },
+  "permission.rule.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "List this node's Orkestrator permission rules with their scope, last use and use count.",
+  },
+  "permission.rule.remove": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Remove an Orkestrator permission rule; matching requests ask again from the next one.",
+  },
   "run.get": {
     version: 1,
     mutation: false,

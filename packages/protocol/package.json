@@ -25,6 +25,7 @@
     "./node/ssh/tunnel-supervisor": "./src/node/ssh/tunnel-supervisor.ts",
     "./agent-command-catalogue": "./src/agent-command-catalogue.ts",
     "./agent-interactions": "./src/agent-interactions.ts",
+    "./permission-rules": "./src/permission-rules.ts",
     "./agent-interaction-deadline": "./src/agent-interaction-deadline.ts",
     "./agent-mail": "./src/agent-mail.ts",
     "./human-prompts": "./src/human-prompts.ts",

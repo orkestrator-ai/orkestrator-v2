@@ -235,11 +235,16 @@ export function publicApprovals(state: SessionState): JsonObject {
       reason: `Pi requested to run the ${pending.toolName} tool.`,
     };
     if (pending.toolName === "bash" || pending.toolName === "powershell") {
+      const command = readString(pending.input.command);
       return {
         ...base,
         kind: "command",
-        command: readString(pending.input.command) || pending.toolName,
+        command: command || pending.toolName,
         cwd: workingDirectory,
+        // An Orkestrator permission rule (todo 0723) may answer a POSIX shell
+        // command only: its matcher parses `sh` syntax, not PowerShell. A
+        // custom tool below is reported as a command too, and never is.
+        ...(pending.toolName === "bash" && command ? { ruleEligible: true } : {}),
       };
     }
     if (pending.toolName === "edit" || pending.toolName === "write") {
@@ -253,7 +258,15 @@ export function publicApprovals(state: SessionState): JsonObject {
             // promises. Report it as unactionable rather than approving a
             // change to a file nobody can name.
             [],
-        ...(path ? {} : { actionable: false }),
+        // A relative path is resolved against this, by Pi and by a rule.
+        cwd: workingDirectory,
+        ...(path &&
+        path === pending.input.path &&
+        !/^(?:~|@|file:)/i.test(path) &&
+        !/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/.test(path)
+          ? { ruleEligible: true }
+          : {}),
+        ...(!path ? { actionable: false } : {}),
       };
     }
     return {

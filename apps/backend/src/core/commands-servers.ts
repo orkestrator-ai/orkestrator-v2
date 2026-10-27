@@ -1549,6 +1549,18 @@ export async function deleteEnvironment(
           error instanceof Error ? error.name : "unknown",
         );
       }
+      // Its environment-scoped permission rules and their application record
+      // go with it; project rules stay (todo 0723).
+      try {
+        if (typeof storage.permissionRuleStore === "function") {
+          storage.permissionRuleStore().environmentDeleted(environmentId);
+        }
+      } catch (error) {
+        console.warn(
+          `[backend] permission rule cleanup failed for ${environmentId}:`,
+          error instanceof Error ? error.name : "unknown",
+        );
+      }
       context.agentTools?.revokeEnvironment(environmentId);
       await seedFs.rm(seedFilesDir(storage.getDataDir(), environmentId), {
         recursive: true,

@@ -14,6 +14,8 @@ import { usePromptHold, type PromptHoldHandler } from "@/hooks/usePromptHold";
 import { openInBrowser } from "@/lib/backend";
 import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
+import { RememberRulePanel } from "@/components/native-agent/RememberRulePanel";
+import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 
 type Answer = { optionIds: string[]; freeText: string };
 
@@ -44,6 +46,7 @@ export function NativeAgentInteractionCard({
   interaction,
   onResolve,
   onHold,
+  onApproveAndRemember,
   planContent,
 }: {
   interaction: AgentInteractionRequest;
@@ -51,6 +54,13 @@ export function NativeAgentInteractionCard({
   onResolve: (resolution: AgentInteractionResolution) => Promise<AgentInteractionApplyOutcome>;
   /** Pauses or resumes the countdown where the provider enforces it. */
   onHold?: PromptHoldHandler;
+  /**
+   * Approves once and saves an Orkestrator permission rule (todo 0723). The
+   * option shows only when the backend offered it on this request.
+   */
+  onApproveAndRemember?: (
+    choice: PermissionRuleChoiceInput,
+  ) => Promise<AgentInteractionApplyOutcome>;
 }) {
   const draftKey = nativeAgentInteractionDraftKey(interaction.sessionId, interaction.id);
   const [answers, setAnswers] = usePromptDraftField<Record<string, Answer>>(
@@ -126,6 +136,34 @@ export function NativeAgentInteractionCard({
             ];
           }),
   });
+
+  const ruleOffer = interaction.presentation.ruleOffer;
+  const [remembering, setRemembering] = useState(false);
+  const [rememberBusy, setRememberBusy] = useState(false);
+  const approveAndRemember = async (choice: PermissionRuleChoiceInput) => {
+    if (!onApproveAndRemember || rememberBusy || submitting || expired) return;
+    setRememberBusy(true);
+    setError(null);
+    try {
+      const outcome = await onApproveAndRemember(choice);
+      if (outcome.result === "applied") {
+        setRemembering(false);
+      } else if (outcome.result === "stale" || outcome.result === "already-resolved") {
+        setRemembering(false);
+        setError("This request was already answered, so no rule was saved.");
+      } else {
+        setError(
+          outcome.result === "rejected"
+            ? "The agent rejected that response. No rule was saved."
+            : "The agent is temporarily unavailable. No rule was saved; it is safe to retry.",
+        );
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRememberBusy(false);
+    }
+  };
 
   const setQuestionAnswer = (
     questionId: string,
@@ -204,9 +242,28 @@ export function NativeAgentInteractionCard({
           {interaction.presentation.approveForSessionLabel}
         </Button>
       ) : null}
+      {ruleOffer && onApproveAndRemember ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-expanded={remembering}
+          disabled={
+            submitting || rememberBusy || expired || interaction.presentation.confirmDisabled
+          }
+          onClick={() => setRemembering((open) => !open)}
+        >
+          Approve and remember…
+        </Button>
+      ) : null}
       <Button
         size="sm"
-        disabled={submitting || expired || !canSubmit || interaction.presentation.confirmDisabled}
+        disabled={
+          submitting ||
+          rememberBusy ||
+          expired ||
+          !canSubmit ||
+          interaction.presentation.confirmDisabled
+        }
         onClick={() => {
           void resolve("answer");
         }}
@@ -224,7 +281,13 @@ export function NativeAgentInteractionCard({
      */
     <BlockingPromptCard
       state={
-        submitting ? "submitting" : expired ? "expired" : error ? "retryable-error" : "pending"
+        submitting || rememberBusy
+          ? "submitting"
+          : expired
+            ? "expired"
+            : error
+              ? "retryable-error"
+              : "pending"
       }
       error={error ?? hold.error}
       title={interaction.presentation.title}
@@ -246,6 +309,15 @@ export function NativeAgentInteractionCard({
       actions={actions}
     >
       <div className="px-4 py-3 text-sm">
+        {remembering && ruleOffer ? (
+          <RememberRulePanel
+            offer={ruleOffer}
+            provider={interaction.provider}
+            disabled={rememberBusy || submitting || expired}
+            onConfirm={(choice) => void approveAndRemember(choice)}
+            onCancel={() => setRemembering(false)}
+          />
+        ) : null}
         {interaction.kind === "plan-approval" && planContent ? (
           <details open className="mt-3 rounded-md border border-border/60 bg-muted/20">
             <summary className="cursor-pointer px-3 py-2 text-xs font-medium">

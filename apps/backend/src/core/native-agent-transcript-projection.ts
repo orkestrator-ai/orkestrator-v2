@@ -120,7 +120,11 @@ import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { fileURLToPath } from "node:url";
-import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_KINDS,
+  type AgentInteractionSnapshot,
+} from "@orkestrator/protocol/agent-interactions";
+import type { PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
 import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
 import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
@@ -770,6 +774,12 @@ export interface NativeAgentTranscriptProjectionHost {
     requestId: string,
     provider: NativeAgentRuntimeProvider,
   ): void;
+  /**
+   * Orkestrator's permission rules (todo 0723): answers the pending requests a
+   * rule covers before any card is built, and offers "Approve and remember"
+   * on the rest. Absent in tests that do not wire it.
+   */
+  permissionRules?: PermissionRuleEnforcer;
 }
 
 /**
@@ -783,6 +793,29 @@ export interface NativeAgentTranscriptProjectionHost {
  * costs a re-read, never user state.
  */
 export class NativeAgentTranscriptProjection {
+  /**
+   * The session's pending requests as a card list: the provider's own list,
+   * minus what a permission rule just answered, with remember offers. A
+   * transient read has no stored session for a rule to belong to.
+   */
+  private pendingInteractions(resolved: {
+    session: PersistedNativeAgentSession;
+    provider: NativeAgentRuntimeProvider;
+    transient: boolean;
+  }): Promise<Pick<AgentInteractionSnapshot, "requests" | "revision">> {
+    const interactions = resolved.provider.interactions;
+    if (!interactions) return Promise.resolve({ requests: [], revision: 0 });
+    const read = interactions.listPendingInteractions(resolved.session.providerSessionId);
+    const rules = this.host.permissionRules;
+    if (!rules || resolved.transient) return read;
+    return read.then((snapshot) =>
+      rules
+        .apply(resolved.session, resolved.provider, snapshot)
+        .then((applied) => applied.snapshot)
+        .catch(() => snapshot),
+    );
+  }
+
   /** Bounded, reconstructible view cache; providers remain authoritative. */
   private readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
   /** Bounded wire revisions for conditional/delta projection reads. */
@@ -3325,9 +3358,7 @@ export class NativeAgentTranscriptProjection {
               )
             : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
       ),
-      resolved.provider.interactions
-        ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
-        : Promise.resolve({ requests: [], revision: 0 }),
+      this.pendingInteractions(resolved),
       advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null),
@@ -4990,9 +5021,7 @@ export class NativeAgentTranscriptProjection {
       const snapshotPromise = resolved.transient
         ? readSnapshot()
         : this.resumeIdentity.read(resolved.session, readSnapshot);
-      const interactionSnapshotPromise = resolved.provider.interactions
-        ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
-        : Promise.resolve({ requests: [], revision: 0 });
+      const interactionSnapshotPromise = this.pendingInteractions(resolved);
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);

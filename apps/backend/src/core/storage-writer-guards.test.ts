@@ -1697,6 +1697,7 @@ const REPOSITORIES = [
   "CoordinatorsRepository",
   "AgentAccountsRepository",
   "ScheduledJobsRepository",
+  "PermissionRulesRepository",
 ];
 
 describe("StorageService store writers", () => {

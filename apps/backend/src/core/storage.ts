@@ -7,6 +7,7 @@ export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
+import type { PermissionRuleStore } from "./permission-rules/store.js";
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
@@ -188,6 +189,11 @@ export class StorageService {
 
   scheduledJobStore(): ScheduledJobStore {
     return this.repos.scheduledJobs.store();
+  }
+
+  /** Orkestrator's own permission rules (todo 0723); per machine. */
+  permissionRuleStore(): PermissionRuleStore {
+    return this.repos.permissionRules.store();
   }
 
   async getResourceSnapshotRevision(

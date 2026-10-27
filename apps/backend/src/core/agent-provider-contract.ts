@@ -5,8 +5,10 @@ import type {
   AgentInteractionPolicy,
   AgentInteractionProvider,
   AgentInteractionResolution,
+  AgentInteractionQuestionAnswer,
   AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
+import type { PermissionRuleSubject } from "@orkestrator/protocol/permission-rules";
 import type {
   AgentModel,
   NativeAgentBackgroundTaskSummary,
@@ -135,6 +137,32 @@ export interface AgentInteractionProviderCapability {
     interactionId: string,
     held: boolean,
   ): Promise<AgentInteractionApplyOutcome>;
+  /**
+   * What an Orkestrator permission rule may match for one pending request
+   * (todo 0723), read from the provider's own payload when the request was last
+   * listed. `null` when the request is not one a rule may answer: the bridge
+   * did not mark it exact, a detail was truncated, or no allow-once answer
+   * exists. Absent on adapters with nothing a rule could answer.
+   */
+  permissionRuleDetail?(
+    sessionId: string,
+    interactionId: string,
+  ): PermissionRuleRequestDetail | null;
+}
+
+/**
+ * The structured operation behind one approval, and how to answer it once.
+ * Never logged: it holds commands and paths.
+ */
+export interface PermissionRuleRequestDetail {
+  subject: PermissionRuleSubject;
+  /** The provider's own suggested command prefix, a preselection hint only. */
+  proposal?: string[];
+  /**
+   * The question answers that select the provider's allow-once option, for
+   * a request that asks its choice as a question (ACP). Empty otherwise.
+   */
+  allowOnceAnswers: AgentInteractionQuestionAnswer[];
 }
 
 export class PromptRejectedError extends Error {

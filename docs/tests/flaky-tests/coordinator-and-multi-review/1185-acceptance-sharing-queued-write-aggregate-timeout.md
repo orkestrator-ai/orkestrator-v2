@@ -44,3 +44,28 @@ Evidence is under the host temporary directory at
 `orkestrator-test-run.9oZXtC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 The passing runner removes its log. Contention is a hypothesis; no assertion,
 timeout, skip or implementation was changed.
+
+
+## Permission-rules main-merge recurrence (2026-10-27)
+
+While merging `f7edf57f1bcd6ed52b6b2fb68d4864065198ced7` into
+`19b8716087e786bc49512b65aa356c8f85f05b43`, the final
+`mise run test:logged -- --name merge-final-default-tests -- mise run test`
+run (two backend workers, concurrent workspace/root/bridge/protocol groups)
+reported `V09: aliases of one checkout share physical work > V09: environments aliasing one checkout share one watcher and scan; a linked worktree does not` at 7491.98 ms.
+The complete owning file then passed alone, exit 0 in 7.0 s:
+
+```sh
+mise run test:logged -- --name merge-acceptance-sharing -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/change-tracking/acceptance-sharing.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is in
+`orkestrator-test-run.QXGTmp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. The aggregate remains non-green; the
+passing runner deletes its log. Host contention remains an unconfirmed
+hypothesis. No assertion, timeout, skip, or implementation was changed for
+this recurrence.
+
+The backend aggregate finished with 12,572 passed, 123 skipped, and 21 failed
+across 769 files (630.64 s). Full merge validation and remaining failures are
+recorded in [1171](../aggregate-validation-runs/1171-orkestrator-permission-rules-0723-validation.md).

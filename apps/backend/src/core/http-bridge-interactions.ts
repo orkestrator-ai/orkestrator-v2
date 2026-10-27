@@ -14,6 +14,7 @@ import {
 import {
   type AgentInteractionProviderCapability,
   type BridgeConnection,
+  type PermissionRuleRequestDetail,
   ProviderUnavailableError,
   type ProviderSessionRegistration,
 } from "./agent-provider-contract.js";
@@ -32,6 +33,11 @@ import {
   truncatedText,
 } from "./agent-provider-runtime.js";
 import { assertOk, boundedJson, bridgeFetch } from "./http-bridge-transport.js";
+import {
+  acpRuleDetail,
+  claudeRuleDetail,
+  codexRuleDetail,
+} from "./permission-rules/request-detail.js";
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 
@@ -116,6 +122,8 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     { providerRequestId: string; sessionId: string; family: string; actionable?: boolean }
   >();
   private readonly resolvingInteractions = new Set<string>();
+  /** What a permission rule may match per listed request; pruned with the ids above. */
+  private readonly ruleDetails = new Map<string, PermissionRuleRequestDetail>();
 
   constructor(
     readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi",
@@ -125,6 +133,27 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.interactionTracker.register(sessionId, interaction);
+  }
+
+  permissionRuleDetail(
+    sessionId: string,
+    interactionId: string,
+  ): PermissionRuleRequestDetail | null {
+    if (this.providerInteractionIds.get(interactionId)?.sessionId !== sessionId) return null;
+    return this.ruleDetails.get(interactionId) ?? null;
+  }
+
+  private recordRuleDetail(interactionId: string, detail: PermissionRuleRequestDetail | null) {
+    if (detail) {
+      setBoundedMapEntry(
+        this.ruleDetails,
+        interactionId,
+        detail,
+        MAX_TRACKED_PROVIDER_INTERACTIONS,
+      );
+    } else {
+      this.ruleDetails.delete(interactionId);
+    }
   }
 
   private normalizedId(sessionId: string, providerRequestId: string, category: string): string {
@@ -397,7 +426,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       ...optionalLine("Blocked path", request.blockedPath),
       ...optionalLine("Input", request.input),
     ]);
-    return this.interactionRequest(sessionId, providerRequestId, "approval", request, {
+    const mapped = this.interactionRequest(sessionId, providerRequestId, "approval", request, {
       kind,
       presentation: {
         // The sentence the CLI composed names the operation better than a
@@ -416,6 +445,8 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       },
       ...timing,
     });
+    this.recordRuleDetail(mapped.id, claudeRuleDetail(request, kind));
+    return mapped;
   }
 
   private mapCodexApproval(sessionId: string, raw: unknown): AgentInteractionRequest {
@@ -516,6 +547,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     });
     const identity = this.providerInteractionIds.get(mapped.id);
     if (identity) identity.actionable = actionable;
+    this.recordRuleDetail(mapped.id, codexRuleDetail(request, kind, actionable));
     return mapped;
   }
 
@@ -621,6 +653,18 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     });
     const identity = this.providerInteractionIds.get(mapped.id);
     if (identity) identity.actionable = !incomplete;
+    // ACP's own option kinds; only an explicit `allow_once` may answer for a rule.
+    const allowOnceIndex = options.findIndex((entry) => asRecord(entry)?.kind === "allow_once");
+    this.recordRuleDetail(
+      mapped.id,
+      incomplete
+        ? null
+        : acpRuleDetail(
+            request,
+            allowOnceIndex === -1 ? null : opaqueOptionId(0, allowOnceIndex),
+            "decision",
+          ),
+    );
     return mapped;
   }
 
@@ -956,7 +1000,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     for (const [interactionId, identity] of this.providerInteractionIds) {
       if (identity.sessionId === sessionId && !currentIds.has(interactionId)) {
         this.providerInteractionIds.delete(interactionId);
+        this.ruleDetails.delete(interactionId);
       }
+    }
+    for (const interactionId of this.ruleDetails.keys()) {
+      if (!this.providerInteractionIds.has(interactionId)) this.ruleDetails.delete(interactionId);
     }
     return snapshot;
   }

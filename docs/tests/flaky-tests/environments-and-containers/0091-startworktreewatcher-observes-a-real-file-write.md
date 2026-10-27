@@ -77,3 +77,16 @@ No watcher implementation, assertion, deadline or skip changed.
 - **Complete unchanged owner rerun:** `mise run test:logged -- --name worktree-watcher-owner -- bun test --cwd apps/backend ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.2 s.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pbtfTr/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; enclosing log `orkestrator-test-run.cChC3V/annotation-coverage-suite.log.gz` under the same temporary root. Passing owner output was removed by the logged runner.
 - **Assessment:** intermittent watcher recurrence; cause remains unconfirmed. The environment-move, worktree Git, profile-cleanup and migration owning files retained failures in separate runs. No watcher code, assertion, deadline or skip changed; the aggregate remains failed.
+
+
+## Permission-rules main-merge recurrence — 2026-10-27
+
+- **Original command:** `mise run test:logged -- --name merge-final-default-tests -- mise run test`, merging `f7edf57f1bcd6ed52b6b2fb68d4864065198ced7` into `19b8716087e786bc49512b65aa356c8f85f05b43`; concurrent workspace/root/bridge/protocol groups with two backend workers.
+- **Failure:** the same real-file-write test observed no change at its two-second deadline (2018.24 ms reported).
+- **Complete owner rerun:** `mise run test:logged -- --name merge-worktree-watcher -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/worktree-watcher.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.2 s.
+- **Evidence:** `orkestrator-test-run.QXGTmp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The aggregate remains non-green; passing output is deleted by the runner.
+- **Assessment:** another intermittent recurrence; host contention or OS event delivery remain hypotheses. No watcher code, assertion, deadline, or skip changed.
+
+The backend aggregate finished with 12,572 passed, 123 skipped, and 21 failed
+across 769 files (630.64 s). Full merge validation and remaining failures are
+recorded in [1171](../aggregate-validation-runs/1171-orkestrator-permission-rules-0723-validation.md).

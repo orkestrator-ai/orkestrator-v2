@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -58,6 +59,7 @@ import {
   steerNativeAgentQueuedPrompt,
   resolveNativeAgentInteraction,
   holdNativeAgentInteraction,
+  approveNativeAgentInteractionAndRemember,
   resumeNativeAgentSession,
   retryPromptQueueDispatch,
   retryNativeAgentDispatch,
@@ -65,6 +67,7 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
 import {
@@ -3106,6 +3109,25 @@ export function useNativeAgentSession<TMessage = unknown>({
     [identity, refresh],
   );
 
+  // "Approve and remember" (todo 0723): one approval, then the rule is saved
+  // by the backend. The refresh drops the answered card.
+  const approveInteractionAndRemember = useCallback(
+    async (
+      interactionId: string,
+      choice: PermissionRuleChoiceInput,
+    ): Promise<AgentInteractionApplyOutcome> => {
+      const { outcome, ruleSaveWarning } = await approveNativeAgentInteractionAndRemember({
+        ...identity,
+        interactionId,
+        ...choice,
+      });
+      if (ruleSaveWarning) toast.warning(ruleSaveWarning);
+      await refresh();
+      return outcome;
+    },
+    [identity, refresh],
+  );
+
   const queueKey = useMemo(() => `${platform}\0${sessionKey}`, [platform, sessionKey]);
   const enqueue = useCallback(
     async (prompt: string, options: NativeAgentSendOptions = {}) => {
@@ -3555,6 +3577,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     updateControls,
     resolveInteraction,
     holdInteraction,
+    approveInteractionAndRemember,
     enqueue,
     removeQueued,
     steerQueued,

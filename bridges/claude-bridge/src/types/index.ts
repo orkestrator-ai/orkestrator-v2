@@ -1096,6 +1096,20 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
   paths?: string[];
   /** `permission` only: the tool input as bounded JSON. */
   input?: string;
+  /**
+   * True only when every detail above is exact (nothing truncated, an absolute
+   * path, a named MCP server), so an Orkestrator permission rule (todo 0723)
+   * may answer it. The backend auto-answers nothing without it.
+   */
+  ruleEligible?: boolean;
+  /** `WebFetch` only: the host of the URL it fetches. */
+  networkHost?: string;
+  /**
+   * The Bash prefix of the SDK's own `canUseTool` suggestion, forwarded only
+   * so the card can preselect the same prefix for an Orkestrator rule. The
+   * suggestion itself is never returned to the SDK.
+   */
+  proposedCommandPrefix?: string[];
 }
 
 /** The values an MCP form answer may carry, as MCP defines them. */

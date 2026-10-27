@@ -73,6 +73,8 @@ export const PUBLIC_ACTION_CLI_COMMANDS: Readonly<Record<PublicActionName, strin
     "mail.send": "orkestrator mail send",
     "node.list": "orkestrator node list",
     "schedule.list": "orkestrator schedule list",
+    "permission.rule.list": "orkestrator permissions rules list",
+    "permission.rule.remove": "orkestrator permissions rules remove",
     "schedule.get": "orkestrator schedule get",
     "schedule.create": "orkestrator schedule create",
     "schedule.update": "orkestrator schedule update",

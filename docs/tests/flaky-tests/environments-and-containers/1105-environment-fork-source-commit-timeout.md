@@ -28,3 +28,28 @@ for all groups and owning-file results. Evidence:
 under the host temporary directory.
 
 The same local-fork case exceeded its five-second deadline (26779.98 ms reported). The complete unchanged owner passed, exit 0 in 3.5 s, with `mise run test:logged -- --name merge-environment-fork-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-environment-fork.test.ts --parallel=1 --only-failures`. This is another aggregate-only recurrence; cause remains unconfirmed. No assertion, timeout, skip or implementation changed.
+
+
+## Permission-rules main-merge recurrence (2026-10-27)
+
+While merging `f7edf57f1bcd6ed52b6b2fb68d4864065198ced7` into
+`19b8716087e786bc49512b65aa356c8f85f05b43`, the final
+`mise run test:logged -- --name merge-final-default-tests -- mise run test`
+run (two backend workers, concurrent workspace/root/bridge/protocol groups)
+reported `fork_environment > starts a local fork from the source commit rather than origin/main` at 5956.85 ms.
+The complete owning file then passed alone, exit 0 in 8.1 s:
+
+```sh
+mise run test:logged -- --name merge-fork -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-environment-fork.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is in
+`orkestrator-test-run.QXGTmp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. The aggregate remains non-green; the
+passing runner deletes its log. Host contention remains an unconfirmed
+hypothesis. No assertion, timeout, skip, or implementation was changed for
+this recurrence.
+
+The backend aggregate finished with 12,572 passed, 123 skipped, and 21 failed
+across 769 files (630.64 s). Full merge validation and remaining failures are
+recorded in [1171](../aggregate-validation-runs/1171-orkestrator-permission-rules-0723-validation.md).

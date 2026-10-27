@@ -22,7 +22,7 @@ import {
   type FlowNodeModel,
   type FlowStackStage,
 } from "@/components/flow-graph/FlowGraph";
-import { FLOW_NODE_HEIGHT, summarizeFlowEdges } from "@/components/flow-graph/flow-graph-model";
+import { flowNodeHeight, summarizeFlowEdges } from "@/components/flow-graph/flow-graph-model";
 import {
   reviewerPendingLabel,
   reviewerStatusLabel,
@@ -31,12 +31,7 @@ import {
 } from "@/components/review/multi-review-steps";
 import { runtimeParts } from "@/lib/review/runtime-summary";
 import { useUIStore } from "@/stores/uiStore";
-import {
-  PIPELINE_CHIPS_NODE_HEIGHT,
-  PIPELINE_FLOW_MIN_HEIGHT,
-  PIPELINE_PR_NODE_HEIGHT,
-  pipelineFlowLayout,
-} from "./pipeline-flow-layout";
+import { PIPELINE_FLOW_MIN_HEIGHT, pipelineFlowLayout } from "./pipeline-flow-layout";
 import type {
   PipelineFlowModel,
   PipelineFlowNode,
@@ -217,12 +212,6 @@ export function pipelineNodeView({
   };
 }
 
-export function pipelineNodeHeight(view: FlowNodeModel): number {
-  if (view.validation?.length) return PIPELINE_CHIPS_NODE_HEIGHT;
-  if (view.extra) return PIPELINE_PR_NODE_HEIGHT;
-  return FLOW_NODE_HEIGHT;
-}
-
 /** "3/4 complete", over the reviewers a review column holds. */
 function reviewProgress(nodes: readonly PipelineFlowNode[]): string | null {
   const reviewers = nodes.filter((node) => node.kind === "reviewer");
@@ -303,7 +292,7 @@ export function PipelineFlowGraph({
             label: columnLabel(column),
             nodes: column.nodeIds.map((id) => ({
               id,
-              height: pipelineNodeHeight(views.get(id)!),
+              height: flowNodeHeight(views.get(id)!),
             })),
           })),
         })

@@ -260,16 +260,25 @@ and `dist/index.d.ts`:
 - `scrollToIndexSystem` gains a navigation generation and a cancel stream;
   its list-refresh retry and 1200 ms cleanup timer check the generation, so a
   timer queued before cancellation cannot retry or clean up a newer
-  navigation.
+  navigation. Cancelling a pending index navigation must also publish
+  `scrollTargetReached`: a restored snapshot's initial location holds the item
+  list at `visibility: hidden` until that signal arrives. Cancelling with no
+  pending navigation must not publish it or reveal the list prematurely.
 - `followOutputSystem` guards its queued follow (`listRefresh` wait and
   fixed-size frame), its size-increase trap and `scrollIntoViewOnChange` with
   a generation, and exposes `cancelPendingNavigation`, which retires both
   systems at once.
 
-The dependency is pinned exactly. `virtuoso-cancellation.test.tsx` exercises
+The dependency is pinned exactly. [`virtuoso-cancellation.test.tsx`](../../apps/web/src/lib/transcript-scroll/virtuoso-cancellation.test.tsx) exercises
 the real patched library (a control run proves the retry and the queued
 follow happen; the cancelled run proves they do not), so a version bump that
-drops or breaks the patch fails there. Regenerate with `bun patch
+drops or breaks the patch fails there. Its restored-snapshot control and
+cancellation cases require an existing list that starts hidden and becomes
+visible on completion or cancellation. The no-pending-navigation case guards
+against premature reveal, and the real `useVirtuosoScrollState` activation and
+deactivation cases exercise cancellation through the controller while the
+initial navigation is pending. Preserve all of these invariants in both runtime
+bundles when regenerating the patch. Regenerate with `bun patch
 react-virtuoso@<version>`, reapply the same edits, `bun patch --commit`, then
 make sure `node_modules/react-virtuoso` is the store symlink again (the edit
 copy otherwise shadows it for root tests).

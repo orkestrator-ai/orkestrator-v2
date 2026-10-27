@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, jest, mock, test } from "bun:test";
 import {
   createSession,
   expectControlOnlyPrompt,
@@ -10,7 +10,11 @@ import {
 } from "./session-manager-test-harness.js";
 import { getAvailableModelCatalog, readClaudePlanUsage } from "./session-manager.js";
 import { readClaudeAuthStatus } from "./claude-sign-in.js";
-import { liveClaudeControls } from "./live-claude-control.js";
+import {
+  LIVE_CLAUDE_READ_TIMEOUT_MS,
+  liveClaudeControls,
+  readFromLiveClaude,
+} from "./live-claude-control.js";
 
 // The model catalogue, the account and the plan windows are bridge-wide. A
 // CLI a session keeps warm between turns answers them; only without one does
@@ -32,7 +36,7 @@ const LIVE_MODEL = {
 async function warmSession(name: string) {
   const session = createSession(name);
   track(session.id);
-  const prompt = sendPrompt(session.id, "hello");
+  const prompt = sendPrompt(session.id, "hello", { includeLocalSettings: true });
   const call = await nextQueryCall();
   call.push({ type: "result", subtype: "success" });
   await prompt;
@@ -47,6 +51,118 @@ async function expectNoProbe() {
 }
 
 describe("bridge-wide reads from a running CLI", () => {
+  test.each([undefined, "[]", '["user","project"]', '["local"]', "{}", "invalid"])(
+    "probes past a CLI with mismatched settings sources: %s",
+    async (sources) => {
+      const initializationResult = mock(async () => ({ models: [LIVE_MODEL] }));
+      queryControlOverrides.initializationResult = initializationResult;
+      const { session } = await warmSession("mismatched settings");
+      session.claudeRuntime!.launch.settingSources = sources;
+
+      expect(liveClaudeControls()).toEqual([]);
+      expect((await getAvailableModelCatalog()).models[0]?.id).toBe("claude-opus-mock");
+      expect(initializationResult).not.toHaveBeenCalled();
+      await expectControlOnlyPrompt(await nextQueryCall());
+    },
+  );
+
+  test("selects the most recently active runtime without touching its idle clock", async () => {
+    const { session: first } = await warmSession("first runtime");
+    const { session: second } = await warmSession("second runtime");
+    const older = first.claudeRuntime!;
+    const newer = second.claudeRuntime!;
+    older.lastFrameAt = Date.now();
+    newer.lastFrameAt = older.lastFrameAt - 1;
+
+    expect(liveClaudeControls()).toEqual([older.control, newer.control]);
+    newer.lastFrameAt = older.lastFrameAt + 1;
+    const read = mock(async (control) => (control === newer.control ? "newest" : "older"));
+    expect(await readFromLiveClaude(read)).toBe("newest");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith(newer.control);
+    expect(newer.lastFrameAt).toBe(older.lastFrameAt + 1);
+    await expectNoProbe();
+  });
+
+  test.each(["draining", "aborted", "deleting", "marked-draining"])(
+    "skips a %s runtime",
+    async (kind) => {
+      const { session } = await warmSession("ineligible runtime");
+      const runtime = session.claudeRuntime!;
+      try {
+        if (kind === "draining") runtime.state = "draining";
+        if (kind === "aborted") {
+          const abortController = new AbortController();
+          abortController.abort();
+          session.claudeRuntime = { ...runtime, abortController };
+        }
+        if (kind === "deleting") session.deleting = true;
+        if (kind === "marked-draining") session.queryControlDraining = runtime.control;
+        const read = mock(async () => "unusable");
+        expect(liveClaudeControls()).toEqual([]);
+        expect(await readFromLiveClaude(read)).toBeUndefined();
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        runtime.state = "open";
+        session.claudeRuntime = runtime;
+        session.deleting = false;
+        session.queryControlDraining = undefined;
+      }
+    },
+  );
+
+  test.each(["timeout", "reject", "throw", "undefined"])(
+    "falls through a newest runtime's %s to an older answer",
+    async (kind) => {
+      const { session: first } = await warmSession("older answering runtime");
+      const { session: second } = await warmSession("newer failing runtime");
+      first.claudeRuntime!.lastFrameAt = Date.now() - 1;
+      second.claudeRuntime!.lastFrameAt = Date.now();
+      let rejectLate: ((reason: Error) => void) | undefined;
+      const read = mock((control) => {
+        if (control === first.claudeRuntime!.control) return Promise.resolve("older answer");
+        if (kind === "throw") throw new Error("closed synchronously");
+        if (kind === "reject") return Promise.reject(new Error("closed"));
+        if (kind === "undefined") return undefined;
+        return new Promise<string>((_resolve, reject) => {
+          rejectLate = reject;
+        });
+      });
+
+      expect(await readFromLiveClaude(read, 5)).toBe("older answer");
+      expect(read.mock.calls.map(([control]) => control)).toEqual([
+        second.claudeRuntime!.control,
+        first.claudeRuntime!.control,
+      ]);
+      // Bun fails the test on an unhandled late rejection.
+      rejectLate?.(new Error("late transport rejection"));
+      await Bun.sleep(0);
+      await expectNoProbe();
+    },
+  );
+
+  test("probes after every live initialization read times out", async () => {
+    const initializationResult = mock(() => new Promise<never>(() => undefined));
+    queryControlOverrides.initializationResult = initializationResult;
+    await warmSession("stalled first runtime");
+    await warmSession("stalled second runtime");
+
+    jest.useFakeTimers();
+    try {
+      const catalog = getAvailableModelCatalog();
+      expect(initializationResult).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(LIVE_CLAUDE_READ_TIMEOUT_MS);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(initializationResult).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(LIVE_CLAUDE_READ_TIMEOUT_MS);
+      expect((await catalog).models[0]?.id).toBe("claude-opus-mock");
+    } finally {
+      jest.useRealTimers();
+    }
+    await expectControlOnlyPrompt(await nextQueryCall());
+  });
+
   test("the model catalogue comes from the running CLI's initialize answer", async () => {
     const initializationResult = mock(async () => ({ models: [LIVE_MODEL] }));
     queryControlOverrides.initializationResult = initializationResult;

@@ -17,14 +17,17 @@ export const LIVE_CLAUDE_READ_TIMEOUT_MS = 5_000;
 /**
  * Whether a CLI launched with these settings sources reads the settings a
  * probe reads. A probe passes none, so it loads user, project and local
- * settings, and user and project settings can narrow the model list
+ * settings, and each of these sources can narrow the model list
  * (`availableModels`). A coordinator turn launches with none at all.
  */
 function readsProbeSettings(settingSources: string | undefined): boolean {
   if (settingSources === undefined) return false;
   try {
     const sources = JSON.parse(settingSources) as unknown;
-    return Array.isArray(sources) && sources.includes("user") && sources.includes("project");
+    return (
+      Array.isArray(sources) &&
+      ["user", "project", "local"].every((source) => sources.includes(source))
+    );
   } catch {
     return false;
   }

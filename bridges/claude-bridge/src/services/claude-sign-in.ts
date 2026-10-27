@@ -52,6 +52,8 @@ let authGeneration = 0;
  * successful turn first. That never locks the composer; only `needs-auth` does.
  */
 let turnAuthenticationFailedUntil = 0;
+/** Launch-time accounts stay suspect until a model proves authentication works. */
+let reuseLiveAccounts = true;
 
 function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
   return Date.now() < turnAuthenticationFailedUntil && value.state === "signed-in"
@@ -66,6 +68,7 @@ export function resetClaudeSignInForTesting(): void {
   authRefreshPending = false;
   authGeneration += 1;
   turnAuthenticationFailedUntil = 0;
+  reuseLiveAccounts = true;
 }
 
 /** Claude reports an absent source as the literal string "none". */
@@ -119,8 +122,12 @@ function liveSignedInAccount(): Promise<NativeAgentAuthStatus | undefined> {
 }
 
 async function probeAccount(): Promise<NativeAgentAuthStatus> {
-  const live = await liveSignedInAccount();
-  if (live) return live;
+  // A warm CLI's launch-time account cannot prove that a refused login still
+  // exists. Check again after awaiting it in case a turn failed mid-read.
+  if (reuseLiveAccounts) {
+    const live = await liveSignedInAccount();
+    if (live && reuseLiveAccounts) return live;
+  }
   let probe: Query | undefined;
   try {
     probe = controlOnlyQuery({
@@ -178,6 +185,7 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
  * composer before the user sends into the same failure again.
  */
 export function noteClaudeAuthenticationFailure(): void {
+  reuseLiveAccounts = false;
   turnAuthenticationFailedUntil = Date.now() + AUTH_CACHE_TTL_MS;
   authCache = undefined;
   // Failures share the active probe. If success already fenced it, queue one
@@ -188,6 +196,7 @@ export function noteClaudeAuthenticationFailure(): void {
 
 /** A model answered, so a cached "no login" is stale. */
 export function noteClaudeAuthenticationWorked(): void {
+  reuseLiveAccounts = true;
   // Success also fences a probe that has not published any cache entry yet.
   // Keep its slot until cleanup completes so another read cannot spawn a
   // second CLI while the obsolete probe is still running.

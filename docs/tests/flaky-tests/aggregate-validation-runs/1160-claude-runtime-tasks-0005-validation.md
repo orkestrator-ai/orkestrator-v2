@@ -58,3 +58,64 @@ stretched past them. The change does not reach their code path (execution
 policy and sandbox launch options). Every other owner is outside the change;
 those that still fail alone fail the same way on `origin/main`. No assertion,
 deadline, skip or implementation was changed.
+
+## Live control metadata review follow-up (2026-10-27)
+
+At `f9eb28571`, the local-settings catalogue regression, warm-CLI authentication
+failure regression, runtime eligibility/order/timeout cases and real SDK
+initialization contract passed together: 43 tests, zero failures. The final
+focused command was:
+
+```sh
+mise run test:logged -- --name final-live-control -- bun test ./bridges/claude-bridge/src/services/live-claude-control.test.ts ./bridges/claude-bridge/src/services/claude-sign-in.test.ts ./bridges/claude-bridge/src/services/live-claude-control.live.test.ts --parallel=2 --only-failures
+```
+
+`mise run test:logged -- --name check -- mise run check` passed formatting,
+lint (existing warnings) and all typechecks. The full non-iOS command was
+`mise run test:logged -- --name default-suite -- mise run test`. Its workspace
+group received four worker slots after 162.1 seconds; backend and web used two
+Bun workers each. The bridge group waited 1,192.9 seconds for two slots.
+Observed host load at 03:59 was 89.78/161.13/176.23 on 18 cores.
+
+The root group had 3,526 passes and two failures, both the existing
+`migrate-copy` extraction-status assertions. The workspace group had backend
+11,476 passes, 106 skips, 18 failures and eight between-test errors; desktop
+1,368 passes, 16 skips and three failures. Web, web-public, CLI, protocol and
+toolchain tests passed. The separate Codex protocol lockfile check passed.
+
+The new credible flake is
+`apps/desktop/tests/artifact-host-manager.test.ts`:
+`artifact host lifecycle > a hung artifact frame after readiness is reported unresponsive and closing terminates it`.
+The aggregate received no `unresponsive` event after its 80 ms wait
+(157.79 ms test duration). The complete unchanged owner passed alone in 1.4 s
+with `mise run test:logged -- --name isolated-artifact-host -- bun test --cwd apps/desktop ./tests/artifact-host-manager.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+The passing raw log was removed by the logged runner. Delayed watchdog/event
+scheduling under host load is a hypothesis, not a demonstrated cause.
+
+Other unchanged owners were rerun with the same logged-command pattern,
+`--parallel=1`, the package cwd and Node preload (no preload/cwd for the root
+owner):
+
+| Owner | Isolated result | Duration |
+| --- | --- | --- |
+| `apps/desktop/scripts/dev/profile-cleanup.test.ts` | 20 pass, 2 fail; the same unexpected `keychainWarning` assertions as 1100 | 1.9 s |
+| `apps/backend/src/core/environment-move.test.ts` | 15 pass, 23 fail, 21 errors; deadlines and teardown errors, so this recurrence is not newly classified as flaky | 236.3 s |
+| `apps/backend/tests/commands-registry-environments.test.ts` | 66 pass, 2 fail, 1 error; fetched-base deadline plus suffix-case hook deadline | 65.8 s |
+| `apps/backend/tests/commands-integration.test.ts` | 54 pass, 1 fail, 1 error; scan-cache deadline; the original artifact-excludes case passed | 53.2 s |
+| `apps/backend/src/core/diff-stats-tracking.test.ts` | 16 pass, 5 fail, 4 errors; deadlines and missing fixture directories after teardown | 88.2 s |
+| `apps/backend/tests/worktree-watcher.test.ts` | 32 pass, 2 fail; real-file observation and linked-index hints | 9.3 s |
+| `apps/backend/tests/commands-environment-fork.test.ts` | 23 pass, 1 fail; source-commit fork exceeded five seconds (8,349.32 ms) | 20.4 s |
+| `tests/unit/migrate-copy.test.ts` | 10 pass, 2 fail; extraction status `2` rather than `0`, as in the earlier run | 3.1 s |
+
+The aggregate also repeated the two `worktree-snapshots-git`, two
+`docker-image` and four `staged-input-relay` failures documented above; these
+owners were not rerun in this follow-up. No unrelated assertion or deadline
+was changed. Browser, Electron, Docker and iOS scenario suites are outside the
+scope of the control metadata fixes.
+
+All bridge packages ultimately passed, including Claude: 1,734 passes, six
+skips, zero failures (189.14 s). The full command exited 1 after 1,577.3 s,
+solely from the workspace and root groups described above. Compressed group
+evidence is in the temporary `orkestrator-test-run.CX0Bro` artifact directory;
+the outer logged command retained `orkestrator-test-run.kk9C3O`. The updated
+registry owner and final repository formatting check also passed.

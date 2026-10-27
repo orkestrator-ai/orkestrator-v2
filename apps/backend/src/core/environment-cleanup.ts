@@ -474,6 +474,10 @@ async function cleanupStateDirectories(
   }
 }
 
+/**
+ * Process-wide on purpose: it only de-duplicates a log line, so two backends
+ * in one process share at most one fewer warning (docs/architecture/backend-runtime.md).
+ */
 const loggedKeptBranches = new Set<string>();
 
 /**

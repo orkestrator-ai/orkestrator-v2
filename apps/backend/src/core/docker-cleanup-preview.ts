@@ -26,6 +26,7 @@ import {
 } from "./docker-cleanup-inventory.js";
 import { inspectVolume } from "./container-storage.js";
 import { inspectNetwork } from "./container-network.js";
+import type { DockerCleanupGrant } from "./docker-cleanup-grants.js";
 
 /**
  * Reviewed cleanup: a preview enumerates this registry's containers and
@@ -37,35 +38,6 @@ import { inspectNetwork } from "./container-network.js";
  */
 
 type CleanupContext = Pick<CommandContext, "storage" | "strictDockerOwner" | "runtime">;
-
-const TOKEN_TTL_MS = 10 * 60_000;
-const MAX_TOKENS = 8;
-
-interface PreviewGrant {
-  owner: string;
-  expiresAt: number;
-  containers: Map<string, { sizeBytes: number | null; state: string }>;
-  volumes: Set<string>;
-  networks: Set<string>;
-}
-
-const grants = new Map<string, PreviewGrant>();
-
-function pruneGrants(now: number): void {
-  for (const [token, grant] of Array.from(grants)) {
-    if (grant.expiresAt <= now) grants.delete(token);
-  }
-  while (grants.size >= MAX_TOKENS) {
-    const oldest = grants.keys().next().value;
-    if (oldest === undefined) break;
-    grants.delete(oldest);
-  }
-}
-
-/** Test seam. */
-export function resetCleanupGrants(): void {
-  grants.clear();
-}
 
 interface ListedVolume {
   name: string;
@@ -153,9 +125,9 @@ export async function previewDockerCleanup(context: CleanupContext): Promise<Cle
   ]);
   const networks = await listAppResources("network").catch(() => [] as ListedVolume[]);
   const rows: CleanupPreviewRow[] = [];
-  const grant: PreviewGrant = {
+  const grant: DockerCleanupGrant = {
     owner,
-    expiresAt: Date.now() + TOKEN_TTL_MS,
+    expiresAt: context.runtime.dockerCleanupGrants.expiryFrom(Date.now()),
     containers: new Map(),
     volumes: new Set(),
     networks: new Set(),
@@ -208,14 +180,12 @@ export async function previewDockerCleanup(context: CleanupContext): Promise<Cle
     });
     if (classification === "eligible") grant.networks.add(network.name);
   }
-  const now = Date.now();
-  pruneGrants(now);
   const selectionToken = createHash("sha256")
     .update(randomUUID())
     .update(owner)
     .digest("hex")
     .slice(0, 32);
-  grants.set(selectionToken, grant);
+  context.runtime.dockerCleanupGrants.record(selectionToken, grant, Date.now());
   return {
     selectionToken,
     expiresAt: new Date(grant.expiresAt).toISOString(),
@@ -259,14 +229,16 @@ export async function executeDockerCleanup(
   context: CleanupContext,
 ): Promise<CleanupExecuteResult> {
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
-  pruneGrants(Date.now());
-  const grant = grants.get(selection.selectionToken);
-  if (!grant || grant.owner !== owner) {
+  const grant = context.runtime.dockerCleanupGrants.take(
+    selection.selectionToken,
+    owner,
+    Date.now(),
+  );
+  if (!grant) {
     throw new Error(
       "ContainerLifecycleError:revision-conflict: The cleanup review expired. Review the resources again.",
     );
   }
-  grants.delete(selection.selectionToken);
   const outcomes: CleanupResourceOutcome[] = [];
 
   const containers = [...new Set(selection.containerIds)];

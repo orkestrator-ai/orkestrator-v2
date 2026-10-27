@@ -7,11 +7,7 @@ import {
   sanitizeLinearError,
   verifyLinearConnection,
 } from "./linear.js";
-import {
-  asString,
-  requireLinearApiKey,
-  withLinearCompletionCommentLock,
-} from "./commands-helpers.js";
+import { asString, requireLinearApiKey } from "./commands-helpers.js";
 
 export function registerLinearCommands(
   register: CommandRegistrar,
@@ -81,7 +77,7 @@ export function registerLinearCommands(
     const runId = asString(pipelineId, "pipelineId");
     const targetIssueId = asString(issueId, "issueId");
     const commentBody = asString(body, "body");
-    return withLinearCompletionCommentLock(runId, async () => {
+    return context.runtime.integrationLocks.withLinearCompletionComment(runId, async () => {
       const existing = await context.storage.kanban.getLinearCompletionComment(runId);
       if (existing?.status === "posted" && existing.commentId) {
         return {

@@ -31,27 +31,14 @@ import {
   TmuxSession,
   TmuxSessionManager,
   type TmuxSessionTimingOptions,
-  getLastTmuxOrphanSweepAt,
   getOrCreateSession,
   killEnvironmentTmuxSessions,
   killOrphanSession,
-  orphanedTmuxMissingSince,
-  persistTmuxEnvironmentActivity,
   resolveBackend,
-  setLastTmuxOrphanSweepAt,
-  tmuxManager,
   workspaceAndClaudeHome,
 } from "./tmux-session-manager.js";
-import {
-  InteractiveTmuxTerminalManager,
-  detachInteractiveTerminalsForEnvironment,
-  interactiveTerminals,
-} from "./tmux-interactive.js";
-import {
-  ClaudeStatePollManager,
-  defaultClaudeStatePolls,
-  environmentContainerId,
-} from "./tmux-poll.js";
+import { InteractiveTmuxTerminalManager } from "./tmux-interactive.js";
+import { ClaudeStatePollManager, environmentContainerId } from "./tmux-poll.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -118,22 +105,22 @@ export async function cleanupEnvironmentTmux(
   context: CommandContext,
   options: { requireStopped?: boolean } = {},
 ): Promise<void> {
-  await tmuxManager.installLock(environmentId).runExclusive(async () => {
-    detachInteractiveTerminalsForEnvironment(environmentId);
+  await context.runtime.tmux.sessions.installLock(environmentId).runExclusive(async () => {
+    context.runtime.tmux.interactiveTerminals.detachEnvironment(environmentId);
     const environment = await context.storage.getEnvironment(environmentId);
     if (environment?.environmentType === "containerized" && environment.status === "stopped") {
-      tmuxManager.removeEnvironment(environmentId);
+      context.runtime.tmux.sessions.removeEnvironment(environmentId);
       return;
     }
 
     let cleanupComplete = true;
-    for (const session of tmuxManager.environmentSessions(environmentId)) {
+    for (const session of context.runtime.tmux.sessions.environmentSessions(environmentId)) {
       const stopped = await session.stop().catch((error: unknown) => {
         console.warn("[tmux] session stop failed during environment cleanup", error);
         return false;
       });
       if (!stopped) cleanupComplete = false;
-      else tmuxManager.removeIfSame(environmentId, session.tabId, session);
+      else context.runtime.tmux.sessions.removeIfSame(environmentId, session.tabId, session);
     }
 
     let backend: TmuxBackend;
@@ -190,9 +177,6 @@ export async function cleanupEnvironmentTmux(
 export function registerTmuxBackendCommands(
   registerCommand: RegisterCommand,
   options: {
-    claudeStatePolls?: ClaudeStatePollManager;
-    /** Docker-backed doorbell installer; without one, polls stay at 1 s. */
-    claudeStateSignal?: poll.ClaudeStateSignalInstaller;
     prepareEnvironmentFirstPrompt?: (
       environmentId: string,
       prompt: string,
@@ -227,12 +211,10 @@ export function registerTmuxBackendCommands(
         release();
       }
     });
-  // Tests inject a manager so the polling commands can be exercised without a
-  // Docker daemon; production keeps the single process-wide instance.
-  const claudeStatePolls = options.claudeStatePolls ?? defaultClaudeStatePolls;
-  if (options.claudeStateSignal) claudeStatePolls.setSignalInstaller(options.claudeStateSignal);
+  // Each backend's runtime owns its polls (`TmuxRuntime`); tests build the
+  // runtime with a reader and timers instead of a Docker daemon.
   register("reconcile_claude_state_polling", (_args, context) =>
-    claudeStatePolls.reconcile(context),
+    context.runtime.tmux.claudeStatePolls.reconcile(context),
   );
 
   register(
@@ -269,14 +251,14 @@ export function registerTmuxBackendCommands(
           );
         }
       }
-      return tmuxManager.installLock(envId).runExclusive(async () => {
+      return context.runtime.tmux.sessions.installLock(envId).runExclusive(async () => {
         context.runtime.environments.fence.assertNotMoving(envId);
         const environment = await context.storage.getEnvironment(envId);
         if (!environment || environment.deletionRequestedAt) {
           throw new Error(`environment ${envId} is being deleted`);
         }
         if (replace) {
-          const existing = tmuxManager.remove(envId, tab);
+          const existing = context.runtime.tmux.sessions.remove(envId, tab);
           if (existing) await existing.stop();
           else await killOrphanSession(context, envId, tab);
         }
@@ -297,7 +279,7 @@ export function registerTmuxBackendCommands(
           asOptionalString(effort),
           typeof fastMode === "boolean" ? fastMode : undefined,
         );
-        await persistTmuxEnvironmentActivity(context, envId);
+        await context.runtime.tmux.persistEnvironmentActivity(context, envId);
         return session.status(await session.tmuxAlive().catch(() => false));
       });
     },
@@ -306,80 +288,93 @@ export function registerTmuxBackendCommands(
   register("claude_tmux_stop", async ({ tabId, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
-    await tmuxManager.installLock(envId).runExclusive(async () => {
+    await context.runtime.tmux.sessions.installLock(envId).runExclusive(async () => {
       // Start inserts its session before installing hooks and probing the
       // executables. Removing outside this lock lets stop kill "nothing" while
       // that start is paused, after which start can launch an untracked tmux
       // process. Serialize the complete stop transition with start/replace.
-      const session = tmuxManager.get(envId, tab);
+      const session = context.runtime.tmux.sessions.get(envId, tab);
       if (!session) {
         await killOrphanSession(context, envId, tab);
       } else {
         if (!(await session.stop())) throw new Error("claude-tmux session stop incomplete");
-        tmuxManager.removeIfSame(envId, tab, session);
+        context.runtime.tmux.sessions.removeIfSame(envId, tab, session);
       }
-      if (session && tmuxManager.sessionsInEnvironment(envId) === 0) {
+      if (session && context.runtime.tmux.sessions.sessionsInEnvironment(envId) === 0) {
         await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch(
           (error: unknown) => {
             console.warn("[tmux] uninstallWorkspaceHooks failed", error);
           },
         );
       }
-      await persistTmuxEnvironmentActivity(context, envId);
+      await context.runtime.tmux.persistEnvironmentActivity(context, envId);
     });
   });
 
   register("claude_tmux_interrupt", async ({ tabId, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
-    await requireSession(envId, asString(tabId, "tabId")).interrupt();
-    await persistTmuxEnvironmentActivity(context, envId);
+    await requireSession(context, envId, asString(tabId, "tabId")).interrupt();
+    await context.runtime.tmux.persistEnvironmentActivity(context, envId);
   });
-  register("claude_tmux_status", async ({ tabId, environmentId }) => {
-    const session = tmuxManager.get(
+  register("claude_tmux_status", async ({ tabId, environmentId }, context) => {
+    const session = context.runtime.tmux.sessions.get(
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     );
     return session ? session.status(await session.tmuxAlive().catch(() => false)) : null;
   });
-  register("claude_tmux_transcript", ({ tabId, environmentId }) =>
+  register("claude_tmux_transcript", ({ tabId, environmentId }, context) =>
     requireSession(
+      context,
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     ).transcriptLines(),
   );
   // Authoritative task list for a tmux tab, for callers rehydrating without
   // replaying the whole transcript.
-  register("claude_tmux_tasks", ({ tabId, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).taskList(),
-  );
-  register("claude_tmux_pending_hooks", ({ tabId, environmentId }) =>
+  register("claude_tmux_tasks", ({ tabId, environmentId }, context) =>
     requireSession(
+      context,
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).taskList(),
+  );
+  register("claude_tmux_pending_hooks", ({ tabId, environmentId }, context) =>
+    requireSession(
+      context,
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     ).pendingHooks(),
   );
-  register("claude_tmux_send_text", ({ tabId, text, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendText(
-      asString(text, "text"),
-    ),
-  );
-  register("claude_tmux_send_keys", ({ tabId, keys, environmentId }) =>
+  register("claude_tmux_send_text", ({ tabId, text, environmentId }, context) =>
     requireSession(
+      context,
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).sendText(asString(text, "text")),
+  );
+  register("claude_tmux_send_keys", ({ tabId, keys, environmentId }, context) =>
+    requireSession(
+      context,
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     ).sendKeysAndRefresh(asStringArray(keys)),
   );
   register(
     "claude_tmux_answer_selection_prompt",
-    ({
-      tabId,
-      environmentId,
-      expectedGeneration,
-      expectedRevision,
-      expectedPromptFingerprint,
-      optionIndex,
-    }) =>
+    (
+      {
+        tabId,
+        environmentId,
+        expectedGeneration,
+        expectedRevision,
+        expectedPromptFingerprint,
+        optionIndex,
+      },
+      context,
+    ) =>
       requireSession(
+        context,
         asString(environmentId, "environmentId"),
         asString(tabId, "tabId"),
       ).answerSelectionPrompt({
@@ -391,7 +386,7 @@ export function registerTmuxBackendCommands(
   );
   register("claude_tmux_submit", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
-    const session = requireSession(envId, asString(tabId, "tabId"));
+    const session = requireSession(context, envId, asString(tabId, "tabId"));
     const prompt = asString(text, "text");
     if (
       prompt.trim() &&
@@ -409,7 +404,7 @@ export function registerTmuxBackendCommands(
       }
     }
     await session.submit(prompt);
-    await persistTmuxEnvironmentActivity(context, envId);
+    await context.runtime.tmux.persistEnvironmentActivity(context, envId);
   });
   register("claude_tmux_submit_queued", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
@@ -418,50 +413,58 @@ export function registerTmuxBackendCommands(
     // Serialize the final liveness check and terminal side effect with tmux
     // teardown. Deletion writes its tombstone before taking this same lock, so
     // a queued dispatch can never type into a pane after deletion has begun.
-    await tmuxManager.installLock(envId).runExclusive(async () => {
+    await context.runtime.tmux.sessions.installLock(envId).runExclusive(async () => {
       context.runtime.environments.fence.assertNotMoving(envId);
       const environment = await context.storage.getEnvironment(envId);
       if (!environment || environment.deletionRequestedAt) {
         throw new Error(`environment ${envId} is being deleted`);
       }
-      const session = requireSession(envId, tab);
+      const session = requireSession(context, envId, tab);
       if (prompt.trim()) session.claimFirstPromptForNaming();
       await session.submit(prompt);
-      await persistTmuxEnvironmentActivity(context, envId);
+      await context.runtime.tmux.persistEnvironmentActivity(context, envId);
     });
   });
-  register("claude_tmux_switch_model", ({ tabId, model, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchModel(
-      asString(model, "model"),
-    ),
+  register("claude_tmux_switch_model", ({ tabId, model, environmentId }, context) =>
+    requireSession(
+      context,
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).switchModel(asString(model, "model")),
   );
-  register("claude_tmux_switch_effort", ({ tabId, effort, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchEffort(
-      asString(effort, "effort"),
-    ),
+  register("claude_tmux_switch_effort", ({ tabId, effort, environmentId }, context) =>
+    requireSession(
+      context,
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).switchEffort(asString(effort, "effort")),
   );
   register("claude_tmux_switch_fast_mode", ({ tabId, fastMode, environmentId }, context) =>
     requireSession(
+      context,
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     ).switchFastMode(asBoolean(fastMode, "fastMode"), context),
   );
   register("claude_tmux_switch_plan_mode", ({ tabId, planMode, environmentId }, context) =>
     requireSession(
+      context,
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     ).switchPlanMode(asBoolean(planMode, "planMode"), context),
   );
-  register("claude_tmux_resize", ({ tabId, cols, rows, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).resize(
-      asPositiveInt(cols, "cols"),
-      asPositiveInt(rows, "rows"),
-    ),
+  register("claude_tmux_resize", ({ tabId, cols, rows, environmentId }, context) =>
+    requireSession(
+      context,
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).resize(asPositiveInt(cols, "cols"), asPositiveInt(rows, "rows")),
   );
   register(
     "claude_tmux_answer_pre_tool_use",
-    ({ tabId, eventId, decision, reason, environmentId }) =>
+    ({ tabId, eventId, decision, reason, environmentId }, context) =>
       requireSession(
+        context,
         asString(environmentId, "environmentId"),
         asString(tabId, "tabId"),
       ).answerPreToolUse(
@@ -470,18 +473,21 @@ export function registerTmuxBackendCommands(
         asOptionalString(reason),
       ),
   );
-  register("claude_tmux_reply_hook", ({ tabId, eventKind, eventId, response, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).replyHook(
-      asString(eventKind, "eventKind"),
-      asString(eventId, "eventId"),
-      response,
-    ),
+  register(
+    "claude_tmux_reply_hook",
+    ({ tabId, eventKind, eventId, response, environmentId }, context) =>
+      requireSession(
+        context,
+        asString(environmentId, "environmentId"),
+        asString(tabId, "tabId"),
+      ).replyHook(asString(eventKind, "eventKind"), asString(eventId, "eventId"), response),
   );
   register(
     "claude_tmux_hold_hook",
     ({ tabId, eventKind, eventId, held, environmentId }, context) => {
       if (typeof held !== "boolean") throw new Error("held must be a boolean");
       return requireSession(
+        context,
         asString(environmentId, "environmentId"),
         asString(tabId, "tabId"),
       ).holdHook(asString(eventKind, "eventKind"), asString(eventId, "eventId"), held, context);
@@ -494,8 +500,8 @@ export function registerTmuxBackendCommands(
   });
   register("claude_tmux_reconcile_orphans", async (_args, context) => {
     const now = Date.now();
-    if (now - getLastTmuxOrphanSweepAt() < 60_000) return { reaped: 0, skipped: true };
-    setLastTmuxOrphanSweepAt(now);
+    const tmux = context.runtime.tmux;
+    if (!tmux.beginOrphanSweep(now)) return { reaped: 0, skipped: true };
     const graceMs = 60 * 60 * 1_000;
     const environments = await context.storage.loadEnvironments();
     const paneLayouts = await context.storage.loadPaneLayoutsForReconciliation();
@@ -558,33 +564,38 @@ export function registerTmuxBackendCommands(
       for (const name of names) {
         const key = `${environment.id}\0${name}`;
         if (referenced.has(name)) {
-          orphanedTmuxMissingSince.delete(key);
+          tmux.forgetOrphan(key);
           continue;
         }
-        const missingSince = orphanedTmuxMissingSince.get(key);
-        if (missingSince === undefined) {
-          orphanedTmuxMissingSince.set(key, now);
-          continue;
-        }
-        if (now - missingSince < graceMs) continue;
-        const managed = tmuxManager.findByTmuxName(environment.id, name);
+        if (now - tmux.orphanFirstSeen(key, now) < graceMs) continue;
+        const managed = context.runtime.tmux.sessions.findByTmuxName(environment.id, name);
         if (managed) {
-          const stopped = await tmuxManager.installLock(environment.id).runExclusive(async () => {
-            if (tmuxManager.findByTmuxName(environment.id, name) !== managed) return false;
-            if (!(await managed.stop())) return false;
-            return tmuxManager.removeIfSame(environment.id, managed.tabId, managed);
-          });
+          const stopped = await context.runtime.tmux.sessions
+            .installLock(environment.id)
+            .runExclusive(async () => {
+              if (context.runtime.tmux.sessions.findByTmuxName(environment.id, name) !== managed)
+                return false;
+              if (!(await managed.stop())) return false;
+              return context.runtime.tmux.sessions.removeIfSame(
+                environment.id,
+                managed.tabId,
+                managed,
+              );
+            });
           if (!stopped) continue;
         } else {
           const killed = await backend.exec(["tmux", "kill-session", "-t", name]);
           if (killed.status !== 0) continue;
         }
         remaining.delete(name);
-        orphanedTmuxMissingSince.delete(key);
+        tmux.forgetOrphan(key);
         console.warn(`[tmux] reaped orphaned session ${environment.id}/${name}`);
         reaped += 1;
       }
-      if (remaining.size === 0 && tmuxManager.sessionsInEnvironment(environment.id) === 0) {
+      if (
+        remaining.size === 0 &&
+        context.runtime.tmux.sessions.sessionsInEnvironment(environment.id) === 0
+      ) {
         const { workspace } = workspaceAndClaudeHome(backend);
         const hookPaths = workspaceHookPaths(
           path.join(runtimeRootPrefixForContext(context), environment.id),
@@ -600,14 +611,14 @@ export function registerTmuxBackendCommands(
     async ({ tabId, environmentId, cols, rows }, context) => {
       const envId = asString(environmentId, "environmentId");
       const tab = asString(tabId, "tabId");
-      const session = requireSession(envId, tab);
+      const session = requireSession(context, envId, tab);
       if (!(await session.tmuxAlive())) throw new Error("tmux session not running");
       context.runtime.environments.fence.assertNotMoving(envId);
       const environment = await context.storage.getEnvironment(envId);
       if (environment?.environmentType !== "local" && !environmentContainerId(environment)) {
         throw new Error("container environment has no container id");
       }
-      return interactiveTerminals.create(
+      return context.runtime.tmux.interactiveTerminals.create(
         session,
         asPositiveInt(cols, "cols"),
         asPositiveInt(rows, "rows"),
@@ -615,29 +626,40 @@ export function registerTmuxBackendCommands(
     },
   );
   register("claude_tmux_start_interactive_terminal", ({ terminalSessionId }, context) =>
-    interactiveTerminals.start(asString(terminalSessionId, "terminalSessionId"), context),
+    context.runtime.tmux.interactiveTerminals.start(
+      asString(terminalSessionId, "terminalSessionId"),
+      context,
+    ),
   );
   register("claude_tmux_write_interactive_terminal", ({ terminalSessionId, data }, context) =>
-    interactiveTerminals.write(
+    context.runtime.tmux.interactiveTerminals.write(
       asString(terminalSessionId, "terminalSessionId"),
       asString(data, "data"),
       context,
     ),
   );
-  register("claude_tmux_resize_interactive_terminal", ({ terminalSessionId, cols, rows }) =>
-    interactiveTerminals.resize(
-      asString(terminalSessionId, "terminalSessionId"),
-      asPositiveInt(cols, "cols"),
-      asPositiveInt(rows, "rows"),
-    ),
+  register(
+    "claude_tmux_resize_interactive_terminal",
+    ({ terminalSessionId, cols, rows }, context) =>
+      context.runtime.tmux.interactiveTerminals.resize(
+        asString(terminalSessionId, "terminalSessionId"),
+        asPositiveInt(cols, "cols"),
+        asPositiveInt(rows, "rows"),
+      ),
   );
-  register("claude_tmux_detach_interactive_terminal", ({ terminalSessionId }) => {
-    interactiveTerminals.detach(asString(terminalSessionId, "terminalSessionId"));
+  register("claude_tmux_detach_interactive_terminal", ({ terminalSessionId }, context) => {
+    context.runtime.tmux.interactiveTerminals.detach(
+      asString(terminalSessionId, "terminalSessionId"),
+    );
   });
 }
 
-export function requireSession(environmentId: string, tabId: string): TmuxSession {
-  const session = tmuxManager.get(environmentId, tabId);
+export function requireSession(
+  context: CommandContext,
+  environmentId: string,
+  tabId: string,
+): TmuxSession {
+  const session = context.runtime.tmux.sessions.get(environmentId, tabId);
   if (!session) throw new Error("tmux session not running");
   return session;
 }

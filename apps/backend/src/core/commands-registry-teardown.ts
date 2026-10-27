@@ -1,7 +1,6 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
-import { claudeStateSignalInstaller } from "./claude-state-signal.js";
 import {
   nativeAgentSessionResumeIdentity,
   type Environment,
@@ -36,12 +35,7 @@ export function registerTeardownCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { commands, options, prepareEnvironmentFirstPrompt } = dependencies;
-  registerTmuxBackendCommands(register, {
-    claudeStatePolls: options.claudeStatePolls,
-    // Docker-backed, so unit tests keep the plain poll unless they inject one.
-    claudeStateSignal: process.env.NODE_ENV === "test" ? undefined : claudeStateSignalInstaller,
-    prepareEnvironmentFirstPrompt,
-  });
+  registerTmuxBackendCommands(register, { prepareEnvironmentFirstPrompt });
 
   type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];
   const tabTeardownFetch = options.tabTeardown?.fetch ?? fetch;

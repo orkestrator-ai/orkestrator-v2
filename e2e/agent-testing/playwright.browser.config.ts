@@ -29,6 +29,7 @@ export default defineConfig({
     "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
+    "codex-typed-prompts-live.spec.ts",
     "slash-command-inactive.spec.ts",
     "slash-command-picker.spec.ts",
     "mcp-apply-inactive.spec.ts",

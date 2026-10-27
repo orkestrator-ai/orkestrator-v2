@@ -33,3 +33,11 @@
 - **Failure:** the same assertion at `app-server-runtime-prompt.test.ts:231` (103.01 ms). Every other group passed.
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts src/app-server-runtime-prompt.test.ts` from `bridges/codex-bridge` passed unchanged: 123 pass, 0 fail, 7.46 s.
 - **Assessment:** recurrence of the existing intermittent failure; todo 0009 changes backend storage only and touches no bridge source or assertions.
+
+## Codex typed-prompt validation recurrence — 2026-10-26
+
+- **Original command:** `mise run test:logged -- --name codex-focused -- bun test --parallel=4 bridges/codex-bridge/src/history bridges/codex-bridge/src/prompts bridges/codex-bridge/src/sessions bridges/codex-bridge/src/app-server-runtime-typed-prompts.test.ts bridges/codex-bridge/src/app-server-runtime-sessions.test.ts bridges/codex-bridge/src/app-server-runtime-prompt.test.ts bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts bridges/codex-bridge/src/transcript-routes.test.ts`, on `prompt-display-bug-7b20be78777d-r1` (todo 0211), Bun 1.4.2, four parallel workers.
+- **Failure:** a new shape at the same assertion (`app-server-runtime-prompt.test.ts:231`, 135.01 ms): the pending prompt resolved `ok: true` with turn `must-not-run`, so the 30 ms delayed retry dispatched before `deleteSession` had fenced the session. Earlier recurrences returned 503 instead. Counts: 774 passed, 1 failed across 775 tests in 22 files.
+- **Owning-file rerun:** `bun test bridges/codex-bridge/src/app-server-runtime-prompt.test.ts` passed three times in a row: 124 pass, 0 fail each.
+- **Evidence:** `orkestrator-test-run.hbIll4/codex-focused.log.gz` under the host temporary directory.
+- **Assessment:** recurrence of the existing intermittent race between the deletion and the delayed retry; under load the deletion can take longer than the 30 ms retry delay. Todo 0211 records a typed prompt only after a turn is accepted, outside the retry path. No assertion, timeout or skip changed.

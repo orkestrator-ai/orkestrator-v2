@@ -9,6 +9,7 @@ import {
   MAX_STEER_REQUESTS,
 } from "./app-server-runtime-base.js";
 import { inheritCommandChanges } from "./sessions/command-changes.js";
+import { inheritTypedPrompts } from "./sessions/typed-prompts.js";
 import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
@@ -281,6 +282,8 @@ export class CodexRuntimeSessions {
         modelId: fork.model,
       });
       context.materialized = true;
+      // Before the first replay, so the fork's own reloads show what was typed too.
+      await inheritTypedPrompts(this.ctx.options.codexHome, parent.threadId, fork.id);
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id, {
         structuredOutputTurns: this.ctx.structuredOutputTurnsForThread(fork.id),
       });

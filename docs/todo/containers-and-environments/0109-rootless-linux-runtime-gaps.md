@@ -332,7 +332,8 @@ on `main` too.
 - [Container lifecycle](../../architecture/container-lifecycle.md) ("Portable
   inputs", "Environment networks").
 - [0350-rootless-tests-fail-on-macos.md](0350-rootless-tests-fail-on-macos.md):
-  six of this file's unit tests fail on macOS hosts.
+  six of this file's unit tests failed on macOS hosts; they now run there
+  with Homebrew's GNU tools, or skip with the reason (finished 2026-10-28).
 
 ## Replaces
 

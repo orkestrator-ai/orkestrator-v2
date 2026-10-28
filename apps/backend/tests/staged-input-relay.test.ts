@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gnuToolPath } from "../../../tests/unit/gnu-shell-tools";
+import { gnuToolPath, missingGnuTools, titleWithSkip } from "../../../tests/unit/gnu-shell-tools";
 import {
   STAGED_INPUT_RELAY_DIR,
   scrubStagedProvider,
@@ -17,7 +17,11 @@ import {
  * unprivileged half (`as_input_user`, `setpriv` to node in the image) runs as
  * the test user; `unreadable` decides what the `find ! -readable` probe sees,
  * standing in for node's view of a rootless daemon's owner-only mounts.
+ * The function needs the image's GNU `rm --one-file-system` and
+ * `du --apparent-size`; BSD `rm` and `du` reject both, so without GNU
+ * coreutils (a macOS host without Homebrew's) the relay cases are skipped.
  */
+const NO_GNU_RELAY_TOOLS = missingGnuTools("rm", "du");
 const rootEntrypoint = await fs.readFile(
   path.join(import.meta.dir, "../../../docker/network-policy-entrypoint.sh"),
   "utf8",
@@ -117,75 +121,81 @@ async function mountedRevision(root: string) {
   return { staged, dataDir, container };
 }
 
-describe("staged input relay", () => {
-  test("a mount node cannot read is copied owner-only into node's directory", async () => {
-    const root = await tempRoot();
-    const { container } = await mountedRevision(root);
-    const relayDir = path.join(root, "run", "orkestrator-inputs");
-    await fs.mkdir(path.dirname(relayDir), { recursive: true });
-    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
+  titleWithSkip("staged input relay", NO_GNU_RELAY_TOOLS),
+  () => {
+    test("a mount node cannot read is copied owner-only into node's directory", async () => {
+      const root = await tempRoot();
+      const { container } = await mountedRevision(root);
+      const relayDir = path.join(root, "run", "orkestrator-inputs");
+      await fs.mkdir(path.dirname(relayDir), { recursive: true });
+      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
 
-    expect((await fs.stat(relayDir)).mode & 0o777).toBe(0o700);
-    const auth = path.join(relayDir, "codex-home", "auth.json");
-    expect(await fs.readFile(auth, "utf8")).toContain("OPENAI_API_KEY");
-    expect((await fs.stat(auth)).mode & 0o777).toBe(0o600);
-    expect((await fs.stat(path.join(relayDir, "codex-home"))).mode & 0o777).toBe(0o700);
-    expect(
-      await fs.readFile(path.join(relayDir, "codex-home", "rules", "default.rules"), "utf8"),
-    ).toBe("allow\n");
-    expect(await fs.readFile(path.join(relayDir, "tmp", "gitconfig"), "utf8")).toContain("Test");
-    // Mounts the backend did not bind are not invented.
-    expect((await fs.readdir(relayDir)).sort()).toEqual(["codex-home", "tmp"]);
-  });
+      expect((await fs.stat(relayDir)).mode & 0o777).toBe(0o700);
+      const auth = path.join(relayDir, "codex-home", "auth.json");
+      expect(await fs.readFile(auth, "utf8")).toContain("OPENAI_API_KEY");
+      expect((await fs.stat(auth)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(path.join(relayDir, "codex-home"))).mode & 0o777).toBe(0o700);
+      expect(
+        await fs.readFile(path.join(relayDir, "codex-home", "rules", "default.rules"), "utf8"),
+      ).toBe("allow\n");
+      expect(await fs.readFile(path.join(relayDir, "tmp", "gitconfig"), "utf8")).toContain("Test");
+      // Mounts the backend did not bind are not invented.
+      expect((await fs.readdir(relayDir)).sort()).toEqual(["codex-home", "tmp"]);
+    });
 
-  test("a mount node can read is left alone, and an earlier relay is removed", async () => {
-    const root = await tempRoot();
-    const { container } = await mountedRevision(root);
-    const relayDir = path.join(root, "orkestrator-inputs");
-    await fs.mkdir(path.join(relayDir, "codex-home"), { recursive: true });
-    await fs.writeFile(path.join(relayDir, "codex-home", "auth.json"), "stale");
-    expect(relay(container, relayDir, { unreadable: false })).toEqual({ exitCode: 0, stderr: "" });
-    await expect(fs.stat(relayDir)).rejects.toThrow();
-  });
+    test("a mount node can read is left alone, and an earlier relay is removed", async () => {
+      const root = await tempRoot();
+      const { container } = await mountedRevision(root);
+      const relayDir = path.join(root, "orkestrator-inputs");
+      await fs.mkdir(path.join(relayDir, "codex-home"), { recursive: true });
+      await fs.writeFile(path.join(relayDir, "codex-home", "auth.json"), "stale");
+      expect(relay(container, relayDir, { unreadable: false })).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
+      await expect(fs.stat(relayDir)).rejects.toThrow();
+    });
 
-  test("a revoked provider's emptied mount relays nothing at the next boot", async () => {
-    const root = await tempRoot();
-    const { container, dataDir, staged } = await mountedRevision(root);
-    const relayDir = path.join(root, "orkestrator-inputs");
-    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
-    expect(await fs.readdir(path.join(relayDir, "codex-home"))).toContain("auth.json");
+    test("a revoked provider's emptied mount relays nothing at the next boot", async () => {
+      const root = await tempRoot();
+      const { container, dataDir, staged } = await mountedRevision(root);
+      const relayDir = path.join(root, "orkestrator-inputs");
+      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      expect(await fs.readdir(path.join(relayDir, "codex-home"))).toContain("auth.json");
 
-    expect(await scrubStagedProvider(dataDir, "env-relay", staged.revision, "codex")).toBe(true);
-    // The bound directory now shows the emptied stage.
-    const codexMount = path.join(container, "codex-home");
-    await fs.rm(codexMount, { recursive: true });
-    await fs.cp(await fs.readlink(`${codexMount}.bind`), codexMount, { recursive: true });
-    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
-    expect(await fs.readdir(path.join(relayDir, "codex-home"))).toEqual([]);
-  });
+      expect(await scrubStagedProvider(dataDir, "env-relay", staged.revision, "codex")).toBe(true);
+      // The bound directory now shows the emptied stage.
+      const codexMount = path.join(container, "codex-home");
+      await fs.rm(codexMount, { recursive: true });
+      await fs.cp(await fs.readlink(`${codexMount}.bind`), codexMount, { recursive: true });
+      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      expect(await fs.readdir(path.join(relayDir, "codex-home"))).toEqual([]);
+    });
 
-  test("links are never followed, and an over-bound mount is not relayed", async () => {
-    const root = await tempRoot();
-    const container = path.join(root, "container");
-    const secret = path.join(root, "secret.txt");
-    await fs.writeFile(secret, "host secret");
-    await fs.mkdir(path.join(container, "codex-home"), { recursive: true });
-    await fs.symlink(secret, path.join(container, "codex-home", "auth.json"));
-    await fs.symlink(path.join(root, "elsewhere"), path.join(container, "pi-config"));
-    const relayDir = path.join(root, "orkestrator-inputs");
-    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
-    const relayed = path.join(relayDir, "codex-home", "auth.json");
-    expect((await fs.lstat(relayed)).isSymbolicLink()).toBe(true);
-    // A mount point that is itself a link is skipped.
-    await expect(fs.lstat(path.join(relayDir, "pi-config"))).rejects.toThrow();
+    test("links are never followed, and an over-bound mount is not relayed", async () => {
+      const root = await tempRoot();
+      const container = path.join(root, "container");
+      const secret = path.join(root, "secret.txt");
+      await fs.writeFile(secret, "host secret");
+      await fs.mkdir(path.join(container, "codex-home"), { recursive: true });
+      await fs.symlink(secret, path.join(container, "codex-home", "auth.json"));
+      await fs.symlink(path.join(root, "elsewhere"), path.join(container, "pi-config"));
+      const relayDir = path.join(root, "orkestrator-inputs");
+      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      const relayed = path.join(relayDir, "codex-home", "auth.json");
+      expect((await fs.lstat(relayed)).isSymbolicLink()).toBe(true);
+      // A mount point that is itself a link is skipped.
+      await expect(fs.lstat(path.join(relayDir, "pi-config"))).rejects.toThrow();
 
-    await fs.writeFile(path.join(container, "codex-home", "one"), "1");
-    await fs.writeFile(path.join(container, "codex-home", "two"), "2");
-    const bounded = relay(container, relayDir, { unreadable: true, maxEntries: 2 });
-    expect(bounded.stderr).toContain("Staged input /codex-home is over the relay bounds");
-    await expect(fs.stat(path.join(relayDir, "codex-home"))).rejects.toThrow();
-  });
-});
+      await fs.writeFile(path.join(container, "codex-home", "one"), "1");
+      await fs.writeFile(path.join(container, "codex-home", "two"), "2");
+      const bounded = relay(container, relayDir, { unreadable: true, maxEntries: 2 });
+      expect(bounded.stderr).toContain("Staged input /codex-home is over the relay bounds");
+      await expect(fs.stat(path.join(relayDir, "codex-home"))).rejects.toThrow();
+    });
+  },
+);
 
 describe("entrypoint input resolution", () => {
   const resolve = (relayDir: string, name: string) => {

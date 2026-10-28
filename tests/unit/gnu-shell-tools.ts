@@ -26,7 +26,12 @@ export const gnuToolPath = [
   process.env.PATH ?? "",
 ].join(delimiter);
 
-const GNU_SIGNATURES = { date: "GNU coreutils", tar: "GNU tar" } as const;
+const GNU_SIGNATURES = {
+  date: "GNU coreutils",
+  du: "GNU coreutils",
+  rm: "GNU coreutils",
+  tar: "GNU tar",
+} as const;
 
 /** Skip reason when `tools` on {@link gnuToolPath} are not the GNU builds, else undefined. */
 export function missingGnuTools(...tools: (keyof typeof GNU_SIGNATURES)[]): string | undefined {

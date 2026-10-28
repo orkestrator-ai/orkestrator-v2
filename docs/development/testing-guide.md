@@ -191,7 +191,7 @@ those requirements. Install the tools with Homebrew:
 brew install bash coreutils findutils gnu-tar grep gnu-sed flock
 ```
 
-The fixtures that need GNU `tar` or `date` put Homebrew's GNU tool directories
+The fixtures that need GNU `tar`, `date`, `rm` or `du` put Homebrew's GNU tool directories
 (under `/opt/homebrew/opt` or `/usr/local/opt`) ahead of the inherited PATH
 themselves (`tests/unit/gnu-shell-tools.ts`), and skip with the install command
 in the test name when those tools are missing. For everything else, prefer the

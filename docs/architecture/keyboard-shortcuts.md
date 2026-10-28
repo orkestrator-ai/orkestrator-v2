@@ -56,6 +56,9 @@ The latter adapts the event into the callback's third argument. E2E helpers use
 that event-first method and assert an accelerator click closes an already-open
 dialog, so an accidental `open` request cannot pass. See Electron's
 [MenuItem API](https://www.electronjs.org/docs/latest/api/menu-item).
+Electron also sets `triggeredByAccelerator` for Enter-based native menu
+navigation. The callback checks Shift and the platform's Ctrl/Command modifier
+as well, so selecting the item with the keyboard keeps an open dialog open.
 
 ## Windows and Linux
 
@@ -113,3 +116,11 @@ subframes, and design subframes. Windows/Linux coverage includes the menu
 layout and accelerators on `linux` and `win32`, Ctrl and AltGr Electron input,
 platform detection, and Ctrl key caps. Packaged native OS qualification remains in
 [0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md).
+
+`e2e/agent-testing/application-menu-electron.spec.ts` builds the production
+template in a disposable Electron process, checks resolved role labels and
+accelerators, and invokes the built menu callbacks. With
+`ORKESTRATOR_NATIVE_MENU_INPUT=1` on an isolated desktop, it also uses OS input
+to navigate View, checks repeated selection, accelerator registration,
+the real About panel, and resumed typing. The native-menu workflow runs this
+on Linux/Xvfb and Windows and retains menu defaults and About screenshots.

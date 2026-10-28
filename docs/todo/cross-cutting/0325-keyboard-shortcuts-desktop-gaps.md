@@ -76,12 +76,64 @@ New coverage:
 - `KeyboardShortcutsDialog.test.tsx`: Windows/Linux rows and footer read
   Ctrl Shift K, with no ⌘/⌥ and no Close Tab row.
 
-Not run here: the Electron binary is not installed in this checkout, and
+At the initial audit, the Electron binary was not installed in this checkout, and
 `mise run package:linux` installs the app into the user's desktop. Native key
 injection would also drive the user's live Wayland session. So the Linux
 items in the matrix above remain open. The repository has no Windows desktop
 package (`package:mac` and `package:linux` only), so the Windows menu branch
-is covered by unit tests only.
+was covered by unit tests only. The runtime follow-up below adds native coverage.
+
+## Native menu review follow-up (2026-10-28)
+
+The new `e2e/agent-testing/application-menu-electron.spec.ts` bundles the real
+application menu template into a disposable Electron fixture. Its runtime
+assertions cover `Menu.buildFromTemplate`, callback argument adaptation, role
+labels and default accelerators, including Linux Quit/Ctrl+Q versus Windows
+Exit/no default key and the different Redo defaults.
+
+The Linux run passed on Omarchy (Arch), Electron 45.0.0, with an isolated Xvfb
+display and the default US layout. XTEST input navigated View › Keyboard
+Shortcuts… twice; both selections opened the dialog action. Ctrl+N dispatched,
+and the display-only Ctrl+Shift+K did not dispatch from the menu. The built
+Help › About role opened the real GTK panel, Escape closed it, and native
+typing resumed in the fixture. The panel was titled **About electron** and
+showed **electron**, Credits, License and Close, without app name/version
+metadata. The run retained its resolved menu defaults and an About screenshot
+under `output/agent-testing/native-menu-linux/electron/results.json`.
+
+This run found and fixed a real dispatch issue: Electron sets
+`triggeredByAccelerator` for Enter-based menu navigation as well as a chord.
+The menu callback now also requires Shift and the platform's Ctrl/Command
+modifier before requesting a toggle. Unit cases pin modifier exclusions, and
+existing Electron helpers now supply realistic chord modifiers.
+
+The native suite is included in `test:agent:electron`.
+`.github/workflows/native-application-menu.yml` runs it with OS input on
+Windows and Linux/Xvfb and uploads the menu and About evidence. Linux tools
+for this local run were extracted under `/tmp`; no desktop installation or
+input into the user's session was needed. Windows execution still needs its
+CI runner; no Windows pass is claimed here. These fixture results do not close
+the packaged-app, native-focus-surface or macOS input-source matrix above.
+
+The missing-navigator regression now removes `globalThis.navigator` and
+restores its property descriptor in `finally`. Removing the detector's
+absent-host guard made this test fail with a TypeError; restoring the guard
+made the same command pass.
+
+Validation: the web catalog/dialog tests, desktop menu/routing/controller
+tests, Electron spec loading, affected web/desktop/e2e typechecks, scoped lint
+and repository formatting passed. The isolated native menu command passed
+in 2.2 seconds. The two broader Electron scenarios were also attempted with
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts workspace-realm-electron.spec.ts --grep 'real Electron main process shares|a leaf.s workspace opens'`
+through `test:logged` on Xvfb. Both timed out at renderer startup, before the
+shortcut assertions: the title remained `Orkestrator AI` instead of the
+profile title for 60 seconds (lines 207 and 221 respectively). The command
+failed in 130.9 seconds; evidence is `/tmp/orkestrator-test-run.fA83qr` and
+`output/agent-testing/electron-smoke/electron/results.json`. No timeout or
+assertion was relaxed, and no passing full-app scenario is claimed for this run.
+The preparation run's unrelated aggregate failures in
+[1295](../../tests/flaky-tests/aggregate-validation-runs/1295-keyboard-shortcuts-windows-linux-validation.md)
+were not repaired or rerun by this test-focused follow-up.
 
 ## Assumptions and decisions
 

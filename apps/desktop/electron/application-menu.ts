@@ -153,8 +153,16 @@ export function createApplicationMenuTemplate(
           // on Windows and Linux) and the macOS menu fallback without
           // registering a second Windows/Linux delivery path.
           registerAccelerator: false,
-          click: (_item, _window, event: MenuKeyboardEvent) =>
-            actions.showKeyboardShortcuts(event?.triggeredByAccelerator ? "toggle" : "open"),
+          click: (_item, _window, event: MenuKeyboardEvent) => {
+            // Electron also marks Enter-based menu navigation as an
+            // accelerator. Only the advertised chord may toggle the dialog.
+            const isShortcut =
+              event?.triggeredByAccelerator &&
+              event.shiftKey &&
+              !event.altKey &&
+              (isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
+            actions.showKeyboardShortcuts(isShortcut ? "toggle" : "open");
+          },
         },
       ],
     },

@@ -259,9 +259,10 @@ describe("desktop application menu on macOS", () => {
     // A pointer or keyboard-navigated click opens; it never closes the dialog.
     click(undefined, undefined, {});
     click(undefined, undefined, { triggeredByAccelerator: false });
+    click(undefined, undefined, { triggeredByAccelerator: true, shiftKey: false, metaKey: false });
     // macOS's key equivalent fires only for a press no page claimed; it toggles.
-    click(undefined, undefined, { triggeredByAccelerator: true });
-    expect(showKeyboardShortcuts.mock.calls).toEqual([["open"], ["open"], ["toggle"]]);
+    click(undefined, undefined, { triggeredByAccelerator: true, shiftKey: true, metaKey: true });
+    expect(showKeyboardShortcuts.mock.calls).toEqual([["open"], ["open"], ["open"], ["toggle"]]);
     expect(zoom).not.toHaveBeenCalled();
   });
 });
@@ -345,10 +346,45 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
       window: unknown,
       event: MenuKeyboardEvent,
     ) => void;
-    // An unregistered accelerator never reports triggeredByAccelerator: a
-    // pointer click or Alt-key menu navigation opens and never closes.
+    // Enter-based menu navigation reports triggeredByAccelerator even for
+    // unregistered items. It opens and never closes the dialog.
     click(undefined, undefined, {});
     click(undefined, undefined, { triggeredByAccelerator: false });
-    expect(showKeyboardShortcuts.mock.calls).toEqual([["open"], ["open"]]);
+    click(undefined, undefined, { triggeredByAccelerator: true, ctrlKey: false, shiftKey: false });
+    expect(showKeyboardShortcuts.mock.calls).toEqual([["open"], ["open"], ["open"]]);
+  });
+});
+
+describe.each(["darwin", "linux", "win32"] as const)("shortcut menu input on %s", (platform) => {
+  test("toggles only for Shift and the platform accelerator modifier", () => {
+    const showKeyboardShortcuts = mock((_request: "open" | "toggle") => {});
+    const template = createApplicationMenuTemplate(
+      menuActions({ platform, showKeyboardShortcuts }),
+    );
+    const click = menuItem(template, "View", "Keyboard Shortcuts…")!.click!;
+    const chord = {
+      triggeredByAccelerator: true,
+      shiftKey: true,
+      metaKey: platform === "darwin",
+      ctrlKey: platform !== "darwin",
+    };
+    for (const event of [
+      chord,
+      { ...chord, shiftKey: false },
+      { ...chord, altKey: true },
+      { ...chord, metaKey: true, ctrlKey: true },
+      { ...chord, metaKey: !chord.metaKey, ctrlKey: !chord.ctrlKey },
+      { ...chord, triggeredByAccelerator: false },
+    ]) {
+      click({} as Electron.MenuItem, undefined, event);
+    }
+    expect(showKeyboardShortcuts.mock.calls).toEqual([
+      ["toggle"],
+      ["open"],
+      ["open"],
+      ["open"],
+      ["open"],
+      ["open"],
+    ]);
   });
 });

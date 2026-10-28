@@ -1,0 +1,58 @@
+name: Native application menu
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/native-application-menu.yml
+      - apps/desktop/electron/application-menu.ts
+      - apps/desktop/package.json
+      - packages/protocol/src/keyboard-shortcuts.ts
+      - e2e/agent-testing/application-menu-electron.spec.ts
+      - e2e/agent-testing/native-menu-input.ts
+      - e2e/agent-testing/playwright.electron.config.ts
+      - e2e/fixtures/application-menu-electron.ts
+      - bun.lock
+  workflow_dispatch:
+
+jobs:
+  menu:
+    name: Native menu (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - run: bun install --frozen-lockfile
+      - name: Install Electron runtime
+        run: bun apps/desktop/node_modules/electron/install.js
+      - name: Install isolated Linux desktop tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb xdotool imagemagick libgtk-3-0 libnss3 libasound2t64
+      - name: Qualify native application menu
+        env:
+          ORKESTRATOR_NATIVE_MENU_INPUT: "1"
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a mise run test:logged -- --name native-menu-linux -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts
+          else
+            mise run test:logged -- --name native-menu-windows -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts
+          fi
+      - name: Upload native menu and About evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-menu-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/agent-testing/electron-smoke/electron
+          if-no-files-found: error
+          retention-days: 7

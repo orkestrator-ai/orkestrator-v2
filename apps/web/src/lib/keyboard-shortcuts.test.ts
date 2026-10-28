@@ -106,7 +106,17 @@ describe("detectShortcutPlatform", () => {
   });
 
   test("treats a missing navigator as Windows/Linux", () => {
-    expect(detectShortcutPlatform(undefined)).toBe("other");
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    try {
+      Object.defineProperty(globalThis, "navigator", { configurable: true, value: undefined });
+      expect(detectShortcutPlatform()).toBe("other");
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "navigator", descriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, "navigator");
+      }
+    }
   });
 });
 

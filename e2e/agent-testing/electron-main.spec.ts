@@ -504,7 +504,16 @@ print("public.tiff")
           }
           // Built MenuItem.click takes the event first; Electron forwards it
           // as the third argument to the template callback.
-          item.click({ triggeredByAccelerator }, focusedWindow, focusedWindow.webContents);
+          item.click(
+            {
+              triggeredByAccelerator,
+              shiftKey: triggeredByAccelerator,
+              metaKey: triggeredByAccelerator && process.platform === "darwin",
+              ctrlKey: triggeredByAccelerator && process.platform !== "darwin",
+            },
+            focusedWindow,
+            focusedWindow.webContents,
+          );
         }, triggeredByAccelerator);
       const shortcutsDialog = window.getByTestId("keyboard-shortcuts-dialog");
       const shortcutsSearch = window.getByRole("textbox", { name: "Search keyboard shortcuts" });

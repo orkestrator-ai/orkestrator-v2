@@ -80,31 +80,56 @@ describe("waitForMcpToolAvailability", () => {
     expect(calls).toBe(2);
   });
 
-  test("the default wait outlasts the handshake budget Codex gives the server", () => {
-    expect(MCP_TOOL_AVAILABILITY_TIMEOUT_MS).toBeGreaterThan(
-      ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC * 1_000,
-    );
+  test("pins the 15-second Codex startup budget and 20-second default wait", () => {
+    expect(ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC).toBe(15);
+    expect(MCP_TOOL_AVAILABILITY_TIMEOUT_MS).toBe(20_000);
   });
 
-  test("a handshake slowed by host load still ends available within the default wait", async () => {
-    // One second per listing: the server stays `starting` for 10 s, twice the
-    // old 5 s wait and over three times the old 3 s handshake budget.
+  test.each(["connected", "failed"])(
+    "observes a definite %s status at the Codex startup deadline",
+    async (status) => {
+      let clock = 0;
+      const budgets: number[] = [];
+      const availability = await waitForMcpToolAvailability(
+        async (timeoutMs) => {
+          budgets.push(timeoutMs);
+          clock += 1_000;
+          return clock < 15_000
+            ? server({ runtimeStatus: "starting" })
+            : server({
+                runtimeStatus: status,
+                tools: status === "connected" ? { [TOOL]: { name: TOOL } } : {},
+              });
+        },
+        "orkestrator",
+        TOOL,
+        { pollMs: 1, now: () => clock },
+      );
+      expect(availability).toEqual(
+        status === "connected" ? { state: "available" } : { state: "missing", reason: "is failed" },
+      );
+      expect(clock).toBe(15_000);
+      expect(budgets).toEqual(Array.from({ length: 15 }, (_, i) => 20_000 - i * 1_000));
+    },
+  );
+
+  test("a server that never settles uses the entire default 20-second window", async () => {
     let clock = 0;
     let calls = 0;
-    const availability = await waitForMcpToolAvailability(
-      async () => {
-        clock += 1_000;
-        calls += 1;
-        return calls <= 10
-          ? server({ runtimeStatus: "starting" })
-          : server({ runtimeStatus: "connected", tools: { [TOOL]: { name: TOOL } } });
-      },
-      "orkestrator",
-      TOOL,
-      { pollMs: 1, now: () => clock },
-    );
-    expect(availability).toEqual({ state: "available" });
-    expect(calls).toBe(11);
+    expect(
+      await waitForMcpToolAvailability(
+        async () => {
+          calls += 1;
+          clock += 1_000;
+          return server({ runtimeStatus: "starting" });
+        },
+        "orkestrator",
+        TOOL,
+        { pollMs: 1, now: () => clock },
+      ),
+    ).toEqual({ state: "unverified" });
+    expect(clock).toBe(20_000);
+    expect(calls).toBe(20);
   });
 
   test("a server still starting at the deadline is unverified, not missing", async () => {

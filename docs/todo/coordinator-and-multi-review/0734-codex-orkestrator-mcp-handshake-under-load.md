@@ -43,7 +43,50 @@ Analysed 2026-10-28 against `main` at `a6a3105f9`.
 
 ### 2. Qualify under load
 
-**Problem.** The fix is pinned by unit tests only: a server that stays `starting` for 10 s is reported available by the default wait, and the thread and process overrides carry 15. No live run has been done under comparable load.
+**Controlled live qualification (2026-10-28).** Added
+`bridges/codex-bridge/src/app-server/mcp-startup.live.test.ts`, which runs the
+pinned Codex 0.164.0 through the real engine against a loopback streamable HTTP
+MCP fixture. Ten simultaneous `initialize` requests delay their responses by
+4, 10, 14 or 17 seconds. No model turn or real credential is used. The fixture
+records monotonic time from receiving `initialize` to receiving `tools/list`;
+the engine uses the default 20-second availability wait.
+
+The first passing run measured:
+
+| Delayed initialize | Threads | Measured handshake | Result |
+| --- | --- | --- | --- |
+| 4 s | 3 | 4.006 s | available |
+| 10 s | 3 | 10.003–10.004 s | available |
+| 14 s | 2 | 14.003 s | available |
+| 17 s | 2 | no tools/list | missing, `could not list its tools` after 14.819 s from receiving initialize |
+
+Codex starts its timeout before the fixture receives `initialize`, explaining
+why the failed connection settles slightly under 15 seconds on this clock.
+The host had 18 logical CPUs; load averages before the run were
+52.52 / 50.68 / 53.95 and after it 61.09 / 52.65 / 54.59.
+The helper tests additionally pin 15 and 20 seconds exactly, exercise both
+`connected` and `failed` at the startup deadline, and exhaust the full default
+window while still starting. The HTTP route tests pass through the real
+runtime, engine and helper: no turn or journal record while starting, 424 for
+a definite failure, and 202 on connection or expiration with an unverified
+listing.
+
+Reproduce and retain content-free measurements:
+
+```sh
+RUN_LIVE_CODEX_APP_SERVER=1 \
+CODEX_MCP_STARTUP_EVIDENCE_PATH=/tmp/codex-mcp-startup-evidence.json \
+mise run test:logged -- --name mcp-startup-live -- \
+  bun test ./bridges/codex-bridge/src/app-server/mcp-startup.live.test.ts \
+  --preload ./tests/setup-node.ts --parallel=1
+```
+
+**Remaining production qualification.** This establishes real Codex timeout
+behavior with concurrent delayed HTTP responses on a busy host. It does not
+reproduce ten complete Multi Reviews, the production backend's event-loop
+saturation, or the original load average of 100–140. That wider operational
+qualification remains open; the original handshake duration cannot be inferred
+from the old timeout logs.
 
 ### 3. Find what makes the backend's `/mcp` handshake slow
 

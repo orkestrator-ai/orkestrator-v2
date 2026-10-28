@@ -17,10 +17,10 @@ export type McpToolAvailability =
 /**
  * Handshake budget for the thread-scoped Orkestrator MCP servers. Codex marks a
  * server that has not finished `initialize` and `tools/list` in this time as
- * failed for the life of the thread, so the budget is set for a backend
- * slowed by host load, not for an idle one. It was 3 s; on a host with a load
- * average above 100 the backend's handshake took longer, and every workflow
- * turn on such a thread was refused (docs/todo 0734).
+ * failed for the life of the thread. The previous 3 s budget timed out on a
+ * host with a load average above 100 (docs/todo 0734); the original handshake
+ * duration was not measured. The bounded 15 s budget is qualified by the live
+ * delayed-handshake probe, not by a replay of that production workload.
  */
 export const ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC = 15;
 /**

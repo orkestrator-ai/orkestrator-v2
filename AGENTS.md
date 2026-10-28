@@ -1768,3 +1768,11 @@ This project uses **shadcn/ui** components. When adding new UI:
 ## Orkestrator
 
 Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.
+
+- Never merge pull requests; the user merges.
+- Workers finish by committing, rebasing on origin/main and pushing their branch without opening a PR, leave git status clean, then mail the coordinator; the coordinator runs Multi Review, which opens the PR.
+- Never run the Orkestrator backend, the bundled CLI backend (packages/cli/dist/main.js) or the app against the real data directory, never install services, and never bind ports 34121 or 34122; use a throwaway profile for live checks.
+- Never change GitHub repository settings, branch protection or rulesets, and never publish packages or take other outward-facing actions without the user's explicit approval.
+- Coordinators never delete environments on their own initiative; only when the user asks, through the confirmed deletion request.
+- Never invent evidence; anything not actually observed is reported under Not done / needs live evidence.
+- Worker final messages use six sections: Problem, Solution, What was done, Decisions, Not done / needs live evidence, Tests run.

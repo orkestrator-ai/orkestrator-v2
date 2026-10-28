@@ -35,6 +35,7 @@ import {
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   buildProjectTree,
@@ -450,6 +451,7 @@ export function MergedProjectList({
         isCollapsed={collapsedProjectKeys.includes(item.id)}
         onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
         sortable={isMachineWritable(item.machine) && !item.machine.truncated}
+        grouping={mode}
         showMachine={mode === "project"}
         label={label}
         labelClassName={
@@ -507,12 +509,15 @@ export function MergedProjectList({
         onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
         onOpen={
           opens
-            ? () =>
+            ? () => {
+                const boardTab = projectLandingBoardTab(mode, opens.machine.bound);
                 openMachineWorkspace({
                   connectionId: opens.machine.connectionId,
                   projectId: opens.project.ref.projectId,
+                  ...(boardTab ? { boardTab } : {}),
                   title: opens.name,
-                })
+                });
+              }
             : undefined
         }
         openMachineName={opens?.machine.name}

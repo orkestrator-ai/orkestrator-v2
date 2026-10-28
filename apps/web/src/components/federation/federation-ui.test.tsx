@@ -225,6 +225,7 @@ test("federated sortable wrappers preserve size when dragged over unequal items"
           isCollapsed={false}
           onToggleCollapse={() => {}}
           sortable
+          grouping="machine"
         />
       </>,
     );
@@ -1164,6 +1165,71 @@ describe("another machine's menus offer what this machine's do", () => {
       ["start_environment_background", "env-1"],
     ]);
   });
+});
+
+describe("a project's entry opens on the tab its grouping calls for", () => {
+  function installRepository() {
+    const datasets = { a: sharedIdDataset("working"), b: sharedIdDataset("waiting") };
+    for (const dataset of Object.values(datasets)) {
+      dataset.projects = [{ ...dataset.projects[0]!, gitUrl: "git@github.com:Acme/App.git" }];
+    }
+    return installDesktopFake({ list: connectionList([MACHINE_A, MACHINE_B]), datasets });
+  }
+
+  function Merged({ mode }: { mode: "project" | "repository" }) {
+    const machines = useMachineViews();
+    return (
+      <MergedProjectList
+        machines={machines}
+        shownIds={new Set(machines.filter(isMachineShown).map((machine) => machine.connectionId))}
+        mode={mode}
+        renderBoundProject={() => null}
+        onBoundEnvironmentDragEnd={() => undefined}
+      />
+    );
+  }
+
+  const request = () => useRemoteWorkspaceStore.getState().requests.bk_a?.request;
+
+  for (const [grouping, coordinator] of [
+    ["machine", true],
+    ["project", true],
+    ["repository", false],
+  ] as const) {
+    test(`grouped by ${grouping}, a leaf's project opens on ${coordinator ? "Coordinator" : "Home"}; its environments open as before`, async () => {
+      installRepository();
+      renderWithFederation(
+        grouping === "machine" ? <RemoteSections /> : <Merged mode={grouping} />,
+      );
+      await waitForRows(2);
+
+      fireEvent.click(screen.getByTitle("Open app on Machine A"));
+      await waitFor(() =>
+        expect(request()).toEqual({
+          type: "select",
+          projectId: "project-1",
+          ...(coordinator ? { boardTab: "coordinator" } : {}),
+        }),
+      );
+
+      fireEvent.click(
+        within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+      );
+      await waitFor(() =>
+        expect(request()).toEqual({
+          type: "select",
+          projectId: "project-1",
+          environmentId: "env-1",
+        }),
+      );
+
+      if (grouping === "repository") {
+        // The repository's own entry opens a leaf's copy on its home, too.
+        fireEvent.click(screen.getByRole("button", { name: "Open acme/app on Machine A" }));
+        await waitFor(() => expect(request()).toEqual({ type: "select", projectId: "project-1" }));
+      }
+    });
+  }
 });
 
 describe("Machine filter is presentation only", () => {

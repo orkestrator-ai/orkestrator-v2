@@ -1,4 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { projectLandingBoardTab, type RealmGrouping } from "@/lib/federation/workspace-realm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -102,7 +103,10 @@ import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
+import {
+  useRemoteEnvironmentShown,
+  useRemoteProjectHomeShown,
+} from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, MachineHomeIcon, machineStatusText } from "./MachineDot";
@@ -323,6 +327,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       isCollapsed={collapsedProjectKeys.includes(item.id)}
       onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
       sortable={sortable}
+      grouping="machine"
       {...(sortable
         ? {
             onAddToFolder: () => setFolderDialogKey(item.id),
@@ -408,6 +413,7 @@ export function RemoteProjectGroup({
   isCollapsed,
   onToggleCollapse,
   sortable,
+  grouping,
   showMachine,
   label = project.name,
   labelClassName,
@@ -420,6 +426,8 @@ export function RemoteProjectGroup({
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   sortable: boolean;
+  /** How the window's sidebar groups the list this row is in; decides where it opens. */
+  grouping: RealmGrouping;
   /** Mark the machine with a home before the name, in lists that mix machines. */
   showMachine?: boolean;
   /** Shown instead of the project name (a repository group names the machine). */
@@ -444,18 +452,25 @@ export function RemoteProjectGroup({
     state.revealedProject?.key === project.key ? state.revealedProject.revision : null,
   );
   const revealed = revealRevision !== null;
+  // Shown with its home or nothing else, as this window's own project rows are.
+  const homeId = machine.environmentsByProject
+    .get(project.ref.projectId)
+    ?.find((environment) => environment.isProjectHome)?.ref.environmentId;
+  const shown = useRemoteProjectHomeShown(machine.connectionId, project.ref.projectId, homeId);
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (revealRevision === null) return;
     rowRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [revealRevision]);
-  const openProject = (board = false) =>
+  const openProject = (board = false) => {
+    const boardTab = board ? "coordinator" : projectLandingBoardTab(grouping, machine.bound);
     openMachineWorkspace({
       connectionId: machine.connectionId,
       projectId: project.ref.projectId,
-      ...(board ? { boardTab: "coordinator" as const } : {}),
+      ...(boardTab ? { boardTab } : {}),
       title: project.name,
     });
+  };
   // The project's own dialogs, in its machine's workspace, as its sidebar opens them.
   const openProjectDialog = (dialog: "repository-settings" | "delete-project") =>
     openMachineWorkspace({
@@ -489,13 +504,14 @@ export function RemoteProjectGroup({
       data-testid="federated-project"
       data-project={project.key}
       data-revealed={revealed || undefined}
+      data-selected={shown || undefined}
     >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
         <div
           ref={rowRef}
           className={cn(
             "relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors",
-            revealed
+            shown || revealed
               ? "bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
               : "hover:bg-hover",
           )}
@@ -511,7 +527,7 @@ export function RemoteProjectGroup({
                   sortable && "cursor-grab active:cursor-grabbing",
                 )}
                 onClick={() => openProject()}
-                aria-current={revealed ? "true" : undefined}
+                aria-current={shown ? "page" : revealed ? "true" : undefined}
                 title={`Open ${project.name} on ${machine.name}`}
               >
                 {showMachine ? (

@@ -3,6 +3,7 @@ import * as realDndCore from "@dnd-kit/core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ComponentProps } from "react";
+import { ticketContentFromSections } from "@orkestrator/protocol/ticket-sections";
 
 const realDndCoreSnapshot = { ...realDndCore };
 const draggableState = {
@@ -95,9 +96,7 @@ describe("KanbanCard ticket sections", () => {
   test("shows the first prose section, not the headed description mirror", () => {
     renderCard(
       makeTask({
-        kind: "work-brief",
-        description: "## Problem\n\nTickets are blobs.",
-        sections: { problem: "Tickets are blobs." },
+        ...ticketContentFromSections("work-brief", { problem: "Tickets are blobs." }),
       }),
     );
     expect(screen.getByText("Tickets are blobs.")).toBeTruthy();
@@ -113,13 +112,12 @@ describe("KanbanCard ticket sections", () => {
     };
     renderCard(
       makeTask({
-        kind: "feature",
-        sections: {
+        ...ticketContentFromSections("feature", {
           acceptanceCriteria: [
             { id: "ac-1", text: "A", check },
             { id: "ac-2", text: "B" },
           ],
-        },
+        }),
       }),
     );
     expect(screen.getByTestId("kanban-card-criteria").textContent).toBe("1/2");

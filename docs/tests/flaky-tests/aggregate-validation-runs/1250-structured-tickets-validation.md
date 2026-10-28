@@ -21,3 +21,22 @@
 No implementation, assertion, wait, timeout or skip in these four owners
 changed. The branch changes the agent ticket tools, but the bounded-output test
 times the same as on `main` when run alone.
+
+
+## Criterion verification review — 2026-10-28
+
+The review repair run used `mise run test:logged -- --name review-repair-default -- mise run test` and waited 559 seconds for another worktree's lease. Its protocol check passed. The first run also exposed an inconsistent Kanban card fixture: it supplied checked sections with empty text mirrors and no sections basis. The new stale-mirror projection correctly discarded that fixture's criteria. The fixture now uses `ticketContentFromSections`; its complete owning file and root typecheck pass.
+
+The unrelated failures observed before stopping that superseded run are retained as validation limitations:
+
+| Owner | Aggregate failure | Complete owning-file rerun |
+| --- | --- | --- |
+| `bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts` | Five-second version-probe timeout. | Passed unchanged in 1.4 s; recurrence recorded in [0210](../agent-bridges/0210-fake-codex-process-timeout.md). |
+| `tests/unit/components/GitHubCloneIntegration.test.tsx` | Empty-destination alert did not appear within the assertion window. | Passed unchanged in 10.5 s; recurrence recorded in [0352](../web-ui/0352-github-picker-non-git-destination-alert.md). |
+| `tests/unit/efficiency/harness.test.ts` | Unchanged pipeline session case timed out at 5024 ms. | Passed unchanged in 8.9 s; recurrence recorded in [0788](../backend-services-and-tooling/0788-efficiency-checkpoint-aggregate-timeout.md). |
+| `tests/unit/test-tiers.test.ts` | SIGINT cleanup expected exit 0 but received 130. | Passed unchanged in 7.2 s. |
+| `tests/unit/disk-report.test.ts` | Five-second process deadline. | Still failed in a three-owner rerun (23.5 s combined); no new isolated pass established. |
+| `packages/cli/tests/command-surface.test.ts` | zsh completion timed out after five seconds. | Still failed alone (13.9 s); no new isolated pass established. |
+| `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | Projection read count was two instead of one. | Still failed alone (12.9 s), matching [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). |
+
+Additional root-change approval and transcript-artifact cleanup failures in the workspace group have not been isolated. No assertions, timeouts or skips in these unrelated owners were changed. The superseded run was stopped after 1,139 seconds, preserving its failure artifacts. The exact aggregate command was started again after repairing the Kanban card fixture; it then queued behind another worktree's exclusive lease. No passing aggregate result was established in this repair turn.

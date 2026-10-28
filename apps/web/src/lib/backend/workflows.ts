@@ -1160,6 +1160,33 @@ export async function getBuildPipelineConditional<T = unknown>(
   return response as unknown as ConditionalBuildPipeline<T>;
 }
 
+/**
+ * Control state only: `unchanged` when the record is still at `knownRevision`,
+ * otherwise the record without any transcript body.
+ */
+export async function getBuildPipelineControl<T = unknown>(
+  pipelineId: string,
+  knownRevision?: number,
+): Promise<{ unchanged: true; revision: number } | PersistedBuildPipeline<T> | null> {
+  const response = await invoke<unknown>("get_build_pipeline", {
+    pipelineId,
+    ...(knownRevision === undefined ? {} : { knownRevision }),
+  });
+  if (response === null) return null;
+  if (
+    isRecord(response) &&
+    response.unchanged === true &&
+    Number.isSafeInteger(response.revision) &&
+    (response.revision as number) >= 0
+  ) {
+    return response as { unchanged: true; revision: number };
+  }
+  if (!isRecord(response) || "unchanged" in response || typeof response.id !== "string") {
+    throw new Error("Invalid get_build_pipeline response");
+  }
+  return response as unknown as PersistedBuildPipeline<T>;
+}
+
 export async function listBuildPipelines<T = unknown>(
   projectId: string,
 ): Promise<Array<PersistedBuildPipeline<T>>> {

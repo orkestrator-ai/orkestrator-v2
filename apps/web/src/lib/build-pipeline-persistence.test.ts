@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
+  buildPipelineChangeReadOptions,
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
   isBuildPipelineTranscriptStale,
   isBuildPipelineTranscriptUnavailable,
   LEGACY_BUILD_PIPELINE_STORAGE_KEY,
   migrateLegacyBuildPipelines,
+  watchBuildPipelineTranscript,
 } from "./build-pipeline-persistence";
 import {
   BUILD_PIPELINE_VERSION,
@@ -115,7 +117,7 @@ describe("build pipeline read model", () => {
     useBuildPipelineStore.getState().replacePipeline(local);
     invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 7 });
 
-    const restored = await hydrateBuildPipeline("pipeline-1");
+    const restored = await hydrateBuildPipeline("pipeline-1", undefined, { transcripts: true });
 
     expect(restored).toBe(local);
     expect(invokeMock).toHaveBeenCalledWith("get_build_pipeline", {
@@ -184,7 +186,7 @@ describe("build pipeline read model", () => {
       ],
     });
 
-    const restored = await hydrateBuildPipeline("pipeline-1");
+    const restored = await hydrateBuildPipeline("pipeline-1", undefined, { transcripts: true });
 
     expect(restored?.sessions[0]?.messages).toBe(unchangedMessages);
     expect(restored?.sessions[1]?.messages).toEqual([
@@ -260,7 +262,7 @@ describe("build pipeline read model", () => {
       })
       .mockResolvedValueOnce(full);
 
-    const restored = await hydrateBuildPipeline("pipeline-1");
+    const restored = await hydrateBuildPipeline("pipeline-1", undefined, { transcripts: true });
 
     expect(restored?.phase).toBe("verifying");
     expect(restored?.sessions[0]?.messages).toEqual([{ id: "authoritative" }]);
@@ -327,6 +329,7 @@ describe("build pipeline read model", () => {
       ],
     });
     const patched = await hydrateBuildPipeline("pipeline-1", undefined, {
+      transcripts: true,
       prioritySessionKey: "session-1",
     });
 
@@ -382,7 +385,7 @@ describe("build pipeline read model", () => {
       ],
     });
 
-    const restored = await hydrateBuildPipeline("pipeline-1");
+    const restored = await hydrateBuildPipeline("pipeline-1", undefined, { transcripts: true });
 
     expect(restored?.sessions[0]?.messages).toBe(held);
     expect(isBuildPipelineTranscriptStale(restored?.sessions[0])).toBe(true);
@@ -423,6 +426,102 @@ describe("build pipeline read model", () => {
         deleted: 3,
       },
     });
+  });
+
+  test("a read without transcripts asks for control state only and keeps held bodies", async () => {
+    const held = [{ id: "held-1" }];
+    const session = {
+      phase: "build" as const,
+      iteration: 0,
+      sessionKey: "session-1",
+      sdkSessionId: "sdk-1",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+      messageRevision: 3,
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...snapshot(),
+      currentSessionIndex: 0,
+      sessions: [{ ...session, messages: held }],
+      backendRevision: 2,
+    });
+    invokeMock.mockResolvedValueOnce(
+      record(
+        { ...snapshot(), currentSessionIndex: 0, sessions: [{ ...session, messageRevision: 4 }] },
+        3,
+      ),
+    );
+
+    const restored = await hydrateBuildPipeline("pipeline-1");
+
+    expect(invokeMock).toHaveBeenCalledWith("get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 2,
+    });
+    expect(restored?.backendRevision).toBe(3);
+    expect(restored?.sessions[0]?.messages).toBe(held);
+    expect(isBuildPipelineTranscriptStale(restored?.sessions[0])).toBe(true);
+
+    invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 3 });
+    expect(await hydrateBuildPipeline("pipeline-1")).toBe(
+      useBuildPipelineStore.getState().pipelines.get("pipeline-1")!,
+    );
+  });
+
+  test("calls during a read share one follow-up read", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    invokeMock.mockImplementationOnce(() => first.promise);
+    invokeMock.mockImplementationOnce(() => second.promise);
+
+    const running = hydrateBuildPipeline("pipeline-1");
+    const queuedA = hydrateBuildPipeline("pipeline-1");
+    const queuedB = hydrateBuildPipeline("pipeline-1", undefined, {
+      transcripts: true,
+      prioritySessionKey: "session-1",
+    });
+    expect(queuedA).toBe(queuedB);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+
+    first.resolve(record(snapshot(), 1));
+    expect(await running).toMatchObject({ backendRevision: 1 });
+    await Promise.resolve();
+    await Promise.resolve();
+    // The follow-up carries the widest options any waiting caller asked for.
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 1,
+      knownSessions: {},
+      prioritySessionKey: "session-1",
+    });
+    second.resolve({ unchanged: true, revision: 1 });
+    expect(await queuedA).toMatchObject({ backendRevision: 1 });
+
+    // Once idle, the next call reads at once.
+    invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 1 });
+    await hydrateBuildPipeline("pipeline-1");
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  test("a change read patches bodies only while a transcript is on screen", () => {
+    expect(buildPipelineChangeReadOptions("pipeline-1")).toEqual({});
+    const stopFirst = watchBuildPipelineTranscript("pipeline-1", "session-1");
+    const stopSecond = watchBuildPipelineTranscript("pipeline-1", "session-2");
+    expect(buildPipelineChangeReadOptions("pipeline-1")).toEqual({
+      transcripts: true,
+      prioritySessionKey: "session-2",
+    });
+    expect(buildPipelineChangeReadOptions("pipeline-2")).toEqual({});
+    stopSecond();
+    stopSecond();
+    expect(buildPipelineChangeReadOptions("pipeline-1")).toEqual({
+      transcripts: true,
+      prioritySessionKey: "session-1",
+    });
+    stopFirst();
+    expect(buildPipelineChangeReadOptions("pipeline-1")).toEqual({});
   });
 
   test("rejects malformed record metadata and mismatched snapshots", async () => {

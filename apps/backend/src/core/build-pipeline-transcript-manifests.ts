@@ -33,6 +33,21 @@ export interface TranscriptChunkRef {
   checksum: string;
 }
 
+/**
+ * One checkpoint's edit: messages before `from` are identical, index for
+ * index, to those of display revision `base`. Lets a reader holding `base`
+ * (or an older revision the chain reaches) be patched from the first changed
+ * message instead of from zero.
+ */
+export interface TranscriptRowChange {
+  revision: number;
+  base: number;
+  from: number;
+}
+
+/** Newest-last edits kept per session; a reader further behind is reconciled from zero. */
+export const MAX_TRANSCRIPT_ROW_CHANGES = 32;
+
 export interface TranscriptManifestRow {
   v: typeof MANIFEST_VERSION;
   /** Manifest revision; the control record's `transcript.manifestRevision`. */
@@ -54,6 +69,8 @@ export interface TranscriptManifestRow {
   /** Sum of the chunk lengths: the bytes this session holds on disk. */
   totalBytes: number;
   chunks: TranscriptChunkRef[];
+  /** Recent edits of the same provider session, oldest first; absent on older rows. */
+  changes?: TranscriptRowChange[];
 }
 
 export interface TranscriptTotals {
@@ -81,6 +98,21 @@ export function isTranscriptChunkRef(value: unknown): value is TranscriptChunkRe
   );
 }
 
+function isTranscriptRowChanges(value: unknown): value is TranscriptRowChange[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_TRANSCRIPT_ROW_CHANGES &&
+    value.every(
+      (change) =>
+        !!change &&
+        typeof change === "object" &&
+        isNonNegativeInteger((change as TranscriptRowChange).revision) &&
+        isNonNegativeInteger((change as TranscriptRowChange).base) &&
+        isNonNegativeInteger((change as TranscriptRowChange).from),
+    )
+  );
+}
+
 export function isTranscriptManifestRow(value: unknown): value is TranscriptManifestRow {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
@@ -99,7 +131,8 @@ export function isTranscriptManifestRow(value: unknown): value is TranscriptMani
     typeof row.committedAt !== "string" ||
     (row.sourceRevision !== undefined && !isNonNegativeInteger(row.sourceRevision)) ||
     !isNonNegativeInteger(row.totalBytes) ||
-    !Array.isArray(row.chunks)
+    !Array.isArray(row.chunks) ||
+    (row.changes !== undefined && !isTranscriptRowChanges(row.changes))
   ) {
     return false;
   }

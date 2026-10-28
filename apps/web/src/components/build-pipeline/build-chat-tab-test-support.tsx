@@ -133,6 +133,7 @@ export const retryReviewerMock = mock(
   }),
 );
 export const getBuildPipelineConditionalMock = mock(async (_pipelineId: string) => null as unknown);
+export const getBuildPipelineControlMock = mock(async (_pipelineId: string) => null as unknown);
 export const stopReviewValidationCommandMock = mock(
   async (_environmentId: string, run: NonNullable<BuildPipeline["validationRun"]>) => run,
 );
@@ -151,6 +152,7 @@ mock.module("@/lib/backend", () => ({
   retryBuildPipelineReviewer: retryReviewerMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
+  getBuildPipelineControl: getBuildPipelineControlMock,
   stopReviewValidationCommand: stopReviewValidationCommandMock,
 }));
 

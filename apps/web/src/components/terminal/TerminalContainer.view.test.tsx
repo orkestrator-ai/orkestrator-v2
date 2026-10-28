@@ -395,6 +395,7 @@ mock.module("@/lib/backend", () => ({
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   getBuildPipelineConditional: mock(async () => null),
+  getBuildPipelineControl: mock(async () => null),
   deletePaneLayout: deletePaneLayoutMock,
   teardownTab: teardownTabMock,
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,

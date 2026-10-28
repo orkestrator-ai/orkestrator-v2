@@ -15,9 +15,11 @@ import {
   writeExclusivePrivateFile,
 } from "./keyed-record-format.js";
 import {
+  MAX_TRANSCRIPT_ROW_CHANGES,
   TranscriptManifestRows,
   type TranscriptChunkRef,
   type TranscriptManifestRow,
+  type TranscriptRowChange,
 } from "./build-pipeline-transcript-manifests.js";
 import {
   importLegacyManifest,
@@ -110,6 +112,8 @@ const UNLINK_BATCH = 64;
 /** Concurrent stage operations (each may hold a whole session's chunks in memory). */
 const MAX_CONCURRENT_STAGES = 2;
 const MAX_LEGACY_MISSES = 4_096;
+/** Sessions whose tail message digests are kept for the next checkpoint's edit detection. */
+const MAX_TAIL_DIGEST_SESSIONS = 64;
 
 export type BuildPipelineTranscriptFaultStage =
   | "after-chunks"
@@ -205,6 +209,8 @@ export type TranscriptRead =
       substituted: boolean;
       /** The window stopped early at `maxBytes`; more messages follow. */
       truncated?: true;
+      /** Recent edits ending at `revision`, oldest first (see {@link stablePrefix}). */
+      changes?: readonly TranscriptRowChange[];
     }
   | { status: "missing" }
   | { status: "unavailable"; reason: string };
@@ -274,6 +280,35 @@ function referenceKey(reference: PipelineTranscriptReference): string {
   ].join("|");
 }
 
+/** Short per-message digest, compared only between two copies of one session. */
+function digestMessage(item: string): string {
+  return createHash("sha256").update(item).digest("base64").slice(0, 22);
+}
+
+/**
+ * How many leading messages a reader holding display revision `held` shares
+ * with the revision the edits end at: the smallest `from` along the chain of
+ * edits back to `held`. Undefined when the chain does not reach it (too old,
+ * another provider session, or a row from before edits were recorded).
+ */
+export function stablePrefix(
+  read: { revision: number; changes?: readonly TranscriptRowChange[] },
+  held: number,
+): number | undefined {
+  if (held === read.revision) return Number.POSITIVE_INFINITY;
+  const changes = read.changes ?? [];
+  let revision = read.revision;
+  let from = Number.POSITIVE_INFINITY;
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const change = changes[index]!;
+    if (change.revision !== revision) return undefined;
+    from = Math.min(from, change.from);
+    revision = change.base;
+    if (revision === held) return from;
+  }
+  return undefined;
+}
+
 function digestContent(items: readonly string[]): string {
   const hash = createHash("sha256");
   hash.update(String(items.length));
@@ -340,6 +375,17 @@ export class BuildPipelineTranscriptStore {
   private legacySettled = false;
   private readonly legacyMisses = new Set<string>();
   private stemIndex: { revision: number | null; stems: Map<string, string> } | null = null;
+  /**
+   * Per session, the digests of the messages in the unsealed last chunk a
+   * checkpoint staged (from `start` on), keyed by its content. The next
+   * checkpoint compares its own repacked messages against them to find the
+   * first edited message. Memory only: after a restart an edit is located at
+   * chunk granularity.
+   */
+  private readonly tailDigests = new Map<
+    string,
+    Array<{ contentDigest: string; start: number; digests: string[] }>
+  >();
   private readonly counters: BuildPipelineTranscriptStats = {
     commits: 0,
     idempotentCommits: 0,
@@ -519,6 +565,10 @@ export class BuildPipelineTranscriptStore {
         }
         const base = current?.sdkSessionId === input.sdkSessionId ? current : null;
         const plan = this.plan(key, retained.items, retained.sizes, base);
+        const digests = retained.items.slice(plan.reused).map(digestMessage);
+        const changes = base
+          ? this.changesFrom(key, base, input.revision, plan.reused, digests)
+          : [];
         if (plan.chunks.length > this.limits.maxChunksPerSession) {
           return this.reject("too-many-chunks");
         }
@@ -537,6 +587,7 @@ export class BuildPipelineTranscriptStore {
           ...(input.sourceRevision === undefined ? {} : { sourceRevision: input.sourceRevision }),
           totalBytes: plan.chunks.reduce((sum, chunk) => sum + chunk.length, 0),
           chunks: plan.chunks,
+          ...(changes.length > 0 ? { changes } : {}),
         };
         const rowJson = JSON.stringify(row);
         if (Buffer.byteLength(rowJson, "utf8") > this.limits.maxManifestBytes) {
@@ -589,6 +640,13 @@ export class BuildPipelineTranscriptStore {
         entries.push(staged);
         this.staged.set(key, entries);
         this.stagedCount += 1;
+        // The next checkpoint repacks at most this row's unsealed last chunk.
+        const last = plan.chunks.at(-1);
+        const tailStart =
+          last && last.length < this.limits.targetChunkBytes
+            ? Math.max(last.firstIndex, plan.reused)
+            : retained.items.length;
+        this.rememberTail(key, contentDigest, tailStart, digests.slice(tailStart - plan.reused));
         return {
           status: "staged",
           reference: staged.reference,
@@ -598,6 +656,54 @@ export class BuildPipelineTranscriptStore {
         };
       }),
     );
+  }
+
+  /**
+   * The row's edit history after this checkpoint: the base's edits plus one
+   * naming the first message that differs from the base. Messages in reused
+   * chunks are unchanged by construction; within the repacked tail they are
+   * compared against the digests the base's checkpoint kept, when this
+   * process staged it.
+   */
+  private changesFrom(
+    key: string,
+    base: TranscriptManifestRow,
+    revision: number,
+    reused: number,
+    digests: readonly string[],
+  ): TranscriptRowChange[] {
+    // The same display revision for different content cannot be told apart.
+    if (revision === base.displayRevision) return [];
+    const previous = this.tailDigests
+      .get(key)
+      ?.find((entry) => entry.contentDigest === base.contentDigest);
+    const end = Math.min(base.messageCount, reused + digests.length);
+    let from = reused;
+    if (previous && previous.start <= reused) {
+      while (
+        from < end &&
+        from - previous.start < previous.digests.length &&
+        previous.digests[from - previous.start] === digests[from - reused]
+      ) {
+        from += 1;
+      }
+    }
+    return [...(base.changes ?? []), { revision, base: base.displayRevision, from }].slice(
+      -MAX_TRANSCRIPT_ROW_CHANGES,
+    );
+  }
+
+  private rememberTail(key: string, contentDigest: string, start: number, digests: string[]): void {
+    // Two candidates per session: a staged checkpoint may not commit.
+    const entries = (this.tailDigests.get(key) ?? [])
+      .filter((entry) => entry.contentDigest !== contentDigest)
+      .slice(-1);
+    entries.push({ contentDigest, start, digests });
+    this.tailDigests.delete(key);
+    this.tailDigests.set(key, entries);
+    if (this.tailDigests.size > MAX_TAIL_DIGEST_SESSIONS) {
+      this.tailDigests.delete(this.tailDigests.keys().next().value as string);
+    }
   }
 
   private reject(reason: string): TranscriptCommitResult {
@@ -796,7 +902,7 @@ export class BuildPipelineTranscriptStore {
     items: string[],
     sizes: number[],
     previous: TranscriptManifestRow | null,
-  ): { chunks: TranscriptChunkRef[]; bytes: Map<string, Buffer> } {
+  ): { chunks: TranscriptChunkRef[]; bytes: Map<string, Buffer>; reused: number } {
     const chunks: TranscriptChunkRef[] = [];
     const bytes = new Map<string, Buffer>();
     let index = 0;
@@ -811,6 +917,7 @@ export class BuildPipelineTranscriptStore {
         index += ref.count;
       }
     }
+    const reused = index;
     let pending: string[] = [];
     let pendingBytes = 2;
     const flush = () => {
@@ -836,7 +943,7 @@ export class BuildPipelineTranscriptStore {
       pendingBytes += size;
     }
     flush();
-    return { chunks, bytes };
+    return { chunks, bytes, reused };
   }
 
   /**
@@ -978,6 +1085,7 @@ export class BuildPipelineTranscriptStore {
       complete: row.omittedMessages === 0,
       substituted,
       ...(truncated ? { truncated: true as const } : {}),
+      ...(row.changes ? { changes: row.changes } : {}),
     };
   }
 

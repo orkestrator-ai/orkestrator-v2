@@ -310,6 +310,7 @@ export function SharedNativeAgentController({
   coordinatorProjectId,
   coordinatorWorkspacePath,
   hiddenByLayout = false,
+  beforeSend,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   const platform = data.platform!;
@@ -1683,15 +1684,26 @@ export function SharedNativeAgentController({
     [sessionKey, updateDraft],
   );
 
+  const beforeSendPendingRef = useRef(false);
+  const [preparingSend, setPreparingSend] = useState(false);
+  const composerLifetimeRef = useRef<object | null>(null);
+  useEffect(() => {
+    composerLifetimeRef.current = {};
+    return () => {
+      composerLifetimeRef.current = null;
+    };
+  }, [sessionKey]);
+
   const submit = useCallback(
     async (
       text: string,
       requestId?: string,
       preparedPrompt = false,
       modeOverride?: "build" | "plan",
-      submitOptions?: { literal?: boolean; noQueue?: boolean },
+      submitOptions?: { literal?: boolean; noQueue?: boolean; preflight?: boolean },
     ) => {
-      if (queueEditPendingRef.current || submitInFlightRef.current) return false;
+      if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
+        return false;
       // A prompt with a stable id must not be queued: the queue carries no id,
       // so a copy the backend already sent would run twice. Retried by the
       // caller once the turn ends and this callback changes.
@@ -1965,6 +1977,38 @@ export function SharedNativeAgentController({
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
+      // Preflight belongs after local validation. Keep the submitted draft's
+      // identity across the wait: suggestions, mentions and attachments can
+      // still edit it, and a remounted composer must never replay this send.
+      if (submitOptions?.preflight && beforeSend) {
+        const lifetime = composerLifetimeRef.current;
+        const pendingDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+        beforeSendPendingRef.current = true;
+        setPreparingSend(true);
+        try {
+          const proceed = await beforeSend();
+          if (composerLifetimeRef.current !== lifetime || proceed === false) return false;
+          const currentDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+          if (
+            currentDraft.text !== pendingDraft.text ||
+            currentDraft.mentions !== pendingDraft.mentions ||
+            currentDraft.attachments !== pendingDraft.attachments ||
+            currentDraft.annotations !== pendingDraft.annotations ||
+            currentDraft.commandSelection !== pendingDraft.commandSelection
+          ) {
+            reportSendError("The draft changed while preparing to send. Review it and send again.");
+            return false;
+          }
+        } catch (error) {
+          if (composerLifetimeRef.current === lifetime) {
+            reportSendError(error instanceof Error ? error.message : String(error));
+          }
+          return false;
+        } finally {
+          beforeSendPendingRef.current = false;
+          if (composerLifetimeRef.current === lifetime) setPreparingSend(false);
+        }
+      }
       updateDraft(sessionKey, { submissionError: undefined });
       submitInFlightRef.current = true;
       setIsSubmitting(true);
@@ -2123,6 +2167,7 @@ export function SharedNativeAgentController({
     },
     [
       adapter.capabilities.attachments,
+      beforeSend,
       clearDraft,
       composer?.fastModeEnabled,
       composer?.selectedModeId,
@@ -2173,12 +2218,19 @@ export function SharedNativeAgentController({
     ],
   );
 
+  const sendFromComposer = useCallback(
+    (text: string, options?: { literal: true }) => {
+      void submit(text, undefined, false, undefined, { ...options, preflight: true });
+    },
+    [submit],
+  );
+
   useEffect(() => {
     sendAsTextRef.current = () => {
       const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
-      void submit(current.text, undefined, false, undefined, { literal: true });
+      sendFromComposer(current.text, { literal: true });
     };
-  }, [sessionKey, submit]);
+  }, [sendFromComposer, sessionKey]);
 
   /**
    * Provider entries mapped to the shared picker's neutral row shape. Sorting
@@ -2637,6 +2689,7 @@ export function SharedNativeAgentController({
         if (cancelled || !isCurrent()) return;
         void submit(heldSubmit.text, heldSubmit.requestId, false, heldSubmit.modeOverride, {
           literal: heldSubmit.literal,
+          preflight: true,
         });
       });
       return () => {
@@ -3489,12 +3542,14 @@ export function SharedNativeAgentController({
             }
             if (event.key !== "Enter" || event.shiftKey) return;
             event.preventDefault();
-            void submit(draft.text);
+            sendFromComposer(draft.text);
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
           placeholder={`Message ${label}`}
-          disabled={queueEditPending || isSubmitting || draft.submissionPending === true}
-          isSending={isDispatching || isSubmitting}
+          disabled={
+            queueEditPending || isSubmitting || preparingSend || draft.submissionPending === true
+          }
+          isSending={isDispatching || isSubmitting || preparingSend}
           isLoading={isTurnActive}
           menus={
             fileMentionMenuOpen ? (
@@ -3786,9 +3841,7 @@ export function SharedNativeAgentController({
                       : "Add to queue"
                     : "Send"
           }
-          onSend={() => {
-            void submit(draft.text);
-          }}
+          onSend={() => sendFromComposer(draft.text)}
           footer={
             projection?.queue ? (
               <QueuedPromptsDialog

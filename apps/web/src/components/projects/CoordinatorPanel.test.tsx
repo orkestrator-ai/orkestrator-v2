@@ -1,3 +1,4 @@
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
@@ -9,12 +10,17 @@ import {
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import {
+  selectDeclinedUpstreamMerge,
+  useCoordinatorUpstreamDeclineStore,
+} from "@/stores/coordinatorUpstreamDeclineStore";
 import {
   collectCoordinatorLeaves,
   focusedCoordinatorConversationId,
@@ -160,6 +166,8 @@ const getCoordinatorView = mock(
 );
 const assignAgent = mock(async () => ensuredSnapshot);
 
+const firstUpstreamTip = "b".repeat(40);
+const runCommand = mock(async () => undefined);
 const launchEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
 const launchSessionKey = createSessionKey(launchEnvironmentId, "coordinator-tab");
 const openingPrompt = "Inspect the repository";
@@ -269,7 +277,13 @@ mock.module("@/lib/backend", () => ({
     providerSessionId: "claude-session",
   }),
   getNativeAgentProjection: getAgentProjection,
+  dismissNativeAgentSuggestedPrompt: async () => ({
+    ...(await getAgentProjection()),
+    suggestedPrompt: undefined,
+    revision: 51,
+  }),
   dispatchNativeAgentIntent: dispatchIntent,
+  runUserCommand: runCommand,
 }));
 
 const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
@@ -330,7 +344,11 @@ describe("CoordinatorPanel", () => {
     resetNativeAgentSyncCapabilityForTests();
     getAgentProjection.mockReset();
     getAgentProjection.mockImplementation(async () => launchProjection("idle"));
-    dispatchIntent.mockClear();
+    dispatchIntent.mockReset();
+    dispatchIntent.mockImplementation(async (input) => ({
+      outcome: "accepted" as const,
+      requestId: input.requestId,
+    }));
     useConfigStore.setState({ config: initialConfig });
     useNativeComposeStore
       .getState()
@@ -373,6 +391,8 @@ describe("CoordinatorPanel", () => {
     useNativeAgentProjectionStore.getState().reset();
     useNativeNoticeDismissalStore.getState().clear();
     useCoordinatorPaneLayoutStore.setState({ layouts: [] });
+    useCoordinatorUpstreamDeclineStore.setState({ declines: [] });
+    runCommand.mockClear();
   });
 
   test("forwards the project id to the coordinator native-agent tab", async () => {
@@ -590,28 +610,32 @@ describe("CoordinatorPanel", () => {
     expect(screen.getByText(/Codex is unavailable for Coordinator/)).toBeTruthy();
   });
 
-  test("asks before starting the coordinator on a checkout behind its upstream", async () => {
-    const unassignedConversation = {
-      ...snapshot.workspace.conversations[0]!,
-      agent: undefined,
-    };
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: { ...snapshot.workspace, conversations: [unassignedConversation] },
-    };
-    ensuredGit = {
-      ...gitStatus,
-      upstream: "origin/main",
-      remote: "origin",
-      ahead: 0,
-      behind: 3,
-      remoteState: "fresh",
-      fetchedAt: new Date(0).toISOString(),
-    };
+  const behindGit = (overrides: Partial<ProjectGitStatus> = {}): ProjectGitStatus => ({
+    ...gitStatus,
+    upstream: "origin/main",
+    upstreamCommit: firstUpstreamTip,
+    remote: "origin",
+    ahead: 0,
+    behind: 3,
+    remoteState: "fresh",
+    fetchedAt: new Date(0).toISOString(),
+    ...overrides,
+  });
+  const mergeDialog = () => screen.queryByRole("alertdialog");
+  // Fetches after the panel's own fetch-on-open, which lands after first render.
+  const fetchesAfterOpen = async () => {
+    await waitFor(() => expect(fetchGit).toHaveBeenCalled());
+    return fetchGit.mock.calls.length;
+  };
+  const pressEscape = () => fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+
+  test("asks before the first prompt and merges by default before starting", async () => {
+    prepareUnassignedLaunch();
+    ensuredGit = behindGit();
     const order: string[] = [];
     syncGit.mockImplementation(async () => {
       order.push("sync");
-      return { ...ensuredGit, behind: 0 };
+      return behindGit({ behind: 0, headCommit: firstUpstreamTip });
     });
     assignAgent.mockImplementation(async () => {
       order.push("assign");
@@ -620,120 +644,89 @@ describe("CoordinatorPanel", () => {
 
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-
-    // Cancel leaves the conversation unstarted and the checkout untouched.
     fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-    expect(await screen.findByText("Checkout is behind origin/main")).toBeTruthy();
-    expect(screen.getByText(/main is 3 commits behind origin\/main/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() =>
-      expect(screen.queryByText("Checkout is behind origin/main") === null).toBe(true),
-    );
+    expect(await screen.findByText("Merge 3 upstream commits?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /There are 3 upstream commits on origin\/main that haven’t been merged into main\. Do you wish to merge them\?/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel" }) === null).toBe(true);
+    // Enter activates the focused default action: merging.
+    const merge = screen.getByRole("button", { name: "Merge and send" });
+    await waitFor(() => expect(document.activeElement).toBe(merge));
     expect(order).toEqual([]);
-
-    // Starting without updating skips the fast-forward.
-    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start without updating" }));
-    await waitFor(() => expect(order).toEqual(["assign"]));
-
-    // Fast-forwarding happens before the first prompt is sent.
-    order.length = 0;
-    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Fast-forward and start" }));
+    fireEvent.click(merge);
     await waitFor(() => expect(order).toEqual(["sync", "assign"]));
-    syncGit.mockImplementation(async () => ensuredGit);
+    expect(mergeDialog() === null).toBe(true);
   });
 
-  test("a diverged checkout is warned about but never fast-forwarded", async () => {
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
-      },
-    };
-    ensuredGit = {
-      ...gitStatus,
-      upstream: "origin/main",
-      remote: "origin",
-      ahead: 2,
-      behind: 1,
-      remoteState: "fresh",
-      fetchedAt: new Date(0).toISOString(),
-    };
-    assignAgent.mockImplementation(async () => ensuredSnapshot);
-
+  test("Escape starts without merging and the first prompt's decline is remembered", async () => {
+    prepareUnassignedLaunch();
+    ensuredGit = behindGit({ behind: 1 });
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-    expect(await screen.findByText(/the branches have diverged/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Fast-forward and start" }) === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Start without updating" }));
+    expect(await screen.findByText("Merge 1 upstream commit?")).toBeTruthy();
+    expect(screen.getByText(/There is 1 upstream commit on origin\/main that hasn’t/)).toBeTruthy();
+    pressEscape();
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(syncGit).not.toHaveBeenCalled();
+    expect(
+      selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
+    ).toMatchObject({ upstream: "origin/main", upstreamCommit: firstUpstreamTip });
+  });
+
+  test("Don't merge is the same answer as Escape", async () => {
+    prepareUnassignedLaunch();
+    ensuredGit = behindGit();
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Don’t merge" }));
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
     expect(syncGit).not.toHaveBeenCalled();
   });
 
-  test("an up-to-date checkout starts the coordinator without asking", async () => {
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+  test.each([
+    { label: "up to date", status: { behind: 0 } },
+    { label: "without an upstream", status: { upstream: null, behind: null, ahead: null } },
+    { label: "diverged", status: { ahead: 2, behind: 1 } },
+    { label: "with tracked changes", status: { trackedChanges: 1 } },
+    { label: "with untracked files", status: { untrackedChanges: 1 } },
+    {
+      label: "mid-merge",
+      status: {
+        mergeInProgress: true,
+        repositoryOperationBlockedReason: "Finish the current merge first.",
       },
-    };
-    ensuredGit = { ...gitStatus, upstream: "origin/main", remote: "origin", ahead: 0, behind: 0 };
-    assignAgent.mockImplementation(async () => ensuredSnapshot);
+    },
+  ] satisfies { label: string; status: Partial<ProjectGitStatus> }[])(
+    "starts without asking when the checkout is $label",
+    async ({ status }) => {
+      prepareUnassignedLaunch();
+      ensuredGit = behindGit(status);
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      const fetches = await fetchesAfterOpen();
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      // The pre-send fetch still ran; it found nothing that could be merged.
+      expect(fetchGit.mock.calls.length).toBe(fetches + 1);
+      expect(mergeDialog() === null).toBe(true);
+      expect(syncGit).not.toHaveBeenCalled();
+    },
+  );
 
-    render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText(/Checkout is behind/) === null).toBe(true);
-  });
-
-  test("a failed pre-start fetch still assigns without a behind-checkout dialog", async () => {
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
-      },
-    };
-    ensuredGit = { ...gitStatus, upstream: "origin/main", behind: 3 };
+  test("a failed pre-start fetch still assigns without asking", async () => {
+    prepareUnassignedLaunch();
+    ensuredGit = behindGit();
     fetchGit.mockRejectedValue(new Error("offline"));
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText(/Checkout is behind/) === null).toBe(true);
-    expect(syncGit).not.toHaveBeenCalled();
-  });
-
-  test.each([
-    { trackedChanges: 1, reason: "it has uncommitted changes." },
-    { untrackedChanges: 1, reason: "it has uncommitted changes." },
-    {
-      mergeInProgress: true,
-      repositoryOperationBlockedReason: "Finish the current merge first.",
-      reason: "Finish the current merge first.",
-    },
-  ])("warns but cannot fast-forward a blocked checkout: %p", async ({ reason, ...status }) => {
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
-      },
-    };
-    ensuredGit = { ...gitStatus, upstream: "origin/main", ahead: 0, behind: 2, ...status };
-    render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-    expect((await screen.findByText(/It cannot be fast-forwarded/)).textContent).toContain(reason);
-    expect(screen.queryByRole("button", { name: "Fast-forward and start" }) === null).toBe(true);
-    expect(assignAgent).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Start without updating" }));
-    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(mergeDialog() === null).toBe(true);
     expect(syncGit).not.toHaveBeenCalled();
   });
 
@@ -743,35 +736,482 @@ describe("CoordinatorPanel", () => {
       enabledAgentPlatforms: ["claude"],
       agentSettings: { defaultAgent: "claude" },
     });
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
-      },
-    };
-    ensuredGit = { ...gitStatus, upstream: "origin/main", remote: "origin", ahead: 0, behind: 2 };
+    prepareUnassignedLaunch();
+    ensuredGit = behindGit({ behind: 2 });
     syncGit.mockRejectedValueOnce(new Error("Fast-forward refused"));
     const { container } = render(<CoordinatorPanel projectId="project-1" />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Inspect my draft after syncing" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("button", { name: "Fast-forward and start" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Merge and send" }));
     expect(await screen.findByText("Fast-forward refused")).toBeTruthy();
     expect(syncGit).toHaveBeenCalledTimes(1);
     expect(assignAgent).not.toHaveBeenCalled();
     expect(input.textContent).toBe("Inspect my draft after syncing");
     expect(container.querySelector(".animate-spin") === null).toBe(true);
-    // Reopening the dialog proves both the composer and sync controls recovered.
-    fireEvent.keyDown(input, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByText(/Checkout is behind/) === null).toBe(true));
-    expect(input.textContent).toBe("Inspect my draft after syncing");
     const key = createSessionKey("coordinator:coordinator-1:conversation-1", "coordinator-tab");
     expect(useNativeComposeStore.getState().drafts.get(key)?.text).toBe(
       "Inspect my draft after syncing",
     );
-    expect(assignAgent).not.toHaveBeenCalled();
+    // A failure is not a decline: the next Enter asks again, and merging sends.
+    expect(
+      selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
+    ).toBeUndefined();
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("button", { name: "Merge and send" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(syncGit).toHaveBeenCalledTimes(2);
+  });
+
+  describe("follow-up messages to the main coordinator", () => {
+    const sendFollowUp = async (text: string) => {
+      const input = await screen.findByRole("textbox");
+      await waitFor(() => expect(input.getAttribute("contenteditable")).not.toBe("false"));
+      fireEvent.input(input, { target: { textContent: text } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      return input;
+    };
+    const sentPrompts = () =>
+      dispatchIntent.mock.calls.map((call) => (call[0] as { prompt?: string }).prompt);
+    const renderAssigned = async (platform: "claude" | "codex" = "claude") => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({
+        enabledAgentPlatforms: [platform],
+        agentSettings: { defaultAgent: platform },
+      });
+      ensuredSnapshot = {
+        ...snapshot,
+        workspace: {
+          ...snapshot.workspace,
+          conversations: [
+            {
+              ...snapshot.workspace.conversations[0]!,
+              role: "main",
+              agent: platform,
+              providerSessionId: `${platform}-session`,
+            },
+          ],
+        },
+      };
+      const view = render(<CoordinatorPanel projectId="project-1" />);
+      await waitFor(() => expect(getAgentProjection).toHaveBeenCalled());
+      return view;
+    };
+
+    test("a slow fetch permits one send at the timeout and cannot send again on completion", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      await fetchesAfterOpen();
+      let finishFetch!: (value: ProjectGitStatus) => void;
+      fetchGit.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFetch = resolve;
+          }),
+      );
+      const timeout = installControlledTimeout(5_000, { label: "upstream preflight" });
+      try {
+        await sendFollowUp("Send despite a slow remote");
+        expect(timeout.pendingCount()).toBe(1);
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        await act(async () => {
+          expect(timeout.advance()).toBe(1);
+        });
+        await waitFor(() => expect(sentPrompts()).toEqual(["Send despite a slow remote"]));
+        await act(async () => finishFetch(behindGit()));
+        expect(dispatchIntent).toHaveBeenCalledTimes(1);
+        expect(syncGit).not.toHaveBeenCalled();
+        expect(mergeDialog() === null).toBe(true);
+      } finally {
+        expect(timeout.restore()).toBe(0);
+      }
+    });
+
+    test("a suggestion added during fetch remains in the draft", async () => {
+      getAgentProjection.mockImplementation(async () => ({
+        ...launchProjection("idle", [
+          {
+            id: "previous",
+            role: "assistant",
+            content: "Ready",
+            parts: [],
+            createdAt: new Date(0).toISOString(),
+          },
+        ]),
+        suggestedPrompt: "Also run the tests",
+      }));
+      await renderAssigned();
+      await fetchesAfterOpen();
+      act(() =>
+        useNativeAgentProjectionStore.getState().setProjection(launchSessionKey, {
+          ...launchProjection(
+            "idle",
+            [
+              {
+                id: "previous",
+                role: "assistant",
+                content: "Ready",
+                parts: [],
+                createdAt: new Date(0).toISOString(),
+              },
+            ],
+            50,
+          ),
+          suggestedPrompt: "Also run the tests",
+        }),
+      );
+      let finishFetch!: (value: ProjectGitStatus) => void;
+      fetchGit.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFetch = resolve;
+          }),
+      );
+      await sendFollowUp("Inspect this");
+      fireEvent.click(await screen.findByRole("button", { name: "Suggested: Also run the tests" }));
+      await act(async () => finishFetch(gitStatus));
+      expect(
+        await screen.findByText(
+          "The draft changed while preparing to send. Review it and send again.",
+        ),
+      ).toBeTruthy();
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      expect(useNativeComposeStore.getState().drafts.get(launchSessionKey)?.text).toBe(
+        "Inspect this\n\nAlso run the tests",
+      );
+      fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+      await waitFor(() => expect(sentPrompts()).toEqual(["Inspect this\n\nAlso run the tests"]));
+    });
+
+    test.each(["fetch", "dialog"] as const)(
+      "unmount during %s settles without sending or declining; a remount can retry",
+      async (stage) => {
+        ensuredGit = behindGit();
+        const view = await renderAssigned();
+        await fetchesAfterOpen();
+        let finishFetch!: (value: ProjectGitStatus) => void;
+        if (stage === "fetch")
+          fetchGit.mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                finishFetch = resolve;
+              }),
+          );
+        await sendFollowUp("Keep across remount");
+        if (stage === "dialog") await screen.findByText("Merge 3 upstream commits?");
+        await act(async () => view.unmount());
+        if (stage === "fetch") await act(async () => finishFetch(behindGit()));
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        expect(syncGit).not.toHaveBeenCalled();
+        expect(
+          selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
+        ).toBeUndefined();
+        expect(useNativeComposeStore.getState().drafts.get(launchSessionKey)?.text).toBe(
+          "Keep across remount",
+        );
+        await renderAssigned();
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+        fireEvent.click(await screen.findByRole("button", { name: "Don’t merge" }));
+        await waitFor(() => expect(sentPrompts()).toEqual(["Keep across remount"]));
+      },
+    );
+
+    test.each(["fetch", "dialog"] as const)(
+      "unmount explicitly settles the %s preflight before any late fetch",
+      async (stage) => {
+        ensuredGit = behindGit();
+        const view = render(<CoordinatorPanel projectId="project-1" />);
+        await screen.findByTestId("native-agent");
+        await fetchesAfterOpen();
+        let finishFetch!: (value: ProjectGitStatus) => void;
+        if (stage === "fetch")
+          fetchGit.mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                finishFetch = resolve;
+              }),
+          );
+        const beforeSend = renderAgentNativeTab.mock.calls.at(-1)![0].beforeSend as () => Promise<
+          void | boolean
+        >;
+        let pending!: Promise<void | boolean>;
+        act(() => {
+          pending = beforeSend();
+        });
+        if (stage === "dialog") await screen.findByText("Merge 3 upstream commits?");
+        await act(async () => view.unmount());
+        await expect(pending).resolves.toBe(false);
+        if (stage === "fetch") await act(async () => finishFetch(behindGit()));
+        expect(syncGit).not.toHaveBeenCalled();
+        expect(
+          selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
+        ).toBeUndefined();
+      },
+    );
+
+    test.each(["empty", "attachment", "command"] as const)(
+      "rejects %s locally before upstream preflight",
+      async (kind) => {
+        ensuredGit = behindGit();
+        if (kind === "attachment")
+          getAgentProjection.mockImplementation(async () => ({
+            ...launchProjection("idle"),
+            platform: "codex",
+            sessionId: "codex-session",
+          }));
+        await renderAssigned(kind === "attachment" ? "codex" : "claude");
+        const fetches = await fetchesAfterOpen();
+        if (kind === "attachment")
+          act(() =>
+            useNativeComposeStore.getState().updateDraft(launchSessionKey, {
+              attachments: [
+                { id: "unsupported", name: "notes.pdf", path: "/notes.pdf", type: "file" },
+              ],
+            }),
+          );
+        if (kind === "command")
+          act(() =>
+            useNativeComposeStore.getState().updateDraft(launchSessionKey, {
+              annotations: [{ id: "a1", text: "Reference", comment: "" }],
+            }),
+          );
+        await sendFollowUp(
+          kind === "empty" ? "  " : kind === "command" ? "!git status" : "Read the attachment",
+        );
+        await waitFor(() =>
+          expect(
+            useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,
+          ).toBeTruthy(),
+        );
+        expect(fetchGit.mock.calls.length).toBe(fetches);
+        expect(syncGit).not.toHaveBeenCalled();
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        expect(mergeDialog() === null).toBe(true);
+        expect(
+          selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
+        ).toBeUndefined();
+      },
+    );
+
+    test("the send button passes through upstream preflight", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Send with the button" } });
+      fireEvent.click(screen.getByTitle("Send"));
+      fireEvent.click(await screen.findByRole("button", { name: "Don’t merge" }));
+      await waitFor(() => expect(sentPrompts()).toEqual(["Send with the button"]));
+    });
+
+    test("a recovering sibling prevents the first-send merge offer", async () => {
+      const unassigned = { ...snapshot.workspace.conversations[0]!, agent: undefined };
+      ensuredSnapshot = {
+        ...snapshot,
+        workspace: {
+          ...snapshot.workspace,
+          conversations: [
+            unassigned,
+            {
+              ...snapshot.workspace.conversations[0]!,
+              id: "recovering",
+              tabId: "recovering-tab",
+              role: "side",
+            },
+          ],
+        },
+      };
+      ensuredGit = behindGit();
+      useNativeAgentProjectionStore
+        .getState()
+        .setProjection(
+          createSessionKey(coordinatorRuntimeId("coordinator-1", "recovering"), "recovering-tab"),
+          launchProjection("recovering"),
+        );
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      const fetches = await fetchesAfterOpen();
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      expect(fetchGit.mock.calls.length).toBe(fetches);
+      expect(syncGit).not.toHaveBeenCalled();
+      expect(mergeDialog() === null).toBe(true);
+    });
+
+    test.each(["recovering", "project-home"] as const)(
+      "does not offer a merge during %s activity",
+      async (kind) => {
+        ensuredGit = behindGit();
+        await renderAssigned();
+        const fetches = await fetchesAfterOpen();
+        const previousEnvironments = useEnvironmentStore.getState().environments;
+        try {
+          act(() => {
+            if (kind === "recovering") {
+              useNativeAgentProjectionStore
+                .getState()
+                .setProjection(launchSessionKey, launchProjection("recovering", [], 50));
+            } else {
+              useEnvironmentStore.setState({
+                environments: [
+                  ...previousEnvironments,
+                  {
+                    id: "home",
+                    projectId: "project-1",
+                    projectHome: true,
+                    name: "Home",
+                    order: 0,
+                  } as never,
+                ],
+              });
+              useNativeAgentProjectionStore
+                .getState()
+                .setProjection(createSessionKey("home", "home-tab"), {
+                  ...launchProjection("running"),
+                  environmentId: "home",
+                });
+            }
+          });
+          await sendFollowUp("Send while checkout is in use");
+          if (kind === "project-home")
+            await waitFor(() => expect(sentPrompts()).toEqual(["Send while checkout is in use"]));
+          else expect(dispatchIntent).not.toHaveBeenCalled();
+          expect(fetchGit.mock.calls.length).toBe(fetches);
+          expect(syncGit).not.toHaveBeenCalled();
+          expect(mergeDialog() === null).toBe(true);
+        } finally {
+          useEnvironmentStore.setState({ environments: previousEnvironments });
+        }
+      },
+    );
+
+    test("busy admission after the merge offer sends without syncing or recording a decline", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      await sendFollowUp("Continue after busy refusal");
+      syncGit.mockRejectedValueOnce(
+        new Error("Stop the active coordinator turn before changing the checkout"),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Merge and send" }));
+      await waitFor(() => expect(sentPrompts()).toEqual(["Continue after busy refusal"]));
+      expect(
+        selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
+      ).toBeUndefined();
+    });
+
+    test("Enter merges, then sends", async () => {
+      ensuredGit = behindGit();
+      const order: string[] = [];
+      syncGit.mockImplementation(async () => {
+        order.push("sync");
+        return behindGit({ behind: 0, headCommit: firstUpstreamTip });
+      });
+      dispatchIntent.mockImplementation(async (input) => {
+        order.push("send");
+        return { outcome: "accepted" as const, requestId: input.requestId };
+      });
+      await renderAssigned();
+      await sendFollowUp("Plan the next step");
+      const merge = await screen.findByRole("button", { name: "Merge and send" });
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      await waitFor(() => expect(document.activeElement).toBe(merge));
+      fireEvent.click(merge);
+      await waitFor(() => expect(order).toEqual(["sync", "send"]));
+      expect(sentPrompts()).toEqual(["Plan the next step"]);
+    });
+
+    test("Escape sends without merging, and the same upstream tip is not asked about again", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      await sendFollowUp("First follow-up");
+      await screen.findByText("Merge 3 upstream commits?");
+      pressEscape();
+      await waitFor(() => expect(sentPrompts()).toEqual(["First follow-up"]));
+      expect(syncGit).not.toHaveBeenCalled();
+
+      const fetches = await fetchesAfterOpen();
+      await sendFollowUp("Second follow-up");
+      await waitFor(() => expect(sentPrompts()).toEqual(["First follow-up", "Second follow-up"]));
+      expect(fetchGit.mock.calls.length).toBe(fetches + 1);
+      expect(mergeDialog() === null).toBe(true);
+
+      // A new upstream commit asks again.
+      ensuredGit = behindGit({ behind: 4, upstreamCommit: "c".repeat(40) });
+      await sendFollowUp("Third follow-up");
+      expect(await screen.findByText("Merge 4 upstream commits?")).toBeTruthy();
+      expect(sentPrompts()).toHaveLength(2);
+      fireEvent.click(screen.getByRole("button", { name: "Merge and send" }));
+      await waitFor(() => expect(sentPrompts()).toHaveLength(3));
+      expect(syncGit).toHaveBeenCalledTimes(1);
+    });
+
+    test("a failed merge keeps the draft unsent", async () => {
+      ensuredGit = behindGit();
+      syncGit.mockRejectedValueOnce(new Error("Fast-forward refused"));
+      await renderAssigned();
+      const input = await sendFollowUp("Keep this draft");
+      fireEvent.click(await screen.findByRole("button", { name: "Merge and send" }));
+      expect(await screen.findByText("Fast-forward refused")).toBeTruthy();
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      expect(input.textContent).toBe("Keep this draft");
+      expect(useNativeComposeStore.getState().drafts.get(launchSessionKey)?.text).toBe(
+        "Keep this draft",
+      );
+    });
+
+    test("a ! command runs without asking", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      const fetches = await fetchesAfterOpen();
+      await sendFollowUp("!git status");
+      await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
+      expect(fetchGit.mock.calls.length).toBe(fetches);
+      expect(mergeDialog() === null).toBe(true);
+    });
+
+    test("does not ask while a coordinator turn is running", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      act(() => {
+        useNativeAgentProjectionStore
+          .getState()
+          .setProjection(launchSessionKey, launchProjection("running", [], 50));
+      });
+      const fetches = await fetchesAfterOpen();
+      await sendFollowUp("Sent after the turn");
+      // The checkout cannot change under a running turn, so nothing is fetched
+      // or asked; the composer's own busy rules decide what happens to it.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(fetchGit.mock.calls.length).toBe(fetches);
+      expect(mergeDialog() === null).toBe(true);
+    });
+  });
+
+  test("side agents are never asked", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [
+          {
+            ...snapshot.workspace.conversations[0]!,
+            role: "side",
+            sideOrdinal: 1,
+            agent: undefined,
+          },
+        ],
+      },
+    };
+    ensuredGit = behindGit();
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    expect(renderAgentNativeTab.mock.calls.at(-1)?.[0].beforeSend).toBeUndefined();
+    const fetches = await fetchesAfterOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(fetchGit.mock.calls.length).toBe(fetches);
   });
 
   test("reports an assignment failure without binding the conversation", async () => {

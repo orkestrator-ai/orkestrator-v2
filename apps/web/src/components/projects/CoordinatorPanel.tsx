@@ -48,7 +48,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -70,6 +70,14 @@ import {
   selectCoordinatorPaneLayout,
   useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
+import { shouldOfferUpstreamMerge } from "@/lib/coordinator-upstream-merge";
+import {
+  selectDeclinedUpstreamMerge,
+  useCoordinatorUpstreamDeclineStore,
+} from "@/stores/coordinatorUpstreamDeclineStore";
+
+/** How long a message waits on the pre-send fetch before it is sent without asking. */
+const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
 
 interface CoordinatorPanelProps {
   projectId: string;
@@ -85,18 +93,6 @@ function gitSummary(status: ProjectGitStatus | null): string {
   if ((status.behind ?? 0) > 0) return `${status.behind} commits behind`;
   if ((status.ahead ?? 0) > 0) return `${status.ahead} commits ahead`;
   return "Up to date";
-}
-
-/** Why a behind checkout cannot be fast-forwarded, or null when it can. */
-function behindFastForwardBlocker(status: ProjectGitStatus | undefined): string | null {
-  if (!status) return null;
-  if ((status.ahead ?? 0) > 0) {
-    return `it also has ${status.ahead} local ${status.ahead === 1 ? "commit" : "commits"}, so the branches have diverged.`;
-  }
-  if (status.trackedChanges > 0 || status.untrackedChanges > 0) {
-    return "it has uncommitted changes.";
-  }
-  return status.repositoryOperationBlockedReason;
 }
 
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
@@ -116,12 +112,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     null,
   );
   const [pendingSwitch, setPendingSwitch] = useState<ProjectGitSwitchConfirmation | null>(null);
-  // Asked before the main coordinator's first prompt when its checkout is
-  // behind its upstream: it would otherwise plan against older code.
-  const [behindStart, setBehindStart] = useState<{
+  // Asked before a message to the main coordinator when its checkout can merge
+  // upstream commits it has not merged: it would otherwise read older code.
+  const [upstreamMerge, setUpstreamMerge] = useState<{
     status: ProjectGitStatus;
-    resolve: (choice: "fast-forward" | "start" | "cancel") => void;
+    resolve: (choice: "merge" | "skip") => void;
   } | null>(null);
+  const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const lifetime = new AbortController();
+    upstreamCheckLifetimeRef.current = lifetime;
+    return () => lifetime.abort();
+  }, [projectId]);
+  const mergeActionRef = useRef<HTMLButtonElement>(null);
   const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? loadError;
   const [pendingLaunch, setPendingLaunch] = useState<{
@@ -199,10 +202,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     [conversationIds, snapshot, storedLayout],
   );
   const layoutRef = useRef(layout);
+  const snapshotRef = useRef(snapshot);
   // Before the effects and handlers below read them.
   useLayoutEffect(() => {
     conversationIdsRef.current = conversationIds;
     layoutRef.current = layout;
+    snapshotRef.current = snapshot;
   });
   const updateLayout = useCallback(
     (change: (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
@@ -351,12 +356,124 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     [projectId, setSnapshot],
   );
   /*
-   * The main coordinator reads this checkout, so starting it on a branch that
-   * is behind its upstream plans against stale code. Ask first, after a
-   * cooldown-bound fetch, and fast-forward when the user chooses to. Resolving
-   * without assigning keeps the composer's draft, so Cancel loses nothing; a
-   * failed fast-forward rejects, which the composer reports with the draft kept.
+   * The main coordinator reads this checkout, so a message sent while the
+   * branch is behind its upstream is answered from older code. Before each
+   * message to the main coordinator (its first prompt included), a
+   * cooldown-bound fetch refreshes the "behind" state, and when the upstream
+   * commits can be fast-forwarded the user is asked whether to merge them.
+   *
+   * Merging resolves only after the fast-forward, so the message then reads
+   * the merged code; a failed fast-forward rejects, which the composer reports
+   * with the draft kept. Declining resolves straight away and is remembered
+   * against the upstream tip, so the question returns only with new commits.
+   * A blocked checkout (local commits, uncommitted changes, an unfinished
+   * operation) is not asked about: the header already says why it cannot sync.
+   * Nor is one while any of this coordinator's conversations is running a
+   * turn, since the backend refuses to change the checkout under it.
    */
+  const confirmUpstreamMerge = useCallback(
+    async (conversation: { role?: string }) => {
+      const lifetime = upstreamCheckLifetimeRef.current;
+      if (!lifetime || lifetime.signal.aborted) return false;
+      if (conversation.role === "side") return;
+      const current = snapshotRef.current;
+      const projections = useNativeAgentProjectionStore.getState().projections;
+      const turnRunning = current?.workspace.conversations.some((item) => {
+        if (item.closedAt || !item.agent) return false;
+        const phase = projections.get(
+          createSessionKey(coordinatorRuntimeId(current.workspace.id, item.id), item.tabId),
+        )?.turn.phase;
+        return (
+          phase === "running" ||
+          phase === "blocked" ||
+          phase === "cancelling" ||
+          phase === "recovering"
+        );
+      });
+      const homeIds = new Set(
+        useEnvironmentStore
+          .getState()
+          .environments.filter(
+            (environment) => environment.projectId === projectId && environment.projectHome,
+          )
+          .map((environment) => environment.id),
+      );
+      const homeRunning = Array.from(projections.values()).some(
+        (projection) =>
+          homeIds.has(projection.environmentId) &&
+          ["running", "blocked", "cancelling", "recovering"].includes(projection.turn.phase),
+      );
+      if (turnRunning || homeRunning) return;
+      let cancel!: () => void;
+      const cancelled = new Promise<false>((resolve) => {
+        cancel = () => resolve(false);
+        lifetime.signal.addEventListener("abort", cancel, { once: true });
+      });
+      try {
+        // An unreachable or slow remote is no reason to hold the message: past
+        // the bound it is sent without asking, and the fetch still lands.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const status = await Promise.race([
+          cancelled,
+          backend
+            .fetchProjectGit(projectId)
+            .then((fetched) => {
+              if (!lifetime.signal.aborted) setGit(fetched);
+              return fetched;
+            })
+            .catch(() => null),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), UPSTREAM_CHECK_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(timer));
+        if (lifetime.signal.aborted || status === false) return false;
+        const declined = selectDeclinedUpstreamMerge(projectId)(
+          useCoordinatorUpstreamDeclineStore.getState(),
+        );
+        if (!status || !shouldOfferUpstreamMerge(status, declined)) return;
+        const choice = await Promise.race([
+          cancelled,
+          new Promise<"merge" | "skip">((resolve) => setUpstreamMerge({ status, resolve })),
+        ]);
+        if (lifetime.signal.aborted || choice === false) return false;
+        setUpstreamMerge(null);
+        if (choice === "skip") {
+          if (status.upstream && status.upstreamCommit) {
+            useCoordinatorUpstreamDeclineStore.getState().decline(projectId, {
+              upstream: status.upstream,
+              upstreamCommit: status.upstreamCommit,
+            });
+          }
+          return;
+        }
+        setOperation("sync");
+        setError(null);
+        try {
+          const synced = await backend.syncProjectGit(projectId);
+          if (lifetime.signal.aborted) return false;
+          setGit(synced);
+          await refreshView();
+          if (lifetime.signal.aborted) return false;
+        } catch (cause) {
+          if (
+            cause instanceof Error &&
+            cause.message === "Stop the active coordinator turn before changing the checkout"
+          )
+            return;
+          void backend
+            .getProjectGitStatus(projectId)
+            .then(setGit)
+            .catch(() => undefined);
+          throw cause;
+        } finally {
+          if (!lifetime.signal.aborted) setOperation(null);
+        }
+      } finally {
+        lifetime.signal.removeEventListener("abort", cancel);
+      }
+    },
+    [projectId, refreshView, setGit],
+  );
   const startConversation = useCallback(
     async (
       conversation: { id: string; role?: string },
@@ -364,30 +481,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       launch: Parameters<typeof assignAgent>[2],
       prompt: string,
     ) => {
-      if (conversation.role !== "side") {
-        // An unreachable remote is no reason to refuse the start.
-        const status = await backend.fetchProjectGit(projectId).catch(() => null);
-        if (status) setGit(status);
-        if (status?.upstream && (status.behind ?? 0) > 0) {
-          const choice = await new Promise<"fast-forward" | "start" | "cancel">((resolve) =>
-            setBehindStart({ status, resolve }),
-          );
-          setBehindStart(null);
-          if (choice === "cancel") return;
-          if (choice === "fast-forward") {
-            setOperation("sync");
-            try {
-              setGit(await backend.syncProjectGit(projectId));
-              await refreshView();
-            } finally {
-              setOperation(null);
-            }
-          }
-        }
-      }
+      if ((await confirmUpstreamMerge(conversation)) === false) return;
       await assignAgent(conversation.id, platform, launch, prompt);
     },
-    [assignAgent, projectId, refreshView, setGit],
+    [assignAgent, confirmUpstreamMerge],
   );
   // The conversation in the focused group; the backend's selection until the
   // layout has caught up with it.
@@ -734,6 +831,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             ? undefined
             : (platform, prompt, options) =>
                 startConversation(conversation, platform, options, prompt)
+        }
+        beforeSend={
+          conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
         }
         {...(launch
           ? {
@@ -1111,37 +1211,40 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog
-        open={behindStart !== null}
+        open={upstreamMerge !== null}
         onOpenChange={(open) => {
-          if (!open) behindStart?.resolve("cancel");
+          // Escape and "Don't merge" both send without merging.
+          if (!open) upstreamMerge?.resolve("skip");
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          onOpenAutoFocus={(event) => {
+            // Enter merges: the default action, not the dismissal Radix focuses.
+            event.preventDefault();
+            mergeActionRef.current?.focus();
+          }}
+        >
           <AlertDialogHeader>
-            <AlertDialogTitle>Checkout is behind {behindStart?.status.upstream}</AlertDialogTitle>
+            <AlertDialogTitle>
+              Merge {upstreamMerge?.status.behind} upstream{" "}
+              {upstreamMerge?.status.behind === 1 ? "commit" : "commits"}?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {behindStart?.status.branch ?? "This checkout"} is {behindStart?.status.behind}{" "}
-              {behindStart?.status.behind === 1 ? "commit" : "commits"} behind{" "}
-              {behindStart?.status.upstream}, so the coordinator would read older code. Worker
-              environments start from the latest base branch either way.
-              {behindFastForwardBlocker(behindStart?.status)
-                ? ` It cannot be fast-forwarded: ${behindFastForwardBlocker(behindStart?.status)}`
-                : ""}
+              There {upstreamMerge?.status.behind === 1 ? "is" : "are"}{" "}
+              {upstreamMerge?.status.behind} upstream{" "}
+              {upstreamMerge?.status.behind === 1 ? "commit" : "commits"} on{" "}
+              {upstreamMerge?.status.upstream} that{" "}
+              {upstreamMerge?.status.behind === 1 ? "hasn’t" : "haven’t"} been merged into{" "}
+              {upstreamMerge?.status.branch ?? "this checkout"}. Do you wish to merge{" "}
+              {upstreamMerge?.status.behind === 1 ? "it" : "them"}? Merging fast-forwards the
+              checkout before your message is sent, so the coordinator reads the latest code.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className={buttonVariants({ variant: "outline" })}
-              onClick={() => behindStart?.resolve("start")}
-            >
-              Start without updating
+            <AlertDialogCancel>Don’t merge</AlertDialogCancel>
+            <AlertDialogAction ref={mergeActionRef} onClick={() => upstreamMerge?.resolve("merge")}>
+              Merge and send
             </AlertDialogAction>
-            {behindStart && !behindFastForwardBlocker(behindStart.status) ? (
-              <AlertDialogAction onClick={() => behindStart.resolve("fast-forward")}>
-                Fast-forward and start
-              </AlertDialogAction>
-            ) : null}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

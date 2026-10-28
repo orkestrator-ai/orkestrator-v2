@@ -50,6 +50,14 @@ export interface AgentNativeTabProps {
       executionProfileId?: string;
     },
   ) => Promise<void>;
+  /**
+   * Runs before a message typed into an assigned conversation's composer is
+   * sent (`!` commands excepted), after local validation. Resolving sends the
+   * validated draft only if it is still unchanged and mounted; false cancels.
+   * Rejecting keeps the draft and shows the error. The text input stays disabled
+   * while it is pending; other draft edits cancel this send.
+   */
+  beforeSend?: () => Promise<void | boolean>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */
   availablePlatforms?: readonly AgentPlatform[];
   /**

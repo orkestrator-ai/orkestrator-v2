@@ -888,9 +888,12 @@ export class NativeAgentService {
     if (coordinator.conversation.agent !== input.agent) {
       throw new Error("Coordinator conversation is unavailable");
     }
+    // Fetch updates remote refs, not the checkout the coordinator reads. It
+    // may still be running after the renderer's bounded pre-send check.
     if (
       workspace.repositoryStatus?.operationState !== undefined &&
-      workspace.repositoryStatus.operationState !== "idle"
+      workspace.repositoryStatus.operationState !== "idle" &&
+      workspace.repositoryStatus.operationState !== "fetching"
     ) {
       throw new Error("The project checkout is changing; wait for the Git operation to finish");
     }

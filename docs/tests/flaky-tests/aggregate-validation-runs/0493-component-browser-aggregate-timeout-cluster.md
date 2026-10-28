@@ -467,3 +467,19 @@ Five complete browser owners passed separately; both native branch-suggestion ca
 - **Real-stack browser:** the full `mise run test:agent:browser:isolated` completed with 30 passed, 68 skipped and six failures (962.4 s logged, `orkestrator-test-run.r7H9Cx/isolated-browser.log.gz`). The new file-tree case initially had an ambiguous loading selector; it was scoped to its directory, the failure injection made persistent until Retry, and mobile navigation awaited shell readiness. The other failures were signed-out Codex recovery, agent mail, narrow host maintenance, stopped-shell recovery and annotation evidence; their full owners were not rerun, so this observation does not classify them as flakes.
 - **Final relevant evidence:** static checks, focused subtree store/hook/component/concurrency regressions, the registered local-subtree command test and diagnostic-bounds guard all passed. The corrected real-stack case passed alone in 101.1 s with `ORKESTRATOR_AGENT_TEST_PROFILE=subtree-regression-qa mise run test:logged -- --name focused-subtree-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep 'capped file tree'`. It covers loading, keyboard Retry, unchanged-bounded-tree polling, returning from Changes, ancestor collapse/reopen, and narrow-viewport reload. An earlier manual profile was inadvertently stopped by the logged runner's inactivity watchdog; it was restarted without that wrapper before the passing run. Both disposable profiles were stopped and reset.
 - **Assessment:** shared-host contention is a hypothesis for the aggregate-only failures; no unrelated implementation, assertion, deadline or skip was changed. Broad suite exit statuses remain failed. Dedicated Docker, Electron and iOS scenario suites were outside these renderer/store changes.
+
+## Coordinator upstream-send review — 2026-10-28
+
+The exact review command `mise run test:logged -- --name browser -- mise run
+test:browser` reran with nine workers: 897 passed, 105 skipped and two failed
+in 525.4 seconds logged. Both failures were the established native branch
+suggestion case in `e2e/AgentLaunchDialog.spec.ts:18`, on mobile and desktop:
+expected `release/2.0`, received `rel`. The preparation-only unrendered-layer
+failure did not recur. No browser owner or assertion changed.
+
+Evidence is `orkestrator-test-run.NTA9Xf/browser.log.gz` below the host temporary
+directory. The browser command remains non-green and its chained public-site
+step was run separately because the component failure prevented it starting.
+
+The separate public-site command passed (exit 0, 10.7 seconds):
+`mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts`.

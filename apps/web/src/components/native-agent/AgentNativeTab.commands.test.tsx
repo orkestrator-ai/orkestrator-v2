@@ -244,8 +244,14 @@ function seedDraft(tabId: string, update: Partial<NativeComposeDraft>) {
   useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), update);
 }
 
-async function renderTab(tabId: string, platform: AgentPlatform = "codex") {
-  const view = render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+async function renderTab(
+  tabId: string,
+  platform: AgentPlatform = "codex",
+  beforeSend?: () => Promise<void | boolean>,
+) {
+  const view = render(
+    <AgentNativeTab tabId={tabId} data={identity(platform)} isActive beforeSend={beforeSend} />,
+  );
   const input = await screen.findByRole("textbox");
   // Wait for the projection so sending is authorised.
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
@@ -761,4 +767,69 @@ test("an unaccepted prompt keeps the controller loading and Stop available", asy
     });
   }
   await waitFor(() => expect(screen.queryByTitle("Stop current query") === null).toBe(true));
+});
+
+describe("composer preflight", () => {
+  test.each(["/login now", "!text"])(
+    "send-as-text gates literal %s before dispatch",
+    async (text) => {
+      let release!: () => void;
+      const beforeSend = mock(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const tabId = `preflight-literal-${text}`;
+      const { input } = await renderTab(tabId, "codex", beforeSend);
+      await type(input, tabId, "/login now");
+      fireEvent.keyDown(input, { key: "Enter" });
+      const literal = await screen.findByRole("button", { name: "Send as text" });
+      expect(beforeSend).not.toHaveBeenCalled();
+      act(() => {
+        // The stable literal action always reads the latest draft, including !text.
+        seedDraft(tabId, { text });
+        fireEvent.click(literal);
+      });
+      expect(beforeSend).toHaveBeenCalledTimes(1);
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      await act(async () => release());
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      expect(dispatchNativeAgentIntentMock.mock.calls[0]![0]).toMatchObject({
+        prompt: text,
+        command: { kind: "literal" },
+      });
+      expect(runUserCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
+  test("Add to queue waits for preflight and queues only once", async () => {
+    projectionOptions = { phase: "running" };
+    let release!: () => void;
+    const beforeSend = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { input } = await renderTab("preflight-queue", "codex", beforeSend);
+    await type(input, "preflight-queue", "Queue this");
+    fireEvent.click(screen.getByTitle("Add to queue"));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(beforeSend).toHaveBeenCalledTimes(1);
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    await act(async () => release());
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
+  test("a rejected slash command never starts preflight", async () => {
+    const beforeSend = mock(async () => {});
+    const { input } = await renderTab("preflight-invalid-command", "codex", beforeSend);
+    await type(input, "preflight-invalid-command", "/login now");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByText("Sign in from Settings instead.");
+    expect(beforeSend).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
 });

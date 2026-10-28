@@ -42,3 +42,25 @@ mise run test:logged -- --name default-tests-rerun -- mise run test
 
 The wrapper exited 0 after 147.3 s. Keep the case open: a passing rerun does
 not establish that the aggregate timing issue is fixed.
+
+## Coordinator upstream-send review recurrence — 2026-10-28
+
+Review preparation at `3f6fc3016ae881312ba3afde8145832603d59719` repeated
+five-second timeouts in the linked project-home scan and the transient
+`rev-parse` and `--get` migration scans. The aggregate exited 1 after 373.0 s;
+its root, bridge and protocol-lockfile groups passed. Preparation evidence is
+`.orkestrator/review-artifacts/review-validation-41f403c0-5bc8-4df1-8983-e2fdbef55ac5/validation-04.stdout.txt`.
+
+The complete unchanged fsmonitor owner passed alone in 10.1 s (exit 0):
+
+```sh
+mise run test:logged -- --name git-fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+It also passed alongside the native-agent admission and image-download owners
+with one Bun worker (99 tests, 14.5 s). No fsmonitor implementation, assertion,
+clock or skip changed in this repair.
+
+The exact aggregate rerun (`mise run test` through `test:logged`) passed the
+fsmonitor cases and retained only the unrelated activity-batch timeout tracked
+in [0247](../native-agents-and-transcripts/0247-activity-batch-sweep-no-requests.md).

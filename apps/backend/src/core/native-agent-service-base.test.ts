@@ -3792,6 +3792,29 @@ describe("NativeAgentService", () => {
           operationState: "idle",
         },
       }));
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        repositoryStatus: { ...workspace!.repositoryStatus!, operationState: "fetching" },
+      }));
+      const fetchingDispatch = {
+        environmentId: runtimeId,
+        agent: "codex" as const,
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-during-fetch",
+        prompt: "Inspect while the read-only fetch is pending",
+      };
+      await expect(service.dispatchPrompt(fetchingDispatch)).resolves.toMatchObject({
+        dispatchedRequestIds: expect.arrayContaining(["request-during-fetch"]),
+      });
+      expect(provider.send).toHaveBeenCalledTimes(6);
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        repositoryStatus: { ...workspace!.repositoryStatus!, operationState: "idle" },
+      }));
+      // Late fetch completion cannot replay a dispatch with the same request id.
+      await service.dispatchPrompt(fetchingDispatch);
+      expect(provider.send).toHaveBeenCalledTimes(6);
+
       // The persisted conversation decides the platform. A caller naming a
       // different one is asking for somebody else's session.
       await expect(

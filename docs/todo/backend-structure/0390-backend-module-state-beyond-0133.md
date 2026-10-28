@@ -22,9 +22,14 @@ should follow the 0011/0066/0133 pattern.
 | `plan-usage-cache.ts` | `activeAccountIds` (`setActivePlanUsageAccount`) and `sharedPlanUsageCache` | `runtime.accounts`, or a plan-usage class on `BackendRuntime` |
 | `github-cli-setup.ts` | `activeLogin` | `runtime.localServers` or a GitHub owner |
 | `opencode-provider-login.ts` | `current`, `mutation`, `listFlight` | `runtime.localServers` |
-| `container-log-service.ts` | `instance` (`ContainerLogService`, stopped by `shutdownContainerLogService`) | `BackendRuntime`, started and stopped with the backend |
 | `opencode-command-changes.ts` | `sharedProbe`, `journals`, `removedJournalDirectories` | `runtime.localServers` or a change-tracking owner |
 | `github-credentials.ts` | the registered `loadGlobalConfig` | a construction option |
+
+The container log service (`container-log-service.ts` `instance`) was in
+this table; it moved to `runtime.containerLogs` in
+[0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md),
+whose full-backend test (`backend-runtime.test.ts`, "two OrkestratorBackends
+in one process") is the pattern for the remaining rows.
 
 Test seams still at module level: `agent-skills.ts` `homeOverride`
 (`setAgentSkillsHomeForTesting`), `container-storage.ts`
@@ -74,4 +79,5 @@ backend per process, so none of this changes shipped behaviour.
 
 - [0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md)
 - [0066-backend-residual-module-state.md](0066-backend-residual-module-state.md)
+- [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): moved the container log service row.
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)

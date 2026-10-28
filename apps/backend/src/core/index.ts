@@ -36,7 +36,6 @@ import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
-import { shutdownContainerLogService } from "./container-log-service.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
@@ -93,7 +92,7 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
-import { BackendRuntime } from "./backend-runtime.js";
+import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
@@ -332,6 +331,11 @@ export class OrkestratorBackend {
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     /** Test seam: process state owned by this backend instance. */
     runtime?: BackendRuntime;
+    /**
+     * Test seam: the Docker followers' spawns, passed to the runtime this
+     * backend builds (ignored with `runtime`).
+     */
+    dockerFollowers?: Pick<BackendRuntimeOptions, "containerOom" | "containerLogs">;
     environmentLifecycleDrainTimeoutMs?: number;
     /**
      * Step 08 named due jobs for the activity bundle and maintenance. `false`
@@ -462,6 +466,7 @@ export class OrkestratorBackend {
           hostClaudeLoginRefresher: () => this.claudeLoginKeeper?.refreshHostIfDue(),
           localCodexLoginRefresher: (home) => this.codexLoginRefresher?.(home),
         },
+        ...options.dockerFollowers,
       });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
@@ -2147,9 +2152,10 @@ export class OrkestratorBackend {
     this.containerLoginFileWatcher?.stop();
     this.containerLoginFileWatcher = null;
     this.codexLoginRefresher = null;
-    // Log followers are observers; stopping them never touches containers.
-    shutdownContainerLogService();
+    // Observers; stopping them never touches containers. Only this backend's
+    // followers stop: another backend in the process keeps its own.
     this.runtime.containerOom.stop();
+    this.runtime.containerLogs.shutdown();
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;

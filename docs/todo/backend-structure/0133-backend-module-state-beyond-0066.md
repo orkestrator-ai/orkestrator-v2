@@ -409,4 +409,4 @@ stop at runtime shutdown (decision 7).
 - [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md)
 - [0390-backend-module-state-beyond-0133.md](0390-backend-module-state-beyond-0133.md)
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)
-- [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): the OOM watcher, login refresher and container log service shutdown interference, split out.
+- [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): the OOM watcher, login refresher and container log service shutdown interference, split out. Done: this file's moves already covered the OOM watcher and refreshers; 0733 moved the log service and added the two-`OrkestratorBackend` shutdown test.

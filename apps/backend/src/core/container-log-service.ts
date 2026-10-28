@@ -15,6 +15,11 @@ import { spawnCommand } from "./shell.js";
  * bounded tail instead. Diagnostic gaps never license dropping authoritative
  * lifecycle, approval or transcript events, which do not travel here.
  *
+ * Owned by `BackendRuntime` as `containerLogs`, so two backends in one process
+ * follow their own containers and one's shutdown never ends the other's
+ * subscriptions. Constructing one starts nothing: the lease sweep starts with
+ * the first subscription.
+ *
  * Log content is never broadcast. Gateway events reach every connected client
  * and fill the shared replay ring that lifecycle and approval events depend
  * on; a busy container would push those out. Readers poll `read` with their
@@ -81,19 +86,22 @@ interface Subscription {
 
 type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnCommand>;
 
+/** Test seams `BackendRuntime` passes through (`containerLogs`). */
+export type ContainerLogServiceOptions = {
+  spawn?: Spawn;
+  now?: () => number;
+};
+
 export class ContainerLogService {
   private readonly sources = new Map<string, LogSource>();
   private readonly subscriptions = new Map<string, Subscription>();
-  private readonly leaseSweep: ReturnType<typeof setInterval>;
+  private leaseSweep: ReturnType<typeof setInterval> | null = null;
   private closed = false;
 
   constructor(
     private readonly spawn: Spawn = spawnCommand,
     private readonly now: () => number = Date.now,
-  ) {
-    this.leaseSweep = setInterval(() => this.expireLeases(), 5_000);
-    this.leaseSweep.unref?.();
-  }
+  ) {}
 
   followerCount(): number {
     let count = 0;
@@ -128,6 +136,10 @@ export class ContainerLogService {
     if (source.idleTimer) {
       clearTimeout(source.idleTimer);
       source.idleTimer = null;
+    }
+    if (!this.leaseSweep) {
+      this.leaseSweep = setInterval(() => this.expireLeases(), 5_000);
+      this.leaseSweep.unref?.();
     }
     const id = randomUUID();
     source.subscriptions.add(id);
@@ -188,7 +200,8 @@ export class ContainerLogService {
   /** Backend shutdown: stop every follower whatever its subscribers did. */
   shutdown(): void {
     this.closed = true;
-    clearInterval(this.leaseSweep);
+    if (this.leaseSweep) clearInterval(this.leaseSweep);
+    this.leaseSweep = null;
     for (const source of Array.from(this.sources.values())) this.stopSource(source);
     this.subscriptions.clear();
   }
@@ -343,22 +356,4 @@ function boundedTail(ring: readonly LogRecord[]): LogRecord[] {
     tail.push(record);
   }
   return tail.reverse();
-}
-
-// ---------------------------------------------------------------------------
-// Backend-lifetime instance
-// ---------------------------------------------------------------------------
-
-let instance: ContainerLogService | null = null;
-
-/** The backend's one log service; created on first use. */
-export function containerLogService(): ContainerLogService {
-  instance ??= new ContainerLogService();
-  return instance;
-}
-
-/** Backend shutdown: stop every follower whatever its clients did. */
-export function shutdownContainerLogService(): void {
-  instance?.shutdown();
-  instance = null;
 }

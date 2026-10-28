@@ -772,8 +772,14 @@ export interface PublicTicketSummary {
 }
 
 export interface PublicTicketDetail extends PublicTicketSummary {
+  /** Absent from backends that predate ticket kinds: a feature ticket. */
+  kind?: import("./ticket-sections.js").TicketKind;
+  /** Every section except the acceptance criteria, as markdown. */
   description: string;
   acceptanceCriteria: string;
+  /** The acceptance criteria as items with their newest Verify result. */
+  criteria?: import("./ticket-sections.js").TicketCriterionSummary[];
+  deliveryPolicy?: import("./ticket-sections.js").DeliveryPolicy;
   /** The latest 50. */
   comments: Array<{ id: string; text: string; createdAt: string }>;
 }

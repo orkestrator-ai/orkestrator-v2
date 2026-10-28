@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, ClipboardList, Image as ImageIcon, MessageSquare } from "lucide-react";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
+import { sectionsFromTicketText } from "@orkestrator/protocol/ticket-sections";
 import { MarkdownBody } from "@/components/pull-requests/pull-request-shared";
+import { TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
+import { pipelineCriteriaView } from "./pipeline-criteria";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useKanbanStore } from "@/stores/kanbanStore";
 
@@ -67,8 +70,8 @@ function Section({
 
 /**
  * The ticket a pipeline was started with: its stored snapshot, never the live
- * Kanban ticket and never the prompt built from it. Empty sections are left
- * out; a pipeline with no snapshot says so.
+ * Kanban ticket and never the prompt built from it, shown as section tiles.
+ * Empty sections are left out; a pipeline with no snapshot says so.
  */
 export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
   const snapshot = pipeline.taskSnapshot as TaskSnapshot | undefined;
@@ -78,6 +81,16 @@ export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
       : undefined,
   );
   const [preview, setPreview] = useState<{ url: string; filename: string } | null>(null);
+  const { criteria, verifySession } = useMemo(() => pipelineCriteriaView(pipeline), [pipeline]);
+  const sections = useMemo(() => {
+    if (!snapshot) return {};
+    const { acceptanceCriteria: _derived, ...rest } = sectionsFromTicketText(
+      snapshot.description ?? "",
+      snapshot.acceptanceCriteria ?? "",
+      { now: pipeline.createdAt },
+    );
+    return criteria.length ? { ...rest, acceptanceCriteria: criteria } : rest;
+  }, [snapshot, pipeline.createdAt, criteria]);
   if (!snapshot || (!snapshot.title?.trim() && !snapshot.description?.trim())) {
     return (
       <p data-testid="pipeline-ticket-placeholder" className="text-sm text-muted-foreground">
@@ -99,6 +112,14 @@ export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
         <p className="mt-1 text-xs text-muted-foreground">
           The ticket as it was when this build started.
         </p>
+        {verifySession ? (
+          <p
+            data-testid="pipeline-ticket-verify-round"
+            className="mt-1 text-xs text-muted-foreground"
+          >
+            Criteria ticks are from Verify in round {verifySession.iteration + 1}.
+          </p>
+        ) : null}
         {changed ? (
           <p
             data-testid="pipeline-ticket-changed"
@@ -109,16 +130,7 @@ export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
           </p>
         ) : null}
       </header>
-      {snapshot.description.trim() ? (
-        <Section icon={ClipboardList} title="Description">
-          <MarkdownBody body={snapshot.description} />
-        </Section>
-      ) : null}
-      {snapshot.acceptanceCriteria.trim() ? (
-        <Section icon={ClipboardList} title="Acceptance criteria">
-          <MarkdownBody body={snapshot.acceptanceCriteria} />
-        </Section>
-      ) : null}
+      <TicketSectionsGrid sections={sections} />
       {images.length > 0 ? (
         <Section icon={ImageIcon} title={`Reference images (${images.length})`}>
           <div className="flex flex-wrap gap-2">

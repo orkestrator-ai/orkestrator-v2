@@ -39,3 +39,12 @@ host temporary directory. Aggregate counts and the other failures from the
 same run are tracked in
 [1180](../aggregate-validation-runs/1180-interaction-test-matrix-0162-validation.md).
 No implementation, assertion, timeout, or skip changed.
+
+
+## Criterion verification review — 2026-10-28
+
+- **Aggregate:** `mise run test:logged -- --name review-repair-default -- mise run test`, on the structured-ticket branch. The run waited 559 seconds for the shared host lease; workspace/root/bridges/protocol reservations were 6/1/2/1.
+- **Failure:** The empty-destination sibling, `GitHub picker to project registration > handles a empty destination through the real add_project handler`, failed after 1912 ms in the root group.
+- **Complete owning-file rerun:** `mise run test:logged -- --name github-clone-rerun -- bun test ./tests/unit/components/GitHubCloneIntegration.test.tsx --parallel=1 --only-failures` passed unchanged (10.5 s).
+- **Evidence:** `orkestrator-test-run.bgBVht` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in this owner changed.

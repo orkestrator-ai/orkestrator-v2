@@ -1,6 +1,14 @@
 import { useRef, useEffect } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { MessageSquare, MoreHorizontal, RotateCcw, SquareArrowOutUpRight } from "lucide-react";
+import {
+  CheckCircle2,
+  MessageSquare,
+  MoreHorizontal,
+  RotateCcw,
+  SquareArrowOutUpRight,
+} from "lucide-react";
+import { acceptanceCriteriaTally } from "@orkestrator/protocol/ticket-sections";
+import { ticketContentOf } from "@/components/tickets/ticket-content";
 import type { KanbanStatus, KanbanTask } from "@/stores/kanbanStore";
 import { isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
 import { Button } from "@/components/ui/button";
@@ -137,7 +145,14 @@ export function KanbanCard({
   const phaseDisplay = buildPhase ? getBuildPhaseDisplay(buildPhase) : null;
   const isActivelyBuilding = buildPhase ? isActiveBuildPhase(buildPhase) : false;
   const commentCount = task.comments.length;
-  const hasFooter = commentCount > 0 || !!environmentName;
+  const { sections } = ticketContentOf(task);
+  // The first prose section, not the description mirror, which for a
+  // structured ticket starts with section headings.
+  const blurb = sections.summary ?? sections.problem ?? sections.context ?? "";
+  const criteria = sections.acceptanceCriteria ?? [];
+  const tally = acceptanceCriteriaTally(criteria);
+  const showTally = criteria.length > 0 && tally.unchecked < criteria.length;
+  const hasFooter = commentCount > 0 || !!environmentName || showTally;
 
   // While the card is being dragged the overlay copy follows the pointer, so
   // the original stays put and renders as a dashed drop target. It deliberately
@@ -154,7 +169,7 @@ export function KanbanCard({
         <div className="invisible p-3 pl-4">
           <div className="min-w-0 pb-8">
             <h4 className="truncate text-sm font-medium">{task.title}</h4>
-            {task.description && <p className="mt-1 text-xs line-clamp-2">{task.description}</p>}
+            {blurb && <p className="mt-1 text-xs line-clamp-2">{blurb}</p>}
             {hasFooter && <div className="mt-2 h-4" />}
           </div>
         </div>
@@ -232,11 +247,24 @@ export function KanbanCard({
             )}
           </div>
         </div>
-        {task.description && (
-          <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{task.description}</p>
-        )}
+        {blurb && <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{blurb}</p>}
         {hasFooter && (
           <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            {showTally && (
+              <span
+                data-testid="kanban-card-criteria"
+                className={cn(
+                  "flex shrink-0 items-center gap-1",
+                  tally.failed > 0 && "text-destructive",
+                )}
+                title={`${tally.passed} passed, ${tally.failed} failed, ${tally["not-checked"]} not checked, ${tally.unchecked} not verified yet`}
+              >
+                <CheckCircle2 className="h-3 w-3" />
+                <span>
+                  {tally.passed}/{criteria.length}
+                </span>
+              </span>
+            )}
             {commentCount > 0 && (
               <span className="flex shrink-0 items-center gap-1">
                 <MessageSquare className="h-3 w-3" />

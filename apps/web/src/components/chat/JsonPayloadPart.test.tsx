@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
@@ -137,6 +137,25 @@ describe("JsonPayloadPart", () => {
 
     expect(screen.getByText("Verification failed")).toBeTruthy();
     expect(screen.queryByText("JSON payload") === null).toBe(true);
+  });
+
+  test("lists each criterion's result under the rationale", () => {
+    render(
+      <JsonPayloadPart
+        payload={payloadOf(
+          '{"complete":false,"rationale":"One is unmet.","acceptanceCriteria":[{"id":"ac-1","status":"passed","evidence":"bun test a"},{"id":"ac-2","status":"not-checked","evidence":"needs a phone"}]}',
+        )}
+        expansionKey="verdict-criteria"
+      />,
+    );
+    expect(screen.getByText("Verification failed")).toBeTruthy();
+    fireEvent.click(screen.getByText("Verification failed"));
+    const items = within(screen.getByTestId("verification-criteria")).getAllByRole("listitem");
+    expect(items.map((item) => item.getAttribute("data-status"))).toEqual([
+      "passed",
+      "not-checked",
+    ]);
+    expect(items[1]!.textContent).toContain("Not checked: needs a phone");
   });
 
   test("renders an unrecognized payload as labelled fields", () => {

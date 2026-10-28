@@ -1193,6 +1193,52 @@ describe("agent Kanban tools", () => {
     });
   });
 
+  test("creates and updates structured tickets with sections", async () => {
+    const connection = server.connection("env-1", "project-1", "host");
+    const created = await rpc(connection.url, connection.token, "tools/call", {
+      name: "create_ticket",
+      arguments: {
+        title: "Brief",
+        kind: "work-brief",
+        sections: {
+          problem: "Delivery policy conflicts.",
+          acceptanceCriteria: ["Policy is a field"],
+          delivery: { policy: "commit-only" },
+        },
+      },
+    });
+    const ticket = created.body.result?.structuredContent?.ticket as Record<string, unknown>;
+    expect(ticket).toMatchObject({
+      kind: "work-brief",
+      deliveryPolicy: "commit-only",
+      criteria: [{ id: "ac-1", text: "Policy is a field" }],
+      description: "## Problem\n\nDelivery policy conflicts.\n\n## Delivery\n\nPolicy: commit-only",
+      acceptanceCriteria: "- Policy is a field",
+    });
+
+    const updated = await rpc(connection.url, connection.token, "tools/call", {
+      name: "update_ticket",
+      arguments: {
+        ticketId: ticket.id,
+        sections: { problem: "", acceptanceCriteria: ["Policy is a field", "Shown in a tile"] },
+      },
+    });
+    expect(updated.body.result?.structuredContent?.ticket).toMatchObject({
+      kind: "work-brief",
+      criteria: [
+        { id: "ac-1", text: "Policy is a field" },
+        { id: "ac-2", text: "Shown in a tile" },
+      ],
+      description: "## Delivery\n\nPolicy: commit-only",
+    });
+
+    const invalid = await rpc(connection.url, connection.token, "tools/call", {
+      name: "update_ticket",
+      arguments: { ticketId: ticket.id, sections: { delivery: { policy: "merge" } } },
+    });
+    expect(invalid.body.result?.isError).toBe(true);
+  });
+
   test("rejects schema boundaries and an update with no editable fields", async () => {
     const connection = server.connection("env-1", "project-1", "host");
     const ticket = await storage.kanban.addKanbanTask("project-1", "Valid", "");

@@ -4,6 +4,7 @@ import type {
   FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
 import type { PrState } from "@/types";
+import type { TicketKind, TicketSections } from "@orkestrator/protocol/ticket-sections";
 /** PR detection result containing URL, state, and merge conflict status */
 
 // --- File System Utilities ---
@@ -47,8 +48,14 @@ export interface KanbanTask {
   id: string;
   projectId: string;
   title: string;
+  /** Markdown of every section except the criteria; `sections` is authoritative. */
   description: string;
+  /** The criteria as a markdown list. */
   acceptanceCriteria: string;
+  /** Absent from backends that predate kinds: a feature ticket. */
+  kind?: TicketKind;
+  /** Absent from backends that predate sections; derive them from the text. */
+  sections?: TicketSections;
   status: KanbanStatus;
   comments: KanbanComment[];
   images: KanbanImage[];
@@ -190,6 +197,17 @@ export async function updateKanbanTask(
     prState,
     prMergeCommented,
   });
+}
+
+/**
+ * Replace a ticket's content from edited markdown (every section, criteria
+ * included). Criteria whose text is unchanged keep their Verify results.
+ */
+export async function updateKanbanTaskContent(
+  taskId: string,
+  content: { title?: string; kind?: TicketKind; markdown?: string },
+): Promise<KanbanTask> {
+  return invoke<KanbanTask>("update_kanban_task", { taskId, ...content });
 }
 
 export async function deleteKanbanTask(taskId: string): Promise<void> {

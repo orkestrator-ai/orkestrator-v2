@@ -93,3 +93,32 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
 - **Assessment:** intermittent recurrence during concurrent repository and
   browser validation. No owning code, assertion, deadline or skip changed;
   status remains open. Case 1220 records the complete validation run.
+
+
+## Structured-ticket main merge recurrence — 2026-10-28
+
+- **Aggregate:** `mise run test:logged -- --name merge-browser -- mise run test:browser`,
+  nine Playwright workers; 896 passed, 105 skipped and three failed (591.5 s).
+  The mobile waiting-group case at `ToolGroupFold.spec.ts:471` received inner
+  `scrollTop` 704 instead of zero after five seconds. Both other failures were
+  the existing native branch-suggestion cases in `AgentLaunchDialog.spec.ts`.
+- **Complete unchanged owner:**
+  `mise run test:logged -- --name merge-tool-group-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output=output/playwright/merge-tool-group-owner`
+  passed all 38 cases (85.2 s).
+- **Evidence:**
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.K0vppX/merge-browser.log.gz`;
+  rerun output is under `output/playwright/merge-tool-group-owner/`.
+- **Context:** merge parents `265bc5719507a52fd47758a528e05a807ff8b2db`
+  and `72a5d8a1fcdce5e6d877ff11e962e158d4835708`. The conflict resolution
+  changes ticket-dialog width classes; this owner and its implementation were
+  unchanged. The default repository suite, static checks, public-site browser
+  suite and 12 actual ticket-dialog viewport checks passed.
+- **Assessment:** confirmed intermittent recurrence; no root cause established
+  and no owning implementation, assertion, deadline or skip changed.
+- **Native branch owner:**
+  `mise run test:logged -- --name merge-native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output=output/playwright/merge-native-branch-owner`
+  retained both native suggestion failures (`rel` instead of `release/2.0`);
+  both manual-entry cases passed (23.4 s). Evidence:
+  `orkestrator-test-run.vucbt3/merge-native-branch-owner.log.gz` under the same
+  host temporary directory. This remains the known non-green native picker
+  limitation, not a new confirmed flake.

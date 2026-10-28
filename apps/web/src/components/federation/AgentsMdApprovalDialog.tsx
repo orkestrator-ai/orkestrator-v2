@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   previewAgentsMdUpdate,
@@ -43,6 +43,9 @@ const RESULT_NOTE: Partial<Record<AgentsMdChangeOutcome["result"], string>> = {
 type Merged =
   | { ok: true; result: AgentsMdMergeResult; diff: AgentsMdDiffLine[] }
   | { ok: false; error: string };
+
+// Entries are single lines (the backend refuses line breaks) but wrap on screen.
+const LINE_BREAKS = /[\r\n\u000b\u000c\u0085\u2028\u2029]/g;
 
 interface Row {
   change: AgentsMdChange;
@@ -180,14 +183,15 @@ export function AgentsMdApprovalDialog({
   return (
     // Like the other coordinator requests, it stays until approved or declined.
     <Dialog open>
-      {/* Long tokens (paths, URLs) in entries and the diff wrap instead of widening the dialog. */}
+      {/* Long tokens (paths, URLs) in entries and the diff wrap instead of widening the dialog.
+          The header and buttons stay put; the entries and diff scroll between them. */}
       <DialogContent
         size="3xl"
-        className="wrap-anywhere"
+        className="flex flex-col wrap-anywhere"
         data-testid="agents-md-request"
         showCloseButton={false}
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>Save decisions to AGENTS.md?</DialogTitle>
           <DialogDescription>
             The project coordinator proposes updating the ## Orkestrator section of AGENTS.md in{" "}
@@ -199,145 +203,166 @@ export function AgentsMdApprovalDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <section className="min-w-0 space-y-2" aria-label="Proposed entries">
-          {rows.map((row, index) => {
-            const result = outcomeByRow.get(index);
-            return (
-              <div
-                key={`${row.change.action}:${row.change.replaces ?? ""}:${index}`}
-                className="flex items-start gap-3 rounded-md border border-white/[0.08] p-2"
-                data-testid="agents-md-entry"
-              >
-                <Checkbox
-                  className="mt-2"
-                  checked={row.include}
-                  disabled={busy}
-                  aria-label={`Include entry ${index + 1}`}
-                  onCheckedChange={(value) =>
-                    setRows((current) =>
-                      current.map((item, at) =>
-                        at === index ? { ...item, include: value === true } : item,
-                      ),
-                    )
-                  }
-                />
-                <div className="min-w-0 flex-1 space-y-1">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">
-                      {ACTION_LABEL[row.change.action]}
-                    </span>
-                    {row.change.replaces ? (
-                      <span className="truncate">“{row.change.replaces}” with</span>
-                    ) : null}
-                    {result && RESULT_NOTE[result] ? (
-                      <span
-                        className={cn(result === "conflict" ? "text-destructive" : "")}
-                        data-testid="agents-md-entry-note"
-                      >
-                        ({RESULT_NOTE[result]})
-                      </span>
-                    ) : null}
-                  </div>
-                  {row.change.action === "remove" ? (
-                    <p className="font-mono text-xs">{row.text}</p>
-                  ) : (
-                    <Input
-                      value={row.text}
-                      disabled={busy || !row.include}
-                      aria-label={`Entry ${index + 1} text`}
-                      maxLength={500}
-                      onChange={(event) => {
-                        const text = event.target.value;
-                        setRows((current) =>
-                          current.map((item, at) => (at === index ? { ...item, text } : item)),
-                        );
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {"error" in proposal ? (
-            <p className="text-xs text-destructive" role="alert">
-              {proposal.error}
-            </p>
-          ) : null}
-        </section>
-
-        <section className="min-w-0 space-y-1" aria-label="Change to the section">
-          {loadError ? (
-            <div>
-              <p className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4" /> Could not read the current section: {loadError}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy}
-                onClick={() => {
-                  setLoadError(null);
-                  setPreview(null);
-                  setPreviewAttempt((attempt) => attempt + 1);
-                }}
-              >
-                Retry preview
-              </Button>
-            </div>
-          ) : !preview ? (
-            <p className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Reading AGENTS.md on the base branch…
-            </p>
-          ) : (
-            <>
-              <p className="text-xs text-muted-foreground">
-                Compared with origin/{preview.baseBranch} ({preview.baseCommit.slice(0, 8)})
-                {preview.section.exists
-                  ? ""
-                  : preview.fileExists
-                    ? "; the section will be added at the end of AGENTS.md"
-                    : "; AGENTS.md will be created"}
-                .{preview.fetched ? "" : " Could not fetch the latest base; this may be stale."}
-              </p>
-              {merged?.ok ? (
-                <pre
-                  className="max-h-72 overflow-auto rounded-md border border-white/[0.08] p-2 text-xs leading-5"
-                  data-testid="agents-md-diff"
+        {/* The padding keeps focus rings clear of the scroll area's edges. */}
+        <div
+          className="-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-1"
+          data-testid="agents-md-body"
+        >
+          <section className="min-w-0 space-y-2" aria-label="Proposed entries">
+            {rows.map((row, index) => {
+              const result = outcomeByRow.get(index);
+              return (
+                <div
+                  key={`${row.change.action}:${row.change.replaces ?? ""}:${index}`}
+                  className="flex items-start gap-3 rounded-md border border-white/[0.08] p-2"
+                  data-testid="agents-md-entry"
                 >
-                  {merged.diff.map((line, index) => (
-                    <div
-                      key={index}
-                      data-diff={line.type}
-                      className={cn(
-                        "whitespace-pre-wrap",
-                        line.type === "add" && "bg-emerald-500/10 text-emerald-300",
-                        line.type === "remove" && "bg-red-500/10 text-red-300 line-through",
-                        line.type === "same" && "text-muted-foreground",
-                      )}
-                    >
-                      {line.type === "add" ? "+ " : line.type === "remove" ? "- " : "  "}
-                      {line.text}
+                  <Checkbox
+                    className="mt-2"
+                    checked={row.include}
+                    disabled={busy}
+                    aria-label={`Include entry ${index + 1}`}
+                    onCheckedChange={(value) =>
+                      setRows((current) =>
+                        current.map((item, at) =>
+                          at === index ? { ...item, include: value === true } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {ACTION_LABEL[row.change.action]}
+                      </span>
+                      {row.change.replaces ? (
+                        <span className="truncate">“{row.change.replaces}” with</span>
+                      ) : null}
+                      {result && RESULT_NOTE[result] ? (
+                        <span
+                          className={cn(result === "conflict" ? "text-destructive" : "")}
+                          data-testid="agents-md-entry-note"
+                        >
+                          ({RESULT_NOTE[result]})
+                        </span>
+                      ) : null}
                     </div>
-                  ))}
-                </pre>
-              ) : merged && !merged.ok ? (
-                <p className="text-xs text-destructive">{merged.error}</p>
-              ) : null}
-              {conflicts.length > 0 ? (
-                <p className="text-xs text-destructive" role="alert">
-                  {conflicts.map((outcome) => outcome.detail).join(" ")} Drop that entry or decline
-                  and ask the coordinator to propose again.
-                </p>
-              ) : unchanged ? (
-                <p className="text-xs text-muted-foreground">
-                  The section already says this; approving opens no pull request.
-                </p>
-              ) : null}
-            </>
-          )}
-        </section>
+                    {row.change.action === "remove" ? (
+                      <p className="font-mono text-xs">{row.text}</p>
+                    ) : (
+                      <Textarea
+                        value={row.text}
+                        disabled={busy || !row.include}
+                        aria-label={`Entry ${index + 1} text`}
+                        maxLength={500}
+                        rows={1}
+                        className="max-h-[calc(8lh+0.75rem+2px)] min-h-9 resize-none py-1.5"
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.nativeEvent.isComposing)
+                            event.preventDefault();
+                        }}
+                        onChange={(event) => {
+                          // Pasted or dropped line breaks become spaces. Same length, so
+                          // the caret stays where it was.
+                          const field = event.target;
+                          const text = field.value.replace(LINE_BREAKS, " ");
+                          if (text !== field.value) {
+                            const { selectionStart, selectionEnd } = field;
+                            field.value = text;
+                            field.setSelectionRange(selectionStart, selectionEnd);
+                          }
+                          setRows((current) =>
+                            current.map((item, at) => (at === index ? { ...item, text } : item)),
+                          );
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {"error" in proposal ? (
+              <p className="text-xs text-destructive" role="alert">
+                {proposal.error}
+              </p>
+            ) : null}
+          </section>
 
-        <DialogFooter>
+          <section className="min-w-0 space-y-1" aria-label="Change to the section">
+            {loadError ? (
+              <div>
+                <p className="flex items-center gap-2 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4" /> Could not read the current section:{" "}
+                  {loadError}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    setLoadError(null);
+                    setPreview(null);
+                    setPreviewAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  Retry preview
+                </Button>
+              </div>
+            ) : !preview ? (
+              <p className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Reading AGENTS.md on the base branch…
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Compared with origin/{preview.baseBranch} ({preview.baseCommit.slice(0, 8)})
+                  {preview.section.exists
+                    ? ""
+                    : preview.fileExists
+                      ? "; the section will be added at the end of AGENTS.md"
+                      : "; AGENTS.md will be created"}
+                  .{preview.fetched ? "" : " Could not fetch the latest base; this may be stale."}
+                </p>
+                {merged?.ok ? (
+                  <pre
+                    className="max-h-72 overflow-auto rounded-md border border-white/[0.08] p-2 text-xs leading-5"
+                    data-testid="agents-md-diff"
+                  >
+                    {merged.diff.map((line, index) => (
+                      <div
+                        key={index}
+                        data-diff={line.type}
+                        className={cn(
+                          "whitespace-pre-wrap",
+                          line.type === "add" && "bg-emerald-500/10 text-emerald-300",
+                          line.type === "remove" && "bg-red-500/10 text-red-300 line-through",
+                          line.type === "same" && "text-muted-foreground",
+                        )}
+                      >
+                        {line.type === "add" ? "+ " : line.type === "remove" ? "- " : "  "}
+                        {line.text}
+                      </div>
+                    ))}
+                  </pre>
+                ) : merged && !merged.ok ? (
+                  <p className="text-xs text-destructive">{merged.error}</p>
+                ) : null}
+                {conflicts.length > 0 ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {conflicts.map((outcome) => outcome.detail).join(" ")} Drop that entry or
+                    decline and ask the coordinator to propose again.
+                  </p>
+                ) : unchanged ? (
+                  <p className="text-xs text-muted-foreground">
+                    The section already says this; approving opens no pull request.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </section>
+        </div>
+
+        <DialogFooter className="shrink-0">
           <Button
             type="button"
             variant="outline"

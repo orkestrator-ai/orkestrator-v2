@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gnuToolPath, missingGnuTools, titleWithSkip } from "../../../tests/unit/gnu-shell-tools";
+import { gnuToolPath, titleWithSkip } from "../../../tests/unit/gnu-shell-tools";
 import {
   STAGED_INPUT_RELAY_DIR,
   scrubStagedProvider,
@@ -17,11 +17,10 @@ import {
  * unprivileged half (`as_input_user`, `setpriv` to node in the image) runs as
  * the test user; `unreadable` decides what the `find ! -readable` probe sees,
  * standing in for node's view of a rootless daemon's owner-only mounts.
- * The function needs the image's GNU `rm --one-file-system` and
- * `du --apparent-size`; BSD `rm` and `du` reject both, so without GNU
- * coreutils (a macOS host without Homebrew's) the relay cases are skipped.
+ * GNU fixtures execute the image's flags unchanged. macOS also runs every
+ * case with BSD tools, translating only rm's filesystem bound and du's
+ * apparent-byte-size flags to their native equivalents.
  */
-const NO_GNU_RELAY_TOOLS = missingGnuTools("rm", "du");
 const rootEntrypoint = await fs.readFile(
   path.join(import.meta.dir, "../../../docker/network-policy-entrypoint.sh"),
   "utf8",
@@ -30,6 +29,55 @@ const entrypoint = await fs.readFile(
   path.join(import.meta.dir, "../../../docker/entrypoint.sh"),
   "utf8",
 );
+
+// Probe the flags themselves rather than localized/version-dependent branding.
+const rmProbe = Bun.spawnSync({
+  cmd: ["rm", "-rf", "--one-file-system", "--"],
+  env: { PATH: gnuToolPath },
+  stderr: "pipe",
+});
+const duProbe = Bun.spawnSync({
+  cmd: [
+    "du",
+    "-s",
+    "-B1",
+    "--apparent-size",
+    path.join(import.meta.dir, "../../../docker/network-policy-entrypoint.sh"),
+  ],
+  env: { PATH: gnuToolPath },
+  stdout: "pipe",
+  stderr: "pipe",
+});
+const missingRelayFlags = [
+  ...(rmProbe.exitCode === 0 ? [] : ["rm --one-file-system"]),
+  ...(duProbe.exitCode === 0 &&
+  Number(duProbe.stdout.toString().split("\t")[0]) === Buffer.byteLength(rootEntrypoint)
+    ? []
+    : ["du -s -B1 --apparent-size"]),
+];
+const NO_GNU_RELAY_TOOLS =
+  missingRelayFlags.length === 0
+    ? undefined
+    : `needs ${missingRelayFlags.join(", ")} (macOS: brew install coreutils)`;
+
+type RelayTools = "GNU" | "BSD";
+const BSD_RELAY_ADAPTERS = `
+rm() {
+  local args=()
+  for arg in "$@"; do
+    if [ "$arg" = --one-file-system ]; then args+=(-x); else args+=("$arg"); fi
+  done
+  /bin/rm "\${args[@]}"
+}
+du() {
+  local args=()
+  for arg in "$@"; do
+    if [ "$arg" = --apparent-size ]; then args+=(-A); else args+=("$arg"); fi
+  done
+  # BSD du reports in blocks of at least 512 bytes. Convert its rounded-up
+  # apparent size back to bytes; the GNU lane checks the exact byte behavior.
+  BLOCKSIZE=512 /usr/bin/du "\${args[@]}" | awk -F '\t' '{printf "%.0f\\n", $1 * 512}'
+}`;
 
 function shellFunction(source: string, name: string): string {
   const body = source.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"))?.[0];
@@ -57,13 +105,17 @@ async function tempRoot(): Promise<string> {
 function relay(
   sourceRoot: string,
   relayDir: string,
-  options: { unreadable: boolean; maxEntries?: number },
+  options: { unreadable: boolean; maxEntries?: number; maxBytes?: number },
+  tools: RelayTools,
 ) {
   const script = [
     "set -euo pipefail",
     shellAssignment(rootEntrypoint, "STAGED_INPUT_MOUNTS"),
     `STAGED_INPUT_RELAY_MAX_ENTRIES=${options.maxEntries ?? 20000}`,
-    shellAssignment(rootEntrypoint, "STAGED_INPUT_RELAY_MAX_BYTES"),
+    options.maxBytes === undefined
+      ? shellAssignment(rootEntrypoint, "STAGED_INPUT_RELAY_MAX_BYTES")
+      : `STAGED_INPUT_RELAY_MAX_BYTES=${options.maxBytes}`,
+    tools === "BSD" ? BSD_RELAY_ADAPTERS : "",
     // The image's node user and group share a name; the host's test user may
     // belong to a differently named primary group (for example on macOS).
     `install() {
@@ -82,9 +134,9 @@ function relay(
   const result = Bun.spawnSync({
     cmd: ["bash", "-c", script],
     env: {
-      // Run the Linux entrypoint with the tools it uses in the image, rather
-      // than macOS's BSD rm/install/du, whose flags have different meanings.
-      PATH: gnuToolPath,
+      // Force the native lane to run without any Homebrew tools, even when
+      // installed, so it also covers Macs without GNU coreutils.
+      PATH: tools === "BSD" ? "/usr/bin:/bin:/usr/sbin:/sbin" : gnuToolPath,
       SOURCE_ROOT: sourceRoot,
       RELAY_DIR: relayDir,
     },
@@ -121,15 +173,29 @@ async function mountedRevision(root: string) {
   return { staged, dataDir, container };
 }
 
-describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
-  titleWithSkip("staged input relay", NO_GNU_RELAY_TOOLS),
-  () => {
+for (const tools of (process.platform === "darwin" ? ["GNU", "BSD"] : ["GNU"]) as RelayTools[]) {
+  // Linux and CI must fail on missing capabilities, never skip security cases.
+  const skip =
+    tools === "GNU" && process.platform === "darwin" && !process.env.CI
+      ? NO_GNU_RELAY_TOOLS
+      : undefined;
+  describe.skipIf(skip !== undefined)(titleWithSkip(`staged input relay (${tools})`, skip), () => {
+    const runRelay = (source: string, destination: string, options: Parameters<typeof relay>[2]) =>
+      relay(source, destination, options, tools);
+    if (tools === "GNU") {
+      test("the required GNU flags are available", () => {
+        expect(NO_GNU_RELAY_TOOLS).toBeUndefined();
+      });
+    }
     test("a mount node cannot read is copied owner-only into node's directory", async () => {
       const root = await tempRoot();
       const { container } = await mountedRevision(root);
       const relayDir = path.join(root, "run", "orkestrator-inputs");
       await fs.mkdir(path.dirname(relayDir), { recursive: true });
-      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      expect(runRelay(container, relayDir, { unreadable: true })).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
 
       expect((await fs.stat(relayDir)).mode & 0o777).toBe(0o700);
       const auth = path.join(relayDir, "codex-home", "auth.json");
@@ -150,7 +216,7 @@ describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
       const relayDir = path.join(root, "orkestrator-inputs");
       await fs.mkdir(path.join(relayDir, "codex-home"), { recursive: true });
       await fs.writeFile(path.join(relayDir, "codex-home", "auth.json"), "stale");
-      expect(relay(container, relayDir, { unreadable: false })).toEqual({
+      expect(runRelay(container, relayDir, { unreadable: false })).toEqual({
         exitCode: 0,
         stderr: "",
       });
@@ -161,7 +227,10 @@ describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
       const root = await tempRoot();
       const { container, dataDir, staged } = await mountedRevision(root);
       const relayDir = path.join(root, "orkestrator-inputs");
-      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      expect(runRelay(container, relayDir, { unreadable: true })).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
       expect(await fs.readdir(path.join(relayDir, "codex-home"))).toContain("auth.json");
 
       expect(await scrubStagedProvider(dataDir, "env-relay", staged.revision, "codex")).toBe(true);
@@ -169,7 +238,10 @@ describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
       const codexMount = path.join(container, "codex-home");
       await fs.rm(codexMount, { recursive: true });
       await fs.cp(await fs.readlink(`${codexMount}.bind`), codexMount, { recursive: true });
-      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      expect(runRelay(container, relayDir, { unreadable: true })).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
       expect(await fs.readdir(path.join(relayDir, "codex-home"))).toEqual([]);
     });
 
@@ -182,7 +254,10 @@ describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
       await fs.symlink(secret, path.join(container, "codex-home", "auth.json"));
       await fs.symlink(path.join(root, "elsewhere"), path.join(container, "pi-config"));
       const relayDir = path.join(root, "orkestrator-inputs");
-      expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
+      expect(runRelay(container, relayDir, { unreadable: true })).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
       const relayed = path.join(relayDir, "codex-home", "auth.json");
       expect((await fs.lstat(relayed)).isSymbolicLink()).toBe(true);
       // A mount point that is itself a link is skipped.
@@ -190,12 +265,38 @@ describe.skipIf(NO_GNU_RELAY_TOOLS !== undefined)(
 
       await fs.writeFile(path.join(container, "codex-home", "one"), "1");
       await fs.writeFile(path.join(container, "codex-home", "two"), "2");
-      const bounded = relay(container, relayDir, { unreadable: true, maxEntries: 2 });
+      const bounded = runRelay(container, relayDir, { unreadable: true, maxEntries: 2 });
       expect(bounded.stderr).toContain("Staged input /codex-home is over the relay bounds");
       await expect(fs.stat(path.join(relayDir, "codex-home"))).rejects.toThrow();
     });
-  },
-);
+    test("apparent bytes bound sparse files without following symlinks", async () => {
+      const root = await tempRoot();
+      const container = path.join(root, "container");
+      const source = path.join(container, "codex-home");
+      await fs.mkdir(source, { recursive: true });
+      const sparse = path.join(source, "large");
+      await fs.writeFile(sparse, "");
+      await fs.truncate(sparse, 1024 * 1024);
+      const relayDir = path.join(root, "orkestrator-inputs");
+      const bounded = runRelay(container, relayDir, { unreadable: true, maxBytes: 512 * 1024 });
+      expect(bounded.exitCode).toBe(0);
+      expect(bounded.stderr).toContain("Staged input /codex-home is over the relay bounds");
+      await expect(fs.stat(relayDir)).rejects.toThrow();
+
+      await fs.unlink(sparse);
+      await fs.symlink(path.join(root, "secret"), sparse);
+      await fs.writeFile(path.join(root, "secret"), "");
+      await fs.truncate(path.join(root, "secret"), 1024 * 1024);
+      expect(runRelay(container, relayDir, { unreadable: true, maxBytes: 512 * 1024 })).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
+      expect((await fs.lstat(path.join(relayDir, "codex-home", "large"))).isSymbolicLink()).toBe(
+        true,
+      );
+    });
+  });
+}
 
 describe("entrypoint input resolution", () => {
   const resolve = (relayDir: string, name: string) => {

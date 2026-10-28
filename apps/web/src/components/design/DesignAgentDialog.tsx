@@ -581,7 +581,7 @@ function DesignAgentDialogBody({
           : "Add to composer";
 
   return (
-    <DialogContent className="max-h-[min(90vh,48rem)] overflow-y-auto sm:max-w-[min(40rem,calc(100%-2rem))]">
+    <DialogContent className="max-h-[min(90vh,48rem)] overflow-y-auto [--modal-max-width:40rem]">
       <DialogHeader>
         <DialogTitle>
           {handoff ? "Hand off design for implementation" : "Ask agent about this design"}

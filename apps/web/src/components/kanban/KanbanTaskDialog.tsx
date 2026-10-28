@@ -161,9 +161,9 @@ interface KanbanTaskDialogProps {
 }
 
 const TASK_DIALOG_CONTENT_CLASS =
-  "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
+  "[--modal-max-width:560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
 /** An existing ticket is wider so its section tiles can sit side by side. */
-const TASK_VIEW_DIALOG_CONTENT_CLASS = `${TASK_DIALOG_CONTENT_CLASS} md:max-w-3xl`;
+const TASK_VIEW_DIALOG_CONTENT_CLASS = `${TASK_DIALOG_CONTENT_CLASS} md:[--modal-max-width:48rem]`;
 const KIND_OPTIONS = TICKET_KINDS.map((kind) => ({ value: kind, label: TICKET_KIND_LABELS[kind] }));
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
@@ -841,7 +841,7 @@ export function KanbanTaskDialog({
           if (!open) setPreviewImage(null);
         }}
       >
-        <DialogContent className="max-w-[90vw] max-h-[90vh] p-2 flex flex-col items-center justify-center">
+        <DialogContent className="[--modal-max-width:90vw] max-h-[90vh] p-2 flex flex-col items-center justify-center">
           <DialogTitle className="sr-only">{previewImage.filename}</DialogTitle>
           <DialogDescription className="sr-only">
             Full-size preview of the attached task image.

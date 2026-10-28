@@ -585,3 +585,50 @@ test("a repository target change fences a baseline write waiting for storage adm
     track.mockRestore();
   }
 });
+
+test("diff tracking migrates app worktrees while preserving a linked project home", async () => {
+  const { h, tracking } = await harness();
+  const { projectPath } = await h.createRepository("fsmonitor-ownership");
+  const git = (...args: string[]) => runCommand("git", ["-C", projectPath, ...args]);
+  await git("config", "extensions.worktreeConfig", "true");
+  const home = path.join(path.dirname(projectPath), "linked-home");
+  const owned = path.join(path.dirname(projectPath), "owned-worktree");
+  await git("worktree", "add", "-b", "linked-home", home);
+  await git("worktree", "add", "-b", "owned-worktree", owned);
+  for (const worktree of [home, owned]) {
+    await runCommand("git", ["-C", worktree, "config", "--worktree", "core.fsmonitor", "true"]);
+    await h.storage.addEnvironment({
+      ...createEnvironment("project", { environmentType: "local" }),
+      worktreePath: worktree,
+      projectHome: worktree === home,
+      createdFromCommit: "origin/main",
+    });
+  }
+  try {
+    await tracking.sync(h.context);
+    for (const worktreePath of [home, owned]) {
+      await tracking.service.readFileList({
+        lookup: { worktreePath },
+        comparisonRef: "origin/main",
+        includeUncommitted: true,
+        refresh: true,
+      });
+    }
+    const config = (worktree: string) =>
+      runCommand("git", ["-C", worktree, "config", "--worktree", "--get", "core.fsmonitor"]);
+    expect((await config(home)).stdout.trim()).toBe("true");
+    await expect(config(owned)).rejects.toThrow();
+  } finally {
+    // The project home was deliberately allowed to start its own daemon.
+    for (const worktree of [home, owned]) {
+      await runCommand("git", [
+        "-C",
+        worktree,
+        "-c",
+        "core.fsmonitor=false",
+        "fsmonitor--daemon",
+        "stop",
+      ]).catch(() => undefined);
+    }
+  }
+});

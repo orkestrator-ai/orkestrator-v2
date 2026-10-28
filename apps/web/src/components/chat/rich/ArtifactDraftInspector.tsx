@@ -183,7 +183,7 @@ export function ArtifactDraftInspectorDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-5xl" data-artifact-draft-inspector="true">
+      <DialogContent size="5xl" data-artifact-draft-inspector="true">
         <DialogTitle>Inspect artifact drafts</DialogTitle>
         <DialogDescription>
           Artifacts in this conversation as the agent left them. Drafts are not published: they are

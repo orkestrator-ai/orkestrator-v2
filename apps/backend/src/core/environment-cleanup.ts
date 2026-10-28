@@ -18,6 +18,7 @@ import { removeEnvironmentNetwork } from "./container-network.js";
 import { removeEnvironmentEgressGateways } from "./egress-gateway.js";
 import type { Environment, Project } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
+import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
@@ -274,6 +275,9 @@ async function cleanupWorktree(
   }
   const projectPath =
     entry.projectPath && (await pathExists(entry.projectPath)) ? entry.projectPath : null;
+  // An fsmonitor daemon outlives its worktree and is never reaped, so stop it
+  // while git can still find it. Git exits at once when none is running.
+  if (await directoryExists(worktreePath)) await stopGitFsmonitorDaemon(worktreePath, run);
   if (projectPath && (await directoryExists(worktreePath))) {
     await run("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
       timeoutMs: 120_000,

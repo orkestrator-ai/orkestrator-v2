@@ -134,7 +134,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
     });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="xl">
         <DialogHeader>
           <DialogTitle>Queued Prompts</DialogTitle>
           <DialogDescription>

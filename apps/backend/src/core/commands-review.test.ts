@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { BackendRuntime } from "./backend-runtime.js";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
@@ -19,6 +19,7 @@ import {
   writeEnvironmentReviewPackage,
 } from "./commands-review.js";
 import { StorageService } from "./storage.js";
+import * as shell from "./shell.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -134,6 +135,44 @@ function validationEntry(overrides: Record<string, unknown> = {}) {
 }
 
 describe("generateLoopedReviewPackage", () => {
+  test("retries timed-out review package status without fsmonitor", async () => {
+    const { worktree, storage } = await reviewEnvironment();
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    const original = shell.runCommand;
+    const calls: string[][] = [];
+    const spy = spyOn(shell, "runCommand").mockImplementation(
+      async (command, args = [], options) => {
+        if (command === "git" && args.includes("status")) {
+          calls.push(args);
+          if (calls.length === 1) throw new shell.CommandFailedError("timeout", { timedOut: true });
+        }
+        return original(command, args, options);
+      },
+    );
+    try {
+      await fs.writeFile(path.join(worktree, "untracked.txt"), "new\n");
+      const reference = await generateLoopedReviewPackage(
+        "env-1",
+        "timeout-package",
+        1,
+        "main",
+        [],
+        [{ path: "untracked.txt", reason: "Left behind." }],
+        [],
+        { storage, runtime } as never,
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual(["-c", "core.fsmonitor=false", ...calls[0]!]);
+      const written = JSON.parse(
+        await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+      ) as ReviewPackage;
+      expect(written.uncommittedFiles).toEqual([{ path: "untracked.txt", reason: "Left behind." }]);
+    } finally {
+      spy.mockRestore();
+      runtime.shutdown();
+    }
+  });
+
   test("records remaining worktree changes instead of failing the package", async () => {
     const { worktree, storage } = await reviewEnvironment();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");

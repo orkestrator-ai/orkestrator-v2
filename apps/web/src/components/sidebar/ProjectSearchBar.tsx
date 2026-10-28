@@ -497,7 +497,8 @@ export function ProjectSearchBar({
         <DialogContent
           showCloseButton={false}
           data-testid="project-search-dialog"
-          className="max-w-2xl gap-0 overflow-hidden p-0 sm:max-w-2xl sm:p-0"
+          size="2xl"
+          className="gap-0 overflow-hidden p-0 sm:p-0"
         >
           <DialogTitle className="sr-only">Search projects and environments</DialogTitle>
           <DialogDescription className="sr-only">

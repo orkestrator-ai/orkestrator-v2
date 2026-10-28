@@ -15,6 +15,7 @@ import {
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
 import { spawnCommand, runCommand } from "./shell.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { writeConfinedFile, workspaceFilePath } from "./path-safety.js";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
 import { resolveGitHubRepository } from "./github.js";
@@ -937,7 +938,10 @@ export async function generateLoopedReviewPackage(
   const [nameStatus, commitOutput, worktreeStatus, artifactSizes] = await Promise.all([
     runner("git", ["diff", "--name-status", "-z", "--no-renames", range], 60_000),
     runner("git", ["show", "-s", "--format=%cI%n%s", headRef], 30_000),
-    runner("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], 30_000),
+    retryGitWithoutFsmonitorOnTimeout(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      (args) => runner("git", args, 30_000),
+    ),
     statEnvironmentReviewArtifacts(environment, runner, artifactPaths),
   ]);
 

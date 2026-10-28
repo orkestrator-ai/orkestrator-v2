@@ -700,7 +700,7 @@ export function HtmlArtifactBody({
       </div>
       {enlarged && captureUrl ? (
         <Dialog open onOpenChange={setEnlarged}>
-          <DialogContent className="sm:max-w-6xl">
+          <DialogContent size="6xl">
             <DialogTitle>{artifactRef.title}</DialogTitle>
             <DialogDescription>
               Saved preview of revision {artifactRef.revision}. This image is static.

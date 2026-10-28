@@ -9,7 +9,7 @@ import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
-import { createBackendShutdownHandler } from "./shutdown.js";
+import { createBackendExitHandler, createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { TailscaleServeManager } from "./tailscale-serve.js";
@@ -26,8 +26,14 @@ import {
   installStandaloneBackendLogging,
   stopStandaloneBackendLogging,
 } from "./standalone-logging.js";
+import { installBoundedConsole } from "./bounded-console.js";
+import { startEventLoopStallMonitor } from "./event-loop-stall-monitor.js";
 
 assertSupportedPlatform();
+// First, before anything logs: Bun's console writes to a stalled stdout reader
+// block this whole process (see bounded-console.ts).
+const boundedConsole = installBoundedConsole();
+startEventLoopStallMonitor();
 // Before any other startup work: a rejection thrown while the backend is still
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.
@@ -209,9 +215,11 @@ const stop = createBackendShutdownHandler({
   },
   warn: (message) => console.warn(message),
   info: (message) => console.log(message),
-  exit: (code) => {
-    void stopStandaloneBackendLogging(standaloneLogging).finally(() => process.exit(code));
-  },
+  exit: createBackendExitHandler({
+    stopLogging: () => stopStandaloneBackendLogging(standaloneLogging),
+    flushConsole: (timeoutMs) => boundedConsole.flush(timeoutMs),
+    exit: (code) => process.exit(code),
+  }),
 });
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));

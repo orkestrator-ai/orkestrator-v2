@@ -227,7 +227,10 @@ function ValidationOutputModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[min(44rem,calc(100dvh-2rem))] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl sm:p-0">
+      <DialogContent
+        size="5xl"
+        className="flex h-[min(44rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:p-0"
+      >
         <DialogHeader className="m-0 shrink-0 gap-3 border-b border-divider px-14 py-4 text-center sm:m-0 sm:px-14 sm:text-center">
           <DialogTitle className="flex items-center justify-center gap-2 text-base">
             <SquareTerminal className="size-4 shrink-0" />

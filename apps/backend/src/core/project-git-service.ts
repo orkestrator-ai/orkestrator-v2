@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import { CommandFailedError, runCommand } from "./shell.js";
+import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
@@ -432,10 +433,11 @@ export class ProjectGitService {
     previous?: ProjectGitStatus,
   ): Promise<ProjectGitStatus> {
     const [porcelain, head, upstream, operations, branches] = await Promise.all([
-      runCommand("git", ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"], {
-        cwd: root,
-        timeoutMs: 10_000,
-      }),
+      // The user's own checkout may run an fsmonitor daemon; a hung one is retried past.
+      runGitWithFsmonitorFallback(
+        ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+        { cwd: root, timeoutMs: 10_000 },
+      ),
       runCommand("git", ["rev-parse", "--verify", "HEAD"], { cwd: root, timeoutMs: 10_000 }).catch(
         () => ({ stdout: "", stderr: "" }),
       ),

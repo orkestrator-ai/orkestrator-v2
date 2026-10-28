@@ -357,7 +357,8 @@ function HistoryDialog({ job, onClose }: { job: ScheduledJob; onClose: () => voi
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className={cn("sm:max-w-2xl", Z_FULLSCREEN_DIALOG)}
+        size="2xl"
+        className={Z_FULLSCREEN_DIALOG}
         overlayClassName={Z_FULLSCREEN_DIALOG}
       >
         <DialogHeader>
@@ -675,7 +676,8 @@ function ScheduleDialog({
   return (
     <Dialog open onOpenChange={(open) => !open && !saving && onClose(false)}>
       <DialogContent
-        className={cn("sm:max-w-xl", Z_FULLSCREEN_DIALOG)}
+        size="xl"
+        className={Z_FULLSCREEN_DIALOG}
         overlayClassName={Z_FULLSCREEN_DIALOG}
       >
         <DialogHeader>

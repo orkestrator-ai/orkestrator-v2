@@ -331,7 +331,8 @@ export function AddProjectDialog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-2xl"
+        size="2xl"
+
         showCloseButton={!isGitHubCloning}
         onEscapeKeyDown={(event) => {
           if (gitHubCloneInFlightRef.current) event.preventDefault();

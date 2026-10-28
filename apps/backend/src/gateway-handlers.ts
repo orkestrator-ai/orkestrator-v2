@@ -37,6 +37,8 @@ import type {
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
+import { boundedConsoleStats } from "./bounded-console.js";
+import { eventLoopDiagnostics } from "./event-loop-stall-monitor.js";
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
 export class GatewayHandlers {
@@ -333,6 +335,10 @@ export class GatewayHandlers {
       recurringWork: recurringWorkDiagnostics(),
       // Additive: content-free mixed-version compatibility-path usage.
       compatibilityPaths: compatibilityPathUsage.snapshot().paths,
+      // Additive: event-loop stalls and console lines dropped while the log
+      // reader was not draining (null outside the backend entrypoint).
+      eventLoop: eventLoopDiagnostics(),
+      consoleOutput: boundedConsoleStats(),
     });
   }
 

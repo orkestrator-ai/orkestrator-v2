@@ -14,7 +14,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { publishConnections } from "@/lib/connections";
-import { cn } from "@/lib/utils";
 
 type HostKeyReview = {
   probeId: string;
@@ -117,10 +116,7 @@ export function SshRouteDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent
-        className={cn("sm:max-w-lg", Z_FULLSCREEN_DIALOG)}
-        overlayClassName={Z_FULLSCREEN_DIALOG}
-      >
+      <DialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
         {review ? (
           <div className="space-y-4">
             <DialogHeader>

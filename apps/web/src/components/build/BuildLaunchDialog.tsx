@@ -823,7 +823,8 @@ export function BuildLaunchDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[42rem] sm:p-0"
+        size="2xl"
+        className="flex max-h-[min(46rem,calc(100vh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:p-0"
         onCloseAutoFocus={(event) => {
           const focusTarget = returnFocusRef?.current;
           if (!focusTarget?.isConnected) return;

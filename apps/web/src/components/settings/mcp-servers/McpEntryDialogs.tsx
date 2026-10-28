@@ -26,7 +26,6 @@ import { Label } from "@/components/ui/label";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { useAccountMachine } from "@/components/settings/account-machine";
-import { cn } from "@/lib/utils";
 
 import { McpErrorNotice, mcpProblemFrom, type McpProblem } from "./McpErrorNotice";
 import { applyBlockedReason, writeBlockedReason } from "./mcp-rollout";
@@ -219,7 +218,8 @@ export function McpEntryDialog({
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose(false)}>
       <DialogContent
-        className={cn("sm:max-w-xl", Z_FULLSCREEN_DIALOG)}
+        size="xl"
+        className={Z_FULLSCREEN_DIALOG}
         overlayClassName={Z_FULLSCREEN_DIALOG}
         onCloseAutoFocus={(event) => {
           if (!onRestoreFocus) return;

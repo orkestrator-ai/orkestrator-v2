@@ -325,10 +325,23 @@ describe("move_environment", () => {
       settings,
     );
 
+    const originalRun = shell.runCommand;
+    const stops: string[][] = [];
+    spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+      if (args.includes("fsmonitor--daemon")) {
+        stops.push(args);
+        expect(await exists(environment.worktreePath!)).toBe(true);
+        expect(await exists(path.join(root, "moved"))).toBe(false);
+      }
+      return originalRun(command, args, options);
+    });
     const moved = await moveEnvironmentTask(environment.id, path.join(root, "moved"), context, {
       sessionHomes: isolatedHomes(root),
     });
 
+    expect(stops).toEqual([
+      ["-C", environment.worktreePath!, "-c", "core.fsmonitor=false", "fsmonitor--daemon", "stop"],
+    ]);
     expect(listTmuxSessions).toHaveBeenCalledTimes(1);
     expect(await exists(environment.worktreePath!)).toBe(false);
     expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(moved.worktreePath);

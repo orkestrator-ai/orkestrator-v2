@@ -115,7 +115,7 @@ describe("native shortcut routing", () => {
       expect(event.preventDefault).toHaveBeenCalledTimes(2);
       expect(owner.send).toHaveBeenCalledTimes(1);
       source.emit("before-input-event", event, { ...chord, type: "keyUp" });
-      source.emit("before-input-event", event, { ...chord, shift: false });
+      source.emit("before-input-event", event, { ...chord, alt: true });
       expect(event.preventDefault).toHaveBeenCalledTimes(2);
       controller.forget(owner.id);
     },
@@ -132,6 +132,60 @@ describe("native shortcut routing", () => {
       expect(realm.send).not.toHaveBeenCalled();
     },
   );
+
+  test.each([
+    ["⌘K", { meta: true, control: false }],
+    ["Ctrl+K", { meta: false, control: true }],
+  ])("%s in a native artifact view opens the window's search, once per press", (_, mods) => {
+    const { register, shell, realm } = harness();
+    const search = { ...chord, ...mods, key: "k", shift: false };
+    const source = register(43);
+    const event = { preventDefault: mock(() => {}) };
+    source.emit("before-input-event", event, search);
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    // The realm owns the artifact, but the search belongs to its window.
+    expect(shell.focus).toHaveBeenCalledTimes(1);
+    expect(shell.send).toHaveBeenLastCalledWith(
+      "orkestrator:event",
+      "app-shortcut",
+      "search-projects",
+    );
+    expect(realm.send).not.toHaveBeenCalled();
+    source.emit("before-input-event", event, { ...search, isAutoRepeat: true });
+    expect(event.preventDefault).toHaveBeenCalledTimes(2);
+    expect(shell.send).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([1, 2, 42, 999])(
+    "app documents, previews and unknown contents %s keep ⌘K and Ctrl+K",
+    (id) => {
+      // An app document's own router knows whether a terminal or text field
+      // there owns Ctrl+K; a previewed page owns ⌘K as a real browser's would.
+      const { register, shell, realm, otherWindow } = harness();
+      const source = register(id);
+      const event = { preventDefault: mock(() => {}) };
+      for (const mods of [{ meta: true }, { meta: false, control: true }])
+        source.emit("before-input-event", event, { ...chord, ...mods, key: "k", shift: false });
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      for (const contents of [shell, realm, otherWindow]) {
+        expect(contents.send).not.toHaveBeenCalled();
+        expect(contents.focus).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  test.each([1, 2, 43])("Ctrl+Shift+K in app/realm/artifact %s toggles like ⌘⇧K", (id) => {
+    const { register, shell, realm, controller } = harness();
+    const event = { preventDefault: mock(() => {}) };
+    register(id).emit("before-input-event", event, { ...chord, meta: false, control: true });
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect((id === 1 ? shell : realm).send).toHaveBeenLastCalledWith(
+      "orkestrator:event",
+      "menu-keyboard-shortcuts",
+      "toggle",
+    );
+    controller.forget(id === 1 ? shell.id : realm.id);
+  });
 
   test("closed IPC accepts only live app renderers and realms", async () => {
     const { controller, routing, owners, shell, realm } = harness();

@@ -1,6 +1,8 @@
 import {
+  APP_SHORTCUT_EVENT,
   KEYBOARD_SHORTCUTS_EVENT,
-  isKeyboardShortcutsChord,
+  matchAppShortcut,
+  type AppShortcutId,
   type KeyboardShortcutsRequest,
 } from "@orkestrator/protocol/keyboard-shortcuts";
 import { emitToContents, type RendererContents } from "./desktop-window-contexts.js";
@@ -33,19 +35,35 @@ export type ShortcutInput = {
   alt: boolean;
 };
 
+/** The app shortcut a native `before-input-event` key press is, if any. */
+export function appShortcutForInput(input: ShortcutInput): AppShortcutId | null {
+  if (input.type !== "keyDown") return null;
+  return matchAppShortcut({
+    key: input.key,
+    code: input.code,
+    metaKey: input.meta,
+    ctrlKey: input.control,
+    shiftKey: input.shift,
+    altKey: input.alt,
+  });
+}
+
 /** Whether a native view's `before-input-event` is ⌘⇧K / Ctrl+Shift+K. */
 export function isKeyboardShortcutsInput(input: ShortcutInput): boolean {
-  return (
-    input.type === "keyDown" &&
-    isKeyboardShortcutsChord({
-      key: input.key,
-      code: input.code,
-      metaKey: input.meta,
-      ctrlKey: input.control,
-      shiftKey: input.shift,
-      altKey: input.alt,
-    })
-  );
+  return appShortcutForInput(input) === "show-shortcuts";
+}
+
+/**
+ * Hand a window-owned app shortcut to the window's shell renderer, giving it
+ * keyboard focus first so the UI it opens (the search) takes the next keys.
+ */
+export function requestAppShortcut(
+  renderer: KeyboardShortcutsRenderer | null | undefined,
+  id: AppShortcutId,
+): void {
+  if (!renderer || renderer.isDestroyed()) return;
+  renderer.focus();
+  emitToContents(renderer, APP_SHORTCUT_EVENT, id);
 }
 
 export type KeyboardShortcutsTarget = {

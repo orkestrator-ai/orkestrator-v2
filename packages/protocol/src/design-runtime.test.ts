@@ -6,7 +6,7 @@ import type {
   DesignStyleResult,
   DesignValidationReport,
 } from "./design-canvas.js";
-import { isKeyboardShortcutsChord } from "./keyboard-shortcuts.js";
+import { APP_SHORTCUTS, matchAppShortcut } from "./keyboard-shortcuts.js";
 import { installDesignRuntime } from "./design-runtime.js";
 
 describe("design runtime sanitizer", () => {
@@ -190,18 +190,22 @@ describe("design runtime editing", () => {
   });
 });
 
-test("serialized design runtime forwards the shared chord once and consumes auto-repeat", () => {
+test("serialized design runtime forwards each app shortcut once and consumes auto-repeat", () => {
   const frame = new Window();
   frame.eval(
-    "window.__forwarded = []; window.parent.postMessage = (message) => window.__forwarded.push(message.channel)",
+    "window.__forwarded = []; window.parent.postMessage = (message) => window.__forwarded.push([message.channel, message.shortcut])",
   );
-  frame.eval(`(${installDesignRuntime.toString()})(${isKeyboardShortcutsChord.toString()})`);
-  const press = (repeat: boolean) => {
+  frame.eval(
+    `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)})`,
+  );
+  const press = (
+    init: { shiftKey: boolean; metaKey?: boolean; ctrlKey?: boolean },
+    repeat: boolean,
+  ) => {
     const event = new frame.KeyboardEvent("keydown", {
       key: "Л",
       code: "KeyK",
-      ctrlKey: true,
-      shiftKey: true,
+      ...init,
       repeat,
       bubbles: true,
       cancelable: true,
@@ -209,7 +213,12 @@ test("serialized design runtime forwards the shared chord once and consumes auto
     frame.document.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
   };
-  press(false);
-  press(true);
-  expect(frame.eval("window.__forwarded")).toEqual(["orkestrator-design-shortcuts"]);
+  press({ ctrlKey: true, shiftKey: true }, false);
+  press({ ctrlKey: true, shiftKey: true }, true);
+  press({ metaKey: true, shiftKey: false }, false);
+  press({ metaKey: true, shiftKey: false }, true);
+  expect(frame.eval("window.__forwarded")).toEqual([
+    ["orkestrator-design-shortcuts", "show-shortcuts"],
+    ["orkestrator-design-shortcuts", "search-projects"],
+  ]);
 });

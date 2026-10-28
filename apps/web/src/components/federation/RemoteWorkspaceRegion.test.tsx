@@ -16,6 +16,7 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
+import { onAppShortcut } from "@/lib/app-shortcuts";
 import { frameEnvelope } from "@/lib/federation/workspace-realm";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
@@ -226,6 +227,29 @@ describe("desktop: another machine's workspace in the central region", () => {
     );
     expect(useUIStore.getState().sidebarOpen).toBe(!open);
     act(() => useUIStore.setState({ sidebarOpen: open }));
+  });
+
+  test("⌘K forwarded from the realm opens the window's search", async () => {
+    const fake = install(true);
+    renderRegion(anchorElement());
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
+    await waitFor(() => expect(fake.workspaceViews.open).toHaveBeenCalledTimes(1));
+    const search = mock(() => {});
+    const stop = onAppShortcut("search-projects", search);
+    try {
+      for (const shortcut of ["search-projects", "close-tab"]) {
+        act(() =>
+          fake.emitViewEvent({
+            viewId: "view-1",
+            type: "message",
+            message: { type: "shortcut", shortcut },
+          }),
+        );
+      }
+      expect(search).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+    }
   });
 
   test("the realm reports the title bar's meters, and the title bar opens its popovers", async () => {
@@ -566,6 +590,33 @@ test("frame title-bar reports and sequenced panel requests use the current docum
     }),
     window.location.origin,
   );
+});
+
+test("⌘K forwarded from a browser realm frame opens the window's search", async () => {
+  install(false);
+  renderRegion(anchorElement());
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+  const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
+  Object.defineProperty(frame, "contentWindow", {
+    configurable: true,
+    value: { postMessage: mock(() => undefined) },
+  });
+  const search = mock(() => {});
+  const stop = onAppShortcut("search-projects", search);
+  try {
+    act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
+    // Another document's envelope is ignored.
+    act(() =>
+      frameMessage(frame, "workspace-2", { type: "shortcut", shortcut: "search-projects" }),
+    );
+    expect(search).not.toHaveBeenCalled();
+    act(() =>
+      frameMessage(frame, "workspace-1", { type: "shortcut", shortcut: "search-projects" }),
+    );
+    expect(search).toHaveBeenCalledTimes(1);
+  } finally {
+    stop();
+  }
 });
 
 function workspaceReply(id: string) {

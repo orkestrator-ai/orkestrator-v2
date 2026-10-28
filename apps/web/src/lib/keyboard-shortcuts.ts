@@ -4,14 +4,26 @@
  * The handlers themselves live next to the surfaces that own them; this list
  * only describes them. When you add, change or remove a shortcut, update the
  * matching entry here so the dialog stays truthful.
+ *
+ * App-level shortcuts, which work wherever focus is in the window, are
+ * defined once in `APP_SHORTCUTS` (`@orkestrator/protocol/keyboard-shortcuts`),
+ * which every key router reads; their entries here take their keys from it
+ * through `appShortcutEntry`.
  */
 
-import { isKeyboardShortcutsChord } from "@orkestrator/protocol/keyboard-shortcuts";
+import {
+  appShortcut,
+  isKeyboardShortcutsChord,
+  type AppShortcutId,
+  type ShortcutPlatform,
+} from "@orkestrator/protocol/keyboard-shortcuts";
 
-export type ShortcutPlatform = "mac" | "other";
+export type { ShortcutPlatform };
 
 export interface KeyboardShortcut {
   id: string;
+  /** Set on app-level shortcuts: they work wherever focus is in the window. */
+  app?: true;
   description: string;
   /** Key caps on macOS, in press order. */
   mac: readonly string[];
@@ -128,26 +140,36 @@ export const DESIGN_KEYBOARD_SHORTCUTS: readonly KeyboardShortcut[] = [
   },
 ];
 
+/** The entry of an app-level shortcut, with its keys from `APP_SHORTCUTS`. */
+function appShortcutEntry(
+  id: AppShortcutId,
+  entry: Omit<KeyboardShortcut, "id" | "app" | "mac" | "other">,
+): KeyboardShortcut {
+  const { key, shift } = appShortcut(id);
+  const letter = key.toUpperCase();
+  return {
+    id,
+    app: true,
+    ...entry,
+    mac: shift ? ["⌘", "⇧", letter] : ["⌘", letter],
+    other: shift ? ["Ctrl", "Shift", letter] : ["Ctrl", letter],
+  };
+}
+
 export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
   {
     id: "general",
     title: "General",
     shortcuts: [
-      {
-        id: "show-shortcuts",
+      appShortcutEntry("show-shortcuts", {
         description: "Show keyboard shortcuts",
-        mac: ["⌘", "⇧", "K"],
-        other: ["Ctrl", "Shift", "K"],
         // Also View › Keyboard Shortcuts… in the desktop app's menu bar.
         keywords: ["help", "keybindings", "hotkeys", "view menu"],
-      },
-      {
-        id: "search-projects",
+      }),
+      appShortcutEntry("search-projects", {
         description: "Search projects and environments",
-        mac: ["⌘", "K"],
-        other: ["Ctrl", "K"],
         keywords: ["command palette", "switch", "jump"],
-      },
+      }),
       {
         id: "open-file",
         description: "Open a file in the environment",

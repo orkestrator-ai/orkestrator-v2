@@ -186,3 +186,60 @@ test("outside pointer dismissal notifies desktop restoration once and returns ty
   await page.keyboard.type("resumed");
   await expect(composer).toHaveValue("resumed");
 });
+
+test.describe("⌘K search works wherever focus is", () => {
+  const requests = (page: import("@playwright/test").Page) => page.getByTestId("search-requests");
+  const shellInput = (page: import("@playwright/test").Page) =>
+    page.getByTestId("terminal-input").evaluate((output) => output.textContent);
+
+  test("from the composer, and ⌘K in a terminal while Ctrl+K reaches the shell", async ({
+    page,
+  }) => {
+    await page.goto("/keyboard-shortcuts");
+    await page.getByRole("textbox", { name: "Composer" }).focus();
+    await page.keyboard.press("Meta+K");
+    await expect(requests(page)).toHaveText("1");
+    await page.keyboard.press("Control+K");
+    // Ctrl+K in a macOS text field is kill-line; elsewhere it is search.
+    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+    await expect(requests(page)).toHaveText(mac ? "1" : "2");
+
+    const terminal = page.getByTestId("terminal").locator("textarea.xterm-helper-textarea");
+    await terminal.focus();
+    await page.keyboard.press("Control+K");
+    // xterm sent ^K (kill-line) to the shell, and the app left it alone.
+    await expect.poll(() => shellInput(page)).toBe("\u000b");
+    await expect(requests(page)).toHaveText(mac ? "1" : "2");
+    await page.keyboard.press("Meta+K");
+    await expect(requests(page)).toHaveText(mac ? "2" : "3");
+    expect(await shellInput(page)).toBe("\u000b");
+  });
+
+  for (const modifier of ["Meta", "Control"]) {
+    test(`${modifier}+K from an app-owned design frame reaches the window`, async ({ page }) => {
+      await page.goto("/keyboard-shortcuts");
+      const input = page
+        .frameLocator('iframe[title="Design preview"]')
+        .getByRole("textbox", { name: "Design input" });
+      await input.fill("kept");
+      await page.keyboard.press(`${modifier}+K`);
+      await expect(requests(page)).toHaveText("1");
+      await expect(input).toHaveValue("kept");
+    });
+  }
+
+  test("from a workspace realm frame's composer, forwarded to its window", async ({ page }) => {
+    await page.goto("/keyboard-shortcuts");
+    const realm = page.frameLocator('iframe[title="Workspace realm"]');
+    const composer = realm.getByRole("textbox", { name: "Realm composer" });
+    await composer.fill("draft");
+    await page.keyboard.press("Meta+K");
+    await expect(requests(page)).toHaveText("1");
+    await expect(composer).toHaveValue("draft");
+    // ⌘⇧K stays with the realm, which draws its own dialog.
+    await composer.focus();
+    await page.keyboard.press("Meta+Shift+K");
+    await expect(realm.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+  });
+});

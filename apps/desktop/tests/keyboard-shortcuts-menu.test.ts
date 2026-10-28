@@ -1,6 +1,7 @@
 import { describe, expect, jest, mock, test } from "bun:test";
 import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
 import {
+  appShortcutForInput,
   isKeyboardShortcutsInput,
   KeyboardShortcutsController,
   resolveKeyboardShortcutsTarget,
@@ -61,6 +62,37 @@ describe("isKeyboardShortcutsInput", () => {
     expect(isKeyboardShortcutsInput({ ...input, meta: false, control: true })).toBe(true);
     expect(isKeyboardShortcutsInput({ ...input, type: "keyUp" })).toBe(false);
     expect(isKeyboardShortcutsInput({ ...input, shift: false })).toBe(false);
+  });
+});
+
+describe("appShortcutForInput", () => {
+  const input = {
+    type: "keyDown",
+    key: "k",
+    code: "KeyK",
+    meta: false,
+    control: false,
+    shift: false,
+    alt: false,
+  };
+
+  test.each([
+    ["⌘", { meta: true }],
+    ["Ctrl", { control: true }],
+  ])("%s+K is search and %s+Shift+K the shortcuts dialog, on any platform", (_, modifier) => {
+    expect(appShortcutForInput({ ...input, ...modifier })).toBe("search-projects");
+    expect(appShortcutForInput({ ...input, ...modifier, key: "K", shift: true })).toBe(
+      "show-shortcuts",
+    );
+    // macOS can report Ctrl+K as its control character; the key position decides.
+    expect(appShortcutForInput({ ...input, ...modifier, key: "\v" })).toBe("search-projects");
+    expect(appShortcutForInput({ ...input, ...modifier, type: "keyUp" })).toBeNull();
+  });
+
+  test("needs exactly one of ⌘ and Ctrl", () => {
+    expect(appShortcutForInput(input)).toBeNull();
+    expect(appShortcutForInput({ ...input, meta: true, control: true })).toBeNull();
+    expect(appShortcutForInput({ ...input, meta: true, alt: true })).toBeNull();
   });
 });
 

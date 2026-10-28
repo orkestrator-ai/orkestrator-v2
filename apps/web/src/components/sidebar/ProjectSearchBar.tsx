@@ -18,6 +18,7 @@ import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
+import { onAppShortcut } from "@/lib/app-shortcuts";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -330,26 +331,25 @@ export function ProjectSearchBar({
     else setOpen(false);
   };
 
+  // ⌘K / Ctrl+K toggles the search from anywhere in the window, the
+  // composer, terminals and workspace realms included (see `app-shortcuts.ts`).
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+  useEffect(
+    () =>
+      onAppShortcut("search-projects", () => {
+        if (!openRef.current) setNow(new Date());
+        openRef.current = !openRef.current;
+        setOpen(openRef.current);
+      }),
+    [],
+  );
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
-
-      const hasModifier = event.metaKey || event.ctrlKey;
-      const hasBothModifiers = event.metaKey && event.ctrlKey;
-      if (
-        hasModifier &&
-        !hasBothModifiers &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "k"
-      ) {
-        if (isTypingTarget(event.target) && !open) return;
-        event.preventDefault();
-        if (!open) setNow(new Date());
-        setOpen(!open);
-        return;
-      }
-
       if (!open || event.key !== "Escape") return;
       if (isTypingTarget(event.target)) return;
       event.preventDefault();

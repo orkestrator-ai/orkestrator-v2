@@ -85,6 +85,31 @@ export function realmCoordinatorDefers(grouping: RealmGrouping | null): boolean 
 }
 
 /**
+ * The tab a project opens on from its entry in the window's sidebar. The
+ * command node's projects open on their coordinator. Another node's open on
+ * its own coordinator too, except where that coordinator defers to the
+ * command node's (grouped by repository): there they open on their home.
+ */
+export function projectLandingTab(
+  grouping: RealmGrouping | null,
+  onCommandNode: boolean,
+): "home" | "coordinator" {
+  return !onCommandNode && realmCoordinatorDefers(grouping) ? "home" : "coordinator";
+}
+
+/**
+ * What a sidebar project entry asks the node to show, as board navigation:
+ * the coordinator where it lands there, nothing where it lands on the home,
+ * which is where another node's realm opens a project by default.
+ */
+export function projectLandingBoardTab(
+  grouping: RealmGrouping | null,
+  onCommandNode: boolean,
+): RealmBoardTab | undefined {
+  return projectLandingTab(grouping, onCommandNode) === "coordinator" ? "coordinator" : undefined;
+}
+
+/**
  * A dialog of the realm's node, opened over what the request selects: the
  * project's for the project dialogs, the environment's for its settings.
  * `environment-rebuild` is the environment's settings on its Container

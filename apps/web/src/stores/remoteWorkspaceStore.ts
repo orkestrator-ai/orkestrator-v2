@@ -254,3 +254,21 @@ export function useRemoteEnvironmentShown(nodeId: string, environmentId: string)
     (state) => state.active?.nodeId === nodeId && state.active.environmentId === environmentId,
   );
 }
+
+/**
+ * Whether another node's project is what the central region shows: the
+ * project with its home, or with nothing else selected, as this window's own
+ * project row is selected.
+ */
+export function useRemoteProjectHomeShown(
+  nodeId: string,
+  projectId: string,
+  homeEnvironmentId: string | undefined,
+): boolean {
+  return useRemoteWorkspaceStore(
+    (state) =>
+      state.active?.nodeId === nodeId &&
+      state.active.projectId === projectId &&
+      (state.active.environmentId === null || state.active.environmentId === homeEnvironmentId),
+  );
+}

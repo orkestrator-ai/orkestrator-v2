@@ -38,6 +38,11 @@ describe("main process startup switches", () => {
       // touch user state. Moving the switch wiring past this boundary must fail.
       const source = `
         import { mock } from "bun:test";
+        import net from "node:net";
+        // Bun has no native setter. Supply one so startup must actually wrap
+        // the shared Socket.prototype, even on runtimes without this API.
+        const originalSetter = function () { return this; };
+        net.Socket.prototype.setTypeOfService = originalSetter;
         const runtimePath = ${JSON.stringify(fileURLToPath(new URL("../electron/runtime-profile.ts", import.meta.url)))};
         const runtime = await import(runtimePath);
         mock.module(runtimePath, () => ({
@@ -69,6 +74,11 @@ describe("main process startup switches", () => {
           stopped = true;
         }
         if (!stopped) throw new Error("startup boundary was not reached");
+        const installedSetter = net.Socket.prototype.setTypeOfService;
+        if (installedSetter === originalSetter ||
+            !installedSetter[Symbol.for("orkestrator.socketTypeOfServiceGuard")]) {
+          throw new Error("socket guard was not installed before startup side effects");
+        }
         process.stdout.write(JSON.stringify(calls));
       `;
       const output = execFileSync(process.execPath, ["--eval", source], {

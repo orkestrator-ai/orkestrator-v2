@@ -1326,6 +1326,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.tokenCount;
           delete reviewer.cacheReadTokens;
           delete reviewer.usageFinalizationPolls;
+          delete reviewer.commandSandboxOff;
           delete reviewer.startedAt;
           delete reviewer.completedAt;
         }
@@ -1428,6 +1429,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.tokenCount;
             delete reviewer.cacheReadTokens;
             delete reviewer.usageFinalizationPolls;
+            delete reviewer.commandSandboxOff;
             delete reviewer.completedAt;
           }
           workflow.phase = "reviewing";

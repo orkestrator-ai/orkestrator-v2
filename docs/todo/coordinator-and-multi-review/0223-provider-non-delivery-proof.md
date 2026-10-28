@@ -541,9 +541,10 @@ the interrupted handoff. Remaining live checks stay batched with
 
 - [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md):
   the recovery rules this builds on.
-- [0723-build-pipeline-resend-without-dispatch-check.md](0723-build-pipeline-resend-without-dispatch-check.md):
-  the earlier analysis of Build Pipeline's same-id stage re-send (task 1
-  and code item 3), now fixed as recorded above.
+- [#1329](https://github.com/orkestrator-ai/orkestrator-v2/pull/1329): the change
+  that fixed Build Pipeline's same-id stage re-send (item 3 above). The
+  separate todo that first analysed it (coordinator-and-multi-review 0723)
+  was deleted on 2026-10-28 as finished.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   where the live check is batched.
 - [0059-claude-preference-lock-after-restart.md](../agent-engines/0059-claude-preference-lock-after-restart.md):

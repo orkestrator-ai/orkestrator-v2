@@ -4608,6 +4608,7 @@ test.each(["grok", "cursor", "pi", "codex"] as const)(
         expect(reviewerDispatch?.prompt).toContain("submit_review_report");
         expect(reviewerDispatch?.options.schema).toBeUndefined();
         expect(reviewerDispatch?.options.workflowResultTool).toBe("submit_review_report");
+        expect(reviewerDispatch?.options.workflowResultKey).toBe(reviewerRequestId);
         expect(reviewerDispatch?.options.agentMcp).toEqual({
           url: "http://127.0.0.1:1234/mcp",
           token: "test-token",
@@ -4644,6 +4645,10 @@ test.each(["grok", "cursor", "pi", "codex"] as const)(
         expect(consolidationDispatch?.options.workflowResultTool).toBe(
           "submit_consolidated_review",
         );
+        // Consolidation is read-only, so Grok and Pi let its result tools
+        // through only for a call naming the attempt the turn declared.
+        expect(consolidationDispatch?.options.readOnly).toBe(true);
+        expect(consolidationDispatch?.options.workflowResultKey).toBe(consolidationRequestId);
         expect(consolidationDispatch?.options.agentMcp).toEqual({
           url: "http://127.0.0.1:1234/mcp",
           token: "test-token",
@@ -4720,6 +4725,7 @@ test("a preparation model that finishes without submitting gets one reminder tur
       expect(reminder.prompt).toContain("Your discovery work is already done");
       expect(reminder.prompt).toContain(reminderRequestId);
       expect(reminder.options.workflowResultTool).toBe("submit_validation_plan");
+      expect(reminder.options.workflowResultKey).toBe(reminderRequestId);
 
       // The reminder is spent once: a second miss fails the step as before.
       const failed = await advanceUntil(
@@ -5148,6 +5154,9 @@ for (const kind of ["prepare", "fix"] as const) {
                     : "submit_fix_result"
                   : undefined,
               );
+              expect(provider.sends.get(nextId)!.options.workflowResultKey).toBe(
+                toolMode ? nextId : undefined,
+              );
               if (outcome === "second-restart") {
                 provider.sessionFailures.set(sessionId, "Codex restarted again.");
                 provider.restartInterrupted.add(sessionId);
@@ -5221,6 +5230,7 @@ test("Fix gets one result reminder in its existing session and fails after a sec
       );
       expect(provider.sends.get(requestId)!.prompt).toContain("Your fix is already done");
       expect(provider.sends.get(requestId)!.options.workflowResultTool).toBe("submit_fix_result");
+      expect(provider.sends.get(requestId)!.options.workflowResultKey).toBe(requestId);
       expect(failed.error).toContain("without calling submit_fix_result");
       expect(provider.sends.size).toBe(2);
     },

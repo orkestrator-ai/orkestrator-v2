@@ -191,11 +191,18 @@ those requirements. Install the tools with Homebrew:
 brew install bash coreutils findutils gnu-tar grep gnu-sed flock
 ```
 
-The fixtures that need GNU `tar` or `date` put Homebrew's GNU tool directories
+The fixtures that need GNU `tar`, `date`, `rm` or `du` put Homebrew's GNU tool directories
 (under `/opt/homebrew/opt` or `/usr/local/opt`) ahead of the inherited PATH
 themselves (`tests/unit/gnu-shell-tools.ts`), and skip with the install command
-in the test name when those tools are missing. For everything else, prefer the
-tools for the validation command without changing the global shell
+in the test name when those tools are missing. Staged-input relay tests probe
+the required flags directly and require them on Linux and CI. macOS also runs
+all relay cases using only system tools, with fixture adapters mapping GNU
+`rm --one-file-system` to BSD `rm -x` and GNU `du --apparent-size -B1` to BSD
+`du -A -B1`, converting its 512-byte output blocks to bytes (rounded up). This
+native lane exercises permissions, stale relay removal, revocation, symlinks,
+entry limits and apparent-byte limits even without Homebrew coreutils; it does
+not qualify GNU flag behavior. For everything else, prefer the tools for the
+validation command without changing the global shell
 configuration (use `/usr/local` in place of `/opt/homebrew` on Intel Macs):
 
 ```bash

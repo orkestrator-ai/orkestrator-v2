@@ -964,7 +964,10 @@ export class BuildPipelineReviewFanout {
             ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
             ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
             ...(agentMcp
-              ? { workflowResultTool: workflowResultToolName("consolidated-review") }
+              ? {
+                  workflowResultTool: workflowResultToolName("consolidated-review"),
+                  workflowResultKey: consolidation.requestId,
+                }
               : {}),
           },
         );

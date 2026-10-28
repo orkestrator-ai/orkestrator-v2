@@ -747,6 +747,7 @@ function startHostUpdates(engine: AutoUpdateController): void {
 
 function createMenu(): void {
   const template = createApplicationMenuTemplate({
+    platform: process.platform,
     productName,
     windows: menuWindowList(),
     newWindow: () => {

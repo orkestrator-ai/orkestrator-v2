@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   KEYBOARD_SHORTCUT_GROUPS,
+  detectShortcutPlatform,
   filterKeyboardShortcuts,
   isKeyboardShortcutsShortcut,
 } from "./keyboard-shortcuts";
@@ -22,6 +23,28 @@ describe("keyboard shortcut catalog", () => {
   test("an empty query lists every shortcut on macOS", () => {
     const total = KEYBOARD_SHORTCUT_GROUPS.reduce((sum, group) => sum + group.shortcuts.length, 0);
     expect(ids(filterKeyboardShortcuts("", "mac"))).toHaveLength(total);
+  });
+
+  test("Windows and Linux key caps name Ctrl, Shift and Alt instead of macOS symbols", () => {
+    for (const shortcut of KEYBOARD_SHORTCUT_GROUPS.flatMap((group) => group.shortcuts)) {
+      for (const key of shortcut.other ?? []) {
+        expect({ id: shortcut.id, key }).toEqual({
+          id: shortcut.id,
+          key: expect.not.stringMatching(/[⌘⌥⌃⇧↵⌫]|\b(Cmd|Command|Option)\b/),
+        });
+      }
+    }
+  });
+
+  test("macOS key caps use the modifier symbols", () => {
+    for (const shortcut of KEYBOARD_SHORTCUT_GROUPS.flatMap((group) => group.shortcuts)) {
+      for (const key of shortcut.mac) {
+        expect({ id: shortcut.id, key }).toEqual({
+          id: shortcut.id,
+          key: expect.not.stringMatching(/^(Ctrl|Shift|Alt|Enter)$/),
+        });
+      }
+    }
   });
 
   test("macOS-only shortcuts are hidden on other platforms", () => {
@@ -47,6 +70,43 @@ describe("keyboard shortcut catalog", () => {
     const groups = filterKeyboardShortcuts("address bar", "mac");
     expect(groups.map((group) => group.id)).toEqual(["editors"]);
     expect(filterKeyboardShortcuts("no such shortcut", "mac")).toEqual([]);
+  });
+});
+
+describe("detectShortcutPlatform", () => {
+  test.each([
+    ["MacIntel", "mac"],
+    ["iPad", "mac"],
+    ["Linux x86_64", "other"],
+    ["Linux aarch64", "other"],
+    ["Win32", "other"],
+  ] as const)("reads %s as %s", (platform, expected) => {
+    expect(detectShortcutPlatform({ platform, userAgent: "" })).toBe(expected);
+  });
+
+  test("falls back to the user agent when the platform is blank", () => {
+    expect(
+      detectShortcutPlatform({
+        platform: "",
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+      }),
+    ).toBe("mac");
+    expect(
+      detectShortcutPlatform({
+        platform: "",
+        userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Electron/45.0.0",
+      }),
+    ).toBe("other");
+    expect(
+      detectShortcutPlatform({
+        platform: "",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      }),
+    ).toBe("other");
+  });
+
+  test("treats a missing navigator as Windows/Linux", () => {
+    expect(detectShortcutPlatform(undefined)).toBe("other");
   });
 });
 

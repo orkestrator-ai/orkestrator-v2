@@ -11,6 +11,8 @@ export type ApplicationMenuWindow = {
 };
 
 export type ApplicationMenuActions = {
+  /** `process.platform`: Windows and Linux get their own menu conventions. */
+  platform: NodeJS.Platform;
   productName: string;
   windows: ApplicationMenuWindow[];
   newWindow(): void;
@@ -71,26 +73,39 @@ function windowMenuItems(actions: ApplicationMenuActions): MenuItemConstructorOp
   }));
 }
 
-/** Build the desktop menu without importing Electron runtime state in tests. */
+/**
+ * Build the desktop menu without importing Electron runtime state in tests.
+ *
+ * Outside macOS, Electron's `Command` modifier is the Super/Windows key, and
+ * the hide, hideOthers, unhide and zoom roles have no action. Windows and
+ * Linux therefore get the conventional layout instead: Quit at the end of
+ * File, About and updates under Help, and no Command accelerators.
+ */
 export function createApplicationMenuTemplate(
   actions: ApplicationMenuActions,
 ): MenuItemConstructorOptions[] {
+  const isMac = actions.platform === "darwin";
+  const checkForUpdates: MenuItemConstructorOptions[] = actions.checkForUpdates
+    ? [{ label: "Check for Updates…", click: actions.checkForUpdates }]
+    : [];
   return [
-    {
-      label: actions.productName,
-      submenu: [
-        { role: "about" },
-        ...(actions.checkForUpdates
-          ? [{ label: "Check for Updates…", click: actions.checkForUpdates }]
-          : []),
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    },
+    ...(isMac
+      ? [
+          {
+            label: actions.productName,
+            submenu: [
+              { role: "about" },
+              ...checkForUpdates,
+              { type: "separator" },
+              { role: "hide" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          } satisfies MenuItemConstructorOptions,
+        ]
+      : []),
     {
       label: "File",
       submenu: [
@@ -102,9 +117,12 @@ export function createApplicationMenuTemplate(
         { type: "separator" },
         {
           label: "Close Tab",
-          accelerator: "Command+W",
+          // Ctrl+W is the shell's delete-word, and Command would register
+          // Super/Windows+W, which window managers and Windows own.
+          ...(isMac ? { accelerator: "Command+W" } : {}),
           click: actions.closeTab,
         },
+        ...(isMac ? [] : [{ type: "separator" } as const, { role: "quit" } as const]),
       ],
     },
     {
@@ -131,8 +149,9 @@ export function createApplicationMenuTemplate(
           label: "Keyboard Shortcuts…",
           accelerator: KEYBOARD_SHORTCUTS_ACCELERATOR,
           // Main consumes native input before both page and menu dispatch,
-          // including child views and subframes. Keep the label and macOS menu
-          // fallback without registering a second Windows/Linux delivery path.
+          // including child views and subframes. Keep the label (Ctrl+Shift+K
+          // on Windows and Linux) and the macOS menu fallback without
+          // registering a second Windows/Linux delivery path.
           registerAccelerator: false,
           click: (_item, _window, event: MenuKeyboardEvent) =>
             actions.showKeyboardShortcuts(event?.triggeredByAccelerator ? "toggle" : "open"),
@@ -143,10 +162,22 @@ export function createApplicationMenuTemplate(
       label: "Window",
       submenu: [
         { role: "minimize" },
-        { role: "zoom" },
+        ...(isMac ? [{ role: "zoom" } as const] : []),
         { type: "separator" },
         ...windowMenuItems(actions),
       ],
     },
+    ...(isMac
+      ? []
+      : [
+          {
+            label: "Help",
+            submenu: [
+              ...checkForUpdates,
+              ...(checkForUpdates.length > 0 ? [{ type: "separator" } as const] : []),
+              { role: "about" },
+            ],
+          } satisfies MenuItemConstructorOptions,
+        ]),
   ];
 }

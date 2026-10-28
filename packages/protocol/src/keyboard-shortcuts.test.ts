@@ -31,6 +31,21 @@ describe("isKeyboardShortcutsChord", () => {
     expect(isKeyboardShortcutsChord(chord({}))).toBe(false);
   });
 
+  test("on Windows, AltGr arrives as Ctrl+Alt and never opens the dialog", () => {
+    // Chromium reports AltGr as ctrlKey + altKey on Windows; AltGr+Shift+K
+    // types a character on several layouts and must reach the focused field.
+    expect(isKeyboardShortcutsChord(chord({ ctrlKey: true, altKey: true }))).toBe(false);
+    expect(isKeyboardShortcutsChord(chord({ ctrlKey: true, altKey: true, key: "Л" }))).toBe(false);
+  });
+
+  test("on Linux, Super+Shift+K is the Meta form and is accepted like Ctrl+Shift+K", () => {
+    // Chromium reports the Super/Windows key as metaKey. Window managers may
+    // keep it, so Ctrl+Shift+K is the documented chord outside macOS.
+    expect(isKeyboardShortcutsChord(chord({ metaKey: true }))).toBe(true);
+    expect(isKeyboardShortcutsChord(chord({ ctrlKey: true, key: "k" }))).toBe(true);
+    expect(isKeyboardShortcutsChord(chord({ ctrlKey: true, key: "Л" }))).toBe(true);
+  });
+
   test("matches the physical K key on a layout that types no Latin letter there", () => {
     // Russian ЙЦУКЕН: the K position types Л.
     expect(isKeyboardShortcutsChord(chord({ metaKey: true, key: "Л" }))).toBe(true);

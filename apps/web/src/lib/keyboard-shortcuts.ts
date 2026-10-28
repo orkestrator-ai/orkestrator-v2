@@ -441,9 +441,12 @@ const KEY_ALIASES: Record<string, string> = {
   Esc: "escape",
 };
 
-export function detectShortcutPlatform(): ShortcutPlatform {
-  if (typeof navigator === "undefined") return "other";
-  const platform = navigator.platform || navigator.userAgent;
+/** macOS and iOS show ⌘ caps; Windows, Linux and everything else show Ctrl. */
+export function detectShortcutPlatform(
+  host: { platform: string; userAgent: string } | undefined = globalThis.navigator,
+): ShortcutPlatform {
+  if (!host) return "other";
+  const platform = host.platform || host.userAgent;
   return /Mac|iPhone|iPad|iPod/i.test(platform) ? "mac" : "other";
 }
 

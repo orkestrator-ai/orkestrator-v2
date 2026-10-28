@@ -3,6 +3,14 @@ import type {
   PublicTicketDetail,
   PublicTicketSummary,
 } from "@orkestrator/protocol/public-api-resources";
+import {
+  isTicketKind,
+  parseTicketSectionsPatch,
+  ticketCriteriaSummary,
+  TICKET_KINDS,
+  type TicketKind,
+  type TicketSectionsPatch,
+} from "@orkestrator/protocol/ticket-sections";
 import type { KanbanTask } from "../storage-shared-core.js";
 import { paginate, requireProject } from "./actions-discovery.js";
 import { PublicActionError } from "./errors.js";
@@ -50,8 +58,11 @@ export function publicTicketSummary(task: KanbanTask): PublicTicketSummary {
 function publicTicketDetail(task: KanbanTask): PublicTicketDetail {
   return {
     ...publicTicketSummary(task),
+    kind: task.kind ?? "feature",
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
+    criteria: ticketCriteriaSummary(task.sections),
+    ...(task.sections?.delivery?.policy ? { deliveryPolicy: task.sections.delivery.policy } : {}),
     comments: task.comments.slice(-50).map((comment) => ({
       id: comment.id,
       text: comment.text,
@@ -81,6 +92,29 @@ function ticketText(input: Record<string, unknown>, key: string): string | undef
     throw new PublicActionError("input-too-large", `${key} must be at most 100000 characters`);
   }
   return value;
+}
+
+/** The structured content fields shared by `ticket.create` and `ticket.update`. */
+function ticketStructure(input: Record<string, unknown>): {
+  kind?: TicketKind;
+  sections?: TicketSectionsPatch;
+} {
+  const { kind, sections } = input;
+  if (kind !== undefined && !isTicketKind(kind)) {
+    throw invalid(`kind must be one of ${TICKET_KINDS.join(", ")}`);
+  }
+  let patch: TicketSectionsPatch | undefined;
+  if (sections !== undefined) {
+    try {
+      patch = parseTicketSectionsPatch(sections);
+    } catch (error) {
+      throw invalid(error instanceof Error ? error.message : "sections is invalid");
+    }
+    if (JSON.stringify(patch).length > 400_000) {
+      throw new PublicActionError("input-too-large", "sections must be at most 400000 characters");
+    }
+  }
+  return { ...(kind !== undefined ? { kind } : {}), ...(patch ? { sections: patch } : {}) };
 }
 
 const ticketList: ReadActionHandler<{
@@ -129,6 +163,8 @@ interface CreateInput {
   description: string;
   acceptanceCriteria: string;
   status: TicketStatus;
+  kind?: TicketKind;
+  sections?: TicketSectionsPatch;
 }
 
 const ticketCreate: MutationActionHandler<CreateInput> = {
@@ -142,6 +178,7 @@ const ticketCreate: MutationActionHandler<CreateInput> = {
       description: ticketText(input, "description") ?? "",
       acceptanceCriteria: ticketText(input, "acceptanceCriteria") ?? "",
       status: oneOf(input, "status", TICKET_STATUSES) ?? "backlog",
+      ...ticketStructure(input),
     };
     return { value, scope: `project:${value.projectId}`, intent: value };
   },
@@ -158,6 +195,8 @@ const ticketCreate: MutationActionHandler<CreateInput> = {
             acceptanceCriteria: input.acceptanceCriteria,
             status: input.status,
             requestId: operation.operationId,
+            ...(input.kind ? { kind: input.kind } : {}),
+            ...(input.sections ? { sections: input.sections } : {}),
           },
         );
         return {
@@ -172,7 +211,14 @@ const ticketCreate: MutationActionHandler<CreateInput> = {
 interface UpdateInput {
   projectId: string;
   ticketId: string;
-  set: { title?: string; description?: string; acceptanceCriteria?: string; status?: TicketStatus };
+  set: {
+    title?: string;
+    description?: string;
+    acceptanceCriteria?: string;
+    status?: TicketStatus;
+    kind?: TicketKind;
+    sections?: TicketSectionsPatch;
+  };
 }
 
 const ticketUpdate: MutationActionHandler<UpdateInput> = {
@@ -191,6 +237,7 @@ const ticketUpdate: MutationActionHandler<UpdateInput> = {
       ...(description !== undefined ? { description } : {}),
       ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
       ...(status !== undefined ? { status } : {}),
+      ...ticketStructure(input),
     };
     if (Object.keys(set).length === 0) throw invalid("Nothing to change");
     return {

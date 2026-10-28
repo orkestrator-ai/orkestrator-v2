@@ -4,6 +4,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { parseTicketSectionsPatch } from "@orkestrator/protocol/ticket-sections";
+import {
+  ticketKindField,
+  ticketSectionsField,
+  ticketStructuredOutput,
+} from "./ticket-tool-fields.js";
 import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
@@ -263,6 +269,7 @@ function ticketDetail(
 
   return {
     ...ticketSummary(task),
+    ...ticketStructuredOutput(task),
     title: title.value,
     description: description.value,
     acceptanceCriteria: acceptanceCriteria.value,
@@ -483,10 +490,13 @@ async function createAgentToolServer(
     "create_ticket",
     {
       title: "Create a Kanban ticket",
-      description: "Create a Kanban ticket in the current project. New tickets default to backlog.",
+      description:
+        "Create a Kanban ticket in the current project. New tickets default to backlog. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256).optional(),
         title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+        kind: ticketKindField,
+        sections: ticketSectionsField,
         description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
         acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
         status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
@@ -498,11 +508,13 @@ async function createAgentToolServer(
         openWorldHint: false,
       },
     },
-    async ({ title, description, acceptanceCriteria, status, requestId }) => {
+    async ({ title, kind, sections, description, acceptanceCriteria, status, requestId }) => {
       const ticket = await storage.kanban.addKanbanTask(scope.projectId, title, description, {
         acceptanceCriteria,
         status,
         requestId,
+        ...(kind ? { kind } : {}),
+        ...(sections ? { sections: parseTicketSectionsPatch(sections) } : {}),
       });
       return ticketResult(ticket);
     },
@@ -513,10 +525,12 @@ async function createAgentToolServer(
     {
       title: "Update a Kanban ticket",
       description:
-        "Update editable fields on a Kanban ticket in the current project. Omitted fields are unchanged.",
+        "Update editable fields on a Kanban ticket in the current project. Omitted fields are unchanged; sections replaces only the sections it names.",
       inputSchema: z.object({
         ticketId: z.string().trim().min(1).max(200),
         title: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
+        kind: ticketKindField,
+        sections: ticketSectionsField,
         description: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
         acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
         status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
@@ -528,10 +542,12 @@ async function createAgentToolServer(
         openWorldHint: false,
       },
     },
-    async ({ ticketId, title, description, acceptanceCriteria, status }) => {
+    async ({ ticketId, title, kind, sections, description, acceptanceCriteria, status }) => {
       await scopedTicket(storage, scope.projectId, ticketId);
-      const updates: Partial<KanbanTask> = {
+      const updates: Parameters<typeof storage.kanban.updateKanbanTask>[1] = {
         ...(title !== undefined ? { title } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+        ...(sections !== undefined ? { sections: parseTicketSectionsPatch(sections) } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
         ...(status !== undefined ? { status: status as KanbanStatus } : {}),

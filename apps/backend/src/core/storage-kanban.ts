@@ -1,6 +1,15 @@
 import * as shared from "./storage-shared.js";
 import { createHash } from "node:crypto";
 import {
+  applyTicketContentUpdate,
+  hasTicketContentUpdate,
+  normalizeTicketContent,
+  type AcceptanceCriterionCheck,
+  type TicketContentUpdate,
+  type TicketKind,
+  type TicketSectionsPatch,
+} from "@orkestrator/protocol/ticket-sections";
+import {
   FeaturePlanningFenceError,
   fs,
   isCanonicalUuid,
@@ -77,6 +86,32 @@ type ResourceChangeListener = shared.ResourceChangeListener;
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
+
+/**
+ * A stored row as current content. Legacy rows get their kind and sections
+ * derived on read; nothing is written back until the ticket is next changed,
+ * so this is the migration and it never loses or rewrites text. Results a
+ * hand-ticked legacy box records are dated with the ticket's creation, so
+ * repeated reads return the same row.
+ */
+export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
+  const content = normalizeTicketContent(task, { now: task.createdAt });
+  return { ...task, ...content };
+}
+
+/** Content fields a create or update may carry; see `applyTicketContentUpdate`. */
+export interface KanbanTaskContentInput {
+  kind?: TicketKind;
+  markdown?: string;
+  sections?: TicketSectionsPatch;
+}
+
+/** A Verify result for one criterion, matched to the ticket by id and text. */
+export interface KanbanCriterionCheckInput {
+  id: string;
+  text: string;
+  check: AcceptanceCriterionCheck;
+}
 
 function stableKanbanId(namespace: string, requestId: string): string {
   const hex = createHash("sha256").update(namespace).update("\0").update(requestId).digest("hex");
@@ -157,12 +192,13 @@ export class KanbanRepository {
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
     // Indexed by project: reads one board without parsing every project's.
     const tasks = this.context.loadStoreRowsByOwner<KanbanTask>(this.files.kanbanFile(), projectId);
-    return tasks.filter((task) => task.projectId === projectId);
+    return tasks.filter((task) => task.projectId === projectId).map(normalizeKanbanTask);
   }
 
   async getKanbanTask(taskId: string): Promise<KanbanTask | null> {
     const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-    return tasks.find((task) => task.id === taskId) ?? null;
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    return task ? normalizeKanbanTask(task) : null;
   }
 
   /**
@@ -204,12 +240,24 @@ export class KanbanRepository {
       status?: KanbanStatus;
       requestId?: string;
       featureBuildRequestHash?: string;
-    } = {},
+    } & KanbanTaskContentInput = {},
   ): Promise<KanbanTask> {
     const status = initial.status ?? "backlog";
     if (!isOneOf(status, ["backlog", "in-progress", "review", "done"])) {
       throw new Error("Kanban task status is invalid");
     }
+    const createdAt = nowIso();
+    const content = applyTicketContentUpdate(
+      null,
+      {
+        description,
+        acceptanceCriteria: initial.acceptanceCriteria ?? "",
+        ...(initial.kind !== undefined ? { kind: initial.kind } : {}),
+        ...(initial.markdown !== undefined ? { markdown: initial.markdown } : {}),
+        ...(initial.sections !== undefined ? { sections: initial.sections } : {}),
+      },
+      { now: createdAt },
+    );
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const id = initial.requestId
@@ -220,25 +268,25 @@ export class KanbanRepository {
         if (
           existing.projectId !== projectId ||
           existing.title !== title ||
-          existing.description !== description ||
-          existing.acceptanceCriteria !== (initial.acceptanceCriteria ?? "") ||
+          existing.description !== content.description ||
+          existing.acceptanceCriteria !== content.acceptanceCriteria ||
+          normalizeKanbanTask(existing).kind !== content.kind ||
           existing.status !== status ||
           existing.featureBuildRequestHash !== initial.featureBuildRequestHash
         ) {
           throw new Error("Kanban ticket requestId was already used with different arguments");
         }
-        return existing;
+        return normalizeKanbanTask(existing);
       }
       const task: KanbanTask = {
         id,
         projectId,
         title,
-        description,
-        acceptanceCriteria: initial.acceptanceCriteria ?? "",
+        ...content,
         status,
         comments: [],
         images: [],
-        createdAt: nowIso(),
+        createdAt,
         order:
           Math.max(
             -1,
@@ -275,12 +323,21 @@ export class KanbanRepository {
   ): Promise<KanbanTask | null> {
     const id = stableKanbanId(`ticket:${projectId}`, requestId);
     const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-    return tasks.find((task) => task.id === id && task.projectId === projectId) ?? null;
+    const task = tasks.find(
+      (candidate) => candidate.id === id && candidate.projectId === projectId,
+    );
+    return task ? normalizeKanbanTask(task) : null;
   }
 
+  /**
+   * Content fields (`description`, `acceptanceCriteria`, `kind`, `markdown`,
+   * `sections`) go through `applyTicketContentUpdate`, so criteria results
+   * survive edits that leave a criterion's text alone. Stored `sections` and
+   * `sectionsBasis` cannot be written directly.
+   */
   async updateKanbanTask(
     taskId: string,
-    updates: Partial<KanbanTask>,
+    updates: Partial<Omit<KanbanTask, "sections" | "sectionsBasis">> & KanbanTaskContentInput,
     expectedProjectId?: string,
   ): Promise<KanbanTask> {
     if (
@@ -300,7 +357,18 @@ export class KanbanRepository {
       }
 
       const oldStatus = task.status;
-      Object.assign(task, updates);
+      const { kind, markdown, sections, description, acceptanceCriteria, ...plain } = updates;
+      const contentUpdate: TicketContentUpdate = {
+        ...(kind !== undefined ? { kind } : {}),
+        ...(markdown !== undefined ? { markdown } : {}),
+        ...(sections !== undefined ? { sections } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
+      };
+      Object.assign(task, plain);
+      if (hasTicketContentUpdate(contentUpdate)) {
+        Object.assign(task, applyTicketContentUpdate(task, contentUpdate));
+      }
       if (updates.status && updates.status !== oldStatus) {
         task.order =
           Math.max(
@@ -317,7 +385,43 @@ export class KanbanRepository {
       }
       await this.context.saveJson(this.files.kanbanFile(), tasks);
       this.context.changes.announce("kanban", task.projectId);
-      return task;
+      return normalizeKanbanTask(task);
+    });
+  }
+
+  /**
+   * Records Verify's result for each criterion still on the ticket with the
+   * same id and text. A criterion edited since the pipeline started is left
+   * alone: the result was for text the ticket no longer has. Returns the
+   * ticket, or null when it no longer exists.
+   */
+  async recordKanbanCriteriaChecks(
+    taskId: string,
+    checks: readonly KanbanCriterionCheckInput[],
+  ): Promise<KanbanTask | null> {
+    if (checks.length === 0) return null;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+      const index = tasks.findIndex((candidate) => candidate.id === taskId);
+      if (index < 0) return null;
+      const task = normalizeKanbanTask(tasks[index]!);
+      const criteria = task.sections?.acceptanceCriteria ?? [];
+      let changed = false;
+      const next = criteria.map((criterion) => {
+        const result = checks.find(
+          (candidate) => candidate.id === criterion.id && candidate.text === criterion.text,
+        );
+        if (!result) return criterion;
+        changed = true;
+        return { ...criterion, check: result.check };
+      });
+      if (!changed) return task;
+      // Results live only in sections, never in the text mirrors, so the
+      // basis stays valid and no other field changes.
+      tasks[index] = { ...task, sections: { ...task.sections, acceptanceCriteria: next } };
+      await this.context.saveJson(this.files.kanbanFile(), tasks);
+      this.context.changes.announce("kanban", task.projectId);
+      return tasks[index]!;
     });
   }
 
@@ -353,12 +457,12 @@ export class KanbanRepository {
         if (existing.text !== text) {
           throw new Error("Kanban comment requestId was already used with different text");
         }
-        return task;
+        return normalizeKanbanTask(task);
       }
       task.comments.push({ id, text, createdAt: nowIso() });
       await this.context.saveJson(this.files.kanbanFile(), tasks);
       this.context.changes.announce("kanban", task.projectId);
-      return task;
+      return normalizeKanbanTask(task);
     });
   }
 
@@ -370,7 +474,7 @@ export class KanbanRepository {
       task.comments = task.comments.filter((comment) => comment.id !== commentId);
       await this.context.saveJson(this.files.kanbanFile(), tasks);
       this.context.changes.announce("kanban", task.projectId);
-      return task;
+      return normalizeKanbanTask(task);
     });
   }
 
@@ -412,7 +516,7 @@ export class KanbanRepository {
         if (existing.filename !== filename) {
           throw new Error("Kanban image requestId was already used with a different filename");
         }
-        return { task, image: existing };
+        return { task: normalizeKanbanTask(task), image: existing };
       }
       const rawBytes = Buffer.from(data, "base64");
       const webpBytes = normalized ? rawBytes : await resizeKanbanImage(rawBytes);
@@ -427,7 +531,7 @@ export class KanbanRepository {
         throw error;
       }
       this.context.changes.announce("kanban", task.projectId);
-      return { task, image };
+      return { task: normalizeKanbanTask(task), image };
     });
   }
 
@@ -446,7 +550,7 @@ export class KanbanRepository {
       await this.context.saveJson(this.files.kanbanFile(), tasks);
       this.context.changes.announce("kanban", task.projectId);
       await this.removeKanbanImageFilesBestEffort([imageId]);
-      return task;
+      return normalizeKanbanTask(task);
     });
   }
 
@@ -937,6 +1041,7 @@ export type KanbanStorage = Pick<
   | "addKanbanTask"
   | "findKanbanTaskByRequestId"
   | "updateKanbanTask"
+  | "recordKanbanCriteriaChecks"
   | "deleteKanbanTask"
   | "addKanbanComment"
   | "deleteKanbanComment"

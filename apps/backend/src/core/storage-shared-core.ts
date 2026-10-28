@@ -21,6 +21,7 @@ import {
   type AgentInteractionPolicy,
   type AgentInteractionResolutionJournal,
 } from "@orkestrator/protocol/agent-interactions";
+import type { TicketKind, TicketSections } from "@orkestrator/protocol/ticket-sections";
 import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
@@ -143,8 +144,20 @@ export type KanbanTask = {
   id: string;
   projectId: string;
   title: string;
+  /**
+   * Mirror of every section except the acceptance criteria, as markdown. Kept
+   * for readers that predate sections; `sections` is authoritative. See
+   * `@orkestrator/protocol/ticket-sections`.
+   */
   description: string;
+  /** Mirror of the acceptance criteria as a markdown list. */
   acceptanceCriteria: string;
+  /** Absent on tickets written before kinds existed: a feature ticket. */
+  kind?: TicketKind;
+  /** Absent on legacy rows; reads derive it from the text mirrors. */
+  sections?: TicketSections;
+  /** Fingerprint of the mirrors `sections` was written with. */
+  sectionsBasis?: string;
   status: KanbanStatus;
   comments: KanbanComment[];
   images: KanbanImage[];

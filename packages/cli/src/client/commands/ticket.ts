@@ -11,6 +11,7 @@ import type { CommandSpec, OptionSpec } from "../spec.js";
 import { oneOf, REQUEST_ID_OPTION, stringOption, submit } from "./common.js";
 
 const STATUSES = ["backlog", "in-progress", "review", "done"] as const;
+const KINDS = ["feature", "work-brief"] as const;
 
 const PROJECT_OPTION: OptionSpec = {
   name: "project",
@@ -44,6 +45,18 @@ const TEXT_FIELD_OPTIONS: OptionSpec[] = [
     valueName: "TEXT",
     description: "Acceptance criteria.",
   },
+  {
+    name: "kind",
+    kind: "string",
+    valueName: "KIND",
+    description: `Ticket kind: ${KINDS.join(", ")}.`,
+  },
+  {
+    name: "sections-file",
+    kind: "string",
+    valueName: "PATH",
+    description: "Read structured sections (a JSON object) from a local file.",
+  },
 ];
 
 function requireProject(options: Record<string, unknown>): string {
@@ -64,8 +77,25 @@ async function ticketFields(
     names: { file: "--description-file", stdin: "--description-stdin", inline: "--description" },
     required: false,
   });
+  const sectionsText = await readTextSource(io, {
+    file: options["sections-file"],
+    label: "Sections",
+    maxBytes: 400_000,
+    names: { file: "--sections-file", stdin: "--sections-stdin" },
+    required: false,
+  });
+  let sections: unknown;
+  if (sectionsText !== undefined) {
+    try {
+      sections = JSON.parse(sectionsText);
+    } catch {
+      throw new CliError("invalid-input", "--sections-file must contain a JSON object");
+    }
+  }
   return {
     ...(stringOption(options, "title") !== undefined ? { title: options.title } : {}),
+    ...(options.kind !== undefined ? { kind: oneOf(options.kind, KINDS, "--kind") } : {}),
+    ...(sections !== undefined ? { sections } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(stringOption(options, "criteria") !== undefined
       ? { acceptanceCriteria: options.criteria }
@@ -83,6 +113,13 @@ function ticketRows(tickets: PublicTicketSummary[]): string[] {
   );
 }
 
+const CRITERION_MARKS = {
+  passed: "[x]",
+  failed: "[!]",
+  "not-checked": "[?]",
+  unchecked: "[ ]",
+} as const;
+
 function ticketLines(ticket: PublicTicketDetail): string[] {
   return [
     ...keyValues([
@@ -90,11 +127,24 @@ function ticketLines(ticket: PublicTicketDetail): string[] {
       ["project", ticket.projectId],
       ["status", ticket.status],
       ["title", ticket.title],
+      ["kind", ticket.kind ?? "feature"],
       ["environment", ticket.environmentId],
       ["pr", ticket.pr.url],
+      ...(ticket.deliveryPolicy ? [["delivery", ticket.deliveryPolicy] as [string, unknown]] : []),
     ]),
     ...(ticket.description ? ["", ticket.description] : []),
-    ...(ticket.acceptanceCriteria ? ["", "Acceptance criteria:", ticket.acceptanceCriteria] : []),
+    ...(ticket.criteria?.length
+      ? [
+          "",
+          "Acceptance criteria:",
+          ...ticket.criteria.map(
+            (criterion) =>
+              `${CRITERION_MARKS[criterion.status ?? "unchecked"]} ${criterion.id} ${criterion.text}${criterion.evidence ? ` (${criterion.evidence})` : ""}`,
+          ),
+        ]
+      : ticket.acceptanceCriteria
+        ? ["", "Acceptance criteria:", ticket.acceptanceCriteria]
+        : []),
     ...ticket.comments.flatMap((comment) => ["", `[${comment.createdAt}] ${comment.text}`]),
   ];
 }
@@ -171,6 +221,7 @@ export const ticketCommands: CommandSpec[] = [
     inputFields: {
       "description-file": "description",
       criteria: "acceptanceCriteria",
+      "sections-file": "sections",
     },
     idOutput: "ticket ID",
     async run(context, parsed) {
@@ -197,13 +248,14 @@ export const ticketCommands: CommandSpec[] = [
   {
     path: ["ticket", "update"],
     action: "ticket.update",
-    summary: "Change a ticket's title, description, criteria or column.",
+    summary: "Change a ticket's title, kind, sections, description, criteria or column.",
     positionals: [{ name: "ticket", required: true }],
     options: [PROJECT_OPTION, ...TEXT_FIELD_OPTIONS, STATUS_OPTION, REQUEST_ID_OPTION],
     inputFields: {
       ticket: "ticketId",
       "description-file": "description",
       criteria: "acceptanceCriteria",
+      "sections-file": "sections",
     },
     idOutput: "ticket ID",
     async run(context, parsed) {

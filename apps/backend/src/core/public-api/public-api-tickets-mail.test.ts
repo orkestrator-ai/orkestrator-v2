@@ -80,6 +80,52 @@ describe("ticket actions", () => {
   });
 });
 
+describe("structured ticket actions", () => {
+  test("create and update take a kind and sections; get reports criteria", async () => {
+    const { harness, projectId } = await setup();
+    const created = await harness.call<{ ticketId: string }>(
+      "ticket.create",
+      {
+        projectId,
+        title: "Brief",
+        kind: "work-brief",
+        sections: {
+          summary: "Do it",
+          acceptanceCriteria: ["Works"],
+          delivery: { policy: "open-pr" },
+        },
+      },
+      { requestId: "structured-1" },
+    );
+    if (!created.ok) throw new Error(created.error.message);
+    const ticketId = created.result.ticketId;
+    const updated = await harness.call(
+      "ticket.update",
+      { projectId, ticketId, sections: { acceptanceCriteria: ["Works", "Has a test"] } },
+      { requestId: "structured-2" },
+    );
+    expect(updated.ok).toBe(true);
+    const ticket = await harness.call<PublicTicketDetail>("ticket.get", { projectId, ticketId });
+    if (!ticket.ok) throw new Error(ticket.error.message);
+    expect(ticket.result).toMatchObject({
+      kind: "work-brief",
+      deliveryPolicy: "open-pr",
+      description: "Do it\n\n## Delivery\n\nPolicy: open-pr",
+      acceptanceCriteria: "- Works\n- Has a test",
+      criteria: [
+        { id: "ac-1", text: "Works" },
+        { id: "ac-2", text: "Has a test" },
+      ],
+    });
+    const invalid = await harness.call(
+      "ticket.update",
+      { projectId, ticketId, sections: { bogus: "x" } },
+      { requestId: "structured-3" },
+    );
+    expect(!invalid.ok && invalid.error.code).toBe("invalid-input");
+  });
+});
+
 describe("mail actions", () => {
   test("refuse before admission while messaging is disabled", async () => {
     const { harness } = await setup();

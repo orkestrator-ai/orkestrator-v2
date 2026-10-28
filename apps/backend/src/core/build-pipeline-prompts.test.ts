@@ -608,8 +608,22 @@ describe("build pipeline prompts", () => {
 
     expect(prompt).toContain("do not rerun or reproduce them");
     expect(prompt).toContain("exercises code this branch changes");
-    expect(prompt).toContain("unless the diff contains a later commit that plausibly repairs it");
+    expect(prompt).toContain(
+      "unless a commit after the recorded validation headRef plausibly repairs it",
+    );
+    expect(prompt).toContain("that repair is still present at HEAD");
+    expect(prompt).toContain("git merge-base --is-ancestor <headRef> HEAD");
+    expect(prompt).toContain("git log --oneline <headRef>..HEAD and the relevant commit diffs");
+    expect(prompt).toContain("git diff <headRef>..HEAD");
+    expect(prompt).toContain("confirm the repair addresses the recorded failure");
+    expect(prompt).toContain(
+      "The cumulative target-to-HEAD diff alone does not establish that a repair followed validation",
+    );
+    expect(prompt).toContain("If headRef is missing, unavailable or not an ancestor of HEAD");
+    expect(prompt).toContain("or no repair can be established in that range");
+    expect(prompt).toContain("keep the relevant failed or incomplete check blocking completion");
     expect(prompt).toContain("accept a claimed repair only when the diff shows it");
+    expect(prompt).toContain("in that post-validation range");
     expect(prompt).toContain("do not repeat its target-branch reproductions");
     expect(prompt).not.toContain("git worktree add");
     expect(prompt).not.toContain("temporary detached worktree");
@@ -649,10 +663,16 @@ describe("build pipeline prompts", () => {
     const prompt = verificationPrompt(filed, "", "main");
 
     expect(prompt).toContain("against commit `validated-sha`");
+    expect(prompt).toContain("use the recorded validation headRef as <headRef>");
+    expect(prompt).toContain("git log --oneline <headRef>..HEAD");
     expect(prompt).toContain("`.orkestrator/review/package-1.json`");
     expect(prompt).toContain("read bounded relevant ranges");
     expect(prompt).toContain("not a plan to rerun");
+    expect(prompt).toContain(
+      "If diagnostics are unavailable or insufficient, report that limitation in the rationale instead of rerunning the command.",
+    );
     expect(prompt).not.toContain("capture rerun output separately");
+    expect(prompt).not.toContain("run only the relevant failed or incomplete command when needed");
     expect(prompt).not.toContain("none is available for this round");
   });
 
@@ -769,6 +789,10 @@ describe("build pipeline prompts", () => {
           }
           expect(prompt.split("</recorded-validation-json>")).toHaveLength(2);
         }
+        const verify = verificationPrompt(value, "", "main");
+        expect(verify).toContain("against commit `head`");
+        expect(verify).toContain("use the recorded validation headRef as <headRef>");
+        expect(verify).toContain("git log --oneline <headRef>..HEAD");
         if (format === "legacy") {
           legacy.validation[0]!.stdout = "";
           legacy.validation[0]!.stderr = "";
@@ -862,7 +886,20 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("characters omitted]");
     expect(prompt).not.toContain("x".repeat(MAX_ADDRESS_REPORT_CHARACTERS));
     expect(prompt.split("</address-report-json>")).toHaveLength(2);
-    expect(verificationPrompt(pipeline(), "", "main")).toContain("**Address report**: none.");
+  });
+
+  test("verificationPrompt reads recorded evidence without reruns when the address report is absent", () => {
+    for (const report of [undefined, "", "  \n  "]) {
+      const prompt = verificationPrompt(pipeline(), "", "main", undefined, report);
+
+      expect(prompt).toContain("**Address report**: none.");
+      expect(prompt).toContain("judge from the diff and any recorded validation evidence");
+      expect(prompt).toContain("Read that evidence without rerunning checks");
+      expect(prompt).toContain(
+        "if it is unavailable or insufficient, report the limitation in the rationale",
+      );
+      expect(prompt).not.toContain("independently confirmed validation evidence");
+    }
   });
 
   test("the pipeline address prompt owns failure triage and reports its evidence", () => {

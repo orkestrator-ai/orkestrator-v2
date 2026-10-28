@@ -550,7 +550,7 @@ export function recordedValidationSection(
     ? "If diagnostics are unavailable or insufficient, report that limitation in the rationale instead of rerunning the command."
     : "If diagnostics are unavailable or insufficient, report that limitation and run only the relevant failed or incomplete command when needed; do not rerun the broad validation plan.";
   if ("kind" in reviewPackage) {
-    return `${header} Each command's status, exit code, limitations and output artifact paths are in the review package at \`${reviewPackage.filePath}\` in the environment workspace; read its \`validation\` entries. ${artifactReading}`;
+    return `${header} Each command's status, exit code, limitations and output artifact paths are in the review package at \`${reviewPackage.filePath}\` in the environment workspace; read its \`validation\` entries. ${artifactReading} ${insufficient}`;
   }
   const results = reviewPackage.validation.map((result) => {
     const { command, status, exitCode, limitation } = result;
@@ -614,12 +614,12 @@ export function addressValidationInstruction(
 }
 
 /**
- * Verify judges recorded failures from the diff alone. Reproducing them is the
- * address and fix stages' job; a verifier that reruns suites or rebuilds the
+ * Verify judges recorded failures from the diff and recorded evidence.
+ * Reproducing them is the address and fix stages' job; a verifier that reruns suites or rebuilds the
  * target branch turns a minutes-long review into a second validation pass.
  */
 export function verificationFailureInstruction(targetBranch: string): string {
-  return `**Recorded failures**: judge them from the diff, the recorded diagnostics and the address report; do not rerun or reproduce them. A failed or incomplete recorded check blocks completion when it exercises code this branch changes or an acceptance criterion depends on it, unless the diff contains a later commit that plausibly repairs it. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. A failure confined to code this branch does not touch is not a reason to fail; mention it in the rationale. The address report is another agent's claim: accept a claimed repair only when the diff shows it, and do not repeat its target-branch reproductions. If any ticket-required repair remains unmet on this branch, report complete: false.`;
+  return `**Recorded failures**: judge them from the diff, the recorded diagnostics and the address report; do not rerun or reproduce them. A failed or incomplete recorded check blocks completion when it exercises code this branch changes or an acceptance criterion depends on it, unless a commit after the recorded validation headRef plausibly repairs it and that repair is still present at HEAD. To establish a later repair, use the recorded validation headRef as <headRef>: confirm it is an ancestor of HEAD with git merge-base --is-ancestor <headRef> HEAD, inspect git log --oneline <headRef>..HEAD and the relevant commit diffs, and check git diff <headRef>..HEAD to confirm the repair addresses the recorded failure and remains in the final code. The cumulative target-to-HEAD diff alone does not establish that a repair followed validation. If headRef is missing, unavailable or not an ancestor of HEAD, or no repair can be established in that range, report the limitation and keep the relevant failed or incomplete check blocking completion. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. A failure confined to code this branch does not touch is not a reason to fail; mention it in the rationale. The address report is another agent's claim: accept a claimed repair only when the diff shows it in that post-validation range, and do not repeat its target-branch reproductions. If any ticket-required repair remains unmet on this branch, report complete: false.`;
 }
 
 /** Keeps a verbose address turn from crowding the ticket out of the verify prompt. */
@@ -627,7 +627,7 @@ export const MAX_ADDRESS_REPORT_CHARACTERS = 16_000;
 
 function addressReportSection(report: string | undefined): string {
   if (!report?.trim()) {
-    return "**Address report**: none. No readable address report is available for this round; judge from the diff and independently confirmed validation evidence.";
+    return "**Address report**: none. No readable address report is available for this round; judge from the diff and any recorded validation evidence. Read that evidence without rerunning checks; if it is unavailable or insufficient, report the limitation in the rationale.";
   }
   const notice = `\n… [${report.length - MAX_ADDRESS_REPORT_CHARACTERS} characters omitted]`;
   const text =

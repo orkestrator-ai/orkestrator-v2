@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Globe, House, Laptop, Network, Shield } from "lucide-react";
+import { GitMerge, Globe, House, Laptop, Network, Shield } from "lucide-react";
+import { PR_READY_TO_MERGE_LABEL } from "@orkestrator/protocol/pr-merge-readiness";
 import { machineDotClass } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,7 @@ export function EnvironmentTooltipBody({
   agentSummary,
   changes,
   onCopyAddress,
+  readyToMerge = false,
 }: {
   name: string;
   machine: EnvironmentTooltipMachine | null;
@@ -41,6 +43,8 @@ export function EnvironmentTooltipBody({
   agentSummary?: ReactNode;
   changes?: ReactNode;
   onCopyAddress?: () => void;
+  /** Its pull request waits only for the user to merge it. */
+  readyToMerge?: boolean;
 }) {
   const isLocal = details.environmentType === "local";
   return (
@@ -121,6 +125,15 @@ export function EnvironmentTooltipBody({
         </p>
       )}
       {changes}
+      {readyToMerge && (
+        <p
+          className="text-xs text-success flex items-center gap-1"
+          data-testid="environment-tooltip-ready-to-merge"
+        >
+          <GitMerge className="h-3 w-3" aria-hidden="true" />
+          {PR_READY_TO_MERGE_LABEL}
+        </p>
+      )}
       {details.prUrl && <p className="text-xs text-blue-400">PR: {details.prUrl}</p>}
     </div>
   );

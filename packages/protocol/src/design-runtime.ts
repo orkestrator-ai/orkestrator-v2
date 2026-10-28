@@ -1,4 +1,10 @@
-import { isKeyboardShortcutsChord } from "./keyboard-shortcuts.js";
+import {
+  APP_SHORTCUTS,
+  matchAppShortcut,
+  appClaimsShortcut,
+  shortcutFocus,
+  type AppShortcut,
+} from "./keyboard-shortcuts.js";
 import type {
   DesignElement,
   DesignHierarchyPage,
@@ -13,7 +19,12 @@ import type {
  * One sanitizer and one DOM budget serve both, so a frame the backend accepts
  * renders the same way in every client.
  */
-export function installDesignRuntime(matchesShortcut?: typeof isKeyboardShortcutsChord) {
+export function installDesignRuntime(
+  matchesShortcut?: typeof matchAppShortcut,
+  shortcuts?: readonly AppShortcut[],
+  claimsShortcut?: typeof appClaimsShortcut,
+  focusedSurface?: typeof shortcutFocus,
+) {
   const MAX_HTML_BYTES = 256 * 1024;
   const MAX_ELEMENTS = 5000;
   const forbidden = "script,iframe,frame,object,embed,base,meta,link,portal,applet";
@@ -507,11 +518,24 @@ export function installDesignRuntime(matchesShortcut?: typeof isKeyboardShortcut
   document.addEventListener(
     "keydown",
     (event) => {
-      if (matchesShortcut?.(event)) {
+      // App shortcuts belong to the editor around the frame; it routes them.
+      const shortcut = matchesShortcut && shortcuts ? matchesShortcut(event, shortcuts) : null;
+      const definition = shortcuts?.find((entry) => entry.id === shortcut);
+      if (
+        definition &&
+        claimsShortcut &&
+        focusedSurface &&
+        claimsShortcut(
+          definition,
+          event,
+          /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? "mac" : "other",
+          focusedSurface(event.target),
+        )
+      ) {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat)
-          window.parent.postMessage({ channel: "orkestrator-design-shortcuts" }, "*");
+          window.parent.postMessage({ channel: "orkestrator-design-shortcuts", shortcut }, "*");
         return;
       }
       // Escape always returns control to the editor, never to authored markup.
@@ -525,5 +549,5 @@ export function installDesignRuntime(matchesShortcut?: typeof isKeyboardShortcut
 /** Only our nonce-bearing bootstrap executes. Authored code has no nonce. */
 export function designBootstrap(nonce: string): string {
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(nonce)) throw new Error("Invalid runtime nonce");
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})(${isKeyboardShortcutsChord.toString()});</script></body></html>`;
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()});</script></body></html>`;
 }

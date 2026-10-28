@@ -98,8 +98,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
       target.prUrl,
       "--json",
       target.projectHome
-        ? "url,state,mergeable,headRefName,baseRefName,isCrossRepository"
-        : "url,state,mergeable,baseRefName",
+        ? "url,state,mergeable,mergeStateStatus,isDraft,headRefName,baseRefName,isCrossRepository"
+        : "url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
     ];
     return {
       args,
@@ -120,8 +120,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "30",
     "--json",
     target.projectHome
-      ? "url,state,mergeable,updatedAt,headRefName,baseRefName,isCrossRepository"
-      : "url,state,mergeable,updatedAt,baseRefName",
+      ? "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
+      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
   ];
   return {
     args,
@@ -359,6 +359,7 @@ export function environmentToPrMonitorTarget(environment: Environment): PrMonito
     prBaseBranch: environment.prBaseBranch ?? null,
     prState: environment.prState ?? null,
     hasMergeConflicts: environment.hasMergeConflicts ?? null,
+    prMergeability: environment.prMergeability ?? null,
     projectHome: environment.projectHome,
   };
 }

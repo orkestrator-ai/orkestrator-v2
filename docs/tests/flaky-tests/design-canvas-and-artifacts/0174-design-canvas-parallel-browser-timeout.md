@@ -278,3 +278,20 @@ to confirm no recurrence is listed in
 ## Shared Codex state review fixes — 2026-10-26
 
 Reopened for a recurrence after the 2026-10-25 fix. Both viewport cases reached their deadlines in the nine-worker component browser suite on `74841142b`; the mobile case was waiting for the replacement iframe element's `display: inline-block`. The complete unchanged owner passed both viewport cases with one worker in 60.6 s: `ORKESTRATOR_E2E_PORT=62459 mise run test:logged -- --name codex-auth-owner-designcanvas -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/codex-auth-owner-designcanvas`. This does not establish that the earlier Apply styles race returned; the new stall's cause remains unknown. The original command and broader results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md). No implementation, assertion, timeout or skip changed in this owner.
+
+
+## Uniform app shortcuts review recurrence — 2026-10-28
+
+The nine-worker component aggregate reported this case again (both 30-second
+DesignCanvas deadlines for 0174, and mobile unrendered-frame selection for
+1249). The complete unchanged DesignCanvas, DesignCanvasAccessibility and
+SetupRecovery owners passed sequentially with one worker: 20 passed, exit 0,
+77.0 seconds. Command:
+
+```sh
+mise run test:logged -- --name design-and-layer-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DesignCanvasAccessibility.spec.ts e2e/SetupRecovery.spec.ts --workers=1
+```
+
+No assertion, timeout or skip changed. The cause remains unestablished; this
+case stays open. Aggregate counts and artifact paths are recorded in
+[0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#uniform-app-shortcut-review-repairs--2026-10-28).

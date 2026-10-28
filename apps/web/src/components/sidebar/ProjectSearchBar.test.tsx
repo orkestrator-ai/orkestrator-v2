@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { Environment, Project } from "@/types";
 import { useConfigStore } from "@/stores/configStore";
+import { useEnvironmentStore } from "@/stores";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
 import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
@@ -221,6 +223,71 @@ describe("ProjectSearchBar", () => {
     expect(screen.getByText("primary")).toBeTruthy();
   });
 
+  test("shimmers a result whose PR is ready to merge and stops when it is merged", async () => {
+    const prUrl = "https://github.com/acme/orkestrator-v2/pull/9";
+    const ready: Environment = {
+      ...localEnvironment,
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+    };
+    const initialEnvironments = useEnvironmentStore.getState().environments;
+    const initialMonitor = usePrMonitorStore.getState();
+    try {
+      useEnvironmentStore.setState({ environments: [ready, containerEnvironment] });
+      usePrMonitorStore.setState({
+        syncStatus: "current",
+        states: new Map([
+          [
+            ready.id,
+            {
+              environmentId: ready.id,
+              mode: "normal",
+              checkInProgress: false,
+              consecutiveErrors: 0,
+              lastCheckAt: "2026-10-28T10:00:00.000Z",
+              lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
+              prUrl,
+              prState: "open",
+              hasMergeConflicts: false,
+              checkSummary: null,
+            },
+          ],
+        ]),
+      });
+      renderSearchBar({ environments: [ready, containerEnvironment] });
+      await openSearch();
+
+      const row = screen.getByTestId("project-search-item-env-local");
+      const name = row.querySelector<HTMLElement>("[data-merge-ready]");
+      expect(name?.textContent).toBe("main");
+      expect(name?.classList).toContain("text-shimmer");
+      const describedBy = row.getAttribute("aria-describedby");
+      expect(describedBy ? document.getElementById(describedBy)?.textContent : null).toBe(
+        "Ready to merge",
+      );
+      // Only the ready environment shimmers.
+      expect(
+        screen.getByTestId("project-search-item-env-container").querySelector("[data-merge-ready]"),
+      ).toBeNull();
+
+      act(() =>
+        useEnvironmentStore.setState({
+          environments: [{ ...ready, prState: "merged" }, containerEnvironment],
+        }),
+      );
+      expect(
+        screen.getByTestId("project-search-item-env-local").querySelector("[data-merge-ready]"),
+      ).toBeNull();
+    } finally {
+      // Unmount first so restoring the shared stores does not re-render the bar.
+      cleanup();
+      useEnvironmentStore.setState({ environments: initialEnvironments });
+      usePrMonitorStore.setState(initialMonitor, true);
+    }
+  });
+
   test("filters to matching environments and opens the keyboard selection", async () => {
     const { onSelectEnvironment, onSelectProject } = renderSearchBar();
     const input = await openSearch();
@@ -428,36 +495,80 @@ describe("ProjectSearchBar", () => {
     expect(await screen.findByRole("dialog")).toBeTruthy();
   });
 
-  test("does not open from Command+K while another field is focused", () => {
+  test("opens from Command+K in the composer and other text fields, and toggles closed", async () => {
     renderSearchBar();
+    const composer = document.createElement("textarea");
+    const editable = document.createElement("div");
+    editable.contentEditable = "true";
     const field = document.createElement("input");
-    document.body.appendChild(field);
+    document.body.append(composer, editable, field);
     try {
-      field.focus();
-      fireEvent.keyDown(field, { key: "k", metaKey: true });
-      expectDomAbsent(screen.queryByRole("dialog"), "search palette while typing");
+      for (const surface of [composer, editable, field]) {
+        surface.focus();
+        fireEvent.keyDown(surface, { key: "k", code: "KeyK", metaKey: true });
+        const input = await screen.findByRole("combobox", {
+          name: "Search projects and environments",
+        });
+        // The search field is a text field too: the same chord closes it.
+        await waitFor(() => expect(document.activeElement).toBe(input));
+        fireEvent.keyDown(input, { key: "k", code: "KeyK", metaKey: true });
+        await waitFor(() => expectDomAbsent(screen.queryByRole("dialog"), "search closed"));
+      }
     } finally {
+      composer.remove();
+      editable.remove();
       field.remove();
     }
   });
 
-  test("does not open from Control+K in a textarea or contenteditable", () => {
-    renderSearchBar();
-    const textarea = document.createElement("textarea");
-    const editable = document.createElement("div");
-    editable.contentEditable = "true";
-    document.body.append(textarea, editable);
-    try {
-      textarea.focus();
-      fireEvent.keyDown(textarea, { key: "k", ctrlKey: true });
-      expectDomAbsent(screen.queryByRole("dialog"), "search palette from textarea");
+  describe("Control+K", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    afterEach(() => {
+      if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+      else delete (navigator as { platform?: string }).platform;
+    });
 
-      editable.focus();
-      fireEvent.keyDown(editable, { key: "k", ctrlKey: true });
-      expectDomAbsent(screen.queryByRole("dialog"), "search palette from contenteditable");
-    } finally {
-      textarea.remove();
-      editable.remove();
-    }
+    test.each(["MacIntel", "Win32"])(
+      "in a focused terminal reaches the shell (kill-line) on %s; Command+K opens search",
+      async (platform) => {
+        Object.defineProperty(navigator, "platform", { value: platform, configurable: true });
+        renderSearchBar();
+        const xterm = document.createElement("div");
+        xterm.className = "xterm";
+        const helper = document.createElement("textarea");
+        xterm.append(helper);
+        document.body.append(xterm);
+        const shellKeys: string[] = [];
+        helper.addEventListener("keydown", (event) => shellKeys.push(event.key));
+        try {
+          helper.focus();
+          fireEvent.keyDown(helper, { key: "k", code: "KeyK", ctrlKey: true });
+          expect(shellKeys).toEqual(["k"]);
+          expectDomAbsent(screen.queryByRole("dialog"), "search from terminal Ctrl+K");
+          fireEvent.keyDown(helper, { key: "k", code: "KeyK", metaKey: true });
+          expect(await screen.findByRole("dialog")).toBeTruthy();
+          expect(shellKeys).toEqual(["k"]);
+        } finally {
+          xterm.remove();
+        }
+      },
+    );
+
+    test("in a text field opens search on Windows and Linux, and is kill-line on macOS", async () => {
+      renderSearchBar();
+      const composer = document.createElement("textarea");
+      document.body.append(composer);
+      try {
+        Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+        composer.focus();
+        fireEvent.keyDown(composer, { key: "k", code: "KeyK", ctrlKey: true });
+        expectDomAbsent(screen.queryByRole("dialog"), "search from macOS Ctrl+K");
+        Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+        fireEvent.keyDown(composer, { key: "k", code: "KeyK", ctrlKey: true });
+        expect(await screen.findByRole("dialog")).toBeTruthy();
+      } finally {
+        composer.remove();
+      }
+    });
   });
 });

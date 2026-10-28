@@ -77,7 +77,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
 
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog.trim()).toBe(
-          "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt,baseRefName",
+          "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
         );
       },
     );
@@ -112,7 +112,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","me
         });
 
         expect((await fs.readFile(logPath, "utf8")).trim()).toBe(
-          "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,updatedAt,baseRefName",
+          "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
         );
       },
     );
@@ -316,7 +316,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
-          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt,baseRefName",
+          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
         );
         expect(execLog).not.toContain("statusCheckRollup");
         expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
@@ -369,7 +369,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
-          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,updatedAt,baseRefName",
+          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
         );
         expect(execLog).not.toContain("statusCheckRollup");
       },

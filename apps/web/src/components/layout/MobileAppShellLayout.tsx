@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -11,6 +12,9 @@ import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { splitTitleEnvironmentName } from "@/lib/application-title";
+import { MergeReadyMarker, MergeReadyName } from "@/components/environments/MergeReadyName";
+import { PR_READY_TO_MERGE_LABEL } from "@orkestrator/protocol/pr-merge-readiness";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 
@@ -32,6 +36,10 @@ interface MobileAppShellLayoutProps {
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
   title: string;
+  /** The environment the title ends with, so its name alone can shimmer. */
+  titleEnvironmentName?: string | null;
+  /** That environment's pull request is ready to merge. */
+  titleReadyToMerge?: boolean;
   filesPanelOpen: boolean;
   centralPanelStyle: CSSProperties;
   actionBar: ReactNode;
@@ -56,6 +64,8 @@ export function MobileAppShellLayout({
   selectedProjectId,
   selectedEnvironmentId,
   title,
+  titleEnvironmentName = null,
+  titleReadyToMerge = false,
   filesPanelOpen,
   centralPanelStyle,
   actionBar,
@@ -67,6 +77,10 @@ export function MobileAppShellLayout({
   onTitleBarMouseDown,
 }: MobileAppShellLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
+  const readyTitle = titleReadyToMerge
+    ? splitTitleEnvironmentName(title, titleEnvironmentName)
+    : null;
+  const mergeReadyDescriptionId = useId();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
   const previousSelectionRef = useRef({ selectedEnvironmentId, selectedProjectId });
@@ -269,9 +283,18 @@ export function MobileAppShellLayout({
                 }
               }}
               aria-label={title}
+              aria-describedby={readyTitle ? mergeReadyDescriptionId : undefined}
               aria-expanded={titleTooltipOpen}
             >
-              {title}
+              {readyTitle ? (
+                <>
+                  {readyTitle.prefix}
+                  <MergeReadyName ready>{readyTitle.environmentName}</MergeReadyName>
+                  <MergeReadyMarker ready descriptionId={mergeReadyDescriptionId} />
+                </>
+              ) : (
+                title
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent
@@ -311,6 +334,9 @@ export function MobileAppShellLayout({
             }}
           >
             {title}
+            {readyTitle ? (
+              <span className="block text-success">{PR_READY_TO_MERGE_LABEL}</span>
+            ) : null}
           </TooltipContent>
         </Tooltip>
         <div

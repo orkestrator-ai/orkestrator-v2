@@ -82,6 +82,13 @@ export interface ArtifactWorkerPreparationStatus {
   finishedAt?: string;
   /** Image reference in use after a successful preparation. */
   image?: string;
+  /**
+   * A worker image prepared on this host earlier is present but was built
+   * from another build context than this backend ships (usually by the
+   * version before an upgrade). Under `auto` it is not used; preparing again
+   * replaces it.
+   */
+  outdated?: boolean;
 }
 
 export type ArtifactPrepareWorkerResponse = ArtifactWorkerPreparationStatus & {

@@ -1,3 +1,4 @@
+import { appShortcut, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import type {
   BrowserWindow,
   ContextMenuParams,
@@ -49,7 +50,7 @@ import {
 } from "./browser-preview-capture-pins.js";
 import { captureResponsiveSet } from "./browser-preview-capture-responsive.js";
 import { captureTabId } from "./browser-preview-capture-validation.js";
-import { isKeyboardShortcutsInput } from "./keyboard-shortcuts-menu.js";
+import { appShortcutForInput } from "./keyboard-shortcuts-menu.js";
 
 type WebContentsViewConstructor = new (
   options?: WebContentsViewConstructorOptions,
@@ -114,10 +115,10 @@ export interface BrowserPreviewManagerOptions {
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
   /**
-   * Toggle the owning renderer's keyboard shortcuts dialog. A key pressed in a
-   * preview never reaches the renderer's own ⌘⇧K / Ctrl+Shift+K listener.
+   * Route a catalog shortcut claimed from a preview to its owning app UI.
+   * Native preview keys never reach the renderer's DOM listener.
    */
-  toggleKeyboardShortcuts: (tabId: string) => void;
+  requestPreviewShortcut: (tabId: string, shortcut: AppShortcutId) => void;
   /** Service previews are unavailable without a transport (old backend, feature off). */
   transport?: BrowserPreviewServiceTransport;
   /** Open a service in the default browser through the private preview origin. */
@@ -813,10 +814,11 @@ export class BrowserPreviewManager {
     const contents = preview.view.webContents;
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("before-input-event", (event, input) => {
-      if (isKeyboardShortcutsInput(input)) {
+      const shortcut = appShortcutForInput(input);
+      if (shortcut && appShortcut(shortcut).fromPreviews) {
         // Also keeps the page and the menu's key equivalent from seeing it.
         event.preventDefault();
-        if (!input.isAutoRepeat) this.options.toggleKeyboardShortcuts(tabId);
+        if (!input.isAutoRepeat) this.options.requestPreviewShortcut(tabId, shortcut);
         return;
       }
       const isAddressShortcut =

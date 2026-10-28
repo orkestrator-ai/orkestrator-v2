@@ -5,6 +5,7 @@ import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tool
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
 import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
 import { EnvironmentTooltipBody } from "./EnvironmentTooltipBody";
+import { MergeReadyMarker, MergeReadyName } from "./MergeReadyName";
 import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
   AlertDialog,
@@ -55,6 +56,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
+import { useEnvironmentReadyToMerge } from "@/hooks/useEnvironmentReadyToMerge";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
 import { hydrationFreshnessNotice } from "@/lib/view-freshness";
@@ -287,6 +289,9 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 
   // Check if this environment is being deleted
   const isEnvironmentDeleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
+  // Its pull request waits only for the user to merge it (pr-merge-readiness).
+  const readyToMerge =
+    useEnvironmentReadyToMerge(environment.id, environment) && !isEnvironmentDeleting;
 
   // The badge is the backend's `environment-net` projection — the same
   // measurement the Files → Changes rows page through. Visibility, counts and
@@ -420,6 +425,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   // the trigger out of the accessibility tree and the DOM on desktop.
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const environmentNameId = useId();
+  const mergeReadyDescriptionId = useId();
   const menuItems: EnvironmentMenuItem[] = [
     {
       key: "settings",
@@ -538,6 +544,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               onMouseLeave={tooltip.hide}
               onFocus={tooltip.show}
               onBlur={tooltip.hide}
+              aria-describedby={readyToMerge ? mergeReadyDescriptionId : undefined}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
                 isSelected && !isMultiSelectMode
@@ -568,7 +575,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span
+                  <MergeReadyName
+                    ready={readyToMerge}
                     id={environmentNameId}
                     className={cn(
                       "truncate font-medium leading-4",
@@ -576,7 +584,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     )}
                   >
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
-                  </span>
+                  </MergeReadyName>
+                  <MergeReadyMarker ready={readyToMerge} descriptionId={mergeReadyDescriptionId} />
                   {boundMachine &&
                     (isEnvironmentDeleting || isMultiSelectMode || isTransitioning) && (
                       <MachineDot
@@ -695,6 +704,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                 : null
             }
             details={environment}
+            readyToMerge={readyToMerge}
             agentSummary={
               <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
             }

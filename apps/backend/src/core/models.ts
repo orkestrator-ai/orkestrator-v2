@@ -7,6 +7,7 @@ import type {
   FrontendAgentActivityObserverSnapshot,
 } from "@orkestrator/protocol/agent-activity";
 import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
+import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
 import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
 import type {
   ContainerLifecycleSnapshot,
@@ -316,6 +317,13 @@ export interface Environment {
   prBaseBranch?: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
+  /**
+   * GitHub's merge state from the PR monitor's last reading (see
+   * `@orkestrator/protocol/pr-merge-readiness`). Cleared whenever `prUrl`
+   * changes, so it never describes a predecessor PR. Absent on records
+   * written before it existed.
+   */
+  prMergeability?: GitHubPullRequestMergeability | null;
   /**
    * Durable backend intent armed by the Resolve action.
    *

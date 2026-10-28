@@ -27,3 +27,11 @@
 - **Complete owning-file rerun:** `mise run test:logged -- --name efficiency-rerun -- bun test ./tests/unit/efficiency/harness.test.ts --parallel=1 --only-failures` passed unchanged (8.9 s).
 - **Evidence:** `orkestrator-test-run.bgBVht` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in this owner changed.
+
+## Container replacement input coverage review — 2026-10-28
+
+- **Aggregate:** `mise run test:logged -- --name default-tests -- mise run test`, at commit `76dba61d9`, with workspace/root/bridges/protocol reservations of 6/1/2/1. The root group used one worker.
+- **Failure:** `supervision workloads > the batch route answers 100 sessions in two requests; an older bridge in one each` exceeded its five-second deadline (6322.77 ms). The root group ran 3,247 tests across 158 files in 491.32 seconds, with this as its only failure.
+- **Complete unchanged owner rerun after root completion:** `mise run test:logged -- --name supervision-recheck -- bun test ./tests/unit/efficiency/harness.test.ts --parallel=1 --only-failures` passed (exit 0, 13.3 seconds logged).
+- **Evidence:** `/tmp/orkestrator-test-run.ryfxPE/root-and-agent-support-tests.log.gz` after aggregate finalization; outer run `/tmp/orkestrator-test-run.a6YBTO`. The shared Linux host's load average reached 58.65 during the aggregate.
+- **Assessment:** another workload in this owner exceeded the same generic deadline under contention and passed alone. This branch adds only a deterministic container replacement test; no supervision implementation, assertion, deadline or skip changed.

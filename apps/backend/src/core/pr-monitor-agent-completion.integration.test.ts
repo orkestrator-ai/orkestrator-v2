@@ -41,7 +41,7 @@ test("agent completion immediately rechecks and clears a resolved conflict", asy
     path.join(fakeBinDir, "gh"),
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"release/2.0"}'
+printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,"baseRefName":"release/2.0"}'
 `,
     { mode: 0o755 },
   );
@@ -139,17 +139,35 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseR
     }, "the immediate PR recheck to persist mergeability");
 
     const ghCommands = (await fs.readFile(ghLogPath, "utf8")).trim().split("\n");
-    expect(ghCommands).toContain(`pr view ${PR_URL} --json url,state,mergeable,baseRefName`);
+    expect(ghCommands).toContain(
+      `pr view ${PR_URL} --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName`,
+    );
     expect(ghCommands).toContain(`pr view ${PR_URL} --json statusCheckRollup`);
     expect(await storage.getEnvironment("env-1")).toMatchObject({
       prUrl: PR_URL,
       prState: "open",
       hasMergeConflicts: false,
       prBaseBranch: "release/2.0",
+      prMergeability: "clean",
     });
     const reloadedStorage = new StorageService(dataDir);
     await reloadedStorage.init();
-    expect((await reloadedStorage.getEnvironment("env-1"))?.prBaseBranch).toBe("release/2.0");
+    expect(await reloadedStorage.getEnvironment("env-1")).toMatchObject({
+      prBaseBranch: "release/2.0",
+      prMergeability: "clean",
+    });
+    // Replacing a PR through storage must not carry over its predecessor's
+    // mergeability, including after a reload.
+    await storage.updateEnvironment("env-1", {
+      prUrl: "https://github.com/acme/repo/pull/8",
+      prState: "open",
+    });
+    const replacementStorage = new StorageService(dataDir);
+    await replacementStorage.init();
+    expect(await replacementStorage.getEnvironment("env-1")).toMatchObject({
+      prUrl: "https://github.com/acme/repo/pull/8",
+      prMergeability: null,
+    });
   } finally {
     await nativeAgents?.shutdown().catch(() => undefined);
     runtime.shutdown();
@@ -172,7 +190,7 @@ test("an ended agent turn discovers a pull request the agent created itself", as
   await withProbeHarness(
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"release/2.0","updatedAt":"2026-08-06T10:00:00Z"}]'
+printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,"baseRefName":"release/2.0","updatedAt":"2026-08-06T10:00:00Z"}]'
 `,
     async ({ storage, invoke, events, ghLog }) => {
       const before = await storage.getEnvironment("env-1");
@@ -193,6 +211,7 @@ printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","base
         prState: "open",
         hasMergeConflicts: false,
         prBaseBranch: "release/2.0",
+        prMergeability: "clean",
       });
       // A found PR is announced, so a client that was never mounted for this
       // environment still learns about it.

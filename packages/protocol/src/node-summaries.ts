@@ -20,6 +20,9 @@ import {
   type ProjectRef,
 } from "./federation.js";
 import type { NodeView } from "./command-nodes.js";
+import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
+import { isPrMergeability } from "./pr-merge-readiness.js";
+import type { PrState } from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
 
@@ -74,6 +77,14 @@ export interface NodeEnvironmentSummary {
   createdAt?: string;
   deleting: boolean;
   isProjectHome: boolean;
+  /**
+   * The node's last PR reading, so a command node can decide "ready to merge"
+   * (`pr-merge-readiness.ts`) for another machine's rows. States only, never
+   * the PR URL. Absent from nodes that predate them, or without a PR.
+   */
+  prState?: PrState;
+  prHasMergeConflicts?: boolean;
+  prMergeability?: GitHubPullRequestMergeability;
 }
 
 /** One node in the portal: registry view, availability and last-known summaries. */
@@ -162,6 +173,8 @@ export function pathName(path: unknown): string | undefined {
   return name || undefined;
 }
 
+const PR_STATES: ReadonlySet<unknown> = new Set<PrState>(["open", "merged", "closed"]);
+
 function normalizeActivity(value: unknown): AgentActivity {
   return value === "working" || value === "waiting" ? value : "idle";
 }
@@ -226,5 +239,10 @@ export function toNodeEnvironmentSummary(
       raw.lifecycleOperation === "deleting" ||
       (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0),
     isProjectHome: raw.projectHome === true,
+    ...(PR_STATES.has(raw.prState) ? { prState: raw.prState as PrState } : {}),
+    ...(typeof raw.hasMergeConflicts === "boolean"
+      ? { prHasMergeConflicts: raw.hasMergeConflicts }
+      : {}),
+    ...(isPrMergeability(raw.prMergeability) ? { prMergeability: raw.prMergeability } : {}),
   };
 }

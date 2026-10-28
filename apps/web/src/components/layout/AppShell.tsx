@@ -26,6 +26,9 @@ import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
 import { getApplicationTitle } from "@/lib/application-title";
+import { useEnvironmentIdReadyToMerge } from "@/hooks/useEnvironmentReadyToMerge";
+import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
+import { viewFromNodeSummary } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
@@ -41,6 +44,7 @@ import {
 } from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import { retainAppShortcutRouter, setUnhandledAppShortcut } from "@/lib/app-shortcuts";
 import {
   useRemoteWorkspaceStore,
   type RemoteWorkspaceSelection,
@@ -98,7 +102,14 @@ function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
     const environment = node?.environments.find(
       (candidate) => candidate.ref.environmentId === active.environmentId,
     );
-    return { projectName: project?.name ?? null, environmentName: environment?.name ?? null };
+    return {
+      projectName: project?.name ?? null,
+      environmentName: environment?.name ?? null,
+      readyToMerge:
+        node && environment
+          ? isNodeEnvironmentReadyToMerge(environment, viewFromNodeSummary(node))
+          : false,
+    };
   }, [active, portalState.nodes]);
 }
 
@@ -147,6 +158,7 @@ export function AppShell({ children }: AppShellProps) {
         null)
       : null,
   );
+  const localReadyToMerge = useEnvironmentIdReadyToMerge(selectedEnvironmentId);
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ??
     DEFAULT_TERMINAL_APPEARANCE;
@@ -188,6 +200,20 @@ export function AppShell({ children }: AppShellProps) {
     if (!activePane?.activeTabId) return null;
     return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
   }, [paneEnvironments, selectedEnvironmentId]);
+
+  // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
+  useEffect(() => retainAppShortcutRouter(), []);
+  useEffect(() => {
+    // ⌘K with the sidebar hidden shows it, with the search open. A realm
+    // forwards ⌘K to the window; the phone layout's drawer stays closed.
+    if (workspaceRealm || isMobile) return;
+    return setUnhandledAppShortcut((id) => {
+      const ui = useUIStore.getState();
+      if (id !== "search-projects" || ui.sidebarOpen) return false;
+      ui.toggleSidebar();
+      return true;
+    });
+  }, [isMobile, workspaceRealm]);
 
   useEffect(() => {
     // A realm's document title is not shown; the window's is.
@@ -253,6 +279,8 @@ export function AppShell({ children }: AppShellProps) {
           selectedProjectId={selectedProjectId}
           selectedEnvironmentId={selectedEnvironmentId}
           title={windowTitle}
+          titleEnvironmentName={remoteNames ? remoteNames.environmentName : activeEnvironmentName}
+          titleReadyToMerge={remoteNames ? remoteNames.readyToMerge : localReadyToMerge}
           filesPanelOpen={filesPanelOpen}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}

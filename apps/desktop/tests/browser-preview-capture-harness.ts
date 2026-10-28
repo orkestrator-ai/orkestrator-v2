@@ -312,7 +312,7 @@ export function createHarness(options: HarnessOptions = {}) {
     openExternal: () => undefined,
     writeClipboardText: () => undefined,
     focusAddressBar: () => undefined,
-    toggleKeyboardShortcuts: () => undefined,
+    requestPreviewShortcut: () => undefined,
     captureStore: store,
     emitCaptureEvent: (event) => events.push(event),
     nativeImage: {

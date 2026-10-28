@@ -10,7 +10,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Codex summary suppression residue**: item 1 says the `parameter:summary` suppression entry is gone; on `main` it is still there. Status: partly done.
+1. **Codex summary suppression residue**: item 1 said the `parameter:summary` suppression entry was gone while `main` still had it. Status: done (2026-10-28, [0727](0727-codex-summary-parameter-still-suppressed.md): descriptor and entry removed, item 1 corrected).
 2. **Unoffered held-model preflight**: the optional open half of item 6. Status: deferred (until Codex's 400 proves confusing).
 3. **Cursor extra-axis live qualification**: change a Cursor axis, send, reload, confirm the value returns. Status: open.
 4. **Codex dispatch-model and config-merge live check**: items 5 and 6 plus the Plan-mode merge fix on a real Codex login. Status: open.
@@ -21,6 +21,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Problem.** The file (item 1 and "Current state") says Codex has no suppression entry and that a renderer test "suppresses no Codex parameter control". Neither is true on `main`, so the doc misstates the shipped table, and the table breaks its own rule that an entry needs a descriptor that produces it.
 
 **Context.** The branch work landed as #1260 (`1e76744d`). Its commit message says it removed the summary entry, and it did remove the bridge plumbing.
+
+**Resolution (2026-10-28).** Done in [0727](0727-codex-summary-parameter-still-suppressed.md): the backend's Codex catalogue no longer emits the `summary` descriptor that kept the entry needed, the entry is gone, both tests are flipped, and item 1 below now matches the code. The investigation below describes `main` at `863b5782`.
 
 **Investigation.** The bridge half is done: no `personality` or summary parameter remains in `bridges/codex-bridge/src/app-server-runtime-lifecycle.ts` or `engine/app-server-engine.ts`, and `maxBudgetUsd` is gone from the Claude bridge. But `packages/protocol/src/native-agent.ts:976` still reads `codex: Object.freeze(["parameter:summary"])`, unchanged at every commit from `1e76744d` to HEAD, although the doc comment above it (:960-965) was rewritten to drop the Codex sentence. The tests still expect suppression: `apps/backend/src/core/native-agent-service-projection.test.ts:3120-3122` (Codex's expected controls omit `parameter:summary`) and `apps/web/src/components/native-agent/AgentNativeTab.test.tsx:6244` and :6290 ("hides unsupported Codex summary in a %s tab"). The renderer test the file names does not exist. Behaviour is harmless (nothing produces the control), but the record is wrong.
 
@@ -147,8 +149,10 @@ qualification run and one optional preflight case.
     (`bridges/acp-bridge/src/session-config.ts`).
   - Pi: `setModel(model, { persist })` through `applyComposerToSession`
     (`bridges/pi-bridge/src/agent-session.ts`).
-  - Codex: no parameters. Its turns run the bridge session's `config.model`;
-    a dispatch naming another model is applied to that config first
+  - Codex: no parameters (`normalizedCodexModels` emits none; a stored
+    `summary` value is retired, `native-agent-retired-parameters.ts`). Its
+    turns run the bridge session's `config.model`; a dispatch naming another
+    model is applied to that config first
     (`apps/backend/src/core/native-agent-dispatch-model.ts`).
 - The Codex bridge's `POST /session/:id/config` replaces the whole session
   config. The backend restates every field a control update leaves alone
@@ -163,16 +167,27 @@ qualification run and one optional preflight case.
    The bridge no longer reads `parameterValues.summary` / `personality`
    (`app-server-runtime-lifecycle.ts` `toEngineConfig`), `EngineTurnConfig`
    drops both fields, and `turn/start` / `thread/start` no longer send them
-   (`engine/app-server-engine.ts`). The `parameter:summary` suppression entry
-   is gone, and the table's comment now says an entry needs a descriptor that
-   produces it. Evidence: Codex's generated protocol marks `personality`
-   deprecated on `TurnStartParams` and `ThreadStartParams` ("`friendly` and
-   `pragmatic` no longer select a style") and `Model.supportsPersonality` as
+   (`engine/app-server-engine.ts`). The table's comment now says an entry needs
+   a descriptor that produces it. Correction (2026-10-28): #1260 removed the
+   `parameter:summary` suppression entry in its first commit and restored it in
+   its second, because the backend's Codex catalogue (`normalizedCodexModels`)
+   still emitted the `summary` descriptor; the squash message and this item
+   described the first commit. [0727](0727-codex-summary-parameter-still-suppressed.md)
+   finished the removal: Codex catalogue rows carry no `parameters`, Codex has
+   no suppression entry, and a stored Codex `summary` value is retired (dropped
+   on the next control update, never forwarded). Evidence: Codex's generated
+   protocol marks `personality` deprecated on `TurnStartParams` and
+   `ThreadStartParams` ("`friendly` and `pragmatic` no longer select a style")
+   and `Model.supportsPersonality` as
    "Always false"; `Model` has no summary-support field, so `model/list` cannot
-   report where `summary` is supported. Tests: the backend projection test now
-   expects Codex to pass `parameter:summary` through
-   (`native-agent-service-projection.test.ts`), and the renderer test
-   "suppresses no Codex parameter control" (`AgentNativeTab.test.tsx`).
+   report where `summary` is supported. Tests (from 0727): the backend
+   projection test "filters only provider-specific parameter controls for %s
+   at the backend boundary" expects Codex to pass `parameter:summary` through
+   (`native-agent-service-projection.test.ts`); the renderer test "suppresses
+   no Codex parameter control in a %s tab" (`AgentNativeTab.test.tsx`); the
+   catalogue assertions that Codex rows have no `parameters`
+   (`commands-state-sync.test.ts`, `commands-registry-coordinator.test.ts`);
+   and "refuses a Codex reasoning summary that no catalogue row offers".
 2. ~~**Reasoning and speed axes.**~~ Done 2026-10-25: decision recorded to keep
    both models, on the `AgentModel` doc comment in `native-agent.ts` (see
    Assumptions and decisions). No renderer code branches on an axis name: the
@@ -439,7 +454,8 @@ qualification run and one optional preflight case.
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
   (execution policy and approvals).
 - [0727-codex-summary-parameter-still-suppressed.md](0727-codex-summary-parameter-still-suppressed.md):
-  the Codex summary descriptor and suppression entry still on `main`, split from task 1.
+  the Codex summary descriptor and suppression entry #1260 left on `main`,
+  split from task 1 and removed there (2026-10-28).
 
 ## Replaces
 

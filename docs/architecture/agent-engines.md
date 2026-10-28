@@ -422,7 +422,14 @@ new model's default.
 Codex's reasoning summary (`summary`) and `personality` are not offered.
 `model/list` reports no summary support, and upstream deprecated
 `personality` (`supportsPersonality` is always false). Codex's own
-`config.toml` still applies to both.
+`config.toml` still applies to both. The backend's Codex catalogue rows carry
+no `parameters` (`normalizedCodexModels` in `commands-registry-projects.ts`),
+so the composer has no Codex parameter control and Codex has no entry in
+`SUPPRESSED_COMPOSER_PARAMETERS`. A `summary` value an older session record
+still holds is retired for Codex only (`native-agent-retired-parameters.ts`):
+the next control update drops it, and prompt and resume bodies never forward
+it. A control update that sets it is refused, as for any parameter no
+descriptor offers.
 
 Session titles are no longer generated here; see [Session titles](#session-titles).
 The bridge keeps only its title index (`session-title-index.ts`), which survives

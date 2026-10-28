@@ -6679,7 +6679,7 @@ describe("AgentNativeTab", () => {
     },
   ];
 
-  const codexSummaryControls = [
+  const codexParameterControls = [
     {
       kind: "select" as const,
       id: "parameter:summary",
@@ -6730,10 +6730,10 @@ describe("AgentNativeTab", () => {
   test.each([
     ["review", true],
     ["ordinary", false],
-  ] as const)("hides unsupported Codex summary in a %s tab", async (kind, review) => {
+  ] as const)("suppresses no Codex parameter control in a %s tab", async (kind, review) => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
-      composerControls: codexSummaryControls,
+      composerControls: codexParameterControls,
     }));
 
     render(
@@ -6747,7 +6747,9 @@ describe("AgentNativeTab", () => {
 
     expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
     expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
-    expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
+    // Codex has no suppression entry, so a descriptor named `summary` renders
+    // like any other parameter; the backend simply no longer produces one.
+    expect(screen.getByText(/Reasoning summary: Automatic/)).toBeTruthy();
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {

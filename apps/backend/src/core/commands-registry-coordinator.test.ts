@@ -305,6 +305,9 @@ describe("coordinator command registry", () => {
         defaultReasoningId: "high",
       }),
     ]);
+    // The cached read goes through the same normaliser, so it offers no
+    // reasoning-summary parameter either.
+    expect((models as AgentModel[])[0]).not.toHaveProperty("parameters");
 
     await coordinator.closeConversation(project.id, conversation.id);
     await expect(

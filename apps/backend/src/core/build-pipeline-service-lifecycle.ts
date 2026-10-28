@@ -24,7 +24,14 @@ import {
   MAX_CODE_REWIND_PREVIEW_PATHS,
   type BuildPipelineCodeRewindPreview,
   type PipelineCodeRewind,
+  taskSnapshotCriteria,
+  type TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
+import {
+  normalizeTicketContent,
+  TICKET_SECTION_LIMITS,
+} from "@orkestrator/protocol/ticket-sections";
+import type { KanbanTask } from "./storage-shared-core.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { Environment } from "./models.js";
 import { type BuildPipelineProvider, PromptRejectedError } from "./build-pipeline-provider.js";
@@ -441,6 +448,46 @@ export class BuildPipelineLifecycle {
     this.ctx.lastProviderAgent.clear();
   }
 
+  /**
+   * The snapshot with the criteria Verify will check, under the Kanban
+   * ticket's own ids so the results can be written back to it. The ticket's
+   * items are used only while its criteria text still matches the snapshot;
+   * otherwise, and for other sources, they are derived from the snapshot text.
+   */
+  private async snapshotWithCriteria(input: StartBuildPipelineInput): Promise<TaskSnapshot> {
+    const snapshot = input.taskSnapshot;
+    if (snapshot.acceptanceCriteriaItems) return snapshot;
+    let ticket: KanbanTask | undefined;
+    if (!input.source || input.source.type === "kanban") {
+      try {
+        const tasks = await this.ctx.invoke<KanbanTask[]>("get_kanban_tasks", {
+          projectId: input.projectId,
+        });
+        ticket = Array.isArray(tasks) ? tasks.find((task) => task.id === input.taskId) : undefined;
+      } catch {
+        ticket = undefined;
+      }
+    }
+    const content = ticket ? normalizeTicketContent(ticket, { now: ticket.createdAt }) : undefined;
+    const fromTicket =
+      content && content.acceptanceCriteria.trim() === snapshot.acceptanceCriteria.trim()
+        ? (content.sections.acceptanceCriteria ?? [])
+        : undefined;
+    // Verify judges at most this many; the snapshot text keeps the rest.
+    const items = (fromTicket ?? taskSnapshotCriteria(snapshot)).slice(
+      0,
+      TICKET_SECTION_LIMITS.maxAcceptanceCriteria,
+    );
+    return {
+      ...snapshot,
+      ...(content && !snapshot.kind ? { kind: content.kind } : {}),
+      acceptanceCriteriaItems: items.map(({ id, text }) => ({
+        id,
+        text: text.slice(0, TICKET_SECTION_LIMITS.maxCriterionLength),
+      })),
+    };
+  }
+
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
@@ -457,6 +504,7 @@ export class BuildPipelineLifecycle {
         throw new Error("The selected build environment does not belong to this project");
       }
     }
+    const taskSnapshot = await this.snapshotWithCriteria(input);
     const steps = normalizeSteps(input.steps);
     const reviewers = normalizeReviewers(input.reviewers);
     const reviewPreparation = normalizeReviewPreparation(input.reviewPreparation);
@@ -483,7 +531,7 @@ export class BuildPipelineLifecycle {
       maxIterations: input.maxIterations ?? 3,
       createdAt: new Date().toISOString(),
       taskTitle: input.taskTitle,
-      taskSnapshot: input.taskSnapshot,
+      taskSnapshot,
       source: input.source,
       featurePlanId: input.featurePlanId?.trim() || undefined,
       admissionKey: buildAdmissionKey(input),

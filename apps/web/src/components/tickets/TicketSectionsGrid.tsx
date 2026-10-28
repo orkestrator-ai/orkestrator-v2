@@ -1,28 +1,15 @@
-import { CheckCircle2, Circle, CircleHelp, XCircle } from "lucide-react";
 import {
   acceptanceCriteriaTally,
   DELIVERY_POLICY_LABELS,
   TICKET_KIND_LABELS,
   TICKET_SECTION_DEFINITIONS,
   type AcceptanceCriterion,
-  type AcceptanceCriterionCheck,
   type TicketKind,
   type TicketSections,
 } from "@orkestrator/protocol/ticket-sections";
 import { MarkdownBody } from "@/components/pull-requests/pull-request-shared";
+import { CRITERION_STATES } from "./criterion-status";
 import { cn } from "@/lib/utils";
-
-type CriterionState = AcceptanceCriterionCheck["status"] | "unchecked";
-
-const CRITERION_STATES: Record<
-  CriterionState,
-  { label: string; icon: typeof Circle; className: string }
-> = {
-  passed: { label: "Passed", icon: CheckCircle2, className: "text-emerald-500" },
-  failed: { label: "Failed", icon: XCircle, className: "text-destructive" },
-  "not-checked": { label: "Not checked", icon: CircleHelp, className: "text-amber-500" },
-  unchecked: { label: "Not verified yet", icon: Circle, className: "text-muted-foreground/60" },
-};
 
 export function TicketKindBadge({ kind, className }: { kind: TicketKind; className?: string }) {
   return (

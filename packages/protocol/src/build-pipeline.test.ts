@@ -22,6 +22,8 @@ import {
   reviewValidationStage,
   isVerificationVerdict,
   VERIFICATION_VERDICT_SCHEMA,
+  taskSnapshotCriteria,
+  verificationCriterionResults,
   type BuildPipeline,
   type BuildStepConfig,
   type BuildStepKey,
@@ -2055,10 +2057,23 @@ describe("verification verdict contract", () => {
     expect(VERIFICATION_VERDICT_SCHEMA).toEqual({
       type: "object",
       additionalProperties: false,
-      required: ["complete", "rationale"],
+      required: ["complete", "rationale", "acceptanceCriteria"],
       properties: {
         complete: { type: "boolean" },
         rationale: { type: "string" },
+        acceptanceCriteria: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "status", "evidence"],
+            properties: {
+              id: { type: "string" },
+              status: { type: "string", enum: ["passed", "failed", "not-checked"] },
+              evidence: { type: "string" },
+            },
+          },
+        },
       },
     });
   });
@@ -2072,19 +2087,77 @@ describe("verification verdict contract", () => {
     const fields = Object.keys(properties);
     const sample: Record<string, unknown> = {};
     for (const [field, { type }] of Object.entries(properties)) {
-      sample[field] = type === "boolean" ? true : "text";
+      sample[field] =
+        type === "boolean"
+          ? true
+          : type === "array"
+            ? [{ id: "ac-1", status: "passed", evidence: "bun test" }]
+            : "text";
     }
 
     expect(isVerificationVerdict(sample)).toBe(true);
     expect(VERIFICATION_VERDICT_SCHEMA.required).toEqual(fields);
 
     // Dropping any one declared field, or adding one the schema does not
-    // declare, must fail the guard.
+    // declare, must fail the guard. The criteria are the one field an old
+    // verdict may lack.
     for (const field of fields) {
       const { [field]: _omitted, ...missingOne } = sample;
-      expect(isVerificationVerdict(missingOne)).toBe(false);
+      expect(isVerificationVerdict(missingOne)).toBe(field === "acceptanceCriteria");
     }
     expect(isVerificationVerdict({ ...sample, extra: 1 })).toBe(false);
+    expect(
+      isVerificationVerdict({
+        ...sample,
+        acceptanceCriteria: [{ id: "ac-1", status: "maybe", evidence: "" }],
+      }),
+    ).toBe(false);
+    expect(
+      isVerificationVerdict({
+        ...sample,
+        acceptanceCriteria: [{ id: "ac-1", status: "passed", evidence: "", extra: 1 }],
+      }),
+    ).toBe(false);
+  });
+
+  test("criterion results follow the snapshot: skipped ones are not checked, unknown ids dropped", () => {
+    const criteria = [
+      { id: "ac-1", text: "One" },
+      { id: "ac-2", text: "Two" },
+    ];
+    expect(
+      verificationCriterionResults(criteria, {
+        complete: false,
+        rationale: "r",
+        acceptanceCriteria: [
+          { id: "ac-9", status: "passed", evidence: "nope" },
+          { id: "ac-1", status: "failed", evidence: ` ${"x".repeat(3_000)} ` },
+        ],
+      }),
+    ).toEqual([
+      { id: "ac-1", status: "failed", evidence: `${"x".repeat(1_999)}…` },
+      { id: "ac-2", status: "not-checked", evidence: "Verify did not report on this criterion." },
+    ]);
+    expect(verificationCriterionResults(criteria, { complete: true, rationale: "r" })).toBe(
+      undefined,
+    );
+  });
+
+  test("an old snapshot's criteria are derived from its text with stable ids", () => {
+    const snapshot = {
+      title: "t",
+      description: "",
+      acceptanceCriteria: "- One\n- Two",
+      comments: [],
+      images: [],
+    };
+    expect(taskSnapshotCriteria(snapshot)).toEqual([
+      { id: "ac-1", text: "One" },
+      { id: "ac-2", text: "Two" },
+    ]);
+    expect(
+      taskSnapshotCriteria({ ...snapshot, acceptanceCriteriaItems: [{ id: "ac-5", text: "X" }] }),
+    ).toEqual([{ id: "ac-5", text: "X" }]);
   });
 
   test("the schema and all nested containers cannot be mutated by a consumer", () => {
@@ -2122,10 +2195,23 @@ describe("verification verdict contract", () => {
     expect(VERIFICATION_VERDICT_SCHEMA).toEqual({
       type: "object",
       additionalProperties: false,
-      required: ["complete", "rationale"],
+      required: ["complete", "rationale", "acceptanceCriteria"],
       properties: {
         complete: { type: "boolean" },
         rationale: { type: "string" },
+        acceptanceCriteria: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "status", "evidence"],
+            properties: {
+              id: { type: "string" },
+              status: { type: "string", enum: ["passed", "failed", "not-checked"] },
+              evidence: { type: "string" },
+            },
+          },
+        },
       },
     });
   });

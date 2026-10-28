@@ -266,6 +266,15 @@ test("the Ticket inspector tiles the ticket's sections and stacks them when narr
   await expect(page.getByTestId("ticket-delivery-policy")).toHaveText(
     "Push, no PR (Multi Review next)",
   );
+  // The newest Verify's ticks, on the inspector and the node face.
+  const criteria = grid.getByTestId("ticket-criterion");
+  await expect(criteria).toHaveCount(2);
+  await expect(criteria.nth(0)).toHaveAttribute("data-status", "passed");
+  await expect(criteria.nth(1)).toHaveAttribute("data-status", "not-checked");
+  await expect(criteria.nth(1)).toContainText("Needs a real phone.");
+  await expect(page.getByTestId("ticket-criteria-tally")).toHaveText("1/2 passed · 1 not checked");
+  await expect(page.getByTestId("pipeline-ticket-verify-round")).toContainText("round 2");
+  await expect(node(page, "Ticket")).toContainText("1/2 criteria");
   const layout = await grid.evaluate((element) => ({
     width: element.getBoundingClientRect().width,
     tiles: [...element.querySelectorAll("section")].map((tile) =>

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { pipelineCriteriaStatusWord } from "./pipeline-criteria";
 import {
   CircleDot,
   ClipboardList,
@@ -209,7 +210,9 @@ export function pipelineNodeView({
               ? { text: "failed", tone: "destructive" }
               : node.state === "cancelled"
                 ? { text: "stopped", tone: "muted" }
-                : undefined;
+                : node.kind === "ticket"
+                  ? pipelineCriteriaStatusWord(pipeline)
+                  : undefined;
   return {
     id: node.id,
     kind: node.kind,

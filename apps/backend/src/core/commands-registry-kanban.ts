@@ -1,9 +1,11 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { PrState } from "./models.js";
 import {
+  isAcceptanceCriterionCheck,
   isTicketKind,
   parseTicketSectionsPatch,
   TICKET_KINDS,
+  TICKET_SECTION_LIMITS,
 } from "@orkestrator/protocol/ticket-sections";
 import type { KanbanTaskContentInput } from "./storage-kanban.js";
 import {
@@ -101,6 +103,31 @@ export function registerKanbanCommands(
       ...(typeof prState === "string" ? { prState: prState as PrState } : {}),
       ...(typeof prMergeCommented === "boolean" ? { prMergeCommented } : {}),
     });
+  });
+  register("record_kanban_criteria_checks", (args, { storage }) => {
+    assertOnlyKeys(args, ["taskId", "checks"], "arguments");
+    if (
+      !Array.isArray(args.checks) ||
+      args.checks.length > TICKET_SECTION_LIMITS.maxAcceptanceCriteria
+    ) {
+      throw new Error("checks must be an array of criterion results");
+    }
+    const checks = args.checks.map((entry, index) => {
+      const value = entry as Record<string, unknown>;
+      if (
+        !value ||
+        typeof value.id !== "string" ||
+        typeof value.text !== "string" ||
+        !isAcceptanceCriterionCheck(value.check)
+      ) {
+        throw new Error(`checks[${index}] must be { id, text, check }`);
+      }
+      return { id: value.id, text: value.text, check: value.check };
+    });
+    return storage.kanban.recordKanbanCriteriaChecks(
+      asNonBlankString(args.taskId, "taskId"),
+      checks,
+    );
   });
   register("delete_kanban_task", ({ taskId }, { storage }) =>
     storage.kanban.deleteKanbanTask(asString(taskId, "taskId")),

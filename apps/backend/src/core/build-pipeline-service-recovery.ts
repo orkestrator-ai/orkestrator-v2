@@ -12,6 +12,10 @@ import {
   isVerificationVerdict,
   boundedPipelineSessionError,
   MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
+  taskSnapshotCriteria,
+  verificationCriterionResults,
+  type PipelineCriterionResult,
+  type TaskSnapshotCriterion,
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
@@ -168,20 +172,27 @@ export class BuildPipelineRecovery {
     if (!result.ok) throw new Error(result.error.message);
     if (!isVerificationVerdict(result.value)) {
       throw new Error(
-        "Verification returned malformed structured output: expected exactly a boolean complete field and a string rationale field",
+        "Verification returned malformed structured output: expected exactly a boolean complete field, a string rationale field and an acceptanceCriteria array",
       );
     }
     const { complete, rationale } = result.value;
+    const criteria = taskSnapshotCriteria(pipeline.taskSnapshot);
+    const criterionResults = verificationCriterionResults(criteria, result.value);
+    const feedback = feedbackWithUnmetCriteria(rationale, criteria, criterionResults);
     session.structuredResultStatus = "accepted";
     pipeline.verificationResult = complete ? "pass" : "fail";
-    pipeline.verificationFeedback = rationale;
+    pipeline.verificationFeedback = feedback;
     // The pipeline keeps only the newest verdict. The session's own copy is
     // what a rewind to the fix after this verification hands that fix.
     session.verificationResult = pipeline.verificationResult;
     session.verificationFeedback =
-      rationale.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH
-        ? rationale
-        : `${rationale.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
+      feedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH
+        ? feedback
+        : `${feedback.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
+    if (criterionResults) {
+      session.acceptanceCriteriaResults = criterionResults;
+      await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
+    }
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (complete) {
       await this.updateKanbanLifecycle(pipeline, {
@@ -404,6 +415,40 @@ export class BuildPipelineRecovery {
       pipeline.completionCommentStatus = "failed";
       pipeline.completionCommentError = errorMessage(error);
       await this.ctx.save(pipeline, pipeline.backendRevision);
+    }
+  }
+
+  /**
+   * Writes Verify's per-criterion results onto the Kanban ticket, so the board
+   * shows the ticks. Best effort: the pipeline's own record is authoritative,
+   * and a ticket that was deleted or edited since keeps what it has.
+   */
+  private async recordTicketCriteriaChecks(
+    pipeline: BuildPipeline,
+    criteria: readonly TaskSnapshotCriterion[],
+    results: readonly PipelineCriterionResult[],
+  ): Promise<void> {
+    const source = pipeline.source;
+    if (source?.type !== "kanban" || results.length === 0) return;
+    const checkedAt = new Date().toISOString();
+    const text = new Map(criteria.map((criterion) => [criterion.id, criterion.text]));
+    try {
+      await this.ctx.invoke("record_kanban_criteria_checks", {
+        taskId: source.taskId,
+        checks: results.map((result) => ({
+          id: result.id,
+          text: text.get(result.id) ?? "",
+          check: {
+            status: result.status,
+            evidence: result.evidence,
+            checkedAt,
+            source: "verify",
+            pipelineId: pipeline.id,
+          },
+        })),
+      });
+    } catch {
+      console.warn("[BuildPipeline] Could not record acceptance criteria results on the ticket");
     }
   }
 
@@ -837,4 +882,23 @@ export class BuildPipelineRecovery {
       resolvedAt,
     );
   }
+}
+
+/**
+ * The fix step reads the verdict's feedback; failed criteria are appended by
+ * id so it knows exactly which ones to address.
+ */
+function feedbackWithUnmetCriteria(
+  rationale: string,
+  criteria: readonly TaskSnapshotCriterion[],
+  results: readonly PipelineCriterionResult[] | undefined,
+): string {
+  const failed = (results ?? []).filter((result) => result.status === "failed");
+  if (failed.length === 0) return rationale;
+  const text = new Map(criteria.map((criterion) => [criterion.id, criterion.text]));
+  const lines = failed.map((result) => {
+    const criterion = (text.get(result.id) ?? "").replace(/\s+/g, " ").slice(0, 300);
+    return `- ${result.id}: ${criterion}${result.evidence ? ` (${result.evidence})` : ""}`;
+  });
+  return `${rationale}\n\nUnmet acceptance criteria:\n${lines.join("\n")}`;
 }

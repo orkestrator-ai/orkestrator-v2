@@ -338,7 +338,23 @@ function scenario(): BuildPipeline {
     return pipeline;
   }
   if (name === "ticket-tiles") {
-    const pipeline = fanout();
+    // A finished run, so the Ticket node can show the last Verify's ticks.
+    const pipeline = loops();
+    pipeline.sessions = pipeline.sessions.map((session) =>
+      session.sessionKey === "verify-2"
+        ? {
+            ...session,
+            acceptanceCriteriaResults: [
+              {
+                id: "ac-1",
+                status: "passed",
+                evidence: "PipelineFlow.spec.ts lays the graph out.",
+              },
+              { id: "ac-2", status: "not-checked", evidence: "Needs a real phone." },
+            ],
+          }
+        : session,
+    );
     pipeline.taskSnapshot = {
       ...SNAPSHOT,
       description: [

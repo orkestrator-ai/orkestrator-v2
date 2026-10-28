@@ -4,6 +4,7 @@ import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pi
 import { sectionsFromTicketText } from "@orkestrator/protocol/ticket-sections";
 import { MarkdownBody } from "@/components/pull-requests/pull-request-shared";
 import { TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
+import { pipelineCriteriaView } from "./pipeline-criteria";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useKanbanStore } from "@/stores/kanbanStore";
 
@@ -80,15 +81,16 @@ export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
       : undefined,
   );
   const [preview, setPreview] = useState<{ url: string; filename: string } | null>(null);
-  const sections = useMemo(
-    () =>
-      snapshot
-        ? sectionsFromTicketText(snapshot.description ?? "", snapshot.acceptanceCriteria ?? "", {
-            now: pipeline.createdAt,
-          })
-        : {},
-    [snapshot, pipeline.createdAt],
-  );
+  const { criteria, verifySession } = useMemo(() => pipelineCriteriaView(pipeline), [pipeline]);
+  const sections = useMemo(() => {
+    if (!snapshot) return {};
+    const { acceptanceCriteria: _derived, ...rest } = sectionsFromTicketText(
+      snapshot.description ?? "",
+      snapshot.acceptanceCriteria ?? "",
+      { now: pipeline.createdAt },
+    );
+    return criteria.length ? { ...rest, acceptanceCriteria: criteria } : rest;
+  }, [snapshot, pipeline.createdAt, criteria]);
   if (!snapshot || (!snapshot.title?.trim() && !snapshot.description?.trim())) {
     return (
       <p data-testid="pipeline-ticket-placeholder" className="text-sm text-muted-foreground">
@@ -110,6 +112,14 @@ export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
         <p className="mt-1 text-xs text-muted-foreground">
           The ticket as it was when this build started.
         </p>
+        {verifySession ? (
+          <p
+            data-testid="pipeline-ticket-verify-round"
+            className="mt-1 text-xs text-muted-foreground"
+          >
+            Criteria ticks are from Verify in round {verifySession.iteration + 1}.
+          </p>
+        ) : null}
         {changed ? (
           <p
             data-testid="pipeline-ticket-changed"

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useKanbanStore } from "@/stores/kanbanStore";
-import { build } from "./pipeline-test-fixture";
+import { build, session } from "./pipeline-test-fixture";
+import { pipelineCriteriaStatusWord } from "./pipeline-criteria";
 import { PipelineTicketView, ticketChangedSinceStart, ticketImageUrl } from "./PipelineTicketView";
 
 const snapshot = {
@@ -90,6 +91,73 @@ describe("pipeline ticket references", () => {
     expect(ticketChangedSinceStart(snapshot, { ...snapshot, title: " Original ticket " })).toBe(
       false,
     );
+  });
+
+  test("shows the newest live Verify result per criterion, never a superseded one", () => {
+    const structured = {
+      ...snapshot,
+      description: "Summary text\n\n## Problem\n\nIt is a blob.",
+      acceptanceCriteria: "- One\n- Two\n- Three",
+      acceptanceCriteriaItems: [
+        { id: "ac-4", text: "One" },
+        { id: "ac-5", text: "Two" },
+        { id: "ac-6", text: "Three" },
+      ],
+    };
+    const pipeline = build({
+      taskSnapshot: structured,
+      sessions: [
+        session("verify", "verify-old", 10, {
+          acceptanceCriteriaResults: [{ id: "ac-4", status: "failed", evidence: "old" }],
+        }),
+        session("verify", "verify-new", 20, {
+          iteration: 1,
+          acceptanceCriteriaResults: [
+            { id: "ac-4", status: "passed", evidence: "bun test one" },
+            { id: "ac-5", status: "not-checked", evidence: "needs a phone" },
+          ],
+        }),
+        session("verify", "verify-superseded", 30, {
+          iteration: 2,
+          supersededBy: "rewind-1",
+          acceptanceCriteriaResults: [{ id: "ac-4", status: "failed", evidence: "superseded" }],
+        }),
+      ],
+    });
+    render(<PipelineTicketView pipeline={pipeline} />);
+    expect(screen.getByRole("region", { name: "Problem" }).textContent).toContain("It is a blob.");
+    expect(
+      screen
+        .getAllByTestId("ticket-criterion")
+        .map((item) => [item.getAttribute("data-criterion-id"), item.getAttribute("data-status")]),
+    ).toEqual([
+      ["ac-4", "passed"],
+      ["ac-5", "not-checked"],
+      ["ac-6", "unchecked"],
+    ]);
+    expect(screen.getByText("needs a phone", { exact: false })).toBeTruthy();
+    expect(screen.getByTestId("pipeline-ticket-verify-round").textContent).toContain("round 2");
+    expect(pipelineCriteriaStatusWord(pipeline)).toEqual({ text: "1/3 criteria", tone: "warning" });
+    expect(pipelineCriteriaStatusWord(build({ taskSnapshot: structured }))).toBeUndefined();
+  });
+
+  test("an old snapshot with no stored criteria ids still lines up with its results", () => {
+    const pipeline = build({
+      taskSnapshot: { ...snapshot, acceptanceCriteria: "- One\n- Two" },
+      sessions: [
+        session("verify", "verify", 10, {
+          acceptanceCriteriaResults: [
+            { id: "ac-1", status: "passed", evidence: "e" },
+            { id: "ac-2", status: "failed", evidence: "f" },
+          ],
+        }),
+      ],
+    });
+    render(<PipelineTicketView pipeline={pipeline} />);
+    expect(
+      screen.getAllByTestId("ticket-criterion").map((item) => item.getAttribute("data-status")),
+    ).toEqual(["passed", "failed"]);
+    expect(pipelineCriteriaStatusWord(pipeline)?.tone).toBe("destructive");
   });
 
   test("an older record without snapshot content explains the missing ticket", () => {

@@ -177,7 +177,11 @@ Run on omarchy-hp (Linux) on 2026-10-28.
   `container-benchmarks`, `container-live-network`, `container-log-service`,
   `container-oom-events`, `container-resources`, `agent-accounts-active`,
   `agent-accounts-containers` at `--parallel=4`: 302 pass, 6 skip, 0 fail.
-- `mise run test`: FULL_SUITE_RESULT
+- `mise run test` (on commit `e5b807a2`): exit 0 in 800.8 s after 402 s
+  queued for host capacity; workspace (web, backend, desktop, web-public,
+  CLI, protocol, toolchain), root and agent-support, bridges and the codex
+  protocol lockfile groups all passed. No flaky test was seen, so no case
+  was recorded.
 
 ## Assumptions and decisions
 

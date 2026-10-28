@@ -115,6 +115,8 @@ export class FanoutProvider implements BuildPipelineProvider {
     fastMode?: boolean;
     agentMcp?: ProviderSendOptions["agentMcp"];
     artifactGrant?: string;
+    workflowResultTool?: string;
+    workflowResultKey?: string;
   }> = [];
   readonly aborted: string[] = [];
   readonly steers: Array<{ sessionId: string; action: unknown }> = [];
@@ -210,6 +212,8 @@ export class FanoutProvider implements BuildPipelineProvider {
       fastMode: options.fastMode,
       ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
       ...(options.artifactGrant ? { artifactGrant: options.artifactGrant } : {}),
+      ...(options.workflowResultTool ? { workflowResultTool: options.workflowResultTool } : {}),
+      ...(options.workflowResultKey ? { workflowResultKey: options.workflowResultKey } : {}),
     });
     const model = this.sessionModels.get(sessionId);
     if (model && this.ambiguousModels.has(model) && !this.ambiguityRaised.has(model)) {

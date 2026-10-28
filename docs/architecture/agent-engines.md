@@ -1331,8 +1331,16 @@ and Grok asks before every MCP call, and Pi's read-only gate blocks all but its
 reading built-ins. So the backend tells those two bridges which attempt a
 workflow-result turn runs for: the prompt body carries `workflowResultTool` and
 `workflowResultKey` next to the attempt's `agentMcp`
-(`bridgePromptBody`; the review fan-out sets the key to the reviewer's result
-key). The bridge keeps them for that turn only (`state.workflowResultTurn`,
+(`bridgePromptBody`). The review fan-out's reviewers, every Multi Review step
+(preparation, consolidation and Fix, and their reminder and restart turns) and
+Build Pipeline consolidation declare the pair, with the key set to the turn's
+request id, which is also the result key. Looped Review
+(`looped-review-service.ts`), Feature Planning (`feature-planning.ts`) and Build
+Pipeline stage sends and follow-ups (`build-pipeline-service-supervisor.ts`)
+still omit `workflowResultKey`; declaring their attempts remains outstanding.
+Those paths do not receive this exemption under deny/ask or read-only gating.
+The warm-up attach does not declare the pair; the bridges read it from the
+prompt only. The bridge keeps them for that turn only (`state.workflowResultTurn`,
 memory only, replaced by every prompt; a malformed pair is refused with 400
 before the turn is claimed).
 
@@ -1359,9 +1367,13 @@ mismatched key reaches an attempt-scoped backend tool, it answers
 broker gives the same correction after authenticating the capability against
 its own key and checking its environment, project, provider and result kind.
 Invalid capabilities, foreign scopes, provider mismatches and wrong result
-kinds still get `capability_denied` with `nextAction: stop`. Only the review
-fan-out declares the key today; consolidation and Fix turns on Grok or Pi do
-not yet.
+kinds still get `capability_denied` with `nextAction: stop`. Build Pipeline
+consolidation runs in plan mode without `readOnly`, so neither bridge gates it
+as read-only; under the default `auto-approve` environment policy its result
+tool passes either way. Its declared key is what lets the result tools through
+when the environment policy is `deny` (refused) or `ask` (parked, then denied
+by the unattended interaction policy), and would keep them working if the turn
+were made read-only.
 
 ### Provider qualification
 

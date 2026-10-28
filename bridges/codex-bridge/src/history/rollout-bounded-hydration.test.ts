@@ -153,6 +153,8 @@ describe("bounded rollout hydration", () => {
       subagentId: "child-1",
       subagentName: "Ada",
       toolState: "success",
+      createdAt: at(1),
+      toolDurationMs: 2_000,
     });
     // The withheld draft is dropped; only the accepted final JSON remains.
     expect(unbounded.messages.at(-1)?.content).toBe('{"result":42}');
@@ -174,6 +176,28 @@ describe("bounded rollout hydration", () => {
     // blocks transiently instead of rescanning or retaining the file.
     expect(getTranscriptCacheStats().coldScans).toBe(2);
     expect(getTranscriptCacheStats().blockRereads).toBeGreaterThan(0);
+  });
+
+  test("persisted child cards preserve a valid zero-duration clock", async () => {
+    await writeRollouts(0);
+    await writeFile(
+      join(root, "sessions", "child-1.jsonl"),
+      jsonl([
+        { timestamp: at(1), type: "session_meta", payload: { id: "child-1", cwd: "/fixture" } },
+        { timestamp: at(1), type: "event_msg", payload: { type: "task_complete" } },
+      ]),
+    );
+    const hydrated = await hydrate();
+    expect(
+      hydrated.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.type === "subagent"),
+    ).toMatchObject({
+      subagentId: "child-1",
+      toolState: "success",
+      createdAt: at(1),
+      toolDurationMs: 0,
+    });
   });
 
   test("an overlong record is shown where it was, and the result is degraded", async () => {

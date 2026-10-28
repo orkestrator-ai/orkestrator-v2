@@ -65,6 +65,19 @@ writers on one `.jsonl`. When touching the prompt path:
   `absent` (`dispatchJournalProvesAbsent`, `persistedDispatchStatus`). A
   client-key session recreated with no rollout restores its journal's ids
   as lost rather than starting empty.
+- **A live pid is not a live owner.** The preference lock and its recovery
+  marker, the turn-in-flight mark and the change-evidence spool claim record
+  `currentProcessIdentity()` (`process-identity.ts`: pid, a per-process
+  instance id, and on Linux the `/proc` start time and boot id). Decide
+  ownership with `recordedOwnerState`, never `process.kill(pid, 0)` alone:
+  pids repeat after a container restart (the preference directory is a
+  persistent volume), a reboot or a wrap. A lock whose owner is proven dead is
+  taken over at once; one whose live owner matches or cannot be checked is
+  never taken, because two writers would race the dispatch journal. An older
+  bridge's pid-only lock keeps the 30 s rule unless it names this process's
+  own pid. `ps` (hosts without `/proc`) runs only on the slow path. A claim
+  write that waits out a live owner answers 503 (`unavailable`: nothing was
+  journaled or sent), never 500.
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
   effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking

@@ -110,7 +110,7 @@ export function registerSessionTranscriptRoutes(
   materialize: (
     id: string,
   ) => Promise<
-    { ok: true } | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 }
+    { ok: true } | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 | 503 }
   >,
 ): void {
   // Transcript-first display route. Persisted hydration continues in the

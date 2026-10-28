@@ -10,21 +10,18 @@
 // `interruption: "restart"` beside the error, which is what the backend
 // continues a turn on (`ReviewFanoutRunner`, the Multi Review step runner).
 
-import { randomUUID } from "node:crypto";
 import type { SessionState } from "../types/index.js";
 import { debugLog } from "./logger.js";
-import { sdkSessionIdFromBridgeId } from "./session-manager-core.js";
 import {
-  processIsAlive,
-  type SessionPreferences,
-  updateSessionPreferences,
-} from "./session-preferences.js";
+  BRIDGE_INSTANCE_ID,
+  currentIdentityFields,
+  recordedOwnerState,
+} from "./process-identity.js";
+import { sdkSessionIdFromBridgeId } from "./session-manager-core.js";
+import { type SessionPreferences, updateSessionPreferences } from "./session-preferences.js";
 
 export const CLAUDE_RESTARTED_MID_TURN_MESSAGE =
   "Claude restarted before this turn finished, so its work stopped partway. Send a message to continue.";
-
-/** Changes when this bridge process restarts. Only written into marks. */
-const BRIDGE_INSTANCE_ID = randomUUID();
 
 /**
  * The notice for a turn whose Claude Code process was killed by a signal
@@ -130,6 +127,7 @@ function writeTurnInFlightMark(session: SessionState, wanted: boolean, claim = f
           pid: process.pid,
           startedAt: Date.now(),
           ...(requestId ? { requestId } : {}),
+          ...currentIdentityFields(),
         }
       : undefined,
   };
@@ -147,8 +145,11 @@ function writeTurnInFlightMark(session: SessionState, wanted: boolean, claim = f
  * Reported as interrupted only when the process that wrote the mark is gone.
  * Several environments' bridges can share one Claude home, so a mark from a
  * live process that is not this one belongs to that process. Pids repeat
- * across container restarts, so a mark carrying this process's own pid but
- * another instance id is from a dead predecessor.
+ * across container restarts and reboots, so a mark carrying this process's own
+ * pid but another instance id, or a live pid whose start time or boot differs
+ * from the recorded one, is from a dead predecessor. A live pid that cannot be
+ * checked (a mark from an older bridge) is still left to its owner. Runs once
+ * per restored session, so on hosts without `/proc` it may ask `ps`.
  */
 export function restoredTurnInterruption(
   preferences: SessionPreferences | undefined,
@@ -168,7 +169,17 @@ export function restoredTurnInterruption(
     // Nothing was cut short; the next settle clears it.
     return { status: "idle", turnInFlightMarked: true, turnInFlightMarkOwned: true };
   }
-  if (mark.pid !== process.pid && processIsAlive(mark.pid)) return { status: "idle" };
+  const writer = recordedOwnerState(
+    {
+      pid: mark.pid,
+      instance: mark.bridgeInstanceId,
+      ...(mark.procStart ? { procStart: mark.procStart } : {}),
+      ...(mark.bootId ? { bootId: mark.bootId } : {}),
+      ...(mark.processStartedAt !== undefined ? { processStartedAt: mark.processStartedAt } : {}),
+    },
+    { slowPath: true },
+  );
+  if (writer !== "dead") return { status: "idle" };
   return {
     status: "error",
     error: CLAUDE_RESTARTED_MID_TURN_MESSAGE,

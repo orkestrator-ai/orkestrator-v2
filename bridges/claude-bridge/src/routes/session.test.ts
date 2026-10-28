@@ -20,6 +20,7 @@ const realClaudeSignInSnapshot = { ...realClaudeSignIn };
 // here so the real catalogue functions serve real rows through the route.
 import { sessions as coreSessions } from "../services/session-manager-core.js";
 import type { SessionState } from "../types/index.js";
+import { PreferenceLockTimeoutError } from "../services/session-preferences.js";
 
 // --- Mock session-manager before importing the route ---
 
@@ -189,7 +190,10 @@ const mockStopBackgroundTask = mock(
  * mock installed below, so it must not depend on class identity surviving that
  * boundary.
  */
-function refusal(code: "not_found" | "conflict" | "invalid", message: string): Error {
+function refusal(
+  code: "not_found" | "conflict" | "invalid" | "unavailable",
+  message: string,
+): Error {
   return Object.assign(new Error(message), { code });
 }
 
@@ -752,6 +756,17 @@ describe("session routes", () => {
 
       expect(res.status).toBe(500);
       expect(await jsonBody(res)).toEqual({ error: "disk full" });
+    });
+
+    test("keeps a non-claim preference lock timeout as 500", async () => {
+      const error = new PreferenceLockTimeoutError();
+      mockSetSessionPreferences.mockRejectedValueOnce(error);
+
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: true });
+
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: error.message });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("maps an unknown session preference update to 404", async () => {
@@ -1361,6 +1376,28 @@ describe("session routes", () => {
       expect(res.status).toBe(409);
       expect(await jsonBody(res)).toEqual({
         error: "Session is already processing a prompt",
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("maps a claim refused on a busy preference lock to 503", async () => {
+      // The backend reads 503 as "not processed" and keeps the retry, where a
+      // 500 would park the prompt as outcome unknown.
+      mockClaimPromptDispatch.mockRejectedValueOnce(
+        refusal(
+          "unavailable",
+          "The session's preferences are busy, so the prompt was not sent. Try again.",
+        ),
+      );
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(503);
+      expect(await jsonBody(res)).toEqual({
+        error: "The session's preferences are busy, so the prompt was not sent. Try again.",
       });
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });

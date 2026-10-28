@@ -265,6 +265,39 @@ describe("prepare isolated preview worker", () => {
     );
   });
 
+  test("an outdated worker from before an upgrade is offered for preparation again", async () => {
+    capabilities = capabilitiesWith({
+      previewRenderer: {
+        available: true,
+        isolation: "process",
+        interactiveIsolation: "unavailable",
+        interactiveReason: "interactive previews need the container worker",
+      },
+      workerPreparation: { available: true, state: "idle", method: null, outdated: true },
+    });
+    const ref = refOf("html-interactive");
+    handler = (command) =>
+      command === TRANSCRIPT_ARTIFACT_COMMANDS.getPublication ? viewOf(ref) : undefined;
+    render(
+      wrap(
+        <ArtifactPart
+          part={{
+            type: "artifact",
+            content: artifactPartContent(ref),
+            artifact: ref,
+            publishedAt: "2026-10-20T10:00:00.000Z",
+            conversationSequence: 1,
+          }}
+        />,
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Prepare isolated preview worker" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/prepared by an earlier version of Orkestrator/)).toBeTruthy();
+    expect(screen.queryByText(/which is not installed on this host/) === null).toBe(true);
+  });
+
   test("not offered when interactive previews already have isolation", async () => {
     const ref = refOf("html-interactive");
     handler = (command) =>

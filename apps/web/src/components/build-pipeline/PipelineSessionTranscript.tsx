@@ -21,6 +21,7 @@ import {
   hydrateBuildPipeline,
   isBuildPipelineTranscriptStale,
   isBuildPipelineTranscriptUnavailable,
+  watchBuildPipelineTranscript,
 } from "@/lib/build-pipeline-persistence";
 import {
   hideMachineOutputText,
@@ -189,6 +190,11 @@ export function PipelineSessionTranscript({
   const sessionKey = session?.sessionKey;
   const messageRevision = session?.messageRevision ?? 0;
   const loadedCount = session?.messages?.length ?? -1;
+  // While on screen, change events patch this session's body in the same read.
+  useEffect(() => {
+    if (!isActive || !visible || !sessionKey) return;
+    return watchBuildPipelineTranscript(pipeline.id, sessionKey);
+  }, [pipeline.id, isActive, visible, sessionKey]);
   // Once per revision, so an unreadable transcript is reported rather than
   // re-requested on every render; failures back off to at most ten seconds.
   useEffect(() => {
@@ -196,7 +202,10 @@ export function PipelineSessionTranscript({
     const request = `${pipeline.id}\0${sessionKey}\0${messageRevision}\0${loadedCount}`;
     if (transcriptRequestRef.current === request) return;
     transcriptRequestRef.current = request;
-    void hydrateBuildPipeline(pipeline.id, undefined, { prioritySessionKey: sessionKey })
+    void hydrateBuildPipeline(pipeline.id, undefined, {
+      transcripts: true,
+      prioritySessionKey: sessionKey,
+    })
       .then(() => {
         if (transcriptRequestRef.current !== request) return;
         transcriptRetryAttemptRef.current = 0;

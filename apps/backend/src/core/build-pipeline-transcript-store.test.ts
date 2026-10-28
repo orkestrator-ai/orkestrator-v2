@@ -11,6 +11,7 @@ import {
   BUILD_PIPELINE_TRANSCRIPT_NAMESPACE,
   BuildPipelineTranscriptStore,
   transcriptPipelineTag,
+  stablePrefix,
   type BuildPipelineTranscriptFaults,
   type BuildPipelineTranscriptLimits,
   type StagedTranscript,
@@ -651,4 +652,88 @@ describe("transcript engine failure injection", () => {
     });
     expect(harness.transcripts.rows.totals().sessions).toBe(1);
   });
+});
+
+describe("transcript prefix fallbacks", () => {
+  for (const edited of [false, true]) {
+    test(`a shrinking transcript retains only unchanged leading rows (edited: ${edited})`, async () => {
+      const harness = store(await dataDirectory(), { limits: { targetChunkBytes: 8_192 } });
+      const first = messages(50, 50);
+      await commit(harness, input(first));
+      const shrunk = first.slice(0, 40);
+      if (edited) shrunk[10] = { id: "changed", text: "changed before the removed tail" };
+      const { reference } = await commit(harness, input(shrunk, { revision: 2 }));
+      const read = await harness.transcripts.read("pipeline-1", KEY, reference);
+      if (read.status !== "found") throw new Error("expected transcript");
+      const from = stablePrefix(read, 1);
+      expect(from).toBe(edited ? 10 : 40);
+      expect([...first.slice(0, from), ...read.messages.slice(from)]).toEqual(shrunk);
+    });
+  }
+
+  test("a checkpoint reusing its base display revision drops the ambiguous edit chain", async () => {
+    const harness = store(await dataDirectory());
+    const first = messages(20, 20);
+    await commit(harness, input(first));
+    const second = [...first];
+    second[19] = { id: "changed-tail", text: "second" };
+    await commit(harness, input(second, { revision: 2 }));
+    const third = [...second];
+    third[10] = { id: "changed-earlier", text: "third" };
+    const { reference } = await commit(harness, input(third, { revision: 2 }));
+    const read = await harness.transcripts.read("pipeline-1", KEY, reference);
+    if (read.status !== "found") throw new Error("expected transcript");
+    expect(read.manifestRevision).toBe(3);
+    expect(read.revision).toBe(2);
+    expect(stablePrefix(read, 1)).toBeUndefined();
+    expect(read.changes).toBeUndefined();
+    expect(read.messages).toEqual(third);
+  });
+
+  test("a reader older than the 32-checkpoint history must reconcile whole", async () => {
+    const harness = store(await dataDirectory());
+    const first = messages(20, 20);
+    const { reference: initial } = await commit(harness, input(first));
+    let body = first;
+    for (let revision = 2; revision <= 35; revision += 1) {
+      body = [...body];
+      body[19] = { id: "stream", text: `revision ${revision}` };
+      await commit(harness, input(body, { revision }));
+    }
+    const read = await harness.transcripts.read("pipeline-1", KEY, initial);
+    if (read.status !== "found") throw new Error("expected transcript");
+    expect(read.changes).toHaveLength(32);
+    expect(stablePrefix(read, 1)).toBeUndefined();
+    expect(stablePrefix(read, 34)).toBe(19);
+    expect(read.messages).toEqual(body);
+  });
+
+  for (const eviction of ["uncommitted stages", "session cache limit"]) {
+    test(`tail digest eviction after ${eviction} falls back to a conservative chunk prefix`, async () => {
+      const harness = store(await dataDirectory(), { limits: { targetChunkBytes: 8_192 } });
+      const first = messages(20, 50);
+      await commit(harness, input(first));
+      if (eviction === "uncommitted stages") {
+        for (let index = 0; index < 3; index += 1) {
+          const candidate = [...first];
+          candidate[19] = { id: "uncommitted", text: `candidate ${index}` };
+          staged(await harness.transcripts.stage(input(candidate, { revision: 2 })));
+        }
+      } else {
+        for (let index = 0; index < 65; index += 1) {
+          await commit(harness, input(messages(1, 20), { sessionKey: `other-${index}` }));
+        }
+      }
+      const second = [...first];
+      second[17] = { id: "late-result", text: "changed row 17" };
+      const { reference } = await commit(harness, input(second, { revision: 2 }));
+      const read = await harness.transcripts.read("pipeline-1", KEY, reference);
+      if (read.status !== "found") throw new Error("expected transcript");
+      const from = stablePrefix(read, 1);
+      // Every row fits the mutable chunk. Its evicted digests cannot prove
+      // row-level equality, so the entire chunk must be sent again.
+      expect(from).toBe(0);
+      expect([...first.slice(0, from), ...read.messages.slice(from)]).toEqual(second);
+    });
+  }
 });

@@ -58,6 +58,7 @@ mock.module("@/lib/looped-review-persistence", () => ({
   resolveLoopedReviewWorkflow,
 }));
 mock.module("@/lib/build-pipeline-persistence", () => ({
+  buildPipelineChangeReadOptions: realBuildPipeline.buildPipelineChangeReadOptions,
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
 }));
@@ -529,7 +530,23 @@ describe("build-pipeline binding", () => {
     dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 1 });
     await tick();
 
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1");
+    // Control state only: no transcript of this pipeline is on screen.
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {});
+  });
+
+  test("patches bodies too while a transcript of the pipeline is on screen", async () => {
+    const stop = realBuildPipeline.watchBuildPipelineTranscript("pipeline-1", "session-1");
+    try {
+      dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 1 });
+      await tick();
+
+      expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {
+        transcripts: true,
+        prioritySessionKey: "session-1",
+      });
+    } finally {
+      stop();
+    }
   });
 
   test("drops a locally persisted pipeline the backend no longer holds", async () => {

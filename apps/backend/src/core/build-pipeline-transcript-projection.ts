@@ -1,6 +1,10 @@
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { PersistedBuildPipeline } from "./models.js";
-import type { TranscriptRead, TranscriptReadWindow } from "./build-pipeline-transcript-store.js";
+import {
+  stablePrefix,
+  type TranscriptRead,
+  type TranscriptReadWindow,
+} from "./build-pipeline-transcript-store.js";
 import {
   LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES,
   committedTranscriptCursor,
@@ -196,15 +200,51 @@ export async function conditionalBuildPipelineRead(
       (read.substituted
         ? cursor.revision === read.revision
         : cursor.revision === committed.revision);
-    if (read.status === "found" && !exactBase && tailStart > 0) {
+    // A newer revision of the same session keeps the client's leading rows up
+    // to the first one an intervening checkpoint edited (the store records
+    // where each checkpoint's edit began), so a growing transcript is patched
+    // from its edit rather than resent whole.
+    const shared =
+      read.status === "found" &&
+      !exactBase &&
+      mayHaveBase &&
+      (read.substituted || read.revision === committed.revision)
+        ? stablePrefix(read, cursor.revision)
+        : undefined;
+    const editedBase = shared !== undefined && shared > 0;
+    let patchedFromBase = exactBase || editedBase;
+    if (read.status === "found" && editedBase && shared < tailStart) {
+      const initial = read;
+      read = await reader.readBuildPipelineTranscript(record.id, session, {
+        fromIndex: shared,
+        maxBytes: remaining,
+      });
+      // Each store call reloads the manifest. The prefix proven by the first
+      // read cannot be retained if a checkpoint landed before the reread,
+      // even when that checkpoint reused the display revision. One full read
+      // reconciles safely without an unbounded retry loop.
+      if (
+        read.status === "found" &&
+        (read.manifestRevision !== initial.manifestRevision ||
+          read.revision !== initial.revision ||
+          read.substituted !== initial.substituted)
+      ) {
+        patchedFromBase = false;
+        read = await reader.readBuildPipelineTranscript(record.id, session, {
+          fromIndex: 0,
+          maxBytes: remaining,
+        });
+      }
+    } else if (read.status === "found" && !exactBase && !editedBase && tailStart > 0) {
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: 0,
         maxBytes: remaining,
       });
     }
-    // Without per-row change history a different revision cannot retain any
-    // prefix. Reconcile from zero, then page under that revision/count until
-    // all committed rows have arrived; never acknowledge stale held rows.
+    // Without a recorded edit history reaching the client's revision, no
+    // prefix can be retained. Reconcile from zero, then page under that
+    // revision/count until all committed rows have arrived; never acknowledge
+    // stale held rows.
     if (read.status !== "found") {
       const unavailable: BuildPipelineMessagePatch = {
         sessionKey: session.sessionKey,
@@ -224,7 +264,7 @@ export async function conditionalBuildPipelineRead(
     }
     const patch: BuildPipelineMessagePatch = {
       sessionKey: session.sessionKey,
-      ...(exactBase ? { baseRevision: cursor!.revision, baseCount: cursor!.count } : {}),
+      ...(patchedFromBase ? { baseRevision: cursor!.revision, baseCount: cursor!.count } : {}),
       startIndex: read.startIndex,
       revision: read.substituted ? read.revision : committed.revision,
       messages: [],
@@ -290,6 +330,7 @@ export async function conditionalBuildPipelineRead(
         page.status !== "found" ||
         page.substituted !== read.substituted ||
         page.revision !== read.revision ||
+        page.manifestRevision !== read.manifestRevision ||
         page.startIndex !== nextIndex
       )
         break;

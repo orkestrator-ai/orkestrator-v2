@@ -30,6 +30,7 @@ import {
   hydrateMultiReviewWorkflowsForEnvironment,
 } from "@/lib/multi-review-persistence";
 import {
+  buildPipelineChangeReadOptions,
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
 } from "@/lib/build-pipeline-persistence";
@@ -579,7 +580,8 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       // A missing record means another client finished or deleted this build.
       // Dropping it locally is what stops a stale tab from resuming a dead
       // pipeline, so treat "not found" as authoritative rather than as an error.
-      return hydrateBuildPipeline(pipelineId)
+      // Bodies only while a transcript of this pipeline is on screen.
+      return hydrateBuildPipeline(pipelineId, undefined, buildPipelineChangeReadOptions(pipelineId))
         .then((pipeline) => {
           if (pipeline) return;
           const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);

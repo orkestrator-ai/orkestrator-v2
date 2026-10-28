@@ -3,10 +3,14 @@
  * embedded in it (efficiency plan step 16). The tab fetches the viewed stage's
  * committed body on demand and reports a stored transcript it cannot read.
  */
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
+import {
+  buildPipelineChangeReadOptions,
+  hydrateBuildPipeline,
+} from "@/lib/build-pipeline-persistence";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 const realBackendSnapshot = { ...realBackend };
@@ -31,15 +35,20 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 
 const getBuildPipelineConditionalMock = mock(async (..._args: unknown[]): Promise<unknown> => null);
+const getBuildPipelineControlMock = mock(async (..._args: unknown[]): Promise<unknown> => null);
 const pauseBuildPipelineMock = mock(async (..._args: unknown[]): Promise<unknown> => null);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
+  getBuildPipelineControl: getBuildPipelineControlMock,
   pauseBuildPipeline: pauseBuildPipelineMock,
 }));
 
 const { BuildChatTab } = await import("./BuildChatTab");
+const { PipelineSessionTranscript } = await import("./PipelineSessionTranscript");
+
+afterEach(cleanup);
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -139,6 +148,7 @@ describe("BuildChatTab referenced transcripts", () => {
   beforeEach(() => {
     cleanup();
     getBuildPipelineConditionalMock.mockClear();
+    getBuildPipelineControlMock.mockClear();
     pauseBuildPipelineMock.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
@@ -218,6 +228,66 @@ describe("BuildChatTab referenced transcripts", () => {
       expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused"),
     );
     expect(screen.getByText("All criteria pass")).toBeTruthy();
+  });
+
+  test("watches only the visible active session and releases body reads on hide, switch and unmount", async () => {
+    const loaded = {
+      ...pipeline,
+      sessions: pipeline.sessions.map((session) => ({ ...session, messages: verifyMessages })),
+    };
+    const element = (visible: boolean, isActive: boolean, sessionIndex = 0, next = loaded) => (
+      <PipelineSessionTranscript
+        pipeline={next}
+        session={next.sessions[sessionIndex]}
+        visible={visible}
+        isActive={isActive}
+        ownsGlobalShortcuts={false}
+        environmentId="env-1"
+        containerId={undefined}
+        composer={false}
+      />
+    );
+    const view = render(element(true, true));
+    expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({
+      transcripts: true,
+      prioritySessionKey: "build-key",
+    });
+    // Exercise the same option selection used by pipeline change events.
+    getBuildPipelineConditionalMock.mockResolvedValueOnce({ unchanged: true, revision: 8 });
+    await hydrateBuildPipeline(pipeline.id, undefined, buildPipelineChangeReadOptions(pipeline.id));
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
+
+    view.rerender(element(false, true));
+    expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({});
+    getBuildPipelineControlMock.mockResolvedValueOnce({ unchanged: true, revision: 8 });
+    await hydrateBuildPipeline(pipeline.id, undefined, buildPipelineChangeReadOptions(pipeline.id));
+    expect(getBuildPipelineControlMock).toHaveBeenCalledTimes(1);
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
+
+    view.rerender(element(true, true, 1));
+    expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({
+      transcripts: true,
+      prioritySessionKey: "verify-key",
+    });
+    view.rerender(element(true, false, 1));
+    expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({});
+    view.rerender(element(true, true, 1));
+    const other = { ...loaded, id: "pipeline-2" };
+    view.rerender(element(true, true, 0, other));
+    expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({});
+    expect(buildPipelineChangeReadOptions(other.id)).toEqual({
+      transcripts: true,
+      prioritySessionKey: "build-key",
+    });
+    view.unmount();
+    // If switching leaked the previous registration, either pipeline would
+    // still ask for message bodies after its last view was released.
+    expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({});
+    expect(buildPipelineChangeReadOptions(other.id)).toEqual({});
+    getBuildPipelineControlMock.mockResolvedValueOnce({ unchanged: true, revision: 8 });
+    await hydrateBuildPipeline(other.id, undefined, buildPipelineChangeReadOptions(other.id));
+    expect(getBuildPipelineControlMock).toHaveBeenCalledTimes(2);
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
   });
 
   test("a failed stage fetch retries while the completed tab remains open", async () => {

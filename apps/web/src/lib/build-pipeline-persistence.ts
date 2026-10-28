@@ -217,11 +217,126 @@ function applyMessagePatches(
   };
 }
 
-/** Installs one authoritative backend read model into the renderer cache. */
-export async function hydrateBuildPipeline(
+export interface HydrateBuildPipelineOptions {
+  /** Served first when the response budget runs out. */
+  prioritySessionKey?: string;
+  /**
+   * Also patch the transcript bodies. Without it the read is control state
+   * only: held bodies are kept and read as stale, and a visible transcript
+   * asks for its own patch, so a pipeline nobody is reading costs one
+   * body-free record per change rather than transcript windows.
+   */
+  transcripts?: boolean;
+}
+
+/** Transcript views on screen, by pipeline: their session keys, newest last. */
+const watchedTranscripts = new Map<string, string[]>();
+
+/**
+ * Marks a stage transcript as on screen until the returned function runs.
+ * Change events for its pipeline then patch bodies too, with that session
+ * first, instead of leaving the view to ask in a second read.
+ */
+export function watchBuildPipelineTranscript(pipelineId: string, sessionKey: string): () => void {
+  const keys = watchedTranscripts.get(pipelineId) ?? [];
+  keys.push(sessionKey);
+  watchedTranscripts.set(pipelineId, keys);
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    const current = watchedTranscripts.get(pipelineId);
+    if (!current) return;
+    const index = current.lastIndexOf(sessionKey);
+    if (index >= 0) current.splice(index, 1);
+    if (current.length === 0) watchedTranscripts.delete(pipelineId);
+  };
+}
+
+/** Read options for a change to `pipelineId`: bodies only while a transcript is on screen. */
+export function buildPipelineChangeReadOptions(pipelineId: string): HydrateBuildPipelineOptions {
+  const prioritySessionKey = watchedTranscripts.get(pipelineId)?.at(-1);
+  return prioritySessionKey ? { transcripts: true, prioritySessionKey } : {};
+}
+
+type PipelineRead = {
+  /** Settles when the read in flight does. */
+  settled: Promise<void>;
+  /** The one follow-up read every caller that arrived meanwhile shares. */
+  queued: { options: HydrateBuildPipelineOptions; result: Promise<BuildPipeline | null> } | null;
+};
+
+/** Point reads in flight, by pipeline. */
+const pipelineReads = new Map<string, PipelineRead>();
+
+function mergeHydrationOptions(
+  queued: HydrateBuildPipelineOptions,
+  next: HydrateBuildPipelineOptions,
+): HydrateBuildPipelineOptions {
+  const prioritySessionKey = next.prioritySessionKey ?? queued.prioritySessionKey;
+  return {
+    ...(prioritySessionKey ? { prioritySessionKey } : {}),
+    ...(queued.transcripts || next.transcripts ? { transcripts: true } : {}),
+  };
+}
+
+function startPipelineRead(
+  pipelineId: string,
+  read: PipelineRead,
+  options: HydrateBuildPipelineOptions,
+): Promise<BuildPipeline | null> {
+  const result = hydrateBuildPipelineOnce(pipelineId, undefined, options);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  read.settled = settled;
+  pipelineReads.set(pipelineId, read);
+  void settled.then(() => {
+    if (pipelineReads.get(pipelineId) === read && read.settled === settled && !read.queued) {
+      pipelineReads.delete(pipelineId);
+    }
+  });
+  return result;
+}
+
+/**
+ * Installs one authoritative backend read model into the renderer cache.
+ *
+ * At most one backend read per pipeline is in flight. A call made while one
+ * runs cannot know whether that read saw its change, so it waits for one
+ * follow-up read, shared by every caller that arrives in the meantime; a
+ * burst of change events costs two reads, not one each.
+ */
+export function hydrateBuildPipeline(
   pipelineId: string,
   load?: PipelineLoader,
-  options: { prioritySessionKey?: string } = {},
+  options: HydrateBuildPipelineOptions = {},
+): Promise<BuildPipeline | null> {
+  if (load) return hydrateBuildPipelineOnce(pipelineId, load, options);
+  const read = pipelineReads.get(pipelineId);
+  if (!read) {
+    return startPipelineRead(pipelineId, { settled: Promise.resolve(), queued: null }, options);
+  }
+  if (read.queued) {
+    read.queued.options = mergeHydrationOptions(read.queued.options, options);
+    return read.queued.result;
+  }
+  const queued: NonNullable<PipelineRead["queued"]> = {
+    options,
+    result: read.settled.then(() => {
+      read.queued = null;
+      return startPipelineRead(pipelineId, read, queued.options);
+    }),
+  };
+  read.queued = queued;
+  return queued.result;
+}
+
+async function hydrateBuildPipelineOnce(
+  pipelineId: string,
+  load: PipelineLoader | undefined,
+  options: HydrateBuildPipelineOptions,
 ): Promise<BuildPipeline | null> {
   const generation = nextHydrationGeneration();
   setBoundedGeneration(
@@ -236,17 +351,22 @@ export async function hydrateBuildPipeline(
   );
   const loaded = load
     ? await load(pipelineId)
-    : await backend.getBuildPipelineConditional<BuildPipeline>(
-        pipelineId,
-        localBefore?.backendRevision,
-        Object.fromEntries(
-          [...localSessions].flatMap(([sessionKey, session]) => {
-            const cursor = transcriptCursor(session);
-            return cursor ? [[sessionKey, cursor]] : [];
-          }),
-        ),
-        options.prioritySessionKey,
-      );
+    : !options.transcripts
+      ? await backend.getBuildPipelineControl<BuildPipeline>(
+          pipelineId,
+          localBefore?.backendRevision,
+        )
+      : await backend.getBuildPipelineConditional<BuildPipeline>(
+          pipelineId,
+          localBefore?.backendRevision,
+          Object.fromEntries(
+            [...localSessions].flatMap(([sessionKey, session]) => {
+              const cursor = transcriptCursor(session);
+              return cursor ? [[sessionKey, cursor]] : [];
+            }),
+          ),
+          options.prioritySessionKey,
+        );
   if (loaded && "unchanged" in loaded && loaded.unchanged) {
     return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
   }

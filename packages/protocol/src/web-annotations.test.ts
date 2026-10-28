@@ -123,6 +123,20 @@ describe("web annotation capture validation", () => {
     }
   });
 
+  test("a source hint's verification is never taken from a payload", () => {
+    const input = fixtureCaptureInput("element");
+    const hint = { producer: "vite-dev", path: "src/settings.tsx", line: 42, verified: false };
+    const withHint = (verified: boolean) => ({
+      ...input,
+      evidence: { ...input.evidence!, sourceHints: [{ ...hint, verified }] },
+    });
+    expect(validateWebAnnotationCaptureInput(withHint(false)).ok).toBe(true);
+    expect(validateWebAnnotationCaptureInput(withHint(true))).toEqual({
+      ok: false,
+      error: "Source hint verification is assigned by the receiver",
+    });
+  });
+
   test("a producer without a recorded basis is client-declared, except legacy imports", () => {
     expect(webAnnotationProducerSource(fixtureCapture("element"))).toBe("client-declared");
     expect(webAnnotationProducerSource(fixtureCapture("legacy-unresolved"))).toBe("backend");

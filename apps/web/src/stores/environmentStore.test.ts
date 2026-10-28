@@ -137,6 +137,28 @@ describe("environmentStore", () => {
     });
   });
 
+  test("PR updates retain mergeability only for the same PR", () => {
+    const oldUrl = "https://example.test/pull/1";
+    const newUrl = "https://example.test/pull/2";
+    useEnvironmentStore
+      .getState()
+      .setEnvironments([
+        environment("env-1", { prUrl: oldUrl, prState: "open", prMergeability: "clean" }),
+      ]);
+    useEnvironmentStore.getState().setEnvironmentPR("env-1", oldUrl, "open", false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.prMergeability).toBe(
+      "clean",
+    );
+    useEnvironmentStore.getState().setEnvironmentPR("env-1", newUrl, "open", false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+      prUrl: newUrl,
+      prMergeability: null,
+    });
+    useEnvironmentStore.getState().updateEnvironment("env-1", { prMergeability: "clean" });
+    useEnvironmentStore.getState().setEnvironmentPR("env-1", null, null);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.prMergeability).toBeNull();
+  });
+
   test("reorders only the selected project and ignores unknown ids", () => {
     const other = environment("other", { projectId: "project-2", order: 4 });
     useEnvironmentStore

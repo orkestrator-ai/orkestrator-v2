@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useState } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
 import * as realStores from "@/stores";
@@ -16,12 +16,22 @@ import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { FederationProvider } from "@/components/federation/FederationProvider";
+import { portalStore } from "@/lib/portal/portal-store";
+import {
+  connectionList,
+  installDesktopFake,
+  remoteConnection,
+  sharedIdDataset,
+  uninstallDesktopFake,
+} from "@/test/federation-desktop-fake";
 import type { TabInfo } from "@/types/paneLayout";
 
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
 const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
 const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
+const INITIAL_PORTAL = portalStore.getState();
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
@@ -266,12 +276,81 @@ describe("AppShell", () => {
     // The document title stays plain text.
     expect(document.title).toBe("pgstack1 - feature-auth");
 
+    act(() =>
+      usePrMonitorStore.setState((state) => ({
+        states: new Map(
+          [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: true }]),
+        ),
+      })),
+    );
+    // No environment refresh follows: the monitor event must immediately veto
+    // the still-clean environment snapshot on its own.
+    expect(title.querySelector("[data-merge-ready]")).toBeNull();
+    act(() =>
+      usePrMonitorStore.setState((state) => ({
+        states: new Map(
+          [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: false }]),
+        ),
+      })),
+    );
+    expect(title.querySelector("[data-merge-ready]")).toBeTruthy();
     act(() => usePrMonitorStore.getState().setSyncStatus("stale"));
     expect(
       screen
         .getByRole("button", { name: "pgstack1 - feature-auth", hidden: true })
         .querySelector("[data-merge-ready]"),
     ).toBeNull();
+  });
+
+  test("remote mobile titles stay plain for current clean summaries without monitor health", async () => {
+    const data = sharedIdDataset("idle");
+    Object.assign(data.environments["project-1"]![0]!, {
+      prUrl: "https://github.com/acme/repo/pull/4",
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+      environmentType: "local",
+    });
+    installDesktopFake({
+      list: connectionList([remoteConnection("leaf", "Leaf", "teal")]),
+      datasets: { leaf: data },
+    });
+    useRemoteWorkspaceStore.setState({
+      active: { nodeId: "bk_leaf", projectId: "project-1", environmentId: "env-1" },
+    });
+    try {
+      render(
+        <FederationProvider>
+          <AppShell>Workspace</AppShell>
+        </FederationProvider>,
+      );
+      await waitFor(() => expect(portalStore.getState().nodes).toHaveLength(1));
+      const node = portalStore.getState().nodes[0]!;
+      expect(node.available).toBe(true);
+      expect(node.freshness).toBe("current");
+      expect(node.environments[0]?.prState).toBe("open");
+      expect(node.environments[0]?.prHasMergeConflicts).toBe(false);
+      expect(node.environments[0]?.prMergeability).toBe("clean");
+      const title = screen.getByRole("button", { name: "app - feature", hidden: true });
+      expect(document.title).toBe("app - feature");
+      expect(title.querySelector("[data-merge-ready]")).toBeNull();
+      // A freshly hydrated clean summary is also what a failed leaf monitor
+      // or a restarted leaf can return. Neither proves a successful PR check.
+      act(() =>
+        portalStore.store.setState({
+          nodes: portalStore.getState().nodes.map((node) => ({ ...node, freshness: "stale" })),
+        }),
+      );
+      expect(
+        screen
+          .getByRole("button", { name: "app - feature", hidden: true })
+          .querySelector("[data-merge-ready]"),
+      ).toBeNull();
+    } finally {
+      cleanup();
+      uninstallDesktopFake();
+      portalStore.store.setState(INITIAL_PORTAL, true);
+    }
   });
 
   test("derives the desktop title, uses the bar presentation, and starts window dragging", () => {

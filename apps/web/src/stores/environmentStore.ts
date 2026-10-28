@@ -109,7 +109,13 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     set((state) => ({
       environments: state.environments.map((environment) =>
         environment.id === environmentId
-          ? { ...environment, prUrl, prState, hasMergeConflicts: hasMergeConflicts ?? null }
+          ? {
+              ...environment,
+              prUrl,
+              prState,
+              hasMergeConflicts: hasMergeConflicts ?? null,
+              prMergeability: environment.prUrl === prUrl ? environment.prMergeability : null,
+            }
           : environment,
       ),
     })),

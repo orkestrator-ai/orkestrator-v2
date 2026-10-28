@@ -66,6 +66,8 @@ describe("isLocalEnvironmentReadyToMerge", () => {
     ["an older backend without a merge state", { prMergeability: undefined }, {}, "current"],
     ["it was merged", { prState: "merged" }, { prState: "merged" }, "current"],
     ["it has conflicts", { hasMergeConflicts: true }, {}, "current"],
+    ["a newer monitor reading has conflicts", {}, { hasMergeConflicts: true }, "current"],
+    ["the monitor conflict reading is unknown", {}, { hasMergeConflicts: null }, "current"],
   ] as const)("not ready when %s", (_label, environmentOverrides, monitorOverrides, sync) => {
     expect(
       isLocalEnvironmentReadyToMerge(
@@ -104,8 +106,10 @@ describe("isNodeEnvironmentReadyToMerge", () => {
     } as FederatedEnvironment;
   }
 
-  test("a connected, current machine's clean PR is ready", () => {
-    expect(isNodeEnvironmentReadyToMerge(remote(), live)).toBe(true);
+  test("even a current clean snapshot cannot confirm leaf monitor health", () => {
+    // Identical persisted summaries can follow a failed detection, expired
+    // credentials, or a restart before the first successful detection.
+    expect(isNodeEnvironmentReadyToMerge(remote(), live)).toBe(false);
   });
 
   test.each([

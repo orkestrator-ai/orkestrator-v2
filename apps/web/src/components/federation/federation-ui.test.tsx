@@ -598,7 +598,7 @@ describe("CL-05: machine identity visual rules", () => {
     expect(screen.getByText("app")).toBeTruthy();
   });
 
-  test("another machine's row shimmers while its relayed PR reading is ready to merge", () => {
+  test("another machine's clean PR stays plain without leaf monitor health", () => {
     const machine = machineView();
     const ready: FederatedEnvironment = {
       ...firstEnvironment(machine),
@@ -609,12 +609,10 @@ describe("CL-05: machine identity visual rules", () => {
     const { rerender } = render(<RemoteEnvironmentItem machine={machine} environment={ready} />);
     const row = screen.getByRole("button", { name: /^feature, on Machine A, Working/ });
     const name = within(row).getByText("feature");
-    expect(name.classList).toContain("text-shimmer");
-    expect(name.classList).toContain("merge-ready-name");
+    expect(name.classList).not.toContain("text-shimmer");
+    expect(name.classList).not.toContain("merge-ready-name");
     const describedBy = row.getAttribute("aria-describedby");
-    expect(describedBy ? document.getElementById(describedBy)?.textContent : null).toBe(
-      "Ready to merge",
-    );
+    expect(describedBy).toBeNull();
 
     // A failing check makes GitHub report the merge state as unstable.
     rerender(

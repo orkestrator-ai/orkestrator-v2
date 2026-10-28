@@ -58,13 +58,23 @@ test("a ready-to-merge environment name sweeps; reduced motion holds a static hi
   await expect(row.getByTestId("merge-ready-indicator")).toBeVisible();
 });
 
-test("another machine's environment shimmers from its relayed PR reading", async ({ page }) => {
+test("another machine's clean PR stays plain without leaf monitor health", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/remote-machine-tree?merge-ready=1");
 
-  const ready = page.getByText("b", { exact: true });
-  await expect(ready).toHaveAttribute("data-merge-ready", "true");
-  expect((await paint(ready)).animationName).toBe("text-shimmer");
+  // Even a current clean persisted snapshot cannot establish that the leaf's
+  // monitor checked GitHub successfully during its current lifetime.
+  const name = page.getByText("b", { exact: true });
+  await expect(name).toBeVisible();
+  await expect(name).not.toHaveAttribute("data-merge-ready", "true");
+  expect((await paint(name)).animationName).toBe("none");
+  const row = page.getByRole("button", { name: /^b, on Remote/ });
+  await expect(row).not.toHaveAccessibleDescription("Ready to merge");
+  await expect(row.getByTestId("merge-ready-indicator")).toHaveCount(0);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(name).not.toHaveAttribute("data-merge-ready", "true");
+  await expect(row.getByTestId("merge-ready-indicator")).toHaveCount(0);
   await expect(page.getByText("c", { exact: true })).not.toHaveAttribute(
     "data-merge-ready",
     "true",

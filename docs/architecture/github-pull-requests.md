@@ -91,8 +91,8 @@ delays or fails the GitHub action.
 ## Ready to merge
 
 An environment whose pull request waits only for the user to merge it has a
-shimmering name: the sidebar row (this machine's and other machines'), search
-results, and the mobile title, which is the only title that names the
+shimmering name in this machine's sidebar row, search results, and the mobile
+title, which is the only title that names the
 environment. The desktop title bar names only the project, so it has nothing
 to shimmer. One rule decides "ready" for every surface:
 `evaluatePrMergeReadiness` in `packages/protocol/src/pr-merge-readiness.ts`.
@@ -106,26 +106,28 @@ Ready means all of:
   non-required check failing or still running) is not ready.
 - If the monitor has a check rollup, nothing in it is failing or pending.
 - The reading is fresh. For this machine: the PR monitor mirror is `current`,
-  the backend has answered a check for this exact PR since it started (the
-  first answered check is announced once for this), the latest check did not
-  fail, and the environment can be polled (local, or a running container). For
-  another machine: it is connected, its summaries are `current`, and the
-  environment is not being deleted and can be polled.
+  the backend has answered a check for this exact PR since polling last started
+  or resumed (the first answered check is announced once for this), the latest
+  check did not fail, both monitor and environment report no conflicts, and the
+  environment can be polled (local, or a running container). For
+  another machine: readiness is suppressed until summaries relay the leaf's
+  current monitor confirmation and error state. Transport freshness alone
+  cannot establish PR-reading freshness.
 
 The PR monitor already asks `gh` for `mergeStateStatus,isDraft` in its normal
 lookup, so readiness costs no extra GitHub request. It persists the result as
 `prMergeability` on the environment, in the viewer's vocabulary above. Storage
 clears it whenever `prUrl` changes. Node summaries relay `prState`,
 `prHasMergeConflicts` and `prMergeability`, never the PR URL, so a command node
-can decide for a leaf's rows.
+can display a leaf's last persisted PR state.
 
 Known gaps:
 
 - The viewer's permission to merge is not checked. The `gh` lookup does not
   return it, and a repository query on every poll would double the cost.
   Orkestrator merges with the same credential the monitor reads with.
-- A leaf's own monitor errors are not relayed, so its last persisted reading is
-  trusted while the leaf is connected and current.
+- A leaf's own monitor health is not relayed. Remote sidebar, search and title
+  readiness stays off, including for a connected leaf with current summaries.
 
 The effect is the shared `.text-shimmer` utility (`apps/web/src/index.css`) with
 the `.merge-ready-name` colours. The name keeps its own colour and the band

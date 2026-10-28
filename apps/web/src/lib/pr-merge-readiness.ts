@@ -41,6 +41,7 @@ export function isLocalEnvironmentReadyToMerge(
     monitor !== null &&
     monitor.prUrl === environment.prUrl &&
     monitor.prState === environment.prState &&
+    monitor.hasMergeConflicts === false &&
     monitor.consecutiveErrors === 0 &&
     monitor.lastSuccessfulCheckAt != null &&
     isPolled(environment.environmentType, environment.status);
@@ -54,22 +55,14 @@ export function isLocalEnvironmentReadyToMerge(
 }
 
 /**
- * Another machine's environment, from the command node's summary. Fresh means
- * the machine is connected and its summaries are current. The leaf's own
- * monitor errors are not relayed, so this trusts its last persisted reading.
+ * Node summaries only contain persisted PR fields, not confirmation from the
+ * leaf's current monitor lifetime. A current transport snapshot cannot prove
+ * that GitHub was checked after a restart or that the latest check succeeded.
+ * Keep all remote readiness surfaces off until summaries relay that health.
  */
 export function isNodeEnvironmentReadyToMerge(
-  environment: FederatedEnvironment,
-  machine: Pick<MachineView, "transport" | "freshness">,
+  _environment: FederatedEnvironment,
+  _machine: Pick<MachineView, "transport" | "freshness">,
 ): boolean {
-  return isPrReadyToMerge({
-    prState: environment.prState,
-    hasMergeConflicts: environment.prHasMergeConflicts,
-    mergeability: environment.prMergeability,
-    fresh:
-      machine.transport === "connected" &&
-      machine.freshness === "current" &&
-      !environment.deleting &&
-      isPolled(environment.environmentType, environment.status),
-  });
+  return false;
 }

@@ -535,11 +535,15 @@ export class PrMonitorService {
     if (!entry || !entry.active) return;
     entry.generation += 1;
     entry.active = false;
+    // GitHub can change while polling is paused. Resume must earn a new
+    // confirmation even when the persisted PR fields have not changed.
+    entry.lastSuccessfulCheckAt = null;
     entry.recheckRequested = false;
     entry.wake = null;
     this.options.cancel(entry.timer);
     entry.timer = undefined;
     this.abortAdmissionWait(entry);
+    this.emitState(entry);
   }
 
   /** Stops monitoring entirely; used when an environment is deleted. */

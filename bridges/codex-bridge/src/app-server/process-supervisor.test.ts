@@ -379,7 +379,7 @@ describe("startup", () => {
     );
     expect(spawnCalls[0]!.args.join(" ")).not.toContain("features.mcp_2026_07_28");
     expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.required=false");
-    expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.startup_timeout_sec=3");
+    expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.startup_timeout_sec=15");
     expect(spawnCalls[0]!.args).toContain(
       'mcp_servers.orkestrator.default_tools_approval_mode="approve"',
     );

@@ -177,10 +177,13 @@ import { ArtifactHostManager } from "./artifact-host-manager.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
 import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts.js";
+import { installSocketTypeOfServiceGuard } from "./socket-tos-guard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = process.env.ELECTRON_DEV === "1";
+// Electron 45's bundled undici can throw EINVAL from a reset socket on macOS.
+installSocketTypeOfServiceGuard();
 // Menu items copy synchronously; Electron 44's writeText returns a Promise whose
 // rejection would otherwise be unhandled and terminate the main process.
 const writeClipboardText = createClipboardTextWriter(clipboard, (message, error) =>

@@ -1684,15 +1684,26 @@ export function SharedNativeAgentController({
     [sessionKey, updateDraft],
   );
 
+  const beforeSendPendingRef = useRef(false);
+  const [preparingSend, setPreparingSend] = useState(false);
+  const composerLifetimeRef = useRef<object | null>(null);
+  useEffect(() => {
+    composerLifetimeRef.current = {};
+    return () => {
+      composerLifetimeRef.current = null;
+    };
+  }, [sessionKey]);
+
   const submit = useCallback(
     async (
       text: string,
       requestId?: string,
       preparedPrompt = false,
       modeOverride?: "build" | "plan",
-      submitOptions?: { literal?: boolean; noQueue?: boolean },
+      submitOptions?: { literal?: boolean; noQueue?: boolean; preflight?: boolean },
     ) => {
-      if (queueEditPendingRef.current || submitInFlightRef.current) return false;
+      if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
+        return false;
       // A prompt with a stable id must not be queued: the queue carries no id,
       // so a copy the backend already sent would run twice. Retried by the
       // caller once the turn ends and this callback changes.
@@ -1966,6 +1977,38 @@ export function SharedNativeAgentController({
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
+      // Preflight belongs after local validation. Keep the submitted draft's
+      // identity across the wait: suggestions, mentions and attachments can
+      // still edit it, and a remounted composer must never replay this send.
+      if (submitOptions?.preflight && beforeSend) {
+        const lifetime = composerLifetimeRef.current;
+        const pendingDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+        beforeSendPendingRef.current = true;
+        setPreparingSend(true);
+        try {
+          const proceed = await beforeSend();
+          if (composerLifetimeRef.current !== lifetime || proceed === false) return false;
+          const currentDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+          if (
+            currentDraft.text !== pendingDraft.text ||
+            currentDraft.mentions !== pendingDraft.mentions ||
+            currentDraft.attachments !== pendingDraft.attachments ||
+            currentDraft.annotations !== pendingDraft.annotations ||
+            currentDraft.commandSelection !== pendingDraft.commandSelection
+          ) {
+            reportSendError("The draft changed while preparing to send. Review it and send again.");
+            return false;
+          }
+        } catch (error) {
+          if (composerLifetimeRef.current === lifetime) {
+            reportSendError(error instanceof Error ? error.message : String(error));
+          }
+          return false;
+        } finally {
+          beforeSendPendingRef.current = false;
+          if (composerLifetimeRef.current === lifetime) setPreparingSend(false);
+        }
+      }
       updateDraft(sessionKey, { submissionError: undefined });
       submitInFlightRef.current = true;
       setIsSubmitting(true);
@@ -2124,6 +2167,7 @@ export function SharedNativeAgentController({
     },
     [
       adapter.capabilities.attachments,
+      beforeSend,
       clearDraft,
       composer?.fastModeEnabled,
       composer?.selectedModeId,
@@ -2174,43 +2218,11 @@ export function SharedNativeAgentController({
     ],
   );
 
-  /*
-   * A send from the composer itself: Enter, the send button, or send as text.
-   * `beforeSend` may await the user (the coordinator's upstream merge
-   * question), so the latest `submit` is called only once it settles. The
-   * composer is disabled meanwhile, so the draft cannot change under it and a
-   * second Enter cannot start another.
-   */
-  const submitRef = useRef(submit);
-  useLayoutEffect(() => {
-    submitRef.current = submit;
-  });
-  const beforeSendPendingRef = useRef(false);
-  const [preparingSend, setPreparingSend] = useState(false);
   const sendFromComposer = useCallback(
     (text: string, options?: { literal: true }) => {
-      if (!beforeSend || (!options?.literal && parseUserCommand(text))) {
-        void submitRef.current(text, undefined, false, undefined, options);
-        return;
-      }
-      if (beforeSendPendingRef.current || submitInFlightRef.current) return;
-      beforeSendPendingRef.current = true;
-      setPreparingSend(true);
-      void beforeSend()
-        .then(
-          () => submitRef.current(text, undefined, false, undefined, options),
-          (error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            setSendError(message);
-            updateDraft(sessionKey, { submissionError: message });
-          },
-        )
-        .finally(() => {
-          beforeSendPendingRef.current = false;
-          setPreparingSend(false);
-        });
+      void submit(text, undefined, false, undefined, { ...options, preflight: true });
     },
-    [beforeSend, sessionKey, updateDraft],
+    [submit],
   );
 
   useEffect(() => {
@@ -2677,6 +2689,7 @@ export function SharedNativeAgentController({
         if (cancelled || !isCurrent()) return;
         void submit(heldSubmit.text, heldSubmit.requestId, false, heldSubmit.modeOverride, {
           literal: heldSubmit.literal,
+          preflight: true,
         });
       });
       return () => {

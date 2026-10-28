@@ -118,6 +118,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     status: ProjectGitStatus;
     resolve: (choice: "merge" | "skip") => void;
   } | null>(null);
+  const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const lifetime = new AbortController();
+    upstreamCheckLifetimeRef.current = lifetime;
+    return () => lifetime.abort();
+  }, [projectId]);
   const mergeActionRef = useRef<HTMLButtonElement>(null);
   const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? loadError;
@@ -367,6 +373,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    */
   const confirmUpstreamMerge = useCallback(
     async (conversation: { role?: string }) => {
+      const lifetime = upstreamCheckLifetimeRef.current;
+      if (!lifetime || lifetime.signal.aborted) return false;
       if (conversation.role === "side") return;
       const current = snapshotRef.current;
       const projections = useNativeAgentProjectionStore.getState().projections;
@@ -375,54 +383,93 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         const phase = projections.get(
           createSessionKey(coordinatorRuntimeId(current.workspace.id, item.id), item.tabId),
         )?.turn.phase;
-        return phase === "running" || phase === "blocked" || phase === "cancelling";
+        return (
+          phase === "running" ||
+          phase === "blocked" ||
+          phase === "cancelling" ||
+          phase === "recovering"
+        );
       });
-      if (turnRunning) return;
-      // An unreachable or slow remote is no reason to hold the message: past
-      // the bound it is sent without asking, and the fetch still lands.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const status = await Promise.race([
-        backend
-          .fetchProjectGit(projectId)
-          .then((fetched) => {
-            setGit(fetched);
-            return fetched;
-          })
-          .catch(() => null),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), UPSTREAM_CHECK_TIMEOUT_MS);
-        }),
-      ]).finally(() => clearTimeout(timer));
-      const declined = selectDeclinedUpstreamMerge(projectId)(
-        useCoordinatorUpstreamDeclineStore.getState(),
+      const homeIds = new Set(
+        useEnvironmentStore
+          .getState()
+          .environments.filter(
+            (environment) => environment.projectId === projectId && environment.projectHome,
+          )
+          .map((environment) => environment.id),
       );
-      if (!status || !shouldOfferUpstreamMerge(status, declined)) return;
-      const choice = await new Promise<"merge" | "skip">((resolve) =>
-        setUpstreamMerge({ status, resolve }),
+      const homeRunning = Array.from(projections.values()).some(
+        (projection) =>
+          homeIds.has(projection.environmentId) &&
+          ["running", "blocked", "cancelling", "recovering"].includes(projection.turn.phase),
       );
-      setUpstreamMerge(null);
-      if (choice === "skip") {
-        if (status.upstream && status.upstreamCommit) {
-          useCoordinatorUpstreamDeclineStore.getState().decline(projectId, {
-            upstream: status.upstream,
-            upstreamCommit: status.upstreamCommit,
-          });
-        }
-        return;
-      }
-      setOperation("sync");
-      setError(null);
+      if (turnRunning || homeRunning) return;
+      let cancel!: () => void;
+      const cancelled = new Promise<false>((resolve) => {
+        cancel = () => resolve(false);
+        lifetime.signal.addEventListener("abort", cancel, { once: true });
+      });
       try {
-        setGit(await backend.syncProjectGit(projectId));
-        await refreshView();
-      } catch (cause) {
-        void backend
-          .getProjectGitStatus(projectId)
-          .then(setGit)
-          .catch(() => undefined);
-        throw cause;
+        // An unreachable or slow remote is no reason to hold the message: past
+        // the bound it is sent without asking, and the fetch still lands.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const status = await Promise.race([
+          cancelled,
+          backend
+            .fetchProjectGit(projectId)
+            .then((fetched) => {
+              if (!lifetime.signal.aborted) setGit(fetched);
+              return fetched;
+            })
+            .catch(() => null),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), UPSTREAM_CHECK_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(timer));
+        if (lifetime.signal.aborted || status === false) return false;
+        const declined = selectDeclinedUpstreamMerge(projectId)(
+          useCoordinatorUpstreamDeclineStore.getState(),
+        );
+        if (!status || !shouldOfferUpstreamMerge(status, declined)) return;
+        const choice = await Promise.race([
+          cancelled,
+          new Promise<"merge" | "skip">((resolve) => setUpstreamMerge({ status, resolve })),
+        ]);
+        if (lifetime.signal.aborted || choice === false) return false;
+        setUpstreamMerge(null);
+        if (choice === "skip") {
+          if (status.upstream && status.upstreamCommit) {
+            useCoordinatorUpstreamDeclineStore.getState().decline(projectId, {
+              upstream: status.upstream,
+              upstreamCommit: status.upstreamCommit,
+            });
+          }
+          return;
+        }
+        setOperation("sync");
+        setError(null);
+        try {
+          const synced = await backend.syncProjectGit(projectId);
+          if (lifetime.signal.aborted) return false;
+          setGit(synced);
+          await refreshView();
+          if (lifetime.signal.aborted) return false;
+        } catch (cause) {
+          if (
+            cause instanceof Error &&
+            cause.message === "Stop the active coordinator turn before changing the checkout"
+          )
+            return;
+          void backend
+            .getProjectGitStatus(projectId)
+            .then(setGit)
+            .catch(() => undefined);
+          throw cause;
+        } finally {
+          if (!lifetime.signal.aborted) setOperation(null);
+        }
       } finally {
-        setOperation(null);
+        lifetime.signal.removeEventListener("abort", cancel);
       }
     },
     [projectId, refreshView, setGit],
@@ -434,7 +481,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       launch: Parameters<typeof assignAgent>[2],
       prompt: string,
     ) => {
-      await confirmUpstreamMerge(conversation);
+      if ((await confirmUpstreamMerge(conversation)) === false) return;
       await assignAgent(conversation.id, platform, launch, prompt);
     },
     [assignAgent, confirmUpstreamMerge],

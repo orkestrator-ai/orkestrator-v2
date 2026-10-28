@@ -129,7 +129,7 @@ for (const kind of ["start", "provision"] as const) {
   test(`${kind} waits for an automatic missing-image pull outside start admission`, async () => {
     const scene = await fixture();
     await withDockerScript(scene.script(), async (log) => {
-      const pending = scene.invoke(kind);
+      const pending = Promise.resolve(scene.invoke(kind));
       // Attach a handler immediately, including if a later assertion fails.
       const outcome = pending.then(
         (value) => ({ value }),
@@ -175,7 +175,7 @@ for (const kind of ["start", "provision"] as const) {
     test(`${kind} checks a pending ${deletion} after the download and lets queued deletion finish`, async () => {
       const scene = await fixture();
       await withDockerScript(scene.script(), async (log) => {
-        const pending = scene.invoke(kind).then(
+        const pending = Promise.resolve(scene.invoke(kind)).then(
           () => null,
           (error) => error as Error,
         );

@@ -210,3 +210,23 @@ passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
 - **Parse-error owner reruns:** `mise run test:logged -- --name merge-signal-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts --parallel=1 --only-failures` passed (74.0 seconds); `mise run test:logged -- --name merge-registry-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed (27.9 seconds). These reruns validate the restored files; the aggregate remains a failed, concurrently modified run.
 - **Evidence:** `orkestrator-test-run.z45fz8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.HK0Z9L/merge-repository.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the known empty-request symptom, with the concurrent-checkout limitation above. No activity-sweep code, test, assertion, deadline or skip changed; the cause remains unproven.
+
+## Coordinator upstream-send review — 2026-10-28
+
+`mise run test:logged -- --name default-tests-rerun -- mise run test` retained
+one backend failure: `a restarted bridge re-detects the batch route` exceeded
+its 5,000 ms deadline (5,002.17 ms), following a `ProviderUnreachableError`.
+Backend totals were 10,145 passed, 87 skipped and one failed. Web passed all
+10,282 cases; root/support, bridges and protocol lockfile groups passed. The
+aggregate exited 1 after 398.3 seconds logged.
+
+The complete unchanged owner passed alone in 0.3 seconds (exit 0):
+
+```sh
+mise run test:logged -- --name activity-batch-isolated -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence is `orkestrator-test-run.dVAVdc/default-tests-rerun.log.gz` and the
+workspace group in `orkestrator-test-run.9oowaB/` below the host temporary
+directory. No activity-sweep implementation, test, deadline or skip changed.
+This confirms aggregate-only intermittence; its cause remains unproven.

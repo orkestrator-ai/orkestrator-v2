@@ -160,6 +160,8 @@ test("outside pointer dismissal notifies desktop restoration once and returns ty
     Object.assign(window, {
       shortcutDismissal: state,
       orkestrator: {
+        ...window.orkestrator,
+        listen: () => () => {},
         keyboardShortcuts: {
           closed: async () => {
             state.closed++;
@@ -223,7 +225,10 @@ test.describe("⌘K search works wherever focus is", () => {
         .getByRole("textbox", { name: "Design input" });
       await input.fill("kept");
       await page.keyboard.press(`${modifier}+K`);
-      await expect(requests(page)).toHaveText("1");
+      const mac = await page.evaluate(() =>
+        /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent),
+      );
+      await expect(requests(page)).toHaveText(modifier === "Control" && mac ? "0" : "1");
       await expect(input).toHaveValue("kept");
     });
   }
@@ -243,3 +248,48 @@ test.describe("⌘K search works wherever focus is", () => {
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
   });
 });
+
+for (const modifier of ["Meta", "Control"]) {
+  for (const surface of ["settings", "shortcuts"]) {
+    test(`${modifier}+K opens usable project search above ${surface}`, async ({ page }) => {
+      await page.goto(
+        surface === "settings" ? "/fullscreen-settings?search-ui" : "/keyboard-shortcuts?search-ui",
+      );
+      if (surface === "shortcuts") {
+        await expect(page.getByTestId("terminal").locator("textarea")).toBeAttached();
+        await page.keyboard.press("Meta+Shift+K");
+      }
+      const underlying =
+        surface === "settings"
+          ? page.getByRole("textbox", { name: "Settings value" })
+          : page.getByRole("textbox", { name: "Search keyboard shortcuts" });
+      await underlying.fill("kept");
+      // Ctrl+K remains native text editing on macOS. Override the platform
+      // for the Windows/Linux branch so both chords exercise the raised UI.
+      if (modifier === "Control")
+        await page.evaluate(() =>
+          Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true }),
+        );
+      await page.keyboard.press(`${modifier}+K`);
+      const search = page.getByTestId("project-search-dialog");
+      await expect(search).toBeVisible();
+      const input = search.getByRole("combobox");
+      await expect(input).toBeFocused();
+      await input.click();
+      await page.keyboard.type("sample query");
+      await expect(input).toHaveValue("sample query");
+      await search.getByRole("button", { name: /^Filter results:/ }).click();
+      const menu = page.getByRole("menu");
+      await expect(menu).toBeVisible();
+      await menu.getByRole("menuitemradio", { name: "Projects", exact: true }).click();
+      await expect(menu).toHaveCount(0);
+      await input.click();
+      await page.keyboard.press("Escape");
+      await expect(search).toHaveCount(0);
+      await expect(underlying).toBeVisible();
+      await expect(underlying).toHaveValue("kept");
+      await page.reload();
+      await expect(page.getByTestId("project-search-dialog")).toHaveCount(0);
+    });
+  }
+}

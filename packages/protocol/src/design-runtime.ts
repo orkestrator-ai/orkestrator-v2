@@ -1,4 +1,10 @@
-import { APP_SHORTCUTS, matchAppShortcut } from "./keyboard-shortcuts.js";
+import {
+  APP_SHORTCUTS,
+  matchAppShortcut,
+  appClaimsShortcut,
+  shortcutFocus,
+  type AppShortcut,
+} from "./keyboard-shortcuts.js";
 import type {
   DesignElement,
   DesignHierarchyPage,
@@ -15,7 +21,9 @@ import type {
  */
 export function installDesignRuntime(
   matchesShortcut?: typeof matchAppShortcut,
-  shortcuts?: Parameters<typeof matchAppShortcut>[1],
+  shortcuts?: readonly AppShortcut[],
+  claimsShortcut?: typeof appClaimsShortcut,
+  focusedSurface?: typeof shortcutFocus,
 ) {
   const MAX_HTML_BYTES = 256 * 1024;
   const MAX_ELEMENTS = 5000;
@@ -512,7 +520,18 @@ export function installDesignRuntime(
     (event) => {
       // App shortcuts belong to the editor around the frame; it routes them.
       const shortcut = matchesShortcut && shortcuts ? matchesShortcut(event, shortcuts) : null;
-      if (shortcut) {
+      const definition = shortcuts?.find((entry) => entry.id === shortcut);
+      if (
+        definition &&
+        claimsShortcut &&
+        focusedSurface &&
+        claimsShortcut(
+          definition,
+          event,
+          /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? "mac" : "other",
+          focusedSurface(event.target),
+        )
+      ) {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat)
@@ -530,5 +549,5 @@ export function installDesignRuntime(
 /** Only our nonce-bearing bootstrap executes. Authored code has no nonce. */
 export function designBootstrap(nonce: string): string {
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(nonce)) throw new Error("Invalid runtime nonce");
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)});</script></body></html>`;
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()});</script></body></html>`;
 }

@@ -168,3 +168,30 @@ export function appClaimsShortcut(
 export function isKeyboardShortcutsChord(chord: ShortcutChord): boolean {
   return matchAppShortcut(chord) === "show-shortcuts";
 }
+
+// Self-contained so designBootstrap can serialize the same focus policy.
+/** What kind of surface `target` is, for `appClaimsShortcut`. */
+export function shortcutFocus(target: EventTarget | null): ShortcutFocus {
+  if (!(target instanceof Element)) return "page";
+  // xterm's helper textarea is a text field, but its keys go to a shell.
+  if (target.closest(".xterm")) return "terminal";
+  if (target.closest(".monaco-editor")) return "text";
+  if (target instanceof HTMLElement && target.isContentEditable) return "text";
+  if (target instanceof HTMLInputElement)
+    return [
+      "button",
+      "checkbox",
+      "color",
+      "file",
+      "image",
+      "radio",
+      "range",
+      "reset",
+      "submit",
+    ].includes(target.type)
+      ? "page"
+      : "text";
+  return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+    ? "text"
+    : "page";
+}

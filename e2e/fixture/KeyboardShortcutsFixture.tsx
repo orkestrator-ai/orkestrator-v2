@@ -1,3 +1,4 @@
+import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -97,7 +98,16 @@ function WindowFixture() {
       />
       <iframe title="Service preview" sandbox="allow-scripts" />
       <RealmFrame />
-      <SearchRequests />
+      {new URLSearchParams(window.location.search).has("search-ui") ? (
+        <ProjectSearchBar
+          projects={[]}
+          environments={[]}
+          onSelectProject={() => {}}
+          onSelectEnvironment={() => {}}
+        />
+      ) : (
+        <SearchRequests />
+      )}
       <KeyboardShortcutsDialog platform="mac" />
     </main>
   );

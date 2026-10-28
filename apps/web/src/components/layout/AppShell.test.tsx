@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useState } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
 import * as realStores from "@/stores";
@@ -15,8 +15,12 @@ import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
+import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
+import { useUIStore as realUIStore } from "@/stores/uiStore";
 import type { TabInfo } from "@/types/paneLayout";
 
+const uiStore = realUIStore;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
 const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
@@ -35,7 +39,7 @@ let isMobile = true;
 let selectedProjectId: string | null = "project-1";
 let selectedEnvironmentId: string | null = "environment-1";
 let filesPanelOpen = false;
-let sidebarOpen = true;
+let mountSearch = false;
 const startDraggingMock = mock(async () => undefined);
 
 function selectState<TState, TResult>(
@@ -61,7 +65,21 @@ mock.module("./ActionBar", () => ({
   ),
 }));
 
-mock.module("./Sidebar", () => ({ Sidebar: () => <div>Sidebar</div> }));
+mock.module("./Sidebar", () => ({
+  Sidebar: () => (
+    <div>
+      Sidebar
+      {mountSearch && (
+        <ProjectSearchBar
+          projects={[]}
+          environments={[]}
+          onSelectProject={() => {}}
+          onSelectEnvironment={() => {}}
+        />
+      )}
+    </div>
+  ),
+}));
 mock.module("./OpenFileDialog", () => ({ OpenFileDialog: () => null }));
 // Stubbed (with restore) so the tab AppShell derives is observable as a prop
 // rather than through the real popover's rendering.
@@ -108,13 +126,13 @@ mock.module("@/stores", () => ({
   ...realStoresSnapshot,
   useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean }) => T) =>
     selectState({ isOpen: filesPanelOpen }, selector),
-  useUIStore: <T,>(
-    selector?: (state: {
-      selectedProjectId: string | null;
-      selectedEnvironmentId: string | null;
-      sidebarOpen: boolean;
-    }) => T,
-  ) => selectState({ selectedProjectId, selectedEnvironmentId, sidebarOpen }, selector),
+  useUIStore: Object.assign(
+    <T,>(selector?: (state: ReturnType<typeof uiStore.getState>) => T) =>
+      uiStore((state) =>
+        selectState({ ...state, selectedProjectId, selectedEnvironmentId }, selector),
+      ),
+    { getState: uiStore.getState },
+  ),
   useProjectStore: <T,>(
     selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
   ) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
@@ -187,7 +205,8 @@ beforeEach(() => {
   selectedProjectId = "project-1";
   selectedEnvironmentId = "environment-1";
   filesPanelOpen = false;
-  sidebarOpen = true;
+  uiStore.setState({ sidebarOpen: true });
+  mountSearch = false;
   startDraggingMock.mockReset();
   document.title = "";
   usePaneLayoutStore.setState({
@@ -250,15 +269,79 @@ describe("AppShell", () => {
 
     expect(screen.getByTestId("resize-handle")).toBeTruthy();
 
-    sidebarOpen = false;
+    act(() => uiStore.setState({ sidebarOpen: false }));
     rerender(<AppShell>Workspace</AppShell>);
     expect(screen.queryByText("Sidebar") === null).toBe(true);
     expect(screen.queryByTestId("resize-handle") === null).toBe(true);
 
-    sidebarOpen = true;
+    act(() => uiStore.setState({ sidebarOpen: true }));
     rerender(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
     expect(screen.getByTestId("resize-handle")).toBeTruthy();
+  });
+
+  test("search reveals the hidden desktop sidebar and delivers the pending request exactly once", async () => {
+    isMobile = false;
+    mountSearch = true;
+    uiStore.setState({ sidebarOpen: false });
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByText("Sidebar")).toBeNull();
+    fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
+    await waitFor(() => expect(screen.getByTestId("project-search-dialog")).toBeTruthy());
+    expect(uiStore.getState().sidebarOpen).toBe(true);
+    const input = screen.getByRole("combobox");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // A second delivery would toggle the just-mounted search closed.
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.getByTestId("project-search-dialog")).toBeTruthy();
+    act(() => {
+      requestAppShortcut("search-projects");
+    });
+    await waitFor(() => expect(screen.queryByTestId("project-search-dialog")).toBeNull());
+    // A later mount must not replay the consumed request.
+    cleanup();
+    render(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByTestId("project-search-dialog")).toBeNull();
+  });
+
+  test("a closed mobile drawer drops search without opening or replaying it", () => {
+    isMobile = false;
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    isMobile = true;
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+    act(() => {
+      requestAppShortcut("search-projects");
+    });
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+    const delivered = mock(() => {});
+    const dispose = onAppShortcut("search-projects", delivered);
+    expect(delivered).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  test("a realm skips the shell's hidden-sidebar fallback", () => {
+    isMobile = false;
+    uiStore.setState({ sidebarOpen: false });
+    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+    const href = window.location.href;
+    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
+    try {
+      render(<AppShell>Workspace</AppShell>);
+      act(() => {
+        requestAppShortcut("search-projects");
+      });
+      expect(uiStore.getState().sidebarOpen).toBe(false);
+      expect(screen.queryByText("Sidebar")).toBeNull();
+    } finally {
+      cleanup();
+      happyDOM.setURL(href);
+    }
+    // Neither realm routing nor its unmount queues work in this shell.
+    const delivered = mock(() => {});
+    const dispose = onAppShortcut("search-projects", delivered);
+    expect(delivered).not.toHaveBeenCalled();
+    dispose();
   });
 
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {

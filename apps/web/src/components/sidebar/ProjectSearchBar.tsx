@@ -498,7 +498,8 @@ export function ProjectSearchBar({
           showCloseButton={false}
           data-testid="project-search-dialog"
           size="2xl"
-          className="gap-0 overflow-hidden p-0 sm:p-0"
+          overlayClassName="z-[90]"
+          className="z-[90] gap-0 overflow-hidden p-0 sm:p-0"
         >
           <DialogTitle className="sr-only">Search projects and environments</DialogTitle>
           <DialogDescription className="sr-only">
@@ -547,7 +548,7 @@ export function ProjectSearchBar({
                   ) : null}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuContent align="end" className="z-[100] w-52">
                 <DropdownMenuLabel className="text-xs text-muted-foreground">
                   Filter results
                 </DropdownMenuLabel>

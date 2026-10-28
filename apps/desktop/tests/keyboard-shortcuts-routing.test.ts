@@ -4,7 +4,7 @@ import { emitToContents } from "../electron/desktop-window-contexts";
 import { KeyboardShortcutsController } from "../electron/keyboard-shortcuts-menu";
 import { KeyboardShortcutsRouting } from "../electron/keyboard-shortcuts-routing";
 
-function harness() {
+function harness(platform: NodeJS.Platform = "linux") {
   const contents = (id: number) => ({
     id,
     isDestroyed: () => false,
@@ -31,7 +31,7 @@ function harness() {
     },
   }));
   const controller = new KeyboardShortcutsController();
-  const routing = new KeyboardShortcutsRouting(() => owners, controller);
+  const routing = new KeyboardShortcutsRouting(() => owners, controller, platform);
   const register = (id: number) => {
     const source = Object.assign(new EventEmitter(), { id });
     routing.register(source);
@@ -154,6 +154,23 @@ describe("native shortcut routing", () => {
     source.emit("before-input-event", event, { ...search, isAutoRepeat: true });
     expect(event.preventDefault).toHaveBeenCalledTimes(2);
     expect(shell.send).toHaveBeenCalledTimes(1);
+  });
+
+  test("darwin artifact Ctrl+K stays with text editing while Cmd+K reaches the shell", () => {
+    const { register, shell } = harness("darwin");
+    const source = register(43);
+    const event = { preventDefault: mock(() => {}) };
+    source.emit("before-input-event", event, {
+      ...chord,
+      shift: false,
+      meta: false,
+      control: true,
+    });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(shell.send).not.toHaveBeenCalled();
+    source.emit("before-input-event", event, { ...chord, shift: false });
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(shell.send).toHaveBeenCalledWith("orkestrator:event", "app-shortcut", "search-projects");
   });
 
   test.each([1, 2, 42, 999])(

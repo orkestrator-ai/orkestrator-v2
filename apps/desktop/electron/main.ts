@@ -1,3 +1,4 @@
+import { appShortcut } from "@orkestrator/protocol/keyboard-shortcuts";
 import {
   app,
   BrowserWindow,
@@ -115,6 +116,7 @@ import {
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import {
   KeyboardShortcutsController,
+  requestAppShortcut,
   type KeyboardShortcutsTarget,
 } from "./keyboard-shortcuts-menu.js";
 import { KeyboardShortcutsRouting } from "./keyboard-shortcuts-routing.js";
@@ -610,11 +612,11 @@ function createWindowBrowserPreviews(
       getWindow: () => createdWindow,
       emitFocus: (tabId) => emitToOwner("browser-preview-focus-address", tabId),
     }),
-    toggleKeyboardShortcuts: (tabId) =>
-      keyboardShortcuts.request(
-        shortcutRouting.target(manager?.webContentsIdForTab(tabId)),
-        "toggle",
-      ),
+    requestPreviewShortcut: (tabId, shortcut) => {
+      const target = shortcutRouting.target(manager?.webContentsIdForTab(tabId));
+      if (appShortcut(shortcut).owner === "document") keyboardShortcuts.request(target, "toggle");
+      else requestAppShortcut(createdWindow.webContents, shortcut);
+    },
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,

@@ -60,19 +60,23 @@ The key press reaches `requestAppShortcut` from one of these entry points:
    rule below, then calls `preventDefault` and `stopPropagation` before Monaco,
    xterm or the composer can handle the key. Repeats are consumed without a
    second toggle.
-2. **Design frames.** The sandboxed runtime is serialized with the matcher and
-   `APP_SHORTCUTS`, so it forwards each app-level shortcut by id over the
-   source-checked frame bridge.
+2. **Design frames.** The sandboxed runtime is serialized with the matcher,
+   `APP_SHORTCUTS`, and the shared focus classifier and claim rule. It applies
+   the platform/text-editing exception before consuming or forwarding a key
+   over the source-checked frame bridge.
 3. **Desktop main, `before-input-event` on every WebContents.**
    - ⌘⇧K (document-owned): consumed before page and menu dispatch in every app
      renderer, realm and artifact view, including their subframes, and
      delivered as `menu-keyboard-shortcuts` `toggle`. Browser and service
-     preview views use their preview manager's hook.
+     preview views use their preview manager's hook, which matches the catalog
+     and routes entries whose `fromPreviews` flag is enabled.
    - ⌘K (window-owned): consumed only in native **artifact** views, which run
      no router, and delivered to the window's shell renderer as
      `app-shortcut` after focusing it. In an app document main leaves it to
      the DOM router (point 1), which knows what has focus. In a browser
-     preview it stays with the page (see Decisions).
+     preview it stays with the page (see Decisions). Native artifacts have no
+     trusted focus classifier, so on macOS plain Ctrl+K stays with the whole
+     artifact surface to preserve text editing; Cmd+K still opens search.
 
 Only `keyDown` triggers; `rawKeyDown` is not a second delivery. The Electron
 API documents this event as `keyDown`/`keyUp`.
@@ -188,18 +192,25 @@ Console, Edge for Duplicate Tab); this has not been verified here.
 ## Tests
 
 - Protocol: matcher on both modifiers and layouts, catalog reachability, and
-  the claim table for each platform and focus.
+  the claim table for each platform and focus; serialized design bootstraps
+  before and after production minification, including macOS text editing.
 - Renderer: the router from composer, terminal and contenteditable on macOS
   and Windows, desktop and browser realm forwarding, main's `app-shortcut`
   event, pending delivery; the search from the composer, a terminal and text
   fields; the dialog with ⌘⇧K and Ctrl+Shift+K on both platforms; the design
-  frame bridge; a realm's forwarded message reaching the window.
-- Electron main: ⌘K and Ctrl+K from an artifact view reach the window's
-  shell; app documents, previews and unknown contents keep them; Ctrl+Shift+K
-  toggles like ⌘⇧K; a visible realm's `shortcut` message focuses its window.
+  frame bridge; a realm's forwarded message reaching the window; router reference
+  counting and final DOM/native listener cleanup; AppShell revealing the hidden
+  desktop sidebar and delivering search once, dropping closed mobile-drawer
+  requests, and skipping the shell fallback in a realm.
+- Electron main: ⌘K and non-macOS Ctrl+K from an artifact view reach the window's
+  shell, macOS artifact Ctrl+K stays with the surface; preview routing follows
+  `fromPreviews`; app documents, previews and unknown contents keep unclaimed
+  keys; Ctrl+Shift+K toggles like ⌘⇧K; a visible realm's `shortcut` message focuses its window.
 - Browser fixture (`e2e/KeyboardShortcuts.spec.ts`): ⌘K from the composer,
   Ctrl+K reaching xterm's shell, ⌘K from a design frame and from a same-origin
-  realm frame.
+  realm frame; real search above fullscreen settings and the shortcuts dialog,
+  including pointer input, typing, the portalled filter menu, and Escape at
+  desktop and phone widths.
 - Electron scenario (`workspace-realm-electron.spec.ts`): ⌘K in a realm's
   composer opens the window's search.
 

@@ -23,11 +23,13 @@ import {
   isAppShortcutId,
   matchAppShortcut,
   type AppShortcutId,
-  type ShortcutFocus,
+  shortcutFocus,
 } from "@orkestrator/protocol/keyboard-shortcuts";
 import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm";
 import { detectShortcutPlatform } from "@/lib/keyboard-shortcuts";
 import { listen } from "@/lib/native/events";
+
+export { shortcutFocus } from "@orkestrator/protocol/keyboard-shortcuts";
 
 type Handler = () => void;
 
@@ -37,31 +39,6 @@ const pending = new Set<AppShortcutId>();
 let unhandled: ((id: AppShortcutId) => boolean) | null = null;
 let routerUsers = 0;
 let detachRouter: (() => void) | null = null;
-
-const NON_TEXT_INPUTS = new Set([
-  "button",
-  "checkbox",
-  "color",
-  "file",
-  "image",
-  "radio",
-  "range",
-  "reset",
-  "submit",
-]);
-
-/** What kind of surface `target` is, for `appClaimsShortcut`. */
-export function shortcutFocus(target: EventTarget | null): ShortcutFocus {
-  if (!(target instanceof Element)) return "page";
-  // xterm's helper textarea is a text field, but its keys go to a shell.
-  if (target.closest(".xterm")) return "terminal";
-  if (target.closest(".monaco-editor")) return "text";
-  if (target instanceof HTMLElement && target.isContentEditable) return "text";
-  if (target instanceof HTMLInputElement) return NON_TEXT_INPUTS.has(target.type) ? "page" : "text";
-  return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
-    ? "text"
-    : "page";
-}
 
 function handleKeyDown(event: KeyboardEvent): void {
   if (event.defaultPrevented) return;

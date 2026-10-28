@@ -6,8 +6,13 @@ import type {
   DesignStyleResult,
   DesignValidationReport,
 } from "./design-canvas.js";
-import { APP_SHORTCUTS, matchAppShortcut } from "./keyboard-shortcuts.js";
-import { installDesignRuntime } from "./design-runtime.js";
+import {
+  APP_SHORTCUTS,
+  matchAppShortcut,
+  appClaimsShortcut,
+  shortcutFocus,
+} from "./keyboard-shortcuts.js";
+import { designBootstrap, installDesignRuntime } from "./design-runtime.js";
 
 describe("design runtime sanitizer", () => {
   let testWindow: Window;
@@ -196,7 +201,7 @@ test("serialized design runtime forwards each app shortcut once and consumes aut
     "window.__forwarded = []; window.parent.postMessage = (message) => window.__forwarded.push([message.channel, message.shortcut])",
   );
   frame.eval(
-    `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)})`,
+    `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()})`,
   );
   const press = (
     init: { shiftKey: boolean; metaKey?: boolean; ctrlKey?: boolean },
@@ -222,3 +227,62 @@ test("serialized design runtime forwards each app shortcut once and consumes aut
     ["orkestrator-design-shortcuts", "search-projects"],
   ]);
 });
+
+// Exercise the exact bootstrap output, including after the production bundler
+// renames functions and local bindings. No module scope exists inside the frame.
+for (const minified of [false, true]) {
+  test(`design bootstrap platform/focus claims (minified=${minified})`, async () => {
+    let bootstrap = designBootstrap;
+    if (minified) {
+      const build = await Bun.build({
+        entrypoints: [import.meta.dir + "/design-runtime.ts"],
+        target: "browser",
+        format: "esm",
+        minify: true,
+      });
+      expect(build.success).toBe(true);
+      const code = await build.outputs[0]!.text();
+      const bundled = await import(
+        `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
+      );
+      bootstrap = bundled.designBootstrap;
+    }
+    for (const platform of ["MacIntel", "Win32", "Linux x86_64"]) {
+      for (const tag of ["input", "textarea", "div"]) {
+        const frame = new Window();
+        Object.defineProperty(frame.navigator, "platform", { value: platform, configurable: true });
+        frame.eval(
+          "window.__forwarded = []; window.parent.postMessage = message => window.__forwarded.push(message)",
+        );
+        const html = bootstrap("serialized-runtime-test-nonce");
+        const script = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)![1]!;
+        frame.eval(script);
+        const input = frame.document.createElement(tag);
+        frame.document.body.append(input);
+        input.focus();
+        const press = (mods: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+          const event = new frame.KeyboardEvent("keydown", {
+            key: "k",
+            code: "KeyK",
+            bubbles: true,
+            cancelable: true,
+            ...mods,
+          });
+          input.dispatchEvent(event);
+          return event.defaultPrevented;
+        };
+        const killLine = platform === "MacIntel" && tag !== "div";
+        expect(press({ ctrlKey: true })).toBe(!killLine);
+        expect(frame.eval("window.__forwarded.length")).toBe(killLine ? 0 : 1);
+        expect(press({ metaKey: true })).toBe(true);
+        expect(press({ ctrlKey: true, shiftKey: true })).toBe(true);
+        expect(frame.eval("window.__forwarded.map(message => message.shortcut)")).toEqual([
+          ...(!killLine ? ["search-projects"] : []),
+          "search-projects",
+          "show-shortcuts",
+        ]);
+        await frame.happyDOM.close();
+      }
+    }
+  });
+}

@@ -1,4 +1,4 @@
-import { appShortcut } from "@orkestrator/protocol/keyboard-shortcuts";
+import { appShortcut, appClaimsShortcut } from "@orkestrator/protocol/keyboard-shortcuts";
 import {
   KeyboardShortcutsController,
   appShortcutForInput,
@@ -30,6 +30,7 @@ export class KeyboardShortcutsRouting {
   constructor(
     private readonly owners: () => Iterable<Owner>,
     private readonly controller: KeyboardShortcutsController,
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {}
 
   target(id: number | undefined) {
@@ -101,6 +102,17 @@ export class KeyboardShortcutsRouting {
       // (the only child left with focus to restore once previews returned)
       // runs no router, so the key goes to the window's shell from here.
       if (!target.restoreFocus) return;
+      // Native artifacts have no trusted focus classifier. Preserve macOS
+      // text editing conservatively for the whole surface.
+      if (
+        !appClaimsShortcut(
+          appShortcut(shortcut),
+          { metaKey: input.meta, ctrlKey: input.control },
+          this.platform === "darwin" ? "mac" : "other",
+          "text",
+        )
+      )
+        return;
       const shell = this.windowShell(target.renderer.id);
       if (!shell) return;
       event.preventDefault();

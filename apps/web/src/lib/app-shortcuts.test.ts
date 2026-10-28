@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
 import { APP_SHORTCUT_EVENT, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import { frameEnvelope, realmSearchParams } from "@/lib/federation/workspace-realm";
 import { listen } from "@/lib/native/events";
 import {
+  retainAppShortcutRouter,
   onAppShortcut,
   requestAppShortcut,
   setUnhandledAppShortcut,
@@ -171,6 +172,55 @@ describe("the window's key router", () => {
     emit?.({ payload: "search-projects" } as never);
     expect(search).toHaveBeenCalledTimes(1);
   });
+});
+
+test("router references share one listener and final release removes DOM and native subscriptions", async () => {
+  const nativeListen = listen as unknown as Mock<typeof listen>;
+  const unlisten = mock(() => {});
+  let ready!: (dispose: () => void) => void;
+  nativeListen.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        ready = resolve;
+      }),
+  );
+  const add = spyOn(window, "addEventListener");
+  const remove = spyOn(window, "removeEventListener");
+  const callsBefore = nativeListen.mock.calls.length;
+  const first = retainAppShortcutRouter();
+  const second = retainAppShortcutRouter();
+  const search = handle("search-projects");
+  const disposeHandler = disposers.pop()!;
+  try {
+    expect(nativeListen.mock.calls.length - callsBefore).toBe(1);
+    expect(add.mock.calls.filter(([name]) => name === "keydown")).toHaveLength(1);
+    first();
+    first(); // Releases are idempotent.
+    second();
+    expect(remove.mock.calls.filter(([name]) => name === "keydown")).toHaveLength(0);
+    press(mount(document.createElement("button")), { key: "k", metaKey: true });
+    expect(search).toHaveBeenCalledTimes(1);
+    disposeHandler();
+    const removed = remove.mock.calls.filter(([name]) => name === "keydown");
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toEqual(add.mock.calls.find(([name]) => name === "keydown"));
+    expect(
+      press(mount(document.createElement("button")), { key: "k", metaKey: true }).claimed,
+    ).toBe(false);
+    // A native subscription that resolves after final release is still disposed.
+    ready(unlisten);
+    await Promise.resolve();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    const again = retainAppShortcutRouter();
+    expect(nativeListen.mock.calls.length - callsBefore).toBe(2);
+    again();
+  } finally {
+    first();
+    second();
+    disposeHandler();
+    add.mockRestore();
+    remove.mockRestore();
+  }
 });
 
 describe("delivery to the owner", () => {

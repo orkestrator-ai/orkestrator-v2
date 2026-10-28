@@ -11,3 +11,4 @@
 - **Not the branch's switches:** the branch moves three Chromium throttling switches into every Electron spec (`electron-launch-switches.ts`). An A/B of this one test passed 2/2 with and 2/2 without them (`svc0042-ab-switch-*`, `svc0042-ab-noswitch-*`).
 - **Evidence:** `output/agent-testing/svc0042-suite-1/`, `svc0042-owner-web-annotations-electron/`, `svc0042-owner2-web-annotations-electron/`.
 - **Hypothesis:** the late font and the reload's load event take longer than 20 s on a saturated host. Not established. No assertion, timeout or skip changed.
+- **Recurrence (2026-10-28):** `Timeout 20000ms exceeded while waiting on the predicate` again in a full `mise run test:agent:electron` on branch `uniform-app-keyboard-shortcuts-376ba22a2bd4` (based on `6a6009a09`, keyboard shortcut routing), host load averages 11 to 35; the unchanged owner then passed alone (`rerun-web-annotations-electron`, 143.8 s).

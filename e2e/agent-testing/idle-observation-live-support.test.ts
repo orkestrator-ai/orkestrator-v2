@@ -9,7 +9,7 @@ import {
   readCadence,
   readGaps,
   selectedCases,
-  sidebarActivityFromClass,
+  sidebarActivityFromMarkerState,
 } from "./idle-observation-live-support";
 
 describe("idle observation live support", () => {
@@ -40,12 +40,16 @@ describe("idle observation live support", () => {
     });
   });
 
-  test("the sidebar icon class maps to its activity state", () => {
-    expect(sidebarActivityFromClass("h-4 text-blue-500 animate-pulse")).toBe("working");
-    expect(sidebarActivityFromClass("h-4 text-amber-500 animate-pulse")).toBe("waiting");
-    expect(sidebarActivityFromClass("h-4 text-success")).toBe("idle");
-    expect(sidebarActivityFromClass("h-4 text-muted-foreground")).toBe("stopped");
-    expect(sidebarActivityFromClass(null)).toBe("unknown");
+  test("the sidebar marker's data-state maps to its activity state", () => {
+    expect(sidebarActivityFromMarkerState("working")).toBe("working");
+    expect(sidebarActivityFromMarkerState("waiting")).toBe("waiting");
+    expect(sidebarActivityFromMarkerState("idle")).toBe("idle");
+    expect(sidebarActivityFromMarkerState("inactive")).toBe("stopped");
+    expect(sidebarActivityFromMarkerState(null)).toBe("unknown");
+    expect(sidebarActivityFromMarkerState(undefined)).toBe("unknown");
+    // Colour classes and unrecognised states are not activity states.
+    expect(sidebarActivityFromMarkerState("bg-red-500/50 animate-pulse")).toBe("unknown");
+    expect(sidebarActivityFromMarkerState("stopped")).toBe("unknown");
   });
 
   test("the fault seam never drops transport control frames", () => {

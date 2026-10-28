@@ -93,18 +93,38 @@ export function gapHistogram(
   return buckets;
 }
 
+export type SidebarActivity = "working" | "waiting" | "idle" | "stopped" | "unknown";
+
 /**
- * The sidebar's environment icon colour is its activity state
- * (`EnvironmentItem.tsx`): blue pulses for working, amber pulses for
- * waiting, green for idle.
+ * The activity a sidebar row shows, from its `EnvironmentStatusMarker`'s
+ * `data-state`: a stopped environment's `inactive` reads as `stopped`, and a
+ * missing marker or an unrecognised state as `unknown`. Colour classes are a
+ * design choice and are deliberately not read.
  */
-export function sidebarActivityFromClass(className: string | null | undefined): string {
-  const classes = new Set((className ?? "").split(/\s+/));
-  if (classes.has("text-blue-500")) return "working";
-  if (classes.has("text-amber-500")) return "waiting";
-  if (classes.has("text-success")) return "idle";
-  if (classes.has("text-muted-foreground")) return "stopped";
+export function sidebarActivityFromMarkerState(state: string | null | undefined): SidebarActivity {
+  if (state === "working" || state === "waiting" || state === "idle") return state;
+  if (state === "inactive") return "stopped";
   return "unknown";
+}
+
+/**
+ * Runs in the page (Playwright serialises it, so it must not reference
+ * anything outside its body). The `data-state` of the status marker in the
+ * local sidebar row labelled `environmentName`, or null when there is no such
+ * row or the row shows no marker (a spinner while starting, stopping or
+ * deleting, or multi-select). Each search stops at the label's own
+ * `role="button"` region, so a row without a marker never reports a
+ * neighbour's, and a same-named label outside a row is passed over.
+ */
+export function environmentMarkerState(environmentName: string): string | null {
+  for (const label of Array.from(document.querySelectorAll("span[id]"))) {
+    if (label.textContent !== environmentName) continue;
+    const marker = label
+      .closest('[role="button"]')
+      ?.querySelector('[data-testid="environment-status-marker"]');
+    if (marker) return marker.getAttribute("data-state");
+  }
+  return null;
 }
 
 /** Whether a gateway frame may be dropped by the fault seam: never a transport control frame. */

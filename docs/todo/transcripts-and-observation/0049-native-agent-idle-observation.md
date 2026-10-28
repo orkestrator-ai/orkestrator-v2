@@ -20,7 +20,33 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: open.
 10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: open.
 
-All five code items match HEAD. The only later changes in this area are refactors (#1180, #1284) and #1298's stopped-runtime fencing in `native-agent-launch-activity-reconciler.ts`; no behaviour described here moved. 0048 hands its live-provider task to this file. Any live case rerun before [0199](0199-idle-observation-spec-sidebar-probe.md) lands is blind on the sidebar, because the spec's sidebar probe has read `unknown` since the 2026-10-24 marker change. The 2026-10-23 sidebar timings predate that change and are valid.
+All five code items match HEAD. The only later changes in this area are refactors (#1180, #1284) and #1298's stopped-runtime fencing in `native-agent-launch-activity-reconciler.ts`; no behaviour described here moved. 0048 hands its live-provider task to this file. Live cases run between the 2026-10-24 marker change and [0199](0199-idle-observation-spec-sidebar-probe.md)'s 2026-10-28 probe fix are blind on the sidebar, because the probe read `unknown`. The 2026-10-23 sidebar timings predate that change and are valid. The fixed probe reads the marker's `data-state`; the 2026-10-28 review qualification below confirms real working/idle transitions and missed-final recovery on Claude and Codex. Other outstanding live cases remain open.
+
+### Sidebar-probe qualification, 2026-10-28
+
+Run IDs `idleqa-0199-review-claude` and `idleqa-0199-review-codex` used
+disposable profile `idleqa-0199-review`, local worktrees, one provider at a
+time and `ORKESTRATOR_AGENT_TEST_IDLE_CASES=missed-final`. Both specs passed.
+Each warm-up ran a harmless five-second shell sleep so the sidebar activity
+sweep could observe working. Both `warmup.sidebarStates` arrays were exactly
+`["working", "idle"]`, with no unknown readings. The suite now asserts this
+positive evidence before fault injection. Profile cleanup completed after
+the runs.
+
+| Measurement | Claude (default model) | Codex (`gpt-6.1-sol`) |
+| --- | --- | --- |
+| Warm-up UI / sidebar lag | 3,819 / 3,880 ms | 670 / 1,311 ms |
+| Idle reads during 35 s pre-turn wait / largest gap | 24 / 9,969 ms | 36 / 10,000 ms |
+| Missed-final UI / sidebar lag | 1,952 / 1,529 ms | 9,711 / 102 ms |
+| Frames naming the environment dropped | 9 | 16 |
+| Follow-up UI / sidebar lag | 2,491 / 3,450 ms | 470 / 491 ms |
+
+Codex's missed-final UI lag was above the normal 3 s p95 target and within
+the 17.5 s lost-announcement bound. Claude's warm-up UI lag was also above
+the normal target. These are individual samples, not p95 estimates. The runs
+qualify sidebar transitions and missed-final recovery; they do not qualify
+the other outstanding scenarios listed above. Evidence lives in
+`output/agent-testing/<run-id>/idle-observation-live/<provider>.json`.
 
 ### 1. Bridge restart while backed off
 
@@ -122,7 +148,7 @@ All five code items match HEAD. The only later changes in this area are refactor
 **Decisions.**
 
 - **Run order?**
-  - **Land 0199, then run every case for Claude and Codex one provider at a time, with tasks 1 to 4 in the same session (recommended).**
+  - **Land 0199 (code landed 2026-10-28), then run every case for Claude and Codex one provider at a time, with tasks 1 to 4 in the same session (recommended).**
     - Pros: one credentialed session; sidebar results are real; one provider at a time avoids stamp-gap recovery masking a lost announcement (the file's own note).
     - Cons: a long run (about 20 minutes per provider).
   - **Run now, without 0199.**

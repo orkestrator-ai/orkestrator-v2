@@ -50,10 +50,10 @@ import {
   readCadence,
   selectedCases,
   shellOutputContainsMarker,
-  sidebarActivityFromClass,
   type CaseRecord,
   type IdleObservationCase,
 } from "./idle-observation-live-support";
+import { sidebarActivity } from "./sidebar-activity";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
@@ -304,6 +304,18 @@ async function openClient(browser: Browser, status: Status, logicalSessionKey: s
   });
   await context.addInitScript(installFaultSeams);
   const page = await context.newPage();
+  // These cases use local worktrees. A host's Docker firewall notice must
+  // remain visible for container QA, but may be closed for this local suite.
+  await page.addLocatorHandler(
+    page.getByRole("dialog", { name: "Docker containers can't reach Orkestrator", exact: true }),
+    async (dialog) => {
+      test.info().annotations.push({
+        type: "host",
+        description: "Closed Docker reachability notice for local-worktree qualification",
+      });
+      await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
+    },
+  );
   const readTimes: number[] = [];
   const readCommands: Record<string, number> = {};
   page.on("request", (request) => {
@@ -355,23 +367,6 @@ async function openEnvironment(page: Page, projectName: string, environmentName:
   if (await expand.isVisible()) await expand.click();
   await dismissSidebarTooltip(page, projectName);
   await entry.click();
-}
-
-/** The sidebar icon's activity state for one environment row. */
-async function sidebarActivity(page: Page, environmentName: string): Promise<string> {
-  const className = await page
-    .evaluate((name) => {
-      const label = Array.from(document.querySelectorAll("span")).find(
-        (span) => span.textContent === name && span.id,
-      );
-      let node: Element | null = label ?? null;
-      while (node && !node.querySelector("svg.shrink-0.transition-colors")) {
-        node = node.parentElement;
-      }
-      return node?.querySelector("svg.shrink-0.transition-colors")?.getAttribute("class") ?? null;
-    }, environmentName)
-    .catch(() => null);
-  return sidebarActivityFromClass(className);
 }
 
 test.describe("live idle observation", () => {
@@ -682,6 +677,7 @@ test.describe("live idle observation", () => {
           let uiSettledAt: number | null = null;
           let sidebarIdleAt: number | null = null;
           let sawWorking = false;
+          const sidebarStates: string[] = [];
           const observePage = options.pageObserves !== false;
           for (;;) {
             const current = await projection();
@@ -712,9 +708,12 @@ test.describe("live idle observation", () => {
               const stopped = (await stopButton().count()) === 0;
               if (shown && stopped && backendIdleAt !== null) uiSettledAt = Date.now();
             }
-            if (observePage && sidebarIdleAt === null && backendIdleAt !== null) {
+            if (observePage) {
               const sidebar = await sidebarActivity(page(), environmentName);
-              if (sidebar === "idle") sidebarIdleAt = Date.now();
+              if (sidebar !== sidebarStates.at(-1)) sidebarStates.push(sidebar);
+              if (sidebarIdleAt === null && backendIdleAt !== null && sidebar === "idle") {
+                sidebarIdleAt = Date.now();
+              }
             }
             if (backendIdleAt !== null) {
               const uiDone = !observePage || uiSettledAt !== null;
@@ -743,6 +742,7 @@ test.describe("live idle observation", () => {
             uiLagMs,
             sidebarLagMs,
             sawWorking,
+            sidebarStates,
           };
         };
 
@@ -889,18 +889,28 @@ test.describe("live idle observation", () => {
         const replyPrompt = (word: string) =>
           `Reply with exactly the uppercase form of this text and nothing else: ${word.toLowerCase()}. Do not use any tools.`;
 
-        // A warm-up turn starts the provider runtime, so later cases time observation, not boot.
+        // Keep the warm-up busy across the 2 s activity sweep, so even a fast
+        // provider response exercises the sidebar's working -> idle transition.
         {
           const word = `IDLEQA-WARM-${nonce()}`;
           const before = await messageIds();
-          await sendFromComposer(replyPrompt(word));
+          await sendFromComposer(
+            `Run a shell command that sleeps for 5 seconds, then prints ${word}. ` +
+              `Wait for it to finish, then reply with exactly ${word} and nothing else.`,
+          );
           const warm = await watchSettle(before, word, {
             uiBoundMs: COMPLETION_BUDGET_MS,
           });
           summary.warmup = {
             uiLagMs: warm.uiLagMs,
             sidebarLagMs: warm.sidebarLagMs,
+            sidebarStates: warm.sidebarStates,
           };
+          // Qualify the browser probe against a real provider turn before any
+          // fault injection. Backend activity alone cannot prove the row read.
+          expect(warm.sidebarStates).toContain("working");
+          expect(warm.sidebarStates.at(-1)).toBe("idle");
+          expect(warm.sidebarStates).not.toContain("unknown");
         }
 
         await runCase("missed-final", async (record) => {
@@ -1400,13 +1410,15 @@ test.describe("live idle observation", () => {
           const commandsBefore = { ...client.readCommands };
           let sawStop = false;
           let sawWorkingSidebar = false;
+          const sidebarReadings = new Set<string>();
           while (Date.now() - idleStart < DETACH_WAIT_MS) {
             await sleep(15_000);
             if ((await stopButton().count()) > 0) sawStop = true;
-            if ((await sidebarActivity(page(), environmentName)) === "working") {
-              sawWorkingSidebar = true;
-            }
+            const sidebar = await sidebarActivity(page(), environmentName);
+            sidebarReadings.add(sidebar);
+            if (sidebar === "working") sawWorkingSidebar = true;
           }
+          record.notes.push(`idle sidebar readings: ${[...sidebarReadings].join(",")}`);
           const cadence = readCadence(client.readTimes, idleStart + 30_000, Date.now());
           record.timings.idleReadsPerMinute = cadence.perMinute;
           record.timings.idleMaxGapMs = cadence.maxGapMs;
@@ -1445,6 +1457,8 @@ test.describe("live idle observation", () => {
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
           }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);
+          // A probe that cannot see the row reads `unknown`, which would pass the next check blind.
+          expect(sidebarReadings.has("idle"), "the sidebar was read as idle while idle").toBe(true);
           expect(sawWorkingSidebar, "the sidebar never shows working on an idle tab").toBe(false);
           const word = `IDLEQA-REATTACH-${nonce()}`;
           // Reuse the pre-wait IDs: no tab-facing read between observing

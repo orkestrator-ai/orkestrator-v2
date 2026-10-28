@@ -2,6 +2,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
+import { sidebarActivity } from "./sidebar-activity";
 
 /**
  * The Claude terminal state signal (`claude-state-signal=2`) with a real
@@ -125,26 +126,6 @@ const visibleText = (output: string): string =>
     .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
     .replace(/\x1b[@-_=>]/g, "")
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-
-/** The environment row's status marker state (`working`, `waiting`, `idle`, `inactive`). */
-async function sidebarActivity(page: Page, environmentName: string): Promise<string> {
-  return page
-    .evaluate((name) => {
-      const label = Array.from(document.querySelectorAll("span")).find(
-        (span) => span.textContent === name && span.id,
-      );
-      let node: Element | null = label ?? null;
-      while (node && !node.querySelector('[data-testid="environment-status-marker"]')) {
-        node = node.parentElement;
-      }
-      return (
-        node
-          ?.querySelector('[data-testid="environment-status-marker"]')
-          ?.getAttribute("data-state") ?? "unknown"
-      );
-    }, environmentName)
-    .catch(() => "unknown");
-}
 
 /** Poll every 50 ms until `predicate` holds; the host time it first held. */
 async function firstTimeTrue(

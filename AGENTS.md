@@ -1783,3 +1783,8 @@ Operating decisions the user approved in Orkestrator coordinator conversations. 
 - Coordinators never delete environments on their own initiative; only when the user asks, through the confirmed deletion request.
 - Never invent evidence; anything not actually observed is reported under Not done / needs live evidence.
 - Worker final messages use six sections: Problem, Solution, What was done, Decisions, Not done / needs live evidence, Tests run.
+- Every new or reworked file under docs/todo starts with a `## Task analysis` section: a line `Analysed <date> against main at <commit>`, a `### Tasks` numbered list giving each task a one-line status (open, done, or open (depends on N)), then one `### N. <task>` subsection per task.
+- Each todo task subsection has **Problem.**, **Context.**, **Investigation.** and **Decisions.** paragraphs; each decision lists its options with pros and cons and marks exactly one as (recommended), so a later worker can act on the file without asking.
+- After the Task analysis, a todo file keeps whichever of these sections apply, in this order: Current state, Outstanding work, Constraints and rationale, Open questions, Needs verification, Related, Replaces.
+- A worker that acts on a todo adds a `## Assumptions and decisions` section with one subsection per choice it made, naming the task it belongs to and saying what it chose and why, and updates the task statuses in the Tasks list.
+- Follow-up todos a worker creates during other work use the same format; when unsure, copy the layout of docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md.

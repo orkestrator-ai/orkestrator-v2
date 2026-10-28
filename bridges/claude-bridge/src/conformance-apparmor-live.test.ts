@@ -88,8 +88,8 @@ test.skipIf(!phase)(
       results.push(await qualifyCoordinatorSandbox("unavailable-hook-refuses-quoted", cli));
       // Review turns use the ordinary bridge resolver on this same restricted
       // host, and the new attacks must be denied with the sandbox disabled.
-      results.push(await qualifyCoordinatorSandbox("read-only-unavailable-reads", cli));
-      results.push(await qualifyCoordinatorSandbox("read-only-unavailable-hook-refuses", cli));
+      results.push(await qualifyCoordinatorSandbox("read-only-host-reads", cli));
+      results.push(await qualifyCoordinatorSandbox("read-only-host-hook-refuses", cli));
       for (const scenario of HOOK_ONLY_ADVERSARIAL_SCENARIOS) {
         results.push(await qualifyCoordinatorSandbox(scenario, cli));
       }

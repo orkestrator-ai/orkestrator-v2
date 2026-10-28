@@ -119,11 +119,8 @@ export async function resolveQueryPlan(
   const readOnlyCommandSandbox = isCoordinatorReadOnlyPolicy(policy)
     ? claudeReadOnlyCommandSandbox()
     : undefined;
-  if (readOnlyCommandSandbox?.reason !== undefined) {
-    session.readOnlyCommandSandboxOff = readOnlyCommandSandbox.reason;
-  } else {
-    delete session.readOnlyCommandSandboxOff;
-  }
+  // Report only after a runtime accepts the turn (`markQueryStarted`). While
+  // preparation awaits, an existing CLI still owns the session's boundary.
   // Load MCP servers and plugins from config files. Both resolutions read
   // the same on-disk config, so they run concurrently and each merges once.
   // A coordinator's inline set is the injected Orkestrator server(s) only:

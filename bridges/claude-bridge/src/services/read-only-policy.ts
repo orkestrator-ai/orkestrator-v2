@@ -239,8 +239,8 @@ const GIT_SUBCOMMAND_MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>
  *
  * `difftool` is deliberately absent even though it reads: its whole purpose is
  * to launch `diff.tool`, an arbitrary command the checkout's own git config can
- * name. `git diff` covers the reading use without handing the repository a way
- * to choose what runs.
+ * name. Even these inspection commands can launch configured helpers, so Git
+ * is only admitted with an explicit required command sandbox.
  */
 const READ_ONLY_GIT_SUBCOMMANDS = Object.freeze(
   new Set([

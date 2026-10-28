@@ -3,7 +3,7 @@ import { expect } from "bun:test";
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   executableOnPath,
@@ -68,6 +68,9 @@ export type Scenario =
   | "read-only-unavailable-reads"
   /** The same turn: the hook still refuses the writing reader. */
   | "read-only-unavailable-hook-refuses"
+  /** Ordinary bridge on a real restricted Linux host, without staging PATH. */
+  | "read-only-host-reads"
+  | "read-only-host-hook-refuses"
   /**
    * Linux only: the block such a turn had before todo 0190 (the sandbox
    * required) on the same staged host. The CLI refuses the whole turn.
@@ -98,7 +101,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
     const unavailable = scenario.startsWith("unavailable-");
     const readOnlyTurn = scenario.startsWith("read-only-");
     const stagedPath =
-      readOnlyTurn && process.platform !== "win32"
+      readOnlyTurn && !scenario.startsWith("read-only-host-") && process.platform !== "win32"
         ? await stagedPathWithoutSandbox(fixture.root)
         : undefined;
     // What the bridge decides for this turn, from the real probe run against
@@ -107,7 +110,11 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       ? claudeReadOnlyCommandSandbox({
           commandSandbox: undefined,
           coordinatorProcess: false,
-          platform: process.platform === "win32" ? "win32" : "linux",
+          platform: scenario.startsWith("read-only-host-")
+            ? process.platform
+            : process.platform === "win32"
+              ? "win32"
+              : "linux",
           linuxSandbox: () =>
             probeClaudeLinuxSandbox({ onPath: (name) => executableOnPath(name, stagedPath) }),
         })
@@ -115,7 +122,11 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
     if (readOnlySandbox) {
       expect(readOnlySandbox.commandSandbox).toBe("unavailable");
       expect(readOnlySandbox.reason).toContain(
-        process.platform === "win32" ? "needs macOS, or Linux" : "bubblewrap and socat",
+        scenario.startsWith("read-only-host-")
+          ? "bwrap-userns-restrict"
+          : process.platform === "win32"
+            ? "needs macOS, or Linux"
+            : "bubblewrap and socat",
       );
     }
     const adversarialCommands: Partial<Record<Scenario, string>> = {
@@ -144,10 +155,12 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
                   scenario === "apparmor-sandbox-reads" ||
                   scenario === "unavailable-hook-reads" ||
                   scenario === "read-only-unavailable-reads" ||
+                  scenario === "read-only-host-reads" ||
                   scenario === "read-only-required-refused"
                 ? "cat in.txt"
                 : scenario === "coordinator-hook-refuses" ||
-                    scenario === "read-only-unavailable-hook-refuses"
+                    scenario === "read-only-unavailable-hook-refuses" ||
+                    scenario === "read-only-host-hook-refuses"
                   ? "uniq in.txt out.txt"
                   : "printf written > out.txt");
     if (scenario === "unavailable-hook-refuses-glob")
@@ -163,14 +176,16 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       ],
       [{ type: "text", text: "Done." }],
     ]);
+    let helperNetworkHits = 0;
     if (scenario.includes("-git-")) {
       // Real local Git configuration, including helper selection through an
       // explicit git-dir. Were the hook to admit it, the helper would write
       // and contact the fixture's unlisted endpoint.
-      const helper = join(fixture.root, "git-helper.sh");
+      const helper = join(fixture.root, "git-helper.sh").replaceAll("\\", "/");
+      const sentinel = join(cwd, "helper-sentinel").replaceAll("\\", "/");
       await writeFile(
         helper,
-        `#!/bin/sh\nprintf helper > '${join(cwd, "helper-sentinel")}'\ncurl --max-time 2 '${endpoint.url.origin}/unlisted'\n`,
+        `#!/bin/sh\nprintf helper > '${sentinel}'\ncurl --max-time 2 '${endpoint.url.origin}/unlisted'\n`,
         { mode: 0o755 },
       );
       const git = (args: string[]) => {
@@ -185,10 +200,31 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       git(["init", "--quiet"]);
       git(["add", "in.txt"]);
       await writeFile(join(cwd, "in.txt"), "changed\n");
-      git(["config", "diff.external", helper]);
-      git(["config", "core.fsmonitor", helper]);
-      git(["config", "diff.fixture.textconv", helper]);
+      git(["config", "diff.external", `'${helper}'`]);
+      git(["config", "core.fsmonitor", `'${helper}'`]);
+      git(["config", "diff.fixture.textconv", `'${helper}'`]);
       await writeFile(join(cwd, ".gitattributes"), "in.txt diff=fixture\n");
+      // Prove this configuration can actually run the sentinel on the current
+      // host, then remove its effects before asking the protected CLI.
+      const control = Bun.spawn(["git", scenario.endsWith("fsmonitor") ? "status" : "diff"], {
+        cwd,
+        env: { ...process.env, ...fixture.env },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      const controlTimeout = setTimeout(() => control.kill(), 5_000);
+      try {
+        expect(await control.exited).toBe(0);
+        expect(await Bun.file(sentinel).text()).toBe("helper");
+        helperNetworkHits = endpoint.networkHits();
+        expect(helperNetworkHits).toBeGreaterThan(0);
+        await unlink(sentinel);
+      } catch (error) {
+        endpoint.stop();
+        throw error;
+      } finally {
+        clearTimeout(controlTimeout);
+      }
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -327,7 +363,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       return { scenario, modelCalls: 0, toolError: false, written: false };
     }
     expect(failure).toBeUndefined();
-    expect(endpoint.networkHits()).toBe(0);
+    expect(endpoint.networkHits()).toBe(helperNetworkHits);
     expect(existsSync(join(cwd, "helper-sentinel"))).toBe(false);
     if (scenario.includes("-xxd-")) {
       expect(existsSync(dashOutput)).toBe(scenario.endsWith("truncate"));
@@ -358,7 +394,8 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
     } else if (
       scenario === "coordinator-sandbox-reads" ||
       scenario === "unavailable-hook-reads" ||
-      scenario === "read-only-unavailable-reads"
+      scenario === "read-only-unavailable-reads" ||
+      scenario === "read-only-host-reads"
     ) {
       expect(commandFailure(toolResults[0]!)).toBeUndefined();
       expect(JSON.stringify(toolResults[0]!.content)).toContain("a\\na\\nb");
@@ -370,6 +407,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       if (
         scenario === "coordinator-hook-refuses" ||
         scenario === "read-only-unavailable-hook-refuses" ||
+        scenario === "read-only-host-hook-refuses" ||
         adversarialCommands[scenario]
       ) {
         expect(JSON.stringify(toolResults[0]!.content)).toContain(

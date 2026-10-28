@@ -52,9 +52,11 @@ describe("runTurnOnRuntime", () => {
     async (available) => {
       Object.defineProperty(process, "platform", { ...platform, value: "linux" });
       const reason = "Fixture host cannot start the command sandbox.";
-      const probe = (works: boolean) =>
+      const probe = (works: boolean, unavailableReason = reason) =>
         setClaudeLinuxSandboxStatusForTests(
-          works ? { available: true } : { available: false, failure: "missing-programs", reason },
+          works
+            ? { available: true }
+            : { available: false, failure: "missing-programs", reason: unavailableReason },
         );
       const boundary = (works: boolean) => (works ? "required" : "unavailable");
       const assertReport = (turn: TurnState, works: boolean) => {
@@ -83,6 +85,7 @@ describe("runTurnOnRuntime", () => {
         const second = createPromptTurnForTesting(session, { readOnly: true });
         turns.push(second.turn);
         const secondPlan = await resolveQueryPlan(second.turn, second.sdkTextPrompt, undefined);
+        expect(session.readOnlyCommandSandboxOff).toBe(available ? undefined : reason);
         probe(available);
         const replacing = runTurnOnRuntime(second.turn, secondPlan, undefined);
         // A CLI launched with the other boundary must retire before replacement.
@@ -96,7 +99,7 @@ describe("runTurnOnRuntime", () => {
 
         // A joining turn uses its plan even if the probe changes again. Keeping
         // a continuation owed also exercises the post-plan refusal check.
-        probe(!available);
+        probe(!available, "A later probe reports a different missing-sandbox reason.");
         session.status = "idle";
         session.abortController = undefined;
         const third = createPromptTurnForTesting(session, { readOnly: true });

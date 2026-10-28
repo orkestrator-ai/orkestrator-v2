@@ -160,9 +160,9 @@ export function claudeLaunchProfile(
         ? { asksForApproval: true }
         : {}),
       // A coordinator's allow-list names the Orkestrator MCP server only when
-      // the turn has one. Whether the CLI was asked for its sandbox follows the
-      // probe, so a host whose answer changed starts a new CLI
-      // rather than joining one launched under the other boundary.
+      // the turn has one. After resolution, use the query plan's sandbox
+      // decision; early admission checks probe for a prospective boundary.
+      // A changed boundary requires a new CLI.
       ...(isCoordinatorReadOnlyPolicy(policy)
         ? {
             agentMcp: options?.agentMcp !== undefined,

@@ -1,5 +1,15 @@
 import { useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { AlertCircle, ArrowUp, FileText, MessageSquareText, Square, X } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowUp,
+  CornerDownRight,
+  FileText,
+  MessageSquareText,
+  Pencil,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -31,7 +41,19 @@ export interface NativeComposeAttachment {
 export interface NativeComposeQueueState {
   length: number;
   error?: { message: string } | null;
+  /** Opens the full queue manager (edit, reorder, remove). */
   onOpen: () => void;
+  /** The prompt that will be sent next, previewed in the strip above the input. */
+  next?: { id: string; text: string };
+  /**
+   * Steer `next` into the running turn, draining it from the queue. Absent
+   * when there is no live turn to steer or `next` cannot be steered.
+   */
+  onSteer?: () => void | Promise<void>;
+  /** Load `next` back into the composer. Absent when it cannot be edited here. */
+  onEdit?: () => void | Promise<void>;
+  /** Remove `next` from the queue. Absent when it needs the dialog to confirm. */
+  onRemove?: () => void | Promise<void>;
 }
 
 export interface NativeComposeBarProps {
@@ -67,6 +89,92 @@ export interface NativeComposeBarProps {
   sendTitle?: string;
   onSend: () => void | Promise<void>;
   footer?: ReactNode;
+}
+
+/**
+ * A tab on top of the composer previewing the next queued prompt. The text
+ * opens the full queue manager; Steer sends it into the running turn instead,
+ * the pencil loads it back into the composer, and the bin drops it.
+ */
+function QueuedPromptStrip({ queue }: { queue: NativeComposeQueueState }) {
+  const [pending, setPending] = useState(false);
+  const more = queue.next ? queue.length - 1 : 0;
+  const run = async (action: (() => void | Promise<void>) | undefined) => {
+    if (!action || pending) return;
+    setPending(true);
+    try {
+      await action();
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <div
+      data-testid="compose-queue-strip"
+      className="mx-auto flex w-[95%] items-center gap-3 rounded-t-lg border border-b-0 border-border/70 bg-input-surface px-3 py-1 text-xs"
+    >
+      <button
+        type="button"
+        onClick={queue.onOpen}
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-muted-foreground transition-colors hover:text-foreground"
+        aria-label={
+          queue.error ? `${queue.length} queued prompts blocked: ${queue.error.message}` : undefined
+        }
+        title={
+          queue.error ? `Queued prompt was not sent: ${queue.error.message}` : "View queued prompts"
+        }
+      >
+        {queue.error ? (
+          <AlertCircle className="h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
+        ) : null}
+        <span className="truncate">{queue.next?.text ?? `${queue.length} queued`}</span>
+        {more > 0 ? <span className="shrink-0">+{more} more</span> : null}
+      </button>
+      {queue.onSteer ? (
+        <button
+          type="button"
+          // Keep focus in the prompt input, as the send button does.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void run(queue.onSteer)}
+          disabled={pending}
+          aria-busy={pending}
+          aria-label="Steer the next queued prompt into the running turn"
+          title="Send this prompt into the running turn now"
+          className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait disabled:opacity-50"
+        >
+          <CornerDownRight className="h-3.5 w-3.5" aria-hidden="true" />
+          Steer
+        </button>
+      ) : null}
+      {queue.onEdit ? (
+        <button
+          type="button"
+          onClick={() => void run(queue.onEdit)}
+          disabled={pending}
+          aria-busy={pending}
+          aria-label="Edit the next queued prompt"
+          title="Edit queued prompt"
+          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait disabled:opacity-50"
+        >
+          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      ) : null}
+      {queue.onRemove ? (
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void run(queue.onRemove)}
+          disabled={pending}
+          aria-busy={pending}
+          aria-label="Remove the next queued prompt"
+          title="Remove queued prompt"
+          className="shrink-0 text-muted-foreground transition-colors hover:text-destructive disabled:cursor-wait disabled:opacity-50"
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -142,263 +250,240 @@ export function NativeComposeBar({
   return (
     <>
       <div
-        data-testid={testId}
         className={cn(
-          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
+          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 sm:w-[min(calc(100%_-_2rem),56rem)]",
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >
-        {attachments.length > 0 || annotations.length > 0 || migrated.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {migrated.map((annotation) => (
-              <div
-                key={annotation.id}
-                data-testid="compose-migrated-annotation"
-                className="flex h-9 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-3 text-xs text-muted-foreground"
-              >
-                <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Browser note moved to a web annotation thread</span>
-                {onOpenMigratedAnnotation ? (
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 hover:text-foreground"
-                    onClick={() => onOpenMigratedAnnotation(annotation.migratedTo!)}
-                  >
-                    Open note
-                  </button>
-                ) : null}
-              </div>
-            ))}
-            {annotations.length > 0 ? (
-              <Tooltip delayDuration={250}>
-                <TooltipTrigger asChild>
-                  <div
-                    data-testid="compose-annotation-count"
-                    className="flex h-9 items-center gap-1.5 rounded-full border border-blue-400/30 bg-blue-500/10 px-3 text-sm text-blue-100 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.04)]"
-                  >
-                    <MessageSquareText className="h-4 w-4 text-blue-300" aria-hidden="true" />
-                    <span>{annotationPillLabel}</span>
-                    {onClearAnnotations ? (
-                      <button
-                        type="button"
-                        onClick={onClearAnnotations}
-                        disabled={disabled || isSending}
-                        className="-mr-1 ml-0.5 rounded-full p-0.5 text-blue-200/70 transition-colors hover:bg-blue-400/15 hover:text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label={
-                          onlyDesignAnnotations
-                            ? `Remove ${annotations.length === 1 ? "design context" : "all design contexts"}`
-                            : "Remove all annotations"
-                        }
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    ) : null}
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent
-                  side="top"
-                  align="start"
-                  sideOffset={8}
-                  className="w-[min(28rem,calc(100vw-2rem))] max-w-none p-4 text-left text-sm text-pretty"
-                >
-                  <ol className="space-y-3">
-                    {annotations.map((annotation, index) => (
-                      <li
-                        key={annotation.id}
-                        className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2"
-                      >
-                        <span className="text-muted-foreground">{index + 1}.</span>
-                        <div className="min-w-0 space-y-1.5">
-                          <div>
-                            <p className="text-xs font-medium text-muted-foreground">
-                              {transcriptAnnotationSourceLabel(annotation.source)}
-                            </p>
-                            <p className="mt-0.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-foreground">
-                              {annotation.text}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-medium text-muted-foreground">
-                              User comment
-                            </p>
-                            <p className="mt-0.5 whitespace-pre-wrap break-words text-foreground">
-                              {annotation.comment.trim() || "No comment added"}
-                            </p>
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-            {attachments.map((attachment) =>
-              attachment.type === "image" && attachment.previewUrl ? (
-                <div
-                  key={attachment.id}
-                  data-testid="compose-image-attachment"
-                  className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
-                >
-                  <button
-                    type="button"
-                    onClick={() => openImagePreview(attachment.id)}
-                    className="block h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                    aria-label={`Preview ${attachment.name}`}
-                    title={attachment.name}
-                  >
-                    <img
-                      src={attachment.previewUrl}
-                      alt={attachment.name}
-                      className="h-full w-full object-cover"
-                    />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onRemoveAttachment(attachment.id)}
-                    disabled={disabled || isSending}
-                    className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm hover:bg-background disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label={`Remove ${attachment.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ) : (
-                <div
-                  key={attachment.id}
-                  className="group relative flex items-center gap-1.5 rounded border border-border bg-muted/50 px-2 py-1 text-xs"
-                >
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                  <span className="max-w-[120px] truncate">{attachment.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => onRemoveAttachment(attachment.id)}
-                    disabled={disabled || isSending}
-                    className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                    aria-label={`Remove ${attachment.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ),
-            )}
-          </div>
-        ) : null}
-
-        <div className="relative" data-mentionable-input ref={inputContainerRef}>
-          {menus}
-          <MentionableInput
-            ref={inputRef}
-            value={text}
-            mentions={mentions}
-            onChange={onTextAndMentionsChange}
-            onCursorChange={onCursorPositionChange}
-            onKeyDown={onKeyDown}
-            comboboxAria={inputComboboxAria}
-            placeholder={placeholder}
-            disabled={disabled || isSending}
-            minHeight={COMPOSE_MIN_INPUT_HEIGHT}
-            maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
-            className={cn((disabled || isSending) && "opacity-60")}
-          />
-        </div>
-
+        {queue && queue.length > 0 ? <QueuedPromptStrip queue={queue} /> : null}
         <div
-          data-native-compose-toolbar
-          className="flex min-w-0 items-center gap-1 overflow-x-auto pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          data-testid={testId}
+          className="rounded-xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20"
         >
-          <div
-            data-native-compose-controls="primary"
-            className="flex min-w-0 flex-1 items-center gap-1"
-          >
-            {primaryControls}
+          {attachments.length > 0 || annotations.length > 0 || migrated.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {migrated.map((annotation) => (
+                <div
+                  key={annotation.id}
+                  data-testid="compose-migrated-annotation"
+                  className="flex h-9 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-3 text-xs text-muted-foreground"
+                >
+                  <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Browser note moved to a web annotation thread</span>
+                  {onOpenMigratedAnnotation ? (
+                    <button
+                      type="button"
+                      className="underline underline-offset-2 hover:text-foreground"
+                      onClick={() => onOpenMigratedAnnotation(annotation.migratedTo!)}
+                    >
+                      Open note
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {annotations.length > 0 ? (
+                <Tooltip delayDuration={250}>
+                  <TooltipTrigger asChild>
+                    <div
+                      data-testid="compose-annotation-count"
+                      className="flex h-9 items-center gap-1.5 rounded-full border border-blue-400/30 bg-blue-500/10 px-3 text-sm text-blue-100 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.04)]"
+                    >
+                      <MessageSquareText className="h-4 w-4 text-blue-300" aria-hidden="true" />
+                      <span>{annotationPillLabel}</span>
+                      {onClearAnnotations ? (
+                        <button
+                          type="button"
+                          onClick={onClearAnnotations}
+                          disabled={disabled || isSending}
+                          className="-mr-1 ml-0.5 rounded-full p-0.5 text-blue-200/70 transition-colors hover:bg-blue-400/15 hover:text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={
+                            onlyDesignAnnotations
+                              ? `Remove ${annotations.length === 1 ? "design context" : "all design contexts"}`
+                              : "Remove all annotations"
+                          }
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="top"
+                    align="start"
+                    sideOffset={8}
+                    className="w-[min(28rem,calc(100vw-2rem))] max-w-none p-4 text-left text-sm text-pretty"
+                  >
+                    <ol className="space-y-3">
+                      {annotations.map((annotation, index) => (
+                        <li
+                          key={annotation.id}
+                          className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2"
+                        >
+                          <span className="text-muted-foreground">{index + 1}.</span>
+                          <div className="min-w-0 space-y-1.5">
+                            <div>
+                              <p className="text-xs font-medium text-muted-foreground">
+                                {transcriptAnnotationSourceLabel(annotation.source)}
+                              </p>
+                              <p className="mt-0.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-foreground">
+                                {annotation.text}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-muted-foreground">
+                                User comment
+                              </p>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words text-foreground">
+                                {annotation.comment.trim() || "No comment added"}
+                              </p>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              {attachments.map((attachment) =>
+                attachment.type === "image" && attachment.previewUrl ? (
+                  <div
+                    key={attachment.id}
+                    data-testid="compose-image-attachment"
+                    className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => openImagePreview(attachment.id)}
+                      className="block h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                      aria-label={`Preview ${attachment.name}`}
+                      title={attachment.name}
+                    >
+                      <img
+                        src={attachment.previewUrl}
+                        alt={attachment.name}
+                        className="h-full w-full object-cover"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveAttachment(attachment.id)}
+                      disabled={disabled || isSending}
+                      className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm hover:bg-background disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label={`Remove ${attachment.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    key={attachment.id}
+                    className="group relative flex items-center gap-1.5 rounded border border-border bg-muted/50 px-2 py-1 text-xs"
+                  >
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    <span className="max-w-[120px] truncate">{attachment.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveAttachment(attachment.id)}
+                      disabled={disabled || isSending}
+                      className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                      aria-label={`Remove ${attachment.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ),
+              )}
+            </div>
+          ) : null}
+
+          <div className="relative" data-mentionable-input ref={inputContainerRef}>
+            {menus}
+            <MentionableInput
+              ref={inputRef}
+              value={text}
+              mentions={mentions}
+              onChange={onTextAndMentionsChange}
+              onCursorChange={onCursorPositionChange}
+              onKeyDown={onKeyDown}
+              comboboxAria={inputComboboxAria}
+              placeholder={placeholder}
+              disabled={disabled || isSending}
+              minHeight={COMPOSE_MIN_INPUT_HEIGHT}
+              maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
+              className={cn((disabled || isSending) && "opacity-60")}
+            />
           </div>
 
           <div
-            data-native-compose-controls="secondary"
-            className="flex shrink-0 items-center gap-1"
+            data-native-compose-toolbar
+            className="flex min-w-0 items-center gap-1 overflow-x-auto pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {queue && queue.length > 0 ? (
-              <button
-                type="button"
-                onClick={queue.onOpen}
-                className={cn(
-                  "flex h-7 items-center gap-1 rounded-lg px-2 text-xs transition-colors",
-                  queue.error
-                    ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
-                    : "bg-elevated text-muted-foreground hover:bg-elevated-hover hover:text-foreground",
-                )}
-                aria-label={
-                  queue.error
-                    ? `${queue.length} queued prompts blocked: ${queue.error.message}`
-                    : undefined
-                }
-                title={
-                  queue.error
-                    ? `Queued prompt was not sent: ${queue.error.message}`
-                    : "View queued prompts"
-                }
-              >
-                {queue.error ? (
-                  <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
-                ) : null}
-                <span>+{queue.length} queued</span>
-              </button>
-            ) : null}
+            <div
+              data-native-compose-controls="primary"
+              className="flex min-w-0 flex-1 items-center gap-1"
+            >
+              {primaryControls}
+            </div>
 
-            {isLoading ? (
-              <button
-                type="button"
-                onClick={() => void onStop?.()}
-                // Not `disabled`: that locks input while a prompt is being
-                // submitted, and a prompt the provider has not accepted yet is
-                // one a user may need to stop. Escape stops it too.
-                disabled={!onStop}
-                className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive text-white transition-colors hover:bg-destructive/85 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Stop current query"
-              >
-                <Square className="h-3.5 w-3.5 fill-current" />
-              </button>
-            ) : null}
+            <div
+              data-native-compose-controls="secondary"
+              className="flex shrink-0 items-center gap-1"
+            >
+              {isLoading ? (
+                <button
+                  type="button"
+                  onClick={() => void onStop?.()}
+                  // Not `disabled`: that locks input while a prompt is being
+                  // submitted, and a prompt the provider has not accepted yet is
+                  // one a user may need to stop. Escape stops it too.
+                  disabled={!onStop}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive text-white transition-colors hover:bg-destructive/85 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Stop current query"
+                >
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                </button>
+              ) : null}
 
-            {showAddressAll && !isLoading ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => void onAddressAll?.()}
-                disabled={disabled || isSending || !onAddressAll}
-                className="h-7 rounded-lg px-3 text-xs"
-                title="Send the review follow-up prompt"
-              >
-                Address all
-              </Button>
-            ) : null}
+              {showAddressAll && !isLoading ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void onAddressAll?.()}
+                  disabled={disabled || isSending || !onAddressAll}
+                  className="h-7 rounded-lg px-3 text-xs"
+                  title="Send the review follow-up prompt"
+                >
+                  Address all
+                </Button>
+              ) : null}
 
-            {showSendButton ? (
-              <Button
-                type="button"
-                size="icon"
-                className={cn(
-                  "h-7 w-7 rounded-lg transition-colors",
-                  /*
+              {showSendButton ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  className={cn(
+                    "h-7 w-7 rounded-lg transition-colors",
+                    /*
                     Queueing is still a send, so it keeps the send button's
                     shape and colour and only steps back in weight — a
                     different-coloured control here reads as a different action.
                   */
-                  isLoading
-                    ? "bg-primary/25 text-blue-200 hover:bg-primary/40"
-                    : "bg-primary text-primary-foreground hover:bg-primary/85",
-                )}
-                disabled={sendDisabled}
-                // Clicking Send must not pull focus out of the prompt input, so
-                // the next prompt can be typed straight away.
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => void onSend()}
-                title={sendTitle ?? (isLoading ? "Add to queue" : "Send message")}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-            ) : null}
+                    isLoading
+                      ? "bg-primary/25 text-blue-200 hover:bg-primary/40"
+                      : "bg-primary text-primary-foreground hover:bg-primary/85",
+                  )}
+                  disabled={sendDisabled}
+                  // Clicking Send must not pull focus out of the prompt input, so
+                  // the next prompt can be typed straight away.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void onSend()}
+                  title={sendTitle ?? (isLoading ? "Add to queue" : "Send message")}
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>

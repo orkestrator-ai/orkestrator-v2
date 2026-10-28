@@ -1122,9 +1122,11 @@ describe("AgentNativeTab", () => {
     expect(composeDock.contains(plan)).toBe(false);
     expect(composeDock.contains(approval)).toBe(true);
     expect(composeDock.className).not.toContain("top-1/2");
-    expect(composer.className).toContain("mb-4");
-    expect(composer.className).toContain("mt-2");
-    expect(composer.className).not.toContain("my-0");
+    // The layout margin sits on the wrapper that also holds the queue strip.
+    const composerFrame = composer.parentElement!;
+    expect(composerFrame.className).toContain("mb-4");
+    expect(composerFrame.className).toContain("mt-2");
+    expect(composerFrame.className).not.toContain("my-0");
   });
 
   test("uses transcript plan content when the provider plan body is unavailable", async () => {

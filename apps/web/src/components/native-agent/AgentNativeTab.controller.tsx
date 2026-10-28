@@ -144,6 +144,7 @@ import {
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import {
   composerOccupiedError,
+  describePromptQueueActionError,
   PromptQueueActionError,
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
@@ -3110,6 +3111,131 @@ export function SharedNativeAgentController({
         }}
       />
     ) : null;
+  // The same gate the composer applies to a typed `/steer`.
+  const steerQueuedPrompt =
+    isRunning && !recoverableDispatch && projection?.capabilities?.actions?.steer
+      ? async (message: { id: string }) => {
+          let outcome;
+          try {
+            outcome = await steerQueued(message.id);
+          } catch (error) {
+            throw new PromptQueueActionError(
+              `Could not steer the running turn: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              { cause: error },
+            );
+          }
+          if (!outcome) {
+            throw new PromptQueueActionError(
+              "This prompt already left the queue, so it was not used to steer.",
+            );
+          }
+          if (outcome.outcome === "applied") {
+            toast.success(`Sent to the active ${label} turn`);
+            return;
+          }
+          // Delivery is unconfirmed: the recovery card under the
+          // transcript owns the prompt now, so show it.
+          if (outcome.outcome === "unknown") {
+            setQueueDialogOpen(false);
+            return;
+          }
+          throw new PromptQueueActionError(
+            outcome.outcome === "rejected"
+              ? `${nativeAgentSteerRejectionMessage(outcome)} The prompt was returned to the queue.`
+              : outcome.outcome === "mismatch"
+                ? "The turn moved on before the steering text was delivered. The prompt was returned to the queue."
+                : `${label} finished the turn before the prompt arrived, so the prompt is still queued.`,
+          );
+        }
+      : undefined;
+  const editQueuedPrompt = async (message: { id: string; text: string }) => {
+    // Removing an annotation request cancels it, so the
+    // remove-then-load edit below must never run for one.
+    if (webAnnotationQueueOrigin(message)) throw webAnnotationQueueItemFrozenError();
+    // Editing loads the prompt into the composer, so anything
+    // already there would be destroyed. Refusing with a reason
+    // beats the silent overwrite.
+    if (
+      draft.text.trim().length > 0 ||
+      draft.attachments.length > 0 ||
+      draft.annotations.length > 0
+    ) {
+      throw composerOccupiedError();
+    }
+    await removeQueued(message.id);
+    const queued = message as Record<string, unknown> & {
+      id: string;
+      text: string;
+    };
+    const attachments = Array.isArray(queued.attachments)
+      ? queued.attachments.flatMap((candidate) => {
+          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+            return [];
+          }
+          const attachment = candidate as Record<string, unknown>;
+          if (
+            (attachment.type !== "file" && attachment.type !== "image") ||
+            typeof attachment.path !== "string" ||
+            !attachment.path
+          )
+            return [];
+          const type: "file" | "image" = attachment.type;
+          return [
+            {
+              id: typeof attachment.id === "string" ? attachment.id : crypto.randomUUID(),
+              type,
+              path: attachment.path,
+              name:
+                typeof attachment.filename === "string"
+                  ? attachment.filename
+                  : (attachment.path.split("/").at(-1) ?? "attachment"),
+              ...(typeof attachment.dataUrl === "string" ? { previewUrl: attachment.dataUrl } : {}),
+            },
+          ];
+        })
+      : [];
+    updateDraft(sessionKey, {
+      text: message.text,
+      mentions: [],
+      attachments,
+      annotations: [],
+    });
+    await updateControlsSafely({
+      ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),
+      ...(typeof queued.reasoningEffort === "string"
+        ? { reasoningId: queued.reasoningEffort }
+        : {}),
+      ...(queued.mode === "build" || queued.mode === "plan" ? { mode: queued.mode } : {}),
+      ...(typeof queued.fastMode === "boolean" ? { fastMode: queued.fastMode } : {}),
+      ...(typeof queued.executionAgent === "string"
+        ? { executionProfileId: queued.executionAgent }
+        : typeof queued.agent === "string"
+          ? { executionProfileId: queued.agent }
+          : {}),
+      ...(typeof queued.includeLocalSettings === "boolean"
+        ? { includeLocalSettings: queued.includeLocalSettings }
+        : {}),
+      ...(typeof queued.promptSuggestions === "boolean"
+        ? { promptSuggestions: queued.promptSuggestions }
+        : {}),
+    });
+    inputRef.current?.focus();
+  };
+  const canSteerQueuedPrompt = (message: { id: string }) => {
+    // Steering carries text only, and a queued command must be
+    // revalidated as a command, not typed into the turn. An annotation
+    // request is a frozen brief with its own lifecycle, so it never steers.
+    const queued = message as Record<string, unknown>;
+    return (
+      webAnnotationQueueOrigin(message) === null &&
+      !(Array.isArray(queued.attachments) && queued.attachments.length > 0) &&
+      queued.command === undefined &&
+      !nativeAsyncQuestionItemId(message.id) &&
+      !(typeof queued.requestId === "string" && nativeAsyncQuestionItemId(queued.requestId))
+    );
+  };
   const chatShell = (
     <NativeChatShell
       agentExpansionScope={data.environmentId}
@@ -3559,6 +3685,47 @@ export function SharedNativeAgentController({
                     ? { message: projection.queue.blocked.error }
                     : null,
                   onOpen: () => setQueueDialogOpen(true),
+                  next: queuedMessages[0],
+                  onSteer:
+                    steerQueuedPrompt &&
+                    queuedMessages[0] &&
+                    canSteerQueuedPrompt(queuedMessages[0])
+                      ? async () => {
+                          const next = queuedMessages[0];
+                          if (!next) return;
+                          try {
+                            await steerQueuedPrompt(next);
+                          } catch (error) {
+                            toast.error(describePromptQueueActionError(error));
+                          }
+                        }
+                      : undefined,
+                  // Annotation requests are frozen briefs, and removing one
+                  // cancels it, so both stay behind the dialog.
+                  onEdit:
+                    queuedMessages[0] && !webAnnotationQueueOrigin(queuedMessages[0])
+                      ? async () => {
+                          const next = queuedMessages[0];
+                          if (!next) return;
+                          try {
+                            await editQueuedPrompt(next);
+                          } catch (error) {
+                            toast.error(describePromptQueueActionError(error));
+                          }
+                        }
+                      : undefined,
+                  onRemove:
+                    queuedMessages[0] && !webAnnotationQueueOrigin(queuedMessages[0])
+                      ? async () => {
+                          const next = queuedMessages[0];
+                          if (!next) return;
+                          try {
+                            await removeQueued(next.id);
+                          } catch (error) {
+                            toast.error(describePromptQueueActionError(error));
+                          }
+                        }
+                      : undefined,
                 }
               : undefined
           }
@@ -3601,90 +3768,7 @@ export function SharedNativeAgentController({
                 onOpenWebAnnotationRequest={(requestId) =>
                   openWebAnnotationRequest(data.environmentId, requestId)
                 }
-                onEdit={async (message) => {
-                  // Removing an annotation request cancels it, so the
-                  // remove-then-load edit below must never run for one.
-                  if (webAnnotationQueueOrigin(message)) throw webAnnotationQueueItemFrozenError();
-                  // Editing loads the prompt into the composer, so anything
-                  // already there would be destroyed. Refusing with a reason
-                  // beats the silent overwrite.
-                  if (
-                    draft.text.trim().length > 0 ||
-                    draft.attachments.length > 0 ||
-                    draft.annotations.length > 0
-                  ) {
-                    throw composerOccupiedError();
-                  }
-                  await removeQueued(message.id);
-                  const queued = message as Record<string, unknown> & {
-                    id: string;
-                    text: string;
-                  };
-                  const attachments = Array.isArray(queued.attachments)
-                    ? queued.attachments.flatMap((candidate) => {
-                        if (
-                          !candidate ||
-                          typeof candidate !== "object" ||
-                          Array.isArray(candidate)
-                        ) {
-                          return [];
-                        }
-                        const attachment = candidate as Record<string, unknown>;
-                        if (
-                          (attachment.type !== "file" && attachment.type !== "image") ||
-                          typeof attachment.path !== "string" ||
-                          !attachment.path
-                        )
-                          return [];
-                        const type: "file" | "image" = attachment.type;
-                        return [
-                          {
-                            id:
-                              typeof attachment.id === "string"
-                                ? attachment.id
-                                : crypto.randomUUID(),
-                            type,
-                            path: attachment.path,
-                            name:
-                              typeof attachment.filename === "string"
-                                ? attachment.filename
-                                : (attachment.path.split("/").at(-1) ?? "attachment"),
-                            ...(typeof attachment.dataUrl === "string"
-                              ? { previewUrl: attachment.dataUrl }
-                              : {}),
-                          },
-                        ];
-                      })
-                    : [];
-                  updateDraft(sessionKey, {
-                    text: message.text,
-                    mentions: [],
-                    attachments,
-                    annotations: [],
-                  });
-                  await updateControlsSafely({
-                    ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),
-                    ...(typeof queued.reasoningEffort === "string"
-                      ? { reasoningId: queued.reasoningEffort }
-                      : {}),
-                    ...(queued.mode === "build" || queued.mode === "plan"
-                      ? { mode: queued.mode }
-                      : {}),
-                    ...(typeof queued.fastMode === "boolean" ? { fastMode: queued.fastMode } : {}),
-                    ...(typeof queued.executionAgent === "string"
-                      ? { executionProfileId: queued.executionAgent }
-                      : typeof queued.agent === "string"
-                        ? { executionProfileId: queued.agent }
-                        : {}),
-                    ...(typeof queued.includeLocalSettings === "boolean"
-                      ? { includeLocalSettings: queued.includeLocalSettings }
-                      : {}),
-                    ...(typeof queued.promptSuggestions === "boolean"
-                      ? { promptSuggestions: queued.promptSuggestions }
-                      : {}),
-                  });
-                  inputRef.current?.focus();
-                }}
+                onEdit={editQueuedPrompt}
                 onMove={async (fromIndex, toIndex) => {
                   const message = queuedMessages[fromIndex];
                   if (!message || fromIndex === toIndex) return;
@@ -3699,60 +3783,8 @@ export function SharedNativeAgentController({
                 onRemove={async (messageId) => {
                   await removeQueued(messageId);
                 }}
-                onSteer={
-                  // The same gate the composer applies to a typed `/steer`.
-                  isRunning && !recoverableDispatch && projection.capabilities?.actions?.steer
-                    ? async (message) => {
-                        let outcome;
-                        try {
-                          outcome = await steerQueued(message.id);
-                        } catch (error) {
-                          throw new PromptQueueActionError(
-                            `Could not steer the running turn: ${
-                              error instanceof Error ? error.message : String(error)
-                            }`,
-                            { cause: error },
-                          );
-                        }
-                        if (!outcome) {
-                          throw new PromptQueueActionError(
-                            "This prompt already left the queue, so it was not used to steer.",
-                          );
-                        }
-                        if (outcome.outcome === "applied") {
-                          toast.success(`Sent to the active ${label} turn`);
-                          return;
-                        }
-                        // Delivery is unconfirmed: the recovery card under the
-                        // transcript owns the prompt now, so show it.
-                        if (outcome.outcome === "unknown") {
-                          setQueueDialogOpen(false);
-                          return;
-                        }
-                        throw new PromptQueueActionError(
-                          outcome.outcome === "rejected"
-                            ? `${nativeAgentSteerRejectionMessage(outcome)} The prompt was returned to the queue.`
-                            : outcome.outcome === "mismatch"
-                              ? "The turn moved on before the steering text was delivered. The prompt was returned to the queue."
-                              : `${label} finished the turn before the prompt arrived, so the prompt is still queued.`,
-                        );
-                      }
-                    : undefined
-                }
-                canSteer={(message) => {
-                  // Steering carries text only, and a queued command must be
-                  // revalidated as a command, not typed into the turn.
-                  const queued = message as Record<string, unknown>;
-                  return (
-                    !(Array.isArray(queued.attachments) && queued.attachments.length > 0) &&
-                    queued.command === undefined &&
-                    !nativeAsyncQuestionItemId(message.id) &&
-                    !(
-                      typeof queued.requestId === "string" &&
-                      nativeAsyncQuestionItemId(queued.requestId)
-                    )
-                  );
-                }}
+                onSteer={steerQueuedPrompt}
+                canSteer={canSteerQueuedPrompt}
                 renderMeta={(message) => {
                   const queued = message as Record<string, unknown>;
                   const attachments = Array.isArray(queued.attachments)

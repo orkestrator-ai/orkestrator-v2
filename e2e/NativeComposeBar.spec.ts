@@ -75,7 +75,21 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await page.keyboard.press("Escape");
   await expect(picker).toHaveAccessibleName(/High ⚡/);
 
-  await page.getByRole("button", { name: "+123 queued" }).click();
+  const strip = page.getByTestId("compose-queue-strip");
+  await expect(strip).toContainText("+122 more");
+  await strip.getByRole("button", { name: /Steer the next queued prompt/ }).click();
+  await expect(strip).toContainText("Queued prompt 2");
+  await expect(strip).toContainText("+121 more");
+  await strip.getByRole("button", { name: "Remove the next queued prompt" }).click();
+  await expect(strip).toContainText("Queued prompt 3");
+  await expect(strip).toContainText("+120 more");
+  await strip.getByRole("button", { name: "Edit the next queued prompt" }).click();
+  await expect(page.getByRole("textbox", { name: "Send a message" })).toContainText(
+    "Queued prompt 3",
+  );
+  await expect(strip).toContainText("Queued prompt 4");
+  await page.getByRole("textbox", { name: "Send a message" }).fill("");
+  await strip.getByTitle("View queued prompts").click();
   await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeHidden();

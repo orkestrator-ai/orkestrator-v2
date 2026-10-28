@@ -424,7 +424,10 @@ function SortableProjectFolderFixture() {
 
 const queuedComposePrompts = Array.from({ length: 123 }, (_, index) => ({
   id: `queued-${index + 1}`,
-  text: `Queued prompt ${index + 1}`,
+  text:
+    index === 0
+      ? "Also run the focused regression for the hook fix and report typecheck and build results"
+      : `Queued prompt ${index + 1}`,
 }));
 
 /**
@@ -436,6 +439,7 @@ function NativeComposeFixture() {
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [sentCount, setSentCount] = useState(0);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [drainedCount, setDrainedCount] = useState(0);
   const [text, setText] = useState("");
   const inputRef = useRef<MentionableInputRef | null>(null);
   const inputContainerRef = useRef<HTMLDivElement | null>(null);
@@ -466,7 +470,18 @@ function NativeComposeFixture() {
           onCursorPositionChange={() => {}}
           onKeyDown={() => {}}
           placeholder="Send a message"
-          queue={{ length: 123, onOpen: () => setQueueOpen(true) }}
+          isLoading={new URLSearchParams(window.location.search).has("running")}
+          queue={{
+            length: queuedComposePrompts.length - drainedCount,
+            next: queuedComposePrompts[drainedCount],
+            onOpen: () => setQueueOpen(true),
+            onSteer: () => setDrainedCount((count) => count + 1),
+            onEdit: () => {
+              setText(queuedComposePrompts[drainedCount]?.text ?? "");
+              setDrainedCount((count) => count + 1);
+            },
+            onRemove: () => setDrainedCount((count) => count + 1),
+          }}
           showAddressAll
           onAddressAll={async () => setSentCount((count) => count + 1)}
           onSend={async () => setSentCount((count) => count + 1)}

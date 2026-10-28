@@ -185,4 +185,62 @@ describe("settings inherited from a command node", () => {
       expect((await storage.loadConfig()).global.codexMaxConcurrentThreads).toBe(3);
     });
   });
+
+  test("machine-only saves ignore malformed inherited preferences and preserve stored values", async () => {
+    await withStorage(async (storage) => {
+      const own = await storage.loadOwnConfig();
+      await storage.updateGlobalConfig({
+        ...own.global,
+        reviewInstruction: "Leaf review",
+        codexMaxConcurrentThreads: 7,
+      });
+      storage.inheritedGlobalSettings = () => ({
+        reviewInstruction: "Controller review",
+        codexMaxConcurrentThreads: 3,
+      });
+      const malformed = {
+        ...(await storage.loadConfig()).global,
+        reviewInstruction: { invalid: true },
+        codexMaxConcurrentThreads: "invalid",
+        allowedDomains: ["leaf.test"],
+      } as unknown as typeof own.global;
+
+      const saved = await storage.updateGlobalConfig(malformed, {
+        preserveInheritedSettings: true,
+      });
+
+      const stored = await storage.loadOwnConfig();
+      expect(stored.global.allowedDomains).toEqual(["leaf.test"]);
+      expect(stored.global.reviewInstruction).toBe("Leaf review");
+      expect(stored.global.codexMaxConcurrentThreads).toBe(7);
+      expect(saved.global.reviewInstruction).toBe("Controller review");
+      expect(saved.global.codexMaxConcurrentThreads).toBe(3);
+    });
+  });
+
+  test("machine-only saves reject invalid machine settings without changing stored config", async () => {
+    await withStorage(async (storage) => {
+      const own = await storage.loadOwnConfig();
+      await storage.updateGlobalConfig({
+        ...own.global,
+        reviewInstruction: "Leaf review",
+        sshAgentSocketPath: "/tmp/leaf-agent.sock",
+      });
+      storage.inheritedGlobalSettings = () => ({ reviewInstruction: "Controller review" });
+      const stored = await storage.loadOwnConfig();
+
+      await expect(
+        storage.updateGlobalConfig(
+          {
+            ...(await storage.loadConfig()).global,
+            sshAgentSocketPath: "relative/agent.sock",
+            allowedDomains: ["changed.test"],
+          },
+          { preserveInheritedSettings: true },
+        ),
+      ).rejects.toThrow("SSH agent socket path must be an absolute path.");
+
+      expect(await storage.loadOwnConfig()).toEqual(stored);
+    });
+  });
 });

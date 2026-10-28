@@ -176,9 +176,8 @@ export type StorageLayerTypes = [
 ];
 
 /**
- * A machine-only save leaves the preferences to the command node, so the
- * renderer omits them, and the stored values replace whatever arrives. Fill
- * them with defaults so validation judges only the machine settings.
+ * Replace inherited preferences with product defaults before layering a
+ * controller snapshot or validating only the machine settings in a save.
  */
 function withDefaultInheritedSettings(global: AppConfig["global"]): AppConfig["global"] {
   const values = { ...global } as unknown as Record<string, unknown>;
@@ -224,15 +223,12 @@ export class ConfigRepository {
   private withInheritedSettings(config: AppConfig): AppConfig {
     const inherited = this.inheritedGlobalSettings?.() ?? null;
     if (!inherited) return config;
-    const values = { ...config.global } as unknown as Record<string, unknown>;
-    const defaults = defaultConfig().global as unknown as Record<string, unknown>;
     // Each snapshot is complete: omitted preferences mean product defaults,
     // never the leaf's persisted override.
-    for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
-      delete values[key];
-      if (defaults[key] !== undefined) values[key] = defaults[key];
-    }
-    const global = { ...values, ...inherited } as AppConfig["global"];
+    const global = {
+      ...withDefaultInheritedSettings(config.global),
+      ...inherited,
+    } as AppConfig["global"];
     // The command node's default agent may not be enabled on this node.
     const agentSettings = normalizeAgentSettings(global.agentSettings);
     const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);

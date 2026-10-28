@@ -9,8 +9,10 @@ Finished on 2026-10-28: every item is done. #1365 (`beb1ec4c8`) fixed the
 test, and this file now records the corrected cause and the macOS evidence.
 Keep this file until the branch that records it merges, for its decisions,
 then delete it, remove its index row, and remove any remaining references to
-it (including in 0321). The stale sibling reference in 0321 has been removed:
-its host-dependent failures have different causes from this fixture-order bug.
+it. Todo 0321 was closed on `main` after its host-dependent failures were
+fixed in #1365; its resolution is recorded in
+[aggregate case 1126](../../tests/flaky-tests/aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md).
+Those failures had different causes from this fixture-order bug.
 
 ## Current state
 
@@ -56,9 +58,10 @@ its host-dependent failures have different causes from this fixture-order bug.
    protocol lockfile groups never started: they stayed queued behind
    scheduler resources held by other worktrees until the 1800 s group
    deadline cancelled them ("Validation was cancelled while queued"). That
-   has nothing to do with this file. Their macOS failures are tracked in
-   [0321](0321-macos-host-dependent-unit-failures.md) and
-   [0350](0350-rootless-tests-fail-on-macos.md).
+   has nothing to do with this file. The workspace macOS failures previously
+   tracked in 0321 were fixed in #1365 and closed on `main`; see
+   [aggregate case 1126](../../tests/flaky-tests/aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md).
+   [0350](0350-rootless-tests-fail-on-macos.md) remains separately tracked.
 
 ## Assumptions and decisions
 
@@ -101,4 +104,4 @@ its host-dependent failures have different causes from this fixture-order bug.
 ## Needs verification
 
 Nothing for this file. A full `mise run test` with every group green on
-macOS still depends on 0321 and 0350.
+macOS still needs all queued groups to complete; 0350 remains separately tracked.

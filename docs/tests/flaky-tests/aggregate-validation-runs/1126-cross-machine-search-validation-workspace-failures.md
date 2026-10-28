@@ -31,9 +31,9 @@ search, federation or summary test. Each owner was then rerun alone with
 | `apps/backend/tests/commands-integration.test.ts` | 55 pass, 0 fail. | 55 pass, 0 fail (this rerun). In the earlier verification it had 53 pass, 2 fail, with timeouts of 8.5 s and 11.4 s. | [0187](../environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md) recurrence, aggregate only |
 | `apps/backend/tests/commands-registry-environments.test.ts` | 68 pass, 0 fail. | 68 pass, 0 fail. | [0188](../environments-and-containers/0188-environment-worktree-aggregate-timeouts.md) recurrence, aggregate only |
 | `apps/backend/tests/commands-environment-fork.test.ts` | 24 pass, 0 fail. | 24 pass, 0 fail. | aggregate only |
-| `apps/backend/tests/staged-input-relay.test.ts` | 5 pass, 4 fail. | 5 pass, 4 fail, identical assertions. | Host dependence, not a flake: [todo 0321](../../../todo/containers-and-environments/0321-macos-host-dependent-unit-failures.md) |
-| `apps/backend/tests/docker-image.test.ts` | 19 pass, 2 fail (`pinned image identity` `--add-host` cases). | 19 pass, 2 fail, identical assertions. | Host dependence: todo 0321 |
-| `apps/desktop/scripts/dev/profile-cleanup.test.ts` | 20 pass, 2 fail (an unexpected `keychainWarning`). | 20 pass, 2 fail, identical assertions. This was also recorded in [1013](1013-interactive-command-main-merge-validation.md). | Host dependence: todo 0321 |
+| `apps/backend/tests/staged-input-relay.test.ts` | 5 pass, 4 fail. | 5 pass, 4 fail, identical assertions. | Host dependence, not a flake: todo 0321, fixed in #1365 (see below) |
+| `apps/backend/tests/docker-image.test.ts` | 19 pass, 2 fail (`pinned image identity` `--add-host` cases). | 19 pass, 2 fail, identical assertions. | Host dependence: todo 0321, fixed in #1365 |
+| `apps/desktop/scripts/dev/profile-cleanup.test.ts` | 20 pass, 2 fail (an unexpected `keychainWarning`). | 20 pass, 2 fail, identical assertions. This was also recorded in [1013](1013-interactive-command-main-merge-validation.md). | Host dependence: todo 0321, fixed in #1365 |
 
 The non-workspace failures from the same runs are recorded separately. The
 migration-copy failures are in todo 0320. The Claude qualification deadlines
@@ -54,6 +54,20 @@ The firewall seed/live/cache timeout recurred as
   and are covered by the open cases above. The branch does not touch them.
 - Three owners fail deterministically with identical assertions on both
   trees. Each has a demonstrated macOS cause, set out in todo 0321.
+
+## Host-dependent owners resolved, 2026-10-28
+
+The three host-dependent owners were made host-independent by #1365
+(`beb1ec4c8`), and todo 0321 was closed. Now the relay test runs the
+entrypoint with Homebrew's GNU tools first on `PATH`
+(`tests/unit/gnu-shell-tools.ts`), so it needs the testing guide's macOS
+prerequisites. The two `--add-host` cases simulate a Linux host, and the
+profile-cleanup cases pass their temporary roots as `keychainRoots`. A re-run
+on `main` at `1d1f0a878`, on a macOS arm64 host (Darwin 27) with GNU
+coreutils and findutils installed, gave these results.
+`staged-input-relay.test.ts` with `docker-image.test.ts` had 30 pass, 0 fail.
+`profile-cleanup.test.ts` had 22 pass, 0 fail. The other seven owners in this
+case are unchanged by that fix.
 
 No test, deadline or implementation outside the search change was modified.
 

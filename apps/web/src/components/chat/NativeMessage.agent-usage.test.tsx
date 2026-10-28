@@ -154,3 +154,45 @@ for (const path of ["subagent", "task-group"] as const) {
     });
   });
 }
+
+describe("subagent runtime without spawn args", () => {
+  // A Codex child has no spawn-tool args; the bridge stamps its run instead.
+  function renderCodexChild(fields: Partial<Extract<NativeMessagePart, { type: "subagent" }>>) {
+    return render(
+      <NativeMessage
+        platform="codex"
+        message={{
+          id: "codex-child",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-03-21T10:00:00.000Z",
+          parts: [
+            {
+              type: "subagent",
+              content: "Zeno",
+              subagentName: "Zeno",
+              subagentActions: [action],
+              subagentActionCount: 1,
+              ...fields,
+            },
+          ],
+        }}
+      />,
+    );
+  }
+
+  test("ticks a running child from the run's start", () => {
+    const startedAt = new Date(Date.now() - 65_000).toISOString();
+    renderCodexChild({ toolState: "pending", createdAt: startedAt });
+    expect(screen.getByText(/^1m [5-9]s$/)).toBeTruthy();
+  });
+
+  test("shows a settled child's measured duration", () => {
+    renderCodexChild({
+      toolState: "success",
+      createdAt: "2026-03-21T10:00:00.000Z",
+      toolDurationMs: 125_000,
+    });
+    expect(screen.getByText("2m 5s")).toBeTruthy();
+  });
+});

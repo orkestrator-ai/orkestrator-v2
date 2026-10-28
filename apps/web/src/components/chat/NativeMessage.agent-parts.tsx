@@ -1213,7 +1213,8 @@ export function SubagentPart({
   const durationLabel = useAgentRuntimeLabel(
     status,
     part.createdAt,
-    numberToolArg(part.toolArgs, "durationMs"),
+    // Codex children carry no spawn args; the bridge measures the run instead.
+    numberToolArg(part.toolArgs, "durationMs") ?? part.toolDurationMs,
     part.toolUseId ?? part.subagentId ?? partKey,
   );
   // Agent output runs to the bridge's 512 KiB cap and `usefulAgentOutput`

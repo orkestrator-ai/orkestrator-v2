@@ -2,10 +2,12 @@
  * Runs one package's `bun test` for the tier in `ORKESTRATOR_TEST_TIER`.
  *
  * Usage, from a package script:
- *   bun ../../scripts/bun-test-tier.ts <package-dir> <path...> -- <bun test flags...>
+ *   bun --no-env-file ../../scripts/bun-test-tier.ts <package-dir> <path...> -- <bun test flags...>
  *
  * The package's discovery paths come before `--` so the slow tier can replace
  * them with its explicit file list. See `test-tiers.ts`.
+ * Start this wrapper with --no-env-file: only the child `bun test` should load
+ * dotenv files, after Bun has selected the test environment.
  */
 import path from "node:path";
 import process from "node:process";
@@ -16,7 +18,7 @@ const [packageDirectory, ...rest] = process.argv.slice(2);
 const separator = rest.indexOf("--");
 if (!packageDirectory || separator < 1) {
   console.error(
-    "Usage: bun scripts/bun-test-tier.ts <package-dir> <path...> -- <bun test flags...>",
+    "Usage: bun --no-env-file scripts/bun-test-tier.ts <package-dir> <path...> -- <bun test flags...>",
   );
   process.exit(2);
 }

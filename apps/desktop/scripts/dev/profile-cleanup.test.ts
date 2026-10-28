@@ -373,7 +373,13 @@ describe("pruneProfiles", () => {
     const now = () => Date.parse("2026-01-31T00:00:00.000Z");
 
     expect(actions(await pruneProfiles({ roots, run, now }))).toEqual({ idle: "kept" });
-    const outcomes = await pruneProfiles({ roots, run, now, olderThanDays: 14 });
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      now,
+      olderThanDays: 14,
+      keychainRoots: roots,
+    });
 
     expect(outcomes).toEqual([{ id: "idle", action: "removed", reason: "unused for 30 days" }]);
     expect(existsSync(idle.profileRoot)).toBe(false);
@@ -420,7 +426,7 @@ describe("pruneProfiles", () => {
     git(unmerged, "add", ".");
     git(unmerged, "commit", "-q", "-m", "work");
 
-    const outcomes = await pruneProfiles({ roots, run });
+    const outcomes = await pruneProfiles({ roots, run, keychainRoots: roots });
 
     expect(outcomes).toEqual([
       {

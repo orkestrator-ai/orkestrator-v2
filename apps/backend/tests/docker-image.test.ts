@@ -686,6 +686,10 @@ case "$1" in
 esac
 `;
     const saved = process.env.ORKESTRATOR_EGRESS;
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // This fixture describes a local Linux Engine, including its explicit
+    // host alias. Simulate the host too when the suite runs on macOS.
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     try {
       delete process.env.ORKESTRATOR_EGRESS;
       await withDockerScript(script("printf 'created-workload\\n'"), async (log) => {
@@ -772,6 +776,7 @@ esac
         expect(creates[0]).not.toContain("ORKESTRATOR_EGRESS");
       });
     } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
       if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
       else process.env.ORKESTRATOR_EGRESS = saved;
     }
@@ -817,6 +822,8 @@ esac
     const saved = process.env.ORKESTRATOR_EGRESS;
     process.env.ORKESTRATOR_EGRESS = "in-container";
     resetDockerTopologyCache();
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     try {
       await withDockerScript(
         `#!/bin/sh
@@ -840,6 +847,7 @@ esac
         },
       );
     } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
       resetDockerTopologyCache();
       if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
       else process.env.ORKESTRATOR_EGRESS = saved;

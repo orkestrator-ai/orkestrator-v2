@@ -61,6 +61,11 @@ Each package's `test:workspace` or `test:bridge` script calls
 (`default`, `slow`, or `all`) and either ignores the package's slow files or
 runs only them.
 
+Package scripts start the tier wrapper with `bun --no-env-file`, so the wrapper
+does not preload development dotenv values into the test process. Its child
+`bun test` loads `.env.test` with the normal test precedence; explicitly inherited
+environment variables still take priority.
+
 Prefer making a slow test deterministic (fake clocks, in-process fakes) over
 adding it to the slow tier. Add a file to the tier when it genuinely needs real
 processes or time; the list started from files whose median duration was 3 s
@@ -250,16 +255,17 @@ or start a production backend.
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
-| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more, including the backend, capped at two while port and deadline-sensitive tests need higher-concurrency qualification |
+| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; ordinary packages get up to two Bun workers. The backend gets up to four in the default tier, and retains its two-worker ceiling in slow/all tiers |
 | Root | Root renderer and repository-contract tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget: one worker on a large host, up to two on smaller ones |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
 
 All cooperating runs share a host budget: one worker slot per logical core by
 default (`ORKESTRATOR_TEST_HOST_WORKERS` may raise it to four per core), plus a
-memory admission budget of 65% of physical memory. This suite still plans at
-most eight Bun workers of its own, including the backend pool, whose
-Node-preloaded integration suites do not load happy-dom. The larger host budget
+memory admission budget of 65% of physical memory. The ordinary worker plan is
+capped at eight slots. The default tier can add up to two backend workers above
+that plan; slow/all tiers retain the backend's two-worker ceiling. Host admission
+reserves the actual group counts, including those additional workers. The larger host budget
 lets other worktrees and review validations run beside it. The protocol check
 reserves one slot too. Groups run together when they fit; smaller machines queue
 groups instead of spawning extra workers.

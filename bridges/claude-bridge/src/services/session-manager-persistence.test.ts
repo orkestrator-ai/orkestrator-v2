@@ -422,8 +422,7 @@ describe("reconcilePersistedSessions", () => {
         expect(materialized.restoredDispatchedRequestIds?.has("before-restart")).toBe(true);
         deleteSession(materialized.id);
       } finally {
-        setClaudeHomeForTesting(sessionManagerTestHome);
-        await rm(directory, { recursive: true, force: true });
+        await releaseTemporaryClaudeHome(directory);
       }
     }
   });

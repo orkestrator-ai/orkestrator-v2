@@ -12,7 +12,7 @@
   },
   "scripts": {
     "test": "bun test --preload ../../tests/setup-node.ts src --parallel",
-    "test:workspace": "bun ../../scripts/bun-test-tier.ts packages/toolchain src -- --preload ../../tests/setup-node.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/toolchain.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    "test:workspace": "bun --no-env-file ../../scripts/bun-test-tier.ts packages/toolchain src -- --preload ../../tests/setup-node.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/toolchain.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bun check -p tsconfig.json"
   },
   "dependencies": {

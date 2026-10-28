@@ -661,8 +661,7 @@ describe("session lifecycle", () => {
       expect(persisted?.dispatchJournalComplete).toBeUndefined();
       expect(persisted?.dispatchedRequestIds).toHaveLength(MAX_DISPATCHED_REQUEST_IDS);
     } finally {
-      setClaudeHomeForTesting(sessionManagerTestHome);
-      await rm(directory, { recursive: true, force: true });
+      await releaseTemporaryClaudeHome(directory);
     }
   });
 

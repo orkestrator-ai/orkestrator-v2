@@ -276,6 +276,152 @@ test("waiting for a shared workspace resource is reported as queue time with its
   expect(done.results[1]!.queueReason).toBeUndefined();
 });
 
+test("waiting for the local command budget reports queue time and clears its reason on start", async () => {
+  const gate = (name: string) => `until [ -f .orkestrator/release-${name} ]; do sleep 0.02; done`;
+  const { root, run, git } = await fixture([
+    command("first", gate("first"), { weight: 2, timeoutMs: 10000 }),
+    command("second", gate("second"), { weight: 2, timeoutMs: 10000 }),
+    command("third", gate("third"), { timeoutMs: 10000 }),
+  ]);
+  // Leave host capacity spare so the third command is waiting only on this
+  // review's local budget, not on an admission ticket or shared resource.
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: Object.fromEntries(
+        run.plan.commands.map((entry) => [entry.command, { workers: 2, memoryMiB: 64 }]),
+      ),
+    }),
+  );
+  git("add", ".");
+  git("commit", "-m", "bounded host reservations");
+  run.plan.headRef = git("rev-parse", "HEAD");
+  await control(root, run, "start");
+  const waiting = await observeUntil(
+    root,
+    run,
+    (next) =>
+      next.results[0]?.status === "running" &&
+      next.results[1]?.status === "running" &&
+      next.results[2]?.status === "queued" &&
+      next.results[2].queuedMs >= 100,
+    5000,
+  );
+  expect(waiting.results[2]!.queueReason).toBe("Waiting for this review's local command budget");
+  expect(waiting.results[2]!.startedAt).toBeUndefined();
+  await writeFile(path.join(root, ".orkestrator/release-first"), "release");
+  const running = await observeUntil(
+    root,
+    run,
+    (next) => next.results[2]?.status === "running",
+    5000,
+  );
+  expect(running.results[1]!.status).toBe("running");
+  expect(running.results[2]!.queuedMs).toBeGreaterThanOrEqual(waiting.results[2]!.queuedMs);
+  expect(running.results[2]!.queueReason).toBeUndefined();
+  await Promise.all(
+    ["second", "third"].map((name) =>
+      writeFile(path.join(root, `.orkestrator/release-${name}`), "release"),
+    ),
+  );
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
+  expect(done.results[2]!.queueReason).toBeUndefined();
+}, 15000);
+
+test("cooperative queue time preserves an earlier local resource wait", async () => {
+  const { root, run, git } = await cooperativeFixture(
+    [
+      command("build", "until [ -f .orkestrator/release-local ]; do sleep 0.02; done", {
+        resources: ["dist"],
+        timeoutMs: 10000,
+      }),
+      command("check", "bun cooperative.ts", {
+        resources: ["dist", "host:cooperative-gate"],
+        timeoutMs: 1000,
+      }),
+    ],
+    {
+      "cooperative.ts": `import { createTestAdmission } from __MODULE__;
+const admission = createTestAdmission(import.meta.dir, process.env, console.log);
+const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1 }, async () => ({ status: 0 }));
+admission.close(); process.exitCode = result.status ?? 1;`,
+    },
+  );
+  // The build must fit beside the external blocker even on a small-memory
+  // host; only the cooperative command should wait on that blocker.
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: ["bun cooperative.ts"],
+      commandProfiles: {
+        [run.plan.commands[0]!.command]: { workers: 1, memoryMiB: 64 },
+      },
+    }),
+  );
+  git("add", ".");
+  git("commit", "-m", "bounded build reservation");
+  run.plan.headRef = git("rev-parse", "HEAD");
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+    workers: 8,
+    memoryMiB: 8192,
+  });
+  const blocker = scheduler.enqueue({
+    owner: "b".repeat(64),
+    workers: 1,
+    memoryMiB: 1,
+    resources: scheduler.resources(scheduler.owner(root), ["host:cooperative-gate"]),
+  });
+  try {
+    await control(root, run, "start");
+    const localWait = await observeUntil(
+      root,
+      run,
+      (next) =>
+        next.results[0]?.status === "running" &&
+        next.results[1]?.status === "queued" &&
+        next.results[1].queueReason?.includes("Waiting for build") === true &&
+        next.results[1].queuedMs >= 100,
+      5000,
+    );
+    await writeFile(path.join(root, ".orkestrator/release-local"), "release");
+    const hostWait = await observeUntil(
+      root,
+      run,
+      (next) =>
+        next.results[0]?.status === "passed" &&
+        next.results[1]?.status === "queued" &&
+        next.results[1].queueReason?.includes("exclusive resource") === true &&
+        next.results[1].queuedMs >= localWait.results[1]!.queuedMs + 100,
+      5000,
+    );
+    expect(hostWait.results[1]!.durationMs).toBe(0);
+    scheduler.release(blocker);
+    const done = await completed(root, run);
+    const projection = JSON.parse(
+      await readFile(
+        path.join(root, ".orkestrator/review-artifacts", run.id, "scheduler-1.json"),
+        "utf8",
+      ),
+    ) as { queuedMs: number; executionMs: number };
+    expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+    expect(projection.queuedMs).toBeGreaterThan(0);
+    expect(done.results[1]!.queuedMs).toBeGreaterThanOrEqual(
+      localWait.results[1]!.queuedMs + projection.queuedMs,
+    );
+    expect(done.results[1]!.durationMs).toBe(projection.executionMs);
+    expect(done.results[1]!.durationMs).toBeLessThan(done.results[1]!.queuedMs);
+    expect(done.results[1]!.queueReason).toBeUndefined();
+  } finally {
+    scheduler.release(blocker);
+    scheduler.close();
+  }
+}, 15000);
+
 test("worktree drift before or during validation is recorded without failing the run", async () => {
   const before = await fixture([command("check", "exit 0")]);
   await writeFile(path.join(before.root, "source.txt"), "changed\n");
@@ -577,7 +723,14 @@ clearInterval(heartbeat);`,
     },
   );
   await control(root, run);
-  await observeUntil(root, run, (next) => next.results[0]?.status === "running", 5_000);
+  // The worker marks a command running before its child has started. Wait for
+  // captured output before stopping it so this tests partial-artifact retention.
+  await observeUntil(
+    root,
+    run,
+    (next) => next.results[0]?.status === "running" && next.results[0].lastOutputAt !== undefined,
+    5_000,
+  );
   const stopped = await control(root, run, "stop-command", {}, "cooperative");
   expect(stopped.results[0]).toMatchObject({ status: "incomplete" });
   const done = await completed(root, run);
@@ -1290,7 +1443,9 @@ publish("running"); await Bun.sleep(250); publish("completed");`,
   expect(done.results[0]!.status).toBe("passed");
   expect(done.results[0]!.durationMs).toBeLessThan(1000);
   expect(done.results[0]!.queuedMs).toBeLessThan(1000);
-});
+  // Fixture Git setup and worker startup are outside the command's one-second
+  // execution budget and may take longer on a busy host.
+}, 15000);
 
 test("a cooperative command returning to the queue frees its local weight", async () => {
   const { root, run } = await cooperativeFixture(

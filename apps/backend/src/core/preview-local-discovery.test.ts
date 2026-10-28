@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createServer, type AddressInfo } from "node:net";
+import { createConnection, createServer, type AddressInfo } from "node:net";
 
 import {
   LoopbackListenerOwnership,
@@ -517,7 +517,19 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
   ): Promise<{ shell: ChildProcess; port: number }> {
     // Report the bound address after a beat: Bun calls the listen callback of a
     // bind that then fails with EADDRINUSE.
-    const script = `const net=require("node:net");const s=net.createServer();const report=()=>setTimeout(()=>console.log("port "+s.address().port),150);s.once("error",()=>s.listen({port:${port + 1},host:"${host}",ipv6Only:false},report));s.listen({port:${port},host:"${host}",ipv6Only:false},report);`;
+    const script = `const net=require("node:net");
+let port=${port};
+const listen=()=>{
+  const s=net.createServer();
+  s.once("error",error=>{
+    if(error.code!=="EADDRINUSE"||port===0||port>=65535)throw error;
+    port++;listen();
+  });
+  s.listen({port,host:"${host}",ipv6Only:false},()=>setTimeout(()=>{
+    const address=s.address();
+    if(address)console.log("port "+address.port);
+  },150));
+};listen();`;
     // "; true" keeps the shell as the server's parent instead of exec'ing it.
     const shell = spawn("/bin/sh", ["-c", `"${process.execPath}" -e '${script}'; true`], {
       detached: true,
@@ -533,10 +545,25 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     return { shell, port: bound };
   }
 
-  async function stop(shell: ChildProcess) {
+  async function stop(shell: ChildProcess, port: number) {
     const exited = new Promise((resolve) => shell.once("exit", resolve));
     process.kill(-shell.pid!, "SIGKILL");
     await exited;
+    const isListening = () =>
+      new Promise<boolean>((resolve) => {
+        const socket = createConnection({ port, host: "127.0.0.1" });
+        const finish = (listening: boolean) => {
+          socket.destroy();
+          resolve(listening);
+        };
+        socket.once("connect", () => finish(true));
+        socket.once("error", () => finish(false));
+      });
+    const deadline = Date.now() + 2_000;
+    while (await isListening()) {
+      if (Date.now() >= deadline) throw new Error("Stopped fixture listener did not close");
+      await Bun.sleep(20);
+    }
   }
 
   test("a dual-stack wildcard listener resolves the owning worktree over IPv4 and refuses another", async () => {
@@ -566,7 +593,10 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
   }, 20_000);
 
   test("two environments, a restart on the reused port, and an auto-incremented port", async () => {
-    const port = await freePort();
+    // Keep the listener open while the environments are prepared: reserving a
+    // port and closing it first lets unrelated host tests steal it.
+    const first = await terminalRunningServer(0);
+    const port = first.port;
     await harness.addLocalEnvironment("a", { entryPort: port });
     await harness.addLocalEnvironment("b", { entryPort: port });
     const roots: ManagedProcessRoot[] = [];
@@ -578,7 +608,6 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     const b = registry.snapshot({ environmentId: "b" }).services[0]!.definition;
 
     // a's terminal starts the dev server on the shared entry port.
-    const first = await terminalRunningServer(port);
     expect(first.port).toBe(port);
     roots.push({ environmentId: "a", pid: first.shell.pid! });
     const opened = await registry.refresh(a.serviceId);
@@ -599,7 +628,7 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
 
     // b's terminal starts the same dev server, which moves to the next port.
     const moved = await terminalRunningServer(port);
-    expect(moved.port).toBe(port + 1);
+    expect(moved.port).toBeGreaterThan(port);
     roots.push({ environmentId: "b", pid: moved.shell.pid! });
     const link = await resolvePreviewTargetIntent(
       registry,
@@ -621,7 +650,7 @@ describe.skipIf(!realHost)("local preview service discovery on this host", () =>
     });
 
     // a restarts its server on the reused port: same service, new generation.
-    await stop(first.shell);
+    await stop(first.shell, port);
     roots.splice(
       roots.findIndex((root) => root.environmentId === "a"),
       1,

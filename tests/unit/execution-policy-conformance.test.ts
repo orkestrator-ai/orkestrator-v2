@@ -51,7 +51,7 @@ describe("execution policy conformance runners", () => {
         readFileSync(path.join(root, RUNNERS[platform].pkg, "package.json"), "utf8"),
       ) as { scripts: Record<string, string> };
       expect(scripts[RUNNERS[platform].script]).toMatch(
-        /^bun \.\.\/\.\.\/scripts\/bun-test-tier\.ts \S+ (?:\S+ )*src\b.* -- /,
+        /^bun --no-env-file \.\.\/\.\.\/scripts\/bun-test-tier\.ts \S+ (?:\S+ )*src\b.* -- /,
       );
       // The default tier must keep it: the slow tier runs only on demand.
       expect(slowTestFiles(root, RUNNERS[platform].pkg)).not.toContain(

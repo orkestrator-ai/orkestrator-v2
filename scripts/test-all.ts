@@ -763,6 +763,8 @@ export const BACKEND_WORKERS_ENV = "ORKESTRATOR_BACKEND_TEST_WORKERS";
  * wall-clock suites now run in the slow tier, so the rest gets a larger pool.
  */
 export const MAX_BACKEND_TEST_WORKERS = 4;
+/** Real-process suites retain their qualified two-worker ceiling. */
+export const MAX_SLOW_BACKEND_TEST_WORKERS = 2;
 export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 /**
@@ -785,7 +787,7 @@ export const TURBO_GROUP_OUTPUT_FLAGS = [
   "--continue=dependencies-successful",
 ];
 
-export function planWorkers(cores: number): WorkerPlan {
+export function planWorkers(cores: number, tier: TestTier = "default"): WorkerPlan {
   // Never plan more Bun workers than logical cores across root + bridges +
   // active workspace package tasks, and never fewer than one per group.
   const budget = Math.min(
@@ -806,7 +808,10 @@ export function planWorkers(cores: number): WorkerPlan {
   const root = Math.max(1, budget - 1 - bridges - workspace * workspaceConcurrency);
   const backend = Math.max(
     workspace,
-    Math.min(MAX_BACKEND_TEST_WORKERS, Number.isFinite(cores) ? Math.floor(cores / 3) : 0),
+    Math.min(
+      tier === "default" ? MAX_BACKEND_TEST_WORKERS : MAX_SLOW_BACKEND_TEST_WORKERS,
+      Number.isFinite(cores) ? Math.floor(cores / 3) : 0,
+    ),
   );
   return { workspace, backend, workspaceConcurrency, root, bridges };
 }
@@ -838,7 +843,7 @@ export function buildConcurrentGroups(
   /** Which test files run; package scripts read the same tier from the environment. */
   tier: TestTier = "default",
 ): TestGroup[] {
-  const workers = planWorkers(cores);
+  const workers = planWorkers(cores, tier);
   // Groups may queue on tiny hosts, but no individual child may exceed the
   // capacity it reserves. The plan's minimum worker floor is not a grant.
   const capacity = Math.max(1, Math.floor(cores) || 1);
@@ -1011,7 +1016,9 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
   heartbeat.unref();
 
   try {
-    await pruneExpiredTestLogDirectories().catch(() => undefined);
+    // A substituted runner owns no real logs. Keep simulated runner tests out
+    // of unrelated host filesystem cleanup (which can outlive their deadline).
+    if (usesDefaultRunner) await pruneExpiredTestLogDirectories().catch(() => undefined);
     const timingsDirectory =
       dependencies.env[TEST_TIMINGS_DIRECTORY_ENV] ||
       (usesDefaultRunner ? createTestTimingsDirectory(dependencies.root) : undefined);

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gnuToolPath } from "../../../tests/unit/gnu-shell-tools";
 import {
   STAGED_INPUT_RELAY_DIR,
   scrubStagedProvider,
@@ -59,6 +60,16 @@ function relay(
     shellAssignment(rootEntrypoint, "STAGED_INPUT_MOUNTS"),
     `STAGED_INPUT_RELAY_MAX_ENTRIES=${options.maxEntries ?? 20000}`,
     shellAssignment(rootEntrypoint, "STAGED_INPUT_RELAY_MAX_BYTES"),
+    // The image's node user and group share a name; the host's test user may
+    // belong to a differently named primary group (for example on macOS).
+    `install() {
+      local args=()
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = -g ]; then shift; args+=(-g "$(id -g)"); else args+=("$1"); fi
+        shift
+      done
+      command install "\${args[@]}"
+    }`,
     // node's view: the probe reports an unreadable entry, or none.
     `as_input_user() { if [ "$1" = find ]; then ${options.unreadable ? 'echo "$2"' : "true"}; return 0; fi; "$@"; }`,
     shellFunction(rootEntrypoint, "relay_staged_inputs"),
@@ -67,7 +78,9 @@ function relay(
   const result = Bun.spawnSync({
     cmd: ["bash", "-c", script],
     env: {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      // Run the Linux entrypoint with the tools it uses in the image, rather
+      // than macOS's BSD rm/install/du, whose flags have different meanings.
+      PATH: gnuToolPath,
       SOURCE_ROOT: sourceRoot,
       RELAY_DIR: relayDir,
     },
@@ -110,7 +123,7 @@ describe("staged input relay", () => {
     const { container } = await mountedRevision(root);
     const relayDir = path.join(root, "run", "orkestrator-inputs");
     await fs.mkdir(path.dirname(relayDir), { recursive: true });
-    expect(relay(container, relayDir, { unreadable: true }).exitCode).toBe(0);
+    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
 
     expect((await fs.stat(relayDir)).mode & 0o777).toBe(0o700);
     const auth = path.join(relayDir, "codex-home", "auth.json");
@@ -131,7 +144,7 @@ describe("staged input relay", () => {
     const relayDir = path.join(root, "orkestrator-inputs");
     await fs.mkdir(path.join(relayDir, "codex-home"), { recursive: true });
     await fs.writeFile(path.join(relayDir, "codex-home", "auth.json"), "stale");
-    expect(relay(container, relayDir, { unreadable: false }).exitCode).toBe(0);
+    expect(relay(container, relayDir, { unreadable: false })).toEqual({ exitCode: 0, stderr: "" });
     await expect(fs.stat(relayDir)).rejects.toThrow();
   });
 
@@ -139,7 +152,7 @@ describe("staged input relay", () => {
     const root = await tempRoot();
     const { container, dataDir, staged } = await mountedRevision(root);
     const relayDir = path.join(root, "orkestrator-inputs");
-    relay(container, relayDir, { unreadable: true });
+    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
     expect(await fs.readdir(path.join(relayDir, "codex-home"))).toContain("auth.json");
 
     expect(await scrubStagedProvider(dataDir, "env-relay", staged.revision, "codex")).toBe(true);
@@ -147,7 +160,7 @@ describe("staged input relay", () => {
     const codexMount = path.join(container, "codex-home");
     await fs.rm(codexMount, { recursive: true });
     await fs.cp(await fs.readlink(`${codexMount}.bind`), codexMount, { recursive: true });
-    relay(container, relayDir, { unreadable: true });
+    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
     expect(await fs.readdir(path.join(relayDir, "codex-home"))).toEqual([]);
   });
 
@@ -160,7 +173,7 @@ describe("staged input relay", () => {
     await fs.symlink(secret, path.join(container, "codex-home", "auth.json"));
     await fs.symlink(path.join(root, "elsewhere"), path.join(container, "pi-config"));
     const relayDir = path.join(root, "orkestrator-inputs");
-    relay(container, relayDir, { unreadable: true });
+    expect(relay(container, relayDir, { unreadable: true })).toEqual({ exitCode: 0, stderr: "" });
     const relayed = path.join(relayDir, "codex-home", "auth.json");
     expect((await fs.lstat(relayed)).isSymbolicLink()).toBe(true);
     // A mount point that is itself a link is skipped.

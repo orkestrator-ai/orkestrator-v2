@@ -260,7 +260,12 @@ describe("startWorktreeWatcher", () => {
   // is not available on every platform, so an unwatchable environment is a skip
   // and not a failure - that is the documented degradation.
   test("observes a real file write", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ork-watch-"));
+    // Qualify on the checkout's filesystem. System temporary directories can
+    // have different native watch behavior from real worktrees (Bun on macOS
+    // delivers no events for this host's OS temporary directory).
+    const fixtureParent = path.resolve(import.meta.dir, "../../../output/watch-fixtures");
+    await fs.mkdir(fixtureParent, { recursive: true });
+    const directory = await fs.realpath(await fs.mkdtemp(path.join(fixtureParent, "ork-watch-")));
     // Registered first so it runs after the watcher closes (cleanups unwind LIFO).
     cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
     let changes = 0;
@@ -280,15 +285,17 @@ describe("startWorktreeWatcher", () => {
 
     if (!watcher.watching) return;
 
-    const deadline = Date.now() + 2_000;
-    let attempt = 0;
-    while (changes === 0 && Date.now() < deadline) {
-      await fs.writeFile(
-        path.join(directory, `created-${attempt}.ts`),
-        `export const value = ${attempt};\n`,
-      );
-      attempt += 1;
-      await Promise.race([changeObserved, new Promise<void>((resolve) => setTimeout(resolve, 75))]);
+    // Wait for the callback caused by one write rather than generating more
+    // mutations while native events are being delivered.
+    await fs.writeFile(path.join(directory, "created.ts"), "export const value = 1;\n");
+    let timeout: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, 2_000);
+    });
+    try {
+      await Promise.race([changeObserved, deadline]);
+    } finally {
+      clearTimeout(timeout!);
     }
 
     expect(changes).toBeGreaterThan(0);

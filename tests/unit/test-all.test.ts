@@ -19,6 +19,7 @@ import {
   main,
   MAX_AGGREGATE_TEST_WORKERS,
   MAX_BACKEND_TEST_WORKERS,
+  MAX_SLOW_BACKEND_TEST_WORKERS,
   MAX_CONSOLE_TAIL_LINE_CHARS,
   MAX_FAILURE_REPORTS,
   MAX_GROUP_OUTPUT_TAIL_BYTES,
@@ -441,6 +442,25 @@ describe("scripts/test-all.ts", () => {
       `--parallel=\${${BACKEND_WORKERS_ENV}:-\${${WORKSPACE_WORKERS_ENV}:-2}}`,
     );
   });
+
+  test.each(["slow", "all"] as const)(
+    "%s keeps real-process backend suites within their two-worker ceiling",
+    (tier) => {
+      for (const cores of [1, 4, 8, 12, 18, 64]) {
+        const plan = planWorkers(cores, tier);
+        expect(plan.backend).toBeLessThanOrEqual(MAX_SLOW_BACKEND_TEST_WORKERS);
+        const workspace = buildConcurrentGroups(cores, false, undefined, tier).find(
+          (group) => group.name === WORKSPACE,
+        )!;
+        expect(workspace.env?.[BACKEND_WORKERS_ENV]).toBe(String(plan.backend));
+        expect(workspace.workers).toBe(
+          Math.min(cores, plan.backend + plan.workspace * (plan.workspaceConcurrency - 1)),
+        );
+      }
+      expect(planWorkers(18, tier).backend).toBe(2);
+      expect(planWorkers(18, "default").backend).toBe(4);
+    },
+  );
 
   test("runs bridge suites as cacheable Turbo package tasks", () => {
     const groups = buildConcurrentGroups(8);

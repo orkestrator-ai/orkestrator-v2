@@ -68,7 +68,7 @@ describe("bridge contract runners", () => {
       scripts: Record<string, string>;
     };
     expect(scripts["test:bridge"]).toMatch(
-      /^bun \.\.\/\.\.\/scripts\/bun-test-tier\.ts \S+ src --/,
+      /^bun --no-env-file \.\.\/\.\.\/scripts\/bun-test-tier\.ts \S+ src --/,
     );
     // The default tier must keep it: the slow tier runs only on demand.
     expect(slowTestFiles(root, path.relative(root, directory))).not.toContain(RUNNER);

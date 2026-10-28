@@ -64,3 +64,33 @@ clock or skip changed in this repair.
 The exact aggregate rerun (`mise run test` through `test:logged`) passed the
 fsmonitor cases and retained only the unrelated activity-batch timeout tracked
 in [0247](../native-agents-and-transcripts/0247-activity-batch-sweep-no-requests.md).
+
+
+## Queued-prompt keyboard review recurrence — 2026-10-28
+
+Preparation at `91513d96d` repeated all four named five-second timeouts:
+linked project-home scan (5,033.16 ms), transient `rev-parse` (5,013.48 ms),
+`--get` (5,029.51 ms) and `--unset` (5,010.94 ms). `mise run test` used default
+workspace/root/bridge/protocol reservations of 6/1/2/1 (backend four workers)
+alongside the nine-worker browser suite. Backend reported 10,153 passed,
+87 skipped and six failed, including the two source-store cases in 0932;
+the aggregate failed its workspace group after 332.2 s. Evidence:
+`.orkestrator/review-artifacts/review-validation-23a7a6f9-6912-45a3-b66d-327817cf8f1d/validation-04.stdout.txt`.
+
+The complete unchanged fsmonitor and source-store owners passed sequentially
+with one Bun worker (exit 0, 9.8 s):
+
+```sh
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+No fsmonitor implementation, assertion, timeout or skip changed. The passing
+logged runner discarded detailed output; contention remains an unproven cause.
+
+The exact original aggregate command then passed (exit 0, 274.7 s):
+
+```sh
+mise run test:logged -- --name review-repair-tests -- mise run test
+```
+
+The successful rerun does not establish a flake fix; this case remains open.

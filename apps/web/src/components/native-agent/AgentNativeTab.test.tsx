@@ -12091,7 +12091,7 @@ describe("AgentNativeTab", () => {
         });
         render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
         const input = await screen.findByRole("textbox");
-        fireEvent.click(await screen.findByRole("button", { name: "Edit the next queued prompt" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
         await waitFor(() => expect(removePromptQueueMessageMock).toHaveBeenCalledTimes(1));
         if (step === "refresh") await waitFor(() => expect(refreshStarted).toBe(true));
         expect(input.getAttribute("contenteditable")).toBe("false");
@@ -12161,7 +12161,7 @@ describe("AgentNativeTab", () => {
           />,
         );
         const input = await screen.findByRole("textbox");
-        const edit = await screen.findByRole("button", { name: "Edit the next queued prompt" });
+        const edit = await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" });
         let complete!: () => void;
         const pending = new Promise<void>((resolve) => {
           complete = resolve;
@@ -12240,7 +12240,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-inline-settings-error" data={identity("codex")} isActive />,
       );
       const input = await screen.findByRole("textbox");
-      const edit = await screen.findByRole("button", { name: "Edit the next queued prompt" });
+      const edit = await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" });
       updateNativeAgentControlsMock.mockRejectedValueOnce(new Error("Settings failed"));
       mockToastError.mockClear();
       fireEvent.click(edit);
@@ -12274,10 +12274,10 @@ describe("AgentNativeTab", () => {
         );
         const name =
           action === "steer"
-            ? "Steer the next queued prompt into the running turn"
+            ? "Steer queued prompt 1 of 1: Queued task"
             : action === "edit"
-              ? "Edit the next queued prompt"
-              : "Remove the next queued prompt";
+              ? "Edit queued prompt 1 of 1"
+              : "Remove queued prompt 1 of 1";
         const button = await screen.findByRole("button", { name });
         if (action === "steer")
           steerNativeAgentQueuedPromptMock.mockRejectedValueOnce(new Error("Disconnected"));
@@ -12291,46 +12291,118 @@ describe("AgentNativeTab", () => {
               : "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.",
           ),
         );
-        await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+        await waitFor(() => expect(button.getAttribute("aria-disabled")).toBeNull());
       },
     );
 
-    test.each(["steer", "remove"] as const)("inline %s targets the queue head", async (action) => {
+    test.each([
+      ["steer", 1, "head"],
+      ["steer", 2, "tail"],
+      ["remove", 1, "head"],
+      ["remove", 2, "tail"],
+    ] as const)(
+      "inline %s on strip %d targets that queued prompt",
+      async (action, position, id) => {
+        seedProjection({
+          phase: "running",
+          actions: { steer: true },
+          queue: {
+            items: [
+              { id: "head", text: "First" },
+              { id: "tail", text: "Second" },
+            ],
+          },
+        });
+        render(
+          <AgentNativeTab tabId={`tab-inline-${action}-${id}`} data={identity("codex")} isActive />,
+        );
+        fireEvent.click(
+          await screen.findByRole("button", {
+            name:
+              action === "steer"
+                ? `Steer queued prompt ${position} of 2: ${position === 1 ? "First" : "Second"}`
+                : `Remove queued prompt ${position} of 2`,
+          }),
+        );
+        if (action === "steer") {
+          await waitFor(() =>
+            expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledWith(
+              expect.objectContaining({ messageId: id }),
+            ),
+          );
+          expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+        } else {
+          await waitFor(() =>
+            expect(removePromptQueueMessageMock).toHaveBeenCalledWith(
+              expect.any(String),
+              "env-1",
+              id,
+            ),
+          );
+        }
+      },
+    );
+
+    test("ArrowUp from the composer reaches every actionable queued prompt", async () => {
       seedProjection({
         phase: "running",
         actions: { steer: true },
         queue: {
           items: [
             { id: "head", text: "First" },
-            { id: "tail", text: "Second" },
+            { id: "image", text: "Has an image", attachments: [{ type: "image", path: "/i.png" }] },
+            { id: "tail", text: "Third" },
           ],
         },
       });
-      render(<AgentNativeTab tabId={`tab-inline-${action}`} data={identity("codex")} isActive />);
-      fireEvent.click(
-        await screen.findByRole("button", {
-          name:
-            action === "steer"
-              ? "Steer the next queued prompt into the running turn"
-              : "Remove the next queued prompt",
-        }),
+      render(<AgentNativeTab tabId="tab-inline-arrows" data={identity("codex")} isActive />);
+      const input = await screen.findByRole("textbox");
+      const head = await screen.findByRole("button", { name: "Steer queued prompt 1 of 3: First" });
+      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ })).toBeNull();
+      act(() => input.focus());
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(head);
+      fireEvent.keyDown(head, { key: "ArrowUp" });
+      const edit = screen.getByRole("button", { name: "Edit queued prompt 2 of 3" });
+      expect(document.activeElement).toBe(edit);
+      fireEvent.keyDown(edit, { key: "ArrowUp" });
+      const tail = screen.getByRole("button", { name: "Steer queued prompt 3 of 3: Third" });
+      expect(document.activeElement).toBe(tail);
+      fireEvent.click(tail);
+      await waitFor(() =>
+        expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledWith(
+          expect.objectContaining({ messageId: "tail" }),
+        ),
       );
-      if (action === "steer") {
-        await waitFor(() =>
-          expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledWith(
-            expect.objectContaining({ messageId: "head" }),
-          ),
-        );
-        expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
-      } else {
-        await waitFor(() =>
-          expect(removePromptQueueMessageMock).toHaveBeenCalledWith(
-            expect.any(String),
-            "env-1",
-            "head",
-          ),
-        );
-      }
+    });
+
+    test("keyboard Edit loads a queued prompt with the caret at its end", async () => {
+      const text = "Queued task to revise";
+      seedProjection({ queue: { items: [{ id: "queued-1", text }] } });
+      render(<AgentNativeTab tabId="tab-keyboard-edit-caret" data={identity("codex")} isActive />);
+      const input = await screen.findByRole("textbox");
+      const edit = await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" });
+      act(() => {
+        input.focus();
+        const range = document.createRange();
+        range.selectNodeContents(input);
+        range.collapse(true);
+        window.getSelection()!.removeAllRanges();
+        window.getSelection()!.addRange(range);
+      });
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(edit);
+      fireEvent.keyDown(edit, { key: "Enter" });
+      fireEvent.click(edit);
+      await waitFor(() => expect(input.textContent).toBe(text));
+      await waitFor(() => {
+        expect(document.activeElement).toBe(input);
+        const caret = window.getSelection()!.getRangeAt(0);
+        const before = document.createRange();
+        before.selectNodeContents(input);
+        before.setEnd(caret.startContainer, caret.startOffset);
+        expect(before.toString().length).toBe(text.length);
+      });
     });
 
     test.each([
@@ -12367,8 +12439,8 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId={`tab-inline-gate-${gate}`} data={identity("codex")} isActive />,
       );
       const strip = within(await screen.findByTestId("compose-queue-strip"));
-      expect(strip.queryByRole("button", { name: /Steer the next/ })).toBeNull();
-      for (const name of ["Edit the next queued prompt", "Remove the next queued prompt"]) {
+      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+      for (const name of ["Edit queued prompt 1 of 1", "Remove queued prompt 1 of 1"]) {
         expect(Boolean(strip.queryByRole("button", { name }))).toBe(gate !== "annotation");
       }
     });
@@ -12379,7 +12451,7 @@ describe("AgentNativeTab", () => {
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Unsent draft" } });
       act(() => input.focus());
-      const edit = await screen.findByRole("button", { name: "Edit the next queued prompt" });
+      const edit = await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" });
       mockToastError.mockClear();
       expect(fireEvent.mouseDown(edit)).toBe(false);
       fireEvent.click(edit);

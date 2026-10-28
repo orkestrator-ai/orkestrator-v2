@@ -134,3 +134,50 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
   and `branch-toolgroupfold.log` in that checkout.
 - **Assessment:** pre-existing on the target branch; no assertion, deadline or
   skip changed.
+
+
+## Queued-prompt keyboard review recurrence — 2026-10-28
+
+Preparation at `91513d96d` repeated mobile inner `scrollTop` 704 instead
+of zero at line 471. `mise run test:browser` ran 1,006 cases using nine
+workers, alongside the repository tests: 897 passed, 105 skipped and four
+failed (478.7 s). Evidence:
+`.orkestrator/review-artifacts/review-validation-23a7a6f9-6912-45a3-b66d-327817cf8f1d/validation-05.stdout.txt`.
+
+The complete unchanged tool-group, pane and native branch owners ran
+sequentially with one worker (133.8 s):
+
+```sh
+mise run test:logged -- --name recorded-browser-owners -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts PaneBreakpoint.spec.ts ToolGroupFold.spec.ts --workers=1
+```
+
+All tool-group and pane cases passed; the run reported 49 passed, one skipped
+and only the two established native branch-suggestion failures. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.t9A9Lw/recorded-browser-owners.log.gz`.
+No tool-group implementation, assertion, deadline or skip changed. The
+aggregate timing cause remains unproven.
+
+
+The exact original browser command was rerun after the queue fixes:
+
+```sh
+mise run test:logged -- --name review-repair-browser -- mise run test:browser
+```
+
+It reported 904 passed, 105 skipped and three failed in 490.7 s with nine
+workers: both known native branch-suggestion cases and the desktop waiting
+tool-group overflow case (704 instead of zero). All new queue regressions
+passed in both viewports; the pane owner passed. The public-site stage was
+not reached because the component suite failed. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.my4kyi/review-repair-browser.log.gz`.
+
+After that final aggregate recurrence, the complete unchanged owner passed
+again (exit 0, 79.0 s):
+
+```sh
+mise run test:logged -- --name tool-group-final-owner -- bunx playwright test --config e2e/playwright.config.ts ToolGroupFold.spec.ts --workers=1
+```
+
+The passing logged runner discarded its detailed output. The known native
+branch-suggestion failures remain unrepaired; no unrelated implementation,
+assertion, deadline or skip was changed.

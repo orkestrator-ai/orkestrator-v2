@@ -55,28 +55,30 @@ describe("NativeComposeBar", () => {
   });
 
   test.each([
-    { length: 0, next: undefined, preview: null, more: null },
-    { length: 3, next: undefined, preview: "3 queued", more: null },
-    { length: 1, next: { id: "q", text: "Next task" }, preview: "Next task", more: null },
-    { length: 4, next: { id: "q", text: "Next task" }, preview: "Next task", more: "+3 more" },
-  ])("queue preview for $length items with next=$next", ({ length, next, preview, more }) => {
+    { length: 0, items: [], header: null },
+    { length: 1, items: ["Next task"], header: "1 queued" },
+    { length: 3, items: ["Next task", "Second", "Third"], header: "3 queued" },
+  ])("queue stack for $length items", ({ length, items, header }) => {
     const onOpen = mock(() => {});
     renderComposeBar(
       () => {},
       [],
       () => {},
-      { length, next, onOpen },
+      { length, items: items.map((text, index) => ({ id: `q${index}`, text })), onOpen },
     );
     if (!length) {
       expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
       return;
     }
-    const strip = within(screen.getByTestId("compose-queue-strip"));
-    const open = strip.getByRole("button", { name: `View queued prompts (${length})` });
-    expect(open.textContent).toContain(preview!);
+    const stack = within(screen.getByTestId("compose-queue-strip"));
+    expect(stack.getByText(header!)).toBeTruthy();
+    // Run order in the DOM; the list is laid out reversed so the next sits lowest.
+    expect(stack.getAllByTestId("compose-queue-item").map((row) => row.textContent)).toEqual([
+      ...items,
+    ]);
+    const open = stack.getByRole("button", { name: `View queued prompts (${length})` });
     expect(open.title).toBe("View queued prompts");
-    expect(strip.queryByText(/\+\d+ more/)?.textContent ?? null).toBe(more);
-    expect(strip.getAllByRole("button")).toHaveLength(1);
+    expect(stack.getAllByRole("button")).toHaveLength(1);
     fireEvent.click(open);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
@@ -88,7 +90,7 @@ describe("NativeComposeBar", () => {
       () => {},
       {
         length: 1,
-        next: { id: "q", text: "Next task" },
+        items: [{ id: "q", text: "Next task" }],
         onOpen: () => {},
         error: { message: "Model unavailable" },
       },
@@ -97,33 +99,38 @@ describe("NativeComposeBar", () => {
       name: "1 queued prompts blocked: Model unavailable",
     });
     expect(open.title).toBe("Queued prompt was not sent: Model unavailable");
-    expect(open.textContent).toBe("Next task");
+    expect(screen.getByTestId("compose-queue-strip").textContent).toContain(
+      "Blocked: Model unavailable",
+    );
   });
 
   test.each([
-    ["onSteer", "Steer the next queued prompt into the running turn"],
-    ["onEdit", "Edit the next queued prompt"],
-    ["onRemove", "Remove the next queued prompt"],
+    ["onSteer", "Steer queued prompt 2 of 2: Second task"],
+    ["onEdit", "Edit queued prompt 2 of 2"],
+    ["onRemove", "Remove queued prompt 2 of 2"],
   ] as const)(
-    "%s preserves focus and disables all actions until completion",
+    "%s acts on its own prompt, preserves focus and blocks every action until completion",
     async (action, name) => {
       let complete!: () => void;
       const pending = new Promise<void>((resolve) => {
         complete = resolve;
       });
-      const onSteer = mock(() => pending);
-      const onEdit = mock(() => pending);
-      const onRemove = mock(() => pending);
-      const callbacks = { onSteer, onEdit, onRemove };
+      const calls: string[] = [];
+      const item = (id: string, text: string) => ({
+        id,
+        text,
+        onSteer: mock(() => (calls.push(`onSteer:${id}`), pending)),
+        onEdit: mock(() => (calls.push(`onEdit:${id}`), pending)),
+        onRemove: mock(() => (calls.push(`onRemove:${id}`), pending)),
+      });
       const inputRef = renderComposeBar(
         () => {},
         [],
         () => {},
         {
           length: 2,
-          next: { id: "q", text: "Next task" },
+          items: [item("first", "Next task"), item("second", "Second task")],
           onOpen: () => {},
-          ...callbacks,
         },
       );
       act(() => inputRef.current!.focus());
@@ -136,19 +143,17 @@ describe("NativeComposeBar", () => {
         .getAllByRole("button")
         .slice(1);
       for (const button of buttons) {
-        expect((button as HTMLButtonElement).disabled).toBe(true);
+        expect(button.getAttribute("aria-disabled")).toBe("true");
         expect(button.getAttribute("aria-busy")).toBe("true");
         fireEvent.click(button);
       }
-      for (const [key, callback] of Object.entries(callbacks)) {
-        expect(callback).toHaveBeenCalledTimes(key === action ? 1 : 0);
-      }
+      expect(calls).toEqual([`${action}:second`]);
       await act(async () => {
         complete();
         await pending;
       });
       for (const button of buttons) {
-        expect((button as HTMLButtonElement).disabled).toBe(false);
+        expect(button.getAttribute("aria-disabled")).toBeNull();
         expect(button.getAttribute("aria-busy")).toBe("false");
       }
     },

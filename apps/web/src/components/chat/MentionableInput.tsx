@@ -46,8 +46,16 @@ export interface MentionableInputRef {
    * typed, landing mid-word in the completed command.
    */
   focusAtEnd: (expectedValue: string) => void;
+  /** Focus and put the caret at a text offset, such as one saved before focus left. */
+  focusAtOffset: (offset: number) => void;
   blur: () => void;
   getCursorPosition: () => number;
+  /**
+   * Whether ArrowUp would leave the input rather than move the caret: the
+   * caret is in the first paragraph and, where layout is available, on its
+   * first visual line.
+   */
+  isCaretOnFirstLine: () => boolean;
   insertMention: (mention: FileMention) => void;
   insertMentionAtCursor: (mention: FileMention) => void;
 }
@@ -101,6 +109,37 @@ function getCursorOffset(element: HTMLElement): number {
   const div = document.createElement("div");
   div.appendChild(fragment);
   return extractText(div).length;
+}
+
+function caretTop(range: Range): number | null {
+  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+  return rect && rect.height > 0 ? rect.top : null;
+}
+
+function isCaretOnFirstLine(element: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.startContainer)) return false;
+  if (extractText(element).slice(0, getCursorOffset(element)).includes("\n")) return false;
+  // A long first paragraph soft-wraps; compare against where the text starts.
+  // An element-boundary range has no text box even in a layout-capable
+  // browser. Measure the first rendered character instead.
+  const caret = range.cloneRange();
+  caret.collapse(true);
+  const start = document.createRange();
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let firstText = walker.nextNode();
+  while (firstText && !firstText.textContent?.length) firstText = walker.nextNode();
+  if (!firstText) return true;
+  start.setStart(firstText, 0);
+  start.setEnd(firstText, 1);
+  const caretY = caretTop(caret);
+  const startY = caretTop(start);
+  // Empty inputs and DOM-only test environments may have no layout.
+  if (caretY === null || startY === null) return true;
+  const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight) || 16;
+  return caretY < startY + lineHeight / 2;
 }
 
 function setCursorOffset(element: HTMLElement, offset: number): void {
@@ -285,8 +324,17 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         lastCursorPositionRef.current = cursorPosition;
         setCursorOffset(input, cursorPosition);
       },
+      focusAtOffset: (offset) => {
+        const input = inputRef.current;
+        if (!input) return;
+        focusEditableElement(input);
+        const cursorPosition = Math.max(0, Math.min(offset, extractText(input).length));
+        lastCursorPositionRef.current = cursorPosition;
+        setCursorOffset(input, cursorPosition);
+      },
       blur: () => inputRef.current?.blur(),
       getCursorPosition: () => (inputRef.current ? getCursorOffset(inputRef.current) : 0),
+      isCaretOnFirstLine: () => (inputRef.current ? isCaretOnFirstLine(inputRef.current) : false),
       insertMention: (mention: FileMention) => {
         if (!inputRef.current) return;
 

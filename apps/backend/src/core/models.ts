@@ -844,6 +844,12 @@ export interface PersistedPromptQueue {
     reservedAt: string;
     /** Manual steering reservations must never drain as ordinary prompts. */
     steer?: true;
+    /**
+     * A steer reservation taken from behind the head: the id of the item that
+     * was ahead of it, so a restored steer returns to its slot rather than
+     * jumping the queue. Absent (or no longer queued) restores to the head.
+     */
+    restoreAfterId?: string;
     /** Persisted immediately before crossing the irreversible tmux boundary. */
     submittingAt?: string;
     /** Persisted after tmux accepted the prompt, before queue acknowledgement. */

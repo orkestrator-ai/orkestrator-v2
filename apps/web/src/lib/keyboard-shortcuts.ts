@@ -309,6 +309,13 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         keywords: ["interrupt", "cancel", "escape"],
       },
       {
+        id: "chat-queued-prompts",
+        description: "Pick a queued prompt to steer, from the input's first line",
+        mac: ["↑"],
+        other: ["↑"],
+        keywords: ["queue", "queued", "steer", "arrow", "up", "down"],
+      },
+      {
         id: "chat-find",
         description: "Find in the conversation",
         mac: ["⌘", "F"],

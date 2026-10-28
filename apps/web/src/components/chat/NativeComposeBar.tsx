@@ -1,15 +1,5 @@
-import { useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import {
-  AlertCircle,
-  ArrowUp,
-  CornerDownRight,
-  FileText,
-  MessageSquareText,
-  Pencil,
-  Square,
-  Trash2,
-  X,
-} from "lucide-react";
+import { useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { ArrowUp, FileText, MessageSquareText, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -21,6 +11,12 @@ import {
   type MentionableInputComboboxAria,
   type MentionableInputRef,
 } from "@/components/chat/MentionableInput";
+import {
+  QueuedPromptStack,
+  type NativeComposeQueuedPrompt,
+  type NativeComposeQueueState,
+  type QueuedPromptStackHandle,
+} from "@/components/chat/QueuedPromptStack";
 import { MediaGalleryDialog } from "@/components/chat/rich/MediaGallery";
 import type { GalleryItem } from "@/lib/chat/rich-markdown/media-gallery-registry";
 import { cn } from "@/lib/utils";
@@ -38,23 +34,7 @@ export interface NativeComposeAttachment {
   previewUrl?: string;
 }
 
-export interface NativeComposeQueueState {
-  length: number;
-  error?: { message: string } | null;
-  /** Opens the full queue manager (edit, reorder, remove). */
-  onOpen: () => void;
-  /** The prompt that will be sent next, previewed in the strip above the input. */
-  next?: { id: string; text: string };
-  /**
-   * Steer `next` into the running turn, draining it from the queue. Absent
-   * when there is no live turn to steer or `next` cannot be steered.
-   */
-  onSteer?: () => void | Promise<void>;
-  /** Load `next` back into the composer. Absent when it cannot be edited here. */
-  onEdit?: () => void | Promise<void>;
-  /** Remove `next` from the queue. Absent when it needs the dialog to confirm. */
-  onRemove?: () => void | Promise<void>;
-}
+export type { NativeComposeQueuedPrompt, NativeComposeQueueState };
 
 export interface NativeComposeBarProps {
   testId?: string;
@@ -74,6 +54,11 @@ export interface NativeComposeBarProps {
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   /** Completion-popup semantics while a menu such as `/` owns the input. */
   inputComboboxAria?: MentionableInputComboboxAria;
+  /**
+   * A menu (`/` commands, `@` files) owns the arrow keys, so ArrowUp must not
+   * leave the input for the queued prompts.
+   */
+  keyboardMenuOpen?: boolean;
   placeholder: string;
   disabled?: boolean;
   isSending?: boolean;
@@ -89,95 +74,6 @@ export interface NativeComposeBarProps {
   sendTitle?: string;
   onSend: () => void | Promise<void>;
   footer?: ReactNode;
-}
-
-/**
- * A tab on top of the composer previewing the next queued prompt. The text
- * opens the full queue manager; Steer sends it into the running turn instead,
- * the pencil loads it back into the composer, and the bin drops it.
- */
-function QueuedPromptStrip({ queue }: { queue: NativeComposeQueueState }) {
-  const [pending, setPending] = useState(false);
-  const more = queue.next ? queue.length - 1 : 0;
-  const run = async (action: (() => void | Promise<void>) | undefined) => {
-    if (!action || pending) return;
-    setPending(true);
-    try {
-      await action();
-    } finally {
-      setPending(false);
-    }
-  };
-  return (
-    <div
-      data-testid="compose-queue-strip"
-      className="mx-auto flex w-[95%] items-center gap-3 rounded-t-lg border border-b-0 border-border/70 bg-input-surface px-3 py-1 text-xs"
-    >
-      <button
-        type="button"
-        onClick={queue.onOpen}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-muted-foreground transition-colors hover:text-foreground"
-        aria-label={
-          queue.error
-            ? `${queue.length} queued prompts blocked: ${queue.error.message}`
-            : `View queued prompts (${queue.length})`
-        }
-        title={
-          queue.error ? `Queued prompt was not sent: ${queue.error.message}` : "View queued prompts"
-        }
-      >
-        {queue.error ? (
-          <AlertCircle className="h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
-        ) : null}
-        <span className="truncate">{queue.next?.text ?? `${queue.length} queued`}</span>
-        {more > 0 ? <span className="shrink-0">+{more} more</span> : null}
-      </button>
-      {queue.onSteer ? (
-        <button
-          type="button"
-          // Keep focus in the prompt input, as the send button does.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => void run(queue.onSteer)}
-          disabled={pending}
-          aria-busy={pending}
-          aria-label="Steer the next queued prompt into the running turn"
-          title="Send this prompt into the running turn now"
-          className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait disabled:opacity-50"
-        >
-          <CornerDownRight className="h-3.5 w-3.5" aria-hidden="true" />
-          Steer
-        </button>
-      ) : null}
-      {queue.onEdit ? (
-        <button
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => void run(queue.onEdit)}
-          disabled={pending}
-          aria-busy={pending}
-          aria-label="Edit the next queued prompt"
-          title="Edit queued prompt"
-          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait disabled:opacity-50"
-        >
-          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
-      ) : null}
-      {queue.onRemove ? (
-        <button
-          type="button"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => void run(queue.onRemove)}
-          disabled={pending}
-          aria-busy={pending}
-          aria-label="Remove the next queued prompt"
-          title="Remove queued prompt"
-          className="shrink-0 text-muted-foreground transition-colors hover:text-destructive disabled:cursor-wait disabled:opacity-50"
-        >
-          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
-      ) : null}
-    </div>
-  );
 }
 
 /**
@@ -202,6 +98,7 @@ export function NativeComposeBar({
   onCursorPositionChange,
   onKeyDown,
   inputComboboxAria,
+  keyboardMenuOpen = false,
   placeholder,
   disabled = false,
   isSending = false,
@@ -250,6 +147,36 @@ export function NativeComposeBar({
       initialSource,
     });
   };
+  const queueStackRef = useRef<QueuedPromptStackHandle>(null);
+  // Where the caret was when ArrowUp moved focus to the queued prompts.
+  const queueReturnCaretRef = useRef<number | null>(null);
+  const returnFromQueue = (caret: "restore" | "end") => {
+    const offset = caret === "restore" ? queueReturnCaretRef.current : null;
+    queueReturnCaretRef.current = null;
+    inputRef.current?.focusAtOffset(offset ?? Number.MAX_SAFE_INTEGER);
+  };
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const input = inputRef.current;
+    if (
+      event.key === "ArrowUp" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.nativeEvent.isComposing &&
+      !keyboardMenuOpen &&
+      !inputComboboxAria?.expanded &&
+      input?.isCaretOnFirstLine()
+    ) {
+      const caret = input.getCursorPosition();
+      if (queueStackRef.current?.enter()) {
+        event.preventDefault();
+        queueReturnCaretRef.current = caret;
+        return;
+      }
+    }
+    onKeyDown(event);
+  };
   return (
     <>
       <div
@@ -258,7 +185,9 @@ export function NativeComposeBar({
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >
-        {queue && queue.length > 0 ? <QueuedPromptStrip queue={queue} /> : null}
+        {queue ? (
+          <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
+        ) : null}
         <div
           data-testid={testId}
           className="rounded-xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20"
@@ -407,7 +336,7 @@ export function NativeComposeBar({
               mentions={mentions}
               onChange={onTextAndMentionsChange}
               onCursorChange={onCursorPositionChange}
-              onKeyDown={onKeyDown}
+              onKeyDown={handleInputKeyDown}
               comboboxAria={inputComboboxAria}
               placeholder={placeholder}
               disabled={disabled || isSending}

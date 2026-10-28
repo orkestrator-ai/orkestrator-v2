@@ -1,5 +1,99 @@
 import { expect, test } from "@playwright/test";
 
+test("ArrowUp from a soft-wrapped continuation moves the caret before entering the queue", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  const text = "A paragraph that wraps across several visual lines without any newline. ".repeat(4);
+  await input.fill(text);
+  // Establish real wrapping, rather than assuming the viewport produced it.
+  const before = await input.evaluate((element) => {
+    const first = document.createRange();
+    first.setStart(element.firstChild!, 0);
+    first.setEnd(element.firstChild!, 1);
+    const caret = window.getSelection()!.getRangeAt(0);
+    return {
+      caretTop: caret.getBoundingClientRect().top,
+      firstTop: first.getBoundingClientRect().top,
+      offset: caret.startOffset,
+    };
+  });
+  expect(before.caretTop).toBeGreaterThan(before.firstTop + 20);
+  expect(before.offset).toBe(text.length);
+  await page.keyboard.press("ArrowUp");
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBeLessThan(
+    text.length,
+  );
+  await input.evaluate((element) => {
+    const range = document.createRange();
+    range.setStart(element.firstChild!, 4);
+    range.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 123:/ })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBe(4);
+});
+
+test("non-steerable head actions can be reached and activated by keyboard", async ({ page }) => {
+  await page.goto("/native-compose?non-steerable-head");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  await input.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(
+    page.getByRole("button", { name: "Edit queued prompt 1 of 123", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Remove queued prompt 1 of 123", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 122:/ })).toBeFocused();
+
+  await page.goto("/native-compose?non-steerable-head");
+  await input.focus();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(input).toBeFocused();
+  await expect(input).toContainText("Also run the focused regression");
+  const loaded = await input.innerText();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBe(
+    loaded.length,
+  );
+  await page.keyboard.type("!");
+  await expect(input).toHaveText(`${loaded}!`);
+});
+
+test("external queue changes recover focus without a local queue action", async ({ page }) => {
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  await input.fill("Draft");
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 123:/ })).toBeFocused();
+  // Simulate external updates without moving focus to the fixture controls.
+  await page
+    .getByRole("button", { name: "Externally remove head", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 122:/ })).toBeFocused();
+  await page
+    .getByRole("button", { name: "Finish turn", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(
+    page.getByRole("button", { name: "Edit queued prompt 1 of 122", exact: true }),
+  ).toBeFocused();
+  await page
+    .getByRole("button", { name: "Drain queue", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBe(5);
+});
+
 test("compose gallery restores keyboard focus after Escape and the close button", async ({
   page,
 }) => {
@@ -39,10 +133,65 @@ test("queue edit keeps the caret in the composer and the opener names its purpos
   await expect(
     strip.getByRole("button", { name: "View queued prompts (123)", exact: true }),
   ).toBeVisible();
-  await strip.getByRole("button", { name: "Edit the next queued prompt", exact: true }).click();
+  await strip.getByRole("button", { name: "Edit queued prompt 1 of 123", exact: true }).click();
   await expect(input).toBeFocused();
   await expect(input).toContainText("Also run the focused regression");
-  await expect(strip).toContainText("Queued prompt 2");
+  await expect(strip).toContainText("122 queued");
+  await expect(strip.getByTestId("compose-queue-item").first()).toContainText("Queued prompt 2");
+});
+
+test("arrow keys steer any queued prompt without leaving the keyboard", async ({ page }) => {
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  const strip = page.getByTestId("compose-queue-strip");
+  const steer = (position: number, total: number) =>
+    strip.getByRole("button", {
+      name: new RegExp(`^Steer queued prompt ${position} of ${total}:`),
+    });
+  await input.focus();
+  await page.keyboard.type("Draft line one");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("line two");
+
+  // From the second line ArrowUp moves the caret, not the focus.
+  await page.keyboard.press("ArrowUp");
+  await expect(input).toBeFocused();
+  // Mark where the caret is so its return can be checked exactly.
+  await page.keyboard.type("#");
+  await page.keyboard.press("ArrowUp");
+  await expect(steer(1, 123)).toBeFocused();
+  // The next prompt to run is the strip nearest the input, and in view.
+  const [inputBox, nextBox] = await Promise.all([input.boundingBox(), steer(1, 123).boundingBox()]);
+  expect(nextBox!.y).toBeLessThan(inputBox!.y);
+  await expect(steer(1, 123)).toBeInViewport();
+
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(steer(3, 123)).toBeFocused();
+  await expect(steer(3, 123)).toBeInViewport();
+  await page.keyboard.press("ArrowDown");
+  await expect(steer(2, 123)).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("native-steered")).toHaveText("queued-2");
+  // The prompt queued after it takes its place and the focus.
+  await expect(steer(2, 122)).toBeFocused();
+  await expect(steer(2, 122)).toHaveAccessibleName("Steer queued prompt 2 of 122: Queued prompt 3");
+
+  await page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+  // The draft is untouched and the caret came back where it was.
+  const draft = (await input.innerText()).replace(/\s+/g, " ");
+  expect(draft).toMatch(/^Draft l.*#.* line two$/);
+  await page.keyboard.type("!");
+  await expect(input).toContainText("#!");
+
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowDown");
+  await expect(input).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press(" ");
+  await expect(page.getByTestId("native-steered")).toHaveText("queued-2,queued-1");
+  await expect(steer(1, 121)).toBeFocused();
 });
 
 test("compose controls stay reachable in a narrow viewport", async ({ page }, testInfo) => {
@@ -92,18 +241,19 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await expect(picker).toHaveAccessibleName(/High ⚡/);
 
   const strip = page.getByTestId("compose-queue-strip");
-  await expect(strip).toContainText("+122 more");
-  await strip.getByRole("button", { name: /Steer the next queued prompt/ }).click();
-  await expect(strip).toContainText("Queued prompt 2");
-  await expect(strip).toContainText("+121 more");
-  await strip.getByRole("button", { name: "Remove the next queued prompt" }).click();
-  await expect(strip).toContainText("Queued prompt 3");
-  await expect(strip).toContainText("+120 more");
-  await strip.getByRole("button", { name: "Edit the next queued prompt" }).click();
+  const next = strip.getByTestId("compose-queue-item").first();
+  await expect(strip).toContainText("123 queued");
+  await strip.getByRole("button", { name: /^Steer queued prompt 1 of 123:/ }).click();
+  await expect(next).toContainText("Queued prompt 2");
+  await expect(strip).toContainText("122 queued");
+  await strip.getByRole("button", { name: "Remove queued prompt 1 of 122" }).click();
+  await expect(next).toContainText("Queued prompt 3");
+  await expect(strip).toContainText("121 queued");
+  await strip.getByRole("button", { name: "Edit queued prompt 1 of 121" }).click();
   await expect(page.getByRole("textbox", { name: "Send a message" })).toContainText(
     "Queued prompt 3",
   );
-  await expect(strip).toContainText("Queued prompt 4");
+  await expect(next).toContainText("Queued prompt 4");
   await page.getByRole("textbox", { name: "Send a message" }).fill("");
   await strip.getByTitle("View queued prompts").click();
   await expect(page.getByRole("dialog", { name: "Queued Prompts" })).toBeVisible();

@@ -19,6 +19,7 @@
 import {
   REVIEW_PACKAGE_SESSION_LABEL,
   isActiveBuildPhase,
+  isReviewPackagePreparationSession,
   isSupersededPipelineSession,
   pipelineIndependentReviewSlot,
   pipelineReviewIssueCounts,
@@ -281,6 +282,34 @@ export function pipelineSkipAction(
   const label = SKIP_LABELS[node.kind];
   if (!session || session.superseded || !label) return null;
   return { stageId: session.sdkSessionId, label };
+}
+
+/**
+ * The stage ID that prepares the review package again without rerunning the
+ * build or fix that wrote its plan, when `node` offers that: the Build or Fix
+ * that wrote the plan, and the Prepare node that holds its checks. Only the
+ * single-review path needs it; elsewhere a dedicated preparation session
+ * restarts on its own.
+ */
+export function pipelinePackageRestartStageId(
+  pipeline: BuildPipeline,
+  node: PipelineFlowNode,
+): string | null {
+  if (node.placeholder || node.superseded) return null;
+  const writesPlan = (session: PipelineSession) =>
+    (session.phase === "build" || session.phase === "fix") &&
+    session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
+    !isSupersededPipelineSession(session) &&
+    isReviewPackagePreparationSession(session, pipeline);
+  if (node.session) {
+    return writesPlan(node.session) ? `review-package:${node.session.sessionKey}` : null;
+  }
+  const run = pipeline.validationRun;
+  if (!node.hasValidation || !run || node.id !== `validation:${run.id}`) return null;
+  const writer = pipeline.sessions.findLast(
+    (session) => session.iteration === pipeline.iteration && writesPlan(session),
+  );
+  return writer ? `review-package:${writer.sessionKey}` : null;
 }
 
 /** "Build", then "Build 2" for the next pass, and so on. */

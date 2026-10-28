@@ -29,6 +29,12 @@ import type { Environment } from "../../apps/web/src/types";
  * - `new`: a pipeline still setting up its environment.
  * - `building`: Build running on Claude Opus at high effort, with live usage;
  *   `&usage=none` before its provider has reported any.
+ * - `rewound-loop`: round 1's Verify restarted after round 2 failed, so four
+ *   consecutive steps (Verify, Fix 2, Review 2, Verify 2) are one previous
+ *   attempt beside the rerun.
+ * - `code-rewind`: a finished single-review pipeline whose Build wrote the
+ *   package plan and recorded the commit it started from, for "Rewind code to
+ *   here" and "Prepare package again".
  *
  * Every backend command lands in `window.__pipelineCommands`, and every tab the
  * graph asks to open in `window.__openedTabs`.
@@ -362,6 +368,53 @@ function scenario(): BuildPipeline {
       ],
     });
   }
+  if (name === "rewound-loop") {
+    const previous = { supersededBy: "loop-rewind", supersededAt: at(1500) };
+    return base({
+      phase: "verifying",
+      currentSessionIndex: 6,
+      sessions: [
+        stage("build", "build", 30, 300),
+        stage("review", "review", 340, 200),
+        stage("verify", "verify-1", 560, 100, { ...previous, verificationResult: "fail" }),
+        stage("fix", "fix-2", 680, 200, { ...previous, iteration: 1 }),
+        stage("review", "review-2", 900, 200, { ...previous, iteration: 1 }),
+        stage("verify", "verify-2", 1120, 100, {
+          ...previous,
+          iteration: 1,
+          status: "error",
+          error: "Verification failed after 2 iterations",
+        }),
+        stage("verify", "verify-1-rerun", 1510, null),
+      ],
+      rewinds: [
+        {
+          id: "loop-rewind",
+          at: at(1500),
+          fromPhase: "failed",
+          fromIteration: 1,
+          iteration: 0,
+          step: { kind: "session", phase: "verify" },
+          sessionKey: "verify-1",
+          supersededSessions: 4,
+        },
+      ],
+    });
+  }
+  if (name === "code-rewind") {
+    return base({
+      phase: "complete",
+      currentSessionIndex: 2,
+      sessions: [
+        stage("build", "build", 30, 600, {
+          headAtStart: "a".repeat(40),
+          producedReviewPackagePlan: true,
+        }),
+        stage("review", "review", 640, 300, { headAtStart: "b".repeat(40) }),
+        stage("verify", "verify", 960, 200, { headAtStart: "c".repeat(40) }),
+      ],
+    });
+  }
   if (name === "loops") return loops();
   if (name === "new") return base({ phase: "waiting-for-setup", sessions: [] });
   return fanout();
@@ -394,6 +447,22 @@ function installBackend(pipeline: BuildPipeline) {
           } as T;
         case "restart_build_pipeline_step":
           return next({});
+        case "preview_build_pipeline_code_rewind":
+          return {
+            pipelineId: current.id,
+            sessionKey: args?.stageId,
+            iteration: 0,
+            targetCommit: "a".repeat(40),
+            head: "c".repeat(40),
+            commits: [
+              { sha: "c".repeat(40), subject: "fix: address the review" },
+              { sha: "b".repeat(40), subject: "feat: draw the flow graph" },
+            ],
+            commitCount: 2,
+            upstream: { ref: "origin/flow", droppedCommits: 2 },
+          } as T;
+        case "rewind_build_pipeline_code":
+          return next({ phase: "building" });
         case "cancel_build_pipeline":
           return next({
             phase: "failed",

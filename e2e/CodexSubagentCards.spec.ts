@@ -138,7 +138,29 @@ async function expectPinnedChildren(page: Page, phase: "running" | "finished" | 
     }
   }
 
-  return childRow.getByRole("button", { name: /^Agent (Ada|Grace|Linus) / }).allTextContents();
+  // Runtime is checked separately: a running child's label changes across reloads.
+  const texts = await childRow
+    .getByRole("button", { name: /^Agent (Ada|Grace|Linus) / })
+    .allTextContents();
+  return texts.map((text) => text.replace(/(?:\d+h )?(?:\d+m )?\d+(?:\.\d+)?m?s$/, ""));
+}
+
+/** Read only the runtime, independently of the card's identity, status and activity. */
+async function childRuntimes(page: Page): Promise<number[]> {
+  return Promise.all(
+    CHILDREN.map(async (child) => {
+      const runtime = card(page, `${child.name} (${child.role})`).getByText(
+        /^(?:\d+h )?(?:\d+m )?\d+(?:\.\d+)?m?s$/,
+      );
+      await expect(runtime).toBeVisible();
+      const text = (await runtime.textContent())!;
+      const units: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 };
+      return Array.from(text.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)).reduce(
+        (seconds, match) => seconds + Number(match[1]) * units[match[2]!]!,
+        0,
+      );
+    }),
+  );
 }
 
 /** Opens a child's card and checks its nested transcript; a running child has no answer yet. */
@@ -188,11 +210,19 @@ test("Codex sub-agent cards stay one per child through reload and a cold restart
     await expect(page.getByTestId("turn-phase")).toHaveText("running");
     await expectCards(page, "Active");
     const runningOrder = await expectPinnedChildren(page, "running");
+    const runningRuntimes = await childRuntimes(page);
     await expectNestedTranscript(page, CHILDREN[0], false);
 
     await page.reload();
     await expectCards(page, "Active");
     expect(await expectPinnedChildren(page, "running")).toEqual(runningOrder);
+    const reloadedRuntimes = await childRuntimes(page);
+    for (let index = 0; index < CHILDREN.length; index += 1) {
+      expect(reloadedRuntimes[index]!).toBeGreaterThanOrEqual(runningRuntimes[index]!);
+    }
+    await expect
+      .poll(async () => (await childRuntimes(page))[0]!)
+      .toBeGreaterThan(reloadedRuntimes[0]!);
 
     // The children finish while the page holds an old read and the backend
     // that served it is replaced, as for a tab in an inactive environment.
@@ -204,11 +234,14 @@ test("Codex sub-agent cards stay one per child through reload and a cold restart
     }).toPass({ timeout: 30_000 });
     await expectCards(page, "Finished");
     const finishedOrder = await expectPinnedChildren(page, "finished");
+    const finishedRuntimes = await childRuntimes(page);
+    for (const duration of finishedRuntimes) expect(duration).toBeGreaterThan(0);
     await expectNestedTranscript(page, CHILDREN[0]);
 
     await page.reload();
     await expectCards(page, "Finished");
     expect(await expectPinnedChildren(page, "finished")).toEqual(finishedOrder);
+    expect(await childRuntimes(page)).toEqual(finishedRuntimes);
     await expectNestedTranscript(page, CHILDREN[1]);
 
     // Cold: a new bridge, app-server and backend recover identity from disk.
@@ -217,6 +250,7 @@ test("Codex sub-agent cards stay one per child through reload and a cold restart
     await expect(page.getByTestId("turn-phase")).toHaveText("idle");
     await expectCards(page, "Finished");
     expect(await expectPinnedChildren(page, "cold")).toEqual(finishedOrder);
+    expect(await childRuntimes(page)).toEqual(finishedRuntimes);
     for (const child of CHILDREN) await expectNestedTranscript(page, child);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

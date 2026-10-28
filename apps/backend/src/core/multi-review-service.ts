@@ -3973,7 +3973,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             effort: selection.reasoningEffort,
             ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
-            ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
+            // Grok and Pi gate a read-only turn's tools in the bridge and let
+            // the attempt's own result tools through only for this key.
+            ...(agentMcp
+              ? {
+                  workflowResultTool: workflowResultToolName(resultKind),
+                  workflowResultKey: request.requestId,
+                }
+              : {}),
           },
         );
       } catch (error) {

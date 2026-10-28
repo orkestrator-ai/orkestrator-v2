@@ -5376,6 +5376,17 @@ describe("build pipeline commands", () => {
       id,
       stageId,
     }));
+    const previewCodeRewind = mock(async (id: string, stageId: string) => ({
+      operation: "preview-code-rewind",
+      id,
+      stageId,
+    }));
+    const rewindCode = mock(async (id: string, stageId: string, expectedHead: string) => ({
+      operation: "rewind-code",
+      id,
+      stageId,
+      expectedHead,
+    }));
     const retryReviewer = mock(async (id: string, reviewerId: string) => ({
       operation: "retry-reviewer",
       id,
@@ -5401,6 +5412,8 @@ describe("build pipeline commands", () => {
       retryReview,
       retryStage,
       restartStep,
+      previewCodeRewind,
+      rewindCode,
       retryReviewer,
       restartCurrentStep,
       retryInteractionFailure,
@@ -5465,6 +5478,36 @@ describe("build pipeline commands", () => {
           id: "pipeline-1",
           stageId: "review-session",
         });
+        await expect(
+          invoke("preview_build_pipeline_code_rewind", {
+            pipelineId: "pipeline-1",
+            stageId: "build-session",
+          }),
+        ).resolves.toEqual({
+          operation: "preview-code-rewind",
+          id: "pipeline-1",
+          stageId: "build-session",
+        });
+        await expect(
+          invoke("rewind_build_pipeline_code", {
+            pipelineId: "pipeline-1",
+            stageId: "build-session",
+            expectedHead: "c".repeat(40),
+          }),
+        ).resolves.toEqual({
+          operation: "rewind-code",
+          id: "pipeline-1",
+          stageId: "build-session",
+          expectedHead: "c".repeat(40),
+        });
+        await expect(
+          invoke("rewind_build_pipeline_code", {
+            pipelineId: "pipeline-1",
+            stageId: "build-session",
+            expectedHead: " ",
+          }),
+        ).rejects.toThrow("expectedHead");
+        expect(rewindCode).toHaveBeenCalledTimes(1);
         await expect(
           invoke("retry_build_pipeline_reviewer", {
             pipelineId: "pipeline-1",
@@ -5641,6 +5684,14 @@ describe("build pipeline commands", () => {
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
         ["skip_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "verify-session" }],
+        [
+          "preview_build_pipeline_code_rewind",
+          { pipelineId: "pipeline-1", stageId: "build-session" },
+        ],
+        [
+          "rewind_build_pipeline_code",
+          { pipelineId: "pipeline-1", stageId: "build-session", expectedHead: "c".repeat(40) },
+        ],
         ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
         ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
         [

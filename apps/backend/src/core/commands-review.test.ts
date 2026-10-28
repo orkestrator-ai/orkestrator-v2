@@ -7,6 +7,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { REVIEW_PACKAGE_FORMAT, type ReviewPackage } from "@orkestrator/protocol/review-workflow";
 import {
+  createPipelineEnvironmentGit,
+  createEnvironmentCommandRunner,
   generateLoopedReviewPackage,
   parseGitPorcelainPaths,
   parseReviewArtifactStatOutput,
@@ -640,5 +642,68 @@ describe("container review package publication", () => {
       ),
     ).rejects.toThrow("not Git-excluded");
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("pipeline environment Git wiring", () => {
+  test.each(["local", "containerized"] as const)(
+    "resolves %s environments, reserves the runner and uses its worktree",
+    async (environmentType) => {
+      const environment = {
+        id: "git-env",
+        environmentType,
+        worktreePath: "/tmp/pipeline-worktree",
+        containerId: "container-git",
+      } as Awaited<ReturnType<StorageService["getEnvironment"]>>;
+      const events: string[] = [];
+      const fence = {
+        beginMutation: (id: string) => {
+          events.push(`begin:${id}`);
+          return () => {
+            events.push("release");
+          };
+        },
+      };
+      const execute = mock(async () => {
+        events.push("git");
+        return { stdout: "head-sha\n", stderr: "", exitCode: 0 };
+      });
+      const lookup = mock(async () => environment);
+      const git = createPipelineEnvironmentGit({ getEnvironment: lookup }, fence, (env, guard) =>
+        createEnvironmentCommandRunner(env, guard, execute),
+      );
+      expect(await git("git-env", ["rev-parse", "HEAD"])).toBe("head-sha\n");
+      expect(lookup).toHaveBeenCalledWith("git-env");
+      expect(events).toEqual(["begin:git-env", "git", "release"]);
+      if (environmentType === "local") {
+        expect(execute).toHaveBeenCalledWith("git", ["rev-parse", "HEAD"], {
+          cwd: "/tmp/pipeline-worktree",
+          timeoutMs: 60_000,
+          env: undefined,
+        });
+      } else {
+        expect(execute).toHaveBeenCalledWith(
+          "docker",
+          ["exec", "-w", "/workspace", "container-git", "git", "rev-parse", "HEAD"],
+          { timeoutMs: 60_000 },
+        );
+      }
+      execute.mockImplementationOnce(async () => {
+        throw new Error("runner failed");
+      });
+      await expect(git("git-env", ["status", "--porcelain"])).rejects.toThrow("runner failed");
+      expect(events.at(-1)).toBe("release");
+    },
+  );
+
+  test("refuses a missing environment before creating a runner", async () => {
+    const runner = mock(createEnvironmentCommandRunner);
+    const git = createPipelineEnvironmentGit(
+      { getEnvironment: async () => null },
+      { beginMutation: () => () => {} },
+      runner,
+    );
+    await expect(git("missing", ["status"])).rejects.toThrow("Environment not found");
+    expect(runner).not.toHaveBeenCalled();
   });
 });

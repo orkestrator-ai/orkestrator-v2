@@ -1,13 +1,18 @@
 import { createRef } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { NativeComposeBar, type NativeComposeAttachment } from "./NativeComposeBar";
+import {
+  NativeComposeBar,
+  type NativeComposeAttachment,
+  type NativeComposeQueueState,
+} from "./NativeComposeBar";
 import type { MentionableInputRef } from "./MentionableInput";
 
 function renderComposeBar(
   onSend: () => void,
   attachments: NativeComposeAttachment[] = [],
   onRemoveAttachment: (id: string) => void = () => {},
+  queue?: NativeComposeQueueState,
 ) {
   const inputRef = createRef<MentionableInputRef>();
   const inputContainerRef = createRef<HTMLDivElement>();
@@ -25,6 +30,7 @@ function renderComposeBar(
       placeholder="Ask anything"
       primaryControls={null}
       onSend={onSend}
+      queue={queue}
     />,
   );
   return inputRef;
@@ -47,6 +53,106 @@ describe("NativeComposeBar", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(input);
   });
+
+  test.each([
+    { length: 0, next: undefined, preview: null, more: null },
+    { length: 3, next: undefined, preview: "3 queued", more: null },
+    { length: 1, next: { id: "q", text: "Next task" }, preview: "Next task", more: null },
+    { length: 4, next: { id: "q", text: "Next task" }, preview: "Next task", more: "+3 more" },
+  ])("queue preview for $length items with next=$next", ({ length, next, preview, more }) => {
+    const onOpen = mock(() => {});
+    renderComposeBar(
+      () => {},
+      [],
+      () => {},
+      { length, next, onOpen },
+    );
+    if (!length) {
+      expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
+      return;
+    }
+    const strip = within(screen.getByTestId("compose-queue-strip"));
+    const open = strip.getByRole("button", { name: `View queued prompts (${length})` });
+    expect(open.textContent).toContain(preview!);
+    expect(open.title).toBe("View queued prompts");
+    expect(strip.queryByText(/\+\d+ more/)?.textContent ?? null).toBe(more);
+    expect(strip.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(open);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  test("blocked queue exposes the error in its accessible name and tooltip", () => {
+    renderComposeBar(
+      () => {},
+      [],
+      () => {},
+      {
+        length: 1,
+        next: { id: "q", text: "Next task" },
+        onOpen: () => {},
+        error: { message: "Model unavailable" },
+      },
+    );
+    const open = screen.getByRole("button", {
+      name: "1 queued prompts blocked: Model unavailable",
+    });
+    expect(open.title).toBe("Queued prompt was not sent: Model unavailable");
+    expect(open.textContent).toBe("Next task");
+  });
+
+  test.each([
+    ["onSteer", "Steer the next queued prompt into the running turn"],
+    ["onEdit", "Edit the next queued prompt"],
+    ["onRemove", "Remove the next queued prompt"],
+  ] as const)(
+    "%s preserves focus and disables all actions until completion",
+    async (action, name) => {
+      let complete!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+      const onSteer = mock(() => pending);
+      const onEdit = mock(() => pending);
+      const onRemove = mock(() => pending);
+      const callbacks = { onSteer, onEdit, onRemove };
+      const inputRef = renderComposeBar(
+        () => {},
+        [],
+        () => {},
+        {
+          length: 2,
+          next: { id: "q", text: "Next task" },
+          onOpen: () => {},
+          ...callbacks,
+        },
+      );
+      act(() => inputRef.current!.focus());
+      const input = screen.getByRole("textbox");
+      const button = screen.getByRole("button", { name });
+      expect(fireEvent.mouseDown(button)).toBe(false);
+      fireEvent.click(button);
+      expect(document.activeElement).toBe(input);
+      const buttons = within(screen.getByTestId("compose-queue-strip"))
+        .getAllByRole("button")
+        .slice(1);
+      for (const button of buttons) {
+        expect((button as HTMLButtonElement).disabled).toBe(true);
+        expect(button.getAttribute("aria-busy")).toBe("true");
+        fireEvent.click(button);
+      }
+      for (const [key, callback] of Object.entries(callbacks)) {
+        expect(callback).toHaveBeenCalledTimes(key === action ? 1 : 0);
+      }
+      await act(async () => {
+        complete();
+        await pending;
+      });
+      for (const button of buttons) {
+        expect((button as HTMLButtonElement).disabled).toBe(false);
+        expect(button.getAttribute("aria-busy")).toBe("false");
+      }
+    },
+  );
 
   test("stop stays available while a prompt is being submitted", () => {
     // A prompt the provider has not accepted yet (Pi's startup) is in flight

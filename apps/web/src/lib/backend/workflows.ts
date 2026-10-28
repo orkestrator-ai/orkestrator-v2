@@ -13,6 +13,7 @@ import type {
 } from "@orkestrator/protocol/agent-interactions";
 import type {
   BuildPipeline as BackendBuildPipeline,
+  BuildPipelineCodeRewindPreview,
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
@@ -1020,6 +1021,33 @@ export async function restartBuildPipelineStep(
   stageId: string,
 ): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("restart_build_pipeline_step", { pipelineId, stageId });
+}
+
+/** What "Rewind code to here" would drop, read before the user confirms it. */
+export async function previewBuildPipelineCodeRewind(
+  pipelineId: string,
+  stageId: string,
+): Promise<BuildPipelineCodeRewindPreview> {
+  return invoke<BuildPipelineCodeRewindPreview>("preview_build_pipeline_code_rewind", {
+    pipelineId,
+    stageId,
+  });
+}
+
+/**
+ * Resets the worktree to the commit a step started from and restarts that
+ * step. `expectedHead` is the HEAD the confirmed preview showed.
+ */
+export async function rewindBuildPipelineCode(
+  pipelineId: string,
+  stageId: string,
+  expectedHead: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("rewind_build_pipeline_code", {
+    pipelineId,
+    stageId,
+    expectedHead,
+  });
 }
 
 /** Skips the pipeline's current stage and moves on to the next one. */

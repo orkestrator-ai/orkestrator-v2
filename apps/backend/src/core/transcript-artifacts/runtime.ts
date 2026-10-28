@@ -3,7 +3,10 @@
  *
  * Configuration (environment, read once at startup; never from artifacts):
  * - ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: `auto` (default) uses `container`
- *   when Docker answers and the worker image is present, else `process`.
+ *   when Docker answers and the worker image is present, else `process`. In
+ *   a packaged install a locally prepared image counts as present only when
+ *   it was built from the context this backend ships, so one prepared before
+ *   an upgrade is outdated and preparation is offered again.
  *   `container` runs the pinned worker image with `--network none` and
  *   resource limits (the OS-level boundary). `process` runs each job in a
  *   fresh, owned, killable local process tree with Chromium's sandbox, a
@@ -56,6 +59,7 @@ import {
   sweepStalePreviewScratch,
 } from "./preview-supervisor.js";
 import {
+  buildContextDigest,
   canPrepareWorker,
   localWorkerPinFile,
   prepareWorkerImage,
@@ -221,6 +225,31 @@ export async function resolveWorkerImage(
     pinned: false,
     warning: `preview worker image ${configured} has no digest pin; using the tag (set ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE to name@sha256:<digest> or rebuild with build.sh to pin it)`,
   };
+}
+
+/**
+ * The build-context digest the local worker image `reference` was built
+ * from: its context label, which worker preparation and build.sh set. The
+ * label is part of the image itself, so it cannot drift from the id a pin
+ * names. `""` for an image built before images were labelled; null when
+ * Docker cannot inspect the image (absent, or Docker not answering).
+ */
+export async function localWorkerContext(
+  docker: string,
+  reference: string,
+): Promise<string | null> {
+  const label = await runDocker(
+    docker,
+    [
+      "image",
+      "inspect",
+      "--format",
+      `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`,
+      reference,
+    ],
+    AUTO_DETECT_TIMEOUT_MS,
+  ).catch(() => ({ code: null, stdout: "" }));
+  return label.code === 0 ? label.stdout.trim() : null;
 }
 
 /** Loopback or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) interface literal. */
@@ -396,6 +425,9 @@ export async function createTranscriptArtifactRuntime(
     options.imagePinFile === undefined
       ? resolveImagePinFile(undefined, options.dataDir)
       : options.imagePinFile;
+  let shippedDigest: Promise<string | null> | null = null;
+  /** Digest of the shipped context, hashed at most once (about 8 MiB). */
+  const shippedContextDigest = (context: string) => (shippedDigest ??= buildContextDigest(context));
   const inspectImage = (reference: string) =>
     runDocker(
       docker,
@@ -417,7 +449,13 @@ export async function createTranscriptArtifactRuntime(
   ) {
     const present = await inspectImage(published.reference);
     dockerAnswered = present.code !== null;
-    if (present.code === 0 && (await publishedMatchesBuildContext(published, buildContext))) {
+    const matches = () =>
+      buildContext.context
+        ? shippedContextDigest(buildContext.context).then(
+            (digest) => digest === published.contextDigest,
+          )
+        : publishedMatchesBuildContext(published, buildContext);
+    if (present.code === 0 && (await matches())) {
       const label = await runDocker(
         docker,
         [
@@ -434,14 +472,44 @@ export async function createTranscriptArtifactRuntime(
     }
   }
 
+  // The default tag names a worker prepared on this host. A packaged install
+  // ships the context it should have been built from, so one prepared before
+  // an upgrade (another context, or no context label) is outdated. A source
+  // checkout ships no context; its build.sh pin is trusted as before.
+  const shippedContext = buildContext.context;
+  const checksLocalWorker = !explicitImage && configuredImage === DEFAULT_PREVIEW_WORKER_IMAGE;
+  let outdatedWorker = false;
+  const resolveConfiguredImage = async () => {
+    const image = await resolveWorkerImage(configuredImage, docker, pinFile());
+    if (shippedContext && checksLocalWorker) {
+      const digest = await shippedContextDigest(shippedContext);
+      // A shipped context that cannot be hashed, or an image Docker cannot
+      // inspect, proves nothing stale.
+      const built = digest === null ? null : await localWorkerContext(docker, image.reference);
+      outdatedWorker = built !== null && built !== digest;
+    }
+    return image;
+  };
+
   let isolation: "process" | "container" | "disabled";
+  let resolvedImage: Awaited<ReturnType<typeof resolveWorkerImage>> | null = null;
   if (isolationSelection === "configured") {
     isolation = isolationSetting as "process" | "container" | "disabled";
   } else {
-    // auto: the container worker when Docker answers and the image is present.
+    // auto: the container worker when Docker answers and the image is present
+    // (and, for a locally prepared one, current).
     const inspect = await inspectImage(configuredImage);
     dockerAnswered = inspect.code !== null;
     isolation = inspect.code === 0 ? "container" : "process";
+    if (isolation === "container") {
+      resolvedImage = await resolveConfiguredImage();
+      if (outdatedWorker) {
+        isolation = "process";
+        options.logger?.warn(
+          "[transcript-artifacts] the prepared preview worker image was built from another build context than this version ships (prepared before an upgrade); previews use process isolation until it is prepared again",
+        );
+      }
+    }
     options.logger?.info?.(`[transcript-artifacts] preview isolation auto-selected: ${isolation}`);
   }
 
@@ -502,8 +570,13 @@ export async function createTranscriptArtifactRuntime(
     const reaped = await reapOrphanPreviewContainers(docker, owner).catch(() => 0);
     if (reaped > 0)
       options.logger?.warn(`[transcript-artifacts] removed ${reaped} orphaned preview worker(s)`);
-    const image = await resolveWorkerImage(configuredImage, docker, pinFile());
+    const image = resolvedImage ?? (await resolveConfiguredImage());
     if (image.warning) options.logger?.warn(`[transcript-artifacts] ${image.warning}`);
+    // Only an explicit `container` setting gets here with an outdated image.
+    if (outdatedWorker)
+      options.logger?.warn(
+        "[transcript-artifacts] the prepared preview worker image was built from another build context than this version ships; ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION=container keeps running it until it is prepared again",
+      );
     workerImage = { reference: image.reference, pinned: image.pinned };
     runner = containerRunner(workerImage);
   } else {
@@ -656,6 +729,7 @@ export async function createTranscriptArtifactRuntime(
       return respond();
     }
     dockerAnswered = true;
+    outdatedWorker = false;
     preparationState = {
       available: true,
       state: "ready",
@@ -685,6 +759,7 @@ export async function createTranscriptArtifactRuntime(
     return {
       ...preparationState,
       available: availability.available,
+      ...(outdatedWorker ? { outdated: true } : {}),
       ...(preparationState.state === "idle" && availability.reason
         ? { reason: availability.reason }
         : {}),

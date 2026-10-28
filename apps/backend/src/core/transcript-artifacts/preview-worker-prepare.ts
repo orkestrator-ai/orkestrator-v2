@@ -15,9 +15,11 @@
  *   checkout the context is staged with stage-context.ts first.
  *
  * Every Docker invocation has a fixed argument vector and a time bound; its
- * output is never logged (only the resulting image id is read). The built id
- * is recorded in a host-local pin under the data directory so later startups
- * run that exact id. Nothing here is reachable from artifact content.
+ * output is never logged (only the resulting image id is read). A built image
+ * is labelled with its context digest, and its id is recorded in a host-local
+ * pin under the data directory with that digest, so later startups run that
+ * exact id and can tell when an upgrade shipped another context. Nothing here
+ * is reachable from artifact content.
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -120,11 +122,26 @@ export function localWorkerPinFile(dataDir: string): string {
   return path.join(dataDir, "artifact-preview-worker", "image-pin.json");
 }
 
-async function writePin(file: string, tag: string, id: string): Promise<void> {
+async function writePin(
+  file: string,
+  tag: string,
+  id: string,
+  contextDigest: string | null,
+): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${process.pid}.tmp`;
-  await writeFile(temp, `${JSON.stringify({ tag, id }, null, 2)}\n`, { mode: 0o600 });
+  const pin = contextDigest ? { tag, id, contextDigest } : { tag, id };
+  await writeFile(temp, `${JSON.stringify(pin, null, 2)}\n`, { mode: 0o600 });
   await rename(temp, file);
+}
+
+/** The context's digest, or null when it cannot be read as a build context. */
+export async function buildContextDigest(context: string): Promise<string | null> {
+  try {
+    return await workerContextDigest(context);
+  } catch {
+    return null;
+  }
 }
 
 /** Runs the staging script with fixed arguments and a scrubbed environment. */
@@ -194,11 +211,7 @@ export async function publishedMatchesContext(
   published: PublishedWorkerImage,
   context: string,
 ): Promise<boolean> {
-  try {
-    return (await workerContextDigest(context)) === published.contextDigest;
-  } catch {
-    return false;
-  }
+  return (await buildContextDigest(context)) === published.contextDigest;
 }
 
 /** Validate source checkouts too, without keeping a stale staged context across restarts. */
@@ -259,10 +272,12 @@ export async function prepareWorkerImage(
       context = staged;
     }
 
+    // Hashed once: it gates the published image and labels a local build.
+    const contextDigest = await buildContextDigest(context);
     let publishedSkipped: PublishedSkipReason | undefined;
     if (options.published) {
       const published = options.published;
-      if (!(await publishedMatchesContext(published, context))) {
+      if (contextDigest !== published.contextDigest) {
         publishedSkipped = "context_mismatch";
       } else {
         const pulled = await docker(
@@ -296,6 +311,9 @@ export async function prepareWorkerImage(
         "--pull=false",
         "--label",
         "orkestrator.artifact-preview-worker=1",
+        // An unreadable context is still built; unlabelled, it is never
+        // mistaken for any shipped context's worker.
+        ...(contextDigest ? ["--label", `${WORKER_CONTEXT_LABEL}=${contextDigest}`] : []),
         "--tag",
         options.tag,
         context,
@@ -327,7 +345,7 @@ export async function prepareWorkerImage(
         ...skipped,
         reason: "The built preview worker image could not be inspected",
       };
-    await writePin(localWorkerPinFile(options.dataDir), options.tag, id);
+    await writePin(localWorkerPinFile(options.dataDir), options.tag, id, contextDigest);
     return { ok: true, method: "build", reference: id, pinned: true, ...skipped };
   } finally {
     if (staged) rmSync(staged, { recursive: true, force: true });

@@ -4,12 +4,21 @@
  * CLI that records its fixed argument vectors.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { PreviewRunner } from "./contracts.js";
-import { workerContextDigest } from "./preview-worker-context-digest.js";
+import { WORKER_CONTEXT_LABEL, workerContextDigest } from "./preview-worker-context-digest.js";
 import {
   localWorkerPinFile,
   prepareWorkerImage,
@@ -38,13 +47,22 @@ function scratch(prefix: string): string {
 
 /**
  * A fake `docker` CLI: image present only after a build or pull; every call
- * is logged. A label inspect prints `label` (the pulled image's context label).
+ * is logged. A label inspect prints `label` for the pulled image and, for a
+ * local image, the context label its build was given (`localLabel` for an
+ * image that is `present` from the start, such as one prepared before an
+ * upgrade).
  */
-function fakeDocker(label = "", present = false): { cli: string; log: () => string[][] } {
+function fakeDocker(
+  label = "",
+  present = false,
+  localLabel = "",
+): { cli: string; log: () => string[][] } {
   const dir = scratch("ork-fake-docker-");
   const log = path.join(dir, "calls.log");
   const built = path.join(dir, "built");
   const pulled = path.join(dir, "pulled");
+  const builtLabel = path.join(dir, "built-label");
+  writeFileSync(builtLabel, localLabel);
   if (present) {
     writeFileSync(built, "");
     writeFileSync(pulled, "");
@@ -56,7 +74,14 @@ function fakeDocker(label = "", present = false): { cli: string; log: () => stri
 printf '%s\\n' "$*" >> '${log}'
 case "$1" in
   version) echo 29.8.0; exit 0 ;;
-  build) touch '${built}'; echo '${BUILT_ID}'; exit 0 ;;
+  build)
+    : > '${builtLabel}'
+    for arg do
+      case "$arg" in
+        ${WORKER_CONTEXT_LABEL}=*) printf '%s' "\${arg#*=}" > '${builtLabel}' ;;
+      esac
+    done
+    touch '${built}'; echo '${BUILT_ID}'; exit 0 ;;
   pull) touch '${pulled}'; exit 0 ;;
   image)
     for reference do :; done
@@ -64,7 +89,14 @@ case "$1" in
       *@sha256:*) test -f '${pulled}' || exit 1 ;;
       *) test -f '${built}' || exit 1 ;;
     esac
-    case "$*" in *Labels*) echo '${label}' ;; *) echo '${BUILT_ID}' ;; esac
+    case "$*" in
+      *Labels*)
+        case "$reference" in
+          *@sha256:*) echo '${label}' ;;
+          *) cat '${builtLabel}'; echo ;;
+        esac ;;
+      *) echo '${BUILT_ID}' ;;
+    esac
     exit 0 ;;
   ps) exit 0 ;;
   *) exit 1 ;;
@@ -258,6 +290,7 @@ describe("worker preparation", () => {
       interactiveIsolation: "container",
       workerImage: { reference: BUILT_ID, pinned: true },
     });
+    const contextDigest = await workerContextDigest(context);
     const builds = docker.log().filter((args) => args[0] === "build");
     expect(builds).toEqual([
       [
@@ -266,6 +299,8 @@ describe("worker preparation", () => {
         "--pull=false",
         "--label",
         "orkestrator.artifact-preview-worker=1",
+        "--label",
+        `orkestrator.artifact-preview-worker.context=${contextDigest}`,
         "--tag",
         DEFAULT_PREVIEW_WORKER_IMAGE,
         context,
@@ -274,6 +309,7 @@ describe("worker preparation", () => {
     expect(JSON.parse(readFileSync(localWorkerPinFile(dataDir), "utf8"))).toEqual({
       tag: DEFAULT_PREVIEW_WORKER_IMAGE,
       id: BUILT_ID,
+      contextDigest,
     });
     expect(runtime.workerPreparation()).toMatchObject({ state: "ready", image: BUILT_ID });
   });
@@ -410,7 +446,9 @@ esac
       );
       const runtime = await createTranscriptArtifactRuntime({
         dataDir: scratch("ork-runtime-startup-"),
-        env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker(contextDigest, true).cli },
+        env: {
+          ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker(contextDigest, true, contextDigest).cli,
+        },
         workerBuildContext: { context, stageScript: null },
         publishedPinFile: pinFile,
         imagePinFile: null,
@@ -527,6 +565,213 @@ esac
     cleanups.push(() => noContext.close());
     expect(noContext.workerPreparation()).toMatchObject({ available: false });
     expect(noContext.workerPreparation().reason).toContain("build context");
+  });
+});
+
+describe("a locally prepared worker after an upgrade", () => {
+  const OTHER_CONTEXT = `sha256:${"9".repeat(64)}`;
+
+  /** The data directory pin a preparation by an earlier version left behind. */
+  function preparedEarlier(contextDigest?: string): string {
+    const dataDir = scratch("ork-prepared-earlier-");
+    const pin = localWorkerPinFile(dataDir);
+    mkdirSync(path.dirname(pin), { recursive: true });
+    writeFileSync(
+      pin,
+      JSON.stringify({
+        tag: DEFAULT_PREVIEW_WORKER_IMAGE,
+        id: BUILT_ID,
+        ...(contextDigest ? { contextDigest } : {}),
+      }),
+    );
+    return dataDir;
+  }
+
+  function capture(): { logger: { info(): void; warn(message: string): void }; warns: string[] } {
+    const warns: string[] = [];
+    return { logger: { info: () => undefined, warn: (message) => warns.push(message) }, warns };
+  }
+
+  for (const [name, previous] of [
+    ["another context", OTHER_CONTEXT],
+    ["no context label", undefined],
+  ] as const) {
+    test(`auto falls back to process isolation and offers preparation again (${name})`, async () => {
+      const context = buildContext();
+      const contextDigest = await workerContextDigest(context);
+      const docker = fakeDocker("", true, previous ?? "");
+      const { logger, warns } = capture();
+      const options = {
+        dataDir: preparedEarlier(previous),
+        env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: docker.cli },
+        workerBuildContext: { context, stageScript: null },
+        publishedPinFile: null,
+        logger,
+      };
+      const upgraded = await createTranscriptArtifactRuntime(options);
+      cleanups.push(() => upgraded.close());
+      expect(upgraded.config).toMatchObject({
+        isolation: "process",
+        isolationSelection: "auto",
+        interactiveIsolation: "unavailable",
+        workerImage: null,
+      });
+      expect(upgraded.workerPreparation()).toEqual({
+        available: true,
+        state: "idle",
+        method: null,
+        outdated: true,
+      });
+      expect(warns.join("\n")).toContain("prepared before an upgrade");
+      // The pinned id's own label was read, not the tag's.
+      expect(docker.log().map((args) => args.join(" "))).toContain(
+        `image inspect --format {{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}} ${BUILT_ID}`,
+      );
+
+      expect(await upgraded.prepareWorker()).toMatchObject({
+        state: "ready",
+        method: "build",
+        image: BUILT_ID,
+        isolation: "container",
+        interactiveIsolation: "container",
+      });
+      expect(upgraded.workerPreparation().outdated).toBeUndefined();
+      expect(JSON.parse(readFileSync(localWorkerPinFile(options.dataDir), "utf8"))).toEqual({
+        tag: DEFAULT_PREVIEW_WORKER_IMAGE,
+        id: BUILT_ID,
+        contextDigest,
+      });
+      await upgraded.close();
+
+      // The next start runs the re-prepared worker straight away.
+      const restarted = await createTranscriptArtifactRuntime(options);
+      cleanups.push(() => restarted.close());
+      expect(restarted.config).toMatchObject({
+        isolation: "container",
+        workerImage: { reference: BUILT_ID, pinned: true },
+      });
+      expect(restarted.workerPreparation().outdated).toBeUndefined();
+    });
+  }
+
+  test("an explicit container setting keeps running an outdated worker and says so", async () => {
+    const { logger, warns } = capture();
+    const runtime = await createTranscriptArtifactRuntime({
+      dataDir: preparedEarlier(OTHER_CONTEXT),
+      env: {
+        ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker("", true, OTHER_CONTEXT).cli,
+        ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "container",
+      },
+      workerBuildContext: { context: buildContext(), stageScript: null },
+      publishedPinFile: null,
+      logger,
+    });
+    cleanups.push(() => runtime.close());
+    expect(runtime.config).toMatchObject({
+      isolation: "container",
+      isolationSelection: "configured",
+      workerImage: { reference: BUILT_ID, pinned: true },
+    });
+    expect(runtime.workerPreparation()).toMatchObject({ available: true, outdated: true });
+    expect(warns.join("\n")).toContain("keeps running it until it is prepared again");
+  });
+
+  test("an image Docker cannot inspect is missing, not outdated", async () => {
+    const { logger, warns } = capture();
+    const runtime = await createTranscriptArtifactRuntime({
+      dataDir: preparedEarlier(OTHER_CONTEXT),
+      env: {
+        ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker().cli,
+        ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "container",
+      },
+      workerBuildContext: { context: buildContext(), stageScript: null },
+      publishedPinFile: null,
+      logger,
+    });
+    cleanups.push(() => runtime.close());
+    expect(runtime.config.workerImage).toEqual({
+      reference: DEFAULT_PREVIEW_WORKER_IMAGE,
+      pinned: false,
+    });
+    expect(runtime.workerPreparation().outdated).toBeUndefined();
+    expect(warns.join("\n")).not.toContain("prepared again");
+  });
+
+  test("an explicit worker image is never checked against the shipped context", async () => {
+    const docker = fakeDocker("", true, OTHER_CONTEXT);
+    const runtime = await createTranscriptArtifactRuntime({
+      dataDir: scratch("ork-explicit-image-"),
+      env: {
+        ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: docker.cli,
+        ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: "example/worker:2",
+      },
+      workerBuildContext: { context: buildContext(), stageScript: null },
+      publishedPinFile: null,
+      imagePinFile: null,
+    });
+    cleanups.push(() => runtime.close());
+    expect(runtime.config).toMatchObject({
+      isolation: "container",
+      workerImage: { reference: "example/worker:2", pinned: false },
+    });
+    expect(runtime.workerPreparation().outdated).toBeUndefined();
+    expect(docker.log().some((args) => args.join(" ").includes("Labels"))).toBe(false);
+  });
+
+  test("a source checkout ships no context, so its prepared worker is used without staging", async () => {
+    const docker = fakeDocker("", true);
+    const stage = stageScript();
+    const runtime = await createTranscriptArtifactRuntime({
+      dataDir: preparedEarlier(),
+      env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: docker.cli },
+      workerBuildContext: { context: null, stageScript: stage.script },
+      publishedPinFile: null,
+    });
+    cleanups.push(() => runtime.close());
+    expect(runtime.config).toMatchObject({
+      isolation: "container",
+      workerImage: { reference: BUILT_ID, pinned: true },
+    });
+    expect(runtime.workerPreparation().outdated).toBeUndefined();
+    expect(() => stage.target()).toThrow();
+    expect(docker.log().some((args) => args.join(" ").includes("Labels"))).toBe(false);
+  });
+
+  test("a shipped context that cannot be hashed proves nothing stale and is built unlabelled", async () => {
+    const context = buildContext();
+    symlinkSync("Dockerfile", path.join(context, "linked"));
+    await expect(workerContextDigest(context)).rejects.toThrow();
+    const runtime = await createTranscriptArtifactRuntime({
+      dataDir: preparedEarlier(OTHER_CONTEXT),
+      env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker("", true, OTHER_CONTEXT).cli },
+      workerBuildContext: { context, stageScript: null },
+      publishedPinFile: null,
+    });
+    cleanups.push(() => runtime.close());
+    expect(runtime.config.workerImage).toEqual({ reference: BUILT_ID, pinned: true });
+    expect(runtime.workerPreparation().outdated).toBeUndefined();
+
+    const docker = fakeDocker();
+    const dataDir = scratch("ork-unhashable-prepare-");
+    expect(
+      await prepareWorkerImage({
+        docker: docker.cli,
+        tag: DEFAULT_PREVIEW_WORKER_IMAGE,
+        dataDir,
+        published: null,
+        buildContext: { context, stageScript: null },
+      }),
+    ).toMatchObject({ ok: true, method: "build", reference: BUILT_ID });
+    expect(
+      docker
+        .log()
+        .find((args) => args[0] === "build")
+        ?.join(" "),
+    ).not.toContain(WORKER_CONTEXT_LABEL);
+    expect(JSON.parse(readFileSync(localWorkerPinFile(dataDir), "utf8"))).toEqual({
+      tag: DEFAULT_PREVIEW_WORKER_IMAGE,
+      id: BUILT_ID,
+    });
   });
 });
 

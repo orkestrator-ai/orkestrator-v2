@@ -18,6 +18,8 @@ import {
   readAndValidateSentinel,
   readProfile,
   readStatus,
+  isRemovedProfileSkeleton,
+  removeProfileSkeleton,
   removeProfileState,
   assertExternalWorktreeOwnership,
 } from "./profile-io.js";
@@ -411,6 +413,30 @@ export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise
     };
     if (exclude.has(id)) {
       keep("requested by this run");
+      continue;
+    }
+    if (await isRemovedProfileSkeleton(profileRoot)) {
+      // What a removal keeps so the name can boot containers again (see
+      // `removeProfileState`). Only the age rule deletes it, quietly otherwise.
+      if (options.olderThanDays === undefined) continue;
+      const idleDays =
+        (now() - ((await stat(profileRoot).catch(() => null))?.mtimeMs ?? 0)) / DAY_MS;
+      if (idleDays <= options.olderThanDays) continue;
+      const reason = `emptied ${Math.floor(idleDays)} days ago`;
+      if (options.dryRun) {
+        outcomes.push({ id, action: "would-remove", reason });
+        continue;
+      }
+      try {
+        await removeProfileSkeleton(profileRoot);
+        outcomes.push({ id, action: "removed", reason });
+      } catch (error) {
+        outcomes.push({
+          id,
+          action: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
       continue;
     }
 

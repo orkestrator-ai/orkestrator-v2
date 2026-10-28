@@ -22,6 +22,7 @@ import {
   readdir,
   rename,
   rm,
+  rmdir,
   writeFile,
   type FileHandle,
 } from "node:fs/promises";
@@ -154,10 +155,37 @@ async function removeExternalWorktreeDir(profile: RuntimeProfile): Promise<void>
     await rm(profile.worktreeDir, { recursive: true, force: true });
 }
 
+/** Names to keep as they are, or to empty in place, while clearing a directory. */
+type ClearPlan = { readonly [name: string]: "keep" | ClearPlan };
+
+/** Delete a directory's entries except those `plan` keeps or empties. Never follows a symlink. */
+async function clearDirectory(directory: string, plan: ClearPlan): Promise<void> {
+  const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  for (const name of entries) {
+    const target = path.join(directory, name);
+    const rule = Object.hasOwn(plan, name) ? plan[name] : undefined;
+    if (rule === "keep") continue;
+    if (rule && (await lstat(target)).isDirectory()) await clearDirectory(target, rule);
+    else await rm(target, { recursive: true, force: true });
+  }
+}
+
 /**
  * Delete disposable profile state without ever following directory symlinks.
  * Kept as one tested production helper so both reset modes retain that safety
  * property when provider-owned credential paths are added or changed.
+ *
+ * The profile root, its data directory and `portable-inputs` are emptied, not
+ * deleted. Docker Desktop on macOS can go on resolving a directory it has
+ * looked up to the deleted one once it is removed and recreated at the same
+ * path, and then refuses every bind under it as "bind source path does not
+ * exist" until it restarts. Staged portable inputs are the only host binds,
+ * and their key and revision directories get fresh names each time, so
+ * keeping these three is what lets a removed profile name boot containers
+ * again (todo 0200). `pruneProfiles` recognises what is left.
  */
 export async function removeProfileState(
   profile: RuntimeProfile,
@@ -166,22 +194,44 @@ export async function removeProfileState(
   const recheckProfile = captureWorktreePathIdentity(profile.profileRoot);
   await removeExternalWorktreeDir(profile);
   recheckProfile();
-  if (!keepToolchains) {
-    await rm(profile.profileRoot, { recursive: true, force: true });
-    return;
+  const data: ClearPlan = {
+    "portable-inputs": {},
+    ...(keepToolchains ? { toolchains: "keep" } : {}),
+  };
+  await clearDirectory(profile.profileRoot, {
+    [path.relative(profile.profileRoot, profile.dataDir)]: data,
+    ...(keepToolchains ? { "profile.json": "keep", [DEV_PROFILE_SENTINEL]: "keep" } : {}),
+  });
+}
+
+/** How deep the directories `removeProfileState` keeps go below the profile root. */
+const REMOVED_PROFILE_DEPTH = 2;
+
+async function holdsOnlyDirectories(directory: string, depth: number): Promise<boolean> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory() || depth === 0) return false;
+    if (!(await holdsOnlyDirectories(path.join(directory, entry.name), depth - 1))) return false;
   }
-  for (const child of await readdir(profile.profileRoot)) {
-    if (child === "profile.json" || child === ".orkestrator-dev-profile") continue;
-    if (child === "data") {
-      for (const dataChild of await readdir(profile.dataDir).catch(() => [])) {
-        if (dataChild !== "toolchains") {
-          await rm(path.join(profile.dataDir, dataChild), { recursive: true, force: true });
-        }
-      }
-    } else {
-      await rm(path.join(profile.profileRoot, child), { recursive: true, force: true });
-    }
+  return true;
+}
+
+/** Whether a profile directory holds only the empty directories a full removal keeps. */
+export async function isRemovedProfileSkeleton(profileRoot: string): Promise<boolean> {
+  const stats = await lstat(profileRoot).catch(() => null);
+  if (!stats?.isDirectory()) return false;
+  return holdsOnlyDirectories(profileRoot, REMOVED_PROFILE_DEPTH).catch(() => false);
+}
+
+/**
+ * Delete what a full removal left behind, bottom-up with `rmdir`, so a file
+ * that appears meanwhile (a start of the same name) fails it instead of
+ * being deleted.
+ */
+export async function removeProfileSkeleton(directory: string): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) await removeProfileSkeleton(path.join(directory, entry.name));
   }
+  await rmdir(directory);
 }
 
 type ModelCacheSeedOptions = {

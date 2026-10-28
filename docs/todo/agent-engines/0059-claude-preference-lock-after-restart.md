@@ -1,6 +1,8 @@
 # Claude prompts fail for 30 s after a bridge dies holding the preference lock
 
-Checked against `main` at `06297124` (2026-10-23).
+Checked against `main` at `06297124` (2026-10-23). Every item done on
+2026-10-28 (against `main` at `1d1f0a87`), in the same change as
+[0726](0726-claude-preference-lock-reused-pid.md), which records the decisions.
 
 ## Task analysis
 
@@ -8,10 +10,10 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Recover or refuse definitely**: items 1 and 2 together: take over a dead owner's lock at once (pid plus start time), or answer a definite retryable refusal instead of 500. Status: open.
-2. **Regression test**: item 3, a bridge test with a lock owned by a dead pid that proves admission (or a definite refusal) inside the 5 s wait. Status: open.
-3. **Stale window**: the open question, whether 30 s is still right once identity is checked. Status: open.
-4. **Container restart**: the "Needs verification" item, whether a container bridge restart leaves the same lock. Status: open; the code answers it (yes, and worse; see below).
+1. **Recover or refuse definitely**: items 1 and 2 together: take over a dead owner's lock at once (pid plus start time), or answer a definite retryable refusal instead of 500. Status: done (2026-10-28): both.
+2. **Regression test**: item 3, a bridge test with a lock owned by a dead pid that proves admission (or a definite refusal) inside the 5 s wait. Status: done (2026-10-28).
+3. **Stale window**: the open question, whether 30 s is still right once identity is checked. Status: done (2026-10-28): kept as the fallback.
+4. **Container restart**: the "Needs verification" item, whether a container bridge restart leaves the same lock. Status: done: answered by the code reading below and closed by 0726's identity check.
 
 ### 1. Recover or refuse definitely
 
@@ -143,14 +145,24 @@ fails the same way.
 
 ## Outstanding work
 
-1. Recover a lock whose owner pid is dead without waiting out the full stale
-   window, while still guarding against pid reuse (for example, record the
-   owner's process start time with the pid and compare both).
-2. Or make the prompt route answer a definite, retryable refusal (409 with a
-   retry hint) instead of a 500 while the lock is held by a dead owner, so the
-   dispatch is not parked as ambiguous.
-3. Add a bridge test that leaves a lock owned by a dead pid and proves a prompt
-   is admitted (or refused definitely) within the 5 s wait.
+Nothing left. Done on 2026-10-28 with
+[0726](0726-claude-preference-lock-reused-pid.md):
+
+1. ~~Recover a lock whose owner pid is dead without waiting out the full stale
+   window, while still guarding against pid reuse.~~ A lock now records the
+   owner's instance id, and on Linux its `/proc` start time and boot id
+   (`process-identity.ts`). An owner proven dead (free pid, this process's pid
+   under another instance, or another start or boot) is taken over at once; an
+   older bridge's pid-only lock keeps the 30 s rule.
+2. ~~Make the prompt route answer a definite, retryable refusal instead of a
+   500.~~ A lock wait that times out on the claim write is a 503 with a fixed
+   reason (`unavailable`), not 409, which already means "running" on this
+   route; the backend retries 503 as "not processed".
+3. ~~Add a bridge test that leaves a lock owned by a dead pid and proves a
+   prompt is admitted (or refused definitely) within the 5 s wait.~~
+   `session-preferences.test.ts` ("takes over at once a fresh lock whose owner
+   pid is gone") and `session-manager-lifecycle.test.ts` ("refuses definitely
+   when a live owner keeps the preference lock through the claim").
 
 ## Constraints and rationale
 
@@ -161,12 +173,16 @@ fails the same way.
 
 ## Open questions
 
-- Is 30 s still the right stale window once a start-time check exists?
+- ~~Is 30 s still the right stale window once a start-time check exists?~~
+  Kept (2026-10-28): it now applies only where identity cannot prove the
+  owner dead (unreadable metadata, an older bridge's lock) and as the point
+  where macOS asks `ps`.
 
 ## Needs verification
 
-- Whether a container bridge restart (`stop_claude_server`) can leave the same
-  lock; the container's preference directory survives a bridge restart.
+- ~~Whether a container bridge restart (`stop_claude_server`) can leave the
+  same lock.~~ Yes, by code reading (task 4); the identity check covers it.
+  The live container check is 0726's qualification item.
 
 ## Related
 

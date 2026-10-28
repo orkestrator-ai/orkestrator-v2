@@ -152,13 +152,16 @@ function isElicitationContent(value: unknown): value is ClaudeElicitationContent
  * Reads a plain `code` property rather than testing `instanceof`: this module
  * reaches the session manager through an import boundary that tests replace
  * wholesale, so class identity is not stable across it but a string is. An
- * error with no code is a genuine fault and stays a 500.
+ * error with no code is a genuine fault and stays a 500. `unavailable` is a
+ * refusal that provably did nothing (the prompt claim's preference lock stayed
+ * busy), which the backend retries as "not processed".
  */
-function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 {
+function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 | 503 {
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "not_found") return 404;
   if (code === "conflict") return 409;
   if (code === "invalid") return 400;
+  if (code === "unavailable") return 503;
   return 500;
 }
 
@@ -295,7 +298,7 @@ async function resolveSession(
   failureMessage: string,
 ): Promise<
   | { ok: true; session: Awaited<ReturnType<typeof ensurePersistedSession>> }
-  | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 }
+  | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 | 503 }
 > {
   try {
     return { ok: true, session: getSession(id) ?? (await ensurePersistedSession(id)) };

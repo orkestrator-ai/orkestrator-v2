@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MAX_DISPATCHED_REQUEST_IDS } from "./session-preferences.js";
+import {
+  MAX_DISPATCHED_REQUEST_IDS,
+  setPreferenceLockTimeoutForTesting,
+} from "./session-preferences.js";
+import { spawnLiveOwner, stopLiveOwners } from "./process-identity-test-harness.js";
 import {
   abortSession,
   captureEvents,
@@ -767,6 +771,40 @@ describe("session lifecycle", () => {
         getSession(session.id)?.dispatchedRequestIds?.has("initial-prompt:env-1:tab-failure"),
       ).toBe(false);
     } finally {
+      await releaseTemporaryClaudeHome(directory);
+    }
+  });
+
+  test("refuses definitely when a live owner keeps the preference lock through the claim", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-lock-busy-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+      await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+      const owner = spawnLiveOwner();
+      await writeFile(
+        join(claudeSessionPreferencesDir(), `${sdkSessionId}.json.lock`),
+        JSON.stringify({ token: "live-owner", pid: owner.pid }),
+      );
+      setPreferenceLockTimeoutForTesting(50);
+      let dispatched = false;
+
+      await expect(
+        claimPromptDispatch(session.id, "busy-lock", () => {
+          dispatched = true;
+          return { started: Promise.resolve(), completion: Promise.resolve() };
+        }),
+      ).rejects.toMatchObject({ code: "unavailable" });
+
+      expect(dispatched).toBe(false);
+      expect(getSession(session.id)?.status).toBe("idle");
+      expect(getSession(session.id)?.dispatchedRequestIds?.has("busy-lock")).toBe(false);
+      expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
+    } finally {
+      setPreferenceLockTimeoutForTesting(null);
+      await stopLiveOwners();
       await releaseTemporaryClaudeHome(directory);
     }
   });

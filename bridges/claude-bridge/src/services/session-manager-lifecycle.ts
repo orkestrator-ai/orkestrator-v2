@@ -10,6 +10,7 @@ import type {
 } from "../types/index.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
+  isPreferenceLockTimeout,
   MAX_DISPATCHED_REQUEST_IDS,
   readSessionPreferences,
   sessionPreferencesUnavailable,
@@ -434,7 +435,21 @@ export async function claimPromptDispatch(
 
   const outcome = (async () => {
     await testHooks?.beforePersistence?.();
-    await updateSessionPreferences(sdkSessionId, journalUpdate(recentRequestIds));
+    try {
+      await updateSessionPreferences(sdkSessionId, journalUpdate(recentRequestIds));
+    } catch (error) {
+      // The lock stayed held by a live owner and nothing reached the journal or
+      // the CLI, so this is a definite refusal the backend may retry, not the
+      // ambiguous 500 a failure after dispatch would be. Only the claim write
+      // maps this way.
+      if (isPreferenceLockTimeout(error)) {
+        throw sessionOperationError(
+          "unavailable",
+          "The session's preferences are busy, so the prompt was not sent. Try again.",
+        );
+      }
+      throw error;
+    }
 
     if (
       sessions.get(sessionId) !== session ||

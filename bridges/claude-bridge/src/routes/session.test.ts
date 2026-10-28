@@ -189,7 +189,10 @@ const mockStopBackgroundTask = mock(
  * mock installed below, so it must not depend on class identity surviving that
  * boundary.
  */
-function refusal(code: "not_found" | "conflict" | "invalid", message: string): Error {
+function refusal(
+  code: "not_found" | "conflict" | "invalid" | "unavailable",
+  message: string,
+): Error {
   return Object.assign(new Error(message), { code });
 }
 
@@ -1361,6 +1364,28 @@ describe("session routes", () => {
       expect(res.status).toBe(409);
       expect(await jsonBody(res)).toEqual({
         error: "Session is already processing a prompt",
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("maps a claim refused on a busy preference lock to 503", async () => {
+      // The backend reads 503 as "not processed" and keeps the retry, where a
+      // 500 would park the prompt as outcome unknown.
+      mockClaimPromptDispatch.mockRejectedValueOnce(
+        refusal(
+          "unavailable",
+          "The session's preferences are busy, so the prompt was not sent. Try again.",
+        ),
+      );
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(503);
+      expect(await jsonBody(res)).toEqual({
+        error: "The session's preferences are busy, so the prompt was not sent. Try again.",
       });
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });

@@ -14,6 +14,13 @@
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSessionPreferencesDir } from "./claude-home.js";
+import {
+  currentProcessIdentity,
+  parseIdentityFields,
+  type ProcessIdentity,
+  type RecordedOwner,
+  recordedOwnerState,
+} from "./process-identity.js";
 
 /** Preferences that must survive a bridge restart. Extend here, not ad hoc. */
 export interface SessionPreferences {
@@ -83,6 +90,14 @@ export interface ClaudeTurnInFlightMark {
    * and additive: an older bridge reads the mark without it.
    */
   requestId?: string;
+  /**
+   * The writer's start time and boot (`process-identity.ts`), so a reader can
+   * tell the writer from a later process that has its pid. Additive, like
+   * `requestId`.
+   */
+  procStart?: string;
+  bootId?: string;
+  processStartedAt?: number;
 }
 
 function parseTurnInFlightMark(value: unknown): ClaudeTurnInFlightMark | undefined {
@@ -111,6 +126,7 @@ function parseTurnInFlightMark(value: unknown): ClaudeTurnInFlightMark | undefin
     record.requestId.length <= 200
       ? { requestId: record.requestId }
       : {}),
+    ...parseIdentityFields(record),
   };
 }
 
@@ -196,14 +212,18 @@ function preferencesPath(sdkSessionId: string): string | null {
  * two temp-file writes into a corrupt rename, and so the last call wins.
  */
 const pendingWrites = new Map<string, Promise<void>>();
-const PREFERENCE_LOCK_TIMEOUT_MS = 5_000;
+let preferenceLockTimeoutMs = 5_000;
 const PREFERENCE_LOCK_STALE_MS = 30_000;
 const PREFERENCE_LOCK_HEARTBEAT_MS = 5_000;
 const UNAVAILABLE_PREFERENCES = Symbol("unavailable-session-preferences");
 
-type LockMetadata = {
+/**
+ * The owner of a lock or recovery marker. An older bridge wrote only
+ * `{ token, pid }`; the identity fields are additive, so it still reads a new
+ * lock by its pid.
+ */
+type LockMetadata = RecordedOwner & {
   token: string;
-  pid: number;
 };
 
 type LockSnapshot = {
@@ -213,20 +233,67 @@ type LockSnapshot = {
   metadata?: LockMetadata;
 };
 
+/**
+ * A session's preference lock stayed held by a live owner for the whole wait.
+ * Nothing was written. Carries a stable `code` so callers can tell it from a
+ * failed write without `instanceof`.
+ */
+export class PreferenceLockTimeoutError extends Error {
+  readonly name = "PreferenceLockTimeoutError";
+  readonly code = "preference-lock-timeout";
+
+  constructor() {
+    super("Timed out waiting for session preference lock");
+  }
+}
+
+export function isPreferenceLockTimeout(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === "preference-lock-timeout";
+}
+
+/** Test-only: shorten the wait for a held lock. `null` restores 5 s. */
+export function setPreferenceLockTimeoutForTesting(timeoutMs: number | null): void {
+  preferenceLockTimeoutMs = timeoutMs ?? 5_000;
+}
+
 function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
 }
 
+function lockMetadata(): string {
+  const identity: ProcessIdentity = currentProcessIdentity();
+  return JSON.stringify({ token: crypto.randomUUID(), ...identity } satisfies LockMetadata);
+}
+
 function parseLockMetadata(raw: string): LockMetadata | undefined {
   try {
-    const parsed = JSON.parse(raw) as Partial<LockMetadata>;
-    return typeof parsed.token === "string" &&
-      parsed.token.length > 0 &&
-      typeof parsed.pid === "number" &&
-      Number.isSafeInteger(parsed.pid) &&
-      parsed.pid > 0
-      ? { token: parsed.token, pid: parsed.pid }
-      : undefined;
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.token !== "string" ||
+      parsed.token.length === 0 ||
+      typeof parsed.pid !== "number" ||
+      !Number.isSafeInteger(parsed.pid) ||
+      parsed.pid <= 0
+    ) {
+      return undefined;
+    }
+    // Identity fields count only beside an instance id: an owner that wrote no
+    // instance is an older bridge, and keeps that bridge's rule.
+    if (
+      typeof parsed.instance !== "string" ||
+      parsed.instance.length === 0 ||
+      parsed.instance.length > 64
+    ) {
+      return { token: parsed.token, pid: parsed.pid };
+    }
+    return {
+      token: parsed.token,
+      pid: parsed.pid,
+      instance: parsed.instance,
+      ...parseIdentityFields(parsed),
+    };
   } catch {
     return undefined;
   }
@@ -250,20 +317,27 @@ async function readLockSnapshot(lockPath: string): Promise<LockSnapshot | undefi
   }
 }
 
-export function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errorCode(error) === "EPERM";
-  }
-}
-
+/**
+ * Whether a lock (or recovery marker) may be removed. A live owner refreshes
+ * the mtime every 5 s, so the 30 s stale window is only ever reached by a dead
+ * or suspended owner; a suspended one keeps its lock.
+ *
+ * - Unreadable metadata (mid-write, or foreign): past the stale window.
+ * - An owner this process can prove dead: at once. Its pid is free, is this
+ *   process's own (this process records its pid only under its own instance),
+ *   or now belongs to a process with another start time or boot id.
+ * - A dead owner from an older bridge (no instance): past the stale window, as
+ *   that bridge did.
+ * - A live owner whose identity matches, or cannot be checked: never. Where
+ *   `/proc` is missing the start time is checked with `ps`, once the lock is
+ *   past the stale window.
+ */
 function snapshotIsRecoverable(snapshot: LockSnapshot): boolean {
-  return (
-    Date.now() - snapshot.mtimeMs > PREFERENCE_LOCK_STALE_MS &&
-    (snapshot.metadata === undefined || !processIsAlive(snapshot.metadata.pid))
-  );
+  const aged = Date.now() - snapshot.mtimeMs > PREFERENCE_LOCK_STALE_MS;
+  const owner = snapshot.metadata;
+  if (!owner) return aged;
+  if (recordedOwnerState(owner, { slowPath: aged }) !== "dead") return false;
+  return owner.instance !== undefined || owner.pid === process.pid || aged;
 }
 
 /**
@@ -280,12 +354,7 @@ async function recoverStaleLock(lockPath: string, candidate: LockSnapshot): Prom
   try {
     recoveryHandle = await open(recoveryPath, "wx", 0o600);
     try {
-      await recoveryHandle.writeFile(
-        JSON.stringify({
-          token: crypto.randomUUID(),
-          pid: process.pid,
-        } satisfies LockMetadata),
-      );
+      await recoveryHandle.writeFile(lockMetadata());
     } catch (error) {
       await recoveryHandle.close().catch(() => {});
       recoveryHandle = undefined;
@@ -296,8 +365,8 @@ async function recoverStaleLock(lockPath: string, candidate: LockSnapshot): Prom
     if (errorCode(error) === "EEXIST") {
       // Recovery itself can be interrupted. A marker owned by a live process
       // is never stolen, even when that process is suspended beyond the stale
-      // interval. A dead owner's marker is removed so future attempts are not
-      // permanently wedged.
+      // interval. A dead owner's marker (by the same identity rule as the
+      // lock) is removed so future attempts are not permanently wedged.
       const abandoned = await readLockSnapshot(recoveryPath);
       if (abandoned && snapshotIsRecoverable(abandoned)) {
         const current = await readLockSnapshot(recoveryPath);
@@ -353,12 +422,7 @@ async function withPreferenceFileLock<T>(path: string, operation: () => Promise<
     try {
       handle = await open(lockPath, "wx", 0o600);
       try {
-        await handle.writeFile(
-          JSON.stringify({
-            token: crypto.randomUUID(),
-            pid: process.pid,
-          } satisfies LockMetadata),
-        );
+        await handle.writeFile(lockMetadata());
       } catch (error) {
         await handle.close().catch(() => {});
         handle = undefined;
@@ -369,8 +433,8 @@ async function withPreferenceFileLock<T>(path: string, operation: () => Promise<
       if (errorCode(error) !== "EEXIST") throw error;
       const lockSnapshot = await readLockSnapshot(lockPath);
       if (!lockSnapshot || (await recoverStaleLock(lockPath, lockSnapshot))) continue;
-      if (Date.now() - startedAt >= PREFERENCE_LOCK_TIMEOUT_MS) {
-        throw new Error("Timed out waiting for session preference lock");
+      if (Date.now() - startedAt >= preferenceLockTimeoutMs) {
+        throw new PreferenceLockTimeoutError();
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }

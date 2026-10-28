@@ -228,7 +228,7 @@ export const INTERACTION_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
  * imports the session manager through a module boundary that tests replace
  * wholesale, so the class identity is not stable there. A `code` field is.
  */
-export type SessionOperationCode = "not_found" | "conflict" | "invalid";
+export type SessionOperationCode = "not_found" | "conflict" | "invalid" | "unavailable";
 
 export class SessionOperationError extends Error {
   readonly name = "SessionOperationError";

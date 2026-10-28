@@ -19,10 +19,8 @@ import {
   useProjectStore,
   useConfigStore,
   useFilesPanelStore,
-  useLoopedReviewStore,
   useMultiReviewStore,
 } from "@/stores";
-import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent, Environment } from "@/types";
 import type {
@@ -39,7 +37,6 @@ import {
 } from "@/prompts";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isGatewayBrowserPreviewSupported, isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -241,12 +238,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [scriptLaunchError, setScriptLaunchError] = useState<string | null>(null);
   const scriptDialogOpen = scriptDialogEnvironmentId !== null;
   const createScriptButtonRef = useRef<HTMLButtonElement>(null);
-  const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
   const [multiReviewDialogOpen, setMultiReviewDialogOpen] = useState(false);
   const [multiReviewLaunchPending, setMultiReviewLaunchPending] = useState(false);
   const multiReviewLaunchInFlightRef = useRef(false);
-  const [loopedReviewLaunchPending, setLoopedReviewLaunchPending] = useState(false);
-  const loopedReviewLaunchInFlightRef = useRef(false);
   const [prDialogTarget, setPrDialogTarget] = useState<{
     environmentId: string;
     projectId: string;
@@ -277,7 +271,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const anyLaunchDialogOpen =
     reviewDialogOpen ||
     scriptDialogOpen ||
-    loopedReviewDialogOpen ||
     multiReviewDialogOpen ||
     prDialogOpen ||
     resolveDialogOpen;
@@ -771,12 +764,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     },
     [enabledAgents, launchDialogDefaultsFor, settingsTiers],
   );
-  const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } = useLoopedReviewStore(
-    useShallow((state) => ({
-      installLoopedReviewWorkflow: state.replaceWorkflow,
-      removeLoopedReviewWorkflow: state.removeWorkflow,
-    })),
-  );
 
   // Handler for code review
   const handleReview = useCallback(
@@ -1032,165 +1019,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       config.repositories,
       createTab,
       isRunning,
-      selectedEnvironment,
-      selectedEnvironmentId,
-      selectedProjectId,
-      setupRunning,
-      workspaceReady,
-    ],
-  );
-
-  const handleLoopedReview = useCallback(
-    async (selection: ReviewLaunchSelection) => {
-      if (
-        loopedReviewLaunchInFlightRef.current ||
-        !createTab ||
-        !selectedEnvironmentId ||
-        !selectedProjectId ||
-        !selectedEnvironment ||
-        !canCreateTab ||
-        !isRunning ||
-        !workspaceReady ||
-        setupRunning
-      ) {
-        return;
-      }
-      // React state does not update until this event returns. Keep a synchronous
-      // guard as well so a double click/submit cannot start two backend workflows.
-      loopedReviewLaunchInFlightRef.current = true;
-      setLoopedReviewLaunchPending(true);
-      let workflowId: string | undefined;
-      let launchError: string | undefined;
-      try {
-        const { task } = findTaskForEnvironment(selectedEnvironmentId);
-        const agent = getReviewAgent(selection.tabType);
-        const reviewDefault = actionDefaultFor("review");
-        const configuredFastMode =
-          selection.fastMode ??
-          (agent === reviewDefault.agent ? reviewDefault.fastMode : undefined) ??
-          preferredFastModesByPlatform[agent];
-        const fastMode =
-          typeof configuredFastMode === "boolean" &&
-          modelSupportsSpeed(agent, reviewModelCatalog, selection.model)
-            ? configuredFastMode
-            : undefined;
-        const kanbanState = useKanbanStore.getState();
-        const hasCurrentProjectNotes =
-          kanbanState.currentNotesProjectId === selectedProjectId &&
-          kanbanState.notes.trim().length > 0;
-        const context =
-          task || hasCurrentProjectNotes
-            ? {
-                ticketTitle: task?.title,
-                ticketDescription: task?.description,
-                acceptanceCriteria: task?.acceptanceCriteria,
-                comments: task?.comments.map((comment) => comment.text),
-                imageNames: task?.images.map((image) => image.filename),
-                projectNotes: hasCurrentProjectNotes ? kanbanState.notes : undefined,
-              }
-            : undefined;
-        const workflow = await backend.startLoopedReview({
-          environmentId: selectedEnvironmentId,
-          projectId: selectedProjectId,
-          agent,
-          model: selection.model,
-          reasoningEffort: selection.reasoningEffort,
-          ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-          targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
-          reviewInstruction: config.global.reviewInstruction,
-          context,
-          allowance: selection.passAllowance,
-        });
-        workflowId = workflow.id;
-        installLoopedReviewWorkflow(workflow);
-        const created = createTab("looped-review", {
-          loopedReviewId: workflowId,
-          displayTitle: "Looped Review",
-        });
-        if (!created) {
-          launchError = "The environment is not ready or the maximum tab count was reached.";
-        }
-      } catch (error) {
-        launchError = error instanceof Error ? error.message : String(error);
-      }
-
-      try {
-        if (!launchError) {
-          setLoopedReviewDialogOpen(false);
-          return;
-        }
-
-        if (!workflowId) {
-          toast.error("Could not open looped review", { description: launchError });
-          return;
-        }
-
-        const reportPreservedWorkflow = (description: string) => {
-          toast.error("Could not open looped review", {
-            description,
-            action: {
-              label: "Open workflow",
-              onClick: () => {
-                try {
-                  const opened = createTab("looped-review", {
-                    loopedReviewId: workflowId,
-                    displayTitle: "Looped Review",
-                  });
-                  if (!opened) {
-                    toast.error("Could not restore looped review", {
-                      description: "Free a tab and try opening the saved workflow again.",
-                    });
-                  }
-                } catch (error) {
-                  toast.error("Could not restore looped review", {
-                    description: error instanceof Error ? error.message : String(error),
-                  });
-                }
-              },
-            },
-          });
-        };
-
-        // Keep the authoritative snapshot installed until both cancellation and
-        // deletion are confirmed. If either operation fails, the workflow stays
-        // available for hydration/recovery instead of becoming invisible while
-        // its provider may still be running.
-        try {
-          const cancelledWorkflow = await backend.cancelLoopedReview(workflowId);
-          installLoopedReviewWorkflow(cancelledWorkflow);
-          if (cancelledWorkflow.phase === "cancelled") {
-            await backend.deleteLoopedReviewWorkflow(workflowId);
-            removeLoopedReviewWorkflow(workflowId);
-            toast.error("Could not open looped review", { description: launchError });
-            return;
-          }
-
-          reportPreservedWorkflow(
-            `${launchError} Cancellation is still in progress; the saved workflow remains available for recovery.`,
-          );
-        } catch (cleanupError) {
-          const cleanupMessage =
-            cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-          reportPreservedWorkflow(
-            `${launchError} Cleanup failed: ${cleanupMessage}. The saved workflow remains available for recovery.`,
-          );
-        }
-      } finally {
-        loopedReviewLaunchInFlightRef.current = false;
-        setLoopedReviewLaunchPending(false);
-      }
-    },
-    [
-      actionDefaultFor,
-      canCreateTab,
-      config.global.reviewInstruction,
-      config.repositories,
-      createTab,
-      installLoopedReviewWorkflow,
-      isRunning,
-      preferredFastModesByPlatform,
-      removeLoopedReviewWorkflow,
-      reviewModelCatalog,
       selectedEnvironment,
       selectedEnvironmentId,
       selectedProjectId,
@@ -2389,16 +2217,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setScriptLaunchError,
     scriptDialogOpen,
     createScriptButtonRef,
-    loopedReviewDialogOpen,
-    setLoopedReviewDialogOpen,
     multiReviewDialogOpen,
     setMultiReviewDialogOpen,
     multiReviewLaunchPending,
     setMultiReviewLaunchPending,
     multiReviewLaunchInFlightRef,
-    loopedReviewLaunchPending,
-    setLoopedReviewLaunchPending,
-    loopedReviewLaunchInFlightRef,
     prDialogTarget,
     setPrDialogTarget,
     prLaunchError,
@@ -2464,8 +2287,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     launchDialogDefaultsFor,
     launchDialogDefaultsFromResolved,
     configuredLaunchDialogDefaultsFor,
-    installLoopedReviewWorkflow,
-    removeLoopedReviewWorkflow,
     handleReview,
     openReviewDialog,
     reviewLongPress,
@@ -2473,7 +2294,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     openMultiReviewDialog,
     multiReviewLongPress,
     handleMultiReview,
-    handleLoopedReview,
     openScriptDialog,
     scriptLongPress,
     scriptEligibilityError,

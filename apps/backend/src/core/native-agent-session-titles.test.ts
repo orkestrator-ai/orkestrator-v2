@@ -71,7 +71,7 @@ async function settle(titles: NativeAgentSessionTitles): Promise<void> {
 }
 
 describe("NativeAgentSessionTitles", () => {
-  test.each(["interactive-native", "coordinator", "build-pipeline", "looped-review"] as const)(
+  test.each(["interactive-native", "coordinator", "build-pipeline", "automated-review"] as const)(
     "gates model generation by origin (%s)",
     async (origin) => {
       const h = harness();

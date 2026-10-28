@@ -17,7 +17,7 @@ import { beginWorkflowArtifactTurn, type ArtifactTurnDispatch } from "./workflow
 
 const policy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "full" },
-  "looped-review",
+  "automated-review",
 );
 const CONNECTION = { url: "http://127.0.0.1:43123/mcp", token: "attempt-capability" };
 

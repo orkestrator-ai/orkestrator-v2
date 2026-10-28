@@ -833,7 +833,7 @@ describe("provider-neutral interaction adapters", () => {
       return Response.json({ status: "idle" });
     }, codexConnection);
     provider.registerSession?.("session-1", {
-      origin: "looped-review",
+      origin: "automated-review",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       phase: "discovery",
     });
@@ -1945,7 +1945,7 @@ describe("provider-neutral interaction adapters", () => {
     const adapter = internal.interactionAdapter;
     for (let index = 0; index < 1_025; index += 1) {
       provider.registerSession?.(`session-${index}`, {
-        origin: "looped-review",
+        origin: "automated-review",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         phase: `phase-${index}`,
       });
@@ -2032,7 +2032,7 @@ describe("provider-neutral interaction adapters", () => {
     // which is the session registered first.
     for (let index = 1; index <= 1_024; index += 1) {
       provider.registerSession?.(`filler-${index}`, {
-        origin: "looped-review",
+        origin: "automated-review",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       });
     }

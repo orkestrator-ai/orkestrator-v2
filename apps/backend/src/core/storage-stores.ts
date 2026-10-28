@@ -6,6 +6,7 @@ import { changeLedgerMigration } from "./change-tracking/ledger-schema.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import { recordShapeUpgradeMigration } from "./storage-record-upgrades.js";
+import { RETIRED_LEGACY_STORES, retireLoopedReviewsMigration } from "./storage-retired-features.js";
 import {
   WEB_ANNOTATION_STORE_LAYOUT,
   WEB_ANNOTATION_STORE_PREFIX,
@@ -53,7 +54,6 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "opencode-model-catalog": { kind: "envelope", collections: ["catalogs"] },
   sessions: { kind: "array", owner: ownerField("environmentId") },
   "pane-layouts": { kind: "record" },
-  "looped-reviews": { kind: "record" },
   "multi-reviews": { kind: "record" },
   "build-pipelines": { kind: "record" },
   "native-agent-sessions": { kind: "record" },
@@ -218,6 +218,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   },
   recordShapeUpgradeMigration,
   changeLedgerMigration,
+  retireLoopedReviewsMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {
@@ -258,7 +259,7 @@ export function retireLegacyJsonStores(dataDir: string, now = Date.now()): numbe
   } catch {
     topLevel = [];
   }
-  for (const store of Object.keys(STORE_LAYOUTS)) {
+  for (const store of [...Object.keys(STORE_LAYOUTS), ...RETIRED_LEGACY_STORES]) {
     if (store.includes("/")) continue;
     for (const entry of legacyArtifacts(topLevel, `${store}.json`)) {
       move(path.join(dataDir, entry), entry);

@@ -11,6 +11,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-database.ts` | `StorageDatabase`: connection, migrations, stores, leases |
 | `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
+| `apps/backend/src/core/storage-retired-features.ts` | The migration that removes data of retired features (Looped Review) |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
 | `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
@@ -262,9 +263,9 @@ same test resolves the store each of those writes names, through constants,
 template literals, small name functions (`webAnnotationStoreName`),
 constructor-set fields and row helpers that take the store as a parameter,
 and fails a write whose store it cannot name or that a repository also
-writes. The import and record upgrades in `storage-stores.ts` and
-`storage-record-upgrades.ts` are exempt: they run inside the migration
-transaction at open, before any writer.
+writes. The import and record upgrades in `storage-stores.ts`,
+`storage-record-upgrades.ts` and `storage-retired-features.ts` are exempt: they
+run inside the migration transaction at open, before any writer.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other
@@ -394,6 +395,14 @@ records) because its queries need joins and range scans. Its file contents
 live under `<dataDir>/change-tracking/` (a content-addressed object store and
 evidence bodies), so a backup of change history must include that directory
 as well as `orkestrator.sqlite`. See [change-tracking.md](change-tracking.md).
+
+Version 5 (`retire-looped-reviews`) retires the removed Looped Review
+feature's data: it deletes the `looped-reviews` store, prunes looped-review
+claims from the agent interaction resolution journal, and deletes the
+native-agent-session records Looped Review started (`looped-review:` logical
+keys). Multi Review and review fan-out sessions that shared the
+`looped-review` origin are kept and relabelled `automated-review`. A stray
+`looped-reviews.json` is still archived into `legacy-json/` and purged.
 
 ### Version 2: legacy JSON import
 

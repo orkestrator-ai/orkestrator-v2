@@ -1479,7 +1479,6 @@ export async function deleteEnvironment(
         }
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
-      await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
       await storage.deleteMultiReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.

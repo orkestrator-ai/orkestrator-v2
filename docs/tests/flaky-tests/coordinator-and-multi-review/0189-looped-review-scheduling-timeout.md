@@ -1,7 +1,7 @@
 # Looped-review persisted-fixture equivalence times out in the aggregate
 
 - **ID:** 0189
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-11
 - **Test:** `LoopedReviewService keyed scheduling > old and new drivers make the same transitions from one persisted fixture`.
 - **File:** `apps/backend/src/core/looped-review-scheduling.test.ts`.
@@ -43,3 +43,9 @@ unchanged owner passed alone with
 `mise run test:logged -- --name backend-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts ./src/core/looped-review-scheduling.test.ts ./src/core/feature-planning-scheduling.test.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures`
 (exit 0, 23.6 s). Evidence: `orkestrator-test-run.xIhDQt/` below the host
 temporary directory. No assertion, timeout or skip changed.
+
+## Resolution (2026-10-28)
+
+Retired, not fixed: the Looped Review feature was removed, and its owning test
+file was deleted with it. The root cause was never confirmed. No surviving test
+runs this case.

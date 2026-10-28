@@ -1009,7 +1009,7 @@ script and parser:
 | --- | --- | --- |
 | Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
 | Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
-| Before a tool-mode workflow stage dispatches (Multi Review, Looped Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
 
 The startup check pulls busybox once (`--pull never` on every run afterwards)
 and falls back to the environment image; with neither it reports

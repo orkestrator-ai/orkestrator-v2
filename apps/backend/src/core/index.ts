@@ -133,7 +133,6 @@ import {
   createSessionTitleService,
   sessionTitleGenerationEnabled,
 } from "./session-title-service.js";
-import { LoopedReviewService } from "./looped-review-service.js";
 import {
   dispatchMultiReviewAddressPrompt,
   recoverMissingMultiReviewFixSession,
@@ -184,7 +183,6 @@ export class OrkestratorBackend {
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
-  private readonly loopedReviews: LoopedReviewService;
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
@@ -1047,22 +1045,6 @@ export class OrkestratorBackend {
       },
     );
     context.buildPipelines = this.buildPipelines;
-    this.loopedReviews = new LoopedReviewService(
-      storage,
-      async <T>(command: string, args: Record<string, unknown> = {}) => {
-        const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return (await handler(args, context)) as T;
-      },
-      {
-        workflowResults: this.workflowResults,
-        workflowResultRollout: this.workflowResultRollout,
-        resolveAgentToolConnection,
-        assertAgentToolsReachable,
-        workflowAdmission: this.workflowAdmission,
-      },
-    );
-    context.loopedReviews = this.loopedReviews;
     this.multiReviews = new MultiReviewService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1173,7 +1155,6 @@ export class OrkestratorBackend {
     const owners: (KeyedWorkflowOwner | undefined)[] = [
       this.featurePlanning,
       this.buildPipelines,
-      this.loopedReviews,
       this.multiReviews,
     ];
     return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
@@ -1556,9 +1537,6 @@ export class OrkestratorBackend {
     // without preventing the gateway from becoming available.
     await this.buildPipelines.init().catch((error) => {
       console.warn("[backend] Failed to restore build pipelines:", error);
-    });
-    await this.loopedReviews.init().catch((error) => {
-      console.warn("[backend] Failed to restore looped reviews:", error);
     });
     await this.multiReviews.init().catch((error) => {
       console.warn("[backend] Failed to restore multi reviews:", error);
@@ -2206,11 +2184,6 @@ export class OrkestratorBackend {
           await this.buildPipelines.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain build pipelines:", error);
-        }
-        try {
-          await this.loopedReviews.shutdown();
-        } catch (error) {
-          console.warn("[backend] Failed to drain looped reviews:", error);
         }
         try {
           await this.multiReviews.shutdown();

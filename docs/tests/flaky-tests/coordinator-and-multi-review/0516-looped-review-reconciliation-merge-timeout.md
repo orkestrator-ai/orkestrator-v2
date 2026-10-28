@@ -1,7 +1,7 @@
 # Looped review reconciliation times out during main merge validation
 
 - **ID:** 0516
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `LoopedReviewService > applies new, updated, existing, and coverage-gap reconciliation across allowance rounds`
 - **Owning file:** `apps/backend/src/core/looped-review-service.test.ts`
@@ -49,3 +49,9 @@ The four private, bounded inner group logs in `orkestrator-test-run.0xWTT4/`
 were compressed after the runner terminated because interruption prevented
 the aggregate's normal finalization. No disposable browser or Docker profile
 state was retained.
+
+## Resolution (2026-10-28)
+
+Retired, not fixed: the Looped Review feature was removed, and its owning test
+file was deleted with it. The root cause was never confirmed. No surviving test
+runs this case.

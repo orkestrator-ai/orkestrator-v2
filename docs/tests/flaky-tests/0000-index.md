@@ -18,7 +18,7 @@ files.
 | --- | --- |
 | [Agent bridges](agent-bridges/0000-index.md) | Provider bridge packages (Claude, Codex, ACP and Cursor, Pi, OpenCode), their test harnesses, runtime environment wiring and bridge vendoring. |
 | [Native agents and transcripts](native-agents-and-transcripts/0000-index.md) | The backend native agent service and observation, agent tools, chat tabs and messages, streaming and paged transcripts, scroll state and plan usage. |
-| [Coordinator and Multi Review](coordinator-and-multi-review/0000-index.md) | The Coordinator service and live runner, agent mail, Multi Review, looped review, the review validation worker, change tracking and build-pipeline review fan-out. |
+| [Coordinator and Multi Review](coordinator-and-multi-review/0000-index.md) | The Coordinator service and live runner, agent mail, Multi Review, the retired looped review, the review validation worker, change tracking and build-pipeline review fan-out. |
 | [Environments, Git and containers](environments-and-containers/0000-index.md) | Environment lifecycle commands (create, move, fork, delete, cleanup), worktrees, submodules, Git and GitHub credentials, Docker containers, the firewall and disk reports. |
 | [Design canvas and transcript artifacts](design-canvas-and-artifacts/0000-index.md) | The design canvas service, renderer and browser journeys; transcript artifacts (Mermaid, interactive previews, the content engine) and the agent-test artifact sanitizer. |
 | [Service previews, annotations and gateway](previews-annotations-and-gateway/0000-index.md) | Service previews and the preview tunnel, web annotations, the browser gateway journey and the remote gateway proxy. |

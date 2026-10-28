@@ -260,10 +260,10 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
       effectiveAdoption: false,
     });
     const internals = observeOnly as unknown as {
-      context: { loopedReviews: unknown };
-      loopedReviews: unknown;
+      context: { multiReviews: unknown };
+      multiReviews: unknown;
     };
-    expect(internals.context.loopedReviews).toBe(internals.loopedReviews);
+    expect(internals.context.multiReviews).toBe(internals.multiReviews);
   } finally {
     if (previousObserve === undefined) delete process.env[observeKey];
     else process.env[observeKey] = previousObserve;
@@ -562,7 +562,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
-    loopedReviews: {
+    multiReviews: {
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
@@ -575,7 +575,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   internals.buildPipelines.init = mock(async () => {
     calls.push("pipelines:init");
   });
-  internals.loopedReviews.init = mock(async () => {
+  internals.multiReviews.init = mock(async () => {
     calls.push("reviews:init");
     throw new Error("review restore failed");
   });
@@ -594,7 +594,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   internals.buildPipelines.shutdown = mock(async () => {
     calls.push("pipelines:shutdown");
   });
-  internals.loopedReviews.shutdown = mock(async () => {
+  internals.multiReviews.shutdown = mock(async () => {
     calls.push("reviews:shutdown");
     throw new Error("review drain failed");
   });

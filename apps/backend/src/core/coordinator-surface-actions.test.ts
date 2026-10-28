@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import { isLoopedReviewWorkflow } from "@orkestrator/protocol/review-workflow";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type {
@@ -341,55 +339,6 @@ describe("edit_coordinator_worker_tab", () => {
     await expect(
       call("edit_coordinator_worker_tab", {
         input: { environmentId: homeId, tabId: "agent", operation: "focus" },
-      }),
-    ).rejects.toThrow("project checkout");
-  });
-});
-
-describe("looped review", () => {
-  test("starts once with the caller's agent and opens its tab", async () => {
-    const start = mock(async (input: Record<string, unknown>, _workflowId?: string) => ({
-      ...input,
-      id: "looped-1",
-    }));
-    context = {
-      ...context,
-      loopedReviews: { start } as unknown as CommandContext["loopedReviews"],
-    } as CommandContext;
-    const input = {
-      requestId: "loop",
-      environmentId: workerId,
-      agent: "codex",
-      model: "gpt-5.6",
-      allowance: 3,
-    };
-    const result = await call("start_coordinator_looped_review", { input });
-    expect(result).toMatchObject({
-      workflowId: "looped-1",
-      reused: false,
-      ui: { status: "opened" },
-    });
-    expect(start.mock.calls[0]![0]).toMatchObject({
-      environmentId: workerId,
-      projectId: scope.projectId,
-      agent: "codex",
-      model: "gpt-5.6",
-      targetBranch: "main",
-      allowance: 3,
-    });
-    const { leaves: panes } = await leaves();
-    expect(panes[0]!.tabs[0]).toMatchObject({
-      id: "looped-review:looped-1",
-      type: "looped-review",
-      loopedReviewTabData: { environmentId: workerId, workflowId: "looped-1", isLocal: true },
-    });
-    expect(await call("start_coordinator_looped_review", { input })).toMatchObject({
-      replayed: true,
-    });
-    expect(start).toHaveBeenCalledTimes(1);
-    await expect(
-      call("start_coordinator_looped_review", {
-        input: { ...input, requestId: "home", environmentId: homeId },
       }),
     ).rejects.toThrow("project checkout");
   });
@@ -963,60 +912,6 @@ for (const followup of [false, true])
       ).toHaveLength(1);
     });
   }
-
-for (const phase of ["preparing", "completed", "cancelled", "failed"]) {
-  test(`looped review recovery reattaches in ${phase}`, async () => {
-    const start = mock(async (input: Record<string, unknown>, id: string) => {
-      const now = new Date().toISOString();
-      const workflow = {
-        ...input,
-        id,
-        version: 2,
-        controller: "backend",
-        phase,
-        ...(phase === "failed"
-          ? {
-              failure: {
-                code: "provider",
-                message: "failed",
-                retryPhase: "preparing",
-                occurredAt: now,
-              },
-            }
-          : {}),
-        createdAt: now,
-        updatedAt: now,
-        backendRevision: 0,
-        startingAllowance: 1,
-        currentAllowance: 1,
-        currentRound: 1,
-        currentPass: 0,
-        rounds: [{ round: 1, allowance: 1, status: "preparing", passes: [], startedAt: now }],
-        sessions: [],
-        activePool: { issues: [], coverageGaps: [] },
-        archivedPools: [],
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        pr: { status: "pending" },
-      };
-      expect(isLoopedReviewWorkflow(workflow)).toBe(true);
-      await storage.saveLoopedReviewWorkflow(id, workerId, 2, workflow, 0);
-      return workflow;
-    });
-    context.loopedReviews = { start } as unknown as CommandContext["loopedReviews"];
-    const launch = () =>
-      call("start_coordinator_looped_review", {
-        input: {
-          requestId: "crashed-review",
-          environmentId: workerId,
-          agent: "codex",
-          model: "default",
-        },
-      });
-    await crashBeforeReceiptCompletion(launch);
-    expect(await reclaim(launch)).toMatchObject({ reused: true });
-    expect(start).toHaveBeenCalledTimes(1);
-  });
-}
 
 test("root-change receipt recovery reuses one approval and delivers one outcome", async () => {
   const notices: string[] = [];

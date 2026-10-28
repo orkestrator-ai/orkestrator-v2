@@ -1,7 +1,7 @@
 # Looped review lease-takeover case exceeds the aggregate deadline
 
 - **ID:** 0301
-- **Status:** open
+- **Status:** resolved
 
 Observed: 2026-10-17
 
@@ -15,3 +15,9 @@ Observed: 2026-10-17
 Hypothesis: the lease-expiry wait in this case runs close to the default
 deadline once the host is saturated. That is unconfirmed. No assertion,
 deadline or skip was changed.
+
+## Resolution (2026-10-28)
+
+Retired, not fixed: the Looped Review feature was removed, and its owning test
+file was deleted with it. The root cause was never confirmed. No surviving test
+runs this case.

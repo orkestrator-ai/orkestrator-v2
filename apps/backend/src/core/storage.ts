@@ -62,7 +62,6 @@ import type {
   PersistedBuildPipeline,
   PersistedComposeDraft,
   PersistedFileDraft,
-  PersistedLoopedReviewWorkflow,
   PersistedMultiReviewWorkflow,
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,
@@ -730,74 +729,6 @@ export class StorageService {
   }
 
   // ReviewsRepository
-
-  getLoopedReviewWorkflow(workflowId: string): Promise<PersistedLoopedReviewWorkflow | null> {
-    return this.repos.reviews.getLoopedReviewWorkflow(workflowId);
-  }
-
-  listLoopedReviewWorkflows(environmentId: string): Promise<PersistedLoopedReviewWorkflow[]> {
-    return this.repos.reviews.listLoopedReviewWorkflows(environmentId);
-  }
-
-  listAllLoopedReviewWorkflows(): Promise<PersistedLoopedReviewWorkflow[]> {
-    return this.repos.reviews.listAllLoopedReviewWorkflows();
-  }
-
-  saveLoopedReviewWorkflow(
-    workflowId: string,
-    environmentId: string,
-    version: number,
-    snapshot: unknown,
-    expectedRevision?: number,
-    controllerFence?: { ownerId: string; token: string },
-    options?: {
-      /**
-       * Rejects the write when the *stored* record has already reached this
-       * version. Evaluated inside the mutation queue so it cannot be overtaken
-       * by a concurrent backend adoption between the caller's read and its
-       * write, which a caller-side check inevitably can be.
-       */
-      rejectStoredVersionAtLeast?: number;
-    },
-  ): Promise<PersistedLoopedReviewWorkflow> {
-    return this.repos.reviews.saveLoopedReviewWorkflow(
-      workflowId,
-      environmentId,
-      version,
-      snapshot,
-      expectedRevision,
-      controllerFence,
-      options,
-    );
-  }
-
-  claimLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    leaseMs: number,
-  ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
-    return this.repos.reviews.claimLoopedReviewController(workflowId, ownerId, leaseMs);
-  }
-
-  validateLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    token: string,
-  ): Promise<boolean> {
-    return this.repos.reviews.validateLoopedReviewController(workflowId, ownerId, token);
-  }
-
-  releaseLoopedReviewController(workflowId: string, ownerId: string, token: string): Promise<void> {
-    return this.repos.reviews.releaseLoopedReviewController(workflowId, ownerId, token);
-  }
-
-  deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
-    return this.repos.reviews.deleteLoopedReviewWorkflow(workflowId);
-  }
-
-  deleteLoopedReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
-    return this.repos.reviews.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
-  }
 
   getMultiReviewWorkflow(workflowId: string): Promise<PersistedMultiReviewWorkflow | null> {
     return this.repos.reviews.getMultiReviewWorkflow(workflowId);

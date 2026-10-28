@@ -1145,7 +1145,7 @@ Dockerfile's `PI_CLI_VERSION` all agree.
 ## Workflow results through tool calls
 
 Backend-owned workflows — feature planning, build pipeline stages, review
-fan-out, multi-review, and looped review — need a structured result from the
+fan-out and multi-review — need a structured result from the
 model. Two transports exist, and each attempt records which one it was admitted
 under so old records stay readable.
 
@@ -1345,8 +1345,8 @@ workflow-result turn runs for: the prompt body carries `workflowResultTool` and
 (`bridgePromptBody`). The review fan-out's reviewers, every Multi Review step
 (preparation, consolidation and Fix, and their reminder and restart turns) and
 Build Pipeline consolidation declare the pair, with the key set to the turn's
-request id, which is also the result key. Looped Review
-(`looped-review-service.ts`), Feature Planning (`feature-planning.ts`) and Build
+request id, which is also the result key. Feature Planning
+(`feature-planning.ts`) and Build
 Pipeline stage sends and follow-ups (`build-pipeline-service-supervisor.ts`)
 still omit `workflowResultKey`; declaring their attempts remains outstanding.
 Those paths do not receive this exemption under deny/ask or read-only gating.

@@ -437,10 +437,10 @@ async function withService(
         ...(args.fingerprint && controls.fingerprint ? { fingerprint: controls.fingerprint } : {}),
       } as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       return testGeneratedReviewPackage(args) as T;
     }
-    if (command === "verify_looped_review_package") return { valid: true } as T;
+    if (command === "verify_review_package") return { valid: true } as T;
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -618,9 +618,7 @@ describe("BuildPipelineService", () => {
       expect(
         "filePath" in reviewing.reviewPackage! ? reviewing.reviewPackage.filePath : "",
       ).toContain(".orkestrator/review-artifacts/");
-      expect(invocations.some((entry) => entry.command === "generate_looped_review_package")).toBe(
-        true,
-      );
+      expect(invocations.some((entry) => entry.command === "generate_review_package")).toBe(true);
       expect(reviewing.sessions.at(-1)).not.toHaveProperty("validationHeadAtStart");
       expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range under review");
       expect(provider.sent.at(-1)?.prompt).toContain("Do not modify, create, or delete files");
@@ -1226,9 +1224,7 @@ describe("BuildPipelineService", () => {
           expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
           expect(provider.created).toHaveLength(sessionCount);
           expect(
-            invocations
-              .slice(before)
-              .some((call) => call.command === "generate_looped_review_package"),
+            invocations.slice(before).some((call) => call.command === "generate_review_package"),
           ).toBe(false);
 
           // Explicit resume moves to the preparation override, without a new fingerprint.

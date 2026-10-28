@@ -8,7 +8,6 @@ import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { JsonRecord, StorageService } from "./storage.js";
-import type { LoopedReviewService } from "./looped-review-service.js";
 import type { MultiReviewService } from "./multi-review-service.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { FeaturePlanningService } from "./feature-planning.js";
@@ -72,7 +71,6 @@ export type CommandContext = {
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
-  loopedReviews?: LoopedReviewService;
   multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
   workflowResults?: import("./workflow-result-service.js").WorkflowResultService;

@@ -69,7 +69,6 @@ const RESOURCE_MANIFEST_FILES: Record<ResourceManifestKind, string> = {
   "project-notes": "project-notes.json",
   "feature-plan": "feature-plans.json",
   "pane-layout": "pane-layouts.json",
-  "looped-review": "looped-reviews.json",
   "multi-review": "multi-reviews.json",
   "build-pipeline": "build-pipelines.json",
   "prompt-queue": "prompt-queues.json",
@@ -633,7 +632,7 @@ describe("StorageService resource change announcements", () => {
     });
   });
 
-  test("announces pane layout, looped review, and multi review writes and deletes", async () => {
+  test("announces pane layout and multi review writes and deletes", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
@@ -654,23 +653,17 @@ describe("StorageService resource change announcements", () => {
       await storage.removeMultiReviewTabs("e1", "missing-workflow");
       expect(changes).toEqual([]);
 
-      await storage.saveLoopedReviewWorkflow("w1", "e1", 1, { id: "w1" });
-      expect(changes.at(-1)).toMatchObject({ resource: "looped-review", id: "w1" });
-
-      await storage.deleteLoopedReviewWorkflow("w1");
-      expect(changes.at(-1)).toMatchObject({ resource: "looped-review", id: "w1" });
-
-      await storage.saveLoopedReviewWorkflow("w2", "e1", 1, { id: "w2" });
-      await storage.saveLoopedReviewWorkflow("w3", "e1", 1, { id: "w3" });
-      changes.length = 0;
-      await storage.deleteLoopedReviewWorkflowsByEnvironment("e1");
-      expect(new Set(changes.map((change) => change.id))).toEqual(new Set(["w2", "w3"]));
-      expect(changes.every((change) => change.resource === "looped-review")).toBe(true);
-
       await storage.saveMultiReviewWorkflow("m1", "e1", 1, { id: "m1" });
       expect(changes.at(-1)).toMatchObject({ resource: "multi-review", id: "m1" });
       await storage.deleteMultiReviewWorkflow("m1");
       expect(changes.at(-1)).toMatchObject({ resource: "multi-review", id: "m1" });
+
+      await storage.saveMultiReviewWorkflow("m2", "e1", 1, { id: "m2" });
+      await storage.saveMultiReviewWorkflow("m3", "e1", 1, { id: "m3" });
+      changes.length = 0;
+      await storage.deleteMultiReviewWorkflowsByEnvironment("e1");
+      expect(new Set(changes.map((change) => change.id))).toEqual(new Set(["m2", "m3"]));
+      expect(changes.every((change) => change.resource === "multi-review")).toBe(true);
 
       await storage.deletePaneLayout("e1");
       expect(changes.at(-1)).toMatchObject({ resource: "pane-layout", id: "e1" });

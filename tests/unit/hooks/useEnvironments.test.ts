@@ -4,7 +4,6 @@ import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useClaudeOptionsStore } from "../../../apps/web/src/stores/claudeOptionsStore";
-import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
@@ -23,7 +22,6 @@ import {
   DEFAULT_TERMINAL_APPEARANCE,
   DEFAULT_TERMINAL_SCROLLBACK,
 } from "../../../apps/web/src/constants/terminal";
-import { loopedReviewFixture } from "../../../apps/web/src/test/looped-review-fixture";
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -179,7 +177,6 @@ describe("useEnvironments", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    useLoopedReviewStore.setState({ workflows: new Map() });
     useErrorDialogStore.setState({ error: null });
     useProjectStore.setState({ projects: [] });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
@@ -575,16 +572,6 @@ describe("useEnvironments", () => {
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
     const pipelineId = seedBuildPipeline("env-1");
-    const deletedWorkflow = loopedReviewFixture({
-      environmentId: "env-1",
-      projectId: "project-1",
-    });
-    const retainedWorkflow = loopedReviewFixture({
-      environmentId: "env-2",
-      projectId: "project-1",
-    });
-    useLoopedReviewStore.getState().replaceWorkflow(deletedWorkflow);
-    useLoopedReviewStore.getState().replaceWorkflow(retainedWorkflow);
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -600,8 +587,6 @@ describe("useEnvironments", () => {
     expect(result.current.allEnvironments).toHaveLength(0);
     expect(result.current.error).toBeNull();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
-    expect(useLoopedReviewStore.getState().workflows.has(deletedWorkflow.id)).toBe(false);
-    expect(useLoopedReviewStore.getState().workflows.has(retainedWorkflow.id)).toBe(true);
   });
 
   test("deleteEnvironment activates the project as soon as cleanup starts", async () => {
@@ -705,11 +690,6 @@ describe("useEnvironments", () => {
       selectedEnvironmentId: "env-1",
     });
     const pipelineId = seedBuildPipeline("env-1");
-    const workflow = loopedReviewFixture({
-      environmentId: "env-1",
-      projectId: "project-1",
-    });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -723,7 +703,6 @@ describe("useEnvironments", () => {
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toBeDefined();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
-    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
     expect(useUIStore.getState().selectedProjectId).toBe("project-1");
   });

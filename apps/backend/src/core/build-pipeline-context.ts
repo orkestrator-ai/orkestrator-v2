@@ -294,7 +294,7 @@ export class BuildPipelineContext {
   /** Background sessions receive the same trusted environment policy as native tabs. */
   async executionPolicy(
     pipeline: BuildPipeline,
-    origin: "build-pipeline" | "looped-review" = "build-pipeline",
+    origin: "build-pipeline" | "automated-review" = "build-pipeline",
   ): Promise<NativeAgentExecutionPolicy> {
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");

@@ -510,7 +510,8 @@ export function MergedProjectList({
         onOpen={
           opens
             ? () => {
-                const boardTab = projectLandingBoardTab(mode, opens.machine.bound);
+                const onCommandNode = opens.machine.bound && portalState.status?.mode !== "leaf";
+                const boardTab = projectLandingBoardTab(mode, onCommandNode);
                 openMachineWorkspace({
                   connectionId: opens.machine.connectionId,
                   projectId: opens.project.ref.projectId,

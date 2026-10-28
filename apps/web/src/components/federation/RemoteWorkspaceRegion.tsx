@@ -229,9 +229,14 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
       selection.current = selectRequest(request);
       return selection.current;
     }
-    // Dialogs are one-shot requests; a replacement resumes only the selection.
-    const { projectId, environmentId } = selection.current;
-    return { projectId, environmentId };
+    // Before readiness, an effect replay or failed load must keep the initial
+    // landing tab (and any dialog) on the document that actually opens.
+    // After readiness, dialogs are one-shot; a replacement resumes the selection.
+    if (wasReady) {
+      const { projectId, environmentId } = selection.current;
+      selection.current = { projectId, environmentId };
+    }
+    return selection.current;
   }, [nodeId]);
 
   const onMessage = useCallback(

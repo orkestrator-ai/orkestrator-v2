@@ -21,9 +21,11 @@ import {
   useRemoteWorkspaceStore,
 } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
+import { LeafModeCoordinatorGate } from "@/components/projects/LeafModeCoordinatorGate";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   OUTCOME_UNKNOWN,
+  SELF_NODE_ID,
   connectionList,
   installDesktopFake,
   remoteConnection,
@@ -1168,6 +1170,120 @@ describe("another machine's menus offer what this machine's do", () => {
 });
 
 describe("a project's entry opens on the tab its grouping calls for", () => {
+  for (const mode of ["command", "leaf"] as const) {
+    test(`a repository heading opens a bound ${mode} node on ${mode === "leaf" ? "Home" : "Coordinator"}`, async () => {
+      const initialUI = useUIStore.getState();
+      installDesktopFake({
+        list: connectionList([]),
+        datasets: {},
+        respondPortal: (command) =>
+          command === "get_node_status"
+            ? {
+                nodeId: SELF_NODE_ID,
+                mode,
+                registrationEnabled: true,
+                controllers: [],
+                detachedControllers: [],
+                suspendedSubordinateCount: 0,
+              }
+            : undefined,
+      });
+      const bound = machineView({
+        connectionId: SELF_NODE_ID,
+        backendId: SELF_NODE_ID,
+        bound: true,
+      });
+      bound.projects[0]!.repositoryHint = "github.com/acme/app";
+      function Workspace() {
+        const projectId = useUIStore((state) => state.selectedProjectId);
+        const tab = useUIStore((state) => state.projectBoardTab);
+        if (!projectId) return null;
+        return tab === "home" ? (
+          <div>Project Home</div>
+        ) : (
+          <LeafModeCoordinatorGate projectId={projectId}>
+            <div>Project Coordinator</div>
+          </LeafModeCoordinatorGate>
+        );
+      }
+      try {
+        useUIStore.setState({ selectedProjectId: null, projectBoardTab: "kanban" });
+        renderWithFederation(
+          <>
+            <MergedProjectList
+              machines={[bound]}
+              shownIds={new Set([SELF_NODE_ID])}
+              mode="repository"
+              renderBoundProject={() => null}
+              onBoundEnvironmentDragEnd={() => undefined}
+            />
+            <Workspace />
+          </>,
+        );
+        await waitFor(() => expect(portalStore.getState().status?.mode).toBe(mode));
+        const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+        for (let click = 0; click < 2; click++) {
+          act(() => useUIStore.getState().setProjectBoardTab("kanban"));
+          fireEvent.click(heading);
+          await waitFor(() =>
+            expect(useUIStore.getState().projectBoardTab).toBe(
+              mode === "leaf" ? "home" : "coordinator",
+            ),
+          );
+          expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+          expect(
+            screen.getByText(mode === "leaf" ? "Project Home" : "Project Coordinator"),
+          ).toBeTruthy();
+          expect(screen.queryByTestId("leaf-mode-coordinator-gate")).toBeNull();
+          expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+        }
+      } finally {
+        cleanup();
+        useUIStore.setState(initialUI, true);
+      }
+    });
+  }
+
+  for (const truncated of [false, true]) {
+    test(`a remote project with ${truncated ? "a Home missing from its truncated summary" : "no Home"} releases its highlight when an environment is selected`, async () => {
+      installTwoMachines();
+      const machine = machineView({ connectionId: "bk_a", truncated });
+      renderWithFederation(
+        <RemoteProjectGroup
+          machine={machine}
+          project={machine.projects[0]!}
+          environments={[firstEnvironment(machine)]}
+          isCollapsed={false}
+          onToggleCollapse={() => {}}
+          sortable={false}
+          grouping="machine"
+        />,
+      );
+      await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
+      const project = screen.getByTitle("Open app on Machine A");
+      fireEvent.click(project);
+      await waitFor(() => expect(project.getAttribute("aria-current")).toBe("page"));
+      const report = (environmentId: string | null) =>
+        act(() =>
+          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+            projectId: "project-1",
+            environmentId,
+          }),
+        );
+      report("env-1");
+      expect(project.getAttribute("aria-current")).toBeNull();
+      if (truncated) {
+        // An unlisted environment cannot be identified as Home by this summary.
+        report("unlisted-home");
+        expect(project.getAttribute("aria-current")).toBeNull();
+      }
+      report(null);
+      expect(project.getAttribute("aria-current")).toBe("page");
+      act(() => useRemoteWorkspaceStore.getState().showLocal());
+      expect(project.getAttribute("aria-current")).toBeNull();
+    });
+  }
+
   function installRepository() {
     const datasets = { a: sharedIdDataset("working"), b: sharedIdDataset("waiting") };
     for (const dataset of Object.values(datasets)) {

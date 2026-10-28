@@ -50,7 +50,8 @@ heavy load, and identically on `origin/main`.
 ## Review follow-up (2026-10-28)
 
 Preparation passed `mise run format:check`, `mise run lint` and
-`mise run typecheck`; these passing repository-wide checks were not repeated.
+`mise run typecheck`; the passing repository-wide lint and type checks were
+reused. Repository formatting was rerun after editing and passed.
 The changed fixtures and specs passed focused lint, both E2E TypeScript
 projects and formatting checks. The dedicated sidebar-probe browser spec
 passed in both Chromium viewport projects (2 tests, 16.9 s), including
@@ -75,3 +76,29 @@ The exact browser and isolated-browser preparation commands were also rerun.
 The first browser attempt was invalidated by overlapping fixture-server and
 artifact ownership; it was interrupted and restarted after the focused probe
 finished. Only the subsequent run counts as broad browser evidence.
+
+- `mise run test:browser`: the clean rerun was deliberately interrupted
+  after reproducing 23 failure titles also present in preparation, all in
+  unchanged owners (usage cards, background-task layout, canvas/settings,
+  mail and review-flow fixtures). Final result: 25 failed, 6 interrupted,
+  218 passed, 60 skipped and 705 not run, 683.0 s. This is incomplete,
+  non-green broad coverage, not a passing browser suite. The public-site
+  command following the component suite did not run. Evidence:
+  `/tmp/orkestrator-test-run.FlGrvw/`. The separate focused probe passed in
+  both viewport projects before this run.
+- `mise run test:agent:browser:isolated`: the runner's 900 s test deadline
+  expired (943.5 s including startup/cleanup), after 11 failures in unchanged
+  account/gateway specs and reaching case 24/109. Error contexts show the
+  host Docker connectivity dialog blocking the app's accessible project
+  tree; the preparation run failed on the same missing project controls.
+  Profile `qa-browser-b49d3ad1-055` was stopped and reset by its owner.
+  Evidence: `/tmp/orkestrator-test-run.TrzSSq/` and
+  `output/agent-testing/qa-browser-b49d3ad1-055/browser/artifacts/`.
+- Credentialed targeted qualification did complete: Claude (113.8 s) and
+  Codex (136.8 s) each passed the live idle spec with
+  `ORKESTRATOR_AGENT_TEST_IDLE_CASES=missed-final`. Both warm-ups recorded exactly
+  `working`, `idle`, with no `unknown`; the missed-final cases passed too.
+  Timings and run IDs are recorded in
+  [0199](../../todo/transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md#live-qualification-2026-10-28-review-follow-up)
+  and [0049](../../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#sidebar-probe-qualification-2026-10-28).
+  Profile `idleqa-0199-review` was stopped and reset.

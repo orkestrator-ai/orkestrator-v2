@@ -55,3 +55,49 @@ mise run test:logged -- --name design-and-layer-owners -- bunx playwright test -
 No assertion, timeout or skip changed. The cause remains unestablished; this
 case stays open. Aggregate counts and artifact paths are recorded in
 [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#uniform-app-shortcut-review-repairs--2026-10-28).
+
+## Remote project-search review recurrence — 2026-10-28
+
+The exact recorded browser command was rerun after fixing search assertions:
+
+```sh
+mise run test:logged -- --name review-repair-browser -- mise run test:browser
+```
+
+With nine workers it reported 930 passed, 105 skipped, and three failed
+(exit 1, 565.0 seconds). The mobile unrendered-frame case again could not
+find `plans (h2)` at line 613 within five seconds. Both other failures were
+the established native branch-suggestion cases. All 22 search cases passed.
+Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ciI5We/review-repair-browser.log.gz`.
+
+The complete unchanged accessibility owner passed all 14 cases with one worker
+(exit 0, 60.7 seconds):
+
+```sh
+mise run test:logged -- --name design-accessibility-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1
+```
+
+The repository default suite passed all four groups (369.4 seconds), and the
+public-site browser stage that the component failure prevented from running
+passed separately (16.8 seconds):
+
+```sh
+mise run test:logged -- --name public-site-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+No design-canvas implementation, assertion, deadline, or skip changed; the
+cause remains unestablished and this case stays open.
+
+The complete unchanged native branch-picker owner retained both established
+suggestion failures (`release/2.0` expected, `rel` received); both manual-entry
+cases passed (two passed, two failed; 23.3 seconds):
+
+```sh
+mise run test:logged -- --name native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/search-review-native-branch
+```
+
+Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.W9Ohup/native-branch-owner.log.gz`.
+This remains an unrelated non-green native picker limitation, not a newly
+confirmed flake. No owning source or tests changed.

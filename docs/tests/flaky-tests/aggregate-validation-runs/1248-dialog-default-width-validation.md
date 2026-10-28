@@ -40,3 +40,59 @@ updated to the new width class and passed alone (47 passed). Evidence:
 
 A second `mise run test` on the committed branch passed every group
 (workspace, root, bridges and Codex protocol; 1,508.8 s under host load).
+
+## Review repair validation (2026-10-28)
+
+The review repair (`22f7041f7`) waits for the approval dialog's opening animation,
+parses JSX and local class constants in the width guard, and adds rendered-width
+checks for source, file, gallery, Mermaid and table viewers at phone, desktop
+and wide-desktop widths.
+
+Targeted checks passed:
+
+- `mise run test:logged -- --name dialog-width-unit -- bun test --cwd apps/web ./src/components/ui/dialog.test.tsx --parallel=1 --only-failures` (1.5 s).
+- `mise run test:logged -- --name dialog-width-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentsMdApproval.spec.ts e2e/ExpandedViewers.spec.ts --repeat-each=5 --workers=4` (110 passed, 70.4 s), including the immediately resolved approval preview in both viewport projects.
+- Scoped web and browser typechecks (`bun check -p apps/web/tsconfig.json` and `bun check -p e2e/tsconfig.json`), oxlint and formatting checks on the changed source files, through `test:logged`.
+- `tests/unit/playwright-spec-loading.test.ts` (30.7 s) and `tests/unit/flaky-tests-index.test.ts` through `test:logged`, with one Bun worker.
+
+Preparation had already passed the default suite and full static checks; those
+passing aggregate commands were not repeated. Its failed browser and Electron
+commands were rerun exactly:
+
+| Command | Result | Evidence under the host temporary directory |
+| --- | --- | --- |
+| `mise run test:logged -- --name browser -- mise run test:browser` | 855 passed, 42 failed, 105 skipped; nine workers, 1,566.0 s. The component failure prevented the public-site stage from running. | `orkestrator-test-run.menF4P/browser.log.gz` |
+| `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | 33 passed, four failed, one skipped, six not run; one worker, 608.9 s. | `orkestrator-test-run.Fk5GUs/agent-electron.log.gz` |
+
+Both evidence directories are under
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`.
+
+The browser run accumulated navigation/reload and interaction timeouts across
+many unchanged specs, alongside the native datalist failure. Host load averages
+were 121.61 / 109.61 / 82.65 at 14:47 and 102.66 / 112.52 / 100.64 at 14:59;
+load is an observation, not a proven cause. The mobile unrendered-frame layer
+failure passed in its complete unchanged owner (14 cases, one worker, 419.7 s)
+and is tracked in [1249](../design-canvas-and-artifacts/1249-design-layer-tree-unrendered-row.md).
+
+The new desktop `source viewer preserves its expanded width inside the viewport`
+case also exceeded its 30-second test deadline in `page.goto`, waiting for
+`load`, before any width assertion. Its complete unchanged owner then passed
+all ten cases across both viewports in 33.7 s:
+
+```sh
+mise run test:logged -- --name expanded-viewers-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ExpandedViewers.spec.ts --workers=1
+```
+
+This records a credible navigation flake in that owner; no layout assertion was
+skipped, relaxed, or changed. The remaining broad browser failures were not
+individually rerun or newly classified as flaky in this repair.
+
+The Electron failures were the existing design graceful-quit deadline
+([1131](../design-canvas-and-artifacts/1131-design-electron-graceful-quit-deadline.md)),
+service-preview HMR not applying v3 in place, annotation descendant processes
+remaining alive during the zoom/DPR journey, and a workspace-realm screenshot
+not appearing. No new isolated diagnosis is claimed for those failures.
+
+Playwright owns the component fixture server and disposable Electron fixtures.
+No named `dev:test` profile was started by this repair; no matching live test
+launcher remained after the runs. Compressed failure logs and Electron artifacts were retained.

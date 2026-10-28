@@ -624,6 +624,43 @@ test("a leaf's workspace opens in the window's central region without moving or 
         });
       }
     }
+    // ⌘K / Ctrl+K typed in the realm's composer opens the window's search,
+    // which takes native keyboard focus from the realm.
+    {
+      const realmPage = electronApp
+        .windows()
+        .find((page) => page.url().includes("realm=workspace"));
+      if (!realmPage) throw new Error("The realm page was not attached");
+      await realmPage.evaluate(() => {
+        const composer = document.createElement("textarea");
+        composer.setAttribute("aria-label", "Realm QA composer");
+        document.body.append(composer);
+      });
+      const composer = realmPage.getByRole("textbox", { name: "Realm QA composer" });
+      const search = window.getByRole("dialog", { name: "Search projects and environments" });
+      try {
+        await composer.focus();
+        await realmPage.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+K`);
+        await expect(search).toBeVisible();
+        await expect(realmPage.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+        if (windowFocused)
+          await expect
+            .poll(() =>
+              electronApp.evaluate(
+                ({ BrowserWindow, webContents }) =>
+                  webContents.getFocusedWebContents()?.id ===
+                  BrowserWindow.getAllWindows()[0]!.webContents.id,
+              ),
+            )
+            .toBe(true);
+        await window.keyboard.press("Escape");
+        await expect(search).toHaveCount(0);
+      } finally {
+        await realmPage.evaluate(() =>
+          document.querySelector('[aria-label="Realm QA composer"]')?.remove(),
+        );
+      }
+    }
     // Keyboard focus crosses the native webContents boundary in both directions.
     const panelState = () =>
       electronApp.evaluate(async ({ webContents }) => {

@@ -8,10 +8,10 @@ import { listen } from "@/lib/native/events";
 import { cn } from "@/lib/utils";
 import { Keyboard, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { onAppShortcut } from "@/lib/app-shortcuts";
 import {
   detectShortcutPlatform,
   filterKeyboardShortcuts,
-  isKeyboardShortcutsShortcut,
   shortcutKeys,
   type ShortcutPlatform,
 } from "@/lib/keyboard-shortcuts";
@@ -127,7 +127,8 @@ function KeyboardShortcutsPanel({
 
 /**
  * Lists application keyboard shortcuts, searchable. ⌘⇧K / Ctrl+Shift+K
- * toggles it from anywhere in this document; the desktop app also opens it
+ * toggles it from anywhere in this document (see `app-shortcuts.ts`),
+ * including its design frames; the desktop app also opens it
  * from View › Keyboard Shortcuts… and forwards the chord from native preview
  * views, which keep their keys from this document.
  */
@@ -154,21 +155,10 @@ export function KeyboardShortcutsDialog({
       setOpen(next);
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isKeyboardShortcutsShortcut(event)) return;
-      // Native Electron input is consumed before DOM dispatch. This remains
-      // the browser and synthetic/CDP fallback, without a time-based guard.
-      // Claim the chord before Monaco (Delete Line) or xterm can process it,
-      // and so the desktop menu's key equivalent does not fire as well.
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.repeat) return;
-      show(!openRef.current);
-    };
-
-    const handleFrameShortcut = () => show(!openRef.current);
-    window.addEventListener(KEYBOARD_SHORTCUTS_EVENT, handleFrameShortcut);
-    window.addEventListener("keydown", handleKeyDown, true);
+    // The chord typed in this document or one of its design frames. Native
+    // Electron input is consumed before DOM dispatch; this remains the
+    // browser and synthetic/CDP path, without a time-based guard.
+    const stopShortcut = onAppShortcut("show-shortcuts", () => show(!openRef.current));
     // Desktop only: the browser client has no native menu and never emits it.
     const unlisten = listen<unknown>(KEYBOARD_SHORTCUTS_EVENT, ({ payload }) => {
       if (!isKeyboardShortcutsRequest(payload)) return;
@@ -182,8 +172,7 @@ export function KeyboardShortcutsDialog({
       }
     });
     return () => {
-      window.removeEventListener(KEYBOARD_SHORTCUTS_EVENT, handleFrameShortcut);
-      window.removeEventListener("keydown", handleKeyDown, true);
+      stopShortcut();
       void unlisten.then((dispose) => dispose());
     };
   }, []);

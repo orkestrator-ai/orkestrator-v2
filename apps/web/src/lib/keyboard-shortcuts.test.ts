@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { APP_SHORTCUTS, matchAppShortcut } from "@orkestrator/protocol/keyboard-shortcuts";
 import {
   KEYBOARD_SHORTCUT_GROUPS,
   detectShortcutPlatform,
@@ -115,6 +116,34 @@ describe("detectShortcutPlatform", () => {
         Object.defineProperty(globalThis, "navigator", descriptor);
       } else {
         Reflect.deleteProperty(globalThis, "navigator");
+      }
+    }
+  });
+});
+
+describe("app-level shortcuts", () => {
+  const all = KEYBOARD_SHORTCUT_GROUPS.flatMap((group) => group.shortcuts);
+
+  test("the catalog lists exactly the shortcuts every key router routes", () => {
+    expect(
+      all
+        .filter((shortcut) => shortcut.app)
+        .map((shortcut) => shortcut.id)
+        .sort(),
+    ).toEqual(APP_SHORTCUTS.map((shortcut) => shortcut.id).sort());
+  });
+
+  test("each one's advertised keys are the chord the routers match, on both platforms", () => {
+    for (const shortcut of all.filter((entry) => entry.app)) {
+      for (const keys of [shortcut.mac, shortcut.other!]) {
+        const chord = {
+          key: keys.at(-1)!.toLowerCase(),
+          metaKey: keys.includes("⌘"),
+          ctrlKey: keys.includes("Ctrl"),
+          shiftKey: keys.includes("⇧") || keys.includes("Shift"),
+          altKey: false,
+        };
+        expect(matchAppShortcut(chord)).toBe(shortcut.id as (typeof APP_SHORTCUTS)[number]["id"]);
       }
     }
   });

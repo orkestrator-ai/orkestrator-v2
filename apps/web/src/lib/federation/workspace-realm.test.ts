@@ -217,3 +217,12 @@ test("title-bar popovers and meters cross only in their known shapes", () => {
     }),
   ).toEqual({ type: "titleBar", usage: null, usageStale: false, panel: null });
 });
+
+test("a realm forwards only catalogued app shortcuts to its window", () => {
+  expect(parseRealmMessage({ type: "shortcut", shortcut: "search-projects" })).toEqual({
+    type: "shortcut",
+    shortcut: "search-projects",
+  });
+  expect(parseRealmMessage({ type: "shortcut", shortcut: "close-tab" })).toBeNull();
+  expect(parseRealmMessage({ type: "shortcut" })).toBeNull();
+});

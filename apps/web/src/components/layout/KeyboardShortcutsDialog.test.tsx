@@ -194,6 +194,43 @@ describe("KeyboardShortcutsDialog", () => {
     }
   });
 
+  describe("Ctrl+Shift+K and Cmd+Shift+K", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    afterEach(() => {
+      if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+      else delete (navigator as { platform?: string }).platform;
+    });
+
+    test.each([
+      ["MacIntel", "metaKey"],
+      ["MacIntel", "ctrlKey"],
+      ["Win32", "ctrlKey"],
+      ["Win32", "metaKey"],
+    ] as const)(
+      "on %s, %s toggles it from the composer and a terminal",
+      async (platform, modifier) => {
+        Object.defineProperty(navigator, "platform", { value: platform, configurable: true });
+        render(
+          <>
+            <textarea aria-label="Composer" />
+            <div className="xterm">
+              <textarea aria-label="Terminal input" />
+            </div>
+            <KeyboardShortcutsDialog />
+          </>,
+        );
+        for (const name of ["Composer", "Terminal input"]) {
+          const surface = screen.getByRole("textbox", { name });
+          surface.focus();
+          fireEvent.keyDown(surface, { key: "K", code: "KeyK", shiftKey: true, [modifier]: true });
+          expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
+          pressShortcut({ [modifier]: true });
+          await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
+        }
+      },
+    );
+  });
+
   test("a View menu click opens the dialog and never closes it", async () => {
     render(<KeyboardShortcutsDialog platform="mac" />);
     const emit = desktopMenuEvent();

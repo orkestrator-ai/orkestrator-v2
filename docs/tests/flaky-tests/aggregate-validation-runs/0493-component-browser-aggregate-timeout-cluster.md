@@ -483,3 +483,87 @@ step was run separately because the component failure prevented it starting.
 
 The separate public-site command passed (exit 0, 10.7 seconds):
 `mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts`.
+
+
+## Uniform app shortcut review repairs — 2026-10-28
+
+Implementation is committed as `3b779c667`. The focused protocol and Electron
+shortcut tests, individual web/desktop/protocol/e2e typechecks, changed-file
+format/lint checks, and all 64 combined shortcut/settings-layout browser cases
+passed. The exact repository rerun passed in 204.1 seconds (see 1253).
+
+The exact original component command was repeated through the logged runner:
+
+```sh
+mise run test:logged -- --name review-repair-browser -- mise run test:browser
+```
+
+With nine workers it finished in 1,155.4 seconds: 911 passed, 105 skipped,
+12 failed. Every shortcut case passed. The failures were:
+
+| Owner | Failures |
+| --- | --- |
+| AgentLaunchDialog | Native branch suggestion, both viewports (`rel` instead of `release/2.0`) |
+| DataSavingGateway | Mobile resume/reconnect scenario |
+| DesignCanvas | Both viewport cases exceeded the 30-second test deadline |
+| DesignCanvasAccessibility | Mobile unrendered-frame layer selection (1249) |
+| PipelineFlow | Mobile inactive review-pass rehydration |
+| SetupRecovery | Both mobile retry/skip hit-target scenarios |
+| ToolGroupFold | Mobile released-reader placement and desktop live fold threshold |
+| StreamingTranscript | Desktop scrollbar departure after find |
+
+The complete native-branch/retention owners had already been rerun unchanged
+with one worker: 21 passed, 20 skipped, three failed in 144.9 seconds. The two
+native branch failures persisted, as did desktop Cursor saturation (0963).
+The public-site step was not reached by the failed component chain; it passed
+separately in 27.6 seconds:
+
+```sh
+mise run test:logged -- --name review-repair-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.grSN2i/review-repair-browser.log.gz` and
+`orkestrator-test-run.E3EaSR/recorded-browser-owners.log.gz`.
+No component assertions, timeouts or skips were weakened. An earlier aggregate
+was stopped after a new settings-fixture input changed its tab order; the extra
+controls now require `?search-ui`, and all 64 owning browser cases passed before
+the exact final aggregate above. A separate earlier focused attempt overlapped
+artifact directories; the final focused/aggregate runs used the directory
+sequentially.
+
+The exact isolated-browser preparation command was also repeated:
+
+```sh
+mise run test:logged -- --name review-repair-isolated-browser -- mise run test:agent:browser:isolated
+```
+
+It reached case 79/109 and hit its overall command deadline (987.0 seconds),
+so there is no complete pass/fail count. Before that it reported failures in
+`browser-gateway.spec.ts:711` (capped file tree), `:2718` (persisted diff
+baselines), and `design-canvas.spec.ts:13` (UPPER.ORKDES text fallback).
+Those real-stack owners were not rerun separately in this repair, and these
+observations are not newly classified as flakes. Cleanup stopped and reset
+`qa-browser-0908f785-2b8`; a final `dev:status --json` reported `missing` and an
+empty `live` object. Evidence:
+`orkestrator-test-run.lc35do/review-repair-isolated-browser.log.gz`.
+
+Electron's exact rerun and complete service-preview owner both retained the
+existing HMR failure; their commands/counts are recorded in 1303. The earlier
+passing full build, full lint and full typecheck preparation commands were not
+repeated redundantly.
+
+
+The complete unchanged design and layer owners then passed sequentially with
+one worker (20 passed, exit 0, 77.0 seconds):
+
+```sh
+mise run test:logged -- --name design-and-layer-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DesignCanvasAccessibility.spec.ts e2e/SetupRecovery.spec.ts --workers=1
+```
+
+This includes both DesignCanvas viewport cases (0174), all 14 accessibility
+cases (1249), and all four SetupRecovery cases. It establishes aggregate-only
+failure for those observations, without establishing a root cause or fix.
+DataSavingGateway, PipelineFlow, ToolGroupFold and StreamingTranscript were
+not rerun separately in this repair, so their latest failures remain
+unclassified and non-green. All shortcut/settings regression checks passed.

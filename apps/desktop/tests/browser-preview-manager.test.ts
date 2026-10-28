@@ -1,3 +1,4 @@
+import { APP_SHORTCUTS, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../electron/browser-preview-manager";
@@ -99,7 +100,7 @@ function createHarness(
   const openExternal = mock(() => undefined);
   const writeClipboardText = mock(() => undefined);
   const focusAddressBar = mock(() => undefined);
-  const toggleKeyboardShortcuts = mock((_tabId: string) => undefined);
+  const requestPreviewShortcut = mock((_tabId: string, _shortcut: AppShortcutId) => undefined);
   const popup = mock(() => undefined);
   const menuTemplates: MenuItemConstructorOptions[][] = [];
   const menu = {
@@ -118,7 +119,7 @@ function createHarness(
     openExternal,
     writeClipboardText,
     focusAddressBar,
-    toggleKeyboardShortcuts,
+    requestPreviewShortcut,
   });
   return {
     manager,
@@ -129,7 +130,7 @@ function createHarness(
     openExternal,
     writeClipboardText,
     focusAddressBar,
-    toggleKeyboardShortcuts,
+    requestPreviewShortcut,
     menuTemplates,
     popup,
     window,
@@ -426,10 +427,10 @@ describe("BrowserPreviewManager", () => {
     expect(press({ meta: true, key: "Л" })).toBe(1);
     // A held key is still claimed, but toggles only once.
     expect(press({ meta: true, isAutoRepeat: true })).toBe(1);
-    expect(harness.toggleKeyboardShortcuts.mock.calls).toEqual([
-      [input.tabId],
-      [input.tabId],
-      [input.tabId],
+    expect(harness.requestPreviewShortcut.mock.calls).toEqual([
+      [input.tabId, "show-shortcuts"],
+      [input.tabId, "show-shortcuts"],
+      [input.tabId, "show-shortcuts"],
     ]);
 
     // Other chords stay with the page.
@@ -437,9 +438,39 @@ describe("BrowserPreviewManager", () => {
     expect(press({ meta: true, alt: true })).toBe(0);
     expect(press({ meta: true, control: true })).toBe(0);
     expect(press({ meta: true, type: "keyUp" })).toBe(0);
-    expect(harness.toggleKeyboardShortcuts).toHaveBeenCalledTimes(3);
+    expect(harness.requestPreviewShortcut).toHaveBeenCalledTimes(3);
     expect(harness.focusAddressBar).not.toHaveBeenCalled();
   });
+
+  test.each([true, false])(
+    "preview routing reads fromPreviews=%s from the catalog",
+    async (fromPreviews) => {
+      const search = APP_SHORTCUTS.find((shortcut) => shortcut.id === "search-projects")!;
+      const original = search.fromPreviews;
+      const harness = createHarness();
+      try {
+        search.fromPreviews = fromPreviews;
+        await harness.manager.attach(input);
+        const event = { preventDefault: mock(() => {}) };
+        harness.views[0]!.webContents.emit("before-input-event", event, {
+          type: "keyDown",
+          key: "k",
+          code: "KeyK",
+          meta: true,
+          control: false,
+          shift: false,
+          alt: false,
+        });
+        expect(event.preventDefault).toHaveBeenCalledTimes(fromPreviews ? 1 : 0);
+        expect(harness.requestPreviewShortcut.mock.calls).toEqual(
+          fromPreviews ? [[input.tabId, "search-projects"]] : [],
+        );
+      } finally {
+        search.fromPreviews = original;
+        harness.manager.destroyAll();
+      }
+    },
+  );
 
   test("restores focus only to a live, visible preview, never a replaced or hidden one", async () => {
     const harness = createHarness();

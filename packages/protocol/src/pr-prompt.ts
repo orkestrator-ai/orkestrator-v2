@@ -121,12 +121,21 @@ Resolve any remaining conflicts, then validate the resolution, even on resume af
 1. Push the resolved changes: \`git push\`
 2. If the push fails, handle appropriately
 
+## Step 6: Check for New Target Branch Commits
+
+The target branch may have moved while you were resolving. As the final action:
+1. Run \`git fetch origin\` again
+2. Run \`git rev-list --count HEAD..origin/${targetBranch}\` to count commits on the target branch that are not yet merged
+3. If the count is greater than zero, do another pass: repeat from Step 2, then return to this step
+4. Finish only once this check shows no new commits on \`origin/${targetBranch}\`
+
 ## Output
 
 After completing all steps:
 1. Summarize which files had conflicts and how they were resolved
 2. Confirm the merge commit was created
 3. Confirm the changes were pushed successfully
+4. State how many passes were needed and confirm the final check found no new commits on the target branch
 
 Begin by fetching the latest changes.`;
 }

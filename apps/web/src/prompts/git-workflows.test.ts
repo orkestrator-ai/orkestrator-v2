@@ -343,6 +343,15 @@ describe("createResolveConflictsPrompt", () => {
     expect(result).toContain("## Step 3: Resolve Conflicts");
     expect(result).toContain("## Step 4: Complete the Merge");
     expect(result).toContain("## Step 5: Push Changes");
+    expect(result).toContain("## Step 6: Check for New Target Branch Commits");
+  });
+
+  test("ends by checking the target branch for new commits and repeating if needed", () => {
+    const result = createResolveConflictsPrompt("develop");
+    expect(result).toContain("git rev-list --count HEAD..origin/develop");
+    expect(result).toContain("repeat from Step 2");
+    expect(result.indexOf("## Step 6:")).toBeGreaterThan(result.indexOf("## Step 5:"));
+    expect(result.indexOf("## Step 6:")).toBeLessThan(result.indexOf("## Output"));
   });
 
   test("uses the provided target branch", () => {

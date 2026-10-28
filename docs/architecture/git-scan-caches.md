@@ -82,4 +82,4 @@ daemon. A test that needs one sets it in its own repository and stops it.
 `git-fsmonitor.test.ts` guards the preload, `enableGitScanCaches`, the
 migration's scoping and the daemon stop.
 
-Remaining work: [0734-git-fsmonitor-follow-ups.md](../todo/containers-and-environments/0734-git-fsmonitor-follow-ups.md).
+Remaining work: [0735-git-fsmonitor-follow-ups.md](../todo/containers-and-environments/0735-git-fsmonitor-follow-ups.md).

@@ -1,6 +1,6 @@
 # Git fsmonitor: live evidence, orphaned daemons and other hosts
 
-Checked against `main` at `dfedcd743` (2026-10-28).
+Checked against `main` at `68c84506c` (2026-10-28).
 
 Orkestrator no longer turns on git's fsmonitor daemon. It removes the setting
 it wrote to older worktrees, stops a worktree's daemon before removing or
@@ -74,4 +74,5 @@ what that change could not prove or did not cover.
 
 ## Replaces
 
-Nothing.
+Numbered 0734 on its branch until `main` took 0734 for the Codex MCP
+handshake todo; renamed before merge.

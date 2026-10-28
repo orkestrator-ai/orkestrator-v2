@@ -116,6 +116,29 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## C14 staged inputs on any host uid, Linux Engine (2026-10-28)
+
+Todo [0728](../todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md),
+on omarchy-hp (rootful Docker Engine 29.9.1, x86_64, cgroup v2), with the
+workspace image `orkestrator-v2:qual-0728-2ddc39c4` (`sha256:d2a42ea4…`,
+`docker build $(bun scripts/docker-image-build-args.ts)`). This host's user
+is uid 1000. The CI runners' shape (a rootful daemon whose host user is not
+uid 1000) was reproduced without changing the host: the test process ran in
+an unprivileged user namespace as an inner uid mapped to the user's
+subordinate uid 101001 (`unshare --user --mount --map-users=1001:101001:1`,
+then `setpriv --reuid=1001 --keep-groups` to keep the `docker` group), so
+the staged revision's files belonged to host uid 101001.
+
+- **Before the fix, uid 101001.** The C14 staged-inputs case failed with
+  `CommandFailedError: cat: /codex-home/config.toml: Permission denied`, the
+  line CI logged in runs 40333566613 and 40409285999.
+- **After the fix.** `container-live-replacement.test.ts` passed 12/12 at
+  uid 101001 (the relay path) and 12/12 at uid 1000 (no relay). The live
+  `staged-input-relay-docker.test.ts` passed 1/1 at uid 1000.
+- **The new assertion can fail.** A scratch copy of the case that planted
+  the source's `config.toml` in the stopped candidate (what a copying
+  migration would leave) failed `Expected: "absent"`, `Received: "config"`.
+
 ## Legacy migration without provider databases, Linux Engine (2026-10-26)
 
 Todo 0058, on Arch Linux (Docker Engine 29.9.1, linux/amd64), with images

@@ -41,12 +41,13 @@ BOOT_FAILURE_CODE=""
 # providers and binds the staged copies instead of whole host agent homes
 # (apps/backend/src/core/portable-inputs.ts); the two lists must stay in step.
 
-# Under rootless Docker the backend's user is container root, so node cannot
-# open its owner-only staged mounts. network-policy-entrypoint.sh
-# (relay_staged_inputs) then copied each such mount into node's own
-# STAGED_INPUT_RELAY_DIR, keeping its absolute path below it. A mount path
-# resolves to that copy when one exists, to itself otherwise. The copy
-# helpers resolve their source root the same way, inline, so each works alone.
+# Under rootless Docker, or on a rootful daemon whose host user is not uid
+# 1000, node cannot open the owner-only staged mounts.
+# network-policy-entrypoint.sh (relay_staged_inputs) then copied each such
+# mount into node's own STAGED_INPUT_RELAY_DIR, keeping its absolute path
+# below it. A mount path resolves to that copy when one exists, to itself
+# otherwise. The copy helpers resolve their source root the same way, inline,
+# so each works alone.
 STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs
 staged_input_path() {
     local relayed="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$1"

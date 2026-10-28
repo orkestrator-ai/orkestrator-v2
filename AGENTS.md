@@ -214,6 +214,13 @@ the changed paths can affect instead of always running every suite:
   renderer or design-canvas changes. Add one only when the ticket or user asks
   for real-stack qualification, or the change edits the real-stack harness
   itself (`e2e/agent-testing/**` specs or `apps/desktop/scripts/dev-test*`).
+- The "Container live qualification" workflow
+  (`.github/workflows/container-live-qualification.yml`) runs on pull requests
+  that touch its paths but is not a required check, so GitHub merges a PR on
+  which it is red. A red run of it on a PR needs a green rerun, or a recorded
+  reason in the PR (the failing case, why it is unrelated, and the todo that
+  tracks it), before the PR is ready to merge. Review preparation checks the
+  PR's latest run of it whenever one exists.
 
 #### Documentation-only merge-conflict resolution
 

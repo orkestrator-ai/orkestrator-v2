@@ -183,6 +183,62 @@ describe("the current turn's workflow-result attempt", () => {
     }
   });
 
+  for (const approvals of ["deny", "ask"] as const) {
+    test(`a declared consolidation attempt bypasses ${approvals} without parking approval`, () => {
+      const { state, child, responses } = readOnlySession(
+        { tool: "submit_consolidated_review", resultKey: KEY },
+        {
+          id: "pipeline",
+          sandbox: "none",
+          approvals,
+          projectResources: false,
+        },
+      );
+      // Build Pipeline consolidation uses the environment policy, not a read-only override.
+      state.readOnly = false;
+      try {
+        let id = 0;
+        for (const tool of [
+          "validate_workflow_result",
+          "submit_consolidated_review",
+          "get_workflow_result_status",
+        ]) {
+          for (const toolCall of [
+            named(`orkestrator__${tool}`),
+            useTool(`orkestrator__${tool}`, { resultKey: KEY }),
+          ]) {
+            child.onPermission((id += 1), {
+              sessionId: state.acpSessionId,
+              toolCall,
+              options,
+            });
+          }
+        }
+        expect(responses).toEqual(Array(6).fill(allowed));
+        expect(state.approvals.size).toBe(0);
+        expect(state.policyDeniedRequests ?? 0).toBe(0);
+
+        // The exemption remains attempt-scoped under the same environment policy.
+        child.onPermission((id += 1), {
+          sessionId: state.acpSessionId,
+          toolCall: named("orkestrator__submit_consolidated_review", { resultKey: OTHER_KEY }),
+          options,
+        });
+        if (approvals === "deny") {
+          expect(responses).toEqual([...Array(6).fill(allowed), refused]);
+          expect(state.approvals.size).toBe(0);
+          expect(state.policyDeniedRequests).toBe(1);
+        } else {
+          expect(responses).toEqual(Array(6).fill(allowed));
+          expect(state.approvals.size).toBe(1);
+        }
+      } finally {
+        clearApprovals(state);
+        sessions.delete(state.id);
+      }
+    });
+  }
+
   test("an explicit tool denial still wins", () => {
     const { state, child, responses } = readOnlySession(reviewerTurn, {
       id: "pipeline",

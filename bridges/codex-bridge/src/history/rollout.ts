@@ -562,6 +562,8 @@ function normalizedSubagentPart(part: TranscriptSubagentPart): NormalizedPart {
     ...(part.subagentReasoningEffort
       ? { subagentReasoningEffort: part.subagentReasoningEffort }
       : {}),
+    ...(part.createdAt ? { createdAt: part.createdAt } : {}),
+    ...(part.toolDurationMs !== undefined ? { toolDurationMs: part.toolDurationMs } : {}),
     toolState: part.toolState,
   };
 }

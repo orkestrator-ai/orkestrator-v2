@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Virtuoso, type ListRange, type VirtuosoHandle } from "react-virtuoso";
-import { ChevronRight, Layers } from "lucide-react";
+import { ChevronRight, Layers, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { formatAgentDurationMs } from "@/lib/chat/native-agent-duration";
@@ -589,8 +589,14 @@ function ToolGroupHeadLine({
         {failureCount > 0 ? (
           <span className="shrink-0 text-failure">{failureCount} failed</span>
         ) : null}
-        <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground/70">
-          {countLabel}
+        {/* Icon + number, as on agent cards; the full phrase is read out above. */}
+        <span
+          className="inline-flex shrink-0 items-center gap-1 tabular-nums text-[10px] text-muted-foreground/70"
+          title={countLabel}
+          aria-hidden="true"
+        >
+          <Wrench className="h-3 w-3 shrink-0" />
+          {toolCount}
         </span>
         {spanLabel ? (
           <span

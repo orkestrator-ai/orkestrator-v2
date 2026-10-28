@@ -32,6 +32,7 @@ import {
   reviewPrompt,
   structuredReportRepairPrompt,
   verificationPrompt,
+  verificationCriteriaSection,
   worktreeSnapshotSection,
 } from "./build-pipeline-prompts.js";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
@@ -609,6 +610,22 @@ describe("build pipeline prompts", () => {
     expect(prompt.indexOf("Acceptance criteria to check")).toBeLessThan(
       prompt.indexOf('"acceptanceCriteria":['),
     );
+  });
+
+  test("only the repeated criterion list is shortened; the snapshot and ticket context keep full text", () => {
+    const text = "x".repeat(10_000) + "required tail";
+    const taskSnapshot = {
+      ...pipeline().taskSnapshot,
+      acceptanceCriteria: `- ${text}`,
+      acceptanceCriteriaItems: [{ id: "ac-9", text }],
+    };
+    const section = verificationCriteriaSection(taskSnapshot);
+    const serialized = section
+      .split("<acceptance-criteria-json>\n")[1]!
+      .split("\n</acceptance-criteria-json>")[0]!;
+    expect(JSON.parse(serialized)).toEqual([{ id: "ac-9", text: "x".repeat(10_000) }]);
+    expect(taskSnapshot.acceptanceCriteriaItems[0]!.text).toBe(text);
+    expect(verificationPrompt({ ...pipeline(), taskSnapshot }, "", "main")).toContain(text);
   });
 
   test("verificationPrompt derives criterion ids from an old snapshot's text", () => {

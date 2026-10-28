@@ -1,4 +1,5 @@
 import { taskSnapshotCriteria, usesReviewFanout } from "@orkestrator/protocol/build-pipeline";
+import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
 import { createHash } from "node:crypto";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
@@ -650,10 +651,15 @@ export function verificationCriteriaSection(task: TaskSnapshot): string {
   if (criteria.length === 0) {
     return "**Acceptance criteria to check**: the ticket lists none. Return an empty `acceptanceCriteria` array and judge the ticket's intent.";
   }
+  const previews = criteria.map(({ id, text }) => ({
+    id,
+    text: text.slice(0, TICKET_SECTION_LIMITS.maxCriterionLength),
+  }));
   return `**Acceptance criteria to check**: return exactly one \`acceptanceCriteria\` entry for each id below, in this order.
 <acceptance-criteria-json>
-${promptCarrierJson(criteria)}
+${promptCarrierJson(previews)}
 </acceptance-criteria-json>
+Long entries in this list are previews. Judge the full criterion text in the ticket above.
 - \`passed\`: only with evidence you established yourself: the command or test you ran and its result, or the diff lines that do it. Another agent's claim is not evidence.
 - \`failed\`: the committed change does not meet it. Any failed criterion means complete: false.
 - \`not-checked\`: you could not establish it either way here, for example it needs a live provider, another platform, credentials or a person. Say what is missing. Never mark such a criterion passed.

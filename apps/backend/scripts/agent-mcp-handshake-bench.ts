@@ -18,7 +18,7 @@ import { StorageService } from "../src/core/storage.js";
  * and a 1.2 MB agent mail store. Reports sequential handshake latency, the
  * wall time and backend CPU per handshake of a concurrent burst, and the cost
  * of one `listAgentMailboxes` read. Figures are machine- and load-specific;
- * compare runs on one host only. Todo 0735 records measured runs.
+ * compare runs on one host only. Todo 0741 records measured runs.
  */
 
 function option(name: string, fallback: number): number {

@@ -17,7 +17,7 @@ Analysed 2026-10-28 against `main` at `a6a3105f9`.
 
 1. **Give the handshake a budget that survives host load**: raise the Codex `startup_timeout_sec` for the Orkestrator servers and make the bridge's tool check wait past it. Status: done (2026-10-28).
 2. **Qualify under load**: rerun about ten concurrent Multi Reviews with Codex preparation and consolidation on a loaded host. Status: open.
-3. **Find what makes the backend's `/mcp` handshake slow**: the same backend also timed out agent `send_message` and `check_inbox` calls overnight, and `launch_multi_review` control calls. Status: investigated (2026-10-28); remaining work moved to [0735](../cross-cutting/0735-backend-responsiveness-under-load.md).
+3. **Find what makes the backend's `/mcp` handshake slow**: the same backend also timed out agent `send_message` and `check_inbox` calls overnight, and `launch_multi_review` control calls. Status: investigated (2026-10-28); remaining work moved to [0741](../cross-cutting/0741-backend-responsiveness-under-load.md).
 
 ### 1. Give the handshake a budget that survives host load
 
@@ -95,7 +95,7 @@ from the old timeout logs.
 **Context.** The agent MCP server shares the single backend process (`bun`) with every other client, bridge stream and SSE connection.
 
 **Findings (2026-10-28).** Investigated in
-[0735](../cross-cutting/0735-backend-responsiveness-under-load.md). The
+[0741](../cross-cutting/0741-backend-responsiveness-under-load.md). The
 overnight mail timeouts were a 6 h 45 min freeze of the whole backend: the
 desktop stopped reading its stdout, and Bun's console blocks once that socket
 is full. The backend now writes console output without blocking, logs

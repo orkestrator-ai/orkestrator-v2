@@ -1531,6 +1531,9 @@ fi
 exit 0
 `;
 
+  // Bun captures a hook's budget when registered. Callers configure their file
+  // timeout only after this factory returns, so give teardown its own budget
+  // for the bounded queue drain and the existing owned-process shutdown grace.
   afterEach(async () => {
     try {
       for (const retire of retireLocalServerHooks.splice(0)) retire();
@@ -1551,7 +1554,7 @@ exit 0
       ptySpawn.mockClear();
       ptyProcesses.splice(0);
     }
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   afterAll(async () => {
     try {

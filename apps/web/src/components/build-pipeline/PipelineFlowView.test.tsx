@@ -5,13 +5,24 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
-import { build, session, sessionlessReviewerRetry, validationRun } from "./pipeline-test-fixture";
+import { formatObservedAt } from "@/lib/view-freshness";
+import {
+  CREATED,
+  build,
+  rewoundToFirstVerify,
+  session,
+  sessionlessReviewerRetry,
+  validationRun,
+} from "./pipeline-test-fixture";
 import {
   BuildChatTab,
   graphNode,
   inspector,
+  nodeTitles,
+  queryGraphNode,
   renderPipelineTab,
   retryReviewerMock,
+  restartStepMock,
   restoreBuildChatTabMocks,
   selectNode,
 } from "./build-chat-tab-test-support";
@@ -19,7 +30,11 @@ import {
 afterAll(restoreBuildChatTabMocks);
 afterEach(() => {
   cleanup();
-  useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
+  useFlowGraphViewStore.setState({
+    views: new Map(),
+    collapsed: new Set(),
+    expandedAttempts: new Set(),
+  });
 });
 
 const reviewing = () =>
@@ -471,6 +486,135 @@ describe("failed node faces", () => {
   });
 });
 
+describe("a pipeline a restart rewound", () => {
+  test("shows the superseded run as one previous attempt that expands into greyed steps", async () => {
+    renderPipelineTab(rewoundToFirstVerify());
+
+    expect(nodeTitles()).toEqual([
+      "Ticket",
+      "Setup",
+      "Build",
+      "Review",
+      "Previous attempt",
+      "Verify",
+      "Ship",
+      "PR",
+    ]);
+    // The rerun is followed, not the history.
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Running");
+    // The step count is the live run's; the previous attempt is history.
+    expect(screen.getByText(/^5 of 7 steps/)).toBeTruthy();
+
+    selectNode("Previous attempt");
+    expect(
+      within(inspector()).getByText(/rewound the pipeline from round 2 to Verify of round 1/),
+    ).toBeTruthy();
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
+
+    await waitFor(() => expect(queryGraphNode("Fix · round 2")).not.toBeNull());
+    const fix = graphNode("Fix · round 2");
+    expect(fix.hasAttribute("data-flow-superseded")).toBe(true);
+    selectNode("Verify · round 2");
+    expect(within(inspector()).getByText(/Superseded by a restart/)).toBeTruthy();
+    // History is read, never restarted or retried.
+    expect(within(inspector()).queryByRole("button", { name: "Restart from here" }) === null).toBe(
+      true,
+    );
+    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" }) === null).toBe(
+      true,
+    );
+
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Hide steps" }));
+    await waitFor(() => expect(queryGraphNode("Fix · round 2") === null).toBe(true));
+  });
+
+  test("each historical reviewer retry opens its own transcript", async () => {
+    const pipeline = rewoundToFirstVerify();
+    const superseded = { supersededBy: "rewind-1", reviewPassId: "pass", label: "Review 1" };
+    pipeline.sessions.splice(
+      3,
+      0,
+      session("review", "failed-review", 1, { ...superseded, reviewerOutcome: "failed" }),
+      session("review", "retry-review", 2, { ...superseded, reviewerOutcome: "completed" }),
+    );
+    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+    renderPipelineTab(pipeline, { isActive: true });
+    for (const [index, key] of ["failed-review", "retry-review"].entries()) {
+      selectNode("Previous attempt");
+      const buttons = within(inspector()).getAllByRole("button", { name: "Review 1 · round 1" });
+      fireEvent.click(buttons[index]!);
+      await waitFor(() =>
+        expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+          `${key}-session`,
+        ),
+      );
+    }
+  });
+
+  test.each([true, false])(
+    "retained validation opens its own checks with sessions=%s",
+    async (withSessions) => {
+      const pipeline = rewoundToFirstVerify();
+      if (!withSessions) pipeline.sessions = [];
+      pipeline.rewinds![0]!.validationRun = validationRun({
+        error: "Historical validation failure",
+        status: "failed",
+      });
+      renderPipelineTab(pipeline);
+      selectNode("Previous attempt");
+      fireEvent.click(within(inspector()).getByRole("button", { name: "Validation" }));
+      await waitFor(() =>
+        expect(within(inspector()).getByText("Historical validation failure")).toBeTruthy(),
+      );
+      expect(
+        within(inspector()).queryByRole("button", { name: "Restart from here" }) === null,
+      ).toBe(true);
+    },
+  );
+
+  test("historical validation cannot restart the newer live run", async () => {
+    const pipeline = rewoundToFirstVerify({
+      phase: "building",
+      sessions: [session("build", "build", 0)],
+      currentSessionIndex: 0,
+      validationRun: validationRun({
+        id: "live",
+        startedAt: "2026-07-29T00:11:00.000Z",
+        status: "running",
+      }),
+    });
+    pipeline.rewinds![0]!.validationRun = validationRun({ id: "retained" });
+    restartStepMock.mockClear();
+    renderPipelineTab(pipeline);
+    selectNode("Previous attempt");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
+    await waitFor(() => expect(queryGraphNode("Validation")).not.toBeNull());
+    selectNode("Validation");
+    expect(within(inspector()).queryByRole("button", { name: "Restart validation" }) === null).toBe(
+      true,
+    );
+    fireEvent.contextMenu(graphNode("Validation"));
+    expect(screen.queryByRole("menuitem", { name: "Restart validation" }) === null).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(restartStepMock).not.toHaveBeenCalled();
+    selectNode("Prepare");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Restart validation" }));
+    await waitFor(() =>
+      expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:live"),
+    );
+  });
+
+  test("a live step still offers restart", () => {
+    renderPipelineTab(rewoundToFirstVerify());
+    selectNode("Review");
+    expect(within(inspector()).getByRole("button", { name: "Restart from here" })).toBeTruthy();
+  });
+});
+
 describe("node face rows", () => {
   const rows = (node: HTMLElement) =>
     [...node.querySelectorAll<HTMLElement>("[data-flow-node-row]")].map((row) => [
@@ -535,6 +679,49 @@ describe("node face rows", () => {
       Date.now = dateNow;
     }
   });
+
+  test("every step that ran has its clock on the third row, the ticket its start", () => {
+    renderPipelineTab(
+      build({
+        phase: "verifying",
+        agentType: "claude",
+        currentSessionIndex: 1,
+        sessions: [
+          // Recorded before stage sessions kept their end time.
+          session("build", "build", 0, { completedAt: undefined }),
+          session("verify", "verify", 3_420, { status: "running", completedAt: undefined }),
+        ],
+      }),
+    );
+    const runtimeRow = (title: string) =>
+      graphNode(title).querySelector<HTMLElement>('[data-flow-node-row="runtime"]')?.textContent;
+    const started = formatObservedAt(CREATED)!;
+    const ticket = graphNode("Ticket");
+    expect(runtimeRow("Ticket")).toBeUndefined();
+    const startRow = ticket.querySelector('[data-flow-node-row="start"]');
+    expect(startRow?.tagName).toBe("TIME");
+    expect(startRow?.getAttribute("datetime")).toBe(CREATED);
+    expect(startRow?.textContent).toBe(`Started ${started}`);
+    expect(ticket.getAttribute("aria-label")).toBe(`Ticket, Started with, Started ${started}`);
+    expect(ticket.style.height).toBe("82px");
+    expect(runtimeRow("Setup")).toBe("0s");
+    expect(runtimeRow("Build")).toBe("57m 0s");
+  });
+
+  test.each([undefined, "not-a-date"])(
+    "a ticket with invalid or missing createdAt (%s) has no start or runtime row",
+    (createdAt) => {
+      const pipeline = build({});
+      if (createdAt === undefined) Reflect.deleteProperty(pipeline, "createdAt");
+      else pipeline.createdAt = createdAt;
+      renderPipelineTab(pipeline);
+      const ticket = graphNode("Ticket");
+      expect(ticket.querySelector('[data-flow-node-row="start"]') === null).toBe(true);
+      expect(ticket.querySelector('[data-flow-node-row="runtime"]') === null).toBe(true);
+      expect(ticket.getAttribute("aria-label")).toBe("Ticket, Started with");
+      expect(ticket.style.height).toBe("64px");
+    },
+  );
 
   test("steps ahead keep two rows, with their badge beside the title", () => {
     renderPipelineTab(running());

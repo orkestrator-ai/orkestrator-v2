@@ -616,7 +616,12 @@ remain and use the same paths.
   location and files are settled before approving; the outcome wakes the
   coordinator. `request_root_changes` uses the same request flow (kind
   `apply-root-changes`) for a worker on the coordinator's own node; see
-  [coordinator.md](coordinator.md#worker-surfaces).
+  [coordinator.md](coordinator.md#worker-surfaces). So does
+  `propose_agents_md_update` (kind `update-agents-md`): the request and its
+  review stay on the command node, and with `nodeId` the section is read and
+  the pull request opened on the leaf that owns that copy
+  (`read_project_agents_md_section`, `open_project_agents_md_pr`, routed); see
+  [coordinator.md](coordinator.md#saving-decisions-to-agentsmd).
 - Creating an environment on a leaf follows the same rules as creating a
   local environment today: a worktree (or container) is made from the
   project, then the project's `.env` files and other files selected in the

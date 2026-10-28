@@ -64,6 +64,8 @@ export interface FlowNodeModel {
   detail: string;
   runtime: RuntimeParts | null;
   runtimeLabel: string;
+  /** An explicitly labelled absolute start time, separate from elapsed runtime. */
+  startTime?: { dateTime: string; text: string };
   /** A small badge beside the title of a node that has not run, e.g. "ahead". */
   pendingLabel?: string;
   /**
@@ -88,6 +90,11 @@ export interface FlowNodeModel {
    * the work. Steps that only sometimes run are never drawn ahead.
    */
   placeholder?: boolean;
+  /**
+   * History a restart replaced: still selectable and readable, drawn greyed
+   * so the live run stands out.
+   */
+  superseded?: boolean;
   /** One more row on the node's face, e.g. a pull request's checks. */
   extra?: ReactNode;
   canOpen: boolean;
@@ -294,6 +301,7 @@ function FlowNode({
     node.statusLabel,
     // Usage not reported yet is left unsaid rather than announced as pending.
     node.runtime ? formatRuntimeParts({ ...node.runtime, tokensPending: false }) : null,
+    node.startTime?.text,
     node.findingsLabel,
   ]
     .filter(Boolean)
@@ -315,11 +323,13 @@ function FlowNode({
         data-flow-node={node.kind}
         data-flow-state={node.state}
         data-flow-placeholder={node.placeholder ? "" : undefined}
+        data-flow-superseded={node.superseded ? "" : undefined}
         style={style}
         className={cn(
           "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline-2 outline-offset-[3px] outline-transparent focus-visible:outline-primary",
           NODE_STATE_CLASS[node.state],
           node.placeholder && "opacity-55",
+          node.superseded && "border-dashed opacity-60 grayscale",
           selected && "outline-primary/60",
           className,
         )}
@@ -388,6 +398,15 @@ function FlowNode({
             </span>
           ) : null}
         </span>
+        {node.startTime ? (
+          <time
+            data-flow-node-row="start"
+            dateTime={node.startTime.dateTime}
+            className="mt-0.5 font-mono text-[11px] text-muted-foreground tabular-nums"
+          >
+            {node.startTime.text}
+          </time>
+        ) : null}
         {/* Row 3: the clock and usage, live while running and final after. */}
         {runtimeRow ? (
           <span data-flow-node-row="runtime" className="mt-0.5 flex min-w-0 items-center gap-2">

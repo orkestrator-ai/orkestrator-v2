@@ -83,6 +83,16 @@ export interface PublishOutcome {
   created: boolean;
 }
 
+/**
+ * Measurements kept per owner and scope however many supersede them: the
+ * newest, and the one before it for a reader still paging it as it is
+ * superseded. Older ones go as new ones are published (see
+ * {@link ChangeLedger.pruneSupersededMeasurements}).
+ */
+export const MEASUREMENTS_KEPT_PER_OWNER = 2;
+/** Superseded measurements pruned per publication: more than one, so a backlog shrinks. */
+const MEASUREMENTS_PRUNED_PER_PUBLISH = 2;
+
 function digest(...parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 40);
 }
@@ -197,6 +207,15 @@ export class ChangeMeasurementService {
           revision,
           measurementId: input.measurement.measurementId,
           eventKind: "projection",
+        });
+      }
+      if (created) {
+        ledger.pruneSupersededMeasurements({
+          owner: { ...input.owner, scope: input.measurement.scope },
+          keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
+          nowIso: nowIso(),
+          maxMeasurements: MEASUREMENTS_PRUNED_PER_PUBLISH,
+          maxFileRows: 256,
         });
       }
       return { measurementId: input.measurement.measurementId, revision, created };

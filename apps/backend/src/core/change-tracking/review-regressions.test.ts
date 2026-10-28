@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import {
   utimesSync,
   chmodSync,
@@ -541,3 +541,70 @@ test("Pi occurrences keep distinct operations, transcript presentations and per-
   }
   expect(new Set(ids).size).toBe(3);
 });
+
+test.each([false, true])(
+  "active diff measurements survive publication and retention, and release on error=%s",
+  async (fail) => {
+    const h = harness();
+    await begin(h, "reader");
+    writeFileSync(join(h.repo, "a.txt"), "original nonempty body\n");
+    const measurement = await end(h, "reader");
+    const ledger = h.service.ledger;
+    const original = h.service.objects.get.bind(h.service.objects);
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let first = true;
+    const read = spyOn(h.service.objects, "get").mockImplementation(async (id) => {
+      if (first) {
+        first = false;
+        entered();
+        await gate;
+        if (fail) throw new Error("manifest unavailable");
+      }
+      return original(id);
+    });
+    const pending = h.service.diffBodies.getDiff({ diffIdentityId: measurement.diffIdentityId! });
+    // Attach the rejection handler before deliberately rejecting the read.
+    const outcome = pending.then(
+      (body) => ({ body }),
+      (error: Error) => ({ error }),
+    );
+    try {
+      await started;
+      h.database()
+        .db.query("DELETE FROM change_selections WHERE measurement_id = ?")
+        .run(measurement.measurementId);
+      for (let round = 0; round < 2; round++) {
+        h.service.measurements.publish({
+          measurement: { ...measurement, measurementId: `new-reader-${round}` },
+          owner: { kind: "turn", id: turnIdFor("env-1", "tab", "reader") },
+          files: [],
+          identity: null,
+          resourceKey: "test:reader",
+        });
+      }
+      await h.service.retention.run();
+      expect(ledger.measurementFileCount(measurement.measurementId)).toBe(1);
+      resume();
+      const result = await outcome;
+      if (fail) {
+        expect("error" in result && result.error.message).toBe("manifest unavailable");
+      } else {
+        expect("body" in result && result.body.kind).toBe("body");
+        expect(JSON.stringify(result)).toContain("original nonempty body");
+      }
+      await h.service.retention.run();
+      expect(ledger.measurement(measurement.measurementId)).toBeNull();
+    } finally {
+      resume();
+      await outcome;
+      read.mockRestore();
+    }
+  },
+);

@@ -122,6 +122,28 @@ test("draws the pipeline left to right, with definite steps ahead and faded", as
   await expect(node(page, "Reviewer 1")).not.toHaveAttribute("data-flow-placeholder", "");
 });
 
+test("the Ticket labels its start separately from runtime and retains it after reload", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=loops");
+  const ticket = node(page, "Ticket");
+  const start = ticket.locator('time[data-flow-node-row="start"]');
+  await expect(start).toHaveText(/^Started /);
+  const text = await start.textContent();
+  await expect(ticket).toHaveAccessibleName(`Ticket, Started with, ${text}`);
+  await expect(ticket.locator('[data-flow-node-row="runtime"]')).toHaveCount(0);
+  expect((await face(page, "Ticket")).rows.map((row) => row.name)).toEqual([
+    "title",
+    "detail",
+    "start",
+  ]);
+  expect(overlapping(await boxes(page))).toBe(0);
+  if (isWide(page)) expect(await edgeEndsMeetNodeCentres(page)).toEqual([]);
+  await page.reload();
+  await expect(start).toHaveText(text!);
+  await expect(ticket).toHaveAccessibleName(`Ticket, Started with, ${text}`);
+});
+
 test("shows the reviewer fan-out as Multi Review does", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=fanout");
   await expect(node(page, "Reviewer 1")).toHaveAttribute("data-flow-state", "running");
@@ -557,4 +579,89 @@ test("split pipeline panes give find and shell selection to the focused pane", a
   // Focus alone republishes the Build pane's independently pinned selection.
   await buildPane.getByRole("tab", { name: /^Build,/ }).click();
   await expect(selectedSession).toHaveText("build-session");
+});
+
+test("nested rewind history retains every transcript and validation across reload", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=nested-rewinds");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(graph(page).locator('[data-flow-node="attempt"]')).toHaveCount(2);
+    await node(page, "Previous attempt").click();
+    for (const label of ["outer-build label", "outer-review label"]) {
+      await page.getByRole("button", { name: `${label} · round 1`, exact: true }).click();
+      await expect(
+        page.getByText(`Transcript of ${label.replace(" label", "")}.`, { exact: true }),
+      ).toBeVisible();
+      await node(page, "Previous attempt").click();
+    }
+    await node(page, "Previous attempt 2").click();
+    for (const [index, key] of ["review-failed", "review-retry"].entries()) {
+      await page
+        .getByRole("button", { name: "Review 1 · round 1", exact: true })
+        .nth(index)
+        .click();
+      await expect(page.getByText(`Transcript of ${key}.`, { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Restart from here", exact: true }),
+      ).toHaveCount(0);
+      await node(page, "Previous attempt 2").click();
+    }
+    await page.getByRole("button", { name: "Validation", exact: true }).click();
+    await expect(page.getByText("Retained validation failure", { exact: true })).toBeVisible();
+    expect(overlapping(await boxes(page))).toBe(0);
+  }
+});
+
+test("retained validation stays read-only beside its live replacement after reload", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=validation-rewind");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await node(page, "Previous attempt").click();
+    await page.getByRole("button", { name: "Validation", exact: true }).click();
+    await expect(page.getByText("Retained validation failure", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restart validation", exact: true })).toHaveCount(
+      0,
+    );
+    await node(page, "Validation").click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "Restart validation", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await node(page, "Prepare").click();
+    await page.getByRole("button", { name: "Restart validation", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.__pipelineCommands
+              ?.filter((entry) => entry.command === "restart_build_pipeline_step")
+              .at(-1)?.args,
+        ),
+      )
+      .toEqual({ pipelineId: "flow-pipeline", stageId: "validation:replacement-validation" });
+  }
+});
+
+test("validation-only history keeps the replacement reviewer panel together", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=review-after-validation-rewind");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(node(page, "Reviewer 1")).toHaveCount(1);
+    await expect(node(page, "Reviewer 2")).toHaveCount(1);
+    const titles = await graph(page)
+      .getByRole("tab")
+      .evaluateAll((nodes) =>
+        nodes.map((element) => element.getAttribute("aria-label")!.split(",")[0]),
+      );
+    expect(titles.indexOf("Previous attempt")).toBeLessThan(titles.indexOf("Reviewer 1"));
+    for (const slot of [1, 2]) {
+      await node(page, `Reviewer ${slot}`).click();
+      await expect(page.getByText(`Transcript of rev-${slot}.`, { exact: true })).toBeVisible();
+    }
+    expect(overlapping(await boxes(page))).toBe(0);
+  }
 });

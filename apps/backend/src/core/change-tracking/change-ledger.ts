@@ -208,6 +208,21 @@ export interface CaptureAttemptRow {
 const now = () => new Date().toISOString();
 
 export class ChangeLedger {
+  private readonly measurementReaders = new Map<string, number>();
+
+  /** Holds a measurement across asynchronous reads, including nested readers. */
+  pinMeasurement(id: string): () => void {
+    this.measurementReaders.set(id, (this.measurementReaders.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = this.measurementReaders.get(id)! - 1;
+      if (remaining) this.measurementReaders.set(id, remaining);
+      else this.measurementReaders.delete(id);
+    };
+  }
+
   constructor(private readonly storage: () => StorageDatabase) {}
 
   private get db(): Database {
@@ -1114,6 +1129,82 @@ export class ChangeLedger {
         .query("SELECT COUNT(*) AS n FROM change_measurement_files WHERE measurement_id = ?")
         .get(measurementId) as { n: number }
     ).n;
+  }
+
+  /**
+   * Deletes superseded measurements except selections, live restore records
+   * and active readers. Retired identities disappear before partial file-row
+   * deletion, so new requests cannot start reading an incomplete measurement.
+   *
+   * Every re-measurement stores its whole file list again (an environment's
+   * net diff can be thousands of files), so without this the table grows
+   * without bound. Bounded work per call: stops after `maxMeasurements` or
+   * once `maxFileRows` file rows are deleted, in one transaction.
+   */
+  pruneSupersededMeasurements(input: {
+    keepLatest: number;
+    nowIso: string;
+    maxMeasurements: number;
+    maxFileRows?: number;
+    owner?: { kind: string; id: string; scope: string };
+  }): { measurements: number; files: number } {
+    return this.transaction(() => {
+      const ownedBy = input.owner ? "WHERE owner_kind = ?4 AND owner_id = ?5 AND scope = ?6" : "";
+      const candidates = this.db
+        .query(
+          `SELECT id FROM (
+             SELECT id, created_seq, ROW_NUMBER() OVER (
+               PARTITION BY owner_kind, owner_id, scope ORDER BY created_seq DESC
+             ) AS newer
+             FROM change_measurements ${ownedBy}
+           )
+           WHERE newer > ?1
+             AND id NOT IN (SELECT measurement_id FROM change_selections WHERE measurement_id IS NOT NULL)
+             AND id NOT IN (SELECT measurement_id FROM change_restore_tokens WHERE expires_at > ?2 AND consumed_at IS NULL)
+             AND id NOT IN (SELECT measurement_id FROM change_restore_operations WHERE state = 'applying')
+           ORDER BY created_seq
+           LIMIT ?3`,
+        )
+        .all(
+          input.keepLatest,
+          input.nowIso,
+          input.maxMeasurements,
+          ...(input.owner ? [input.owner.kind, input.owner.id, input.owner.scope] : []),
+        ) as Array<{ id: string }>;
+      const deleteFiles = this.db.query(
+        `DELETE FROM change_measurement_files WHERE measurement_id = ?1 AND ordinal IN (
+           SELECT ordinal FROM change_measurement_files WHERE measurement_id = ?1 LIMIT ?2
+         )`,
+      );
+      const deleteIdentities = this.db.query(
+        "DELETE FROM change_diff_identities WHERE measurement_id = ?",
+      );
+      const deleteMeasurement = this.db.query("DELETE FROM change_measurements WHERE id = ?");
+      const pruned = { measurements: 0, files: 0 };
+      for (const { id } of candidates) {
+        if (this.measurementReaders.has(id)) continue;
+        if (input.maxFileRows !== undefined && pruned.files >= input.maxFileRows) break;
+        deleteIdentities.run(id);
+        pruned.files += deleteFiles.run(
+          id,
+          Math.max(0, (input.maxFileRows ?? 256) - pruned.files),
+        ).changes;
+        if (
+          this.db
+            .query("SELECT 1 FROM change_measurement_files WHERE measurement_id = ? LIMIT 1")
+            .get(id)
+        )
+          break;
+        deleteMeasurement.run(id);
+        pruned.measurements += 1;
+      }
+      return pruned;
+    });
+  }
+
+  /** Returns up to `maxPages` free database pages to the filesystem; the free pages left. */
+  releaseFreePages(maxPages?: number): number {
+    return this.storage().releaseFreePages(maxPages);
   }
 
   insertDiffIdentity(identity: DiffIdentity): void {

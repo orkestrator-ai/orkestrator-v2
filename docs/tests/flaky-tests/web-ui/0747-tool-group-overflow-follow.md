@@ -72,3 +72,24 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
 - **Complete unchanged owner:** `mise run test:logged -- --name toolgroupfold -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts` passed (23.9 s logged).
 - **Aggregate evidence:** [1155](../aggregate-validation-runs/1155-webkit-title-tooltip-0202-validation.md). The branch changes only `MobileAppShellLayout` and its tests, which this spec does not render.
 - **Assessment:** intermittent recurrence; no owning source, assertion, deadline or skip changed.
+
+
+## AGENTS.md review-fix validation recurrence — 2026-10-27
+
+- **Failure:** Desktop `a waiting group that fits its cap follows appended calls
+  as it starts overflowing` retained inner scrollTop 704 instead of zero at
+  `ToolGroupFold.spec.ts:471` after five seconds.
+- **Aggregate:** `mise run test:logged -- --name agents-md-browser-full -- mise run test:browser`,
+  nine Playwright workers; 858 passed, 105 skipped, three failed (493.0 s).
+  Both other failures were the native branch picker. All ten AGENTS.md approval
+  browser cases passed.
+- **Complete unchanged owner:**
+  `mise run test:logged -- --name agents-md-baseline-fold -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts`
+  passed (exit 0, 19.6 s).
+- **Evidence:**
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ypVY2E/agents-md-browser-full.log.gz`;
+  the original Playwright trace is under
+  `output/playwright/test-results/ToolGroupFold-a-waiting-gr-d43b9-ls-as-it-starts-overflowing-desktop-chromium/trace.zip`.
+- **Assessment:** intermittent recurrence during concurrent repository and
+  browser validation. No owning code, assertion, deadline or skip changed;
+  status remains open. Case 1220 records the complete validation run.

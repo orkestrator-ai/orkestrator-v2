@@ -16,10 +16,22 @@
 
 import { readManifest } from "./capture.js";
 import type { ChangeLedger } from "./change-ledger.js";
+import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
 import type { ObjectStore } from "./object-store.js";
 import type { ChangeTrackingPolicyRegistry } from "./policy-registry.js";
 
+/** Superseded measurements are pruned in batches of at most this many file rows. */
+const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 256;
+const MEASUREMENT_PRUNE_BATCH = 64;
+/** Freed database pages are released in steps of this many 4 KiB pages. */
+const RELEASE_PAGES_PER_STEP = 128;
+
+/** Lets requests run between bounded batches of database maintenance. */
+const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 export interface RetentionReport {
+  prunedMeasurements: number;
+  prunedMeasurementFiles: number;
   expiredReferences: number;
   releasedForQuota: number;
   deletedSnapshots: number;
@@ -58,6 +70,8 @@ export class ChangeRetentionService {
     const { ledger, store, policies } = this.deps;
     const policy = policies.policy;
     const report: RetentionReport = {
+      prunedMeasurements: 0,
+      prunedMeasurementFiles: 0,
       expiredReferences: 0,
       releasedForQuota: 0,
       deletedSnapshots: 0,
@@ -69,6 +83,7 @@ export class ChangeRetentionService {
     report.expiredReferences = ledger.transaction(() =>
       ledger.expireReferences(new Date(nowMs).toISOString()),
     );
+    await this.pruneMeasurements(nowMs, report);
 
     // Archived turn endpoints beyond the retention window lose their pins.
     const cutoff = new Date(nowMs - policy.archivedBodyRetentionDays * 86_400_000).toISOString();
@@ -93,6 +108,37 @@ export class ChangeRetentionService {
       ledger.pruneLiveIdentities(new Date(nowMs - 86_400_000).toISOString());
     });
     return report;
+  }
+
+  /**
+   * Prunes superseded measurements in bounded batches, yielding between
+   * them: a backlog can be tens of millions of file rows, and one long
+   * transaction would block every request. Then returns the freed pages to
+   * the filesystem, again in steps.
+   */
+  private async pruneMeasurements(nowMs: number, report: RetentionReport): Promise<void> {
+    const { ledger } = this.deps;
+    while (true) {
+      const pruned = ledger.pruneSupersededMeasurements({
+        keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
+        nowIso: new Date(nowMs).toISOString(),
+        maxMeasurements: MEASUREMENT_PRUNE_BATCH,
+        maxFileRows: MEASUREMENT_PRUNE_BATCH_FILE_ROWS,
+      });
+      report.prunedMeasurements += pruned.measurements;
+      report.prunedMeasurementFiles += pruned.files;
+      if (pruned.measurements === 0 && pruned.files === 0) break;
+      await yieldToEventLoop();
+    }
+    if (report.prunedMeasurementFiles === 0 && report.prunedMeasurements === 0) return;
+    let previous = Number.POSITIVE_INFINITY;
+    while (true) {
+      const left = ledger.releaseFreePages(RELEASE_PAGES_PER_STEP);
+      // Stop once nothing is left or a step makes no progress (a busy writer).
+      if (left === 0 || left >= previous) break;
+      previous = left;
+      await yieldToEventLoop();
+    }
   }
 
   private releaseTurnEndpoints(

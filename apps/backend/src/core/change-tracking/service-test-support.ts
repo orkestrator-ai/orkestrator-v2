@@ -32,7 +32,11 @@ export interface Harness {
 }
 
 export function createHarness(
-  options: { policy?: Partial<ChangeTrackingPolicy>; repo?: boolean } = {},
+  options: {
+    policy?: Partial<ChangeTrackingPolicy>;
+    repo?: boolean;
+    manualScheduling?: boolean;
+  } = {},
 ): Harness {
   const dataDir = mkdtempSync(join(tmpdir(), "ork-ct-data-"));
   const repo = mkdtempSync(join(tmpdir(), "ork-ct-repo-"));
@@ -51,7 +55,7 @@ export function createHarness(
     environmentTarget: async (environmentId) =>
       environmentId === "env-1" ? { kind: "local", worktreePath: repo } : null,
     durable: false,
-    manualScheduling: true,
+    manualScheduling: options.manualScheduling ?? true,
     policy: options.policy,
   });
   service.start();

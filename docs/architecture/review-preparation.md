@@ -13,6 +13,16 @@ output, calculating exit codes, or assembling the evidence package. Pipeline
 implementation and fix prompts request focused development checks; the following
 preparation stage owns the final full validation pass.
 
+Later pipeline stages read that evidence rather than repeating it. Address runs
+targeted checks for the files it edits. It also owns failure triage: it fixes
+recorded failures that relate to the ticket or the branch, and reproduces any
+it believes are unrelated on the target branch. It ends with a validation
+report. Verify is an acceptance judgement over the diff, the recorded package
+and that report (`latestAddressReport` reads only this round's address
+session). It runs no full suite and installs no dependencies. It reproduces a
+failure on the target branch only when no address report covers it, which
+happens when the review found nothing to address.
+
 ## Fresh discovery for arbitrary repositories
 
 There is deliberately no cross-round command-plan or result cache. Each round

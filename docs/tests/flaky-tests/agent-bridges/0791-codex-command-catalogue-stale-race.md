@@ -154,3 +154,19 @@ reported 2,458 pass, 46 skip and 1 fail across 98 files. The complete owner
 passed alone (30 passed), and the second full run passed the Codex bridge. The
 branch changes the Codex dispatch journal and prompt claim, not the command
 catalogue. Evidence: [1147](../aggregate-validation-runs/1147-provider-non-delivery-proof-0223-validation.md).
+
+## Main merge for pipeline step skipping — 2026-10-28
+
+The duplicate armed-delay case tracked by [0800](0800-codex-command-catalogue-armed-delay-race.md)
+recurred in `mise run test:logged -- --name merge-default-tests -- mise run test`:
+`an explicit refresh cannot replace the baseline for an already armed delay`
+failed at line 293 (110.73 ms). The complete unchanged owner passed alone
+(exit 0, 1.4 s):
+
+```sh
+mise run test:logged -- --name merge-codex-catalogue-recheck -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.Xy7MuA/bridges.log.gz` below the host
+temporary directory after completion. The merge changes no Codex bridge code,
+assertions, timeouts, or skips; the original aggregate remains non-green.

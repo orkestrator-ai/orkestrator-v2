@@ -14,10 +14,12 @@ import {
   isActiveBuildPhase,
   isStartBuildPipelineInput,
   isReviewPackagePreparationSession,
+  isSupersededPipelineSession,
   reviewValidationStage,
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   MAX_PIPELINE_USER_MESSAGES,
+  MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
@@ -55,6 +57,12 @@ import { type BuildPipelineContext, BUILD_PIPELINE_PROGRESS_MS } from "./build-p
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+import {
+  recordRewind,
+  restartStepOrder,
+  supersedeSessionsFrom,
+  verificationFeedbackBefore,
+} from "./build-pipeline-rewind.js";
 
 function validatedUserMessage(text: string): string {
   const trimmed = text.trim();
@@ -830,19 +838,39 @@ export class BuildPipelineLifecycle {
 
   /**
    * Restarts one visible pipeline stage and invalidates every result derived
-   * from it. The request is persisted before the supervisor opens a new
-   * session, so an unmounted renderer or backend restart cannot lose the run.
+   * from it. The pipeline rewinds to the stage's own round, so the rounds
+   * after it are available again; the stage's old session and every later one
+   * stay in the record as a superseded previous attempt. The worktree is not
+   * reset. Works from a failed or completed pipeline too. The request is
+   * persisted before the supervisor opens a new session, so an unmounted
+   * renderer or backend restart cannot lose the run.
    */
   async restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
     return this.restartLocatedStage(pipelineId, (candidate) => {
       if (candidate.validationRun && stageId === `validation:${candidate.validationRun.id}`) {
         return { kind: "validation" };
       }
+      const latest = candidate.rewinds?.at(-1);
+      if (
+        latest?.step.kind === "validation" &&
+        latest.validationRun &&
+        stageId === `validation:${latest.validationRun.id}`
+      ) {
+        return { kind: "satisfied" };
+      }
       const session = candidate.sessions.find(
         (session) => session.sdkSessionId === stageId || session.sessionKey === stageId,
       );
+      // A build or fix turn that also wrote the package plan is still the
+      // Build or Fix step the user restarted: it runs again. Only the
+      // dedicated preparation session restarts package preparation alone.
       return session
-        ? { kind: "session", session, phase: session.phase }
+        ? {
+            kind: "session",
+            session,
+            phase: session.phase,
+            forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
+          }
         : new Error("This pipeline stage is no longer available");
     });
   }
@@ -860,6 +888,13 @@ export class BuildPipelineLifecycle {
       if (!phase || !stagePhase) {
         return new Error("This build has no running stage to restart");
       }
+      if (
+        candidate.restartRequest?.kind === "validation" ||
+        (candidate.rewinds?.at(-1)?.replacementValidationRunId === candidate.validationRun?.id &&
+          (candidate.validationRun?.status === "planned" ||
+            candidate.validationRun?.status === "running"))
+      )
+        return { kind: "satisfied" };
       const validationTarget = reviewValidationStage(candidate, phase);
       if (validationTarget === "validation") return { kind: "validation" };
       if (validationTarget === "review-package") {
@@ -886,6 +921,7 @@ export class BuildPipelineLifecycle {
     pipelineId: string,
     locate: (candidate: BuildPipeline) =>
       | { kind: "validation" }
+      | { kind: "satisfied" }
       | { kind: "review-package"; implementationPhase: "build" | "fix" }
       | {
           kind: "session";
@@ -896,12 +932,45 @@ export class BuildPipelineLifecycle {
       | Error,
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
+    let satisfied = false;
     await this.ctx.mutate(pipelineId, async (candidate) => {
       const target = locate(candidate);
       if (target instanceof Error) {
         rejection = target;
         return;
       }
+      if (target.kind === "satisfied") {
+        satisfied = true;
+        return;
+      }
+      const named = target.kind === "session" ? target.session : undefined;
+      if (named && isSupersededPipelineSession(named)) {
+        // The same request again (a double click, a retried command) names the
+        // step the newest rewind just superseded: that restart is already done.
+        const latest = candidate.rewinds?.at(-1);
+        if (latest?.id !== named.supersededBy || latest?.sessionKey !== named.sessionKey) {
+          rejection = new Error(
+            "This step belongs to a previous attempt. Restart a step of the current run instead.",
+          );
+        }
+        return;
+      }
+      if (await this.pullRequestMerged(candidate)) {
+        // Shipping again would open a second pull request for merged work.
+        rejection = new Error(
+          "This build's pull request has been merged. Start a new build for further changes.",
+        );
+        return;
+      }
+      const fromPhase = candidate.phase;
+      const fromIteration = candidate.iteration;
+      // Restarting a step rewinds the pipeline to that step's own round. A
+      // validation or package restart without a named session is the current
+      // round's. The worktree is not rewound: the new run works on the code
+      // as it is now, later rounds' commits included.
+      const iteration = named ? named.iteration : candidate.iteration;
+      const rewindsRound = iteration < candidate.iteration;
+      const previousFeedback = candidate.verificationFeedback;
 
       // A late tool submission from the discarded generation must be denied;
       // otherwise it could become authoritative after the replacement starts.
@@ -928,6 +997,43 @@ export class BuildPipelineLifecycle {
       }
       await this.stopCurrentStage(candidate);
 
+      // Old records kept only the latest accepted Verify verdict. Preserve it
+      // on its owning session before clearing the live result during rewind.
+      const verdictOwner = [...candidate.sessions]
+        .reverse()
+        .find(
+          (session) =>
+            session.phase === "verify" &&
+            !isSupersededPipelineSession(session) &&
+            (session.structuredResultStatus === "accepted" ||
+              (session.structuredResultStatus === undefined && session.status === "idle")),
+        );
+      if (verdictOwner && candidate.verificationResult && !verdictOwner.verificationResult) {
+        verdictOwner.verificationResult = candidate.verificationResult;
+        if (candidate.verificationFeedback !== undefined) {
+          const feedback = candidate.verificationFeedback;
+          verdictOwner.verificationFeedback ??=
+            feedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH
+              ? feedback
+              : `${feedback.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
+        }
+      }
+      const previousValidationRun = candidate.validationRun;
+      candidate.iteration = iteration;
+      if (rewindsRound) {
+        // Later rounds derived these from their own code. The rewound round
+        // runs on the code as it is now, so it prepares, reviews and verifies
+        // again rather than reusing another round's evidence.
+        delete candidate.reviewPackage;
+        delete candidate.validationRun;
+        discardSessionReviewReports(candidate);
+        delete candidate.reviewFanout;
+        delete candidate.structuredReview;
+        delete candidate.structuredReviewRequestId;
+        delete candidate.verificationResult;
+        delete candidate.verificationFeedback;
+      }
+
       const implementationPhase = (): "build" | "fix" => {
         const currentIterationImplementation = [...candidate.sessions]
           .reverse()
@@ -935,6 +1041,7 @@ export class BuildPipelineLifecycle {
             (session) =>
               session.iteration === candidate.iteration &&
               (session.phase === "build" || session.phase === "fix") &&
+              !isSupersededPipelineSession(session) &&
               !isReviewPackagePreparationSession(session, candidate),
           );
         return currentIterationImplementation?.phase === "fix" ? "fix" : "build";
@@ -1002,6 +1109,48 @@ export class BuildPipelineLifecycle {
           delete candidate.verificationFeedback;
         }
       }
+      if (restart.kind === "session" && restart.phase === "fix") {
+        // A fix answers the verification that ended the round before it.
+        // A legacy record's pipeline-level verdict belongs to its latest
+        // round; it cannot explain a Fix in an earlier round.
+        const feedback =
+          verificationFeedbackBefore(candidate, iteration) ??
+          (rewindsRound ? undefined : previousFeedback);
+        if (feedback === undefined) delete candidate.verificationFeedback;
+        else candidate.verificationFeedback = feedback;
+      }
+
+      // The restarted step's old session and everything after it become a
+      // previous attempt: kept, readable, and out of the live run.
+      const at = new Date().toISOString();
+      const rewindId = randomUUID();
+      const supersededSessions = supersedeSessionsFrom(
+        candidate,
+        { iteration, order: restartStepOrder(restart) },
+        rewindId,
+        at,
+      );
+      if (
+        supersededSessions > 0 ||
+        (previousValidationRun && previousValidationRun.id !== candidate.validationRun?.id)
+      ) {
+        recordRewind(candidate, {
+          id: rewindId,
+          at,
+          fromPhase,
+          fromIteration,
+          iteration,
+          step: { ...restart },
+          ...(named ? { sessionKey: named.sessionKey } : {}),
+          supersededSessions,
+          ...(restart.kind === "validation"
+            ? { replacementValidationRunId: candidate.validationRun!.id }
+            : {}),
+          ...(previousValidationRun && previousValidationRun.id !== candidate.validationRun?.id
+            ? { validationRun: previousValidationRun }
+            : {}),
+        });
+      }
 
       candidate.phase =
         restart.kind === "session"
@@ -1023,9 +1172,11 @@ export class BuildPipelineLifecycle {
             : "building";
       delete candidate.skipRequest;
       clearStageControlState(candidate);
+      candidate.pendingKanbanReactivation = true;
+      delete candidate.kanbanReactivationRetryAt;
     });
     if (rejection) throw rejection;
-    await this.stageSupervisor.runLocked(pipelineId);
+    if (!satisfied) await this.stageSupervisor.runLocked(pipelineId);
     return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
@@ -1085,6 +1236,7 @@ export class BuildPipelineLifecycle {
       const isCurrent =
         named !== undefined &&
         !named.superseded &&
+        !isSupersededPipelineSession(named) &&
         named.phase === stagePhase &&
         (fanoutReview
           ? Boolean(named.sessionKey) &&
@@ -1169,6 +1321,19 @@ export class BuildPipelineLifecycle {
     }
     current.status = "idle";
     current.completedAt ??= new Date().toISOString();
+  }
+
+  /**
+   * Whether this pipeline shipped a pull request that has since merged. A
+   * restart would then ship the work a second time. An environment PR with no
+   * Ship session belongs to a reused environment, not to this pipeline.
+   */
+  private async pullRequestMerged(pipeline: BuildPipeline): Promise<boolean> {
+    if (!pipeline.environmentId || !pipeline.sessions.some((session) => session.phase === "pr")) {
+      return false;
+    }
+    const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
+    return environment?.prState === "merged";
   }
 
   /**

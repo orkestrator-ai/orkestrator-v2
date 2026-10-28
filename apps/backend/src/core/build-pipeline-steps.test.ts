@@ -1704,6 +1704,16 @@ describe("per-step execution modes", () => {
             : { complete: true, rationale: "All criteria pass." }) as T,
       });
 
+      const opencode = providerFor("opencode");
+      opencode.messages = async (sessionId: string) => [
+        { id: `${sessionId}-user`, role: "user", parts: [{ type: "text", text: "Address it." }] },
+        {
+          id: `${sessionId}-assistant`,
+          role: "assistant",
+          parts: [{ type: "text", text: "Fixed the off-by-one; reran src/app.test.ts: pass." }],
+        },
+      ];
+
       const started = await service.start({
         ...startInput(),
         agentType: "codex",
@@ -1719,7 +1729,6 @@ describe("per-step execution modes", () => {
       });
       await advanceToStage(service, storage, started.id, "verify");
 
-      const opencode = providerFor("opencode");
       expect(opencode.createdModes).toContainEqual(["address", "build"]);
       expect(created).toContainEqual({
         agent: "opencode",
@@ -1737,6 +1746,14 @@ describe("per-step execution modes", () => {
       const addressDispatch = sent.find((entry) => entry.agent === "opencode");
       expect(addressDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(addressDispatch?.prompt).toContain("Off-by-one");
+      expect(addressDispatch?.prompt).toContain("End with a validation report");
+      // The verifier judges the address stage's own report instead of rerunning its checks.
+      const verifyDispatch = sent.find((entry) =>
+        entry.prompt.startsWith("Verify the committed branch changes"),
+      );
+      expect(verifyDispatch?.prompt).toContain(
+        "Fixed the off-by-one; reran src/app.test.ts: pass.",
+      );
       expect(codex.sentModes.slice(0, 2)).toEqual(["build", "build"]);
     });
   });

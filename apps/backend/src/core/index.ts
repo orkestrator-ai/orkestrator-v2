@@ -1938,6 +1938,7 @@ export class OrkestratorBackend {
     await this.nodePortal.start().catch((error) => {
       console.warn("[backend] The command-node portal did not start:", errorCode(error));
     });
+    this.nodeCoordination.start();
     this.coordinators.startStatusWakes();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
@@ -2122,7 +2123,7 @@ export class OrkestratorBackend {
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
-    this.nodeCoordination.collector.dispose();
+    this.nodeCoordination.dispose();
     this.nodePortal.stop();
     const nodesStopped = this.nodes.stop().catch(() => undefined);
     if (this.activityLeaseSweep) {

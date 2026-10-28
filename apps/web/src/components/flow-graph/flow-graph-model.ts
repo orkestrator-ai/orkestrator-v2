@@ -162,6 +162,7 @@ export function flowNodeHeight(node: {
   runtime: object | null;
   validation?: readonly unknown[];
   extra?: unknown;
+  startTime?: object;
 }): number {
   const runtime = flowNodeHasRuntimeRow(node) ? FLOW_NODE_RUNTIME_ROW_HEIGHT : 0;
   const below = node.validation?.length
@@ -169,7 +170,8 @@ export function flowNodeHeight(node: {
     : node.extra
       ? FLOW_NODE_EXTRA_ROW_HEIGHT
       : 0;
-  return FLOW_NODE_HEIGHT + runtime + below;
+  const start = node.startTime ? FLOW_NODE_RUNTIME_ROW_HEIGHT : 0;
+  return FLOW_NODE_HEIGHT + runtime + start + below;
 }
 
 export interface FlowRect {

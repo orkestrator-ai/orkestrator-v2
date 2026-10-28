@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
+import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import {
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
@@ -274,65 +275,132 @@ test("pipeline separates implementation from fresh discovery and waits for backe
   }
 });
 
-test("pipeline validation restart discards stale evidence and keeps polling the new run", async () => {
-  const h = await harness();
-  const service = new BuildPipelineService(h.storage, h.invoke, {
-    autoAdvance: false,
-    provider: async () => h.provider,
-  });
-  try {
-    const started = await service.start({
-      taskId: "task-validation-restart",
-      projectId: "project-1",
-      existingEnvironmentId: "env-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "validation restart",
-      taskSnapshot: {
-        title: "validation restart",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
+test.each(["named", "current"] as const)(
+  "pipeline %s validation restart is idempotent while pending, running and reloaded",
+  async (restartMode) => {
+    const h = await harness();
+    let service = new BuildPipelineService(h.storage, h.invoke, {
+      autoAdvance: false,
+      provider: async () => h.provider,
     });
-    const read = async () =>
-      (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
-    for (let pass = 0; pass < 8 && (await read()).validationRun?.status !== "running"; pass += 1) {
+    try {
+      const started = await service.start({
+        taskId: "task-validation-restart",
+        projectId: "project-1",
+        existingEnvironmentId: "env-1",
+        environmentType: "local",
+        agentType: "claude",
+        taskTitle: "validation restart",
+        taskSnapshot: {
+          title: "validation restart",
+          description: "",
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
+      });
+      const read = async () =>
+        (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
+      for (
+        let pass = 0;
+        pass < 8 && (await read()).validationRun?.status !== "running";
+        pass += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+      if (restartMode === "named") {
+        h.finish();
+        await service.advanceNow(started.id);
+      }
+      const sealed = await read();
+      const originalRunId = sealed.validationRun!.id;
+      if (restartMode === "named") expect(sealed.reviewPackage?.id).toBe(originalRunId);
+
+      h.keepRunning();
+      const sendsBeforeRestart = h.sends.length;
+      const dispatch = spyOn(BuildPipelineSupervisor.prototype, "runLocked").mockResolvedValueOnce(
+        undefined,
+      );
+      let restarted: BuildPipeline;
+      try {
+        restarted =
+          restartMode === "named"
+            ? await service.restartStep(started.id, `validation:${originalRunId}`)
+            : await service.restartCurrentStep(started.id);
+        expect(restarted.validationRun?.status).toBe("planned");
+        expect(
+          (await service.restartStep(started.id, `validation:${originalRunId}`)).validationRun?.id,
+        ).toBe(restarted.validationRun!.id);
+        expect((await service.restartCurrentStep(started.id)).rewinds).toHaveLength(1);
+      } finally {
+        dispatch.mockRestore();
+      }
       await service.advanceNow(started.id);
+      restarted = await read();
+      const restartedRunId = restarted.validationRun!.id;
+      expect(restartedRunId).not.toBe(originalRunId);
+      expect(restarted.validationRun?.status).toBe("running");
+      expect(restarted.reviewPackage).toBeUndefined();
+
+      // Retrying either control must keep the replacement generation running.
+      for (let repeat = 0; repeat < 2; repeat++) {
+        const named = await service.restartStep(started.id, `validation:${originalRunId}`);
+        const current = await service.restartCurrentStep(started.id);
+        expect(named.validationRun?.id).toBe(restartedRunId);
+        expect(current.validationRun?.id).toBe(restartedRunId);
+        expect(current.rewinds).toHaveLength(1);
+      }
+      await service.shutdown();
+      service = new BuildPipelineService(h.storage, h.invoke, {
+        autoAdvance: false,
+        provider: async () => h.provider,
+      });
+      expect(
+        (await service.restartStep(started.id, `validation:${originalRunId}`)).validationRun?.id,
+      ).toBe(restartedRunId);
+      expect((await service.restartCurrentStep(started.id)).validationRun?.id).toBe(restartedRunId);
+      expect(h.calls.filter((call) => call.name === "start_review_validation")).toHaveLength(2);
+      expect(h.calls.filter((call) => call.name === "cancel_review_validation")).toHaveLength(
+        restartMode === "current" ? 1 : 0,
+      );
+
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const stillRunning = await read();
+      expect(stillRunning.validationRun).toMatchObject({ id: restartedRunId, status: "running" });
+      expect(stillRunning.reviewPackage).toBeUndefined();
+      expect(h.sends).toHaveLength(sendsBeforeRestart);
+      expect(
+        h.calls.filter(
+          (call) =>
+            call.name === "status_review_validation" &&
+            (call.args.run as ReviewValidationRun).id === restartedRunId,
+        ).length,
+      ).toBeGreaterThanOrEqual(2);
+      // A later, unrelated validation generation must still be restartable.
+      const unrelated = structuredClone(stillRunning);
+      unrelated.validationRun!.id = "unrelated-validation";
+      await h.storage.saveBuildPipeline(
+        unrelated.id,
+        unrelated.projectId,
+        unrelated.environmentId,
+        1,
+        unrelated,
+        unrelated.backendRevision,
+      );
+      const next = await service.restartCurrentStep(started.id);
+      expect(next.validationRun?.id).not.toBe("unrelated-validation");
+      expect(next.validationRun?.id).not.toBe(restartedRunId);
+      expect(next.rewinds).toHaveLength(2);
+      await expect(service.restartStep(started.id, `validation:${originalRunId}`)).rejects.toThrow(
+        "no longer available",
+      );
+    } finally {
+      await service.shutdown();
+      await h.cleanup();
     }
-    h.finish();
-    await service.advanceNow(started.id);
-    const sealed = await read();
-    const originalRunId = sealed.validationRun!.id;
-    expect(sealed.reviewPackage?.id).toBe(originalRunId);
-
-    h.keepRunning();
-    const sendsBeforeRestart = h.sends.length;
-    const restarted = await service.restartStep(started.id, `validation:${originalRunId}`);
-    const restartedRunId = restarted.validationRun!.id;
-    expect(restartedRunId).not.toBe(originalRunId);
-    expect(restarted.validationRun?.status).toBe("running");
-    expect(restarted.reviewPackage).toBeUndefined();
-
-    await service.advanceNow(started.id);
-    await service.advanceNow(started.id);
-    const stillRunning = await read();
-    expect(stillRunning.validationRun).toMatchObject({ id: restartedRunId, status: "running" });
-    expect(stillRunning.reviewPackage).toBeUndefined();
-    expect(h.sends).toHaveLength(sendsBeforeRestart);
-    expect(
-      h.calls.filter(
-        (call) =>
-          call.name === "status_review_validation" &&
-          (call.args.run as ReviewValidationRun).id === restartedRunId,
-      ).length,
-    ).toBeGreaterThanOrEqual(2);
-  } finally {
-    await service.shutdown();
-    await h.cleanup();
-  }
-});
+  },
+);
 
 test("replacement pipeline controller consumes a durable restart request", async () => {
   const h = await harness();

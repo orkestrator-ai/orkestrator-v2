@@ -69,3 +69,34 @@ this recurrence.
 The backend aggregate finished with 12,572 passed, 123 skipped, and 21 failed
 across 769 files (630.64 s). Full merge validation and remaining failures are
 recorded in [1171](../aggregate-validation-runs/1171-orkestrator-permission-rules-0723-validation.md).
+
+
+## Storage-maintenance review fixes recurrence (2026-10-27)
+
+On `local-env-disk-fccbc2f7869f-r1`, based on `55f7adb3e`,
+`mise run test:logged -- --name default-suite -- mise run test` (two backend
+workers) timed out in `V09: aliases of one checkout share physical work > V09:
+environments aliasing one checkout share one watcher and scan; a linked worktree
+does not` after 8876.12 ms against its 5000 ms deadline. The host load average
+was subsequently observed at 138.87.
+
+The complete unchanged owner passed alone (15 tests, exit 0, 8.9 s):
+
+```sh
+mise run test:logged -- --name acceptance-sharing-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/change-tracking/acceptance-sharing.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is under the host temporary directory in
+`orkestrator-test-run.ppPDQr/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The aggregate remains non-green. Contention is a hypothesis, not an established
+cause; the owner and its deadlines were unchanged.
+
+The completed aggregate backend group reported 12,711 passed, 25 failed and
+123 skipped across 12,859 tests in 779 files (1025.56 s). The complete default
+run exited 1 after 1132.9 s; desktop, root and Claude bridge tests added six
+failures, all in files outside the storage-maintenance fixes. The new storage
+and retention regressions and the focused change-tracking suite passed, as did
+formatting, lint and typechecking. The run does not establish that every
+aggregate failure is pre-existing. Browser, Electron, Docker and iOS scenario
+suites were outside this backend-only follow-up's scope; production-scale
+maintenance timing and packaged/cross-platform copy behavior remain unmeasured.

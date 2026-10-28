@@ -11,6 +11,7 @@ import type {
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,
   PersistedNativeAgentSession,
+  PersistedPromptQueue,
 } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -18,12 +19,32 @@ import type { StorageRepositories } from "./storage-repositories.js";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
   MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
+  MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES,
   PendingNativeAgentDispatchError,
   PendingNativeAgentSteerError,
   isNonBlankString,
   isRecord,
   nowIso,
 } from "./storage-shared.js";
+
+/**
+ * Put a steer reservation's item back where it was queued: after the item that
+ * was ahead of it when reserved, or at the head when it was the head or that
+ * item has since left the queue. Every other item keeps its order.
+ */
+export function restoreSteeredQueueItem(
+  inFlight: NonNullable<PersistedPromptQueue["inFlight"]>,
+  messages: readonly unknown[],
+): unknown[] {
+  const restored = inFlight.message;
+  const others = messages.filter(
+    (item) => !isRecord(item) || !isRecord(restored) || item.id !== restored.id,
+  );
+  const afterId = isNonBlankString(inFlight.restoreAfterId) ? inFlight.restoreAfterId : undefined;
+  const after =
+    afterId === undefined ? -1 : others.findIndex((item) => isRecord(item) && item.id === afterId);
+  return [...others.slice(0, after + 1), restored, ...others.slice(after + 1)];
+}
 
 /**
  * The per-session delivery journals: a prompt dispatch or steer is recorded
@@ -383,10 +404,23 @@ export class NativeAgentDeliveries {
           sourceQueue: true,
           createdAt: nowIso(),
         };
+        const ahead = queue.messages[index - 1];
+        const restoreAfterId =
+          isRecord(ahead) &&
+          isNonBlankString(ahead.id) &&
+          Buffer.byteLength(ahead.id, "utf8") <= MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
+            ? ahead.id
+            : undefined;
         queues[queueKey] = {
           ...queue,
           messages: queue.messages.filter((_, i) => i !== index),
-          inFlight: { message, requestId, reservedAt: nowIso(), steer: true },
+          inFlight: {
+            message,
+            requestId,
+            reservedAt: nowIso(),
+            steer: true,
+            ...(restoreAfterId ? { restoreAfterId } : {}),
+          },
           updatedAt: nowIso(),
           revision: queue.revision + 1,
         };
@@ -438,15 +472,7 @@ export class NativeAgentDeliveries {
         ...rest,
         messages:
           settlement === "restore"
-            ? [
-                inFlight.message,
-                ...queue.messages.filter(
-                  (item) =>
-                    !isRecord(item) ||
-                    !isRecord(inFlight.message) ||
-                    item.id !== inFlight.message.id,
-                ),
-              ]
+            ? restoreSteeredQueueItem(inFlight, queue.messages)
             : queue.messages,
         updatedAt: nowIso(),
         revision: queue.revision + 1,

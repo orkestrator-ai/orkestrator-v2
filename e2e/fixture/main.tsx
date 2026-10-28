@@ -444,8 +444,11 @@ function NativeComposeFixture() {
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [sentCount, setSentCount] = useState(0);
   const [queueOpen, setQueueOpen] = useState(false);
-  const [drainedCount, setDrainedCount] = useState(0);
+  const [queued, setQueued] = useState(queuedComposePrompts);
+  const [steered, setSteered] = useState<string[]>([]);
   const [text, setText] = useState("");
+  const dropQueued = (id: string) =>
+    setQueued((current) => current.filter((prompt) => prompt.id !== id));
   const inputRef = useRef<MentionableInputRef | null>(null);
   const inputContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -477,15 +480,20 @@ function NativeComposeFixture() {
           placeholder="Send a message"
           isLoading={new URLSearchParams(window.location.search).has("running")}
           queue={{
-            length: queuedComposePrompts.length - drainedCount,
-            next: queuedComposePrompts[drainedCount],
+            length: queued.length,
             onOpen: () => setQueueOpen(true),
-            onSteer: () => setDrainedCount((count) => count + 1),
-            onEdit: () => {
-              setText(queuedComposePrompts[drainedCount]?.text ?? "");
-              setDrainedCount((count) => count + 1);
-            },
-            onRemove: () => setDrainedCount((count) => count + 1),
+            items: queued.map((prompt) => ({
+              ...prompt,
+              onSteer: () => {
+                setSteered((current) => [...current, prompt.id]);
+                dropQueued(prompt.id);
+              },
+              onEdit: () => {
+                setText(prompt.text);
+                dropQueued(prompt.id);
+              },
+              onRemove: () => dropQueued(prompt.id),
+            })),
           }}
           showAddressAll
           onAddressAll={async () => setSentCount((count) => count + 1)}
@@ -519,14 +527,19 @@ function NativeComposeFixture() {
           }
         />
         <output data-testid="native-send-count">{sentCount}</output>
+        <output data-testid="native-steered">{steered.join(",")}</output>
       </section>
       <QueuedPromptsDialog
         open={queueOpen}
         onOpenChange={setQueueOpen}
-        messages={queuedComposePrompts}
+        messages={queued}
         onEdit={() => {}}
         onMove={() => {}}
         onRemove={() => {}}
+        onSteer={(prompt) => {
+          setSteered((current) => [...current, prompt.id]);
+          dropQueued(prompt.id);
+        }}
       />
     </main>
   );

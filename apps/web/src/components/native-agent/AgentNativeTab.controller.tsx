@@ -3215,6 +3215,14 @@ export function SharedNativeAgentController({
           );
         }
       : undefined;
+  // The strips above the composer report a failed queue action as a toast.
+  const runInlineQueueAction = async (action: () => Promise<unknown>) => {
+    try {
+      await action();
+    } catch (error) {
+      toast.error(describePromptQueueActionError(error));
+    }
+  };
   const editQueuedPrompt = async (message: { id: string; text: string }) => {
     // Removing an annotation request cancels it, so the
     // remove-then-load edit below must never run for one.
@@ -3545,6 +3553,7 @@ export function SharedNativeAgentController({
             sendFromComposer(draft.text);
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
+          keyboardMenuOpen={fileMentionMenuOpen || commandComposer.menuOpen}
           placeholder={`Message ${label}`}
           disabled={
             queueEditPending || isSubmitting || preparingSend || draft.submissionPending === true
@@ -3769,47 +3778,25 @@ export function SharedNativeAgentController({
                     ? { message: projection.queue.blocked.error }
                     : null,
                   onOpen: () => setQueueDialogOpen(true),
-                  next: queuedMessages[0],
-                  onSteer:
-                    steerQueuedPrompt &&
-                    queuedMessages[0] &&
-                    canSteerQueuedPrompt(queuedMessages[0])
-                      ? async () => {
-                          const next = queuedMessages[0];
-                          if (!next) return;
-                          try {
-                            await steerQueuedPrompt(next);
-                          } catch (error) {
-                            toast.error(describePromptQueueActionError(error));
-                          }
-                        }
-                      : undefined,
-                  // Annotation requests are frozen briefs, and removing one
-                  // cancels it, so both stay behind the dialog.
-                  onEdit:
-                    queuedMessages[0] && !webAnnotationQueueOrigin(queuedMessages[0])
-                      ? async () => {
-                          const next = queuedMessages[0];
-                          if (!next) return;
-                          try {
-                            await editQueuedPrompt(next);
-                          } catch (error) {
-                            toast.error(describePromptQueueActionError(error));
-                          }
-                        }
-                      : undefined,
-                  onRemove:
-                    queuedMessages[0] && !webAnnotationQueueOrigin(queuedMessages[0])
-                      ? async () => {
-                          const next = queuedMessages[0];
-                          if (!next) return;
-                          try {
-                            await removeQueued(next.id);
-                          } catch (error) {
-                            toast.error(describePromptQueueActionError(error));
-                          }
-                        }
-                      : undefined,
+                  items: queuedMessages.map((message) => {
+                    // Annotation requests are frozen briefs, and removing one
+                    // cancels it, so both stay behind the dialog.
+                    const inline = !webAnnotationQueueOrigin(message);
+                    return {
+                      id: message.id,
+                      text: message.text,
+                      onSteer:
+                        steerQueuedPrompt && canSteerQueuedPrompt(message)
+                          ? () => runInlineQueueAction(() => steerQueuedPrompt(message))
+                          : undefined,
+                      onEdit: inline
+                        ? () => runInlineQueueAction(() => editQueuedPrompt(message))
+                        : undefined,
+                      onRemove: inline
+                        ? () => runInlineQueueAction(() => removeQueued(message.id))
+                        : undefined,
+                    };
+                  }),
                 }
               : undefined
           }

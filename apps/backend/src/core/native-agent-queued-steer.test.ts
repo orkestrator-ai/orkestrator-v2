@@ -3,6 +3,7 @@ import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/nati
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { StorageService, isPersistedNativeAgentSession } from "./storage.js";
+import { restoreSteeredQueueItem } from "./storage-native-deliveries.js";
 import { storageInternals } from "./storage-test-support.js";
 
 const identity = {
@@ -294,5 +295,99 @@ describe("durable queue-to-steer handoff", () => {
       }
       expect(perform).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("steering a queued prompt behind the head", () => {
+  const later = { id: "later", text: "Then this" };
+  type Run = Parameters<typeof fixture>[0];
+  // The fixture queues [item, tail]; add a third so `tail` sits in the middle.
+  const withMiddle = (run: Run) =>
+    fixture(async (context) => {
+      await context.storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, later);
+      await run(context);
+    });
+
+  test("delivers that prompt as a steer and leaves the others in order", async () => {
+    await withMiddle(async ({ service, storage, perform }) => {
+      expect(await service.steerQueuedPrompt({ ...identity, messageId: tail.id })).toEqual({
+        outcome: "applied",
+      });
+      expect(perform).toHaveBeenCalledTimes(1);
+      const [, action] = perform.mock.calls[0] as unknown[];
+      expect(action).toMatchObject({ kind: "steer", text: tail.text, requestId: tail.id });
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([item, later]);
+      expect((await storage.getNativeAgentSession(key))?.dispatchedRequestIds).toContain(tail.id);
+    });
+  });
+
+  test("a refused steer goes back to its own slot, not the head", async () => {
+    await withMiddle(async ({ service, storage, setResponse }) => {
+      setResponse({ outcome: "rejected", requestId: tail.id, reason: "steer-not-recorded" });
+      await service.steerQueuedPrompt({ ...identity, messageId: tail.id });
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([item, tail, later]);
+      expect((await storage.getPromptQueue(queueKey))?.inFlight).toBeUndefined();
+    });
+  });
+
+  test("an ambiguous dispatch is reconciled, never re-sent", async () => {
+    await withMiddle(async ({ service, storage, perform, setResponse, setStatus }) => {
+      setResponse(new Error("Response lost after admission"));
+      expect(await service.steerQueuedPrompt({ ...identity, messageId: tail.id })).toEqual({
+        outcome: "unknown",
+        requestId: tail.id,
+      });
+      // A second press while the first is unresolved replays the receipt.
+      expect(await service.steerQueuedPrompt({ ...identity, messageId: tail.id })).toEqual({
+        outcome: "unknown",
+        requestId: tail.id,
+      });
+      expect(perform).toHaveBeenCalledTimes(1);
+      setStatus("dispatched");
+      await service.drainPromptQueueForSession(identity);
+      expect(perform).toHaveBeenCalledTimes(1);
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([item, later]);
+    });
+  });
+
+  test("an ambiguous dispatch found absent restores the prompt to its slot after restart", async () => {
+    await withMiddle(async ({ service, storage, perform, setResponse, setStatus }) => {
+      setResponse({ outcome: "unknown" });
+      await service.steerQueuedPrompt({ ...identity, messageId: tail.id });
+      expect((await storage.getPromptQueue(queueKey))?.inFlight).toMatchObject({
+        restoreAfterId: item.id,
+      });
+      setStatus("absent");
+      await service.drainPromptQueueForSession(identity);
+      const next = await reopened(storage);
+      expect((await next.getPromptQueue(queueKey))?.messages).toEqual([item, tail, later]);
+      expect(perform).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("restoreSteeredQueueItem", () => {
+  const a = { id: "a", text: "A" };
+  const b = { id: "b", text: "B" };
+  const c = { id: "c", text: "C" };
+  const inFlight = (restoreAfterId?: string) => ({
+    message: c,
+    requestId: "c",
+    reservedAt: new Date(0).toISOString(),
+    steer: true as const,
+    ...(restoreAfterId === undefined ? {} : { restoreAfterId }),
+  });
+
+  test("returns the item after the one that was ahead of it", () => {
+    expect(restoreSteeredQueueItem(inFlight("a"), [a, b])).toEqual([a, c, b]);
+  });
+
+  test("restores to the head when the item ahead has left, or for older reservations", () => {
+    expect(restoreSteeredQueueItem(inFlight("gone"), [a, b])).toEqual([c, a, b]);
+    expect(restoreSteeredQueueItem(inFlight(), [a, b])).toEqual([c, a, b]);
+  });
+
+  test("never duplicates an item a stale save put back", () => {
+    expect(restoreSteeredQueueItem(inFlight("a"), [a, c, b])).toEqual([a, c, b]);
   });
 });

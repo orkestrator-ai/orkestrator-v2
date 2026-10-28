@@ -181,14 +181,28 @@ Rules of thumb:
 - When the last item in a file is done, set its **Finished** column to Yes
   in the folder index in the same change. Then move any durable behaviour into
   `architecture/` or `development/`, delete the file and remove its row from
-  the folder index. Its number is not reused.
+  the folder index. Renumber the remaining ranks to `1..n` in row order. Its
+  todo number is not reused.
 - To add work, create a new file with the next number and the same headings
   in the folder that fits, and add a rated row (Finished: No) to that
   folder's index. A new
   folder also needs its own `0000-index.md` and a row in
   [`todo/0000-index.md`](todo/0000-index.md).
+- After any row removal, insertion, or move, renumber that folder's ranks to
+  `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans
   every Markdown file.
+- `tests/unit/todo-index.test.ts` fails when two files share a number or a
+  folder index is missing a rated row for a file, has invalid Criticality or
+  Finished values, or has ranks other than `1..n` in row order. It also requires
+  every area folder to be linked from the top-level index. Two numbers were
+  already shared when it was added and stay allowlisted: 0054 (three files) and
+  0723 (two). Neither may gain another file.
+- Two open pull requests can each pick the same next number and each pass CI,
+  so the guard may first fire on `main` after the second merges. Fix forward:
+  rename the newer file to the next free number, update every link to it,
+  and record the old number in its "Replaces" section. A file that only just
+  merged has few links, so this does not undo a number anyone relies on.
 
 Live-provider and platform runs (macOS, Docker Desktop, Electron, Safari and
 iOS, two machines) are the most common open gate. They are batched in

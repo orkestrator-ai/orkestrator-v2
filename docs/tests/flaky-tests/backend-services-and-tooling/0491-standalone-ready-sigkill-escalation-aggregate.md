@@ -23,3 +23,23 @@
 The case times a grace period against a real child process. Under heavy host
 load the signal and exit ordering it observes can shift. Keep open until a
 recurrence on a normally loaded host gives the assertion message.
+
+## Todo 0732 main merge — 2026-10-28
+
+`mise run test:logged -- --name merge-default-tests -- mise run test`
+merged `d3842173e` into `f521032b1`. Default workspace/root/bridges/protocol
+workers were 6/1/2/1; host admission queued the groups for about 389 s.
+The backend reported 9,967 pass, 87 skip and two failures across 656 files
+(322.08 s). Root, bridges, protocol and the other workspace packages passed;
+the aggregate remained non-green (927.4 s including admission).
+Evidence: `orkestrator-test-run.LxnFHE/summary.json` and
+`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory; outer logged-run artifacts are in
+`orkestrator-test-run.cjGI8A`.
+
+The grace-period case failed at 209.89 ms: line 90 expected only `SIGTERM`
+but had already received `SIGKILL` too. The complete unchanged owner passed
+with
+`mise run test:logged -- --name merge-standalone-ready-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures`
+(exit 0, 0.7 s). This is consistent with the real-timer ordering race;
+no readiness implementation, assertion, timeout or skip changed.

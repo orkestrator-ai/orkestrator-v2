@@ -1,7 +1,7 @@
 # Measurement retention times out in aggregate validation
 
-- **ID:** 1222
-- **Status:** open
+- **ID:** 1246
+- **Status:** resolved
 - **Owner:** `apps/backend/src/core/change-tracking/measurement-retention.test.ts`
 
 On 2026-10-28, socket type-of-service guard review preparation failed
@@ -30,3 +30,16 @@ in the next case (128.22 ms). The backend again reported 9,904 passed,
 87 skipped and two failed tests across 651 files (265.16 seconds). Its evidence
 is retained with the default-suite rerun's failure artifacts. The desktop
 package reported 1,274 passed, 16 skipped and zero failed tests in that run.
+
+## Replaces
+
+Originally numbered 1222; renumbered to 1246 while merging `main`
+to preserve both cases after parallel branches reused the number.
+
+## Resolution
+
+Both branches independently wrapped the 150-by-200 backlog fixture in one
+transaction, avoiding over 30,000 SQLite autocommits without changing the
+assertions or deadlines. The repair and passing complete-owner and aggregate
+backend evidence are recorded in
+[1222-measurement-retention-backlog-aggregate-timeout.md](1222-measurement-retention-backlog-aggregate-timeout.md).

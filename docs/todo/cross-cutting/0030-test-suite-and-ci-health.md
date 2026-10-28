@@ -730,11 +730,16 @@ Decisions made on 2026-10-25 for this round, with the options weighed.
   Renderer windows keep `sandbox: false` as a documented exception for ESM
   preloads (`apps/desktop/electron/window.ts`); emitting CJS preloads would
   allow `sandbox: true`.
-- Living-doc drift: the flake registry reuses IDs on two or three case files
-  each: 0147, 0151, 0161–0164, 0176, 0512–0518, 0672, 0694 (three), 0721,
-  0724, 0785, 0786, 0790 (three) and 0791. Renumbering means rewriting prose
-  references across case files; decided not to renumber, and new entries
-  take numbers assigned per branch.
+- Living-doc drift: the flake registry reuses 29 IDs across 74 case files:
+  0147, 0151, 0161–0164, 0176, 0512–0514, 0515 (four), 0516, 0517, 0518
+  (three), 0632, 0671 (seven), 0672 (five), 0673, 0692, 0694 (three), 0721,
+  0724, 0785, 0786, 0790 (three), 0791, 0826 (three), 0947 (four) and 1011;
+  the rest have two each. Renumbering means rewriting prose references across
+  case files; decided not to renumber. Since
+  [0732](0732-duplicate-todo-numbers-unguarded.md),
+  `tests/unit/flaky-tests-index.test.ts` freezes exactly this set and fails on
+  any new reuse, and a new case takes the next number after the highest in
+  use.
 
 ## Replaces
 

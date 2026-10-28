@@ -103,7 +103,8 @@ describe("superseded measurements", () => {
     const latest = h.service.projections.selectedMeasurement(key)!;
     // A backlog an older build left: many superseded copies of one owner's diff.
     const backlog = Array.from({ length: 150 }, (_, index) => `m_backlog_${index}`);
-    // Seed atomically so fixture setup does not fsync every one of its 30,000 rows.
+    // Seed the backlog atomically, as production callers do. Autocommitting
+    // each of the 30,000 file rows makes setup dominate the test under load.
     ledger.transaction(() => {
       for (const measurementId of backlog) {
         ledger.insertMeasurement(

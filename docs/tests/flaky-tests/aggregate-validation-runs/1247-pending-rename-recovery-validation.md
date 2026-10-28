@@ -1,6 +1,6 @@
 # Pending rename recovery validation
 
-- **ID:** 1245
+- **ID:** 1247
 - **Status:** open
 - **Date observed:** 2026-10-28
 - **Command:** `mise run test`, after commits `6566274cf` and `88f8b5c04`.
@@ -24,3 +24,8 @@ non-green, and bridges remain unqualified by this run. Related rename tests and
 backend static checks passed separately. The earlier preparation retention
 timeout was reproduced alone and repaired by batching fixture inserts in one
 transaction, without changing retention assertions.
+
+## Replaces
+
+Originally numbered 1245; renumbered to 1247 while merging `main`
+to preserve both cases after parallel branches reused the number.

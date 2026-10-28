@@ -67,9 +67,11 @@ Users and isolation:
   shared hook through `/etc/zsh/zshrc`, reads prompt configuration from
   `/etc/starship.toml` through `STARSHIP_CONFIG`, and retains repository-owned
   Git aliases plus native Zsh completion without Oh My Zsh.
-- Staged inputs (`staged-inputs=3`): under rootless Docker the backend's
-  owner-only staged mounts are container root's, so the root entrypoint
-  relays each one `node` cannot read into `node`'s own
+- Staged inputs (`staged-inputs=3`): the backend's staged mounts are
+  owner-only and belong to its user, so `node` cannot read them under
+  rootless Docker (they are container root's) or on a rootful daemon whose
+  host user is not uid 1000 (GitHub's runners). The root entrypoint relays
+  each one `node` cannot read into `node`'s own
   `/run/orkestrator-inputs` before dropping privileges
   (`relay_staged_inputs`). `entrypoint.sh` reads a relayed copy in place of
   its mount (the copy helpers resolve their source root inline, and

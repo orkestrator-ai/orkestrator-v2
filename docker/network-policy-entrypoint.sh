@@ -142,14 +142,16 @@ umask 022
 printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 
 # Staged inputs (staged-inputs=3, see entrypoint.sh). The backend binds its
-# staged revision read-only, owner-only (0700/0600) and owned by its own
-# user. On a rootful daemon that user is the container's node. Under rootless
-# Docker the backend's user is container root and node is a subordinate UID,
-# so node cannot open the mounts. Each mount node cannot read in full is
-# copied, root reading and node writing, into a node-owned 0700 directory the
-# entrypoint reads instead. Nothing is widened on the host or for any other
-# user. The relay is rebuilt from the mounts on every boot, so emptying the
-# revision (revocation) empties it at the next start.
+# staged revision read-only, owner-only (0700/0600) and owned by its own user,
+# so node (uid 1000) can open them only on a rootful daemon whose host user is
+# uid 1000. Under rootless Docker the backend's user is container root and
+# node a subordinate UID; on a rootful daemon with any other host user
+# (GitHub's runners, a second user on a shared host) the mounts belong to that
+# uid. Each mount node cannot read in full is copied, root reading and node
+# writing, into a node-owned 0700 directory the entrypoint reads instead.
+# Nothing is widened on the host or for any other user. The relay is rebuilt
+# from the mounts on every boot, so emptying the revision (revocation) empties
+# it at the next start.
 STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs
 # The mount points below `/`, as the backend binds them
 # (apps/backend/src/core/portable-inputs.ts and the project seed files).

@@ -138,6 +138,16 @@ async function createLegacyEnvironment(
   return { fixture, environmentId: environment.id, containerId };
 }
 
+/** The container's read-only bind of the staged Codex inputs. */
+async function codexHomeBind(containerId: string) {
+  const mounts = JSON.parse(
+    await docker(["inspect", "-f", "{{json .Mounts}}", containerId]),
+  ) as Array<{ Type: string; Source: string; Destination: string; RW: boolean }>;
+  const bind = mounts.find((mount) => mount.Type === "bind" && mount.Destination === "/codex-home");
+  if (!bind) throw new Error(`${containerId} has no /codex-home bind`);
+  return bind;
+}
+
 function lifecycleOf(environment: Environment | null) {
   const parsed = parseContainerLifecycle(environment?.containerLifecycle);
   if (!parsed.supported) throw new Error("unsupported lifecycle record");
@@ -223,6 +233,12 @@ describe("C14 legacy migration with staged provider inputs", () => {
       const previousCodexHome = process.env.CODEX_HOME;
       process.env.CODEX_HOME = codexHome;
       try {
+        // The staged mount is owner-only and the backend's user owns it, so
+        // node can read it only where that user is uid 1000. Check what node
+        // imported at boot (from the relayed copy where it could not read the
+        // mount), before POPULATE edits it, and the bind itself; never read the
+        // raw mount as node.
+        let imported = "";
         // Codex never ran here, the common case: the entrypoint created
         // ~/.codex but no SQLite store exists, so the relocation step selects
         // nothing. That empty selection was refused as a symlinked root.
@@ -232,17 +248,27 @@ describe("C14 legacy migration with staged provider inputs", () => {
           {
             credentialSources: ["codex"],
             populate: async (id) => {
+              imported = await exec(id, "cat /home/node/.codex/config.toml");
               await exec(id, POPULATE);
             },
           },
         );
-        expect(await exec(containerId, "cat /codex-home/config.toml")).toBe(
-          'model = "staged-host"',
-        );
+        expect(imported).toBe('model = "staged-host"');
+        const sourceBind = await codexHomeBind(containerId);
+        expect(sourceBind.RW).toBe(false);
+        expect(sourceBind.Source.startsWith(path.join(dataDir, "portable-inputs"))).toBe(true);
         expect(await exec(containerId, "ls /home/node/.codex/*.sqlite* 2>/dev/null | wc -l")).toBe(
           "0",
         );
         const before = await exec(containerId, WORKSPACE_SNAPSHOT);
+        // The source's copy is POPULATE's edit. The host then drops
+        // config.toml and gains AGENTS.md, so only a fresh staging gives the
+        // candidate AGENTS.md and only a copy gives it config.toml: every boot,
+        // the replacement's own health boot included, overwrites config.toml
+        // from /codex-home, so a value check could not tell a copy apart.
+        expect(await exec(containerId, "cat /home/node/.codex/config.toml")).toBe("config");
+        await fs.rm(path.join(codexHome, "config.toml"));
+        await fs.writeFile(path.join(codexHome, "AGENTS.md"), "restaged-host\n");
 
         const outcome = await replaceRuntimePreservingState(
           { environmentId, expectedContainerId: containerId },
@@ -253,6 +279,9 @@ describe("C14 legacy migration with staged provider inputs", () => {
         expect(record.storage.format).toBe("volume-v1");
         expect(record.outcomes.at(-1)).toMatchObject({ kind: "migrate", status: "succeeded" });
         expect(record.retainedRuntimes?.map((entry) => entry.containerId)).toEqual([containerId]);
+        const candidateBind = await codexHomeBind(outcome!.containerId);
+        expect(candidateBind.RW).toBe(false);
+        expect(candidateBind.Source).not.toBe(sourceBind.Source);
 
         await startRuntime(outcome!.containerId);
         await waitForContainerBoot(outcome!.containerId);
@@ -278,9 +307,15 @@ describe("C14 legacy migration with staged provider inputs", () => {
           ].join("\n"),
         );
         // The candidate's inputs are staged afresh from the host, not copied
-        // from the source's edited home.
-        expect(await exec(outcome!.containerId, "cat /home/node/.codex/config.toml")).toBe(
-          'model = "staged-host"',
+        // from the source's edited home or its earlier staged revision.
+        expect(
+          await exec(
+            outcome!.containerId,
+            "test -e /home/node/.codex/config.toml && cat /home/node/.codex/config.toml || echo absent",
+          ),
+        ).toBe("absent");
+        expect(await exec(outcome!.containerId, "cat /home/node/.codex/AGENTS.md")).toBe(
+          "restaged-host",
         );
       } finally {
         if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

@@ -1,6 +1,7 @@
 # Container CI case "C14 legacy migration with staged provider inputs" fails on any host whose user is not uid 1000
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `863b5782` (2026-10-27). Code, test and docs work
+done 2026-10-28 on `main` at `31b9c972`; only the CI run remains.
 
 The live case [0058](0058-legacy-migration-root-symlink.md) added reads the
 staged Codex input `/codex-home/config.toml` as the container's `node` user
@@ -18,11 +19,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Make the precondition uid-independent**: assert the staged mount and what `node` actually imports, not the raw owner-only mount. Status: open.
-2. **Prove re-staging, not copying**: make the final `config.toml` assertion able to fail if the migration copied the source's copy. Status: open.
-3. **Correct the relay comment**: the relay also runs on a rootful daemon whose user is not uid 1000. Status: open.
-4. **Green CI run**: both architectures pass the whole replacement file. Status: open (depends on 1).
-5. **Whether the workflow should gate merges**: decide how a red qualification run stops a PR. Status: open.
+1. **Make the precondition uid-independent**: assert the staged mount and what `node` actually imports, not the raw owner-only mount. Status: done 2026-10-28.
+2. **Prove re-staging, not copying**: make the final `config.toml` assertion able to fail if the migration copied the source's copy. Status: done 2026-10-28.
+3. **Correct the relay comment**: the relay also runs on a rootful daemon whose user is not uid 1000. Status: done 2026-10-28.
+4. **Green CI run**: both architectures pass the whole replacement file. Status: open (needs the fix PR's run; task 1 is done).
+5. **Whether the workflow should gate merges**: decide how a red qualification run stops a PR. Status: done 2026-10-28 (an `AGENTS.md` rule; the workflow stays optional).
 
 ### 1. Make the precondition uid-independent
 
@@ -58,6 +59,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Context.** The main C14 case asserts `config.toml` is not carried over when nothing is staged (`:199-205`).
 
 **Investigation.** The test never edits the source's copy, despite the comment. Certainty: high, from reading the test.
+
+**Correction (2026-10-28, observed live).** The source's copy did differ: `POPULATE` writes `config` to `~/.codex/config.toml` (`container-live-workspace.ts`), and the case read `config` there after boot. The assertion could not fail for another reason: `copy_agent_file` (`docker/entrypoint.sh`) overwrites `config.toml` from `/codex-home` on every boot, and the replacement boots the candidate once for its health check before returning. A copied file is therefore replaced by the staged value before any test can look, so no value check after the migration can tell a copy from a re-staging while the host still has `config.toml`. The recommended option below would not have worked; see "Assumptions and decisions".
 
 **Decisions.**
 
@@ -125,35 +128,39 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Current state
 
-- `container-live-replacement.test.ts:214-291` is the case. Its precondition
-  at `:239` reads the raw staged mount as `node`.
-- It fails on GitHub's runners on both architectures (runs 40333566613 and
-  40409285999, 2026-10-26) and passes on omarchy-hp, where the host user is
-  uid 1000.
-- 0058 is marked Finished in the folder index, and its qualification evidence
-  in `docs/development/container-qualification.md` comes from omarchy-hp only.
-- The relay that makes owner-only staged inputs usable to `node` on any uid
-  ships in `staged-inputs=3` images (`docker/network-policy-entrypoint.sh`).
-- The workflow is not a required check.
+- The C14 staged-inputs case (`container-live-replacement.test.ts`) no
+  longer reads a raw staged mount as `node`. It records what `node` imported
+  at boot (inside the `populate` hook, before `POPULATE` edits it) and checks
+  the `/codex-home` bind with `docker inspect` (read-only, inside this run's
+  `portable-inputs`).
+- Before migrating, the host drops `config.toml` and gains `AGENTS.md`. The
+  candidate must have a new read-only `/codex-home` revision, the new
+  `AGENTS.md`, and no `config.toml` (a copy would leave the source's
+  `config`).
+- The relay comments in `docker/network-policy-entrypoint.sh` and
+  `docker/entrypoint.sh` and the staged-inputs bullet in `docker/AGENTS.md`
+  now name a rootful daemon whose host user is not uid 1000 alongside
+  rootless Docker.
+- `AGENTS.md` ("Choosing validation for a change") now says a red
+  "Container live qualification" run on a PR needs a green rerun or a
+  recorded reason before the PR is ready to merge. The workflow is still not
+  a required check.
+- Evidence, on omarchy-hp (whose user is uid 1000, not another uid as
+  expected) with image `orkestrator-v2:qual-0728-2ddc39c4`
+  (`sha256:d2a42ea4…`): the old case failed with CI's `Permission denied`
+  when the test ran as host uid 101001 (a user-namespace simulation, see
+  [Container qualification](../../development/container-qualification.md#c14-staged-inputs-on-any-host-uid-linux-engine-2026-10-28));
+  the fixed file passed 12/12 at uid 101001 and 12/12 at uid 1000; a
+  planted copy made the new assertion fail.
 
 ## Outstanding work
-
-### Code
-
-1. Replace the precondition at `container-live-replacement.test.ts:239` with
-   a `docker inspect` check of the `/codex-home` bind (read-only) and a `node`
-   read of `/home/node/.codex/config.toml`.
-2. Before the migration, overwrite the source's `~/.codex/config.toml`, and
-   keep the candidate's expected value as the host's.
-3. Reword the rootful case in `docker/network-policy-entrypoint.sh:145-147`
-   and the staged-inputs bullet in `docker/AGENTS.md`.
 
 ### Qualification
 
 - The fix PR's "Container live qualification" run passes every case in
-  `container-live-replacement.test.ts` on linux-x64 and linux-arm64.
-- The same file passes on a uid-1000 Linux Engine host with
-  `RUN_LIVE_DOCKER_TESTS=1`, on a workspace-specific qualification image.
+  `container-live-replacement.test.ts` on linux-x64 and linux-arm64. The PR
+  triggers the workflow through its `container-live-*.test.ts` and
+  `docker/entrypoint.sh` path filters.
 
 ## Constraints and rationale
 
@@ -166,15 +173,112 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Open questions
 
-- Should other live tests be audited for raw reads of `/claude-config`,
-  `/codex-home` and the other staged mount points as `node`? A search at
-  `863b5782` found only this one; the C20 check that reads a raw mount is
-  guarded by `test ! -r` under rootless.
+- None. The audit question is answered: a search on 2026-10-28 (`main` at
+  `31b9c972`) of the live and `*docker*` tests for reads of `/claude-config`,
+  `/codex-home` and the other staged mount points found only C20's two
+  checks, both safe on any uid: `test ! -r` on a raw mount, guarded by the
+  rootless branch, and a `test ! -e` absence check after revocation.
 
 ## Needs verification
 
 - The runner user's uid, read from a CI step (`id -u`), if the explanation is
-  ever disputed.
+  ever disputed. The local reproduction used host uid 101001, not the
+  runners' presumed 1001; any uid other than 1000 has the same effect on a
+  0600 file.
+- Whether the case passes on linux-arm64: only x86_64 ran locally.
+
+## Assumptions and decisions
+
+### What the precondition checks (task 1)
+
+- **Options.** (a) Read the imported `/home/node/.codex/config.toml` as
+  `node` and assert the `/codex-home` bind with `docker inspect`, as C20
+  does. (b) Read the raw mount as root. (c) Resolve the relay copy first,
+  like `staged_input_path`.
+- **Choice: (a), reading the import inside the `populate` hook.** The
+  todo's plan read the imported file after `createLegacyEnvironment`
+  returns, but `POPULATE` has already replaced it with `config` by then
+  (observed: the first run failed with `Expected: "model = "staged-host""`
+  and `Received: "config"`). The hook runs after boot and before `POPULATE`.
+- **Pros.** Independent of the host uid; checks what Codex in the container
+  uses, through the relay wherever the relay runs; follows C20.
+- **Cons.** Indirect: a broken import and a broken mount look the same.
+  The bind check (destination, read-only, source in this run's
+  `portable-inputs`) narrows it. (b) would hide a relay or import
+  regression; (c) would make the case take a different branch per host, and
+  the relay has its own suite.
+
+### How the re-staging assertion can fail (task 2)
+
+- **Options.** (a) The todo's plan: edit the source's `config.toml` and
+  expect the host value in the candidate. (b) Change the host's value before
+  migrating and expect the new value. (c) Inspect the candidate's
+  `~/.codex` with `docker cp` before its first boot. (d) Remove
+  `config.toml` from the host and add `AGENTS.md` before migrating; expect
+  the candidate to have no `config.toml`, the new `AGENTS.md`, and a new
+  `/codex-home` revision.
+- **Choice: (d).** (a) cannot fail: the source's copy already differed
+  (`POPULATE`'s `config`) and every boot overwrites it from `/codex-home`.
+  (b) fails only if the candidate reused the source's staged revision; a
+  copy is still overwritten. (c) was tried and fails for the wrong reason: the
+  stopped candidate already had a `config.toml` (observed; content not
+  read), because the replacement boots the candidate once for its health
+  check (`container-replacement.ts`) and that boot imports it.
+- **Pros of (d).** Each wrong behaviour gives a different result: a copy
+  leaves `config`; reusing the source's revision gives `staged-host` and no
+  `AGENTS.md`. Proved by a scratch mutation that planted `config` in the
+  stopped candidate: the case failed with `Expected: "absent"`
+  and `Received: "config"`.
+- **Cons.** The host losing `config.toml` between creation and migration
+  is a less common shape than an unchanged host. The case with an unchanged
+  host value is not separately covered, but its outcome is the same staged
+  value either way, so there is nothing for it to distinguish.
+
+### Where the relay wording goes (task 3)
+
+- **Options.** Reword the relay comment and `docker/AGENTS.md`, or leave
+  them.
+- **Choice: reword**, both scripts' comments (`network-policy-entrypoint.sh`
+  and the matching `entrypoint.sh` comment) and the `docker/AGENTS.md`
+  bullet.
+- **Pros.** The next author of a live test learns that the raw mounts are
+  unreadable to `node` on CI, not only under rootless Docker.
+- **Cons.** Comment-only changes to `docker/` alter the image content; the
+  `docker/entrypoint.sh` change also triggers the container workflow, which
+  task 4 wants anyway.
+
+### How a red qualification run stops a PR (task 5)
+
+- **Options.** (a) Keep the workflow optional and add an `AGENTS.md`
+  validation rule: a red run needs a green rerun or a recorded reason
+  before merge. (b) Make it a required check with an always-running stub
+  job for PRs outside its paths. (c) Leave it as it is.
+- **Choice: (a).**
+- **Pros.** No unrelated PR is blocked by a pending path-filtered check or
+  a flaky live case; review preparation (Multi Review) already reads that
+  section of `AGENTS.md`; it matches `container-qualification.md`'s "fixed,
+  or the reason is recorded" rule. (b) needs a branch protection change,
+  which `AGENTS.md`'s Orkestrator section forbids agents to make without the
+  user's explicit approval.
+- **Cons.** It relies on the reviewer reading the run; GitHub still lets a
+  red PR merge. (c) is how 0058 and 0109 merged red. (b) stays open to the
+  user if this proves too weak.
+
+### Simulating a non-uid-1000 host (qualification)
+
+- **Assumption.** The task expected omarchy-hp's user not to be uid 1000;
+  `id` showed `uid=1000(arkaydeus)`. To show the old case failing and the new
+  one passing where the host user is not uid 1000, the test process ran in
+  an unprivileged user namespace (`unshare --user --mount`, inner uid 1001
+  mapped to subordinate uid 101001 from `/etc/subuid`, `docker` group kept),
+  with the worktree and Bun bind-mounted under `/tmp` in that namespace's
+  private mount table. Nothing on the host was configured, and the namespace
+  disappears with the process.
+- **Alternatives.** A second host user (needs root and changes the
+  machine); waiting for CI (cannot show a local before and after).
+- **Limit.** The daemon is the same rootful daemon, so this matches the
+  runners' shape (rootful, non-1000 host user) but not their kernel,
+  storage driver or arm64.
 
 ## Related
 

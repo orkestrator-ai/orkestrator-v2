@@ -97,3 +97,14 @@ and the aggregate log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.
 ## Pending rename recovery review — 2026-10-28
 
 The aggregate repeated this failure and the complete unchanged owner passed alone. Commands, timings and the aggregate capacity limitation are recorded in [1247](../aggregate-validation-runs/1247-pending-rename-recovery-validation.md). No implementation, assertion, wait, timeout or skip changed.
+
+## Git fsmonitor removal validation — 2026-10-28
+
+`mise run test` on branch `git-fsmonitor-leak-and-hangs-969095f24ee2` (backend
+git fsmonitor handling only; no web change) on macOS at load average 40–60
+repeated the maximal-list failure: expected one projection read, received two
+(2420.99 ms). The unchanged owner passed alone on the branch (22 pass, 8.7 s)
+and on a clean `dfedcd743` (origin/main) clone (22 pass). Evidence:
+`orkestrator-test-run.2rpgar/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. No implementation, assertion, wait,
+timeout or skip changed.

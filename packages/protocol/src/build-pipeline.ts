@@ -22,6 +22,15 @@ import {
   type AgentInteractionWorkflowSummary,
 } from "./agent-interactions.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import {
+  ACCEPTANCE_CRITERION_STATUSES,
+  isAcceptanceCriterionStatus,
+  isTicketKind,
+  sectionsFromTicketText,
+  TICKET_SECTION_LIMITS,
+  type AcceptanceCriterionStatus,
+  type TicketKind,
+} from "./ticket-sections.js";
 import { isNativeAgentModelSubstitution } from "./native-agent.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
@@ -69,13 +78,76 @@ export type TaskSnapshotImage = {
   data: string;
 };
 
+/** One acceptance criterion as the pipeline started with it. */
+export interface TaskSnapshotCriterion {
+  /** The ticket's own criterion id, so Verify results can be written back. */
+  id: string;
+  /** Full original text, including legacy criteria beyond the tool input limit. */
+  text: string;
+}
+
 export type TaskSnapshot = {
   title: string;
   description: string;
   acceptanceCriteria: string;
   comments: Array<{ text: string }>;
   images: TaskSnapshotImage[];
+  /** The ticket's kind. Absent on snapshots taken before kinds existed. */
+  kind?: TicketKind;
+  /**
+   * The criteria Verify checks, with the ticket's ids. Absent on snapshots
+   * taken before this existed and when the ticket was not found; see
+   * {@link taskSnapshotCriteria}.
+   */
+  acceptanceCriteriaItems?: TaskSnapshotCriterion[];
 };
+
+/**
+ * The criteria Verify checks for this snapshot. A snapshot without stored
+ * items has them derived from its text, deterministically, so the verify
+ * prompt and the inspector agree on the ids.
+ */
+export function taskSnapshotCriteria(snapshot: TaskSnapshot): TaskSnapshotCriterion[] {
+  if (snapshot.acceptanceCriteriaItems) {
+    return snapshot.acceptanceCriteriaItems.slice(0, TICKET_SECTION_LIMITS.maxAcceptanceCriteria);
+  }
+  // The same derivation a legacy ticket gets, so criteria a description lists
+  // under its own heading are checked too.
+  return (
+    sectionsFromTicketText(snapshot.description ?? "", snapshot.acceptanceCriteria ?? "", {
+      now: "1970-01-01T00:00:00.000Z",
+    }).acceptanceCriteria ?? []
+  )
+    .slice(0, TICKET_SECTION_LIMITS.maxAcceptanceCriteria)
+    .map(({ id, text }) => ({ id, text }));
+}
+
+/** Verify's judgement of one criterion, as the session stores it. */
+export interface PipelineCriterionResult {
+  id: string;
+  status: AcceptanceCriterionStatus;
+  /** At most {@link TICKET_SECTION_LIMITS.maxEvidenceLength} characters. */
+  evidence: string;
+}
+
+function isPipelineCriterionResult(value: unknown): value is PipelineCriterionResult {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.id) &&
+    value.id.length <= 64 &&
+    isAcceptanceCriterionStatus(value.status) &&
+    typeof value.evidence === "string" &&
+    value.evidence.length <= TICKET_SECTION_LIMITS.maxEvidenceLength
+  );
+}
+
+function isPipelineCriterionResults(value: unknown): value is PipelineCriterionResult[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= TICKET_SECTION_LIMITS.maxAcceptanceCriteria &&
+    value.every(isPipelineCriterionResult)
+  );
+}
 
 export type BuildPhase =
   | "creating-environment"
@@ -385,38 +457,68 @@ type VerificationVerdictFieldType<T extends "boolean" | "string"> = T extends "b
   ? boolean
   : string;
 
+/** Verify's judgement of one ticket criterion, as the model reports it. */
+export interface VerificationCriterionVerdict {
+  id: string;
+  status: AcceptanceCriterionStatus;
+  evidence: string;
+}
+
 /**
- * The verification turn's answer: did the committed branch meet the ticket?
+ * The verification turn's answer: did the committed branch meet the ticket,
+ * and how did each acceptance criterion fare?
  *
  * Shared rather than declared at the point of use so the supervisor that
  * enforces the schema and the transcript that renders the answer cannot drift
  * apart — a renderer guessing at the shape would silently fall back to raw JSON
  * the day a field is added.
+ *
+ * `acceptanceCriteria` is required by the schema the provider enforces, but a
+ * verdict without it still parses: a verify turn started before the field
+ * existed answers in the old two-field shape.
  */
 export type VerificationVerdict = {
   -readonly [Field in VerificationVerdictField]: VerificationVerdictFieldType<
     (typeof VERIFICATION_VERDICT_FIELDS)[Field]
   >;
-};
+} & { acceptanceCriteria?: VerificationCriterionVerdict[] };
 
 const VERIFICATION_VERDICT_FIELD_ENTRIES = Object.entries(VERIFICATION_VERDICT_FIELDS) as [
   VerificationVerdictField,
   "boolean" | "string",
 ][];
 
+// No `maxItems`: several providers' structured output rejects or strips it
+// (see structured-review/budgets.ts). The guard enforces the bound instead.
+const VERIFICATION_CRITERIA_SCHEMA = Object.freeze({
+  type: "array",
+  items: Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    required: Object.freeze(["id", "status", "evidence"]),
+    properties: Object.freeze({
+      id: Object.freeze({ type: "string" }),
+      status: Object.freeze({ type: "string", enum: ACCEPTANCE_CRITERION_STATUSES }),
+      evidence: Object.freeze({ type: "string" }),
+    }),
+  }),
+});
+
 /**
  * Frozen because the supervisor hands this exact object to the provider that
  * constrains the turn; a consumer mutating it would change what the model is
  * asked for everywhere at once.
  */
-const VERIFICATION_VERDICT_REQUIRED = Object.freeze(
-  VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field]) => field),
-);
-const VERIFICATION_VERDICT_PROPERTIES = Object.freeze(
-  Object.fromEntries(
+const VERIFICATION_VERDICT_REQUIRED = Object.freeze([
+  ...VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field]) => field),
+  "acceptanceCriteria",
+]);
+const VERIFICATION_VERDICT_PROPERTIES = Object.freeze({
+  ...Object.fromEntries(
     VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field, type]) => [field, Object.freeze({ type })]),
   ),
-);
+  acceptanceCriteria: VERIFICATION_CRITERIA_SCHEMA,
+});
 
 export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = Object.freeze({
   type: "object",
@@ -425,20 +527,80 @@ export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = Object.freez
   properties: VERIFICATION_VERDICT_PROPERTIES,
 });
 
+function isVerificationCriterionVerdict(value: unknown): value is VerificationCriterionVerdict {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 3 &&
+    typeof record.id === "string" &&
+    isAcceptanceCriterionStatus(record.status) &&
+    typeof record.evidence === "string"
+  );
+}
+
 /**
  * Exactly the contract fields and nothing else, so an unrelated payload that
  * happens to carry a `complete` flag is not mistaken for a verification
- * verdict. The key count mirrors the schema's `additionalProperties: false`.
+ * verdict. The key count mirrors the schema's `additionalProperties: false`;
+ * the old two-field shape is the one allowed omission.
  */
 export function isVerificationVerdict(value: unknown): value is VerificationVerdict {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).length !== VERIFICATION_VERDICT_FIELD_ENTRIES.length) {
+  const hasCriteria = record.acceptanceCriteria !== undefined;
+  if (
+    Object.keys(record).length !==
+    VERIFICATION_VERDICT_FIELD_ENTRIES.length + (hasCriteria ? 1 : 0)
+  ) {
+    return false;
+  }
+  if (
+    hasCriteria &&
+    !(
+      Array.isArray(record.acceptanceCriteria) &&
+      record.acceptanceCriteria.length <= TICKET_SECTION_LIMITS.maxAcceptanceCriteria &&
+      record.acceptanceCriteria.every(isVerificationCriterionVerdict)
+    )
+  ) {
     return false;
   }
   return VERIFICATION_VERDICT_FIELD_ENTRIES.every(([field, type]) => typeof record[field] === type);
+}
+
+/** A verdict in the shape written before per-criterion results existed. */
+export function isLegacyVerificationVerdict(value: unknown): boolean {
+  return (
+    isVerificationVerdict(value) &&
+    (value as Record<string, unknown>).acceptanceCriteria === undefined
+  );
+}
+
+/**
+ * The session's per-criterion results from a verdict: one entry per snapshot
+ * criterion, in snapshot order. A criterion the verdict skipped is recorded as
+ * not checked, never as passed; ids the snapshot does not have are dropped.
+ * Old verdicts explicitly leave every snapshot criterion not checked.
+ */
+export function verificationCriterionResults(
+  criteria: readonly TaskSnapshotCriterion[],
+  verdict: VerificationVerdict,
+): PipelineCriterionResult[] {
+  const reported = new Map((verdict.acceptanceCriteria ?? []).map((entry) => [entry.id, entry]));
+  const limit = TICKET_SECTION_LIMITS.maxEvidenceLength;
+  return criteria.map(({ id }) => {
+    const entry = reported.get(id);
+    if (!entry) {
+      return { id, status: "not-checked", evidence: "Verify did not report on this criterion." };
+    }
+    const evidence = entry.evidence.trim();
+    return {
+      id,
+      status: entry.status,
+      evidence: evidence.length <= limit ? evidence : `${evidence.slice(0, limit - 1)}…`,
+    };
+  });
 }
 
 /**
@@ -667,6 +829,12 @@ export interface PipelineSession {
   verificationResult?: "pass" | "fail";
   /** At most {@link MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH} characters. */
   verificationFeedback?: string;
+  /**
+   * Verify's result for each criterion of the snapshot, by id, in snapshot
+   * order. Absent on other phases, on records written before it existed, and
+   * when the verdict did not report criteria.
+   */
+  acceptanceCriteriaResults?: PipelineCriterionResult[];
   /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
@@ -1424,6 +1592,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       (value.phase === "verify" &&
         typeof value.verificationFeedback === "string" &&
         value.verificationFeedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH)) &&
+    (value.acceptanceCriteriaResults === undefined ||
+      (value.phase === "verify" && isPipelineCriterionResults(value.acceptanceCriteriaResults))) &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||
@@ -1587,9 +1757,26 @@ function isUserMessage(value: unknown): value is PipelineUserMessage {
   );
 }
 
+function isTaskSnapshotCriteria(value: unknown): value is TaskSnapshotCriterion[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= TICKET_SECTION_LIMITS.maxAcceptanceCriteria &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        isNonBlankString(item.id) &&
+        item.id.length <= 64 &&
+        typeof item.text === "string",
+    )
+  );
+}
+
 function isTaskSnapshot(value: unknown): value is TaskSnapshot {
   if (!isRecord(value)) return false;
   return (
+    (value.kind === undefined || isTicketKind(value.kind)) &&
+    (value.acceptanceCriteriaItems === undefined ||
+      isTaskSnapshotCriteria(value.acceptanceCriteriaItems)) &&
     typeof value.title === "string" &&
     typeof value.description === "string" &&
     typeof value.acceptanceCriteria === "string" &&

@@ -340,6 +340,11 @@ export async function withService(
       kanbanTasks.set(taskId, task);
       return undefined as T;
     }
+    if (command === "record_kanban_criteria_checks") {
+      const task = kanbanTasks.get(String(args.taskId));
+      if (task) Object.assign(task, { criteriaChecks: args.checks });
+      return (task ?? null) as T;
+    }
     if (command === "update_feature_plan") return undefined as T;
     if (command === "pr_monitor_watch") return undefined as T;
     if (

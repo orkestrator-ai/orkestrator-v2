@@ -814,7 +814,9 @@ start with `packages/`.
 - Where: `worktree-watcher.ts:147-148, 233-247`.
 - Fix: watch non-ignored subtrees only, or rely on git's fsmonitor, which
   `enableGitScanCaches` already turns on. This depends on Bun's Linux
-  watcher, which was not inspected.
+  watcher, which was not inspected. (2026-10-28: fsmonitor is no longer
+  turned on; see [git-scan-caches.md](../architecture/git-scan-caches.md).
+  Only the first option remains.)
 
 **ST-18. Git-scope demand never expires.** Impact Medium · Confidence High
 - Where: `git-scopes.ts:143-170, 199-203`; `change-tracking/service.ts:286-287`.

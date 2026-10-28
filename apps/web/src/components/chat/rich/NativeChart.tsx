@@ -235,7 +235,7 @@ export function NativeChart({ spec, viewKey, source, provenance, extraActions }:
       </RichBlockFrame>
       {expanded ? (
         <Dialog open onOpenChange={(open) => setExpanded(open)}>
-          <DialogContent className="sm:max-w-5xl">
+          <DialogContent size="5xl">
             <DialogTitle>{spec.title}</DialogTitle>
             <DialogDescription>{label}</DialogDescription>
             <NativeChartBody

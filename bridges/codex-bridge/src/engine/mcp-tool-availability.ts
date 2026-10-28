@@ -14,7 +14,21 @@ export type McpToolAvailability =
   /** app-server could not answer. Callers must not treat this as missing. */
   | { state: "unverified" };
 
-export const MCP_TOOL_AVAILABILITY_TIMEOUT_MS = 5_000;
+/**
+ * Handshake budget for the thread-scoped Orkestrator MCP servers. Codex marks a
+ * server that has not finished `initialize` and `tools/list` in this time as
+ * failed for the life of the thread. The previous 3 s budget timed out on a
+ * host with a load average above 100 (docs/todo 0734); the original handshake
+ * duration was not measured. The bounded 15 s budget is qualified by the live
+ * delayed-handshake probe, not by a replay of that production workload.
+ */
+export const ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC = 15;
+/**
+ * Longer than the startup budget, so a slow handshake reaches a definite
+ * `connected` or `failed` inside the wait instead of being reported unverified
+ * while it is still starting.
+ */
+export const MCP_TOOL_AVAILABILITY_TIMEOUT_MS = (ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC + 5) * 1_000;
 export const MCP_TOOL_AVAILABILITY_POLL_MS = 100;
 
 function record(value: unknown): Record<string, unknown> {

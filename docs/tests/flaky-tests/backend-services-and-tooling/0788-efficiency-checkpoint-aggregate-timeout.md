@@ -18,3 +18,12 @@
 
 - **Disposition:** environmental (host load).
 - **Evidence:** host load reached 147 during the aggregate, and the first isolated rerun failed the same way at that load. The owner passed once load fell to about 76. A run that fails alone at that load is a host condition, not a flake by the registry's definition. Reopen if it fails at normal load.
+
+
+## Criterion verification review — 2026-10-28
+
+- **Aggregate:** `mise run test:logged -- --name review-repair-default -- mise run test`, on the structured-ticket branch. The run waited 559 seconds for the shared host lease; workspace/root/bridges/protocol reservations were 6/1/2/1.
+- **Failure:** `supervision workloads > an unchanged pipeline session is read whole and saved once` timed out at 5024 ms in the root group.
+- **Complete owning-file rerun:** `mise run test:logged -- --name efficiency-rerun -- bun test ./tests/unit/efficiency/harness.test.ts --parallel=1 --only-failures` passed unchanged (8.9 s).
+- **Evidence:** `orkestrator-test-run.bgBVht` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in this owner changed.

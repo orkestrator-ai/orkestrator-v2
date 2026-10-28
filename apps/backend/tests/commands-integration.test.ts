@@ -2341,11 +2341,13 @@ exit 1
         await expect(
           gitOutput(worktreePath, ["config", "--get", "core.untrackedCache"]),
         ).resolves.toBe("true");
-        // Scoped to this worktree, never to the shared config: these worktrees
-        // hang off a clone the user also drives by hand.
+        // fsmonitor is never turned on: its daemon slowed every git call, could
+        // hang, and outlived the worktree.
         await expect(
-          gitOutput(worktreePath, ["config", "--worktree", "--get", "core.fsmonitor"]),
-        ).resolves.toBe("true");
+          gitOutput(worktreePath, ["config", "--worktree", "--get", "core.fsmonitor"]).catch(
+            () => "",
+          ),
+        ).resolves.toBe("");
         await expect(
           gitOutput(worktree, ["config", "--get", "core.fsmonitor"]).catch(() => ""),
         ).resolves.not.toBe("true");

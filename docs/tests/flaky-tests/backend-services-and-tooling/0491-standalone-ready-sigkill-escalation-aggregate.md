@@ -65,3 +65,31 @@ branch (exit 0; 589.3 s including host admission). Its output is in
 `.orkestrator/fix-validation/default-suite-rerun.log`. No readiness code or
 assertions changed. A full detached `origin/main` run had a separate OpenCode
 agent-tool timing failure, with no readiness failure.
+
+## Project landing-tab review — 2026-10-28
+
+Preparation's `mise run test` repeated the early SIGKILL assertion at line 90
+(94.28 ms), using the default concurrent workspace/root/bridges/protocol groups.
+The unchanged complete owner passed alone (exit 0, 1.0 s):
+
+```sh
+mise run test:logged -- --name prior-standalone-failure -- bun --cwd=apps/backend test ./tests/standalone-ready.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is `validation-05.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-715de670-9258-47de-9a56-3b5d32afcae9/`.
+No readiness code, assertions, timeouts or skips changed.
+
+## Git fsmonitor removal validation — 2026-10-28
+
+`mise run test` on branch `git-fsmonitor-leak-and-hangs-969095f24ee2` (backend
+git fsmonitor handling; nothing in the standalone backend or its readiness
+wait) on macOS at load average 40–60 failed this case at 141.95 ms: line 90
+had already seen `SIGKILL`. The unchanged owner, run alone with
+`bun test tests/standalone-ready.test.ts` from `apps/backend`, failed once in
+four runs while the load average was about 60, then passed 8 of 8 as it fell
+to about 40. A clean `dfedcd743` (origin/main) clone passed 14 of 14 over the
+same window. Consistent with the real-timer ordering race recorded above, now
+also seen in isolation on a heavily loaded host. Evidence:
+`orkestrator-test-run.2rpgar/` under the host temporary directory. No
+implementation, assertion, timeout or skip changed.

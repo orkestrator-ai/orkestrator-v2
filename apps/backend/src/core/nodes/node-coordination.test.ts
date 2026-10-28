@@ -43,6 +43,46 @@ function coordination(world: MailWorld, controllers: Array<{ id: string; name: s
 }
 
 describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
+  for (const policy of ["muted", "off", "hourly-limit"] as const) {
+    test(`leaf response preserves the ${policy} placement and reason`, async () => {
+      const world = await MailWorld.create();
+      worlds.push(world);
+      const worker = await world.addEnvironment("worker");
+      const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
+      const input = {
+        controllerId: "bk_cmd",
+        coordinatorEnvironmentId: "coordinator:c1:conv-1",
+        coordinatorTabId: "coord-tab",
+        requestId: "first",
+        toEnvironmentId: worker.environmentId,
+        toTabId: worker.tabId,
+        body: "Correction.",
+      };
+      if (policy === "hourly-limit") {
+        const config = await world.storage.loadConfig();
+        await world.storage.updateGlobalConfig({
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 1 },
+        });
+        await instance.deliverIncoming(input);
+      } else
+        await world.storage.updateAgentMailboxPolicy(
+          worker.environmentId,
+          worker.tabId,
+          policy === "muted" ? { mutedInbound: true } : { inject: "off" },
+        );
+      expect(await instance.deliverIncoming({ ...input, requestId: "second" })).toMatchObject({
+        placement: policy === "muted" ? "bounced" : policy === "off" ? "stored" : "inject-held",
+        placementReason:
+          policy === "muted"
+            ? "recipient-muted"
+            : policy === "off"
+              ? "inject-policy-off"
+              : "hourly-limit",
+      });
+    });
+  }
+
   test("delivers as ordinary incoming mail and routes the agent's answer to that command node's outbox", async () => {
     const world = await MailWorld.create();
     worlds.push(world);
@@ -75,6 +115,7 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     expect(incoming.trust).toBe("same-project");
     expect(incoming.route).toBe("coordinator");
     expect(incoming.placement).toBe("pending-inject");
+    expect(delivered.placement).toBe("pending-inject");
 
     // The agent answers "coordinator": it goes to the command node that asked.
     const router = world.storage.nodeMailRouter!;

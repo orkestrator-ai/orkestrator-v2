@@ -521,7 +521,7 @@ describe("thread lifecycle", () => {
       url: "http://127.0.0.1:4567/artifact-mcp",
       http_headers: { Authorization: "Bearer oag1.turn-grant" },
       required: false,
-      startup_timeout_sec: 3,
+      startup_timeout_sec: 15,
       default_tools_approval_mode: "approve",
     });
     // The attempt's result server keeps its own credential.
@@ -841,13 +841,13 @@ describe("thread lifecycle", () => {
           url: "http://127.0.0.1:4567/design-mcp",
           http_headers: { Authorization: "Bearer tab-secret" },
           required: false,
-          startup_timeout_sec: 3,
+          startup_timeout_sec: 15,
         },
         "mcp_servers.orkestrator": {
           url: "http://127.0.0.1:4567/mcp",
           http_headers: { Authorization: "Bearer tab-secret" },
           required: false,
-          startup_timeout_sec: 3,
+          startup_timeout_sec: 15,
           // Only the mail and artifact tools bypass the ordinary approval policy.
           tools: Object.fromEntries(
             [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => [

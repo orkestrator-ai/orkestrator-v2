@@ -4,6 +4,7 @@
  * coordinator-only workflow tools. `control-mcp-server.ts` owns the listener
  * and authentication; it rebuilds this server for every request.
  */
+import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
@@ -12,6 +13,7 @@ import {
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -20,6 +22,11 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { z } from "zod";
+import {
+  ticketKindField,
+  ticketSectionsField,
+  ticketStructuredOutput,
+} from "./ticket-tool-fields.js";
 import {
   allEnvironments,
   compactMessages,
@@ -256,6 +263,7 @@ function ticketSummary(task: JsonRecord): JsonRecord {
 function ticketDetail(task: JsonRecord): JsonRecord {
   return {
     ...ticketSummary(task),
+    ...ticketStructuredOutput(task as Parameters<typeof ticketStructuredOutput>[0]),
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
     comments: Array.isArray(task.comments) ? task.comments.slice(-50) : [],
@@ -1120,11 +1128,14 @@ export async function createControlMcp(
     "create_ticket",
     {
       title: "Create a Kanban ticket",
-      description: "Create a ticket in one configured project.",
+      description:
+        "Create a ticket in one configured project. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
         title: z.string().trim().min(1).max(500),
+        kind: ticketKindField,
+        sections: ticketSectionsField,
         description: z.string().max(100_000).default(""),
         acceptanceCriteria: z.string().max(100_000).default(""),
         status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
@@ -1137,7 +1148,18 @@ export async function createControlMcp(
         openWorldHint: false,
       },
     },
-    async ({ requestId, projectId, title, description, acceptanceCriteria, status, nodeId }) => {
+    async ({
+      requestId,
+      projectId,
+      title,
+      kind,
+      sections,
+      description,
+      acceptanceCriteria,
+      status,
+      nodeId,
+    }) => {
+      const structured = { ...(kind ? { kind } : {}), ...(sections ? { sections } : {}) };
       if (operator) {
         return operatorCreateTicket(callerOnNode(operator, nodeId), {
           requestId,
@@ -1146,6 +1168,7 @@ export async function createControlMcp(
           description,
           acceptanceCriteria,
           status,
+          ...structured,
         });
       }
       coordinatorNodeRefused(nodeId);
@@ -1158,6 +1181,7 @@ export async function createControlMcp(
         acceptanceCriteria,
         status,
         requestId,
+        ...structured,
       });
       if (!isRecord(task)) throw new Error("Kanban ticket creation returned no ticket");
       return toolResult({ ticket: ticketDetail(task) });
@@ -1168,21 +1192,26 @@ export async function createControlMcp(
     "update_ticket",
     {
       title: "Update a Kanban ticket",
-      description: "Update specified editable fields of a ticket in one project.",
+      description:
+        "Update specified editable fields of a ticket in one project; sections replaces only the sections it names.",
       inputSchema: z
         .object({
           requestId: z.string().trim().min(1).max(256).optional(),
           projectId: z.string().trim().min(1).max(200),
           ticketId: z.string().trim().min(1).max(200),
           title: z.string().trim().min(1).max(500).optional(),
+          kind: ticketKindField,
+          sections: ticketSectionsField,
           description: z.string().max(100_000).optional(),
           acceptanceCriteria: z.string().max(100_000).optional(),
           status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
           nodeId: nodeIdField,
         })
         .refine(
-          ({ title, description, acceptanceCriteria, status }) =>
+          ({ title, kind, sections, description, acceptanceCriteria, status }) =>
             title !== undefined ||
+            kind !== undefined ||
+            sections !== undefined ||
             description !== undefined ||
             acceptanceCriteria !== undefined ||
             status !== undefined,
@@ -1285,7 +1314,12 @@ export async function createControlMcp(
           .describe(REASONING_ID_DESCRIPTION),
         fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
         conversationMode: z.enum(["plan", "build"]).default("build"),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
         baseBranch: (coordinatorScope
           ? z.string().trim().min(1).max(500)
@@ -1504,7 +1538,12 @@ export async function createControlMcp(
         fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
         conversationMode: z.enum(["plan", "build"]).default("build"),
         title: z.string().trim().min(1).max(200).optional(),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         nodeId: nodeIdField,
       }),
       annotations: {
@@ -1604,7 +1643,12 @@ export async function createControlMcp(
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         conversationMode: z.enum(["plan", "build"]).optional(),
         nodeId: nodeIdField,
       }),
@@ -1726,7 +1770,7 @@ export async function createControlMcp(
       {
         title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
         description: coordinatorScope
-          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes.'
+          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
@@ -1743,6 +1787,16 @@ export async function createControlMcp(
               "body must be at most 32 KiB UTF-8",
             ),
           replyToMessageId: z.string().trim().min(1).max(300).optional(),
+          ...(coordinatorScope
+            ? {
+                deliverNow: z
+                  .boolean()
+                  .optional()
+                  .describe(
+                    "Steer this message into the worker's running turn instead of waiting for it to end. For course corrections only. Default false.",
+                  ),
+              }
+            : {}),
           nodeId: nodeIdField.describe(
             coordinatorScope
               ? "Message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node's environment. A reply to mail from another node goes back to it without nodeId."
@@ -1756,7 +1810,7 @@ export async function createControlMcp(
           openWorldHint: false,
         },
       },
-      async ({ nodeId, ...input }) => {
+      async ({ nodeId, deliverNow, ...input }) => {
         if (operator) {
           return operatorSendMessage(callerOnNode(operator, nodeId), input);
         }
@@ -1804,6 +1858,9 @@ export async function createControlMcp(
             const { coordinatorDelegationOpened, ...summary } = sent;
             return toolResult({
               message: summary,
+              ...(deliverNow === true
+                ? coordinatorDeliverNowResult(summary, { unsupported: true })
+                : {}),
               ...(coordinatorDelegationOpened === true ? asyncDelegationResult() : {}),
             });
           }
@@ -1811,11 +1868,21 @@ export async function createControlMcp(
         const message = await invoke<unknown>("send_coordinator_agent_mail", {
           ...input,
           ...coordinatorScope,
+          ...(coordinatorScope && deliverNow === true ? { deliverNow: true } : {}),
         });
         if (!isRecord(message)) throw new Error("Message send returned no result");
-        const { body: _body, coordinatorDelegationOpened: delegationOpened, ...summary } = message;
+        const {
+          body: _body,
+          coordinatorDelegationOpened: delegationOpened,
+          deliverNow: deliverNowOutcome,
+          deliverNowNote,
+          ...summary
+        } = message;
         return toolResult({
           message: summary,
+          ...(deliverNowOutcome !== undefined
+            ? { deliverNow: deliverNowOutcome, deliverNowNote }
+            : {}),
           ...(coordinatorScope && delegationOpened === true ? asyncDelegationResult() : {}),
         });
       },

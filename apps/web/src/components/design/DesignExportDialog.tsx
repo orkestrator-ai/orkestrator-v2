@@ -301,7 +301,7 @@ export function DesignExportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Pinned near the top so a status line changing size below the fields never moves them. */}
       <DialogContent
-        className="top-[12vh] max-h-[calc(88dvh-1rem)] translate-y-0 sm:max-w-lg"
+        className="top-[12vh] max-h-[calc(88dvh-1rem)] translate-y-0"
         onOpenAutoFocus={() => {
           opener.current =
             document.activeElement instanceof HTMLElement ? document.activeElement : null;

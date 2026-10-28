@@ -31,7 +31,6 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { publishConnections } from "@/lib/connections";
-import { cn } from "@/lib/utils";
 import { SshRouteDialog, errorCode } from "./SshRouteDialog";
 import { FormError, MachineSection, TokenInput, errorText } from "./machine-ui";
 import type { ConnectionsApi } from "./useMachines";
@@ -434,7 +433,8 @@ export function DeviceConnectionSection({
 
           <Dialog open={review !== null} onOpenChange={(open) => !open && setReview(null)}>
             <DialogContent
-              className={cn("sm:max-w-md", Z_FULLSCREEN_DIALOG)}
+              size="md"
+              className={Z_FULLSCREEN_DIALOG}
               overlayClassName={Z_FULLSCREEN_DIALOG}
             >
               <DialogHeader>
@@ -536,7 +536,8 @@ function AddHttpsRouteDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
-        className={cn("sm:max-w-md", Z_FULLSCREEN_DIALOG)}
+        size="md"
+        className={Z_FULLSCREEN_DIALOG}
         overlayClassName={Z_FULLSCREEN_DIALOG}
       >
         <form onSubmit={(event) => void submit(event)} className="space-y-4">

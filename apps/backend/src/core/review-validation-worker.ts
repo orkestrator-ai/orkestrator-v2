@@ -91,8 +91,18 @@ function headMatches() {
   const head = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], gitOptions());
   return head.status === 0 && head.stdout.trim() === run.plan.headRef;
 }
+function worktreeStatus() {
+  const args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
+  const status = spawnSync("git", args, gitOptions());
+  // A hung fsmonitor daemon blocks status until the timeout. Waiting longer does
+  // not help; asking once more without the daemon does.
+  if (status.error && status.error.code === "ETIMEDOUT") {
+    return spawnSync("git", ["-c", "core.fsmonitor=false", ...args], gitOptions());
+  }
+  return status;
+}
 function worktreePaths() {
-  const status = spawnSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], gitOptions());
+  const status = worktreeStatus();
   if (status.status !== 0) return null;
   const fields = status.stdout.split("\0");
   if (fields[fields.length - 1] === "") fields.pop();

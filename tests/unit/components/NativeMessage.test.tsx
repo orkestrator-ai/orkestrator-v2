@@ -304,7 +304,10 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
     const bubble = screen.getByText("Copy this user prompt").closest(".rounded-xl") as HTMLElement;
     expect(bubble.textContent).not.toContain("12:00");
-    expect(bubble.className).toContain("[&_.prose_p]:my-0");
+    expect(bubble.className).toContain("[&_.prose_p]:my-2");
+    expect(bubble.className).toContain("[&_.prose>:first-child]:mt-0");
+    expect(bubble.className).toContain("[&_.prose>:last-child]:mb-0");
+    expect(bubble.className).not.toContain("[&_.prose_p]:my-0");
 
     const copy = screen.getByRole("button", { name: "Copy text" });
     const actionRow = copy.parentElement?.parentElement?.parentElement;

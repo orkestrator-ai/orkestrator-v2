@@ -6,6 +6,7 @@ import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectL
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
+import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
@@ -113,6 +114,10 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
+
+const ExpandedViewersFixture = lazy(async () => ({
+  default: (await import("./ExpandedViewersFixture")).ExpandedViewersFixture,
+}));
 
 const DataSavingGatewayFixture = lazy(async () => ({
   default: (await import("./DataSavingGatewayFixture")).DataSavingGatewayFixture,
@@ -1862,6 +1867,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
+  if (window.location.pathname === "/expanded-viewers") {
+    return (
+      <Suspense fallback={null}>
+        <ExpandedViewersFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/agents-md-approval") return <AgentsMdApprovalFixture />;
   if (window.location.pathname === "/design-canvas") {
     installDesignCanvasFixture();
@@ -1943,6 +1955,8 @@ function fixtureForPath() {
     return <NativeHydratingPreviewFixture />;
   }
   if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
+  if (window.location.pathname === "/native-message-spacing")
+    return <NativeMessageSpacingFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;

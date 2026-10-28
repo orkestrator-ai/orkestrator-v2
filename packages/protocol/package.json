@@ -8,6 +8,7 @@
     "./agent-accounts": "./src/agent-accounts.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
+    "./ticket-sections": "./src/ticket-sections.ts",
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",
     "./node/application-logging": "./src/node/application-logging.ts",

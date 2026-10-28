@@ -15,6 +15,7 @@ import {
   COORDINATOR_CONTROL_TOOL_NAMES,
   COORDINATOR_WORKFLOW_STATUS_WAKE,
   COORDINATOR_PR_RULE,
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -24,7 +25,12 @@ import {
 
 type RpcBody = {
   result?: {
-    tools?: Array<{ name: string; description?: string; annotations?: Record<string, boolean> }>;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      annotations?: Record<string, boolean>;
+      inputSchema?: { properties?: Record<string, { description?: string }> };
+    }>;
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
   };
@@ -528,6 +534,27 @@ describe("Orkestrator control MCP server", () => {
       scope: { projectId: "project-2" },
     });
     expect(refused.isError).toBe(true);
+  });
+
+  test("publishes the worker prompt format rule on every delegation prompt field", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.error).toBeUndefined();
+    for (const name of [
+      "launch_environment",
+      "launch_job",
+      "send_prompt_to_tab",
+      "launch_node_environment",
+      "send_prompt_to_node_tab",
+    ]) {
+      const tool = listed.body.result?.tools?.find((candidate) => candidate.name === name);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema?.properties?.prompt?.description).toContain(
+        COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+      );
+    }
   });
 
   test("binds coordinator credentials to one project and revokes them", async () => {
@@ -2692,6 +2719,146 @@ describe("Orkestrator control MCP server", () => {
       },
     });
     expect(launchWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
+  });
+
+  test("coordinator send_message forwards deliverNow and reports what happened", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("send_coordinator_agent_mail", (args) => ({
+      id: "message-1",
+      requestId: args.requestId,
+      placement: "injected",
+      body: "never echoed",
+      coordinatorDelegationOpened: true,
+      ...(args.deliverNow === true
+        ? { deliverNow: "steered", deliverNowNote: "Steered into the worker's running turn." }
+        : {}),
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["mail"],
+    });
+
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const sendTool = listed.body.result?.tools?.find((tool) => tool.name === "send_message") as
+      | {
+          description?: string;
+          inputSchema?: { required?: string[]; properties?: Record<string, { type?: string }> };
+        }
+      | undefined;
+    expect(sendTool?.inputSchema?.properties?.deliverNow?.type).toBe("boolean");
+    expect(sendTool?.inputSchema?.required).not.toContain("deliverNow");
+    expect(sendTool?.description).toContain("course correction");
+
+    const steered = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "steer-1",
+        toEnvironmentId: "env-1",
+        body: "Stop: the requirement changed.",
+        deliverNow: true,
+      },
+    });
+    expect(
+      invocations.findLast(({ command }) => command === "send_coordinator_agent_mail")?.args,
+    ).toMatchObject({ requestId: "steer-1", deliverNow: true });
+    expect(steered.body.result?.structuredContent).toMatchObject({
+      deliverNow: "steered",
+      deliverNowNote: "Steered into the worker's running turn.",
+      message: { id: "message-1", placement: "injected" },
+    });
+    expect(steered.body.result?.structuredContent?.message).not.toHaveProperty("deliverNow");
+    expect(steered.body.result?.structuredContent?.message).not.toHaveProperty("body");
+
+    // Left out, nothing is asked of the delivery and the result has no claim.
+    const routine = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: { requestId: "routine-1", toEnvironmentId: "env-1", body: "Routine." },
+    });
+    expect(
+      invocations.findLast(({ command }) => command === "send_coordinator_agent_mail")?.args,
+    ).not.toHaveProperty("deliverNow");
+    expect(routine.body.result?.structuredContent).not.toHaveProperty("deliverNow");
+  });
+
+  for (const [placement, reason, outcome] of [
+    ["pending-inject", undefined, "unsupported, queued"],
+    ["stored", "inject-policy-off", "not queued"],
+    ["bounced", "recipient-muted", "not queued"],
+    ["inject-held", "loop-budget-exhausted", "not queued"],
+    ["inject-held", "hourly-limit", "not queued"],
+  ]) {
+    test(`remote deliverNow reports ${placement} ${reason ?? ""} without forwarding the flag`, async () => {
+      const credential = coordinatorCredential(["mail", "discovery"]);
+      overrides.set("get_node_status", () => ({
+        nodeId: "bk_cmd",
+        mode: "command",
+        controllers: [],
+      }));
+      overrides.set("get_node_summaries", () => ({
+        selfId: "bk_cmd",
+        nodes: [
+          {
+            nodeId: "bk_leaf",
+            available: true,
+            view: { displayName: "Build box" },
+            projects: [
+              {
+                ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+                repositoryHint: "example.invalid/secret/repo",
+              },
+            ],
+            environments: [],
+          },
+        ],
+      }));
+      overrides.set("send_coordinator_node_mail", (args) => ({
+        nodeId: args.nodeId,
+        messageId: "leaf-message",
+        placement,
+        placementReason: reason,
+      }));
+      const sent = await rpc(credential.url, credential.token, "tools/call", {
+        name: "send_message",
+        arguments: {
+          nodeId: "bk_leaf",
+          requestId: "remote-correction",
+          toEnvironmentId: "leaf-env",
+          body: "Correction.",
+          deliverNow: true,
+        },
+      });
+      expect(sent.body.result?.isError).not.toBe(true);
+      expect(sent.body.result?.structuredContent).toMatchObject({
+        deliverNow: outcome,
+        message: { messageId: "leaf-message", placement },
+      });
+      if (reason) expect(sent.body.result?.structuredContent?.deliverNowNote).toContain(reason);
+      const forwarded = invocations.findLast(
+        ({ command }) => command === "send_coordinator_node_mail",
+      );
+      expect(forwarded?.args).toMatchObject({ requestId: "remote-correction", nodeId: "bk_leaf" });
+      expect(forwarded?.args).not.toHaveProperty("deliverNow");
+    });
+  }
+
+  test("external send_message schema omits deliverNow", async () => {
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const listed = await rpc(descriptor.url, descriptor.token, "tools/list");
+    const send = listed.body.result?.tools?.find((tool) => tool.name === "send_message");
+    expect(send).toBeDefined();
+    expect(send?.inputSchema?.properties).not.toHaveProperty("deliverNow");
   });
 
   test("reports an unavailable checkout base without calling git status", async () => {

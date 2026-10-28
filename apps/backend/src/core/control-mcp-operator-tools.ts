@@ -232,6 +232,9 @@ function legacyTicketSummary(ticket: PublicTicketSummary): JsonRecord {
 function legacyTicketDetail(ticket: PublicTicketDetail): JsonRecord {
   return {
     ...legacyTicketSummary(ticket),
+    kind: ticket.kind ?? "feature",
+    ...(ticket.criteria?.length ? { criteria: ticket.criteria } : {}),
+    ...(ticket.deliveryPolicy ? { deliveryPolicy: ticket.deliveryPolicy } : {}),
     description: ticket.description,
     acceptanceCriteria: ticket.acceptanceCriteria,
     comments: ticket.comments,
@@ -313,6 +316,8 @@ export async function operatorCreateTicket(
     description: string;
     acceptanceCriteria: string;
     status: string;
+    kind?: string;
+    sections?: JsonRecord;
   },
 ) {
   const { requestId, ...fields } = input;

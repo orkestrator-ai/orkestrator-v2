@@ -385,9 +385,9 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect(window).toHaveTitle(/leaf-app/);
     await sameWindow();
 
-    // Project-name navigation defaults to Home, including on a fresh realm.
-    await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
-    // Explicit board navigation overrides that default in the same realm.
+    // Machine grouping opens Coordinator, including on a fresh realm.
+    await expect.poll(async () => (await realmState())?.coordinatorSelected).toBe(true);
+    // Explicit board navigation also selects Coordinator in the same realm.
     await leafProject.click({ button: "right" });
     await window.getByRole("menuitem", { name: "Open Board", exact: true }).click();
     await expect.poll(async () => (await realmState())?.coordinatorSelected).toBe(true);
@@ -396,8 +396,30 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect.poll(async () => (await realmState())?.coordinatorChecking).toBe(false);
     await expect.poll(async () => (await realmState())?.coordinatorPanel).toBe(true);
     await expect.poll(async () => (await realmState())?.coordinatorGate).toBe(false);
-    await leafProject.click();
+    // Reselecting the project restores the grouping's landing tab.
+    const realmPageForTabs = electronApp
+      .context()
+      .pages()
+      .find((page) => page.url().includes("realm=workspace"));
+    expect(realmPageForTabs).toBeTruthy();
+    await realmPageForTabs!.getByRole("tab", { name: "Home", exact: true }).click();
     await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
+    await leafProject.click();
+    await expect.poll(async () => (await realmState())?.coordinatorSelected).toBe(true);
+
+    // Repository grouping opens Home in the same realm, on initial click and reselection.
+    await window.getByRole("button", { name: /^Sort environments:/ }).click();
+    await window.getByRole("menuitemradio", { name: "By repository", exact: true }).click();
+    const repositoryProject = window.getByTitle("Open leaf-app on Leaf");
+    await repositoryProject.click();
+    await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
+    await realmPageForTabs!.getByRole("tab", { name: "Coordinator", exact: true }).click();
+    await expect.poll(async () => (await realmState())?.coordinatorSelected).toBe(true);
+    await repositoryProject.click();
+    await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
+    await window.getByRole("button", { name: /^Sort environments:/ }).click();
+    await window.getByRole("menuitemradio", { name: "By machine", exact: true }).click();
+    await sameWindow();
     await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();
     await expect(leafRow).toHaveAttribute("data-selected", "true");
 

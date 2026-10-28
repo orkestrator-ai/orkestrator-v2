@@ -78,10 +78,11 @@ async function control(
   action = "start",
   extraEnv: Record<string, string> = {},
   resultId?: string,
+  workerSource = REVIEW_VALIDATION_WORKER,
 ) {
   const payload = Buffer.from(JSON.stringify({ root, run, action, resultId })).toString("base64");
   const child = Bun.spawn(
-    [process.execPath, "-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER],
+    [process.execPath, "-e", REVIEW_VALIDATION_CONTROL, payload, workerSource],
     {
       cwd: "/",
       stdout: "pipe",
@@ -1672,3 +1673,88 @@ test("a measured command reserves its observed CPU use on the next run", async (
   expect(done.results[0]!.cpuMs).toBeLessThan(done.results[0]!.durationMs);
   expect(done.results[2]).toMatchObject({ reservedWorkers: 1 });
 }, 30000);
+
+for (const interpreter of ["bun", "node"]) {
+  test(`status timeout reports ETIMEDOUT and retries without fsmonitor (${interpreter})`, async () => {
+    const { root } = await fixture();
+    const calls = path.join(root, ".git", "status-calls");
+    const env = await gitOnPath(`
+printf '%s\\n' "$*" >> '${calls}'
+if [ "$1" = "status" ]; then
+  exec '${process.execPath}' -e 'setInterval(() => {}, 1000)'
+fi
+`);
+    // Execute the worker's exact status/path helpers with a shorter deadline.
+    // This is a real spawnSync timeout, rather than an invented error object.
+    const helpers = REVIEW_VALIDATION_WORKER.slice(
+      REVIEW_VALIDATION_WORKER.indexOf("function gitOptions()"),
+      REVIEW_VALIDATION_WORKER.indexOf("const seenDriftPaths"),
+    ).replace("timeout: 10000", "timeout: 200");
+    const script = `const { spawnSync } = require("node:child_process");
+const root = ${JSON.stringify(root)};
+${helpers}
+const status = worktreeStatus();
+process.stdout.write(JSON.stringify({ status: status.status, error: status.error?.code, stdout: status.stdout }));`;
+    await writeFile(path.join(root, "source.txt"), "changed\n");
+    const child = Bun.spawn([interpreter, "-e", script], {
+      env: { ...process.env, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({ status: 0, stdout: " M source.txt\0" });
+    expect((await readFile(calls, "utf8")).trim().split("\n")).toEqual([
+      "status --porcelain=v1 -z --untracked-files=all",
+      "-c core.fsmonitor=false status --porcelain=v1 -z --untracked-files=all",
+    ]);
+  }, 10_000);
+}
+
+test("worker captures drift after a real status timeout, and preserves non-timeout failures", async () => {
+  for (const timeout of [true, false]) {
+    const { root, run } = await fixture([command("check", "exit 0")]);
+    const calls = path.join(root, ".git", "status-calls");
+    const env = await gitOnPath(`
+if [ "$1" = "status" ]; then
+  printf 'initial\\n' >> '${calls}'
+  ${timeout ? `exec '${process.execPath}' -e 'setInterval(() => {}, 1000)'` : "exit 128"}
+fi
+if [ "$1" = "-c" ]; then printf 'fallback\\n' >> '${calls}'; fi
+`);
+    await writeFile(path.join(root, "source.txt"), "changed\n");
+    await control(
+      root,
+      run,
+      "start",
+      env,
+      undefined,
+      REVIEW_VALIDATION_WORKER.replace(
+        'spawnSync("git", args, gitOptions())',
+        'spawnSync("git", args, { ...gitOptions(), timeout: 500 })',
+      ),
+    );
+    const done = await observeUntil(
+      root,
+      run,
+      (next) => !["planned", "running"].includes(next.status),
+      12_000,
+    );
+    expect(done.error ?? "").not.toContain("HEAD changed");
+    const recorded = await readFile(calls, "utf8");
+    if (timeout) {
+      expect(done.status).toBe("completed");
+      expect(done.environmentChanges).toEqual(["source.txt"]);
+      expect(recorded).toContain("fallback");
+    } else {
+      expect(done.status).toBe("failed");
+      expect(done.error).toContain("Git status could not be read");
+      expect(recorded).not.toContain("fallback");
+    }
+  }
+}, 20_000);

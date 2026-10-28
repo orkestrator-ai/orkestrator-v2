@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { StrictMode } from "react";
 import {
   environmentKey,
   environmentRef,
@@ -83,6 +84,34 @@ afterEach(() => {
 });
 
 describe("desktop: another machine's workspace in the central region", () => {
+  test("an effect replay preserves Coordinator on the fresh realm that survives", async () => {
+    const fake = install(true);
+    render(
+      <StrictMode>
+        <FederationProvider>
+          <RemoteWorkspaceRegion anchor={anchorElement()} />
+        </FederationProvider>
+      </StrictMode>,
+    );
+    act(() =>
+      useRemoteWorkspaceStore.getState().open("bk_a", {
+        projectId: "project-1",
+        boardTab: "coordinator",
+      }),
+    );
+    await waitFor(() => expect(fake.workspaceViews.open).toHaveBeenCalledTimes(2));
+    for (const [input] of fake.workspaceViews.open.mock.calls) {
+      expect(input).toEqual({
+        nodeId: "bk_a",
+        request: { projectId: "project-1", boardTab: "coordinator" },
+      });
+    }
+    await waitFor(() =>
+      expect(fake.workspaceViews.setVisible).toHaveBeenLastCalledWith("view-2", true),
+    );
+    expect(fake.workspaceViews.close).toHaveBeenCalledWith("view-1");
+  });
+
   test("opens a realm on what was clicked, places it over the region and never reloads", async () => {
     const fake = install(true);
     const anchor = anchorElement();

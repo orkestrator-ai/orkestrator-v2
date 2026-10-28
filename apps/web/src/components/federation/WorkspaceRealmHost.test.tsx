@@ -162,8 +162,15 @@ test("a leaf project confirmed to have no checkout falls back to Coordinator aft
   ).toBe(false);
 });
 
-for (const board of [false, true]) {
-  test(`remote project ${board ? "Open Board opens Coordinator" : "name opens Home"} in a leaf realm`, async () => {
+for (const [grouping, board] of [
+  ["repository", false],
+  ["repository", true],
+  ["machine", false],
+  ["machine", true],
+  ["project", false],
+] as const) {
+  const coordinator = board || grouping !== "repository";
+  test(`grouped by ${grouping}, remote project ${board ? "Open Board" : "name"} opens ${coordinator ? "Coordinator" : "Home"} in a leaf realm`, async () => {
     const summary = toNodeProjectSummary(nodeId, { ...project }, 0)!;
     const machine = {
       connectionId: nodeId,
@@ -186,6 +193,7 @@ for (const board of [false, true]) {
         isCollapsed
         onToggleCollapse={() => {}}
         sortable={false}
+        grouping={grouping}
       />,
     );
     const row = screen.getByRole("button", { name: project.name });
@@ -197,14 +205,14 @@ for (const board of [false, true]) {
     expect(request).toEqual({
       type: "select",
       projectId: project.id,
-      ...(board ? { boardTab: "coordinator" } : {}),
+      ...(coordinator ? { boardTab: "coordinator" } : {}),
     });
     tree.unmount();
     openRealm(request);
     await act(async () => resolveProjects([project]));
     await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
     expect(screen.getByLabelText("Visible workspace").textContent).toBe(
-      board ? "coordinator" : home.name,
+      coordinator ? "coordinator" : home.name,
     );
   });
 }

@@ -165,7 +165,7 @@ export function NetworkWhitelistDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="[--modal-max-width:500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {isFullAccess ? (

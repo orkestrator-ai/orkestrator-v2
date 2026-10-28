@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { verificationCriterionResults } from "@orkestrator/protocol/build-pipeline";
 import { parseFeaturePlannerState } from "@orkestrator/protocol/feature-planning";
 import { safeParseStructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -69,6 +70,16 @@ describe("workflow result contract validation", () => {
         [],
       );
     }
+  });
+
+  test("a current turn accepting a legacy verdict exposes omitted criteria as not checked", () => {
+    const verdict = { complete: true, rationale: "Verification finished." };
+    expect(validateWorkflowResult("verification-result", verdict)).toEqual([]);
+    expect(
+      verificationCriterionResults([{ id: "ac-9", text: "Must be verified" }], verdict),
+    ).toEqual([
+      { id: "ac-9", status: "not-checked", evidence: "Verify did not report on this criterion." },
+    ]);
   });
 
   test("an explicit negative outcome is a valid result, not a rejection", () => {

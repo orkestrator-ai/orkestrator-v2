@@ -272,7 +272,7 @@ function LinearConnectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="[--modal-max-width:500px]">
         <DialogHeader>
           <DialogTitle>Connect Linear</DialogTitle>
           <DialogDescription>

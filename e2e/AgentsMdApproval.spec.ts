@@ -82,3 +82,31 @@ test("a merge failure blocks approval and still allows decline", async ({ page }
   await page.getByRole("button", { name: "Decline" }).click();
   await expect(page.getByTestId("decision")).toContainText('"decision":"reject"');
 });
+
+test("the approval dialog keeps a capped width and wraps long entries inside it", async ({
+  page,
+}) => {
+  await page.goto("/agents-md-approval");
+  const dialog = page.getByTestId("agents-md-request");
+  await expect(page.getByTestId("agents-md-diff")).toBeVisible();
+  // Visibility precedes the end of DialogContent's opening zoom. Measure only
+  // after its animations settle, including when the preview resolves immediately.
+  await dialog.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
+  const viewport = page.viewportSize()!;
+  const widthBefore = (await dialog.boundingBox())!.width;
+  // 3xl is 48rem; narrower windows keep a gutter of 0.5rem per side on phones.
+  expect(widthBefore).toBeLessThanOrEqual(Math.min(768, viewport.width - 16));
+  expect(widthBefore).toBeGreaterThan(Math.min(700, viewport.width - 40));
+
+  const token = `docs/${"very-long-path-segment-".repeat(18)}end.md`;
+  await dialog.getByRole("textbox", { name: "Entry 1 text" }).fill(`Read ${token} first.`);
+  await expect(page.getByTestId("agents-md-diff")).toContainText(token);
+
+  expect((await dialog.boundingBox())!.width).toBe(widthBefore);
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});

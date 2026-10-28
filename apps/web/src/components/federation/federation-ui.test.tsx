@@ -225,6 +225,7 @@ test("federated sortable wrappers preserve size when dragged over unequal items"
           isCollapsed={false}
           onToggleCollapse={() => {}}
           sortable
+          grouping="machine"
         />
       </>,
     );

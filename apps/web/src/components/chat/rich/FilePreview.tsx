@@ -682,7 +682,10 @@ function FilePreviewDialog({
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="flex max-h-[85vh] w-[min(64rem,calc(100vw-2rem))] max-w-none flex-col gap-3 sm:max-w-none">
+      <DialogContent
+        size="full"
+        className="flex max-h-[85vh] w-[min(64rem,calc(100vw-2rem))] flex-col gap-3"
+      >
         <DialogHeader>
           <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
           <DialogDescription>

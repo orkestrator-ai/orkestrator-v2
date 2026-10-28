@@ -76,6 +76,7 @@ import {
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { pathExists, runCommand } from "./shell.js";
+import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
 import { shutdownClaudeStatePolling } from "./tmux.js";
@@ -2240,6 +2241,8 @@ export async function removeLocalWorktree(
   worktreePath: string,
 ): Promise<void> {
   const recheckWorktree = captureWorktreePathIdentity(worktreePath);
+  // An fsmonitor daemon outlives its worktree, so stop it while git can find it.
+  if (await pathExists(worktreePath)) await stopGitFsmonitorDaemon(worktreePath);
   await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
     timeoutMs: 120_000,
   }).catch(async () => {
@@ -2278,6 +2281,7 @@ export async function cleanupFailedLocalWorktree(
   branch: string,
 ): Promise<void> {
   const recheckWorktree = captureWorktreePathIdentity(worktreePath);
+  if (await pathExists(worktreePath)) await stopGitFsmonitorDaemon(worktreePath);
   await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
     timeoutMs: 120_000,
   }).catch(async () => {

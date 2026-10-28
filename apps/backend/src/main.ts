@@ -26,8 +26,14 @@ import {
   installStandaloneBackendLogging,
   stopStandaloneBackendLogging,
 } from "./standalone-logging.js";
+import { installBoundedConsole } from "./bounded-console.js";
+import { startEventLoopStallMonitor } from "./event-loop-stall-monitor.js";
 
 assertSupportedPlatform();
+// First, before anything logs: Bun's console writes to a stalled stdout reader
+// block this whole process (see bounded-console.ts).
+const boundedConsole = installBoundedConsole();
+startEventLoopStallMonitor();
 // Before any other startup work: a rejection thrown while the backend is still
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.
@@ -210,7 +216,9 @@ const stop = createBackendShutdownHandler({
   warn: (message) => console.warn(message),
   info: (message) => console.log(message),
   exit: (code) => {
-    void stopStandaloneBackendLogging(standaloneLogging).finally(() => process.exit(code));
+    void stopStandaloneBackendLogging(standaloneLogging)
+      .then(() => boundedConsole.flush(2_000))
+      .finally(() => process.exit(code));
   },
 });
 process.on("SIGINT", () => void stop("SIGINT"));

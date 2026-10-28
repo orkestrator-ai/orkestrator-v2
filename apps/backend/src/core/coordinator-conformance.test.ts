@@ -18,8 +18,14 @@ import { coordinatorProcessPolicy as grokCoordinatorPolicy } from "../../../../b
 import { resolvePiMcpServers } from "../../../../bridges/pi-bridge/src/mcp-config.js";
 import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_PR_RULE,
   type CoordinatorProviderTier,
 } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  COORDINATOR_WORKER_NO_PR_INSTRUCTION,
+} from "@orkestrator/protocol/review-evidence-frames";
 import {
   describeNativeAgentExecutionPolicy,
   nativeAgentPolicyDeniesNetwork,
@@ -293,5 +299,24 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_ASYNC_CONTRACT).toContain("woken");
     expect(COORDINATOR_ASYNC_CONTRACT).toContain("Do not wait, sleep, poll");
     expect(COORDINATOR_ASYNC_CONTRACT).toContain("silence means the work is still running");
+  });
+
+  test("a pull request comes from a PR tab, never from a delegated worker", () => {
+    // Coordinators used to end build instructions with "prepare commit + PR",
+    // so the worker opened a PR before any review ran.
+    expect(COORDINATOR_PR_RULE).toContain("workers never raise them");
+    expect(COORDINATOR_PR_RULE).toContain("tell it not to open a pull request");
+    expect(COORDINATOR_PR_RULE).toContain("create_pr");
+    expect(COORDINATOR_PR_RULE).toContain("auto-PR raises the PR itself");
+    expect(COORDINATOR_PR_RULE).toContain("has its own PR step");
+    // The worker is told the same, whatever the coordinator's prompt says.
+    expect(COORDINATOR_WORKER_NO_PR_INSTRUCTION).toContain("Do not open a pull request");
+    expect(COORDINATOR_WORKER_NO_PR_INSTRUCTION).toContain("even if the prompt below asks");
+    for (const instruction of [
+      COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
+      COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+    ]) {
+      expect(instruction).toContain(COORDINATOR_WORKER_NO_PR_INSTRUCTION);
+    }
   });
 });

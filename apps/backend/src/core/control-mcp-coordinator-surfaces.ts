@@ -16,8 +16,8 @@ import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool
 
 /**
  * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
- * tmux tab, a browser preview, tab editing, looped review, feature-plan
- * launch, the request to copy the checkout's uncommitted changes into a
+ * tmux tab, a browser preview, tab editing, looped review, the PR tab,
+ * feature-plan launch, the request to copy the checkout's uncommitted changes into a
  * worker, and the proposal to save decisions to AGENTS.md. None of them
  * reaches the project checkout; the last two only ask the user. Each calls one `*_coordinator_*` backend command with the
  * authenticated scope, which revalidates it and refuses the project home.
@@ -55,6 +55,7 @@ export const COORDINATOR_SURFACE_TOOL_CAPABILITIES: ReadonlyArray<readonly [stri
   ["start_looped_review", "multi-review"],
   ["get_looped_review", "multi-review"],
   ["cancel_looped_review", "multi-review"],
+  ["create_pr", "multi-review"],
   ["launch_feature_plan", "tickets"],
   ["get_feature_plan", "tickets"],
 ];
@@ -298,6 +299,30 @@ export function registerCoordinatorSurfaceTools(
     },
     async ({ workflowId }) =>
       toolResult(await call("cancel_coordinator_looped_review", { workflowId })),
+  );
+
+  server.registerTool(
+    "create_pr",
+    {
+      title: "Raise a worker's pull request (PR tab)",
+      description:
+        "The Create PR button: open the worker's PR tab, whose agent commits, pushes and opens a pull request against targetBranch (default: the repository's PR base branch). It never merges. This is how a coordinator raises a pull request: call it only after the review and its fix have finished, and only when the review did not run with auto-PR. Refused for a build pipeline's worker, whose own PR step raises it; skipped when the worker already has a pull request. Omit targetBranch to use the PR base branch.",
+      inputSchema: z
+        .object({
+          requestId,
+          environmentId,
+          targetBranch: z.string().trim().min(1).max(500).optional(),
+        })
+        .strict(),
+      annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
+    },
+    async (input) =>
+      toolResult({
+        ...(await call("create_coordinator_pr", { input })),
+        delivery: "async",
+        wake: "This conversation is not woken when the pull request opens. Finish your turn and tell the user the PR tab is running; if you need its URL, schedule a check with create_schedule and read prUrl with get_environment.",
+        nextStep: "Finish your turn now. Do not poll.",
+      }),
   );
 
   server.registerTool(

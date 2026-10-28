@@ -566,6 +566,14 @@ describe("Orkestrator control MCP server", () => {
     expect(definitions.find((tool) => tool.name === "launch_multi_review")?.description).toContain(
       "Preferred complete Multi Review button action",
     );
+    // Workers commit and report; the pull request comes from the PR tab.
+    for (const name of ["launch_environment", "launch_job", "send_prompt_to_tab"])
+      expect(definitions.find((tool) => tool.name === name)?.description).toContain(
+        "Never ask the worker to open a pull request",
+      );
+    expect(definitions.find((tool) => tool.name === "create_pr")?.description).toContain(
+      "only after the review and its fix have finished",
+    );
     const multiReviewTool = definitions.find((tool) => tool.name === "launch_multi_review") as
       { description?: string; inputSchema?: { required?: string[] } } | undefined;
     // Omitted model rows use the saved defaults, the same as the button.

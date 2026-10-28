@@ -135,12 +135,6 @@ export type AutoPrLaunchOutcome =
 /**
  * Starts the ordinary PR agent for a workflow whose Fix completed, or whose
  * consolidated report found nothing to fix.
- *
- * This is the backend twin of the action bar's Create PR click: the same
- * prompt, the same `PR` tab title, and the same `pr` action default, launched
- * through the durable native-agent job so the tab appears in every client.
- * The request id is stable, so a retry after a lost acknowledgement joins the
- * original job instead of creating a second PR agent.
  */
 export async function launchMultiReviewAutoPr(
   invoke: CommandInvoker,
@@ -149,8 +143,48 @@ export async function launchMultiReviewAutoPr(
   requestId: string,
   beforeLaunch?: () => Promise<AutoPrLaunchOutcome | undefined>,
 ): Promise<AutoPrLaunchOutcome> {
-  const environment = await storage.getEnvironment(workflow.environmentId);
-  if (!environment) return { kind: "rejected", message: "Review environment no longer exists" };
+  return launchPrAgent(
+    invoke,
+    storage,
+    {
+      environmentId: workflow.environmentId,
+      // The review compared against this branch, so the PR targets it too.
+      targetBranch: workflow.targetBranch,
+      requestId,
+      missingEnvironmentMessage: "Review environment no longer exists",
+    },
+    beforeLaunch,
+  );
+}
+
+/**
+ * Starts the ordinary PR agent in an environment: the one way Orkestrator
+ * raises a pull request outside a build pipeline.
+ *
+ * This is the backend twin of the action bar's Create PR click: the same
+ * prompt, the same `PR` tab title, and the same `pr` action default, launched
+ * through the durable native-agent job so the tab appears in every client.
+ * The request id is stable, so a retry after a lost acknowledgement joins the
+ * original job instead of creating a second PR agent.
+ */
+export async function launchPrAgent(
+  invoke: CommandInvoker,
+  storage: Pick<StorageService, "getEnvironment" | "loadConfig">,
+  input: {
+    environmentId: string;
+    targetBranch: string;
+    requestId: string;
+    missingEnvironmentMessage?: string;
+  },
+  beforeLaunch?: () => Promise<AutoPrLaunchOutcome | undefined>,
+): Promise<AutoPrLaunchOutcome> {
+  const { environmentId, targetBranch, requestId } = input;
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment)
+    return {
+      kind: "rejected",
+      message: input.missingEnvironmentMessage ?? "Environment no longer exists",
+    };
   if (environment.prUrl) return { kind: "skipped", message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE };
 
   const config = await storage.loadConfig();
@@ -176,10 +210,9 @@ export async function launchMultiReviewAutoPr(
   try {
     result = await invoke("launch_native_agent_job", {
       requestId,
-      environmentId: workflow.environmentId,
+      environmentId,
       agent: action.agent,
-      // The review compared against this branch, so the PR targets it too.
-      prompt: createPRPrompt(workflow.targetBranch),
+      prompt: createPRPrompt(targetBranch),
       title: MULTI_REVIEW_AUTO_PR_TAB_TITLE,
       conversationMode: "build",
       // Automatic follow-ups never take focus; only a foreground click does.
@@ -205,11 +238,11 @@ export async function launchMultiReviewAutoPr(
   // Poll faster until the PR appears, as the Create PR button does. Monitoring
   // is advisory: the agent-idle probe still discovers the PR if this fails.
   await invoke("pr_monitor_watch", {
-    environmentId: workflow.environmentId,
+    environmentId,
     mode: "create-pending",
   }).catch((reason: unknown) => {
     console.warn(
-      `[multi-review] Could not start PR monitoring for ${workflow.environmentId}:`,
+      `[pr] Could not start PR monitoring for ${environmentId}:`,
       reason instanceof Error ? reason.message : reason,
     );
   });

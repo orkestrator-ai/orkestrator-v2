@@ -395,6 +395,69 @@ describe("looped review", () => {
   });
 });
 
+describe("create_coordinator_pr", () => {
+  function stubPrLaunch() {
+    const launch = mock(async (args: Record<string, unknown>) => ({
+      status: "accepted",
+      tabId: `pr-tab:${String(args.requestId)}`,
+    }));
+    const watch = mock(async () => ({}));
+    commands.set("launch_native_agent_job", launch as unknown as CommandHandler);
+    commands.set("pr_monitor_watch", watch as unknown as CommandHandler);
+    return { launch, watch };
+  }
+
+  test("opens the worker's PR tab once per request, against the PR base branch", async () => {
+    const { launch, watch } = stubPrLaunch();
+    const input = { requestId: "pr", environmentId: workerId };
+    const result = await call("create_coordinator_pr", { input });
+    expect(result).toMatchObject({
+      environmentId: workerId,
+      status: "launched",
+      tabId: expect.stringMatching(/^pr-tab:coordinator-pr:/),
+      targetBranch: "main",
+    });
+    expect(launch.mock.calls[0]![0]).toMatchObject({
+      environmentId: workerId,
+      title: "PR",
+      conversationMode: "build",
+      activateTab: false,
+      prompt: expect.stringContaining("main"),
+    });
+    expect(watch).toHaveBeenCalledWith(
+      { environmentId: workerId, mode: "create-pending" },
+      context,
+    );
+    expect(await call("create_coordinator_pr", { input })).toMatchObject({ replayed: true });
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves a build pipeline's PR to the pipeline and an existing PR alone", async () => {
+    const { launch } = stubPrLaunch();
+    await expect(
+      call("create_coordinator_pr", { input: { requestId: "home", environmentId: homeId } }),
+    ).rejects.toThrow("project checkout");
+    const pipelineWorker = createEnvironment(scope.projectId, {
+      name: "pipeline-worker",
+      environmentType: "local",
+      buildPipelineId: "pipeline-1",
+    });
+    await storage.addEnvironment(pipelineWorker);
+    await expect(
+      call("create_coordinator_pr", {
+        input: { requestId: "pipe", environmentId: pipelineWorker.id },
+      }),
+    ).rejects.toThrow("build pipeline");
+    await storage.updateEnvironment(workerId, { prUrl: "https://github.com/acme/repo/pull/7" });
+    expect(
+      await call("create_coordinator_pr", {
+        input: { requestId: "exists", environmentId: workerId },
+      }),
+    ).toMatchObject({ status: "skipped", prUrl: "https://github.com/acme/repo/pull/7" });
+    expect(launch).not.toHaveBeenCalled();
+  });
+});
+
 describe("feature plan launch", () => {
   test("creates a plan and starts planning once per request", async () => {
     const startPlanning = mock(async (args: Record<string, unknown>) => ({

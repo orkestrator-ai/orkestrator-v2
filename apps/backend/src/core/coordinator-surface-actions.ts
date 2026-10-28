@@ -32,6 +32,7 @@ import {
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
 import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
+import { launchPrAgent, MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE } from "./multi-review-auto-pr.js";
 import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
@@ -41,8 +42,8 @@ import { editWorkerTab, openLoopedReviewTab, openWorkerBrowserTab } from "./work
 /**
  * Backend commands behind the coordinator's worker surfaces (todo 0142):
  * terminal and tmux launch, browser preview launch and navigation, tab
- * editing, looped review, feature-plan launch, and the request to copy the
- * checkout's uncommitted changes into a worker.
+ * editing, looped review, the PR tab, feature-plan launch, and the request
+ * to copy the checkout's uncommitted changes into a worker.
  *
  * Every command takes the authenticated `scope` the Control MCP server built
  * from the coordinator's credential, revalidates it, and acts only on a
@@ -427,6 +428,63 @@ export function registerCoordinatorSurfaceActions(
       return { workflow: loopedSummary(cancelled) };
     });
   }
+
+  /**
+   * The Create PR button for a worker: the PR tab is the only place a
+   * coordinator's work becomes a pull request, after review. A build
+   * pipeline raises its own, so its environment is refused.
+   */
+  register("create_coordinator_pr", async (args, context) => {
+    const caller = await coordinatorCaller(args.scope, context);
+    const input = record(args.input, "the pull request input");
+    const requestId = asNonBlankString(input.requestId, "requestId");
+    const environment = await requireCoordinatorWorker(context, caller, input.environmentId);
+    const targetBranch = optionalText(input.targetBranch, "targetBranch", 500);
+    if (environment.buildPipelineId)
+      throw new Error(
+        "This worker belongs to a build pipeline, whose own PR step raises the pull request; follow it with get_build_pipeline",
+      );
+    return withCoordinatorReceipt(
+      context,
+      caller,
+      { requestId, action: "create-pr", payload: { environmentId: environment.id, targetBranch } },
+      async () => {
+        if (environment.prUrl)
+          return {
+            environmentId: environment.id,
+            status: "skipped",
+            message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE,
+            prUrl: environment.prUrl,
+          };
+        const config = await context.storage.loadConfig();
+        const base =
+          targetBranch ?? (config.repositories[caller.projectId]?.prBaseBranch || "main");
+        const outcome = await launchPrAgent(
+          <T>(command: string, commandArgs?: JsonRecord) =>
+            run<T>(context, command, commandArgs ?? {}),
+          context.storage,
+          {
+            environmentId: environment.id,
+            targetBranch: base,
+            // Namespaced, so a retry joins this PR agent and never another caller's.
+            requestId: `coordinator-pr:${requestKey(caller, requestId)}`,
+          },
+        );
+        if (outcome.kind === "launched")
+          return {
+            environmentId: environment.id,
+            status: "launched",
+            tabId: outcome.tabId,
+            targetBranch: base,
+          };
+        if (outcome.kind === "skipped")
+          return { environmentId: environment.id, status: "skipped", message: outcome.message };
+        throw new Error(
+          outcome.kind === "pending" ? "The PR agent launch is still pending" : outcome.message,
+        );
+      },
+    );
+  });
 
   register("launch_coordinator_feature_plan", async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);

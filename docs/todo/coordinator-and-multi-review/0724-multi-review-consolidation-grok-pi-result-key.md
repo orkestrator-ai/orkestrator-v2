@@ -167,6 +167,12 @@ As of 2026-10-28:
 - `bridgePromptBody` forwards the pair to Grok and Pi only together, as before
   (`http-bridge-provider.test.ts`), and the bridge gates are unchanged.
 - Not seen with a real Grok or Pi model.
+- Validation 2026-10-28: format check, lint and typecheck clean; focused
+  Multi Review, Build Pipeline fan-out and HTTP bridge suites pass. The full
+  `mise run test` passed every group except one backend timeout in
+  `public-api/test-support.test.ts`, which also fails alone on a clean
+  `origin/main` clone under the same host load (flake
+  [1245](../../tests/flaky-tests/backend-services-and-tooling/1245-public-api-test-support-harness-timeout-under-load.md)).
 
 ## Outstanding work
 

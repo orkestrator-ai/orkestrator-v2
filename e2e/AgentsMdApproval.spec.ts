@@ -89,6 +89,11 @@ test("the approval dialog keeps a capped width and wraps long entries inside it"
   await page.goto("/agents-md-approval");
   const dialog = page.getByTestId("agents-md-request");
   await expect(page.getByTestId("agents-md-diff")).toBeVisible();
+  // Visibility precedes the end of DialogContent's opening zoom. Measure only
+  // after its animations settle, including when the preview resolves immediately.
+  await dialog.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
   const viewport = page.viewportSize()!;
   const widthBefore = (await dialog.boundingBox())!.width;
   // 3xl is 48rem; narrower windows keep a gutter of 0.5rem per side on phones.

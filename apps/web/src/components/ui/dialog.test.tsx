@@ -2,6 +2,7 @@ import type * as React from "react";
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 
@@ -11,6 +12,66 @@ import { MODAL_SIZE_CLASS_NAME, MODAL_WIDTH_CLASS_NAME, type ModalSize } from ".
 afterEach(cleanup);
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../../..");
+
+// Parse JSX rather than looking for the first `>`: callbacks and comparisons
+// can contain that character before className. Follow local class constants,
+// including aliases and expressions passed through cn()/template literals.
+function dialogWidthOverrides(source: string): string[] {
+  const { program, errors } = parseSync("dialog-consumer.tsx", source);
+  expect(errors).toEqual([]);
+  const walk = (node: Node, visit: (node: Node) => void): void => {
+    visit(node);
+    for (const key of visitorKeys[node.type] ?? []) {
+      const value = (node as unknown as Record<string, unknown>)[key];
+      if (Array.isArray(value)) {
+        for (const child of value) if (child) walk(child as Node, visit);
+      } else if (value) walk(value as Node, visit);
+    }
+  };
+  const constants = new Map<string, Node>();
+  walk(program, (node) => {
+    if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
+      constants.set(node.id.name, node.init);
+    }
+  });
+  const hasMaxWidth = (node: Node, seen = new Set<string>()): boolean => {
+    let found = false;
+    walk(node, (child) => {
+      const text =
+        child.type === "Literal" && typeof child.value === "string"
+          ? child.value
+          : child.type === "TemplateElement"
+            ? child.value.raw
+            : "";
+      if (/(?:^|[\s:])max-w-/.test(text)) found = true;
+      if (child.type === "Identifier" && !seen.has(child.name)) {
+        seen.add(child.name);
+        const constant = constants.get(child.name);
+        if (constant && hasMaxWidth(constant, seen)) found = true;
+      }
+    });
+    return found;
+  };
+  const offenders: string[] = [];
+  walk(program, (node) => {
+    if (
+      node.type !== "JSXOpeningElement" ||
+      node.name.type !== "JSXIdentifier" ||
+      !["DialogContent", "AlertDialogContent"].includes(node.name.name)
+    )
+      return;
+    for (const attribute of node.attributes) {
+      if (
+        attribute.type === "JSXAttribute" &&
+        attribute.name.name === "className" &&
+        attribute.value &&
+        hasMaxWidth(attribute.value)
+      )
+        offenders.push(source.slice(node.start, node.end));
+    }
+  });
+  return offenders;
+}
 
 describe("Dialog primitives", () => {
   test("merges caller styles and overlay classes without terminal-theme overrides", () => {
@@ -221,6 +282,42 @@ describe("DialogContent width", () => {
     expect(dialog.classList.contains("sm:max-w-[30rem]")).toBe(true);
   });
 
+  test("the source guard sees max-width classes after arrow-function props", () => {
+    for (const tag of ["DialogContent", "AlertDialogContent"]) {
+      const opening = `<${tag} onEscapeKeyDown={() => undefined} className="sm:max-w-2xl" />`;
+      expect(dialogWidthOverrides(`const view = ${opening};`)).toEqual([opening]);
+    }
+  });
+
+  test("the source guard follows class constants, aliases and class expressions", () => {
+    for (const className of [
+      "TASK_DIALOG_CONTENT_CLASS",
+      'cn("flex", TASK_DIALOG_CONTENT_CLASS)',
+      "`flex ${TASK_DIALOG_CONTENT_CLASS}`",
+      'expanded ? TASK_DIALOG_CONTENT_CLASS : "flex"',
+    ]) {
+      const opening = `<DialogContent className={${className}} />`;
+      expect(
+        dialogWidthOverrides(`
+        const WIDTH = "max-w-2xl";
+        const TASK_DIALOG_CONTENT_CLASS = WIDTH;
+        const view = ${opening};
+      `),
+      ).toEqual([opening]);
+    }
+  });
+
+  test("the source guard permits size, custom caps and widths on children", () => {
+    expect(
+      dialogWidthOverrides(`
+      const CLASS = "flex [--modal-max-width:34rem]";
+      const view = <DialogContent onEscapeKeyDown={() => undefined} size="full" className={CLASS}>
+        <div className="max-w-full">Content</div>
+      </DialogContent>;
+    `),
+    ).toEqual([]);
+  });
+
   test("keeps callers on size or --modal-max-width rather than max-w classes", () => {
     // An unprefixed max-w-* used to lose to the base sm:max-w-* and open the
     // dialog at nearly full window width, so callers size modals through the
@@ -232,8 +329,8 @@ describe("DialogContent width", () => {
       if (!source.endsWith(".tsx") || source.endsWith(".test.tsx")) continue;
       if (source.startsWith(path.join("components", "ui"))) continue;
       const text = readFileSync(path.join(sourceRoot, source), "utf8");
-      for (const opening of text.match(/<(?:Alert)?DialogContent\b[\s\S]*?\n?\s*>/g) ?? []) {
-        if (/(?:^|[\s"'`:])max-w-/.test(opening)) offenders.push(`${source}: ${opening}`);
+      for (const opening of dialogWidthOverrides(text)) {
+        offenders.push(`${source}: ${opening}`);
       }
     }
 

@@ -104,6 +104,9 @@ function actorParticipant(actor: MailActor): AgentMailParticipant {
         kind: actor.role === "coordinator" ? "coordinator" : "agent",
         displayName: `${actor.title || (actor.role === "coordinator" ? "Project coordinator" : actor.tabId)} on ${actor.nodeName}`,
         agent: null,
+        ...(actor.role === "agent" && actor.environmentName
+          ? { environmentName: actor.environmentName }
+          : {}),
         projectId: actor.projectId,
         canReceive: false,
       };

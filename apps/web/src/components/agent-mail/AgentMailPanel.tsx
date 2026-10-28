@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import { AgentMailConversationView, ParticipantIcon } from "./AgentMailConversationView";
-import { formatAgentMailTime } from "./agent-mail-ui";
+import { agentMailParticipantLabel, formatAgentMailTime } from "./agent-mail-ui";
 import { MailboxDeliverySettings } from "./MailboxDeliverySettings";
 
 function errorMessage(error: unknown): string {
@@ -240,12 +240,12 @@ function ConversationRow({
       <div className="flex items-center gap-1.5 text-xs">
         <ParticipantIcon participant={first} />
         <span className={cn("truncate font-medium", first.closed && "text-muted-foreground")}>
-          {first.displayName}
+          {agentMailParticipantLabel(first)}
         </span>
         <span className="shrink-0 text-muted-foreground">↔</span>
         <ParticipantIcon participant={second} />
         <span className={cn("truncate font-medium", second.closed && "text-muted-foreground")}>
-          {second.displayName}
+          {agentMailParticipantLabel(second)}
         </span>
         <span className="ml-auto shrink-0 pl-2 text-[10px] tabular-nums text-muted-foreground">
           {formatAgentMailTime(lastMessage.createdAt)}

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { ChatFindActiveContext } from "./chat-find-context";
 import { MailTile, mailTileTone } from "./MailTile";
 
@@ -232,6 +234,45 @@ describe("MailTile", () => {
     expect(screen.getByText("To Codex 2")).toBeTruthy();
     expect(screen.getByText("waiting to deliver").dataset.mailStatus).toBe("progress");
     expect(mailTileTone({ kind: "message", direction: "out" })).toBe("sent");
+  });
+
+  test("names a recipient tab with its environment, giving way on the environment first", () => {
+    useEnvironmentStore.setState({ environments: [] });
+    const { container } = render(
+      <MailTile
+        mail={mail({
+          direction: "out",
+          sender: "To env-1 · Claude 2",
+          address: { environmentId: "env-1", tabId: "tab-1", tabName: "Claude 2" },
+          status: { label: "delivered", tone: "muted" },
+        })}
+        expansionKey="named"
+      />,
+    );
+    const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
+    expect(sender.textContent).toBe("To env-1 · Claude 2");
+    act(() =>
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            id: "env-1",
+            name: "a-very-long-environment-name-for-the-login-fix",
+            order: 0,
+          } as Environment,
+        ],
+      }),
+    );
+    expect(sender.textContent).toBe("To a-very-long-environment-name-for-the-login-fix · Claude 2");
+    expect(sender.title).toBe(sender.textContent);
+    // Only the environment's name truncates; the tab, status and chevron keep their room.
+    const [prefix, environment, rest] = Array.from(sender.children) as HTMLElement[];
+    expect(prefix!.className).toContain("shrink-0");
+    expect(environment!.className).toContain("truncate");
+    expect(environment!.className).toContain("min-w-0");
+    expect(rest!.className).toContain("shrink-0");
+    expect(rest!.className).toContain("text-ellipsis");
+    expect(sender.className).toContain("min-w-0");
+    expect(screen.getByText("delivered").className).toContain("shrink-0");
   });
 
   test("opens the conversation between sender and recipient", () => {

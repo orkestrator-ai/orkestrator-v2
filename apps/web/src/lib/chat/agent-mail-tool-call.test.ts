@@ -71,6 +71,35 @@ describe("agentMailToolCall", () => {
     });
   });
 
+  test("keeps the names another node reported for a recipient there", () => {
+    const result = {
+      message: {
+        nodeId: "bk_hp",
+        node: "omarchy-hp",
+        messageId: "m2",
+        toEnvironmentId: "leaf-env",
+        toTabId: "startup-agent",
+        toEnvironmentName: "fix-login-bug",
+        toTabName: "Claude 2",
+        placement: "pending-inject",
+      },
+    };
+    const call = agentMailToolCall(
+      toolPart(
+        "mcp__orkestrator__send_message",
+        { requestId: "r2", toEnvironmentId: "leaf-env", nodeId: "bk_hp", body: "Fix it." },
+        { toolOutput: JSON.stringify(result) },
+      ),
+    );
+    expect(call?.to).toEqual({
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      environmentName: "fix-login-bug",
+      tabName: "Claude 2",
+      node: "omarchy-hp",
+    });
+  });
+
   test("reads a received message from a read result", () => {
     const output = JSON.stringify([
       {

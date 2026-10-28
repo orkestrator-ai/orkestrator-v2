@@ -207,7 +207,8 @@ describe("NativeMessage peer mail", () => {
     const tile = container.querySelector<HTMLElement>("[data-mail-tile]")!;
     expect(tile.dataset.mailKind).toBe("message");
     expect(tile.dataset.expanded).toBe("false");
-    expect(screen.getByText("Claude 3")).toBeTruthy();
+    // The tab is named with its environment; this one's name is not loaded.
+    expect(tile.querySelector("[data-mail-sender]")?.textContent).toBe("sender · Claude 3");
     expect(screen.getByText("Implement sidebar changes")).toBeTruthy();
     const body = container.querySelector<HTMLElement>("[data-agent-chat-search-content]");
     expect(body?.querySelector("strong")?.textContent).toBe("Design source:");

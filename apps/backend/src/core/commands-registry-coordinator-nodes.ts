@@ -484,6 +484,8 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         const delivered = await target.call<{
           messageId?: string;
           toTabId?: string;
+          toEnvironmentName?: string;
+          toTabName?: string;
           placement?: string;
           placementReason?: string;
         }>(
@@ -500,6 +502,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           `mail:${caller.coordinatorId}:${requestId}`,
         );
         const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
+        const toEnvironmentName =
+          delivered?.toEnvironmentName ??
+          (typeof recipient.name === "string" ? recipient.name : undefined);
         // As here, only mail scheduled to reach the worker asks it anything: a
         // message the node stored or bounced opens no delegation. (Older nodes do
         // not report the placement.)
@@ -524,6 +529,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
           toEnvironmentId,
           ...(workerTab ? { toTabId: workerTab } : {}),
+          // Names the recipient in the coordinator's transcript; older nodes
+          // report no tab name.
+          ...(toEnvironmentName ? { toEnvironmentName } : {}),
+          ...(delivered?.toTabName && delivered.toTabId === workerTab
+            ? { toTabName: delivered.toTabName }
+            : {}),
           ...(delivered?.placement ? { placement: delivered.placement } : {}),
           ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
           coordinatorDelegationOpened,

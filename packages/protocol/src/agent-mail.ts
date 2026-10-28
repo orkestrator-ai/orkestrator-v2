@@ -268,6 +268,8 @@ export interface NodeMailActor {
   environmentId: string;
   tabId: string;
   title: string | null;
+  /** The sender's environment name on its node, when the node reported it. */
+  environmentName?: string;
 }
 
 /** Who node mail is budgeted as: one remote sender, like a mailbox. */
@@ -631,6 +633,43 @@ export function agentMailParticipantKey(actor: MailActor): string {
     case "node":
       return nodeMailSenderKey(actor);
   }
+}
+
+/** An environment id short enough for a label, until the environment's name is known. */
+export function shortAgentMailEnvironmentId(environmentId: string): string {
+  return environmentId.length > 8 ? environmentId.slice(0, 8) : environmentId;
+}
+
+/** How mail names an agent tab: its environment first, then the tab. */
+export interface AgentMailAddressLabel {
+  environment: string;
+  /**
+   * Absent when the tab is not known yet, or is named for its environment so
+   * the name is not said twice.
+   */
+  tab?: string;
+}
+
+/**
+ * Name an agent tab by its environment as well as the tab, because tab names
+ * like "Claude 2" repeat in every environment. An environment whose name is
+ * not known yet reads as its short id, a tab without a name as its id.
+ */
+export function agentMailAddressLabel(address: {
+  environmentId: string;
+  environmentName?: string | null;
+  tabId?: string;
+  tabName?: string | null;
+}): AgentMailAddressLabel {
+  const environment =
+    address.environmentName?.trim() || shortAgentMailEnvironmentId(address.environmentId);
+  const tab = address.tabName?.trim() || address.tabId?.trim();
+  return !tab || tab === environment ? { environment } : { environment, tab };
+}
+
+/** {@link agentMailAddressLabel} as one line: `fix-login-bug · Claude 2`. */
+export function formatAgentMailAddressLabel(label: AgentMailAddressLabel): string {
+  return label.tab ? `${label.environment} · ${label.tab}` : label.environment;
 }
 
 /** The same key for a pair whichever way round it is named. */

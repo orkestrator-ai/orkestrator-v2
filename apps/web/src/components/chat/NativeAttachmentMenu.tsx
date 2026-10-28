@@ -190,7 +190,8 @@ function WorkspaceFilePickerDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-2xl gap-0 overflow-hidden p-0 sm:p-0"
+        size="2xl"
+        className="gap-0 overflow-hidden p-0 sm:p-0"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           inputRef.current?.focus();

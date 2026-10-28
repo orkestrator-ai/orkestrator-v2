@@ -147,7 +147,7 @@ export function CommandHandoverDialog() {
   if (!plan) {
     return (
       <Dialog open onOpenChange={(open) => (open ? undefined : close())}>
-        <DialogContent className="sm:max-w-md" data-testid="command-handover-dialog">
+        <DialogContent size="md" data-testid="command-handover-dialog">
           <DialogHeader>
             <DialogTitle>Make {target.name} the command node</DialogTitle>
             <DialogDescription className="flex items-center gap-2">
@@ -170,7 +170,7 @@ export function CommandHandoverDialog() {
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : close())}>
-      <DialogContent className="sm:max-w-md" data-testid="command-handover-dialog">
+      <DialogContent size="md" data-testid="command-handover-dialog">
         <DialogHeader>
           <DialogTitle>Make {preview.targetName} the command node</DialogTitle>
           <DialogDescription>

@@ -63,7 +63,7 @@ describe("AddProjectDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("dialog").className).toContain("sm:max-w-2xl");
+    expect(screen.getByRole("dialog").classList.contains("[--modal-max-width:42rem]")).toBe(true);
   });
 
   test("detects the Git remote for a path entered in a browser client", async () => {

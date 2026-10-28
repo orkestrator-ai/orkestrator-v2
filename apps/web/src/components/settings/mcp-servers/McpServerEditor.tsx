@@ -370,7 +370,8 @@ export function McpServerEditor({
     <>
       <Dialog open onOpenChange={(open) => !open && requestClose()}>
         <DialogContent
-          className={cn("max-h-[90vh] overflow-y-auto sm:max-w-2xl", Z_FULLSCREEN_DIALOG)}
+          size="2xl"
+          className={cn("max-h-[90vh] overflow-y-auto", Z_FULLSCREEN_DIALOG)}
           overlayClassName={Z_FULLSCREEN_DIALOG}
           onCloseAutoFocus={(event) => {
             if (!onRestoreFocus) return;

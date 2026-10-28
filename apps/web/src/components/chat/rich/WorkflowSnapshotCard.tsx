@@ -214,7 +214,7 @@ export function WorkflowSnapshotCard({
       </RichBlockFrame>
       {expanded ? (
         <Dialog open onOpenChange={setExpanded}>
-          <DialogContent className="sm:max-w-5xl">
+          <DialogContent size="5xl">
             <DialogTitle>Snapshot · {title}</DialogTitle>
             <DialogDescription>
               Captured {captured} · revision {snapshot.sourceRevision}. Historical data; it does not

@@ -55,9 +55,11 @@ describe("DesignLaunchButton", () => {
       fireEvent.click(screen.getByRole("button", { name: "New design workspace" }));
     });
     const dialog = screen.getByRole("dialog", { name: "Design workspace" });
-    expect(dialog.className).toContain("max-w-[calc(100%-1rem)]");
-    expect(dialog.className).toContain("sm:max-w-[min(42rem,calc(100%-2rem))]");
-    expect(dialog.className).not.toContain("sm:max-w-2xl");
+    expect(dialog.className).toContain("max-w-(--modal-limit)");
+    expect(dialog.className).toContain("[--modal-max-width:42rem]");
+    expect(dialog.className).toContain(
+      "sm:[--modal-limit:min(var(--modal-max-width),calc(100%-2rem))]",
+    );
     await flush();
   });
 

@@ -5,7 +5,7 @@ import { PreviewServiceDialog } from "./PreviewServiceDialog";
 afterEach(cleanup);
 
 describe("PreviewServiceDialog", () => {
-  test("retains the mobile viewport cap and applies the md cap only from sm", () => {
+  test("caps the dialog at md inside the viewport gutter", () => {
     render(
       <PreviewServiceDialog
         open
@@ -17,8 +17,8 @@ describe("PreviewServiceDialog", () => {
     );
 
     const dialog = screen.getByRole("dialog", { name: "Register preview service" });
-    expect(dialog.classList.contains("max-w-[calc(100%-1rem)]")).toBe(true);
-    expect(dialog.classList.contains("sm:max-w-md")).toBe(true);
-    expect(dialog.classList.contains("max-w-md")).toBe(false);
+    expect(dialog.classList.contains("max-w-(--modal-limit)")).toBe(true);
+    expect(dialog.classList.contains("[--modal-max-width:28rem]")).toBe(true);
+    expect(dialog.classList.contains("[--modal-limit:calc(100%-1rem)]")).toBe(true);
   });
 });

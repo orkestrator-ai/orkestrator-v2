@@ -175,7 +175,8 @@ export function RichTable({
         <Dialog open={expanded} onOpenChange={setExpanded}>
           <DialogContent
             {...focusReturn}
-            className="flex max-h-[85vh] w-[min(90rem,calc(100vw-2rem))] max-w-none flex-col gap-2 sm:max-w-none"
+            size="full"
+            className="flex max-h-[85vh] w-[min(90rem,calc(100vw-2rem))] flex-col gap-2"
           >
             <DialogHeader>
               <DialogTitle>Table</DialogTitle>

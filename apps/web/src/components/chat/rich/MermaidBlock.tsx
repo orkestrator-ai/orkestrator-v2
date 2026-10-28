@@ -626,7 +626,8 @@ export const MermaidBlock = memo(function MermaidBlock({
         <Dialog open={expanded} onOpenChange={setExpanded}>
           <DialogContent
             {...dialogFocus}
-            className="flex h-[85vh] w-[min(80rem,calc(100vw-2rem))] max-w-none flex-col gap-2 sm:max-w-none"
+            size="full"
+            className="flex h-[85vh] w-[min(80rem,calc(100vw-2rem))] flex-col gap-2"
           >
             <DialogHeader>
               <DialogTitle>Mermaid diagram</DialogTitle>

@@ -24,6 +24,32 @@ afterEach(() => cleanup());
 const repositoryRoot = path.resolve(import.meta.dir, "../../../../..");
 
 describe("AlertDialog primitives", () => {
+  test("shares the dialog width cap, with lg by default and size overrides", () => {
+    const { rerender } = render(
+      <AlertDialog defaultOpen>
+        <AlertDialogContent>
+          <AlertDialogTitle>Sized alert</AlertDialogTitle>
+          <AlertDialogDescription>Body</AlertDialogDescription>
+        </AlertDialogContent>
+      </AlertDialog>,
+    );
+    const dialog = () => screen.getByRole("alertdialog", { name: "Sized alert" });
+    expect(dialog().className).toContain("max-w-(--modal-limit)");
+    expect(dialog().classList.contains("[--modal-max-width:32rem]")).toBe(true);
+    expect(dialog().className).not.toContain("sm:max-w-lg");
+
+    rerender(
+      <AlertDialog defaultOpen>
+        <AlertDialogContent size="2xl">
+          <AlertDialogTitle>Sized alert</AlertDialogTitle>
+          <AlertDialogDescription>Body</AlertDialogDescription>
+        </AlertDialogContent>
+      </AlertDialog>,
+    );
+    expect(dialog().classList.contains("[--modal-max-width:42rem]")).toBe(true);
+    expect(dialog().classList.contains("[--modal-max-width:32rem]")).toBe(false);
+  });
+
   test("forwards props, exposes slots, and merges caller classes", () => {
     render(
       <AlertDialog defaultOpen>

@@ -24,6 +24,7 @@ import type {
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
 import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
 import type {
   AgentInteractionOrigin,
@@ -121,6 +122,11 @@ export interface Environment {
   prState: PrState | null;
   /** Whether the PR has merge conflicts with the target branch */
   hasMergeConflicts: boolean | null;
+  /**
+   * GitHub's merge state from the backend PR monitor's last reading; absent
+   * from older backends. Read through `@/lib/pr-merge-readiness`, never alone.
+   */
+  prMergeability?: GitHubPullRequestMergeability | null;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;

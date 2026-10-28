@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getApplicationTitle } from "./application-title";
+import { getApplicationTitle, splitTitleEnvironmentName } from "./application-title";
 
 describe("getApplicationTitle", () => {
   test("includes the active project in the desktop title", () => {
@@ -32,5 +32,25 @@ describe("getApplicationTitle", () => {
     expect(getApplicationTitle("fixture", false, null, "agent-123")).toBe(
       "Orkestrator AI — DEV [agent-123] - fixture",
     );
+  });
+});
+
+describe("splitTitleEnvironmentName", () => {
+  test("splits a title that ends with the environment", () => {
+    expect(splitTitleEnvironmentName("pgstack1 - feature-auth", "feature-auth")).toEqual({
+      prefix: "pgstack1 - ",
+      environmentName: "feature-auth",
+    });
+    // A name containing the separator still splits at the real suffix.
+    expect(splitTitleEnvironmentName("proj - a - b", "a - b")).toEqual({
+      prefix: "proj - ",
+      environmentName: "a - b",
+    });
+  });
+
+  test("leaves a title without that environment whole", () => {
+    expect(splitTitleEnvironmentName("Orkestrator AI - pgstack1", "feature-auth")).toBeNull();
+    expect(splitTitleEnvironmentName("pgstack1", null)).toBeNull();
+    expect(splitTitleEnvironmentName("pgstack1 - x", "")).toBeNull();
   });
 });

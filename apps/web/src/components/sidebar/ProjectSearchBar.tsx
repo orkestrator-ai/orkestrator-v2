@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { FolderGit2, ListFilter, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatusIndicator } from "@/components/environments/StatusIndicator";
+import { MergeReadyMarker, MergeReadyName } from "@/components/environments/MergeReadyName";
+import { useEnvironmentIdReadyToMerge } from "@/hooks/useEnvironmentReadyToMerge";
 import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
@@ -162,6 +164,16 @@ function ProjectSearchRow({
   onSelect: (hit: ProjectSearchHit) => void;
   rowRef?: (node: HTMLButtonElement | null) => void;
 }) {
+  // This machine's rows read the live PR monitor; another machine's carry the
+  // answer from its summary.
+  const isLocalEnvironmentHit = hit.type === "environment" && (!hit.machine || hit.machine.bound);
+  const localReadyToMerge = useEnvironmentIdReadyToMerge(
+    isLocalEnvironmentHit ? hit.environment.id : null,
+  );
+  const readyToMerge =
+    hit.type === "environment" &&
+    (isLocalEnvironmentHit ? localReadyToMerge : hit.environment.readyToMerge === true);
+  const mergeReadyDescriptionId = useId();
   const rowProps = {
     ref: rowRef,
     type: "button" as const,
@@ -173,6 +185,7 @@ function ProjectSearchRow({
     "data-availability": hit.machine ? hit.availability : undefined,
     "aria-selected": isActive,
     "aria-label": hitLabel(hit),
+    "aria-describedby": readyToMerge ? mergeReadyDescriptionId : undefined,
     onMouseEnter: onHighlight,
     onClick: () => onSelect(hit),
     className: cn(
@@ -204,7 +217,12 @@ function ProjectSearchRow({
   return (
     <button {...rowProps}>
       <StatusIndicator status={hit.environment.status} className="shrink-0" />
-      <span className="min-w-0 flex-1 truncate text-sm">{hit.environment.name}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <MergeReadyName ready={readyToMerge} className="min-w-0 truncate text-sm">
+          {hit.environment.name}
+        </MergeReadyName>
+        <MergeReadyMarker ready={readyToMerge} descriptionId={mergeReadyDescriptionId} />
+      </span>
       {/* On a phone the name, project and machine take the row. */}
       <span className="hidden min-w-0 items-center gap-2 overflow-hidden text-[11px] text-zinc-500 sm:flex">
         {age ? <span className="tabular-nums">{age}</span> : null}

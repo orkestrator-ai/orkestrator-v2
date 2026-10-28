@@ -95,6 +95,19 @@ mise run test:logged -- --name review-repair-tests -- mise run test
 
 The successful rerun does not establish a flake fix; this case remains open.
 
+## Merge-readiness review preparation — 2026-10-28
+
+Preparation for `mergeable-pr-environment-shimmer-09258728cf65` repeated the
+transient `--get` and `--unset` migration scan timeouts (5,010.70 ms and
+5,020.74 ms). Evidence is `validation-04.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-2b5424e9-f105-4cc7-afcd-918fa109916c/`.
+The complete unchanged owner passed alone (exit 0, 12.6 s):
+
+```sh
+mise run test:logged -- --name git-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+No fsmonitor implementation, tests, assertions or deadlines changed.
 
 ## Uniform app shortcuts review recurrence — 2026-10-28
 

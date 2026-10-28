@@ -8,6 +8,7 @@ import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { useProjectStore, useEnvironmentStore, useUIStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { Project, Environment } from "@/types";
 
 function install() {
@@ -18,6 +19,19 @@ function install() {
   const repository = params.has("repository");
   // A third, empty machine, so an expanded machine has a neighbour on each side.
   const spare = params.has("spare");
+  // `?merge-ready`: `p-env-1` and `q-env-1` have a PR ready to merge, while
+  // `p-env-2`'s is blocked, so the two can be compared side by side.
+  const mergeReady = params.has("merge-ready");
+  const readyIds = new Set(["p-env-1", "q-env-1"]);
+  const prFor = (id: string) =>
+    !mergeReady || (!readyIds.has(id) && id !== "p-env-2")
+      ? { prUrl: null, prState: null, hasMergeConflicts: null }
+      : {
+          prUrl: `https://github.com/acme/source/pull/${id.length}${id.at(-1)}`,
+          prState: "open" as const,
+          hasMergeConflicts: false,
+          prMergeability: readyIds.has(id) ? ("clean" as const) : ("blocked" as const),
+        };
   const storageKey = `sidebar-drag-fixture:${location.search}`;
   const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as {
     projects: Project[];
@@ -43,9 +57,7 @@ function install() {
       branch: "main",
       containerId: null,
       status: "stopped",
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
+      ...prFor(`${project.id}-env-${index}`),
       createdAt: "2026-10-22T00:00:00Z",
       networkAccessMode: "restricted",
       order: index,
@@ -133,6 +145,26 @@ function install() {
   };
   useProjectStore.getState().setProjects(projects);
   useEnvironmentStore.setState({ environments });
+  if (mergeReady) {
+    // The fixture has no PR monitor service, so seed its confirmed mirror.
+    usePrMonitorStore.getState().applySnapshot(
+      environments
+        .filter((environment) => environment.prUrl)
+        .map((environment) => ({
+          environmentId: environment.id,
+          mode: "normal",
+          checkInProgress: false,
+          consecutiveErrors: 0,
+          lastCheckAt: "2026-10-28T10:00:00.000Z",
+          lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
+          prUrl: environment.prUrl,
+          prState: environment.prState,
+          hasMergeConflicts: environment.hasMergeConflicts,
+          checkSummary: { passed: 3, total: 3, pending: 0 },
+        })),
+    );
+    usePrMonitorStore.getState().setSyncStatus("current");
+  }
   useUIStore.setState({
     collapsedProjects: [],
     collapsedProjectFolders: [],

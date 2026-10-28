@@ -286,6 +286,48 @@ describe("PrMonitorService", () => {
     harness.service.shutdown();
   });
 
+  test("persists a merge-state change on its own, and only once", async () => {
+    const harness = createHarness();
+    harness.service.sync([openPr({ prMergeability: "blocked" })]);
+    harness.setDetect(async () => detection({ mergeability: "clean" }));
+    await harness.fireNext();
+    expect(harness.calls.persist).toEqual([
+      { environmentId: "env-1", detection: detection({ mergeability: "clean" }) },
+    ]);
+    await harness.fireNext();
+    expect(harness.calls.persist).toHaveLength(1);
+    expect(harness.calls.detect.at(-1)?.prMergeability).toBe("clean");
+    harness.service.shutdown();
+  });
+
+  test("a replacement detection without merge state clears the in-memory target", async () => {
+    const harness = createHarness();
+    harness.service.sync([openPr({ prMergeability: "clean" })]);
+    const replacement = detection({ url: "https://github.com/org/repo/pull/2" });
+    harness.setDetect(async () => replacement);
+    await harness.fireNext();
+    expect(harness.calls.persist[0]?.detection).toEqual(replacement);
+    await harness.fireNext();
+    expect(harness.calls.detect.at(-1)).toMatchObject({
+      prUrl: replacement.url,
+      prMergeability: null,
+    });
+    expect(harness.calls.persist).toHaveLength(1);
+    harness.service.shutdown();
+  });
+
+  test("a reading without a merge state leaves the stored one alone", async () => {
+    // Callers that do not ask GitHub for `mergeStateStatus` (repair, merge
+    // confirmation) must not erase what the poll recorded.
+    const harness = createHarness();
+    harness.service.sync([openPr({ prMergeability: "clean" })]);
+    harness.setDetect(async () => detection());
+    await harness.fireNext();
+    expect(harness.calls.persist).toHaveLength(0);
+    expect(harness.calls.detect.at(-1)?.prMergeability).toBe("clean");
+    harness.service.shutdown();
+  });
+
   test("sync holds the last reading for an unready environment without polling it", () => {
     const harness = createHarness();
     harness.service.sync([openPr({ ready: false })]);
@@ -1626,6 +1668,43 @@ describe("PrMonitorService", () => {
     expect(harness.removalEvents()).toHaveLength(1);
   });
 
+  test.each(["open", "merged"] as const)(
+    "pause publishes lost confirmation and resume waits for a check that reports %s",
+    async (state) => {
+      const harness = createHarness();
+      harness.service.sync([openPr({ kind: "container", containerId: "container-1" })]);
+      harness.setDetect(async () => detection({ mergeability: "clean" }));
+      await harness.fireNext();
+      expect(harness.service.snapshot()[0]?.lastSuccessfulCheckAt).toBeTruthy();
+
+      harness.service.pause("env-1");
+      expect(harness.service.snapshot()[0]?.lastSuccessfulCheckAt).toBeNull();
+      expect(harness.stateEvents().at(-1)?.state.lastSuccessfulCheckAt).toBeNull();
+      const revision = harness.service.revisionedSnapshot().revision;
+      harness.service.pause("env-1");
+      expect(harness.service.revisionedSnapshot().revision).toBe(revision);
+
+      harness.service.sync([openPr({ kind: "container", containerId: "container-1" })]);
+      expect(harness.service.snapshot()[0]?.lastSuccessfulCheckAt).toBeNull();
+      harness.setDetect(async () => {
+        throw new Error("credential expired while stopped");
+      });
+      await harness.fireNext();
+      expect(harness.service.snapshot()[0]).toMatchObject({
+        lastSuccessfulCheckAt: null,
+        consecutiveErrors: 1,
+      });
+      harness.setDetect(async () => detection({ state, mergeability: "blocked" }));
+      await harness.fireNext();
+      expect(harness.service.snapshot()[0]).toMatchObject({
+        prState: state,
+        lastSuccessfulCheckAt: expect.any(String),
+      });
+      expect(harness.calls.persist.at(-1)?.detection.mergeability).toBe("blocked");
+      harness.service.shutdown();
+    },
+  );
+
   test("a paused entry resumes polling when sync sees the environment ready again", () => {
     const harness = createHarness();
     harness.service.sync([openPr()]);
@@ -1670,10 +1749,18 @@ describe("PrMonitorService", () => {
     harness.service.sync([openPr()]);
     const eventsAfterTracking = harness.stateEvents().length;
 
+    // The first answered check is announced once, so clients can tell a
+    // reading confirmed by this backend from a restored one.
+    await harness.fireNext();
+    expect(harness.stateEvents()).toHaveLength(eventsAfterTracking + 1);
+    expect(harness.stateEvents().at(-1)?.state.lastSuccessfulCheckAt).toBe(
+      new Date(harness.clock.value).toISOString(),
+    );
+
     await harness.fireNext();
     await harness.fireNext();
 
-    expect(harness.stateEvents()).toHaveLength(eventsAfterTracking);
+    expect(harness.stateEvents()).toHaveLength(eventsAfterTracking + 1);
     expect(harness.service.snapshot()[0]?.lastCheckAt).toBe(
       new Date(harness.clock.value).toISOString(),
     );

@@ -1,6 +1,6 @@
 {
   "name": "claude-bridge",
-  "version": "2.34.1-beta",
+  "version": "2.34.2-beta",
   "description": "Bridge server for Claude Agent SDK integration with Orkestrator AI",
   "type": "module",
   "main": "dist/index.js",

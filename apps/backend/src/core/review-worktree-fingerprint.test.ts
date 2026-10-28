@@ -198,3 +198,81 @@ test("accepts an envelope with no fingerprint", () => {
     parseReviewWorktreeFingerprint(JSON.stringify({ head: "1".repeat(40), status: "" })),
   ).toEqual({ head: "1".repeat(40), status: "" });
 });
+
+for (const interpreter of INTERPRETERS) {
+  test.skipIf(process.platform === "win32")(
+    `timeout reaps a blocking fsmonitor hook and descendants before fallback (${interpreter})`,
+    async () => {
+      const root = await fixture();
+      const hook = path.join(root, ".git", "blocking-hook.cjs");
+      const pids = path.join(root, ".git", "hook-pids");
+      await fs.writeFile(
+        hook,
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+process.on("SIGTERM", () => {});
+fs.appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+if (process.argv[2] !== "descendant") {
+  spawn(process.execPath, [__filename, "descendant"], { stdio: "inherit" });
+}
+// Safety bound if the regression fails; the test must never leak forever.
+setTimeout(() => process.exit(0), 8000);
+`,
+        { mode: 0o755 },
+      );
+      await runCommand("git", ["config", "core.fsmonitor", hook], { cwd: root });
+      const bin = path.join(root, ".git", "bin");
+      await fs.mkdir(bin);
+      const log = path.join(root, ".git", "git-calls");
+      const realGit = (await runCommand("which", ["git"])).stdout.trim();
+      await fs.writeFile(
+        path.join(bin, "git"),
+        `#!/bin/sh
+printf '%s\\n' "$*" >> '${log}'
+exec '${realGit}' "$@"
+`,
+        { mode: 0o755 },
+      );
+      await fs.writeFile(path.join(root, "tracked.txt"), "dirty\n");
+      const started = Date.now();
+      const result = await runCommand(
+        interpreter,
+        [
+          "-e",
+          REVIEW_WORKTREE_FINGERPRINT_SCRIPT.replace(
+            "const STATUS_TIMEOUT_MS = 10000;",
+            "const STATUS_TIMEOUT_MS = 1500;",
+          ),
+          "fingerprint",
+        ],
+        {
+          cwd: root,
+          timeoutMs: 6000,
+          env: { PATH: `${bin}:${process.env.PATH}`, GIT_OPTIONAL_LOCKS: "0" },
+        },
+      );
+      expect(Date.now() - started).toBeLessThan(6000);
+      expect(result.stderr).toBe("");
+      expect(parseReviewWorktreeFingerprint(result.stdout).status).toContain("tracked.txt");
+      const calls = (await fs.readFile(log, "utf8")).trim().split("\n");
+      const blockedStatus = calls.findIndex((args) => args.startsWith("status "));
+      expect(blockedStatus).toBeGreaterThanOrEqual(0);
+      expect(calls.slice(blockedStatus + 1).length).toBeGreaterThanOrEqual(4);
+      expect(
+        calls.slice(blockedStatus + 1).every((args) => args.startsWith("-c core.fsmonitor=false ")),
+      ).toBe(true);
+      const hookPids = (await fs.readFile(pids, "utf8")).trim().split("\n");
+      expect(hookPids).toHaveLength(2);
+      for (const pid of hookPids) {
+        // A zombie has exited and holds no pipes; init may not have reaped it yet.
+        const state = await runCommand("ps", ["-p", pid, "-o", "stat="]).then(
+          (result) => result.stdout.trim(),
+          () => "",
+        );
+        expect(state === "" || state.startsWith("Z")).toBe(true);
+      }
+    },
+    15_000,
+  );
+}

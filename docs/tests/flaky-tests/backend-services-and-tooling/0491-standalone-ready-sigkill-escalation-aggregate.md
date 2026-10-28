@@ -43,3 +43,17 @@ with
 `mise run test:logged -- --name merge-standalone-ready-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures`
 (exit 0, 0.7 s). This is consistent with the real-timer ordering race;
 no readiness implementation, assertion, timeout or skip changed.
+
+## Git fsmonitor removal validation — 2026-10-28
+
+`mise run test` on branch `git-fsmonitor-leak-and-hangs-969095f24ee2` (backend
+git fsmonitor handling; nothing in the standalone backend or its readiness
+wait) on macOS at load average 40–60 failed this case at 141.95 ms: line 90
+had already seen `SIGKILL`. The unchanged owner, run alone with
+`bun test tests/standalone-ready.test.ts` from `apps/backend`, failed once in
+four runs while the load average was about 60, then passed 8 of 8 as it fell
+to about 40. A clean `dfedcd743` (origin/main) clone passed 14 of 14 over the
+same window. Consistent with the real-timer ordering race recorded above, now
+also seen in isolation on a heavily loaded host. Evidence:
+`orkestrator-test-run.2rpgar/` under the host temporary directory. No
+implementation, assertion, timeout or skip changed.

@@ -1,3 +1,4 @@
+import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { useState } from "react";
 import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
 import { SettingsMachineStrip } from "../../apps/web/src/components/settings/SettingsMachineStrip";
@@ -19,6 +20,7 @@ const machines = [
   { nodeId: "bk_build", name: "Build box", colorToken: "amber", connected: true },
   { nodeId: "bk_laptop", name: "Laptop", colorToken: "rose", connected: false },
 ];
+const withSearch = new URLSearchParams(window.location.search).has("search-ui");
 const withMachines = new URLSearchParams(window.location.search).has("machines");
 
 export function FullscreenSettingsFixture() {
@@ -33,6 +35,14 @@ export function FullscreenSettingsFixture() {
     <>
       {/* The page underneath, which the keyboard must not reach while settings are open. */}
       <button type="button">Page underneath</button>
+      {withSearch && (
+        <ProjectSearchBar
+          projects={[]}
+          environments={[]}
+          onSelectProject={() => {}}
+          onSelectEnvironment={() => {}}
+        />
+      )}
       <FullscreenSettingsLayout
         open={open}
         onOpenChange={setOpen}
@@ -66,6 +76,7 @@ export function FullscreenSettingsFixture() {
       >
         {(section) => (
           <div className="h-[1200px]" data-testid="settings-content">
+            {withSearch && <input aria-label="Settings value" />}
             Content for {section}
             {withMachines
               ? ` on ${section === "section-2" ? "Studio" : (machines.find((m) => m.nodeId === machine)?.name ?? "")}`

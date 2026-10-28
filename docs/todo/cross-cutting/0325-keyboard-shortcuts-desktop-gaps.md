@@ -21,6 +21,10 @@ Record these checks on packaged macOS and Linux builds:
 - Dismiss a preview-originated dialog with Escape, the chord and an outside
   pointer click; typing resumes in that preview. Hidden or disposed previews never regain focus.
 - With a Cyrillic input source on macOS, ⌘⇧ and the K key open the dialog.
+- ⌘K / Ctrl+K with focus in the sidebar, composer, Monaco, an interactive
+  artifact, a design frame and a workspace realm opens the window's search,
+  which takes typing; in a terminal Ctrl+K still reaches the shell (kill-line)
+  and ⌘K opens search; in a browser preview ⌘K stays with the page.
 
 The browser client cannot intercept keyboard events in uncooperative
 cross-origin browser/service preview iframes. This origin-isolation limit has

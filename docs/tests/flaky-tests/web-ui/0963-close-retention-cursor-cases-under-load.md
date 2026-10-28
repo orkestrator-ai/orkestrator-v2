@@ -43,3 +43,23 @@ complete one-worker owner rerun. No new isolated pass was established.
 Commands, counts, and artifacts are recorded in
 [1126](../aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md#review-fix-validation-2026-10-27).
 Status remains open; no assertion, timeout, or skip changed.
+
+
+## Uniform app shortcuts review — 2026-10-28
+
+Preparation `mise run test:browser` had 912 passes, 105 skips and three
+failures: the two established native branch suggestions and desktop Cursor
+steering. The complete unchanged owners were then run sequentially with one
+worker:
+
+```sh
+mise run test:logged -- --name recorded-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/CloseRetention.spec.ts --workers=1
+```
+
+Result: 21 passed, 20 skipped, three failed (144.9 seconds). Desktop steering
+again missed `agent-runtime-steer-saturated` at line 724 after 30 seconds;
+mobile steering passed. Both native branch suggestions still received `rel`
+instead of `release/2.0`. This observation remains non-green in the complete
+owner and is not a newly established flake. No assertions, deadlines or skips
+changed. Evidence: host temporary directory
+`orkestrator-test-run.E3EaSR/recorded-browser-owners.log.gz`.

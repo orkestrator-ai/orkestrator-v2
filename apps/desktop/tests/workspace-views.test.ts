@@ -179,6 +179,25 @@ describe("workspace realms in a desktop window", () => {
     expect(parent.webContents.focus).toHaveBeenCalledTimes(1);
   });
 
+  test("a window-owned shortcut from a visible realm gives the window keyboard focus", async () => {
+    const { views } = harness();
+    const parent = fakeParent();
+    const { viewId } = await views.open(parent as never, { nodeId: "bk_leaf", search: {} });
+    const child = (parent.children[0] as FakeView).webContents;
+    const shortcut = { type: "shortcut", shortcut: "search-projects" };
+    views.post(child.id, shortcut);
+    expect(parent.webContents.focus).not.toHaveBeenCalled();
+    views.setVisible(parent.webContents.id, viewId, true);
+    views.post(child.id, { type: "ready" });
+    expect(parent.webContents.focus).not.toHaveBeenCalled();
+    views.post(child.id, shortcut);
+    expect(parent.webContents.focus).toHaveBeenCalledTimes(1);
+    expect(parent.webContents.sent.at(-1)).toEqual([
+      WORKSPACE_VIEWS_EVENT_CHANNEL,
+      { viewId, type: "message", message: shortcut },
+    ]);
+  });
+
   test("a still of a realm is a JPEG data URL for its own window only", async () => {
     const { views } = harness();
     const parent = fakeParent();

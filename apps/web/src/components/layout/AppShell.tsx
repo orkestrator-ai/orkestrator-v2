@@ -44,6 +44,7 @@ import {
 } from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import { retainAppShortcutRouter, setUnhandledAppShortcut } from "@/lib/app-shortcuts";
 import {
   useRemoteWorkspaceStore,
   type RemoteWorkspaceSelection,
@@ -199,6 +200,20 @@ export function AppShell({ children }: AppShellProps) {
     if (!activePane?.activeTabId) return null;
     return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
   }, [paneEnvironments, selectedEnvironmentId]);
+
+  // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
+  useEffect(() => retainAppShortcutRouter(), []);
+  useEffect(() => {
+    // ⌘K with the sidebar hidden shows it, with the search open. A realm
+    // forwards ⌘K to the window; the phone layout's drawer stays closed.
+    if (workspaceRealm || isMobile) return;
+    return setUnhandledAppShortcut((id) => {
+      const ui = useUIStore.getState();
+      if (id !== "search-projects" || ui.sidebarOpen) return false;
+      ui.toggleSidebar();
+      return true;
+    });
+  }, [isMobile, workspaceRealm]);
 
   useEffect(() => {
     // A realm's document title is not shown; the window's is.

@@ -108,3 +108,27 @@ mise run test:logged -- --name git-fsmonitor-owner -- bun test --cwd apps/backen
 ```
 
 No fsmonitor implementation, tests, assertions or deadlines changed.
+
+## Uniform app shortcuts review recurrence — 2026-10-28
+
+Preparation at `c73f44755` repeated the four five-second scan deadlines
+(linked project-home 5,012.92 ms; transient rev-parse 5,038.27 ms; --get
+5,008.28 ms; --unset 5,024.25 ms), during `mise run test` with the default
+workspace/root/bridges/protocol worker reservations of 6/1/2/1 alongside
+component-browser validation. The complete unchanged owner passed alone:
+
+```sh
+mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures
+```
+
+Exit 0, 8.9 seconds. Preparation evidence:
+`.orkestrator/review-artifacts/review-validation-b78694d3-cfea-4eae-8896-38cb77ce8e81/validation-04.stdout.txt`.
+No implementation, assertion, timeout or skip changed; this remains an open
+aggregate timing case.
+
+
+After fixing an unsupported build option in the newly added minification
+regression, the exact original repository command was rerun:
+`mise run test:logged -- --name review-repair-tests -- mise run test`.
+All four groups passed (exit 0, 204.1 seconds). The fsmonitor assertions and
+timeouts remain unchanged.

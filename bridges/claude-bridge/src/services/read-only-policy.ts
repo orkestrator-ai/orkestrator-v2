@@ -176,31 +176,35 @@ const MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * unlisted option's value is counted, which can only refuse a reading command,
  * never admit a writing one.
  */
-const POSITIONAL_LIMITS: ReadonlyMap<string, { max: number; valueOptions: ReadonlySet<string> }> =
-  new Map([
-    ["hostname", { max: 0, valueOptions: new Set<string>() }],
-    ["uniq", { max: 1, valueOptions: new Set(["-f", "-s", "-w"]) }],
-    [
-      "xxd",
-      {
-        max: 1,
-        valueOptions: new Set([
-          "-c",
-          "-cols",
-          "-g",
-          "-groupsize",
-          "-l",
-          "-len",
-          "-n",
-          "-name",
-          "-o",
-          "-offset",
-          "-s",
-          "-seek",
-        ]),
-      },
-    ],
-  ]);
+const POSITIONAL_LIMITS: ReadonlyMap<
+  string,
+  { max: number; valueOptions: ReadonlySet<string>; stopAtFirstOperand?: boolean }
+> = new Map([
+  ["hostname", { max: 0, valueOptions: new Set<string>() }],
+  ["uniq", { max: 1, valueOptions: new Set(["-f", "-s", "-w"]) }],
+  [
+    "xxd",
+    {
+      max: 1,
+      // xxd stops parsing options at its input; even `-out.bin` then names output.
+      stopAtFirstOperand: true,
+      valueOptions: new Set([
+        "-c",
+        "-cols",
+        "-g",
+        "-groupsize",
+        "-l",
+        "-len",
+        "-n",
+        "-name",
+        "-o",
+        "-offset",
+        "-s",
+        "-seek",
+      ]),
+    },
+  ],
+]);
 
 /**
  * Programs whose options are admitted by allowlist. Every listed option takes a
@@ -235,8 +239,8 @@ const GIT_SUBCOMMAND_MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>
  *
  * `difftool` is deliberately absent even though it reads: its whole purpose is
  * to launch `diff.tool`, an arbitrary command the checkout's own git config can
- * name. `git diff` covers the reading use without handing the repository a way
- * to choose what runs.
+ * name. Even these inspection commands can launch configured helpers, so Git
+ * is only admitted with an explicit required command sandbox.
  */
 const READ_ONLY_GIT_SUBCOMMANDS = Object.freeze(
   new Set([
@@ -549,7 +553,10 @@ interface CommandVerdict {
 }
 
 /** Whether one shell command only reads. Exported for its own tests. */
-export function isReadOnlyShellCommand(command: string): CommandVerdict {
+export function isReadOnlyShellCommand(
+  command: string,
+  options: { commandSandbox?: CoordinatorCommandSandbox } = {},
+): CommandVerdict {
   const trimmed = command.trim();
   if (!trimmed) return { allowed: true };
   if (COMPOSITION_PATTERN.test(trimmed) || /(?:^|\s)~/.test(trimmed)) {
@@ -572,6 +579,15 @@ export function isReadOnlyShellCommand(command: string): CommandVerdict {
   const program = first;
   if (NETWORK_COMMANDS.has(program)) return networkRefusal(program);
   if (program === "git") {
+    // Even inspection can invoke repository/ambient helpers (diff.external,
+    // textconv, fsmonitor, pagers). Only admit Git behind an OS sandbox.
+    if (options.commandSandbox !== "required") {
+      return {
+        allowed: false,
+        reason:
+          "Coordinator Git commands require the command sandbox because Git configuration can run helpers. Use reading tools or delegate to a worker environment.",
+      };
+    }
     const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
     const subcommand = subcommandIndex > 0 ? tokens[subcommandIndex] : undefined;
     const args = subcommandIndex > 0 ? tokens.slice(subcommandIndex + 1) : [];
@@ -612,7 +628,7 @@ export function isReadOnlyShellCommand(command: string): CommandVerdict {
     if (
       (mutating && hasFlag(args, mutating)) ||
       (options && !optionsAllowed(args, options)) ||
-      (limit && positionalCount(args, limit.valueOptions) > limit.max)
+      (limit && positionalCount(args, limit.valueOptions, limit.stopAtFirstOperand) > limit.max)
     ) {
       return {
         allowed: false,
@@ -652,7 +668,11 @@ function optionsAllowed(args: readonly string[], allowed: ReadonlySet<string>): 
 }
 
 /** Positional arguments, not counting the values of `valueOptions`. */
-function positionalCount(args: readonly string[], valueOptions: ReadonlySet<string>): number {
+function positionalCount(
+  args: readonly string[],
+  valueOptions: ReadonlySet<string>,
+  stopAtFirstOperand = false,
+): number {
   let count = 0;
   let optionsEnded = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -666,6 +686,7 @@ function positionalCount(args: readonly string[], valueOptions: ReadonlySet<stri
       continue;
     }
     count += 1;
+    if (stopAtFirstOperand) optionsEnded = true;
   }
   return count;
 }
@@ -693,6 +714,7 @@ export function createCoordinatorReadOnlyHook(
   researchMcpServerNames: readonly string[] = coordinatorResearchMcpServersFromEnv(process.env).map(
     (server) => server.name,
   ),
+  options: { commandSandbox?: CoordinatorCommandSandbox } = {},
 ): HookCallback {
   const deniedTools = new Set(claudeDeniedTools(policy));
   const allowedMcpPrefixes = [
@@ -731,7 +753,7 @@ export function createCoordinatorReadOnlyHook(
         return deny("Coordinator commands may not run outside the sandbox.");
       }
       const command = typeof toolInput?.command === "string" ? toolInput.command : "";
-      const verdict = isReadOnlyShellCommand(command);
+      const verdict = isReadOnlyShellCommand(command, options);
       if (!verdict.allowed) return deny(verdict.reason!);
     }
     return {};

@@ -40,6 +40,7 @@ import {
   claudeWorkspaceCwd,
   resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
+import { claudeReadOnlyCommandSandbox } from "./claude-execution-sandbox.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import {
   claudeRuntimeOwnsLiveWork,
@@ -113,6 +114,8 @@ export interface ClaudeLaunchProfile {
    * sandbox and the read-only hook: the execution boundary.
    */
   boundary: string;
+  /** The decision used for SDK options, including the reason reported on joined turns. */
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>;
   /** JSON of the structured-output schema, or null for an ordinary turn. */
   outputSchema: string | null;
   agent: string | undefined;
@@ -129,9 +132,14 @@ export interface ClaudeLaunchProfile {
 export function claudeLaunchProfile(
   session: SessionState,
   options: PromptOptions | undefined,
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): ClaudeLaunchProfile {
   const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
+  const sandbox = isCoordinatorReadOnlyPolicy(policy)
+    ? (readOnlyCommandSandbox ?? claudeReadOnlyCommandSandbox())
+    : undefined;
   return {
+    readOnlyCommandSandbox: sandbox,
     context1m: effectiveClaudeContext1m(options),
     promptSuggestions: options?.promptSuggestions === true,
     chrome: effectiveClaudeChrome(policy, options),
@@ -152,8 +160,15 @@ export function claudeLaunchProfile(
         ? { asksForApproval: true }
         : {}),
       // A coordinator's allow-list names the Orkestrator MCP server only when
-      // the turn has one.
-      ...(isCoordinatorReadOnlyPolicy(policy) ? { agentMcp: options?.agentMcp !== undefined } : {}),
+      // the turn has one. After resolution, use the query plan's sandbox
+      // decision; early admission checks probe for a prospective boundary.
+      // A changed boundary requires a new CLI.
+      ...(isCoordinatorReadOnlyPolicy(policy)
+        ? {
+            agentMcp: options?.agentMcp !== undefined,
+            commandSandbox: sandbox!.commandSandbox,
+          }
+        : {}),
     }),
     outputSchema: options?.outputSchema === undefined ? null : JSON.stringify(options.outputSchema),
     agent: options?.agent,
@@ -194,8 +209,9 @@ export function claudeLaunchResourceProfile(
 export function claudeLaunchedProfile(
   session: SessionState,
   options: PromptOptions | undefined,
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): ClaudeLaunchProfile {
-  const profile = claudeLaunchProfile(session, options);
+  const profile = claudeLaunchProfile(session, options, readOnlyCommandSandbox);
   return {
     ...profile,
     settingSources: JSON.stringify(
@@ -255,10 +271,11 @@ export async function assertClaudeRuntimeAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
   resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials"> & { settingSources?: string },
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): Promise<void> {
   const runtime = openClaudeRuntime(session);
   if (!runtime || !claudeRuntimeOwesWork(runtime)) return;
-  const request = claudeLaunchProfile(session, options);
+  const request = claudeLaunchProfile(session, options, readOnlyCommandSandbox);
   const refuse = (conflict: string | undefined) => {
     if (conflict)
       throw sessionOperationError(

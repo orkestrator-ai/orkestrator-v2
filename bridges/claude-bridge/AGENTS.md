@@ -250,7 +250,12 @@ invariants keep it honest:
   `claudeReadOnlySandbox` denies writes there (`filesystem.denyWrite`). Where
   the sandbox cannot run commands at all (Windows; Linux without bubblewrap
   and socat, or whose bubblewrap cannot nest the CLI's user namespace; the
-  launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`) it is left
-  off and this allowlist is the whole boundary. A command it admits must neither write
+  launcher says so in `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX`; for a
+  read-only review turn in an ordinary bridge, the bridge's own probe,
+  `claudeReadOnlyCommandSandbox`) it is left off and this allowlist is the
+  whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
-  `git ls-remote` are refused rather than left to the sandbox.
+  `git ls-remote` are refused rather than left to the sandbox. Git inspection
+  also needs an explicit `required` sandbox decision: repository and ambient
+  configuration can launch helpers even for `git diff` or `git status`, so
+  hook-only turns use reading tools or delegate Git to a worker.

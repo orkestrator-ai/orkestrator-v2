@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   appendNativeAgentPolicyNote,
   describeNativeAgentExecutionPolicy,
+  describeNativeAgentPolicyEffects,
   nativeAgentPolicyEffects,
+  READ_ONLY_TURN_POLICY_NOTE,
+  readOnlyCommandSandboxOffNote,
+  readOnlyTurnReportedPolicy,
   withoutProviderSandbox,
   SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
   type NativeAgentExecutionPolicy,
@@ -178,5 +182,37 @@ describe("withoutProviderSandbox", () => {
       "First. Second.",
     );
     expect(appendNativeAgentPolicyNote(host, "Only.").note).toBe("Only.");
+  });
+});
+
+describe("readOnlyTurnReportedPolicy", () => {
+  const turnPolicy: NativeAgentExecutionPolicy = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    networkAccess: "restricted",
+  };
+
+  test("says why it differs from the session's policy", () => {
+    expect(readOnlyTurnReportedPolicy(turnPolicy)).toEqual({
+      ...turnPolicy,
+      note: READ_ONLY_TURN_POLICY_NOTE,
+    });
+  });
+
+  test("without the command sandbox, reports none and names the boundary that held", () => {
+    const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+    const reported = readOnlyTurnReportedPolicy(turnPolicy, { commandSandboxOff: reason });
+    expect(reported).toEqual({
+      ...turnPolicy,
+      sandbox: "none",
+      note: `${READ_ONLY_TURN_POLICY_NOTE} ${readOnlyCommandSandboxOffNote(reason)}`,
+    });
+    expect(describeNativeAgentPolicyEffects(nativeAgentPolicyEffects(reported))).toStartWith(
+      "No sandbox, approvals denied",
+    );
+    expect(readOnlyCommandSandboxOffNote(reason)).toContain("read-only command filter");
+    expect(readOnlyCommandSandboxOffNote(reason)).toEndWith(reason);
   });
 });

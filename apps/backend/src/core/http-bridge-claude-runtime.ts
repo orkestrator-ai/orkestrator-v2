@@ -1,5 +1,6 @@
 import {
   normalizeNativeAgentTurnActivity,
+  READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS,
   type NativeAgentBackgroundTaskKind,
   type NativeAgentBackgroundTaskSummary,
   type NativeAgentBackgroundTaskUsage,
@@ -200,5 +201,26 @@ export function claudeBackgroundObservation(body: Record<string, unknown>, statu
     ...(Array.isArray(ids)
       ? { retainedContinuationRequestIds: ids.filter((id): id is string => typeof id === "string") }
       : {}),
+  };
+}
+
+/**
+ * Why the session's latest read-only turn ran its commands with the CLI's
+ * sandbox off, as a Claude bridge reports it: the probe found no
+ * working sandbox where the bridge runs, so the read-only hook was the whole
+ * boundary. Bounded, and absent for any other shape or an older bridge.
+ */
+export function claudeReadOnlySandboxObservation(body: Record<string, unknown>): {
+  commandSandboxOff?: string;
+} {
+  const reported = asRecord(body.readOnlyCommandSandbox);
+  if (reported?.state !== "off" || typeof reported.reason !== "string") return {};
+  const reason = reported.reason.trim();
+  if (!reason) return {};
+  return {
+    commandSandboxOff:
+      reason.length > READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS
+        ? `${reason.slice(0, READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS - 1)}…`
+        : reason,
   };
 }

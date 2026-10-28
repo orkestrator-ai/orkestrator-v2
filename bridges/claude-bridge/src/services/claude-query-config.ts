@@ -71,14 +71,25 @@ export function claudeTurnPolicy(
  * The policy Agent Info should describe now. While a `readOnly` turn runs it
  * is that turn's policy, not the session's: reporting the session's would
  * understate what the running turn may do. `commandDiscoveryInputs` records
- * the inputs of the query the running turn started.
+ * the inputs of the query the running turn started, and
+ * `readOnlyCommandSandboxOff` whether its commands run without the sandbox.
  */
 export function claudeReportedPolicy(
-  session: Pick<SessionState, "executionPolicy" | "status" | "commandDiscoveryInputs">,
+  session: Pick<
+    SessionState,
+    "executionPolicy" | "status" | "commandDiscoveryInputs" | "readOnlyCommandSandboxOff"
+  >,
 ): NativeAgentExecutionPolicy | undefined {
   if (session.status === "running" && session.commandDiscoveryInputs?.readOnly === true) {
     const turnPolicy = claudeTurnPolicy(session.executionPolicy, true);
-    if (turnPolicy) return readOnlyTurnReportedPolicy(turnPolicy);
+    if (turnPolicy) {
+      return readOnlyTurnReportedPolicy(
+        turnPolicy,
+        session.readOnlyCommandSandboxOff === undefined
+          ? {}
+          : { commandSandboxOff: session.readOnlyCommandSandboxOff },
+      );
+    }
   }
   return session.executionPolicy;
 }

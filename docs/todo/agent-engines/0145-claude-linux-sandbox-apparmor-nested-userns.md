@@ -226,11 +226,11 @@ failed every Bash call.
    the turn up front with the same reason (decision D3). Evidence:
    `claude-execution-sandbox.test.ts` (provider and coordinator policies,
    including a malformed launcher value; read-only review turns in an
-   ordinary bridge left alone, see 0190; only Linux probed; no probe for a
+   ordinary bridge never refused, see 0190; only Linux probed; no probe for a
    turn that does not need one), `routes/session.test.ts` ("a turn that
    requires a sandbox this host cannot run commands in": 422 with the reason,
-   nothing claimed or sent; an unsandboxed session and a read-only review
-   turn unaffected),
+   nothing claimed or sent; an unsandboxed session unaffected, and since 0190
+   a read-only review turn accepted to run on the hook alone),
    `session-manager-sandbox-refusal.test.ts` (the query plan fails without
    starting a CLI) and `http-bridge-commands.test.ts` (the backend surfaces
    the bridge's reason without the HTTP prefix).
@@ -376,7 +376,8 @@ a graphical desktop inspection remains in the checklist above.
   and container sessions; nothing is journaled for a refused prompt.
 - **Cons.** The whole turn is refused, including tools that would not have
   needed the sandbox (Read, Grep). Read-only review turns on such a host
-  still fail each Bash call until 0190 is done. Windows is not probed: its sandbox is
+  failed each Bash call until 0190 (done 2026-10-28: they now run with the
+  sandbox off and the hook as the boundary, and say so). Windows is not probed: its sandbox is
   behind a vendor flag and its behaviour is unverified, so it keeps today's
   behaviour. A refused session needs its policy changed to run.
 

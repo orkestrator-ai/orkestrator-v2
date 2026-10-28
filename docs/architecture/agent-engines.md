@@ -827,7 +827,11 @@ while a turn started with `readOnly` is running (`claudeReportedPolicy`), Cursor
 and Grok while the session's `readOnly` flag is set, which the next prompt
 clears (`cursorAppliedPolicy` in `execution-policy.ts`,
 `acpSessionReportedPolicy`). The reported policy carries
-`READ_ONLY_TURN_POLICY_NOTE` so the summary says why it differs.
+`READ_ONLY_TURN_POLICY_NOTE` so the summary says why it differs. A Claude
+read-only turn on a host where its command sandbox cannot run (a container, or
+Linux without a working bubblewrap) runs with the sandbox off and reports
+`sandbox: "none"` with the probe's reason; see "Read-only review turns without
+a working sandbox" in [`coordinator.md`](coordinator.md).
 
 ### Approval modes
 

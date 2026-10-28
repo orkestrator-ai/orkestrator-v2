@@ -13,7 +13,10 @@ import {
 } from "@orkestrator/protocol/node/claude-linux-sandbox";
 import { PINNED_TOOLCHAIN_VERSIONS } from "../../../packages/toolchain/src/manifest.js";
 import { withPolicyCliFixture } from "../../../tests/conformance/execution-policy/vendor-cli.js";
-import { qualifyCoordinatorSandbox } from "../test-fixtures/coordinator-sandbox-qualification.js";
+import {
+  HOOK_ONLY_ADVERSARIAL_SCENARIOS,
+  qualifyCoordinatorSandbox,
+} from "../test-fixtures/coordinator-sandbox-qualification.js";
 
 const phase = process.env.ORKESTRATOR_CLAUDE_APPARMOR_PHASE;
 
@@ -83,6 +86,13 @@ test.skipIf(!phase)(
       results.push(await qualifyCoordinatorSandbox("apparmor-sandbox-reads", cli));
       results.push(await qualifyCoordinatorSandbox("unavailable-hook-reads", cli));
       results.push(await qualifyCoordinatorSandbox("unavailable-hook-refuses-quoted", cli));
+      // Review turns use the ordinary bridge resolver on this same restricted
+      // host, and the new attacks must be denied with the sandbox disabled.
+      results.push(await qualifyCoordinatorSandbox("read-only-host-reads", cli));
+      results.push(await qualifyCoordinatorSandbox("read-only-host-hook-refuses", cli));
+      for (const scenario of HOOK_ONLY_ADVERSARIAL_SCENARIOS) {
+        results.push(await qualifyCoordinatorSandbox(scenario, cli));
+      }
 
       // Exercise the real HTTP prompt route and real session, without SDK mocks.
       await withPolicyCliFixture(async (fixture) => {
@@ -150,5 +160,5 @@ test.skipIf(!phase)(
       );
     }
   },
-  90_000,
+  180_000,
 );

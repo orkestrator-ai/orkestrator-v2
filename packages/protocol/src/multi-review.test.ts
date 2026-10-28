@@ -430,6 +430,14 @@ describe("multi review protocol", () => {
         stepRuntimes: { fix: { startedAt: timestamp, tokenCount: 1.5 } },
       }),
     ).toBe(false);
+    // Consolidation's read-only turn ran without the command sandbox (todo 0190).
+    const consolidate = (commandSandboxOff: unknown) => ({
+      ...workflow,
+      stepRuntimes: { consolidate: { startedAt: timestamp, commandSandboxOff } },
+    });
+    expect(isMultiReviewWorkflow(consolidate("bwrap is missing."))).toBe(true);
+    expect(isMultiReviewWorkflow(consolidate("x".repeat(1_025)))).toBe(false);
+    expect(isMultiReviewWorkflow(consolidate(false))).toBe(false);
   });
 
   test("carries progress and stall timestamps on both supervised session kinds", () => {

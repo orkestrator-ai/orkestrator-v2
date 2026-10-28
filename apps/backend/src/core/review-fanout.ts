@@ -1105,6 +1105,8 @@ export class ReviewFanoutRunner {
       delete reviewer.tokenCount;
       delete reviewer.cacheReadTokens;
       delete reviewer.usageFinalizationPolls;
+      // A new session reports its own boundary.
+      delete reviewer.commandSandboxOff;
       host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0usage`);
       delete reviewer.progressAt;
       delete reviewer.progressDigest;
@@ -1338,6 +1340,15 @@ export class ReviewFanoutRunner {
     });
     const { status, error: statusDetail } = observation;
     await host.assertFence();
+    // Kept once seen: the turn's commands ran without the sandbox even if a
+    // later read no longer says so. The card names the boundary.
+    if (
+      observation.commandSandboxOff !== undefined &&
+      reviewer.commandSandboxOff !== observation.commandSandboxOff
+    ) {
+      reviewer.commandSandboxOff = observation.commandSandboxOff;
+      await this.commit();
+    }
     if ((status === "idle" || status === "error") && observation.turnSettled === false)
       return "continue";
     const transcript = new PassTranscriptReader(provider, reviewer.providerSessionId, {

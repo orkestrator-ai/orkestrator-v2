@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS } from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
@@ -2298,6 +2299,33 @@ describe("HTTP bridge provider", () => {
     expect(
       (await observe({ "task-1": { status: "running" } }, "running")).backgroundWorkLive,
     ).toBeUndefined();
+  });
+
+  test("carries a read-only turn's missing command sandbox, bounded (todo 0190)", async () => {
+    const observe = async (readOnlyCommandSandbox: unknown, status = "idle") => {
+      const { provider } = httpProvider(() => Response.json({ status, readOnlyCommandSandbox }));
+      return provider.observeSession!("session-1");
+    };
+    const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+    for (const status of ["running", "idle"]) {
+      expect(await observe({ state: "off", reason }, status)).toMatchObject({
+        status,
+        commandSandboxOff: reason,
+      });
+    }
+    const long = (await observe({ state: "off", reason: "x".repeat(5_000) })).commandSandboxOff;
+    expect(long).toHaveLength(READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS);
+    expect(long?.endsWith("…")).toBe(true);
+    // An older bridge, or any other shape, says nothing.
+    for (const malformed of [
+      undefined,
+      { state: "on", reason },
+      { state: "off" },
+      { state: "off", reason: "  " },
+      "off",
+    ]) {
+      expect((await observe(malformed)).commandSandboxOff).toBeUndefined();
+    }
   });
 
   test("keeps only the matching retained continuation unsettled", async () => {

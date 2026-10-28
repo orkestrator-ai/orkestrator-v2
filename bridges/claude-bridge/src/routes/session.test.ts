@@ -2141,9 +2141,33 @@ describe("session routes", () => {
     test("a session without the provider sandbox is unaffected", async () => {
       const passed = await promptOnLinux({ prompt: "List the files", requestId: "plain" });
       expect(passed.status).toBe(202);
-      // A read-only review turn in an ordinary bridge keeps today's behaviour (todo 0190).
-      const review = await promptOnLinux({ prompt: "Review", readOnly: true });
+    });
+
+    test("a read-only review turn is accepted and runs on the hook alone (todo 0190)", async () => {
+      // Even in a session that requires the provider sandbox: the turn runs
+      // under the read-only policy, whose sandbox is off where none can run.
+      mockGetSession.mockImplementation((id) =>
+        id === "s-1"
+          ? ({
+              ...defaultGetSession(id)!,
+              executionPolicy: {
+                id: "interactive-host",
+                sandbox: "provider",
+                approvals: "auto-approve",
+                projectResources: true,
+                networkAccess: "full",
+              },
+            } as never)
+          : undefined,
+      );
+      const review = await promptOnLinux({
+        prompt: "Review",
+        readOnly: true,
+        requestId: "review-report",
+      });
       expect(review.status).toBe(202);
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      expect(mockSendPrompt.mock.calls[0]?.[2]?.readOnly).toBe(true);
     });
   });
 
@@ -3385,6 +3409,34 @@ describe("persisted session routes", () => {
       const idle = await jsonBody(await app.request("/session/s-1"));
       expect(idle).not.toHaveProperty("interruption");
       expect(idle).not.toHaveProperty("interruptedRequestId");
+      mockGetSession.mockImplementation(defaultGetSession);
+    });
+
+    test("reports a read-only turn's missing command sandbox past the turn (todo 0190)", async () => {
+      const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+      const review = {
+        id: "s-1",
+        title: "Review",
+        status: "running" as "running" | "idle",
+        commandDiscoveryInputs: { readOnly: true, includeLocalSettings: false },
+        readOnlyCommandSandboxOff: reason as string | undefined,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      };
+      mockGetSession.mockImplementation(() => review as ReturnType<typeof mockGetSession>);
+      const running = await jsonBody(await app.request("/session/s-1"));
+      expect(running.readOnlyCommandSandbox).toEqual({ state: "off", reason });
+      expect(running.policy).toMatchObject({ id: "coordinator-read-only", sandbox: "none" });
+      expect(running.policy.note).toContain(reason);
+
+      review.status = "idle";
+      expect(await jsonBody(await app.request("/session/s-1"))).toMatchObject({
+        readOnlyCommandSandbox: { state: "off", reason },
+      });
+      delete review.readOnlyCommandSandboxOff;
+      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty(
+        "readOnlyCommandSandbox",
+      );
       mockGetSession.mockImplementation(defaultGetSession);
     });
 

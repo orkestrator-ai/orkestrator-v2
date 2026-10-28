@@ -20,6 +20,7 @@ import {
   type MultiReviewStepKind,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { readOnlyCommandSandboxOffNote } from "@orkestrator/protocol/native-agent";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -212,6 +213,24 @@ const NOTE_TONE_CLASS = {
   warning: "text-amber-500",
   destructive: "text-destructive",
 } as const;
+
+/**
+ * A read-only step whose commands ran without the provider's command sandbox,
+ * which cannot run where it ran: the read-only command filter was
+ * its whole boundary, so the step says so beside its outcome.
+ */
+function CommandSandboxOffNote({ reason, testId }: { reason: string; testId: string }) {
+  const text = readOnlyCommandSandboxOffNote(reason);
+  return (
+    <p
+      className={`max-h-16 overflow-x-hidden overflow-y-auto overscroll-contain break-words whitespace-normal pr-1 text-xs [overflow-wrap:anywhere] ${NOTE_TONE_CLASS.warning}`}
+      data-testid={testId}
+      title={text}
+    >
+      {text}
+    </p>
+  );
+}
 
 type ReviewTileActivation = { kind: "pointer"; pointerId: number } | { kind: "keyboard" } | null;
 
@@ -1165,6 +1184,7 @@ function MultiReviewOverviewTab({
     ) : null,
   });
 
+  const consolidationSandboxOff = workflow.stepRuntimes?.consolidate?.commandSandboxOff;
   const consolidationView = stepView({
     key: "consolidation",
     kind: "consolidate",
@@ -1189,12 +1209,27 @@ function MultiReviewOverviewTab({
       workflow.pausedStep === "consolidate" &&
       Boolean(commands.resumeStep),
     activityAt: latestActivityAt(workflow.stepRuntimes?.consolidate),
-    details: workflow.consolidatedReport ? (
-      <p className="text-xs text-foreground/85">
-        {findingCountLabel(workflow.consolidatedReport.issues.length, "issue")} ·{" "}
-        {findingCountLabel(workflow.consolidatedReport.testCoverageGaps.length, "coverage gap")}.
-      </p>
-    ) : null,
+    details:
+      workflow.consolidatedReport || consolidationSandboxOff ? (
+        <div className="space-y-2">
+          {workflow.consolidatedReport ? (
+            <p className="text-xs text-foreground/85">
+              {findingCountLabel(workflow.consolidatedReport.issues.length, "issue")} ·{" "}
+              {findingCountLabel(
+                workflow.consolidatedReport.testCoverageGaps.length,
+                "coverage gap",
+              )}
+              .
+            </p>
+          ) : null}
+          {consolidationSandboxOff ? (
+            <CommandSandboxOffNote
+              reason={consolidationSandboxOff}
+              testId="multi-review-consolidation-sandbox-off"
+            />
+          ) : null}
+        </div>
+      ) : null,
     report: workflow.consolidatedReport ? (
       <StructuredReviewReportView
         report={workflow.consolidatedReport}
@@ -1490,6 +1525,12 @@ function MultiReviewOverviewTab({
           </p>
           {reviewer.resultSubmission && reviewer.resultSubmission !== "preparing" ? (
             <WorkflowResultStatus state={reviewer.resultSubmission} kind="review-report" />
+          ) : null}
+          {reviewer.commandSandboxOff ? (
+            <CommandSandboxOffNote
+              reason={reviewer.commandSandboxOff}
+              testId={`multi-reviewer-sandbox-off-${reviewer.id}`}
+            />
           ) : null}
           {/* The workflow error generalizes a shared cause; this is the only
           place the reviewer's own outcome is legible. */}

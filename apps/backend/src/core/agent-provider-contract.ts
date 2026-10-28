@@ -99,6 +99,14 @@ export interface ProviderSessionObservation {
    * about whichever request the caller is watching, as before.
    */
   interruptedRequestId?: string;
+  /**
+   * Why the session's latest read-only turn ran its commands without the
+   * provider's command sandbox, which cannot run where the session runs (a
+   * container, or Linux without a working bubblewrap): the read-only command
+   * filter was the whole boundary. Reported by the Claude bridge
+   * and recorded on the Multi Review step it belongs to.
+   */
+  commandSandboxOff?: string;
 }
 
 /** A provider-caused stop of a turn the same session can continue. */

@@ -363,6 +363,11 @@ session.get("/:id", async (c) => {
     structuredOutput: sessionData.structuredOutput,
     contextUsage: sessionData.inProgressUsage ?? sessionData.usage,
     policy: claudeReportedPolicy(sessionData),
+    // Kept past the turn's end, so a workflow that first looks once the turn
+    // has finished still learns that its commands ran without the sandbox.
+    ...(sessionData.readOnlyCommandSandboxOff !== undefined
+      ? { readOnlyCommandSandbox: { state: "off", reason: sessionData.readOnlyCommandSandboxOff } }
+      : {}),
     // Authoritative even before the first turn completes: rate-limit events
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,

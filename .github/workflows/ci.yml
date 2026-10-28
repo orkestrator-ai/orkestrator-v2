@@ -106,6 +106,28 @@ jobs:
       - name: Typecheck
         run: mise run typecheck
 
+  claude-hook-only-windows:
+    name: Claude hook-only qualification (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Qualify real Claude hook-only execution
+        run: mise run test:logged -- --name claude-hook-only-windows -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-coordinator-sandbox-live.test.ts --parallel=1 --test-name-pattern 'read-only turn without|hook-only adversarial'
+
   test:
     name: Unit and integration tests
     runs-on: ubuntu-latest
@@ -131,6 +153,19 @@ jobs:
           mise run download:claude
           mise run download:codex
           echo "$GITHUB_WORKSPACE/binaries" >> "$GITHUB_PATH"
+
+      - name: Qualify Claude hook-only turns in a real Linux container
+        run: |
+          docker run --rm --user root \
+            --volume "$GITHUB_WORKSPACE:/repo" --workdir /repo \
+            --env ORKESTRATOR_POLICY_CLAUDE_PATH=/repo/binaries/claude \
+            oven/bun:1.4.4 sh -c '
+              apt-get update -qq && apt-get install -y --no-install-recommends git curl &&
+              bun scripts/run-logged.ts --name claude-hook-only-container -- \
+                bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts \
+                ./src/conformance-coordinator-sandbox-live.test.ts --parallel=1 \
+                --test-name-pattern "read-only turn without|hook-only adversarial"
+            '
 
       # Preserve paired probe/CLI evidence on this same disposable AppArmor host.
       # The restricted phase must run before any sysctl/profile remediation.

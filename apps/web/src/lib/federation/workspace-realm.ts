@@ -13,6 +13,8 @@
  * The realm and its window talk only through the small messages below.
  */
 
+import { isAppShortcutId, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
+
 const REALM_PARAM = "realm";
 const REALM_VALUE = "workspace";
 const MAX_ID_LENGTH = 256;
@@ -186,6 +188,8 @@ export type RealmToShellMessage =
   | { type: "settings"; section: string }
   /** A user dismissed the popover opened by this request. */
   | { type: "panelDismissed"; panel: RealmPanel; seq: number }
+  /** A window-owned app shortcut (⌘K search) was typed in the realm; see `APP_SHORTCUTS`. */
+  | { type: "shortcut"; shortcut: AppShortcutId }
   /** What the window's title bar shows for this node: its host meters and open popover. */
   | {
       type: "titleBar";
@@ -353,6 +357,11 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
   if (message.type === "settings") {
     return typeof message.section === "string" && /^[a-z-]{1,40}$/.test(message.section)
       ? { type: "settings", section: message.section }
+      : null;
+  }
+  if (message.type === "shortcut") {
+    return isAppShortcutId(message.shortcut)
+      ? { type: "shortcut", shortcut: message.shortcut }
       : null;
   }
   if (message.type === "panelDismissed") {

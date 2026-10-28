@@ -1,3 +1,4 @@
+import type { AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import type { BrowserWindow, Session } from "electron";
 import type {
   BrowserPreviewOpenLinkEvent,
@@ -23,7 +24,7 @@ export interface InitializeBrowserPreviewsOptions {
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
-  toggleKeyboardShortcuts: (tabId: string) => void;
+  requestPreviewShortcut: (tabId: string, shortcut: AppShortcutId) => void;
   getAuthorization: (url: string) => string | null;
   transport?: BrowserPreviewManagerOptions["transport"];
   openServiceExternally?: BrowserPreviewManagerOptions["openServiceExternally"];
@@ -92,7 +93,7 @@ export function initializeBrowserPreviews({
   openExternal,
   writeClipboardText,
   focusAddressBar,
-  toggleKeyboardShortcuts,
+  requestPreviewShortcut,
   getAuthorization,
   transport,
   openServiceExternally,
@@ -111,7 +112,7 @@ export function initializeBrowserPreviews({
     openExternal,
     writeClipboardText,
     focusAddressBar,
-    toggleKeyboardShortcuts,
+    requestPreviewShortcut,
     ...(transport ? { transport } : {}),
     ...(openServiceExternally ? { openServiceExternally } : {}),
     ...(captureStore ? { captureStore } : {}),

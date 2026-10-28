@@ -328,6 +328,15 @@ export class WorkspaceViews {
   post(realmWebContentsId: number, message: unknown): void {
     const entry = this.entryForWebContents(realmWebContentsId);
     if (!entry) throw new Error("Only a workspace realm can message its window.");
+    // A window-owned shortcut (⌘K) opens UI in the window, whose keys must
+    // stop going to the realm; only a realm the user can see asks this.
+    if (
+      entry.visible &&
+      (message as { type?: unknown } | null)?.type === "shortcut" &&
+      !entry.parent.webContents.isDestroyed()
+    ) {
+      entry.parent.webContents.focus?.();
+    }
     this.notify(entry, { viewId: entry.viewId, type: "message", message });
   }
 

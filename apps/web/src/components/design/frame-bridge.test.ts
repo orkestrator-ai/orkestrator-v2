@@ -1,5 +1,5 @@
-import { KEYBOARD_SHORTCUTS_EVENT } from "@orkestrator/protocol/keyboard-shortcuts";
 import { describe, expect, test } from "bun:test";
+import { onAppShortcut } from "@/lib/app-shortcuts";
 import { DesignFrameBridge } from "./frame-bridge";
 
 describe("DesignFrameBridge", () => {
@@ -48,29 +48,32 @@ describe("DesignFrameBridge lifecycle", () => {
   });
 });
 
-test("only the owned, live design frame can forward the shortcuts chord", () => {
-  let toggles = 0;
-  const onToggle = () => toggles++;
-  window.addEventListener(KEYBOARD_SHORTCUTS_EVENT, onToggle);
+test("only the owned, live design frame can forward app shortcuts", () => {
+  const forwarded: string[] = [];
+  const stops = (["show-shortcuts", "search-projects"] as const).map((id) =>
+    onAppShortcut(id, () => forwarded.push(id)),
+  );
   const target = { postMessage() {} } as unknown as Window;
   const bridge = new DesignFrameBridge(target);
-  const deliver = (source: Window) =>
+  const deliver = (source: Window, shortcut: unknown) =>
     window.dispatchEvent(
       new MessageEvent("message", {
         source,
-        data: { channel: "orkestrator-design-shortcuts" },
+        data: { channel: "orkestrator-design-shortcuts", shortcut },
       }),
     );
   try {
-    deliver(window);
-    expect(toggles).toBe(0);
-    deliver(target);
-    expect(toggles).toBe(1);
+    deliver(window, "show-shortcuts");
+    expect(forwarded).toEqual([]);
+    deliver(target, "show-shortcuts");
+    deliver(target, "search-projects");
+    deliver(target, "close-tab");
+    expect(forwarded).toEqual(["show-shortcuts", "search-projects"]);
     bridge.close();
-    deliver(target);
-    expect(toggles).toBe(1);
+    deliver(target, "show-shortcuts");
+    expect(forwarded).toHaveLength(2);
   } finally {
     bridge.close();
-    window.removeEventListener(KEYBOARD_SHORTCUTS_EVENT, onToggle);
+    for (const stop of stops) stop();
   }
 });

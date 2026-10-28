@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  APP_SHORTCUTS,
+  appClaimsShortcut,
+  appShortcut,
+  isAppShortcutId,
   isKeyboardShortcutsChord,
   isKeyboardShortcutsRequest,
+  matchAppShortcut,
   type ShortcutChord,
+  type ShortcutFocus,
+  type ShortcutPlatform,
 } from "./keyboard-shortcuts";
 
 function chord(init: Partial<ShortcutChord>): ShortcutChord {
@@ -59,5 +66,84 @@ describe("isKeyboardShortcutsRequest", () => {
     expect(isKeyboardShortcutsRequest("toggle")).toBe(true);
     expect(isKeyboardShortcutsRequest("close")).toBe(false);
     expect(isKeyboardShortcutsRequest(undefined)).toBe(false);
+  });
+});
+
+describe("matchAppShortcut", () => {
+  test("⌘K and Ctrl+K are search on every platform; with Shift they are the shortcuts dialog", () => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(matchAppShortcut(chord({ ...modifier, shiftKey: false, key: "k" }))).toBe(
+        "search-projects",
+      );
+      expect(matchAppShortcut(chord({ ...modifier, key: "K" }))).toBe("show-shortcuts");
+    }
+  });
+
+  test("needs exactly one of ⌘ and Ctrl, and no Alt", () => {
+    expect(matchAppShortcut(chord({ shiftKey: false }))).toBeNull();
+    expect(matchAppShortcut(chord({ metaKey: true, ctrlKey: true, shiftKey: false }))).toBeNull();
+    expect(matchAppShortcut(chord({ metaKey: true, altKey: true, shiftKey: false }))).toBeNull();
+    expect(matchAppShortcut(chord({ metaKey: true, key: "j", code: "KeyJ" }))).toBeNull();
+  });
+
+  test("uses the physical key only when the layout types no Latin letter", () => {
+    expect(matchAppShortcut(chord({ ctrlKey: true, shiftKey: false, key: "л" }))).toBe(
+      "search-projects",
+    );
+    expect(matchAppShortcut(chord({ metaKey: true, shiftKey: false, key: "t" }))).toBeNull();
+    // An Electron Input on macOS can carry the control character for Ctrl+K.
+    expect(matchAppShortcut(chord({ ctrlKey: true, shiftKey: false, key: "\v" }))).toBe(
+      "search-projects",
+    );
+  });
+
+  test("every catalogued shortcut is reachable, by a unique chord", () => {
+    const chords = new Set(APP_SHORTCUTS.map((shortcut) => `${shortcut.key}:${shortcut.shift}`));
+    expect(chords.size).toBe(APP_SHORTCUTS.length);
+    for (const shortcut of APP_SHORTCUTS) {
+      expect(isAppShortcutId(shortcut.id)).toBe(true);
+      expect(appShortcut(shortcut.id)).toBe(shortcut);
+      expect(
+        matchAppShortcut(chord({ metaKey: true, key: shortcut.key, shiftKey: shortcut.shift })),
+      ).toBe(shortcut.id);
+    }
+    expect(isAppShortcutId("close-tab")).toBe(false);
+  });
+});
+
+describe("appClaimsShortcut", () => {
+  const search = appShortcut("search-projects");
+  const dialog = appShortcut("show-shortcuts");
+  const cases: [ShortcutPlatform, ShortcutFocus, "meta" | "ctrl", boolean][] = [
+    // ⌘K is never a text-editing key: it opens search from anywhere.
+    ["mac", "page", "meta", true],
+    ["mac", "text", "meta", true],
+    ["mac", "terminal", "meta", true],
+    // Ctrl+K on macOS: kill-line in text fields and shells, search elsewhere.
+    ["mac", "page", "ctrl", true],
+    ["mac", "text", "ctrl", false],
+    ["mac", "terminal", "ctrl", false],
+    // Ctrl+K elsewhere is the platform's primary chord, except in a shell.
+    ["other", "page", "ctrl", true],
+    ["other", "text", "ctrl", true],
+    ["other", "terminal", "ctrl", false],
+    ["other", "terminal", "meta", true],
+  ];
+  test.each(cases)(
+    "search on %s in a %s focus with %s: %p",
+    (platform, focus, modifier, claims) => {
+      const keys = { metaKey: modifier === "meta", ctrlKey: modifier === "ctrl" };
+      expect(appClaimsShortcut(search, keys, platform, focus)).toBe(claims);
+    },
+  );
+
+  test("the shortcuts dialog is claimed everywhere with either modifier", () => {
+    for (const platform of ["mac", "other"] as const)
+      for (const focus of ["page", "text", "terminal"] as const)
+        for (const keys of [
+          { metaKey: true, ctrlKey: false },
+          { metaKey: false, ctrlKey: true },
+        ])
+          expect(appClaimsShortcut(dialog, keys, platform, focus)).toBe(true);
   });
 });

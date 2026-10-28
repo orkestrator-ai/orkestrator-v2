@@ -1,9 +1,8 @@
 # A locally built preview worker outlives an upgrade
 
 Checked against `main` at `863b57821` (2026-10-27). Code items done on
-2026-10-28 against `main` at `6a6009a09`. Packaged upgrade qualification now
-checks startup, rebuilding and restart reuse; successful live rendering is
-blocked by a host container-runtime crash (see qualification).
+2026-10-28 against `main` at `6a6009a09`. Packaged backend upgrade qualification
+passed on 2026-10-28 using a disposable Docker daemon (see qualification).
 
 "Prepare isolated preview worker" (`transcript_artifact_prepare_worker`)
 builds the worker image from the context the backend ships and records its
@@ -94,25 +93,68 @@ bundles just never arrived.
   redirects only the default tag to the private tag; Docker inspection,
   builds, owner recovery and worker execution remain real. Cleanup stops
   only the backend/container it created and removes its private tag.
+- To reproduce with a disposable daemon, as in the successful run:
+
+  ```bash
+  qual_daemon_id=$(docker run --detach --rm --privileged --env DOCKER_TLS_CERTDIR= --publish 127.0.0.1::2375 docker:29.9-dind-rootless)
+  trap 'docker container stop "$qual_daemon_id" >/dev/null' EXIT
+  qual_daemon_host="tcp://$(docker port "$qual_daemon_id" 2375/tcp)"
+  for attempt in {1..100}; do
+    docker --host "$qual_daemon_host" version >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  docker --host "$qual_daemon_host" version >/dev/null
+  DOCKER_HOST="$qual_daemon_host" mise run test:logged -- --name preview-upgrade-live -- bun scripts/qualify-preview-worker-upgrade.ts
+  ```
+
+  The daemon has its own image store and no host Docker socket mount. Its
+  anonymous storage is removed when the recorded container is stopped.
 - 2026-10-28 run: startup selected process isolation, capabilities exposed
   `outdated: true` with preparation available, and the owned orphan was
   removed. Preparing through the gateway built a different image id,
   persisted its context digest, and applied the matching image label. A
   fresh packaged backend reused that pin with container isolation and no
   outdated flag. Recorded Docker launch vectors used the new id before and
-  after restart. `ArtifactPdf.test.tsx` separately verifies the visible
-  preparation wording.
-- Live rendering **did not pass**: both real Mermaid requests failed with
+  after restart. Both real Mermaid requests rendered successfully in the
+  disposable daemon, before and after restart. The logged harness passed
+  in 180.4 seconds, and its parent shell stopped the daemon.
+  `ArtifactPdf.test.tsx` separately verifies the visible preparation wording.
+- The initial attempt against the host daemon failed with
   `renderer_unavailable: The preview worker stopped unexpectedly`. Captured
   Docker stderr shows `runc` receiving `SIGSEGV` in
   `cyphar.com/go-pathrs/internal/libpathrs._Cfunc_pathrs_reopen`, then
   `OCI runtime start failed: container process is already dead`. No core
-  entry or OOM-kill evidence was available; the host had about 10 GiB of
-  available memory. This identifies a container-start failure; its underlying
-  cause is not established. The harness keeps rendering as a required
-  assertion, exits nonzero, and still checks restart reuse. Evidence:
-  `/tmp/orkestrator-test-run.0OeJgX`. Rerun on a working container runtime to
-  complete qualification. The desktop installer itself was not exercised.
+  entry or OOM-kill evidence was available. Its underlying cause is not
+  established; no host runtime settings were changed. The same harness then
+  passed with the isolated daemon. Host-failure evidence:
+  `/tmp/orkestrator-test-run.FGuAIJ`. The desktop installer itself was not
+  exercised; qualification uses the packaged backend bundle and release
+  assets outside the checkout, through the real gateway.
+
+### Review validation
+
+- Passed: the runtime, preparation and scratch owner tests, the build-script
+  contract test, `ArtifactPdf.test.tsx`, backend and repository-script type
+  checks, lint of the changed source files, and `mise run format:check`.
+- The DOM diagnostic guard completed on rerun (27.1 s):
+  `ArtifactPdf.test.tsx` is no longer an offender. Seven unchanged files from
+  the preparation run still fail it. Evidence:
+  `/tmp/orkestrator-test-run.aKutwS`.
+- Repeated the recorded `mise run test:browser` with private fixture ports
+  (`ORKESTRATOR_E2E_PORT=18385`, `ORKESTRATOR_PUBLIC_E2E_PORT=18386`). The
+  ownership check passed, but the run had 148 failures, largely navigation
+  timeouts; Vite also logged `source.listen is not a function` from the
+  untouched native event adapter. It was interrupted after 20.5 minutes:
+  112 passed, 59 skipped, 5 interrupted and 680 not run. Evidence:
+  `/tmp/orkestrator-test-run.aIRzK9`. This is not a passing browser run.
+- Repeated the recorded `mise run test:full`; its bridges group was marked
+  incomplete by the no-output watchdog, and its root group finished with
+  3,570 passes and five failures (including a DOM guard timeout). Aggregate
+  execution then reached the logged runner's 30-minute deadline with the
+  workspace group unfinished; 541 seconds had been spent in the shared-host
+  queue. The Codex protocol lockfile check passed. Evidence is retained in
+  `/tmp/orkestrator-test-run.wOg95K` and its child group logs in
+  `/tmp/orkestrator-test-run.saoqcn`. The aggregate is not green.
 
 ## Constraints and rationale
 

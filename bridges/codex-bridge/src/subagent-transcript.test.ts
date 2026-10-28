@@ -644,6 +644,51 @@ describe("child run clock", () => {
     });
   });
 
+  test("an unstamped follow-up clears the old clock until a timestamped record arrives", () => {
+    const followup: TranscriptRecord = {
+      type: "event_msg",
+      payload: { type: "user_message", message: "One more thing." },
+    };
+    const records = [started, final(42), followup];
+    const unstamped = deriveSingleSubagent(records);
+    expect(unstamped.toolState).toBe("pending");
+    expect(unstamped).not.toHaveProperty("createdAt");
+    expect(unstamped).not.toHaveProperty("toolDurationMs");
+
+    records.push({ timestamp: at(60), type: "turn_context", payload: { turn_id: "turn-2" } });
+    const running = deriveSingleSubagent(records);
+    expect(running).toMatchObject({ toolState: "pending", createdAt: at(60) });
+    expect(running).not.toHaveProperty("toolDurationMs");
+    expect(deriveSingleSubagent([...records, final(75)])).toMatchObject({
+      toolState: "success",
+      createdAt: at(60),
+      toolDurationMs: 15_000,
+    });
+  });
+
+  for (const [label, start, end] of [
+    ["malformed start", "invalid", at(42)],
+    ["malformed end", at(0), "invalid"],
+    ["end before start", at(42), at(0)],
+  ]) {
+    test(`omits duration for ${label}`, () => {
+      const part = deriveSingleSubagent([
+        { ...started, timestamp: start },
+        { ...final(42), timestamp: end },
+      ]);
+      expect(part.toolState).toBe("success");
+      expect(part).not.toHaveProperty("toolDurationMs");
+    });
+  }
+
+  test("accepts a valid zero-duration settlement", () => {
+    expect(deriveSingleSubagent([started, final(0)])).toMatchObject({
+      toolState: "success",
+      createdAt: at(0),
+      toolDurationMs: 0,
+    });
+  });
+
   test("leaves the clock out when the rollout has no timestamps", () => {
     const part = deriveSingleSubagent([{ ...final(1), timestamp: undefined }]);
     expect(part).not.toHaveProperty("createdAt");

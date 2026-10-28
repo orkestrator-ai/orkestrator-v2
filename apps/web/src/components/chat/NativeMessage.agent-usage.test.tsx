@@ -157,7 +157,7 @@ for (const path of ["subagent", "task-group"] as const) {
 
 describe("subagent runtime without spawn args", () => {
   // A Codex child has no spawn-tool args; the bridge stamps its run instead.
-  function renderCodexChild(fields: Partial<NativeMessagePart>) {
+  function renderCodexChild(fields: Partial<Extract<NativeMessagePart, { type: "subagent" }>>) {
     return render(
       <NativeMessage
         platform="codex"

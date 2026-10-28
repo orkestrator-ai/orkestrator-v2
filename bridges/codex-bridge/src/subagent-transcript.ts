@@ -719,8 +719,9 @@ export function foldChildTranscriptRecord(
 ): void {
   const markPending = (): void => {
     if (fold.sawTerminalState) fold.reopenedAfterTerminal = true;
-    // A reused child starts a new run: its clock restarts from here.
-    if (fold.state !== "pending" && record.timestamp) fold.startedAt = record.timestamp;
+    // A reused child starts a new run. An unstamped reopen clears the old
+    // start so a later timestamped record can initialize the new clock.
+    if (fold.state !== "pending") fold.startedAt = record.timestamp;
     fold.endedAt = undefined;
     fold.state = "pending";
   };

@@ -4,6 +4,7 @@ import type { NativeAgentLaunchActivityReconciler } from "./native-agent-launch-
 import type { NativeAgentPromptQueueDispatcher } from "./native-agent-prompt-queue-dispatcher.js";
 import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 import type { NativeAgentService } from "./native-agent-service.js";
+import type { NativeAgentSessionOperations } from "./native-agent-session-operations.js";
 import type { NativeAgentTranscriptProjection } from "./native-agent-transcript-projection.js";
 
 /**
@@ -19,6 +20,8 @@ export interface NativeAgentServiceCollaborators {
   interactions: NativeAgentInteractionTracker;
   launches: NativeAgentLaunchActivityReconciler;
   promptQueues: NativeAgentPromptQueueDispatcher;
+  /** Stateless session controls; it has no `forTesting()` because it owns no state. */
+  sessionOperations: NativeAgentSessionOperations;
 }
 
 export function collaborators(service: NativeAgentService): NativeAgentServiceCollaborators {

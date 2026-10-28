@@ -803,6 +803,55 @@ default inject policy is. Workers are told to report with `send_message` to
 `"coordinator"`; the coordinator may message a worker by environment id alone,
 which resolves to the tab it is waiting on or the environment's agent tab.
 
+### Course corrections with deliverNow
+
+Mail to a busy worker normally waits for its turn to end. A coordinator that
+must correct a worker mid-turn ("add this to your task", "stop, the
+requirement changed") sets `deliverNow: true` on `send_message` (also when it
+replies with `replyToMessageId`; the coordinator has no separate
+`reply_message`). The tool description says to keep it for course
+corrections, not routine follow-ups.
+
+`send_coordinator_agent_mail` passes `steer` to `sendAgentMail`, which marks
+the message's pending entry `steerRequested`: the same flag as the mail UI's
+**Deliver now**, so the steer itself, its single attempt and the journal
+verification of an unanswered steer are that path
+([`agent-messaging.md`](agent-messaging.md), "Deliver now into a running
+turn"). The flag is set only when the message is placed `pending-inject`, so
+mutes, inject policy, the unattended budget, the hourly limit and
+`mayInjectMessage` decide delivery exactly as before; `deliverNow` only lets
+an admitted message skip the wait for idle. The command then waits for one
+drain pass (outside the worker admission lock, as `retry_agent_mail_inject`
+does) and returns `deliverNow` with a `deliverNowNote`
+(`coordinator-deliver-now.ts`):
+
+| `deliverNow` | Meaning |
+| --- | --- |
+| `steered` | Landed in the worker's running turn (`injectedVia: "steer"` on the message). |
+| `delivered` | The worker was idle, so it went out as a new turn. |
+| `queued until idle` | The steer did not happen (refused, too large, busy gate); it is delivered when the turn ends. |
+| `unsupported, queued` | The agent cannot take mail mid-turn (a tmux agent, which also gets the `steer-unsupported` hold note, or a provider without `steer`); delivered when the turn ends. |
+| `verifying` | The steer was handed off without an answer. It is checked against the steer journal and never offered twice. |
+| `not queued` | The message was bounced, stored or held by a budget; `deliverNow` changes nothing. |
+
+A steered message counts as delivered, so the delegation it opened or joined
+settles when the running turn ends and the coordinator is woken once, as for
+any delegation.
+
+Decisions:
+
+- **Coordinator-only.** Worker `send_message` and `reply_message` have no
+  `deliverNow`, and `sendAgentMail` ignores `steer` for any sender that is not
+  a coordinator: a worker steering its coordinator would bypass the
+  delegation hold.
+- **Never into a coordinator conversation.** Main ↔ side mail ignores the
+  flag and reports `queued until idle`, so a side agent cannot cut into the
+  main's turn with the user.
+- **Not across a node link yet.** Mail routed to another node reports
+  `unsupported, queued` and is delivered at idle. Live qualification and the
+  node link are in
+  [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
+
 `list_agents` (discovery) returns every agent tab in the project and what each
 is doing — see [`agent-registry.md`](agent-registry.md).
 

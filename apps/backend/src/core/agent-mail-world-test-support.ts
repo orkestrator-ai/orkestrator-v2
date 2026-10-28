@@ -17,6 +17,8 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentMailMessage, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
+import type { CoordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
+import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
 import { runCommand } from "./shell.js";
 import type { AgentMailSender } from "./storage-agent-mail-store.js";
@@ -58,6 +60,13 @@ export class MailWorld {
   readonly refuseNext = new Set<string>();
   /** Simulate the dispatch gate finding a busy session after the presence read. */
   readonly holdNext = new Set<string>();
+  /** Force the next steer offered to an actor to end this way (by actor key). */
+  readonly steerNext = new Map<string, MailSteerDispatchOutcome>();
+  /** What the steer journal answers when an unanswered steer is verified. */
+  steerJournal: "dispatched" | "not-dispatched" | "unknown" = "unknown";
+  /** Steer request ids the drain asked the journal about. */
+  readonly reconciledSteers: string[] = [];
+  private readonly steers = new Map<string, string[]>();
   private requestCounter = 0;
 
   /** Environments the drain asked to start because coordinator mail was waiting. */
@@ -99,8 +108,26 @@ export class MailWorld {
         mailInjectPresence: async ({ environmentId, logicalSessionKey }) =>
           world().busy.has(`${environmentId}\0${logicalSessionKey}`) ? "working" : "idle",
         dispatchMailInject: async (input) => world().dispatch(input),
+        steerMailInject: async (input) => world().steer(input),
+        reconcileMailSteer: async ({ requestId }) => {
+          world().reconciledSteers.push(requestId);
+          return world().steerJournal;
+        },
       },
-      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      {
+        // A terminal agent's session key is the default one for its tab.
+        mailInjectPresence: async ({ environmentId, tabId }) =>
+          world().busy.has(`${environmentId}\0env-${environmentId}:${tabId}`) ? "working" : "idle",
+        dispatchMailInject: async ({ environmentId, tabId, text }) => {
+          const sent = await world().dispatch({
+            environmentId,
+            logicalSessionKey: `env-${environmentId}:${tabId}`,
+            prompt: text,
+            requestId: `tmux-${environmentId}-${tabId}`,
+          });
+          return sent.outcome === "rejected" ? { outcome: "unknown" as const } : sent;
+        },
+      },
       {
         coordinatorMailForStoppedEnvironment: async (environmentId) => {
           world().startRequests.push(environmentId);
@@ -184,6 +211,45 @@ export class MailWorld {
     return Promise.resolve({ outcome: "accepted" as const, requestId: input.requestId });
   }
 
+  /** A steer into the actor's running turn: applied if one is running. */
+  private steer(input: {
+    environmentId: string;
+    logicalSessionKey: string;
+    text: string;
+  }): Promise<MailSteerDispatchOutcome> {
+    const key = `${input.environmentId}\0${input.logicalSessionKey}`;
+    const forced = this.steerNext.get(key);
+    if (forced) {
+      this.steerNext.delete(key);
+      return Promise.resolve(forced);
+    }
+    if (!this.busy.has(key)) return Promise.resolve({ outcome: "idle" });
+    this.steers.set(key, [...(this.steers.get(key) ?? []), input.text]);
+    return Promise.resolve({ outcome: "applied" });
+  }
+
+  /** Message bodies steered into this actor's running turns, in order. */
+  steered(actor: MailActor): string[] {
+    return (this.steers.get(`${actor.environmentId}\0${actor.logicalSessionKey}`) ?? []).flatMap(
+      (text) =>
+        [
+          ...text.matchAll(
+            /<orkestrator-peer-payload-json>\n([\s\S]*?)\n<\/orkestrator-peer-payload-json>/g,
+          ),
+        ].map((match) => (JSON.parse(match[1]!) as DeliveredCarrier).body),
+    );
+  }
+
+  /** Keys an actor for `steerNext`. */
+  key(actor: MailActor): string {
+    return `${actor.environmentId}\0${actor.logicalSessionKey}`;
+  }
+
+  /** The actor is mid-turn on something else (a user prompt, say). */
+  startTurn(actor: MailActor): void {
+    this.busy.add(this.key(actor));
+  }
+
   async close(): Promise<void> {
     this.coordinator.stopStatusWakes();
     await this.mail.shutdown();
@@ -233,7 +299,10 @@ export class MailWorld {
    * coordinator its creator and opens the delegation its first turn answers,
    * the way `launch_environment` does.
    */
-  async addEnvironment(name: string, options: { launched?: boolean } = {}): Promise<MailActor> {
+  async addEnvironment(
+    name: string,
+    options: { launched?: boolean; terminal?: boolean } = {},
+  ): Promise<MailActor> {
     const environment = createEnvironment(this.projectId, { name, environmentType: "local" });
     environment.status = "running";
     environment.setupPhase = "ready";
@@ -249,11 +318,13 @@ export class MailWorld {
           kind: "leaf",
           id: "pane",
           tabs: [
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: { environmentId: environment.id, platform: "codex" },
-            },
+            options.terminal
+              ? { id: "startup-agent", type: "claude-tmux" }
+              : {
+                  id: "startup-agent",
+                  type: "agent-native",
+                  nativeAgentData: { environmentId: environment.id, platform: "codex" },
+                },
           ],
           activeTabId: "startup-agent",
         },
@@ -329,7 +400,12 @@ export class MailWorld {
    * opens — or, while the worker is still on an earlier request, the one it
    * joins (as `send_coordinator_agent_mail` does).
    */
-  async delegate(from: MailActor, worker: MailActor, body: string): Promise<AgentMailMessage> {
+  async delegate(
+    from: MailActor,
+    worker: MailActor,
+    body: string,
+    options: { deliverNow?: boolean } = {},
+  ): Promise<AgentMailMessage & Partial<CoordinatorDeliverNowResult>> {
     this.requestCounter += 1;
     const send = createCommandRegistry().get("send_coordinator_agent_mail")!;
     return (await send(
@@ -341,9 +417,14 @@ export class MailWorld {
         toEnvironmentId: worker.environmentId,
         toTabId: worker.tabId,
         body,
+        ...(options.deliverNow ? { deliverNow: true } : {}),
       },
-      { storage: this.storage, coordinators: this.coordinator } as CommandContext,
-    )) as AgentMailMessage;
+      {
+        storage: this.storage,
+        coordinators: this.coordinator,
+        drainAgentMail: () => this.mail.drainInjects(),
+      } as CommandContext,
+    )) as AgentMailMessage & Partial<CoordinatorDeliverNowResult>;
   }
 
   /** Run the injection drain until nothing more can be delivered. */

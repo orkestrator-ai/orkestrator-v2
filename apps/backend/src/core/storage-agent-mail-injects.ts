@@ -646,7 +646,8 @@ export class AgentMailInjects {
     mailboxId: string,
     messageId: string,
     outcome:
-      | { outcome: "accepted" }
+      /** `via: "steer"`: it landed in the recipient's running turn. */
+      | { outcome: "accepted"; via?: "steer" }
       | { outcome: "held"; reason: string }
       | { outcome: "failed"; reason: "ambiguous" | "rejected" }
       /** Refused before it reached the agent: queue it again after a delay. */
@@ -676,6 +677,7 @@ export class AgentMailInjects {
       if (outcome.outcome === "accepted") {
         message.placement = "injected";
         message.injectedAt = new Date().toISOString();
+        if (outcome.via === "steer") message.injectedVia = "steer";
         delete message.placementReason;
         if (pendingIndex >= 0) store.pendingInject.splice(pendingIndex, 1);
       } else if (outcome.outcome === "held") {

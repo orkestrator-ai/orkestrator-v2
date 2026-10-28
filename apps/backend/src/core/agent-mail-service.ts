@@ -397,7 +397,9 @@ export class AgentMailService {
     if (!claimed) return;
     const result =
       status === "dispatched"
-        ? ({ outcome: "accepted" } as const)
+        ? steer
+          ? ({ outcome: "accepted", via: "steer" } as const)
+          : ({ outcome: "accepted" } as const)
         : status === "not-dispatched"
           ? // The journal may still hold the refused row; "parked" lets presence
             // reconciliation clear it before the next attempt, as on startup.
@@ -724,7 +726,7 @@ export class AgentMailService {
           : ({ outcome: "failed", reason: "ambiguous" } as const);
       const settle = async (
         result:
-          | { outcome: "accepted" }
+          | { outcome: "accepted"; via?: "steer" }
           | { outcome: "held"; reason: string }
           | { outcome: "failed"; reason: "ambiguous" | "rejected" }
           | { outcome: "retry"; reason: string }
@@ -764,7 +766,7 @@ export class AgentMailService {
           steered = { outcome: "refused", reason: "steer-refused" };
         }
         if (steered.outcome === "applied") {
-          await settle({ outcome: "accepted" }, "steer");
+          await settle({ outcome: "accepted", via: "steer" }, "steer");
           continue;
         }
         if (steered.outcome === "unknown") {

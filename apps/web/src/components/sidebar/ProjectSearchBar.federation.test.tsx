@@ -165,6 +165,16 @@ describe("ProjectSearchBar across machines", () => {
     expect(onSelectMachineProject).toHaveBeenCalledTimes(1);
     const [machine, projectId] = onSelectMachineProject.mock.calls[0]!;
     expect([machine.name, projectId]).toEqual(["mbp3", "tg"]);
+    // Opened on its machine as well, as its sidebar row opens it.
+    expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+      nodeId: "bk_mbp3",
+      projectId: "tg",
+      environmentId: null,
+    });
+    expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toMatchObject({
+      projectId: "tg",
+      boardTab: "coordinator",
+    });
   });
 
   test("lists a project once per machine, each labelled, offline rows greyed with the note", async () => {
@@ -280,7 +290,7 @@ describe("ProjectSearchBar across machines", () => {
     expect(await screen.findByText("No projects yet")).toBeTruthy();
   });
 
-  test("arrow keys traverse local and remote projects before Enter reveals the remote project", async () => {
+  test("arrow keys traverse local and remote projects before Enter reveals and opens the remote project", async () => {
     const { onSelectProject, onSelectEnvironment, onSelectMachineProject } = renderSearch();
     const input = await openAndType("orkestrator");
     const local = await option("orkestrator-v2, project on This computer");
@@ -303,6 +313,10 @@ describe("ProjectSearchBar across machines", () => {
       expect.objectContaining({ connectionId: "bk_mbp3" }),
       "ork-3",
     );
+    expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+      nodeId: "bk_mbp3",
+      projectId: "ork-3",
+    });
     expect(onSelectProject).not.toHaveBeenCalled();
     expect(onSelectEnvironment).not.toHaveBeenCalled();
     expectDomAbsent(screen.queryByRole("combobox"), "palette after remote project selection");
@@ -336,7 +350,11 @@ describe("ProjectSearchBar across machines", () => {
     });
     expect(onSelectProject).not.toHaveBeenCalled();
     expect(onSelectEnvironment).not.toHaveBeenCalled();
-    expect(onSelectMachineProject).not.toHaveBeenCalled();
+    // Its project is revealed in the sidebar so the environment row shows.
+    expect(onSelectMachineProject).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: "bk_mbp3" }),
+      "ork-3",
+    );
     expectDomAbsent(screen.queryByRole("combobox"), "palette after remote environment selection");
   });
 
@@ -538,6 +556,10 @@ describe("ProjectSearchBar across machines", () => {
         expect.objectContaining({ connectionId: "bk_mbp3" }),
         "tg",
       );
+      expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+        nodeId: "bk_mbp3",
+        projectId: "tg",
+      });
       expect(onSelectProject).not.toHaveBeenCalled();
       await openAndType("run-desktop");
       fireEvent.click(

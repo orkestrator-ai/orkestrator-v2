@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 for (const mode of ["machine", "activity", "repository"] as const) {
-  test(`search reveals a remote project through the actual sidebar from ${mode} view`, async () => {
+  test(`search reveals and opens a remote project through the actual sidebar from ${mode} view`, async () => {
     const offline = mode === "repository";
     installDesktopFake({
       list: connectionList([
@@ -88,7 +88,8 @@ for (const mode of ["machine", "activity", "repository"] as const) {
     fireEvent.keyDown(input, { key: "Enter" });
 
     const button = await screen.findByTitle("Open telegram-scraper on mbp3");
-    await waitFor(() => expect(button.getAttribute("aria-current")).toBe("true"));
+    // Shown in the central region, as a click on the row opens it.
+    await waitFor(() => expect(button.getAttribute("aria-current")).toBe("page"));
     expect(button.closest("[data-project]")?.getAttribute("data-project")).toBe(key);
     expect(button.closest("[data-project]")?.getAttribute("data-revealed")).toBe("true");
     expectDomAbsent(screen.queryByRole("dialog"), "palette after selection");
@@ -104,6 +105,10 @@ for (const mode of ["machine", "activity", "repository"] as const) {
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
     expect(useProjectStore.getState().projects).toEqual([]);
     expect(useEnvironmentStore.getState().environments).toEqual([]);
-    expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+    expect(useRemoteWorkspaceStore.getState().active).toEqual({
+      nodeId: "bk_mbp3",
+      projectId: "tg",
+      environmentId: null,
+    });
   });
 }

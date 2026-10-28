@@ -323,6 +323,38 @@ describe("environment cleanup steps", () => {
     expect(await environmentCleanupLedger(dataDir).get("e1")).toBeNull();
   });
 
+  test("stops the worktree's fsmonitor daemon before removing it", async () => {
+    const { context, dataDir, worktreeDir } = await cleanupContext();
+    const { projectPath, base } = await project();
+    const worktreePath = path.join(worktreeDir, "project-feature");
+    await git(projectPath, "worktree", "add", "-q", "-b", "feature", worktreePath, base);
+    const cleanup = entry({ projectPath, worktreePath, branch: "feature", pending: ["worktree"] });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const calls: string[][] = [];
+
+    expect(
+      await runEnvironmentCleanupStep(cleanup, "worktree", context, {
+        run: async (command, args, options) => {
+          calls.push([command, ...args]);
+          return runCommand(command, args, options);
+        },
+      }),
+    ).toBe(true);
+
+    const stop = calls.findIndex((call) => call.includes("fsmonitor--daemon"));
+    const remove = calls.findIndex((call) => call.includes("remove"));
+    expect(calls[stop]).toEqual([
+      "git",
+      "-C",
+      worktreePath,
+      "-c",
+      "core.fsmonitor=false",
+      "fsmonitor--daemon",
+      "stop",
+    ]);
+    expect(stop).toBeLessThan(remove);
+  });
+
   test("removes an unregistered leftover inside the workspaces root", async () => {
     const { context, worktreeDir } = await cleanupContext();
     const worktreePath = path.join(worktreeDir, "project-feature");

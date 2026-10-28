@@ -1,5 +1,5 @@
 import { afterAll } from "bun:test";
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createOwnedTempDir, sweepStaleTempDirs } from "./temp-sweep";
 
@@ -22,6 +22,10 @@ sweepStaleTempDirs({
 // global path when asked to write.
 const gitConfigDirectory = createOwnedTempDir(GIT_CONFIG_DIRECTORY_PREFIX);
 process.env.GIT_CONFIG_GLOBAL = join(gitConfigDirectory, "config");
+// Fixture repositories must never start a git fsmonitor daemon: nothing stops
+// one when the temporary repository is deleted, so each would outlive the run.
+// A test that needs fsmonitor sets it in its own repository's config.
+writeFileSync(process.env.GIT_CONFIG_GLOBAL, "[core]\n\tfsmonitor = false\n");
 
 // `bun test` does not deliver `exit` to preload handlers, and under
 // `--parallel` it evaluates the preload again for every file in the same

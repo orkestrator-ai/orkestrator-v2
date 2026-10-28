@@ -30,19 +30,31 @@ function coded(code) {
   return error;
 }
 
+// Set once a status read timed out: a hung fsmonitor daemon blocks every later
+// read too, so the rest of this probe skips it.
+let gitPrefix = [];
+// Internal only; a status timeout is retried, never reported.
+const STATUS_TIMEOUT = "status-timeout";
+const STATUS_TIMEOUT_MS = 10000;
+
 function git(args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", [...gitPrefix, ...args], { stdio: ["ignore", "pipe", "pipe"] });
     const chunks = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    const fail = (code) => {
+    const fail = (code, signal = "SIGKILL") => {
       if (settled) return;
       settled = true;
-      child.kill("SIGKILL");
+      clearTimeout(timer);
+      child.kill(signal);
       reject(coded(code));
     };
+    // SIGTERM lets git remove an index.lock it took before the daemon stalled.
+    const timer = options.timeoutMs
+      ? setTimeout(() => fail(STATUS_TIMEOUT, "SIGTERM"), options.timeoutMs)
+      : undefined;
     child.stdout.on("data", (chunk) => {
       stdoutBytes += chunk.length;
       const limit = options.captureLimit ?? options.hashLimit ?? 0;
@@ -61,6 +73,7 @@ function git(args, options = {}) {
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       if (code !== 0) reject(coded("git-failed"));
       else resolve(options.captureLimit ? Buffer.concat(chunks) : Buffer.alloc(0));
     });
@@ -135,10 +148,15 @@ async function capture() {
     ["rev-parse", "--verify", "HEAD^{commit}"],
     { captureLimit: 1024 },
   )).toString("utf8").trim();
+  const statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
   const status = await git(
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    { captureLimit: MAX_STATUS_BYTES },
-  );
+    statusArgs,
+    { captureLimit: MAX_STATUS_BYTES, timeoutMs: gitPrefix.length ? 0 : STATUS_TIMEOUT_MS },
+  ).catch((error) => {
+    if (!error || error.probeCode !== STATUS_TIMEOUT) throw error;
+    gitPrefix = ["-c", "core.fsmonitor=false"];
+    return git(statusArgs, { captureLimit: MAX_STATUS_BYTES });
+  });
   if (!WANT_FINGERPRINT) return { head, status, fingerprint: null };
   const hash = createHash("sha256");
   hash.update("head\0");

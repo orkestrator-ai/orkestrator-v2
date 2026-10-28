@@ -114,7 +114,9 @@ Inside the local-server queue:
 8. Containers: drain a running container's processes, then run the
    `container`, `volumes` and `network` steps.
 9. Stop local servers, then run the `worktree` step and, only if it
-   succeeded, the `branch` step.
+   succeeded, the `branch` step. The `worktree` step first stops the
+   worktree's git fsmonitor daemon, if any
+   ([git-scan-caches.md](git-scan-caches.md#stopping-daemons)).
 10. Delete environment-keyed records, design canvases and web annotations;
     delete the schedules its agents own and pause other owners' schedules
     aimed at it ([scheduled-jobs.md](scheduled-jobs.md#when-the-owner-or-the-target-goes-away));

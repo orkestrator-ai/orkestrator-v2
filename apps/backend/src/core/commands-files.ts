@@ -3,6 +3,7 @@ import {
   getHostClaudeCredentials as readHostClaudeCredentials,
 } from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
+import { removeLegacyWorktreeFsmonitor, runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -971,21 +972,27 @@ export async function getLocalGitStatusDetailed(
 }> {
   validateGitRefName(targetBranch, "target branch");
   await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+  // Diff stats read every local environment, so this is where a worktree created
+  // by an older version sheds the fsmonitor setting it was given.
+  await removeLegacyWorktreeFsmonitor(worktreePath);
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
   const git = ["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "-C", worktreePath];
+  // A hung fsmonitor daemon (the user's own, or one an older version started)
+  // would block these reads forever; each is bounded and retried without it.
   const [nameStatus, numstat, porcelain, baseOid] = await Promise.all([
-    runCommand("git", [...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
+    runGitWithFsmonitorFallback([...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
-    runCommand("git", [...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
+    runGitWithFsmonitorFallback([...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
     includeUncommitted
-      ? runCommand("git", [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-          timeoutMs: 60_000,
-        })
+      ? runGitWithFsmonitorFallback(
+          [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+          { timeoutMs: 60_000 },
+        )
       : Promise.resolve({ stdout: "" }),
     runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "-q", `${base}^{commit}`], {
       timeoutMs: 10_000,
@@ -1254,24 +1261,27 @@ export async function resolveLocalGitBase(
 }
 
 /**
- * Turns on git's own caches for a worktree.
+ * Turns on git's untracked cache for a worktree.
  *
  * `git status` is dominated by walking and stat'ing the tree. The untracked
  * cache remembers which directories had no untracked files and skips re-reading
- * them, and fsmonitor lets git ask the OS what changed instead of asking the
- * filesystem about everything. Both are one-time settings that speed up every
- * git call the application makes against this worktree, not only diff stats.
+ * them. It is a one-time setting that speeds up every git call the application
+ * makes against this worktree, not only diff stats.
  *
- * Best effort by design: an old git rejects the fsmonitor value, and a
- * repository on a filesystem that cannot support the daemon must still work.
+ * fsmonitor is deliberately not enabled. Its daemon made every git call wait
+ * for a cookie round trip (about a second on macOS external volumes), could
+ * hang and block `git status` outright, and outlived deleted worktrees. See
+ * docs/architecture/git-scan-caches.md and {@link removeLegacyWorktreeFsmonitor}.
+ *
+ * Best effort by design: a repository whose config cannot be written must
+ * still work.
  */
 export async function enableGitScanCaches(worktreePath: string): Promise<void> {
   // Scoped to this worktree with `--worktree`, never to the shared config. These
-  // worktrees hang off a clone the user also drives by hand, and turning on a
-  // background fsmonitor daemon for their own repository is not this
-  // application's decision to make. `extensions.worktreeConfig` is the one
-  // shared write, and it only enables per-worktree config - it changes no
-  // behaviour on its own.
+  // worktrees hang off a clone the user also drives by hand, and changing how
+  // git scans their own repository is not this application's decision to make.
+  // `extensions.worktreeConfig` is the one shared write, and it only enables
+  // per-worktree config - it changes no behaviour on its own.
   const enabled = await runCommand(
     "git",
     ["-C", worktreePath, "config", "extensions.worktreeConfig", "true"],
@@ -1284,14 +1294,11 @@ export async function enableGitScanCaches(worktreePath: string): Promise<void> {
   // shared config, so stop rather than reach outside the worktree.
   if (!enabled) return;
 
-  for (const [key, value] of [
-    ["core.untrackedCache", "true"],
-    ["core.fsmonitor", "true"],
-  ] as const) {
-    await runCommand("git", ["-C", worktreePath, "config", "--worktree", key, value], {
-      timeoutMs: 10_000,
-    }).catch(() => undefined);
-  }
+  await runCommand(
+    "git",
+    ["-C", worktreePath, "config", "--worktree", "core.untrackedCache", "true"],
+    { timeoutMs: 10_000 },
+  ).catch(() => undefined);
 }
 
 function pathHasGitMetadataSegment(relativePath: string): boolean {

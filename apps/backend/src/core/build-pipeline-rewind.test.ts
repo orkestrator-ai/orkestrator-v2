@@ -1,14 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_PIPELINE_REWINDS,
+  MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES,
+  MAX_PIPELINE_ROUND_REVIEW_REPORTS,
   REVIEW_PACKAGE_SESSION_LABEL,
+  type BuildPipeline,
   type PipelineRewind,
   type PipelineSession,
   type PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { cleanReview } from "./build-pipeline-service-test-support.js";
 import {
   carriesFixBaseline,
+  pruneRoundReviewReports,
   recordRewind,
+  retainRoundReviewReport,
+  roundReviewReport,
   restartStepOrder,
   sessionStepOrder,
   supersedeSessionsFrom,
@@ -221,5 +229,82 @@ describe("build pipeline rewinds", () => {
     ).toBe(false);
     // A rewind whose record was dropped from the bounded history is not trusted.
     expect(carriesFixBaseline({ rewinds: [] }, supersededHere)).toBe(false);
+  });
+});
+
+describe("per-round review report copies", () => {
+  const report = (summary: string): StructuredReviewReport => ({
+    ...cleanReview,
+    reviewSummary: summary,
+  });
+  const record = (sessions: PipelineSession[]) =>
+    ({ sessions }) as Pick<BuildPipeline, "sessions" | "roundReviewReports">;
+
+  test("keeps one copy per round and reads it while its review is the newest", () => {
+    const first = session("review", 0);
+    const second = session("review", 1);
+    const pipeline = record([first, second]);
+    retainRoundReviewReport(pipeline, first, report("round 0"));
+    retainRoundReviewReport(pipeline, second, report("round 1"));
+    expect(roundReviewReport(pipeline, 0)?.reviewSummary).toBe("round 0");
+    expect(roundReviewReport(pipeline, 1)?.reviewSummary).toBe("round 1");
+
+    // A second accepted review of round 0 replaces that round's copy.
+    const retried = session("review", 0, { sessionKey: "review:0:retry" });
+    pipeline.sessions.push(retried);
+    expect(roundReviewReport(pipeline, 0)).toBeUndefined();
+    retainRoundReviewReport(pipeline, retried, report("round 0 again"));
+    expect(pipeline.roundReviewReports?.map((entry) => entry.sessionKey)).toEqual([
+      "review:0:retry",
+      second.sessionKey,
+    ]);
+    expect(roundReviewReport(pipeline, 0)?.reviewSummary).toBe("round 0 again");
+  });
+
+  test("drops copies whose review a rewind superseded or a reviewer retry discarded", () => {
+    const first = session("review", 0);
+    const second = session("review", 1);
+    const pipeline = record([first, second]);
+    retainRoundReviewReport(pipeline, first, report("round 0"));
+    retainRoundReviewReport(pipeline, second, report("round 1"));
+    second.supersededBy = "rewind-1";
+    first.superseded = true;
+    pruneRoundReviewReports(pipeline);
+    expect(pipeline.roundReviewReports).toBeUndefined();
+  });
+
+  test("stays within the byte budget, oldest rounds first, and skips an oversized report", () => {
+    const filler = "x".repeat(Math.floor(MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES / 3));
+    const sessions = [0, 1, 2, 3].map((iteration) => session("review", iteration));
+    const pipeline = record(sessions);
+    for (const entry of sessions) {
+      retainRoundReviewReport(pipeline, entry, report(`${entry.iteration}${filler}`));
+    }
+    const size = (pipeline.roundReviewReports ?? []).reduce(
+      (sum, entry) => sum + new TextEncoder().encode(JSON.stringify(entry.report)).length,
+      0,
+    );
+    expect(size).toBeLessThanOrEqual(MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES);
+    expect(pipeline.roundReviewReports?.map((entry) => entry.iteration)).toEqual([2, 3]);
+
+    const huge = session("review", 4);
+    pipeline.sessions.push(huge);
+    retainRoundReviewReport(
+      pipeline,
+      huge,
+      report("y".repeat(MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES + 1)),
+    );
+    expect(roundReviewReport(pipeline, 4)).toBeUndefined();
+    expect(pipeline.roundReviewReports?.map((entry) => entry.iteration)).toEqual([2, 3]);
+  });
+
+  test("keeps no more copies than a record may hold", () => {
+    const sessions = Array.from({ length: MAX_PIPELINE_ROUND_REVIEW_REPORTS + 1 }, (_, index) =>
+      session("review", index),
+    );
+    const pipeline = record(sessions);
+    for (const entry of sessions) retainRoundReviewReport(pipeline, entry, report("small"));
+    expect(pipeline.roundReviewReports).toHaveLength(MAX_PIPELINE_ROUND_REVIEW_REPORTS);
+    expect(pipeline.roundReviewReports?.[0]?.iteration).toBe(1);
   });
 });

@@ -10,6 +10,8 @@
  */
 import {
   MAX_PIPELINE_REWINDS,
+  MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES,
+  MAX_PIPELINE_ROUND_REVIEW_REPORTS,
   REVIEW_PACKAGE_SESSION_LABEL,
   isSupersededPipelineSession,
   type BuildPipeline,
@@ -18,6 +20,7 @@ import {
   type PipelineSession,
   type PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 /** Position of a step within one round, in the order the loop runs them. */
 const PHASE_ORDER: Record<PipelineSessionPhase, number> = {
@@ -142,4 +145,93 @@ export function carriesFixBaseline(
       entry.iteration < entry.fromIteration &&
       entry.iteration <= session.iteration,
   );
+}
+
+/**
+ * The newest live review-phase session of `iteration`: the single review, or
+ * a fan-out pass's consolidation. A copy filed by an older session is stale,
+ * because a later attempt of that round (a retry, a retried reviewer) has
+ * started since.
+ */
+function newestLiveReviewSession(
+  pipeline: Pick<BuildPipeline, "sessions">,
+  iteration: number,
+): PipelineSession | undefined {
+  for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
+    const session = pipeline.sessions[index]!;
+    if (
+      session.phase === "review" &&
+      session.iteration === iteration &&
+      !isSupersededPipelineSession(session) &&
+      session.superseded !== true
+    ) {
+      return session;
+    }
+  }
+  return undefined;
+}
+
+function reportBytes(report: StructuredReviewReport): number {
+  return new TextEncoder().encode(JSON.stringify(report)).length;
+}
+
+/** Drops copies whose session a rewind or a later attempt replaced. */
+export function pruneRoundReviewReports(
+  pipeline: Pick<BuildPipeline, "sessions" | "roundReviewReports">,
+): void {
+  if (!pipeline.roundReviewReports) return;
+  const kept = pipeline.roundReviewReports.filter(
+    (entry) => newestLiveReviewSession(pipeline, entry.iteration)?.sessionKey === entry.sessionKey,
+  );
+  if (kept.length > 0) pipeline.roundReviewReports = kept;
+  else delete pipeline.roundReviewReports;
+}
+
+/**
+ * Keeps `report`, just accepted from `session`, as its round's copy. Older
+ * rounds' copies give way first when the byte budget is exceeded; a report
+ * that alone exceeds it is not kept, and a restarted Address of that round
+ * reruns the review as before.
+ */
+export function retainRoundReviewReport(
+  pipeline: Pick<BuildPipeline, "sessions" | "roundReviewReports">,
+  session: Pick<PipelineSession, "iteration" | "sessionKey">,
+  report: StructuredReviewReport,
+): void {
+  const others = (pipeline.roundReviewReports ?? []).filter(
+    (entry) => entry.iteration !== session.iteration,
+  );
+  const size = reportBytes(report);
+  const entries =
+    size <= MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES
+      ? [...others, { iteration: session.iteration, sessionKey: session.sessionKey, report }]
+      : others;
+  entries.sort((left, right) => left.iteration - right.iteration);
+  let total = entries.reduce((sum, entry) => sum + reportBytes(entry.report), 0);
+  while (
+    (total > MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES ||
+      entries.length > MAX_PIPELINE_ROUND_REVIEW_REPORTS) &&
+    entries.length > 0
+  ) {
+    // The round just accepted is the one a restart is most likely to need.
+    const dropAt = entries[0]!.iteration === session.iteration && entries.length > 1 ? 1 : 0;
+    total -= reportBytes(entries.splice(dropAt, 1)[0]!.report);
+  }
+  pipeline.roundReviewReports = entries;
+  pruneRoundReviewReports(pipeline);
+}
+
+/**
+ * The accepted consolidated report of `iteration`, when its copy is still the
+ * newest live review of that round.
+ */
+export function roundReviewReport(
+  pipeline: Pick<BuildPipeline, "sessions" | "roundReviewReports">,
+  iteration: number,
+): StructuredReviewReport | undefined {
+  const entry = pipeline.roundReviewReports?.find((candidate) => candidate.iteration === iteration);
+  if (!entry) return undefined;
+  return newestLiveReviewSession(pipeline, iteration)?.sessionKey === entry.sessionKey
+    ? entry.report
+    : undefined;
 }

@@ -358,6 +358,7 @@ export async function withPipeline(
     workflowResults?: WorkflowResultService;
   }) => Promise<void>,
   options: {
+    environmentGit?: BuildPipelineServiceOptions["environmentGit"];
     transcriptPersistIntervalMs?: number;
     toolMode?: boolean;
     /** Result kinds admitted to tool mode; defaults to consolidation only. */
@@ -450,6 +451,7 @@ export async function withPipeline(
   const createService = () =>
     new BuildPipelineService(storage, invoke, {
       autoAdvance: false,
+      environmentGit: options.environmentGit,
       provider: async (_pipeline, agent) => providers.get(agent)!,
       transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
       ...(options.structuredResultDeadlineMs !== undefined

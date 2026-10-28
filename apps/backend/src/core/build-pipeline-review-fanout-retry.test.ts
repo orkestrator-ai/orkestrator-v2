@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   isBuildPipeline,
   pipelineIndependentReviewLabel,
+  type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   advanceUntil,
@@ -19,6 +20,154 @@ const PANEL = [
 ];
 
 describe("build pipeline reviewer retry", () => {
+  for (const retry of [false, true]) {
+    test(`earlier Address ${retry ? "rejects a stale consolidation after reviewer retry" : "reuses its own consolidation"}`, async () => {
+      await withPipeline(async ({ service, storage, read, provider }) => {
+        const structured = provider.structured.bind(provider);
+        provider.structured = async <T>(id: string, requestId: string) => {
+          if (id.includes("verif"))
+            return {
+              ok: true,
+              provider: "claude",
+              requestId,
+              value: { complete: false, rationale: "Another round needed" } as T,
+            };
+          return structured<T>(id, requestId);
+        };
+        provider.runningConsolidation = true;
+        const started = await service.start({ ...startInput(PANEL), maxIterations: 1 });
+        let firstFanout: BuildPipeline["reviewFanout"];
+        let firstPackage: BuildPipeline["reviewPackage"];
+        let later = await read(started.id);
+        for (let pass = 0; pass < 60 && later.iteration === 0; pass += 1) {
+          if (later.iteration === 0 && later.reviewFanout?.consolidation) {
+            firstFanout = structuredClone(later.reviewFanout);
+            firstPackage = structuredClone(later.reviewPackage);
+            provider.runningConsolidation = false;
+          }
+          await service.advanceNow(started.id);
+          later = await read(started.id);
+        }
+        expect(later.iteration).toBe(1);
+        const firstAddress = later.sessions.find(
+          (s) => s.phase === "address" && s.iteration === 0,
+        )!;
+        const firstConsolidation = later.sessions.find(
+          (s) => s.label === "Consolidation" && s.iteration === 0,
+        )!;
+        expect(later.roundReviewReports?.find((r) => r.iteration === 0)?.sessionKey).toBe(
+          firstConsolidation.sessionKey,
+        );
+        if (retry) {
+          // Model a retained copy surviving an interrupted reviewer retry of the earlier pass.
+          expect(firstFanout).toBeDefined();
+          await rewritePipeline(storage, started.id, (p) => {
+            p.iteration = 0;
+            p.phase = "reviewing";
+            p.reviewFanout = firstFanout;
+            p.reviewPackage = firstPackage;
+            p.reviewFanout!.reviewers[0]!.status = "failed";
+            p.reviewFanout!.reviewers[0]!.error = "retry required";
+            delete p.reviewFanout!.report;
+          });
+          provider.runningModels.add("opus");
+          await service.retryReviewer(started.id, firstFanout!.reviewers[0]!.id);
+          expect(
+            (await read(started.id)).sessions.find(
+              (s) => s.sessionKey === firstConsolidation.sessionKey,
+            )?.superseded,
+          ).toBe(true);
+          const created = provider.created.length;
+          const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+          expect(restarted.structuredReview).toBeUndefined();
+          expect(provider.created.slice(created).some((s) => s.phase === "address")).toBe(false);
+        } else {
+          const created = provider.created.length;
+          const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+          expect(restarted.iteration).toBe(0);
+          expect(restarted.structuredReview?.reviewSummary).toBe("Merged review.");
+          expect(provider.created.slice(created).map((s) => s.phase)).toEqual(["address"]);
+          expect(provider.sent.at(-1)?.prompt).toContain("Consolidated finding");
+        }
+      });
+    });
+  }
+
+  test("failed fanout pause keeps unconfirmed writers visible to rewind admission", async () => {
+    const gitCalls: string[][] = [];
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        provider.runningModels.add("opus");
+        const started = await service.start(startInput(PANEL));
+        let reviewing = await advanceUntil(service, read, started.id, "reviewing");
+        for (
+          let pass = 0;
+          pass < 10 && !reviewing.reviewFanout?.reviewers.some((r) => r.providerSessionId);
+          pass += 1
+        ) {
+          await service.advanceNow(started.id);
+          reviewing = await read(started.id);
+        }
+        provider.abort = async () => {
+          throw new Error("fanout abort failed");
+        };
+        await expect(service.pause(started.id)).rejects.toThrow("fanout abort failed");
+        const paused = await read(started.id);
+        expect(paused.sessions.some((s) => s.status === "running")).toBe(true);
+        await expect(
+          service.rewindCode(started.id, reviewing.sessions[0]!.sessionKey, "1".repeat(40)),
+        ).rejects.toThrow("confirmed");
+        expect(gitCalls).toEqual([]);
+      },
+      {
+        environmentGit: async (_id, args) => {
+          gitCalls.push(args);
+          return "";
+        },
+      },
+    );
+  });
+
+  test("fanout stopping failure leaves Git and the restart record untouched", async () => {
+    const gitCalls: string[][] = [];
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        provider.runningModels.add("opus");
+        const started = await service.start(startInput(PANEL));
+        let reviewing = await advanceUntil(service, read, started.id, "reviewing");
+        for (
+          let pass = 0;
+          pass < 10 && !reviewing.reviewFanout?.reviewers.some((r) => r.providerSessionId);
+          pass += 1
+        ) {
+          await service.advanceNow(started.id);
+          reviewing = await read(started.id);
+        }
+        await service.pause(started.id);
+        provider.abort = async () => {
+          throw new Error("stop failed");
+        };
+        await expect(
+          service.rewindCode(started.id, reviewing.sessions[0]!.sessionKey, "1".repeat(40)),
+        ).rejects.toThrow("stop failed");
+        expect(gitCalls.some((args) => args[0] === "update-ref" || args[0] === "reset")).toBe(
+          false,
+        );
+        expect((await read(started.id)).rewinds).toBeUndefined();
+        expect((await read(started.id)).phase).toBe("paused");
+      },
+      {
+        environmentGit: async (_id, args) => {
+          gitCalls.push(args);
+          if (args[0] === "rev-list") return "0";
+          if (args[0] === "rev-parse" && args[1] === "HEAD") return "1".repeat(40);
+          if (args[0] === "rev-parse") throw new Error("no upstream");
+          return "";
+        },
+      },
+    );
+  });
+
   test.each(["", " \n\t"])(
     "persists blank provider errors (%j) on a single stage",
     async (message) => {

@@ -811,6 +811,8 @@ describe("backend setup wrappers", () => {
     await backendWrappers.retryBuildPipelineStage("pipeline-1");
     await backendWrappers.restartBuildPipelineStep("pipeline-1", "review-session");
     await backendWrappers.skipBuildPipelineStep("pipeline-1", "verify-session");
+    await backendWrappers.previewBuildPipelineCodeRewind("pipeline-1", "build-session");
+    await backendWrappers.rewindBuildPipelineCode("pipeline-1", "build-session", "c".repeat(40));
     await backendWrappers.retryBuildPipelineReviewer("pipeline-1", "reviewer-2");
     await backendWrappers.restartBuildPipelineCurrentStep("pipeline-1");
     await backendWrappers.retryBuildPipelineInteractionFailure("pipeline-1");
@@ -839,6 +841,14 @@ describe("backend setup wrappers", () => {
       ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
       ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
       ["skip_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "verify-session" }],
+      [
+        "preview_build_pipeline_code_rewind",
+        { pipelineId: "pipeline-1", stageId: "build-session" },
+      ],
+      [
+        "rewind_build_pipeline_code",
+        { pipelineId: "pipeline-1", stageId: "build-session", expectedHead: "c".repeat(40) },
+      ],
       ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
       ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
       [

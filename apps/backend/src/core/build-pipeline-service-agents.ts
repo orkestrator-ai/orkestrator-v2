@@ -412,15 +412,27 @@ export class BuildPipelineAgents {
     );
     if (fanout.consolidation) mirroredSessionIds.add(fanout.consolidation.providerSessionId);
     for (const target of uniqueTargets) mirroredSessionIds.add(target.sessionId);
-    for (const sessionId of mirroredSessionIds) {
-      const session = pipeline.sessions.find((candidate) => candidate.sdkSessionId === sessionId);
-      if (session?.status === "running") session.status = sessionStatus;
-    }
     const results = await Promise.allSettled(
       uniqueTargets.map(async ({ agent, sessionId }) => {
         await (await this.provider(pipeline, agent)).abort(sessionId);
       }),
     );
+    const unconfirmed = new Set(
+      uniqueTargets
+        .filter((_target, index) => results[index]?.status === "rejected")
+        .map((target) => target.sessionId),
+    );
+    for (const sessionId of mirroredSessionIds) {
+      const session = pipeline.sessions.find((candidate) => candidate.sdkSessionId === sessionId);
+      if (!session) continue;
+      if (unconfirmed.has(sessionId)) {
+        session.status = "running";
+        delete session.completedAt;
+      } else if (session.status === "running") {
+        session.status = sessionStatus;
+        session.completedAt ??= now;
+      }
+    }
     return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   }
 }

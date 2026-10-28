@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 
@@ -37,6 +38,9 @@ function hold<K>(counts: Map<K, number>, key: K): () => void {
  * task of this backend, and a refusal happens before anything is journaled.
  */
 export class EnvironmentMutationFence {
+  /** Identifies commands issued by the owner of an exclusive reservation. */
+  private readonly exclusiveOwner = new AsyncLocalStorage<string>();
+
   /**
    * Environments whose runtime is being replaced or reset. For the whole
    * operation — quiescing, copying, validating the candidate — no new agent
@@ -45,6 +49,25 @@ export class EnvironmentMutationFence {
    * not run and can simply be sent again.
    */
   private readonly replacing = new Map<string, number>();
+
+  /** Reserve file writes and submissions while a journaled Git reset commits. */
+  async withExclusiveMutation<T>(
+    environmentId: string,
+    paths: string[],
+    run: () => Promise<T>,
+  ): Promise<T> {
+    if (this.exclusiveOwner.getStore() === environmentId) return run();
+    this.assertAcceptsAgentWork(environmentId);
+    if (!this.beginMove(environmentId))
+      throw new Error("Environment mutation is already in progress");
+    try {
+      this.bindMovePaths(environmentId, paths);
+      return await this.exclusiveOwner.run(environmentId, run);
+    } finally {
+      this.endMove(environmentId);
+    }
+  }
+
   /**
    * Environments whose local worktree is being moved to another folder. Held
    * from admission until the move settles, so a prompt can neither start an
@@ -63,6 +86,7 @@ export class EnvironmentMutationFence {
   }
 
   async withReplacement<T>(environmentId: string, run: () => Promise<T>): Promise<T> {
+    this.assertNotMoving(environmentId);
     const release = hold(this.replacing, environmentId);
     try {
       return await run();
@@ -113,6 +137,7 @@ export class EnvironmentMutationFence {
 
   /** Held until a file write or worker start acknowledges, before any await. */
   beginMutation(environmentId: string): () => void {
+    if (this.exclusiveOwner.getStore() === environmentId) return () => {};
     this.assertNotMoving(environmentId);
     return hold(this.pendingMutations, environmentId);
   }

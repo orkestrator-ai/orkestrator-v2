@@ -70,3 +70,13 @@ The separate native branch-selection owner rerun also failed unchanged at both v
 ## Refresh through 95c9cb46a — 2026-10-24
 
 The desktop paused-question case again raised `apiRequestContext.fetch: Request context disposed` in the route callback at line 107 during the nine-worker `mise run test:logged -- --name refresh-95c9-browser -- mise run test:browser` run (579 passed, five failed, 102 skipped; 254.2 s). The complete unchanged owner passed with one worker in 13.5 s: `ORKESTRATOR_E2E_PORT=64238 mise run test:logged -- --name refresh-95c9-owner-ClaudeInteractions -- bunx playwright test --config e2e/playwright.config.ts ClaudeInteractions.spec.ts --workers=1 --output output/playwright/refresh-95c9-ClaudeInteractions`. Evidence: host temporary artifact `orkestrator-test-run.6yNWW5/refresh-95c9-browser.log.gz`. This confirms a recurrence; no assertion, timeout, skip or implementation changed. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the merge parents and other validation outcomes.
+
+
+## Codex MCP startup coverage validation — 2026-10-28
+
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser`.
+- **Failure:** desktop paused-question route callback at line 107 raised `apiRequestContext.fetch: Request context disposed`.
+- **Suite:** nine workers; 874 passed, 105 skipped and three failed (630.2 s logged). The other two failures were native branch selection in both viewports.
+- **Complete unchanged owner:** `mise run test:logged -- --name browser-claude-recheck -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1` passed (16.8 s logged).
+- **Evidence:** host temporary artifact `orkestrator-test-run.HOuu35/browser.log.gz`.
+- **Assessment:** recurrence of the recorded disposal race. No Claude code, assertions, timeout or skip changed. Native branch selection also failed in its unchanged one-worker owner (two passed, two failed; 23.4 s), so it is not classified as a flake here. Its evidence is `orkestrator-test-run.eQ4vHu/browser-branch-recheck.log.gz`.

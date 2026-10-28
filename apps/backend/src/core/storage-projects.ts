@@ -14,6 +14,7 @@ import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/proto
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
+import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import type { EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
@@ -853,6 +854,8 @@ export class ProjectsRepository {
       if ("prUrl" in updates && (updates.prUrl == null || typeof updates.prUrl === "string")) {
         if (environment.prUrl !== updates.prUrl || updates.prUrl == null) {
           environment.prBaseBranch = null;
+          // A merge state describes one PR; never carry it to a replacement.
+          if (environment.prMergeability !== undefined) environment.prMergeability = null;
         }
         environment.prUrl = updates.prUrl ?? null;
       }
@@ -871,6 +874,11 @@ export class ProjectsRepository {
         if (updates.hasMergeConflicts == null) environment.hasMergeConflicts = null;
         else if (typeof updates.hasMergeConflicts === "boolean")
           environment.hasMergeConflicts = updates.hasMergeConflicts;
+      }
+      if ("prMergeability" in updates) {
+        environment.prMergeability = isPrMergeability(updates.prMergeability)
+          ? updates.prMergeability
+          : null;
       }
       if ("revokedInputProviders" in updates) {
         const revoked = Array.isArray(updates.revokedInputProviders)

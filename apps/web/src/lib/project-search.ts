@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import { pathName, repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
+import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import type { Environment, EnvironmentStatus, Project } from "@/types";
 
 /**
@@ -74,6 +75,11 @@ export interface ProjectSearchEnvironment {
   lastActivityAt?: string;
   createdAt?: string;
   order: number;
+  /**
+   * Another machine's PR is ready to merge, decided from its summary. This
+   * machine's rows leave it unset: the row reads the live PR monitor instead.
+   */
+  readyToMerge?: boolean;
 }
 
 /** One machine's searchable rows. `machine` is null outside a multi-machine view. */
@@ -222,6 +228,7 @@ export function machineSearchSource(machine: MachineView): ProjectSearchSource {
         ...(environment.lastActivityAt ? { lastActivityAt: environment.lastActivityAt } : {}),
         ...(environment.createdAt ? { createdAt: environment.createdAt } : {}),
         order: environment.order,
+        ...(isNodeEnvironmentReadyToMerge(environment, machine) ? { readyToMerge: true } : {}),
       });
     }
   }

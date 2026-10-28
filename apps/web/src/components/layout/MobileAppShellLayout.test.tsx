@@ -188,6 +188,47 @@ describe("MobileAppShellLayout", () => {
     expect(screen.queryByRole("dialog", { name: "Tools" }) === null).toBe(true);
   });
 
+  test("shimmers only the environment name in the title while its PR is ready to merge", () => {
+    const { rerender, props } = renderLayout({
+      titleEnvironmentName: "feature-auth",
+      titleReadyToMerge: true,
+    });
+    const title = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+    // Visible text is unchanged; the description beside it is `hidden`.
+    const visibleText = Array.from(title.childNodes)
+      .filter((node) => !(node instanceof HTMLElement && node.hidden))
+      .map((node) => node.textContent)
+      .join("");
+    expect(visibleText).toBe("pgstack1 - feature-auth");
+    const name = title.querySelector<HTMLElement>("[data-merge-ready]");
+    expect(name?.textContent).toBe("feature-auth");
+    expect(name?.classList).toContain("text-shimmer");
+    expect(name?.classList).toContain("merge-ready-name");
+    const describedBy = title.getAttribute("aria-describedby");
+    expect(describedBy ? document.getElementById(describedBy)?.textContent : null).toBe(
+      "Ready to merge",
+    );
+    expect(title.querySelector('[data-testid="merge-ready-indicator"]')?.classList).toContain(
+      "motion-reduce:inline-block",
+    );
+
+    rerender(<MobileAppShellLayout {...props} titleReadyToMerge={false} />);
+    const plain = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+    expect(plain.querySelector("[data-merge-ready]")).toBeNull();
+    expect(plain.hasAttribute("aria-describedby")).toBe(false);
+    expect(plain.textContent).toBe("pgstack1 - feature-auth");
+  });
+
+  test("leaves a title that does not name the environment unstyled", () => {
+    renderLayout({
+      title: "pgstack1",
+      titleEnvironmentName: "feature-auth",
+      titleReadyToMerge: true,
+    });
+    const title = screen.getByRole("button", { name: "pgstack1" });
+    expect(title.querySelector("[data-merge-ready]")).toBeNull();
+  });
+
   test("bounds the mobile title and toggles its full text with touch taps", async () => {
     const title = "A project and environment name that is far too long for a mobile title bar";
     const { props } = renderLayout({ title });

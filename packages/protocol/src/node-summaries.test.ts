@@ -84,3 +84,43 @@ test("search fields are bounded, path-free and additive", () => {
   expect(Object.keys(bareEnvironment)).not.toContain("worktreeName");
   expect(Object.keys(bareEnvironment)).not.toContain("createdAt");
 });
+
+test("PR readiness signals travel without the PR URL and drop anything unrecognised", () => {
+  const environment = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    prUrl: "https://github.com/acme/private/pull/7",
+    prState: "open",
+    hasMergeConflicts: false,
+    prMergeability: "clean",
+  })!;
+  expect(environment).toMatchObject({
+    prState: "open",
+    prHasMergeConflicts: false,
+    prMergeability: "clean",
+  });
+  expect(JSON.stringify(environment)).not.toContain("github.com");
+
+  const malformed = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    prState: "OPEN",
+    hasMergeConflicts: "no",
+    prMergeability: "CLEAN",
+  })!;
+  expect(Object.keys(malformed)).not.toContain("prState");
+  expect(Object.keys(malformed)).not.toContain("prHasMergeConflicts");
+  expect(Object.keys(malformed)).not.toContain("prMergeability");
+
+  // A record from a node without a PR (or before the fields) omits them.
+  const bare = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    prState: null,
+    hasMergeConflicts: null,
+    prMergeability: null,
+  })!;
+  for (const key of ["prState", "prHasMergeConflicts", "prMergeability"]) {
+    expect(Object.keys(bare)).not.toContain(key);
+  }
+});

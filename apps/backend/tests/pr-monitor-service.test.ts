@@ -286,6 +286,32 @@ describe("PrMonitorService", () => {
     harness.service.shutdown();
   });
 
+  test("persists a merge-state change on its own, and only once", async () => {
+    const harness = createHarness();
+    harness.service.sync([openPr({ prMergeability: "blocked" })]);
+    harness.setDetect(async () => detection({ mergeability: "clean" }));
+    await harness.fireNext();
+    expect(harness.calls.persist).toEqual([
+      { environmentId: "env-1", detection: detection({ mergeability: "clean" }) },
+    ]);
+    await harness.fireNext();
+    expect(harness.calls.persist).toHaveLength(1);
+    expect(harness.calls.detect.at(-1)?.prMergeability).toBe("clean");
+    harness.service.shutdown();
+  });
+
+  test("a reading without a merge state leaves the stored one alone", async () => {
+    // Callers that do not ask GitHub for `mergeStateStatus` (repair, merge
+    // confirmation) must not erase what the poll recorded.
+    const harness = createHarness();
+    harness.service.sync([openPr({ prMergeability: "clean" })]);
+    harness.setDetect(async () => detection());
+    await harness.fireNext();
+    expect(harness.calls.persist).toHaveLength(0);
+    expect(harness.calls.detect.at(-1)?.prMergeability).toBe("clean");
+    harness.service.shutdown();
+  });
+
   test("sync holds the last reading for an unready environment without polling it", () => {
     const harness = createHarness();
     harness.service.sync([openPr({ ready: false })]);
@@ -1670,10 +1696,18 @@ describe("PrMonitorService", () => {
     harness.service.sync([openPr()]);
     const eventsAfterTracking = harness.stateEvents().length;
 
+    // The first answered check is announced once, so clients can tell a
+    // reading confirmed by this backend from a restored one.
+    await harness.fireNext();
+    expect(harness.stateEvents()).toHaveLength(eventsAfterTracking + 1);
+    expect(harness.stateEvents().at(-1)?.state.lastSuccessfulCheckAt).toBe(
+      new Date(harness.clock.value).toISOString(),
+    );
+
     await harness.fireNext();
     await harness.fireNext();
 
-    expect(harness.stateEvents()).toHaveLength(eventsAfterTracking);
+    expect(harness.stateEvents()).toHaveLength(eventsAfterTracking + 1);
     expect(harness.service.snapshot()[0]?.lastCheckAt).toBe(
       new Date(harness.clock.value).toISOString(),
     );

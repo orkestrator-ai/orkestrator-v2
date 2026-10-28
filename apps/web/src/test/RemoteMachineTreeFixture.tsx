@@ -50,6 +50,10 @@ function install() {
           order: index,
           status: "running",
           projectHome: id === "home",
+          // `?merge-ready`: "b" relays a PR reading that is ready to merge.
+          ...(id === "b" && new URLSearchParams(location.search).has("merge-ready")
+            ? { prState: "open", hasMergeConflicts: false, prMergeability: "clean" }
+            : {}),
         },
         index,
       )!,

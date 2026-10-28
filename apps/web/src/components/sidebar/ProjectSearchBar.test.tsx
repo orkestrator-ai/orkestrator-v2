@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { Environment, Project } from "@/types";
 import { useConfigStore } from "@/stores/configStore";
+import { useEnvironmentStore } from "@/stores";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
 import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
@@ -219,6 +221,71 @@ describe("ProjectSearchBar", () => {
     expect(screen.getByTestId("project-search-item-env-local")).toBeTruthy();
     expect(screen.getByTestId("project-search-item-env-container")).toBeTruthy();
     expect(screen.getByText("primary")).toBeTruthy();
+  });
+
+  test("shimmers a result whose PR is ready to merge and stops when it is merged", async () => {
+    const prUrl = "https://github.com/acme/orkestrator-v2/pull/9";
+    const ready: Environment = {
+      ...localEnvironment,
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+    };
+    const initialEnvironments = useEnvironmentStore.getState().environments;
+    const initialMonitor = usePrMonitorStore.getState();
+    try {
+      useEnvironmentStore.setState({ environments: [ready, containerEnvironment] });
+      usePrMonitorStore.setState({
+        syncStatus: "current",
+        states: new Map([
+          [
+            ready.id,
+            {
+              environmentId: ready.id,
+              mode: "normal",
+              checkInProgress: false,
+              consecutiveErrors: 0,
+              lastCheckAt: "2026-10-28T10:00:00.000Z",
+              lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
+              prUrl,
+              prState: "open",
+              hasMergeConflicts: false,
+              checkSummary: null,
+            },
+          ],
+        ]),
+      });
+      renderSearchBar({ environments: [ready, containerEnvironment] });
+      await openSearch();
+
+      const row = screen.getByTestId("project-search-item-env-local");
+      const name = row.querySelector<HTMLElement>("[data-merge-ready]");
+      expect(name?.textContent).toBe("main");
+      expect(name?.classList).toContain("text-shimmer");
+      const describedBy = row.getAttribute("aria-describedby");
+      expect(describedBy ? document.getElementById(describedBy)?.textContent : null).toBe(
+        "Ready to merge",
+      );
+      // Only the ready environment shimmers.
+      expect(
+        screen.getByTestId("project-search-item-env-container").querySelector("[data-merge-ready]"),
+      ).toBeNull();
+
+      act(() =>
+        useEnvironmentStore.setState({
+          environments: [{ ...ready, prState: "merged" }, containerEnvironment],
+        }),
+      );
+      expect(
+        screen.getByTestId("project-search-item-env-local").querySelector("[data-merge-ready]"),
+      ).toBeNull();
+    } finally {
+      // Unmount first so restoring the shared stores does not re-render the bar.
+      cleanup();
+      useEnvironmentStore.setState({ environments: initialEnvironments });
+      usePrMonitorStore.setState(initialMonitor, true);
+    }
   });
 
   test("filters to matching environments and opens the keyboard selection", async () => {

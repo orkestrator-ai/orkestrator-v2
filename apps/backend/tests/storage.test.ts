@@ -609,6 +609,28 @@ describe("Electron StorageService", () => {
       '"lifecycleError":null',
     );
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
+
+    // A merge state belongs to one PR: kept for the same URL, cleared for a
+    // replacement, and anything unrecognised is stored as unknown (null).
+    const prOne = "https://github.com/acme/repo/pull/1";
+    await storage.updateEnvironment(firstEnvironment.id, {
+      prUrl: prOne,
+      prState: "open",
+      prMergeability: "clean",
+    });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.prMergeability).toBe("clean");
+    await storage.updateEnvironment(firstEnvironment.id, { prUrl: prOne, prState: "open" });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.prMergeability).toBe("clean");
+    await storage.updateEnvironment(firstEnvironment.id, {
+      prUrl: "https://github.com/acme/repo/pull/2",
+    });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.prMergeability).toBeNull();
+    await storage.updateEnvironment(firstEnvironment.id, { prMergeability: "CLEAN" });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.prMergeability).toBeNull();
+    await storage.updateEnvironment(firstEnvironment.id, { prMergeability: "blocked" });
+    await storage.updateEnvironment(firstEnvironment.id, { prUrl: null, prState: null });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.prMergeability).toBeNull();
+
     expect(
       (await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map(
         (environment) => environment.id,

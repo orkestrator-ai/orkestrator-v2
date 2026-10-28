@@ -229,6 +229,10 @@ function fakeRunner(script: {
   networkCreate?: "ok" | "fail";
   execOutput?: (args: Call) => string | Error;
   activeUnits?: string[];
+  /** Names `docker network ls` lists for the owner and probe-role labels. */
+  labelledNetworks?: string[];
+  /** Holds each probe `docker run` until the test settles it. */
+  holdProbes?: Array<() => void>;
 }) {
   const calls: Call[] = [];
   let probeImagePresent = script.probeImagePresent ?? true;
@@ -257,6 +261,9 @@ function fakeRunner(script: {
       probeImagePresent = true;
       return ok();
     }
+    if (sub === "network" && rest[0] === "ls" && rest.some((arg) => arg.startsWith("label="))) {
+      return ok((script.labelledNetworks ?? []).map((name) => `${name}\n`).join(""));
+    }
     if (sub === "network" && rest[0] === "ls") return ok("bridge\nork-owner-abc-net\n");
     if (sub === "network" && rest[0] === "inspect") {
       const names = rest.slice(3);
@@ -271,7 +278,11 @@ function fakeRunner(script: {
     if (sub === "network" && rest[0] === "rm") return ok();
     if (sub === "ps") return ok("");
     if (sub === "rm") return ok();
-    if (sub === "run") return ok(script.probeOutput?.(call) ?? CURL_HTTP_405);
+    if (sub === "run") {
+      const hold = script.holdProbes;
+      if (hold) await new Promise<void>((resolve) => hold.push(resolve));
+      return ok(script.probeOutput?.(call) ?? CURL_HTTP_405);
+    }
     if (sub === "exec") {
       const output = script.execOutput?.(call) ?? CURL_HTTP_405;
       if (output instanceof Error) throw output;
@@ -677,5 +688,116 @@ describe("rootless Docker", () => {
       detectTopology: () => new Promise(() => undefined),
     }).svc;
     expect(await stalled.resolveContainerHostAddress(20)).toBeNull();
+  });
+});
+
+/** Lets the service's pending Docker calls run until `predicate` holds. */
+async function until(predicate: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 1_000 && !predicate(); turn += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(predicate()).toBe(true);
+}
+
+const PROBE_NETWORK = "ork-owner-reach-probe-net";
+const isNetworkRemoval = (call: Call) =>
+  call[1] === "network" && call[2] === "rm" && call[3] === PROBE_NETWORK;
+
+describe("shutdown and stale probe cleanup", () => {
+  test("shutdown during a check removes the probe containers and network within the bound", async () => {
+    const held: Array<() => void> = [];
+    const runner = fakeRunner({ holdProbes: held });
+    const { svc } = service({ runner });
+    const checked = svc.check("boot");
+    // Both probes are running: one on the bridge, one on the probe network.
+    await until(() => held.length === 2);
+    const probeNames = runner.calls
+      .filter((call) => call[1] === "run")
+      .map((call) => call[call.indexOf("--name") + 1]!);
+    const before = runner.calls.length;
+    // The probes never return; dispose must not wait for them past its bound.
+    await svc.dispose(5);
+    const after = runner.calls.slice(before);
+    expect(after).toEqual([
+      ["docker", "rm", "-f", ...probeNames],
+      ["docker", "network", "rm", PROBE_NETWORK],
+    ]);
+    // The cut-short check winds down; once closed, a later check starts nothing.
+    for (const release of held) release();
+    await checked;
+    const calls = runner.calls.length;
+    await svc.check("manual");
+    expect(runner.calls.length).toBe(calls);
+  });
+
+  test("shutdown waits for a check that finishes in time and lets it clean up itself", async () => {
+    const held: Array<() => void> = [];
+    const runner = fakeRunner({ holdProbes: held });
+    const { svc } = service({ runner });
+    const checked = svc.check("boot");
+    await until(() => held.length === 2);
+    const disposed = svc.dispose(60_000);
+    for (const release of held) release();
+    await disposed;
+    await checked;
+    expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(2);
+    // The leftover removal before create, then the check's own `finally`;
+    // shutdown added no removal of its own.
+    const probeNames = new Set(
+      runner.calls
+        .filter((call) => call[1] === "run")
+        .map((call) => call[call.indexOf("--name") + 1]),
+    );
+    expect(runner.calls.some((call) => call[1] === "rm" && probeNames.has(call[3]))).toBe(false);
+  });
+
+  test("a check still preparing when shutdown begins never creates a probe network", async () => {
+    let topology: (value: { kind: "local-engine" }) => void = () => undefined;
+    const runner = fakeRunner({});
+    const { svc } = service({
+      runner,
+      detectTopology: () => new Promise((resolve) => (topology = resolve)),
+    });
+    const checked = svc.check("boot");
+    // Nothing exists yet, so the bound elapses with nothing to remove.
+    await svc.dispose(5);
+    topology({ kind: "local-engine" });
+    await checked;
+    expect(runner.calls.some((call) => call[1] === "network" && call[2] === "create")).toBe(false);
+    expect(runner.calls.some((call) => call[1] === "run")).toBe(false);
+  });
+
+  test("shutdown with no check running touches no Docker", async () => {
+    const runner = fakeRunner({});
+    const { svc } = service({ runner });
+    await svc.dispose();
+    expect(runner.calls).toEqual([]);
+  });
+
+  test("the reaper removes this owner's unattached probe networks, one per call", async () => {
+    const runner = fakeRunner({
+      // Docker's label filter already scopes to this owner; a listed name of
+      // another shape is still never removed.
+      labelledNetworks: [PROBE_NETWORK, "ork-owner-reach-old-net", "ork-other-reach-probe-net"],
+    });
+    const { svc } = service({ runner });
+    await svc.check("boot");
+    const listing = runner.calls.find(
+      (call) =>
+        call[1] === "network" && call[2] === "ls" && call.some((arg) => arg.startsWith("label=")),
+    );
+    expect(listing).toContain("label=orkestrator-owner=owner");
+    expect(listing).toContain("label=orkestrator-resource-role=host-reachability-probe");
+    const create = runner.calls.findIndex((call) => call[2] === "create");
+    const removedBeforeCreate = runner.calls
+      .slice(0, create)
+      .filter((call) => call[1] === "network" && call[2] === "rm")
+      .map((call) => call.slice(3));
+    expect(removedBeforeCreate).toEqual([
+      [PROBE_NETWORK],
+      ["ork-owner-reach-old-net"],
+      // createProbeNetwork's own leftover removal.
+      [PROBE_NETWORK],
+    ]);
   });
 });

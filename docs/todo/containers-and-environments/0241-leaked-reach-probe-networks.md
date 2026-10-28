@@ -6,10 +6,10 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Find the leaking run**: identify which test or harness boots a real backend whose boot probe is killed mid-check. Status: open.
-2. **Suite-level cleanup by owner label**: the leaking suite removes its probe networks in `afterAll`. Status: open (depends on 1).
-3. **Owner reaper also removes networks**: `reapStaleProbes` removes the owner's unattached probe networks, not only containers. Status: open.
-4. **Qualification: no new probe networks after a full run**: a full `mise run test` plus the live Docker suites leaves nothing new. Status: open (after 1 to 3).
+1. **Find the leaking run**: identify which test or harness boots a real backend whose boot probe is killed mid-check. Status: done in code (2026-10-28, [0730](0730-cli-tests-leak-probe-networks.md)): `cli.test.ts`'s development backend and every `test:cli:scenarios` backend, leaking on a graceful SIGTERM, not only a kill. Live attribution by owner needs a Linux host (see Assumptions and decisions).
+2. **Suite-level cleanup by owner label**: the leaking suite removes its probe networks in `afterAll`. Status: done another way (2026-10-28): both harnesses skip the boot check and a SIGTERM'd backend now removes its own probe network ([0730](0730-cli-tests-leak-probe-networks.md) tasks 2 and 3). No `afterAll` backstop was added; see Assumptions and decisions.
+3. **Owner reaper also removes networks**: `reapStaleProbes` removes the owner's unattached probe networks, not only containers. Status: done (2026-10-28).
+4. **Qualification: no new probe networks after a full run**: a full `mise run test` plus the live Docker suites leaves nothing new. Status: open; needs a Linux host (the check never probes on macOS).
 5. **Owner-agnostic sweep (open question)**: whether a sweep should offer to remove old unattached probe networks whatever their owner. Status: open.
 
 ### 1. Find the leaking run
@@ -110,7 +110,56 @@ Inside `bun test`, the children of `apps/backend/tests/standalone.test.ts` inher
     - Pros: the strictest reading of the constraint.
     - Cons: the backlog that already exists on this host is never reclaimed without hand work.
 
-Seen on omarchy-hp (Arch Linux, Docker Engine 29.9.1) on 2026-10-26 while
+## Assumptions and decisions
+
+Made 2026-10-28 while implementing this file together with
+[0730](0730-cli-tests-leak-probe-networks.md).
+
+### Task 1: confirming the source
+
+- **Chose:** the code reading, carried by 0730, plus a live check of the fix
+  on this machine; the per-harness owner correlation is left for a Linux host.
+- **Why:** the work ran on macOS (Docker Desktop 29.9.2).
+  `ContainerHostReachabilityService.runCheck` returns `not-linux` before any
+  Docker call off Linux, so neither harness can create a probe network here,
+  and a before/after diff would prove nothing. Running `cli.test.ts` here left
+  the probe-network count at 0 before and after, which is expected and not
+  evidence. The recommended correlation needs omarchy-hp or another Linux host.
+
+### Task 2: harness cleanup
+
+- **Chose:** the recommended "disable the boot probe for harness backends"
+  half, through the internal switch `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`
+  that 0730 task 3 recommends rather than a public service flag. The `afterAll`
+  backstop by owner label was not added.
+- **Why:** 0730's later, more specific analysis prefers the environment switch
+  (no public CLI surface, no `NODE_ENV` change). With the switch on, no harness
+  backend starts a boot probe. A probe started later (a container scenario on
+  a rootless daemon) is now settled by the backend's own shutdown (0730 task
+  2). A backstop would put Docker calls into every ordinary CLI unit run,
+  which the recommended option lists as a pro to avoid. It would also need the
+  backend's owner derivation in the CLI package, and a SIGKILL or watchdog
+  kill skips `afterAll` anyway.
+
+### Task 3: the owner reaper
+
+- **Chose:** the recommended option. `reapStaleProbes` removes probe
+  containers first, then lists networks with the owner and probe-role labels
+  and removes each one by name, one per call. Only names starting with
+  `ork-<owner>-reach-` are removed.
+- **Why:** Docker refuses to remove a network with an attached container, so
+  only unattached networks go; one per call keeps one refusal from skipping
+  the rest (the lesson in `container-live-cleanup.ts`). The name check is
+  belt and braces on top of the exact owner label filter. Live on Docker
+  Desktop it removed a leftover of its own owner and left another owner's
+  probe network in place.
+
+### Task 5: the owner-agnostic sweep
+
+- **Chose:** nothing; left open for the user, as asked. The host's existing
+  networks were not touched.
+
+
 qualifying [0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md).
 
 ## Current state
@@ -145,6 +194,9 @@ qualifying [0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-sy
 ## Outstanding work
 
 ### Code
+
+Items 1 to 3 are done (2026-10-28); see the Tasks list and
+[0730](0730-cli-tests-leak-probe-networks.md).
 
 1. Find which test leaks them. Three more appeared at 00:58:00–08 UTC while
    a plain `mise run test` (no live Docker suites enabled) was killed by a

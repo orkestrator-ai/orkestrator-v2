@@ -62,6 +62,10 @@ const CONTAINER_REACHABLE_TTL_MS = 60_000;
 const CONTAINER_FAILURE_TTL_MS = 10_000;
 /** Minimum spacing of automatic host rechecks triggered by container probes. */
 const AUTO_RECHECK_INTERVAL_MS = 60_000;
+/** How long shutdown waits for a running check to remove its own probe network. */
+const DISPOSE_WAIT_MS = 3_000;
+/** Per-command bound on shutdown's own removal when the check did not finish. */
+const DISPOSE_REMOVE_TIMEOUT_MS = 5_000;
 
 /**
  * POSIX-sh probe: `$1` URL, `$2` connect timeout in seconds. Prefers curl
@@ -466,6 +470,13 @@ type ContainerProbeCacheEntry = { at: number; port: number; probe: ContainerHost
 export class ContainerHostReachabilityService {
   private state: ContainerHostReachability = initialContainerHostReachability();
   private inFlight: Promise<ContainerHostReachability> | null = null;
+  /** Set by {@link dispose}: no check starts, and a running one adds no probe network. */
+  private closed = false;
+  private disposing: Promise<void> | null = null;
+  /** This owner's probe network while it may exist; cleared once removed. */
+  private probeNetwork: string | null = null;
+  /** Names of probe containers whose `docker run` has not returned. */
+  private readonly probeContainers = new Set<string>();
   private lastAutoRecheckAt = Number.NEGATIVE_INFINITY;
   private readonly containerCache = new Map<string, ContainerProbeCacheEntry>();
   private readonly containerInFlight = new Map<string, Promise<ContainerHostProbe>>();
@@ -519,6 +530,7 @@ export class ContainerHostReachabilityService {
   /** Coalesced host check. A call during a running check shares its result. */
   check(trigger: "boot" | "manual" | "recheck"): Promise<ContainerHostReachability> {
     if (this.inFlight) return this.inFlight;
+    if (this.closed) return Promise.resolve(this.snapshot());
     const running = this.runCheck(trigger)
       .catch((error: unknown) => {
         this.log.warn(
@@ -539,6 +551,61 @@ export class ContainerHostReachabilityService {
       });
     this.inFlight = running;
     return running;
+  }
+
+  /**
+   * For backend shutdown: stops new checks and settles a running one so its
+   * probe network does not outlive the process. Waits up to `waitMs` for the
+   * check to remove the network itself, then removes this owner's probe
+   * containers and network by name. Bounded (a hung Docker cannot hold the
+   * exit past the removal timeouts) and never rejects. A SIGKILL still
+   * leaks; {@link reapStaleProbes} recovers that on the owner's next check.
+   */
+  dispose(waitMs = DISPOSE_WAIT_MS): Promise<void> {
+    this.closed = true;
+    this.disposing ??= this.settleForShutdown(waitMs);
+    return this.disposing;
+  }
+
+  private async settleForShutdown(waitMs: number): Promise<void> {
+    const running = this.inFlight;
+    if (running) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        running.then(
+          () => undefined,
+          () => undefined,
+        ),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, waitMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+    }
+    const network = this.probeNetwork;
+    const containers = [...this.probeContainers];
+    if (!network && containers.length === 0) return;
+    this.log.info(
+      `${LOG_PREFIX} shutdown removing probe resources network=${network ?? "-"} containers=${containers.length}`,
+    );
+    // Containers first: Docker refuses to remove a network they are attached to.
+    if (containers.length > 0) {
+      await this.run("docker", ["rm", "-f", ...containers], {
+        timeoutMs: DISPOSE_REMOVE_TIMEOUT_MS,
+      }).catch(() => undefined);
+    }
+    if (network) {
+      await this.run("docker", ["network", "rm", network], {
+        timeoutMs: DISPOSE_REMOVE_TIMEOUT_MS,
+      }).then(
+        () => {
+          if (this.probeNetwork === network) this.probeNetwork = null;
+        },
+        (error: unknown) =>
+          this.log.warn(
+            `${LOG_PREFIX} shutdown probe network removal failed network=${network} error=${boundedError(error)}`,
+          ),
+      );
+    }
   }
 
   /**
@@ -768,6 +835,8 @@ export class ContainerHostReachabilityService {
       });
     }
     await this.reapStaleProbes();
+    // Shutdown began while the image was pulled: create nothing it must remove.
+    if (this.closed) return this.snapshot();
 
     const hostGateway = topology.kind !== "desktop" ? "host-gateway" : null;
     // Both paths at once: a dropped connection costs the full connect timeout.
@@ -794,12 +863,15 @@ export class ContainerHostReachabilityService {
       probes = await probeBoth(hostGateway);
       // Rootless: host-gateway is inside RootlessKit's namespace; try its
       // host loopback address before calling the path blocked.
-      if (rootless && !probes.every((probe) => probe.outcome === "reachable")) {
+      if (rootless && !this.closed && !probes.every((probe) => probe.outcome === "reachable")) {
         loopbackProbes = await probeBoth(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS);
       }
     } finally {
       if (network) {
-        await this.run("docker", ["network", "rm", network.name], { timeoutMs: 20_000 }).catch(
+        await this.run("docker", ["network", "rm", network.name], { timeoutMs: 20_000 }).then(
+          () => {
+            if (this.probeNetwork === network.name) this.probeNetwork = null;
+          },
           (error: unknown) =>
             this.log.warn(
               `${LOG_PREFIX} probe network removal failed network=${network.name} error=${boundedError(error)}`,
@@ -1012,6 +1084,7 @@ export class ContainerHostReachabilityService {
     const name = `ork-${this.deps.ownerNamespace}-reach-${randomBytes(4).toString("hex")}`;
     const started = this.now();
     let classification: ProbeClassification;
+    this.probeContainers.add(name);
     try {
       const { stdout, stderr } = await this.run(
         "docker",
@@ -1046,6 +1119,8 @@ export class ContainerHostReachabilityService {
       classification = { outcome: "error", httpStatus: null, detail: boundedError(error) };
       // A timed-out `docker run` can leave the container behind.
       await this.run("docker", ["rm", "-f", name], { timeoutMs: 15_000 }).catch(() => undefined);
+    } finally {
+      this.probeContainers.delete(name);
     }
     const subnet =
       scope === "default-bridge"
@@ -1068,6 +1143,9 @@ export class ContainerHostReachabilityService {
     const name = `ork-${this.deps.ownerNamespace}-reach-probe-net`;
     // A crash mid-check can leave it behind; start from a clean network.
     await this.run("docker", ["network", "rm", name], { timeoutMs: 20_000 }).catch(() => undefined);
+    if (this.closed) return null;
+    // Tracked before it exists: a shutdown during the create still removes it.
+    this.probeNetwork = name;
     try {
       await this.run(
         "docker",
@@ -1078,6 +1156,7 @@ export class ContainerHostReachabilityService {
       this.log.warn(
         `${LOG_PREFIX} probe network create failed network=${name} error=${boundedError(error)}; checking the default bridge only`,
       );
+      this.probeNetwork = null;
       return null;
     }
     return { name, subnet: await this.networkSubnet(name) };
@@ -1130,7 +1209,11 @@ export class ContainerHostReachabilityService {
     }
   }
 
-  /** Removes probe containers and networks an interrupted check left behind. */
+  /**
+   * Removes probe containers and networks an interrupted check of this owner
+   * left behind (a backend killed mid-check). Owner-scoped: other owners'
+   * probes on a shared daemon are never touched.
+   */
   private async reapStaleProbes(): Promise<void> {
     const filters = [
       "--filter",
@@ -1157,6 +1240,32 @@ export class ContainerHostReachabilityService {
       }
     } catch {
       // Best effort: a leftover probe is harmless and reaped next time.
+    }
+    // Then networks, after their containers. Docker refuses to remove a
+    // network that still has a container attached, so only unattached ones go.
+    const prefix = `ork-${this.deps.ownerNamespace}-reach-`;
+    try {
+      const { stdout } = await this.run(
+        "docker",
+        ["network", "ls", ...filters, "--format", "{{.Name}}"],
+        { timeoutMs: 15_000 },
+      );
+      const names = stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((name) => name.startsWith(prefix))
+        .slice(0, 32);
+      if (names.length > 0) {
+        this.log.info(`${LOG_PREFIX} removing ${names.length} stale probe network(s)`);
+      }
+      // One per call: a refusal (still attached) must not keep the others.
+      for (const name of names) {
+        await this.run("docker", ["network", "rm", name], { timeoutMs: 20_000 }).catch(
+          () => undefined,
+        );
+      }
+    } catch {
+      // Best effort, as above.
     }
   }
 

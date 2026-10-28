@@ -578,6 +578,14 @@ mise run test:cli:scenarios -- --environment-type container \
   --docker-image orkestrator-v2:dev-<worktree hash>
 ```
 
+Scenario backends, and the CLI package tests that start a packaged backend,
+run with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. That skips the boot
+host-reachability check: each backend is a new Docker owner stopped seconds
+after `ready`, so its Linux probe network would belong to an owner nothing
+reaps. A later on-demand check (a container scenario on a rootless daemon, a
+workflow preflight) still runs. A scenario that needs the boot check passes
+the variable through its own `env`.
+
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
 (CLI changes seen by an open and a reloaded renderer). Its live question and
 approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`

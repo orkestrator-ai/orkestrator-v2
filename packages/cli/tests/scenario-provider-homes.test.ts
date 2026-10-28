@@ -247,6 +247,21 @@ test("an explicit Codex API key avoids reading or copying the host OAuth login",
   expect(await readFile(source, "utf8")).toBe("host-oauth-must-not-be-read");
 });
 
+test("scenario backends skip the boot host-reachability probe unless a scenario asks for it", async () => {
+  const { hostHome, root } = await fixture();
+  // A host value does not turn it back on: only the scenario's own env can.
+  const hostEnv = { ORKESTRATOR_HOST_REACHABILITY_CHECK: "on" };
+  const env = await prepareIsolatedBackendEnvironment({ root, hostHome, hostEnv });
+  expect(env.ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
+  const probing = await prepareIsolatedBackendEnvironment({
+    root,
+    hostHome,
+    hostEnv,
+    env: { ORKESTRATOR_HOST_REACHABILITY_CHECK: "on" },
+  });
+  expect(probing.ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("on");
+});
+
 test("backend environment wiring cannot inherit credential authorization or bypass isolation", async () => {
   const { hostHome, root } = await fixture();
   const hostile = {

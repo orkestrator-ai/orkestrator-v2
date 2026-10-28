@@ -41,8 +41,10 @@ const READ_ONLY_SANDBOX_UNSUPPORTED =
  * A coordinator's launcher has already probed and says so in
  * `COORDINATOR_COMMAND_SANDBOX_ENV`; its answer stands, and in a coordinator
  * process an absent or malformed one reads as `required`, so an older
- * launcher never turns a missing sandbox into an unsandboxed coordinator
- * (`claudeSandboxRefusal` refuses a host that cannot give it). An ordinary
+ * launcher never turns a missing sandbox into an unsandboxed coordinator.
+ * Without a launcher answer the CLI is asked to require its sandbox and fails
+ * closed if it cannot run; early refusal applies only to an explicit answer.
+ * An ordinary
  * bridge has no launcher answer, so a read-only review
  * turn (Multi Review's reports, plan-mode reviewers) decides from the probe
  * where the CLI runs, the way the backend qualifies a coordinator: macOS's

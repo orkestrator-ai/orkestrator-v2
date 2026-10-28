@@ -155,7 +155,7 @@ describe("read-only command sandbox (todo 0190)", () => {
       ).toEqual({ commandSandbox: expected });
     }
     // An older launcher that sets no answer must not turn a missing sandbox
-    // into an unsandboxed coordinator: `claudeSandboxRefusal` refuses it.
+    // into an unsandboxed coordinator: the CLI must require its sandbox.
     expect(
       claudeReadOnlyCommandSandbox({
         commandSandbox: undefined,
@@ -165,6 +165,15 @@ describe("read-only command sandbox (todo 0190)", () => {
       }),
     ).toEqual({ commandSandbox: "required" });
     expect(probed).toBe(false);
+    // No explicit launcher qualification means no early Linux refusal. The
+    // required SDK sandbox above is what fails closed on this older launcher.
+    expect(
+      claudeSandboxRefusal(coordinatorProcessPolicy(), {
+        commandSandbox: undefined,
+        platform: "linux",
+        linuxSandbox: refused,
+      }),
+    ).toBeUndefined();
   });
 
   test("without the sandbox, a read-only turn keeps every other part of its boundary", () => {

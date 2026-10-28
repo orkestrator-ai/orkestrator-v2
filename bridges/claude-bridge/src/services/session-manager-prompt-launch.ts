@@ -209,10 +209,15 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
     ? [AGENT_MCP_SERVER_NAME, ...(options?.agentMcp?.design ? ["orkestrator-design"] : [])]
     : [];
   // Launch-only settings may have changed while this turn was preparing.
-  await assertClaudeRuntimeAccepts(session, options, {
-    ...claudeLaunchResourceProfile(plugins, queryEnvironment),
-    settingSources: JSON.stringify(plan.settingSources),
-  });
+  await assertClaudeRuntimeAccepts(
+    session,
+    options,
+    {
+      ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+      settingSources: JSON.stringify(plan.settingSources),
+    },
+    plan.readOnlyCommandSandbox,
+  );
   // Held from here so the process is not closed as unused while the
   // settings below are applied.
   session.queryControl = running.control;
@@ -300,7 +305,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     toolTracker: stream.toolTracker,
     activeTaskIds: stream.activeTaskIds,
     launch: {
-      ...claudeLaunchedProfile(session, options),
+      ...claudeLaunchedProfile(session, options, plan.readOnlyCommandSandbox),
       settingSources: JSON.stringify(plan.settingSources),
       ...claudeLaunchResourceProfile(plugins, queryEnvironment),
     },
@@ -348,6 +353,10 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
   );
   session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
   turn.queryStarted = true;
+  // A joined turn reports the boundary of the CLI that actually took it.
+  const sandboxOff = turnRuntime.launch.readOnlyCommandSandbox?.reason;
+  if (sandboxOff !== undefined) session.readOnlyCommandSandboxOff = sandboxOff;
+  else delete session.readOnlyCommandSandboxOff;
   // From here a restart cuts the turn short rather than losing it unsent.
   syncTurnInFlightMark(session, { started: true, requestId: turn.dispatchRequestId });
   testHooks?.onQueryStarted?.();
@@ -376,7 +385,7 @@ function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | unde
   const running = openClaudeRuntime(turn.session);
   if (!running || claudeRuntimeOwesWork(running)) return running;
   const requested = {
-    ...claudeLaunchProfile(turn.session, turn.options),
+    ...claudeLaunchProfile(turn.session, turn.options, plan.readOnlyCommandSandbox),
     settingSources: JSON.stringify(plan.settingSources),
     ...claudeLaunchResourceProfile(plan.plugins, plan.queryEnvironment),
   };

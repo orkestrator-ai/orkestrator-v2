@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import {
   setClaudeLinuxSandboxStatusForTests,
   type ClaudeLinuxSandboxStatus,
@@ -94,6 +95,21 @@ describe("a read-only turn where the command sandbox cannot run (todo 0190)", ()
       }
       expect(call.options.hooks?.PreToolUse?.length).toBeGreaterThan(0);
       expect(call.options.permissionMode).toBe("default");
+      const hook = (call.options.hooks as Options["hooks"])!.PreToolUse![0]!.hooks[0]!;
+      for (const command of [
+        "xxd in.txt -out.txt",
+        "xxd -r dump.txt -out.bin",
+        "git diff",
+        "git --git-dir=.git diff",
+        "git status",
+      ]) {
+        const verdict = await hook(
+          { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as never,
+          undefined as never,
+          { signal: new AbortController().signal } as never,
+        );
+        expect(verdict).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+      }
 
       const running = getSession(session.id)!;
       expect(running.status).toBe("running");

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   createPromptTurnForTesting,
@@ -13,6 +13,15 @@ import { resolveQueryPlan } from "./session-manager-prompt-query.js";
 import { finalizeTurn } from "./session-manager-prompt-settle.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
+
+import { setClaudeLinuxSandboxStatusForTests } from "@orkestrator/protocol/node/claude-linux-sandbox";
+import { claudeReportedPolicy } from "./claude-query-config.js";
+
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+afterEach(() => {
+  Object.defineProperty(process, "platform", platform);
+  setClaudeLinuxSandboxStatusForTests({ available: true });
+});
 
 function preparedTurn() {
   const session = createSession("launch");
@@ -38,6 +47,75 @@ function followUp(turn: TurnState) {
 }
 
 describe("runTurnOnRuntime", () => {
+  test.each([true, false])(
+    "uses the planned sandbox at launch, replacement and join (initially available: %s)",
+    async (available) => {
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      const reason = "Fixture host cannot start the command sandbox.";
+      const probe = (works: boolean) =>
+        setClaudeLinuxSandboxStatusForTests(
+          works ? { available: true } : { available: false, failure: "missing-programs", reason },
+        );
+      const boundary = (works: boolean) => (works ? "required" : "unavailable");
+      const assertReport = (turn: TurnState, works: boolean) => {
+        expect(turn.runtime!.launch.readOnlyCommandSandbox?.commandSandbox).toBe(boundary(works));
+        expect(JSON.parse(turn.runtime!.launch.boundary).commandSandbox).toBe(boundary(works));
+        expect(turn.session.readOnlyCommandSandboxOff).toBe(works ? undefined : reason);
+        expect(claudeReportedPolicy(turn.session)?.sandbox).toBe(works ? "provider" : "none");
+      };
+      probe(available);
+      const session = createSession("sandbox probe changes during preparation");
+      track(session.id);
+      const first = createPromptTurnForTesting(session, { readOnly: true });
+      const turns = [first.turn];
+      try {
+        const firstPlan = await resolveQueryPlan(first.turn, first.sdkTextPrompt, undefined);
+        probe(!available);
+        await runTurnOnRuntime(first.turn, firstPlan, undefined);
+        const call = await nextQueryCall();
+        expect(call.options.sandbox).toMatchObject({ enabled: available });
+        assertReport(first.turn, available);
+        const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+        await input.next();
+
+        session.status = "idle";
+        session.abortController = undefined;
+        const second = createPromptTurnForTesting(session, { readOnly: true });
+        turns.push(second.turn);
+        const secondPlan = await resolveQueryPlan(second.turn, second.sdkTextPrompt, undefined);
+        probe(available);
+        const replacing = runTurnOnRuntime(second.turn, secondPlan, undefined);
+        // A CLI launched with the other boundary must retire before replacement.
+        expect((await input.next()).done).toBe(true);
+        call.finish();
+        await replacing;
+        const replacement = await nextQueryCall();
+        expect(replacement.options.sandbox).toMatchObject({ enabled: !available });
+        expect(second.turn.runtime).not.toBe(first.turn.runtime);
+        assertReport(second.turn, !available);
+
+        // A joining turn uses its plan even if the probe changes again. Keeping
+        // a continuation owed also exercises the post-plan refusal check.
+        probe(!available);
+        session.status = "idle";
+        session.abortController = undefined;
+        const third = createPromptTurnForTesting(session, { readOnly: true });
+        turns.push(third.turn);
+        const thirdPlan = await resolveQueryPlan(third.turn, third.sdkTextPrompt, undefined);
+        second.turn.awaitingContinuation = true;
+        probe(available);
+        await runTurnOnRuntime(third.turn, thirdPlan, undefined);
+        expect(third.turn.runtime).toBe(second.turn.runtime);
+        expect(mockQuery).toHaveBeenCalledTimes(2);
+        assertReport(third.turn, !available);
+      } finally {
+        session.claudeRuntime?.abortController.abort();
+        await session.claudeRuntime?.ended;
+        for (const turn of turns) finalizeTurn(turn);
+      }
+    },
+  );
+
   test("launches one process, registers its turn and cleans it up on stream exhaustion", async () => {
     const started = mock(() => {});
     const { turn, sdkTextPrompt } = preparedTurn();

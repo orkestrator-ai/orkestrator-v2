@@ -114,6 +114,8 @@ export interface ClaudeLaunchProfile {
    * sandbox and the read-only hook: the execution boundary.
    */
   boundary: string;
+  /** The decision used for SDK options, including the reason reported on joined turns. */
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>;
   /** JSON of the structured-output schema, or null for an ordinary turn. */
   outputSchema: string | null;
   agent: string | undefined;
@@ -130,9 +132,14 @@ export interface ClaudeLaunchProfile {
 export function claudeLaunchProfile(
   session: SessionState,
   options: PromptOptions | undefined,
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): ClaudeLaunchProfile {
   const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
+  const sandbox = isCoordinatorReadOnlyPolicy(policy)
+    ? (readOnlyCommandSandbox ?? claudeReadOnlyCommandSandbox())
+    : undefined;
   return {
+    readOnlyCommandSandbox: sandbox,
     context1m: effectiveClaudeContext1m(options),
     promptSuggestions: options?.promptSuggestions === true,
     chrome: effectiveClaudeChrome(policy, options),
@@ -159,7 +166,7 @@ export function claudeLaunchProfile(
       ...(isCoordinatorReadOnlyPolicy(policy)
         ? {
             agentMcp: options?.agentMcp !== undefined,
-            commandSandbox: claudeReadOnlyCommandSandbox().commandSandbox,
+            commandSandbox: sandbox!.commandSandbox,
           }
         : {}),
     }),
@@ -202,8 +209,9 @@ export function claudeLaunchResourceProfile(
 export function claudeLaunchedProfile(
   session: SessionState,
   options: PromptOptions | undefined,
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): ClaudeLaunchProfile {
-  const profile = claudeLaunchProfile(session, options);
+  const profile = claudeLaunchProfile(session, options, readOnlyCommandSandbox);
   return {
     ...profile,
     settingSources: JSON.stringify(
@@ -263,10 +271,11 @@ export async function assertClaudeRuntimeAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
   resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials"> & { settingSources?: string },
+  readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): Promise<void> {
   const runtime = openClaudeRuntime(session);
   if (!runtime || !claudeRuntimeOwesWork(runtime)) return;
-  const request = claudeLaunchProfile(session, options);
+  const request = claudeLaunchProfile(session, options, readOnlyCommandSandbox);
   const refuse = (conflict: string | undefined) => {
     if (conflict)
       throw sessionOperationError(

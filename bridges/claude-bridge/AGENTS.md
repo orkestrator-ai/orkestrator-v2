@@ -242,4 +242,7 @@ invariants keep it honest:
   `claudeReadOnlyCommandSandbox`) it is left off and this allowlist is the
   whole boundary. A command it admits must neither write
   nor reach the network on its own, which is why `gh`, `curl` and
-  `git ls-remote` are refused rather than left to the sandbox.
+  `git ls-remote` are refused rather than left to the sandbox. Git inspection
+  also needs an explicit `required` sandbox decision: repository and ambient
+  configuration can launch helpers even for `git diff` or `git status`, so
+  hook-only turns use reading tools or delegate Git to a worker.

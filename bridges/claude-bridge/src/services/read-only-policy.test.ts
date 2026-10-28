@@ -14,7 +14,9 @@ import {
 const coordinatorPolicy: NativeAgentExecutionPolicy = coordinatorProcessPolicy();
 
 async function decide(toolName: string, toolInput: Record<string, unknown> = {}) {
-  const hook = createCoordinatorReadOnlyHook(coordinatorPolicy);
+  const hook = createCoordinatorReadOnlyHook(coordinatorPolicy, undefined, {
+    commandSandbox: "required",
+  });
   const output = await hook(
     {
       hook_event_name: "PreToolUse",
@@ -179,7 +181,7 @@ describe("Claude coordinator read-only policy", () => {
       "git log --oneline -5",
       "cat README.md",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(true);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(true);
       expect(await decide("Bash", { command })).toBeUndefined();
     }
     for (const command of [
@@ -191,7 +193,7 @@ describe("Claude coordinator read-only policy", () => {
       "gh pr create",
       "tee out.txt",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
   });
@@ -205,6 +207,10 @@ describe("Claude coordinator read-only policy", () => {
       "uniq in.txt out.txt",
       "uniq -c in.txt out.txt",
       "xxd in.bin out.txt",
+      "xxd in.txt -out.txt",
+      "xxd -r dump.txt -out.bin",
+      "xxd in.txt -c 16",
+      "xxd -- in.txt -out.txt",
       "xxd -r -c 16 dump.txt out.bin",
       // Clustered or attached one-letter flags are the same flag.
       "sort -no out.txt in.txt",
@@ -234,7 +240,7 @@ describe("Claude coordinator read-only policy", () => {
       "./ls",
       "/usr/bin/cat README.md",
     ]) {
-      const verdict = isReadOnlyShellCommand(command);
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
     }
   });
@@ -258,14 +264,19 @@ describe("Claude coordinator read-only policy", () => {
       "git grep --open=rm TODO",
       "file --comp -m magic",
     ]) {
-      expect({ command, allowed: isReadOnlyShellCommand(command).allowed }).toEqual({
+      expect({
+        command,
+        allowed: isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed,
+      }).toEqual({
         command,
         allowed: false,
       });
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
     expect(isReadOnlyShellCommand("uniq in.txt").allowed).toBe(true);
-    expect(isReadOnlyShellCommand("git remote get-url origin").allowed).toBe(true);
+    expect(
+      isReadOnlyShellCommand("git remote get-url origin", { commandSandbox: "required" }).allowed,
+    ).toBe(true);
   });
 
   test("network commands are refused because coordinator commands have no network", () => {
@@ -280,10 +291,28 @@ describe("Claude coordinator read-only policy", () => {
       "git remote show https://example.com/repo",
       "curl https://example.com",
     ]) {
-      const verdict = isReadOnlyShellCommand(command);
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
       expect(verdict.reason).toContain("no network access");
     }
+  });
+
+  test("hook-only Git inspection cannot invoke configured helpers", async () => {
+    expect(isReadOnlyShellCommand("git diff").allowed).toBe(false);
+    const options = { commandSandbox: "unavailable" } as const;
+    const hook = createCoordinatorReadOnlyHook(coordinatorPolicy, [], options);
+    for (const command of ["git diff", "git status", "git --git-dir=.git diff", "git log -p"]) {
+      expect(isReadOnlyShellCommand(command, options).allowed).toBe(false);
+      const output = await hook(
+        { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } } as never,
+        undefined as never,
+        { signal: new AbortController().signal } as never,
+      );
+      expect(output).toMatchObject({
+        hookSpecificOutput: { permissionDecision: "deny" },
+      });
+    }
+    expect(isReadOnlyShellCommand("cat in.txt", options).allowed).toBe(true);
   });
 
   test("the reading forms of hardened programs stay available", () => {
@@ -304,7 +333,7 @@ describe("Claude coordinator read-only policy", () => {
       "git grep -n TODO",
       "file README.md",
     ]) {
-      const verdict = isReadOnlyShellCommand(command);
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: true });
     }
   });
@@ -325,7 +354,7 @@ describe("Claude coordinator read-only policy", () => {
       "cat a\r\ntouch b",
       "git status\n\ngit push",
     ]) {
-      const verdict = isReadOnlyShellCommand(command);
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect(verdict.allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
@@ -343,11 +372,13 @@ describe("Claude coordinator read-only policy", () => {
       "git difftool HEAD~1",
       "git difftool --tool=evil",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
     // The reading form it replaces stays available.
-    expect(isReadOnlyShellCommand("git diff HEAD~1").allowed).toBe(true);
+    expect(isReadOnlyShellCommand("git diff HEAD~1", { commandSandbox: "required" }).allowed).toBe(
+      true,
+    );
   });
 
   test("a script shipped in a skill directory cannot be run", async () => {
@@ -368,7 +399,7 @@ describe("Claude coordinator read-only policy", () => {
       "bun scripts/release.ts",
       "source scripts/env.sh",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
     expect(isReadOnlyShellCommand(`cat ${scripts}/scripts/tag.sh`).allowed).toBe(true);
@@ -387,7 +418,7 @@ describe("Claude coordinator read-only policy", () => {
       "rg --pre ./evil.sh TODO",
       "date -s 2020-01-01",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
     // `-execdir rm {} +` is caught earlier as composition; the argument rule is
@@ -404,7 +435,7 @@ describe("Claude coordinator read-only policy", () => {
       "rg TODO src",
       "date",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(true);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(true);
     }
   });
 
@@ -422,7 +453,7 @@ describe("Claude coordinator read-only policy", () => {
       "git config --unset user.email",
       "git config set user.email someone@example.invalid",
     ]) {
-      const verdict = isReadOnlyShellCommand(command);
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect(verdict.allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
@@ -442,7 +473,7 @@ describe("Claude coordinator read-only policy", () => {
       "git config -l",
       "git config list",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(true);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(true);
       expect(await decide("Bash", { command })).toBeUndefined();
     }
   });
@@ -457,20 +488,20 @@ describe("Claude coordinator read-only policy", () => {
       "git valueOf --oneline",
       "git hasOwnProperty branch",
     ]) {
-      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect(isReadOnlyShellCommand(command, { commandSandbox: "required" }).allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
   });
 
   test("a refusal names the command it refused rather than a template fragment", () => {
-    const verdict = isReadOnlyShellCommand("git commit -m x");
+    const verdict = isReadOnlyShellCommand("git commit -m x", { commandSandbox: "required" });
     expect(verdict.allowed).toBe(false);
     expect(verdict.reason).toBe(
       "Coordinator is read-only, so `git commit` is not available here. Delegate it to a worker environment.",
     );
     expect(verdict.reason).not.toContain(".trim()");
     // A bare `git` with no subcommand still reads back cleanly.
-    expect(isReadOnlyShellCommand("git").reason).toBe(
+    expect(isReadOnlyShellCommand("git", { commandSandbox: "required" }).reason).toBe(
       "Coordinator is read-only, so `git` is not available here. Delegate it to a worker environment.",
     );
   });

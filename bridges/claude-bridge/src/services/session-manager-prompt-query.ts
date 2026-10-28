@@ -469,7 +469,16 @@ export function claudeQueryOptions(
       // snapshotted, and the measuring hook only opens a window.
       PreToolUse: [
         ...(coordinatorReadOnly && policy
-          ? [{ hooks: [recordingHookDenials(createCoordinatorReadOnlyHook(policy), session.id)] }]
+          ? [
+              {
+                hooks: [
+                  recordingHookDenials(
+                    createCoordinatorReadOnlyHook(policy, undefined, readOnlyCommandSandbox),
+                    session.id,
+                  ),
+                ],
+              },
+            ]
           : []),
         { hooks: [recordingHookDenials(createStaleMcpServerHook(mcp), session.id)] },
         commandChangeHook.PreToolUse,

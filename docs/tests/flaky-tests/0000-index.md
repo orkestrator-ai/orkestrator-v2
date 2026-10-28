@@ -48,6 +48,14 @@ files.
   a recurrence of a known case updates that case instead.
 - Name the file `NNNN-short-slug.md`. Its body carries `- **ID:** NNNN` and
   `- **Status:** <status>` lines that match its index row.
+- A new case takes the next number after the highest one in use in any group
+  (or one from a range reserved for the branch), and a number is never
+  reused. `tests/unit/flaky-tests-index.test.ts` fails on a number used by
+  more than one case file, in one group or across groups. The 29 numbers that
+  were already shared when the check was added are frozen in its
+  `FROZEN_DUPLICATES` list and kept, not renumbered; none of them may gain
+  another file. When a reused number is cited in prose, cite the case file
+  name too.
 - Status is one of `open`, `resolved` or `environmental`. Change it in place
   in both the case file and the group table; never move or delete a row.
 - Group tables have the columns `ID | Status | Test | File | Symptom | Case`,

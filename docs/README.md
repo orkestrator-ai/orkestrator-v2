@@ -189,6 +189,15 @@ Rules of thumb:
   [`todo/0000-index.md`](todo/0000-index.md).
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans
   every Markdown file.
+- `tests/unit/todo-index.test.ts` fails when two files share a number or a
+  folder index is missing a rated row for a file. Two numbers were already
+  shared when it was added and stay allowlisted: 0054 (three files) and 0723
+  (two). Neither may gain another file.
+- Two open pull requests can each pick the same next number and each pass CI,
+  so the guard may first fire on `main` after the second merges. Fix forward:
+  rename the newer file to the next free number, update every link to it,
+  and record the old number in its "Replaces" section. A file that only just
+  merged has few links, so this does not undo a number anyone relies on.
 
 Live-provider and platform runs (macOS, Docker Desktop, Electron, Safari and
 iOS, two machines) are the most common open gate. They are batched in

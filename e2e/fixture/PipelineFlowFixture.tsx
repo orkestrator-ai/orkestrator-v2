@@ -337,6 +337,26 @@ function scenario(): BuildPipeline {
     });
     return pipeline;
   }
+  if (name === "ticket-tiles") {
+    const pipeline = fanout();
+    pipeline.taskSnapshot = {
+      ...SNAPSHOT,
+      description: [
+        "Make the build pipeline tab look like **Multi Review**.",
+        "## Problem",
+        "The ticket is one long blob.",
+        "## Context",
+        "The Ticket node is the first step.",
+        "## Constraints",
+        "Keep old snapshots readable.",
+        "## Delivery",
+        "Policy: push-no-pr",
+        "## Rollout",
+        "No flag.",
+      ].join("\n\n"),
+    };
+    return pipeline;
+  }
   if (name === "images") {
     const pipeline = fanout();
     pipeline.taskSnapshot = {

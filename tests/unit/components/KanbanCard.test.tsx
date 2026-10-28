@@ -89,6 +89,46 @@ function renderCard(task: KanbanTask, props: Partial<ComponentProps<typeof Kanba
   );
 }
 
+describe("KanbanCard ticket sections", () => {
+  afterEach(cleanup);
+
+  test("shows the first prose section, not the headed description mirror", () => {
+    renderCard(
+      makeTask({
+        kind: "work-brief",
+        description: "## Problem\n\nTickets are blobs.",
+        sections: { problem: "Tickets are blobs." },
+      }),
+    );
+    expect(screen.getByText("Tickets are blobs.")).toBeTruthy();
+    expect(screen.queryByText(/## Problem/)).toBeNull();
+  });
+
+  test("shows a criteria tally once Verify has checked something", () => {
+    const check = {
+      status: "passed" as const,
+      evidence: "e",
+      checkedAt: "2026-10-28T00:00:00.000Z",
+      source: "verify" as const,
+    };
+    renderCard(
+      makeTask({
+        kind: "feature",
+        sections: {
+          acceptanceCriteria: [
+            { id: "ac-1", text: "A", check },
+            { id: "ac-2", text: "B" },
+          ],
+        },
+      }),
+    );
+    expect(screen.getByTestId("kanban-card-criteria").textContent).toBe("1/2");
+    cleanup();
+    renderCard(makeTask({ acceptanceCriteria: "- A\n- B" }));
+    expect(screen.queryByTestId("kanban-card-criteria")).toBeNull();
+  });
+});
+
 describe("KanbanCard", () => {
   afterEach(() => {
     cleanup();

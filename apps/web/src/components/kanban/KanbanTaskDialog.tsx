@@ -30,8 +30,19 @@ import {
   Loader2,
   Paperclip,
   ImageIcon,
+  Pencil,
   X,
 } from "lucide-react";
+import {
+  TICKET_KINDS,
+  TICKET_KIND_LABELS,
+  ticketMarkdown,
+  ticketMarkdownTemplate,
+  type TicketKind,
+} from "@orkestrator/protocol/ticket-sections";
+import { SegmentedSelector } from "@/components/ui/segmented-selector";
+import { TicketKindBadge, TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
+import { ticketContentOf } from "@/components/tickets/ticket-content";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -151,6 +162,9 @@ interface KanbanTaskDialogProps {
 
 const TASK_DIALOG_CONTENT_CLASS =
   "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
+/** An existing ticket is wider so its section tiles can sit side by side. */
+const TASK_VIEW_DIALOG_CONTENT_CLASS = `${TASK_DIALOG_CONTENT_CLASS} md:max-w-3xl`;
+const KIND_OPTIONS = TICKET_KINDS.map((kind) => ({ value: kind, label: TICKET_KIND_LABELS[kind] }));
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
 const TASK_DIALOG_FOOTER_CLASS = "border-t border-border p-4 sm:p-6";
@@ -162,6 +176,7 @@ export function KanbanTaskDialog({
   createForProjectId,
 }: KanbanTaskDialogProps) {
   const updateTask = useKanbanStore((s) => s.updateTask);
+  const updateTaskContent = useKanbanStore((s) => s.updateTaskContent);
   const deleteTask = useKanbanStore((s) => s.deleteTask);
   const addTaskStore = useKanbanStore((s) => s.addTask);
   const addComment = useKanbanStore((s) => s.addComment);
@@ -190,11 +205,14 @@ export function KanbanTaskDialog({
   );
 
   const [isEditing, setIsEditing] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editAC, setEditAC] = useState("");
+  /** The whole ticket as markdown while an existing ticket is being edited. */
+  const [editMarkdown, setEditMarkdown] = useState("");
+  const [editKind, setEditKind] = useState<TicketKind>("feature");
   const [commentText, setCommentText] = useState("");
-  const [isEditingAC, setIsEditingAC] = useState(false);
 
   // Image state
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -343,7 +361,7 @@ export function KanbanTaskDialog({
       setEditDescription("");
       setEditAC("");
       setIsEditing(false);
-      setIsEditingAC(false);
+      setEditMarkdown("");
       setPendingImages([]);
       setCreatedTaskForBuild(null);
       setPreviewImage(null);
@@ -514,19 +532,41 @@ export function KanbanTaskDialog({
 
   if (!task && !isCreateMode) return null;
 
+  const content = task ? ticketContentOf(task) : null;
+  const originalMarkdown = content ? ticketMarkdown(content.sections) : "";
+
   const handleStartEdit = () => {
-    if (task) {
+    if (task && content) {
       setEditTitle(task.title);
-      setEditDescription(task.description);
+      setEditKind(content.kind);
+      setEditMarkdown(originalMarkdown || ticketMarkdownTemplate(content.kind));
     }
     setIsEditing(true);
   };
 
-  const handleSaveEdit = () => {
-    if (editTitle.trim() && task) {
-      void updateTask(task.id, { title: editTitle.trim(), description: editDescription.trim() });
+  const handleSaveEdit = async () => {
+    if (!editTitle.trim() || !task || !content) return;
+    const title = editTitle.trim();
+    // Only what changed is sent: a title fix must not re-render a legacy
+    // ticket's text, and an untouched template is not content.
+    const markdown =
+      editMarkdown.trim() === originalMarkdown.trim() ||
+      (!originalMarkdown && editMarkdown.trim() === ticketMarkdownTemplate(content.kind))
+        ? undefined
+        : editMarkdown;
+    const changes = {
+      ...(title !== task.title ? { title } : {}),
+      ...(editKind !== content.kind ? { kind: editKind } : {}),
+      ...(markdown !== undefined ? { markdown } : {}),
+    };
+    if (Object.keys(changes).length === 0) {
+      setIsEditing(false);
+      return;
     }
-    setIsEditing(false);
+    setIsSavingEdit(true);
+    const saved = await updateTaskContent(task.id, changes);
+    setIsSavingEdit(false);
+    if (saved) setIsEditing(false);
   };
 
   const handleCancelEdit = () => {
@@ -573,24 +613,6 @@ export function KanbanTaskDialog({
     if (e.key === "Enter") {
       handleCreate();
     }
-  };
-
-  const handleStartEditAC = () => {
-    if (task) {
-      setEditAC(task.acceptanceCriteria);
-    }
-    setIsEditingAC(true);
-  };
-
-  const handleSaveAC = () => {
-    if (task) {
-      void updateTask(task.id, { acceptanceCriteria: editAC.trim() });
-    }
-    setIsEditingAC(false);
-  };
-
-  const handleCancelAC = () => {
-    setIsEditingAC(false);
   };
 
   const handleDelete = () => {
@@ -960,7 +982,7 @@ export function KanbanTaskDialog({
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           ref={dialogContentRef}
-          className={TASK_DIALOG_CONTENT_CLASS}
+          className={TASK_VIEW_DIALOG_CONTENT_CLASS}
           onInteractOutside={(e) => e.preventDefault()}
         >
           <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
@@ -974,6 +996,7 @@ export function KanbanTaskDialog({
                     <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
                       {STATUS_LABELS[task.status]}
                     </span>
+                    {content ? <TicketKindBadge kind={content.kind} /> : null}
                   </div>
                   <Button
                     variant="ghost"
@@ -987,88 +1010,85 @@ export function KanbanTaskDialog({
                 </div>
                 {isEditing ? (
                   <div className="space-y-2 pt-1">
+                    <DialogTitle className="sr-only">Edit {task.title}</DialogTitle>
                     <Input
                       value={editTitle}
                       onChange={(e) => setEditTitle(e.target.value)}
                       className="text-lg font-semibold"
+                      aria-label="Ticket title"
                       autoFocus
                     />
-                    <Textarea
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      placeholder="Description..."
-                      rows={3}
-                      className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                    <SegmentedSelector
+                      value={editKind}
+                      options={KIND_OPTIONS}
+                      onValueChange={setEditKind}
+                      ariaLabel="Ticket kind"
                     />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={handleSaveEdit}>
-                        Save
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
-                        Cancel
-                      </Button>
-                    </div>
                   </div>
                 ) : (
-                  <div className="cursor-pointer" onClick={handleStartEdit}>
-                    <DialogTitle className="text-lg">{task.title}</DialogTitle>
-                    {task.description ? (
-                      <p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
-                        {task.description}
-                      </p>
-                    ) : (
-                      <p className="mt-1 text-sm text-muted-foreground/50 italic">
-                        Click to add a description...
-                      </p>
-                    )}
+                  <div className="flex items-start justify-between gap-2">
+                    <DialogTitle
+                      className="min-w-0 cursor-pointer text-lg break-words"
+                      onClick={handleStartEdit}
+                    >
+                      {task.title}
+                    </DialogTitle>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0 gap-1.5"
+                      onClick={handleStartEdit}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </Button>
                   </div>
                 )}
               </DialogHeader>
 
-              <Separator />
-
-              {/* Acceptance Criteria */}
-              <div>
-                <div className="flex items-center gap-1.5 mb-2">
-                  <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-                  <h4 className="text-sm font-medium">Acceptance Criteria</h4>
+              {isEditing ? (
+                <div className="space-y-2" data-testid="ticket-markdown-editor">
+                  <Textarea
+                    value={editMarkdown}
+                    onChange={(e) => setEditMarkdown(e.target.value)}
+                    placeholder="Summary first, then ## headings: Problem, Context, Acceptance criteria (one - item per line), Out of scope, Notes…"
+                    aria-label="Ticket text"
+                    rows={14}
+                    className="max-h-[calc(24lh+1rem)] overflow-y-auto font-mono text-xs"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Markdown. Each <code>##</code> heading is a section; unknown headings are kept
+                    as their own tiles. Criteria whose text you leave alone keep their Verify
+                    result.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => void handleSaveEdit()}
+                      disabled={!editTitle.trim() || isSavingEdit}
+                    >
+                      {isSavingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                      Save
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
+                      Cancel
+                    </Button>
+                  </div>
                 </div>
-                {isEditingAC ? (
-                  <div className="space-y-2">
-                    <Textarea
-                      value={editAC}
-                      onChange={(e) => setEditAC(e.target.value)}
-                      placeholder="Define what 'done' looks like..."
-                      rows={4}
-                      className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-                      autoFocus
-                    />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={handleSaveAC}>
-                        Save
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={handleCancelAC}>
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className="cursor-pointer rounded-md border border-border/50 p-2.5 hover:border-border transition-colors min-h-[40px]"
-                    onClick={handleStartEditAC}
-                  >
-                    {task.acceptanceCriteria ? (
-                      <p className="text-sm text-foreground whitespace-pre-wrap">
-                        {task.acceptanceCriteria}
-                      </p>
-                    ) : (
-                      <p className="text-sm text-muted-foreground/50 italic">
-                        Click to add acceptance criteria...
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
+              ) : (
+                <TicketSectionsGrid
+                  sections={content?.sections ?? {}}
+                  empty={
+                    <button
+                      type="button"
+                      className="w-full rounded-md border border-dashed border-border/60 p-3 text-left text-sm text-muted-foreground/60 italic transition-colors hover:border-border"
+                      onClick={handleStartEdit}
+                    >
+                      Click to add a description and acceptance criteria...
+                    </button>
+                  }
+                />
+              )}
 
               {/* Images */}
               {renderImageSection()}

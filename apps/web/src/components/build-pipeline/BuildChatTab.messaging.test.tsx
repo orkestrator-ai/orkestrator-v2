@@ -1423,7 +1423,7 @@ describe("BuildChatTab graph", () => {
     selectNode("Ticket");
     const ticket = screen.getByTestId("pipeline-ticket");
     expect(within(ticket).getByRole("heading", { name: "Backend-owned build" })).toBeTruthy();
-    expect(within(ticket).getByRole("region", { name: "Description" })).toBeTruthy();
+    expect(within(ticket).getByRole("region", { name: "Summary" })).toBeTruthy();
     expect(within(ticket).queryByRole("region", { name: "Acceptance criteria" }) === null).toBe(
       true,
     );

@@ -142,7 +142,7 @@ describe("build pipeline acceptance criteria", () => {
     });
   });
 
-  test("an old two-field verdict still passes and records no criteria", async () => {
+  test("an old two-field verdict explicitly records criteria as not checked", async () => {
     await withService(async (service, storage, _provider, invocations) => {
       const started = await service.start(
         startInput({ source: { type: "kanban", taskId: "task-default" } }),
@@ -150,10 +150,124 @@ describe("build pipeline acceptance criteria", () => {
       const stored = await untilVerified(service, storage, started.id);
       const verify = stored.sessions.find((session) => session.phase === "verify")!;
       expect(verify.verificationResult).toBe("pass");
-      expect(verify.acceptanceCriteriaResults).toBeUndefined();
+      expect(verify.acceptanceCriteriaResults).toEqual([
+        { id: "ac-1", status: "not-checked", evidence: "Verify did not report on this criterion." },
+      ]);
       expect(
         invocations.some((invocation) => invocation.command === "record_kanban_criteria_checks"),
-      ).toBe(false);
+      ).toBe(true);
+    });
+  });
+  test("complete true with a failed criterion cannot advance to PR", async () => {
+    await withService(async (service, storage, provider) => {
+      verdictWith(provider, {
+        complete: true,
+        rationale: "Contradictory result.",
+        acceptanceCriteria: [
+          { id: "ac-1", status: "failed", evidence: "Runner still lives in renderer." },
+        ],
+      });
+      const started = await service.start(startInput({ maxIterations: 1 }));
+      const stored = await untilVerified(service, storage, started.id);
+      expect(stored.verificationResult).toBe("fail");
+      expect(stored.sessions.some((session) => session.phase === "pr")).toBe(false);
+    });
+  });
+
+  test("changed description criteria use the snapshot and cannot tick the live requirement", async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      const live = await storage.kanban.addKanbanTask(
+        "project-1",
+        "T",
+        "Summary\n\n## Acceptance criteria\n\n- New requirement",
+      );
+      controls.kanbanTasks.set(live.id, live);
+      verdictWith(provider, {
+        complete: true,
+        rationale: "Snapshot requirement met.",
+        acceptanceCriteria: [
+          { id: "ac-1", status: "passed", evidence: "Old requirement implemented." },
+        ],
+      });
+      const started = await service.start(
+        startInput({
+          taskId: live.id,
+          source: { type: "kanban", taskId: live.id },
+          taskSnapshot: {
+            title: "T",
+            description: "Summary\n\n## Acceptance criteria\n\n- Old requirement",
+            acceptanceCriteria: "",
+            images: [],
+            comments: [],
+          },
+        }),
+      );
+      expect(started.taskSnapshot.acceptanceCriteriaItems).toEqual([
+        { id: "ac-1", text: "Old requirement" },
+      ]);
+      await untilVerified(service, storage, started.id);
+      const recorded = invocations.find(
+        (call) => call.command === "record_kanban_criteria_checks",
+      )!;
+      await storage.kanban.recordKanbanCriteriaChecks(
+        live.id,
+        recorded.args.checks as Parameters<typeof storage.kanban.recordKanbanCriteriaChecks>[1],
+      );
+      expect((await storage.kanban.getKanbanTask(live.id))?.sections?.acceptanceCriteria).toEqual([
+        { id: "ac-1", text: "New requirement" },
+      ]);
+    });
+  });
+
+  test("a failed live lookup still derives criteria from the snapshot", async () => {
+    await withService(async (service, _storage, _provider, _invocations, controls) => {
+      controls.failCommands.add("get_kanban_tasks");
+      const started = await service.start(startInput());
+      expect(started.taskSnapshot.acceptanceCriteriaItems).toEqual([
+        { id: "ac-1", text: "No renderer orchestration" },
+      ]);
+    });
+  });
+
+  test("a criterion longer than the tool input limit retains its text for ticket write-back", async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      const text = "Long criterion " + "x".repeat(10_001);
+      const live = await storage.kanban.addKanbanTask("project-1", "T", undefined, {
+        markdown: "Summary\n\n## Acceptance criteria\n\n- " + text,
+      });
+      controls.kanbanTasks.set(live.id, live);
+      verdictWith(provider, {
+        complete: true,
+        rationale: "Criterion implemented.",
+        acceptanceCriteria: [
+          { id: "ac-1", status: "passed", evidence: "Checked unchanged requirement." },
+        ],
+      });
+      const started = await service.start(
+        startInput({
+          taskId: live.id,
+          source: { type: "kanban", taskId: live.id },
+          taskSnapshot: {
+            title: "T",
+            description: live.description,
+            acceptanceCriteria: live.acceptanceCriteria,
+            images: [],
+            comments: [],
+          },
+        }),
+      );
+      expect(started.taskSnapshot.acceptanceCriteriaItems?.[0]?.text).toBe(text);
+      await untilVerified(service, storage, started.id);
+      const recorded = invocations.find(
+        (call) => call.command === "record_kanban_criteria_checks",
+      )!;
+      await storage.kanban.recordKanbanCriteriaChecks(
+        live.id,
+        recorded.args.checks as Parameters<typeof storage.kanban.recordKanbanCriteriaChecks>[1],
+      );
+      expect(
+        (await storage.kanban.getKanbanTask(live.id))?.sections?.acceptanceCriteria?.[0],
+      ).toMatchObject({ text, check: { status: "passed", pipelineId: started.id } });
     });
   });
 });

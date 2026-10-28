@@ -234,7 +234,7 @@ export class KanbanRepository {
   async addKanbanTask(
     projectId: string,
     title: string,
-    description: string,
+    description: string | undefined,
     initial: {
       acceptanceCriteria?: string;
       status?: KanbanStatus;
@@ -250,8 +250,10 @@ export class KanbanRepository {
     const content = applyTicketContentUpdate(
       null,
       {
-        description,
-        acceptanceCriteria: initial.acceptanceCriteria ?? "",
+        ...(description !== undefined ? { description } : {}),
+        ...(initial.acceptanceCriteria !== undefined
+          ? { acceptanceCriteria: initial.acceptanceCriteria }
+          : {}),
         ...(initial.kind !== undefined ? { kind: initial.kind } : {}),
         ...(initial.markdown !== undefined ? { markdown: initial.markdown } : {}),
         ...(initial.sections !== undefined ? { sections: initial.sections } : {}),

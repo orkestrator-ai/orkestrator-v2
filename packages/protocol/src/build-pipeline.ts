@@ -82,6 +82,7 @@ export type TaskSnapshotImage = {
 export interface TaskSnapshotCriterion {
   /** The ticket's own criterion id, so Verify results can be written back. */
   id: string;
+  /** Full original text, including legacy criteria beyond the tool input limit. */
   text: string;
 }
 
@@ -580,14 +581,13 @@ export function isLegacyVerificationVerdict(value: unknown): boolean {
  * The session's per-criterion results from a verdict: one entry per snapshot
  * criterion, in snapshot order. A criterion the verdict skipped is recorded as
  * not checked, never as passed; ids the snapshot does not have are dropped.
- * Undefined for a verdict in the old shape, which judged no criterion.
+ * Old verdicts explicitly leave every snapshot criterion not checked.
  */
 export function verificationCriterionResults(
   criteria: readonly TaskSnapshotCriterion[],
   verdict: VerificationVerdict,
-): PipelineCriterionResult[] | undefined {
-  if (!verdict.acceptanceCriteria) return undefined;
-  const reported = new Map(verdict.acceptanceCriteria.map((entry) => [entry.id, entry]));
+): PipelineCriterionResult[] {
+  const reported = new Map((verdict.acceptanceCriteria ?? []).map((entry) => [entry.id, entry]));
   const limit = TICKET_SECTION_LIMITS.maxEvidenceLength;
   return criteria.map(({ id }) => {
     const entry = reported.get(id);
@@ -1766,8 +1766,7 @@ function isTaskSnapshotCriteria(value: unknown): value is TaskSnapshotCriterion[
         isRecord(item) &&
         isNonBlankString(item.id) &&
         item.id.length <= 64 &&
-        typeof item.text === "string" &&
-        item.text.length <= TICKET_SECTION_LIMITS.maxCriterionLength,
+        typeof item.text === "string",
     )
   );
 }

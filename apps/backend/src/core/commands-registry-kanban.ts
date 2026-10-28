@@ -69,7 +69,7 @@ export function registerKanbanCommands(
       asString(title, "title"),
       description === undefined &&
       (initial.markdown !== undefined || initial.sections !== undefined)
-        ? ""
+        ? undefined
         : asString(description, "description"),
     ] as const;
     return Object.keys(initial).length > 0
@@ -117,11 +117,20 @@ export function registerKanbanCommands(
       if (
         !value ||
         typeof value.id !== "string" ||
+        !value.id.trim() ||
+        value.id.length > 64 ||
         typeof value.text !== "string" ||
+        !value.text.trim() ||
         !isAcceptanceCriterionCheck(value.check)
       ) {
         throw new Error(`checks[${index}] must be { id, text, check }`);
       }
+      assertOnlyKeys(value, ["id", "text", "check"], `checks[${index}]`);
+      assertOnlyKeys(
+        { ...value.check },
+        ["status", "evidence", "checkedAt", "source", "pipelineId"],
+        `checks[${index}].check`,
+      );
       return { id: value.id, text: value.text, check: value.check };
     });
     return storage.kanban.recordKanbanCriteriaChecks(

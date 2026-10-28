@@ -624,8 +624,8 @@ export function validateWorkflowResult(
   context?: WorkflowResultSlotInput["context"],
 ): WorkflowResultValidationIssue[] {
   const registeredSchema = workflowResultJsonSchema(kind, schema);
-  // A verify turn started before per-criterion results existed answers in the
-  // old two-field shape; it stays valid rather than failing the pipeline.
+  // Keep the old two-field shape compatible. The consumer records every
+  // omitted snapshot criterion as not checked, including on current turns.
   const structural =
     kind === "verification-result" && isLegacyVerificationVerdict(value)
       ? []

@@ -36,6 +36,16 @@ const FULL: TicketSections = {
 };
 
 describe("ticket markdown round trip", () => {
+  test.each(["Porting to C#", "Multiple##", "A # B#"])(
+    "preserves hashes in heading %s",
+    (title) => {
+      const sections = parseTicketMarkdown(`## ${title}\n\nBody`);
+      expect(sections.custom).toEqual([{ title, body: "Body" }]);
+      expect(parseTicketMarkdown(renderTicketMarkdown(sections))).toEqual(sections);
+      expect(parseTicketMarkdown(`## ${title} ###\n\nBody`)).toEqual(sections);
+    },
+  );
+
   test("sections → markdown → sections is the identity", () => {
     const markdown = renderTicketMarkdown(FULL);
     expect(parseTicketMarkdown(markdown, { previousCriteria: FULL.acceptanceCriteria })).toEqual(

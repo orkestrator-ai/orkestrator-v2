@@ -17,14 +17,5 @@ export function ticketContentOf(task: {
   sectionsBasis?: string;
   createdAt?: string;
 }): TicketContent {
-  if (task.sections && task.kind) {
-    return {
-      kind: task.kind,
-      description: task.description,
-      acceptanceCriteria: task.acceptanceCriteria,
-      sections: task.sections,
-      sectionsBasis: task.sectionsBasis ?? "",
-    };
-  }
   return normalizeTicketContent(task, task.createdAt ? { now: task.createdAt } : {});
 }

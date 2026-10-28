@@ -24,11 +24,11 @@ import {
   MAX_CODE_REWIND_PREVIEW_PATHS,
   type BuildPipelineCodeRewindPreview,
   type PipelineCodeRewind,
-  taskSnapshotCriteria,
   type TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   normalizeTicketContent,
+  sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
 } from "@orkestrator/protocol/ticket-sections";
 import type { KanbanTask } from "./storage-shared-core.js";
@@ -469,12 +469,18 @@ export class BuildPipelineLifecycle {
       }
     }
     const content = ticket ? normalizeTicketContent(ticket, { now: ticket.createdAt }) : undefined;
+    const snapshotCriteria =
+      sectionsFromTicketText(snapshot.description, snapshot.acceptanceCriteria)
+        .acceptanceCriteria ?? [];
+    const liveCriteria = content?.sections.acceptanceCriteria ?? [];
     const fromTicket =
-      content && content.acceptanceCriteria.trim() === snapshot.acceptanceCriteria.trim()
-        ? (content.sections.acceptanceCriteria ?? [])
+      content &&
+      liveCriteria.length === snapshotCriteria.length &&
+      liveCriteria.every((criterion, index) => criterion.text === snapshotCriteria[index]!.text)
+        ? liveCriteria
         : undefined;
     // Verify judges at most this many; the snapshot text keeps the rest.
-    const items = (fromTicket ?? taskSnapshotCriteria(snapshot)).slice(
+    const items = (fromTicket ?? snapshotCriteria).slice(
       0,
       TICKET_SECTION_LIMITS.maxAcceptanceCriteria,
     );
@@ -483,7 +489,7 @@ export class BuildPipelineLifecycle {
       ...(content && !snapshot.kind ? { kind: content.kind } : {}),
       acceptanceCriteriaItems: items.map(({ id, text }) => ({
         id,
-        text: text.slice(0, TICKET_SECTION_LIMITS.maxCriterionLength),
+        text,
       })),
     };
   }

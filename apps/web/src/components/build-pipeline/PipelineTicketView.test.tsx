@@ -160,6 +160,51 @@ describe("pipeline ticket references", () => {
     expect(pipelineCriteriaStatusWord(pipeline)?.tone).toBe("destructive");
   });
 
+  test.each([true, false])(
+    "all 120 legacy criteria and full long text remain visible (stored ids: %s)",
+    (storedIds) => {
+      const long = "Long criterion " + "x".repeat(10_001) + " END";
+      const texts = Array.from({ length: 120 }, (_, i) =>
+        i === 0 ? long : `Requirement ${i + 1}`,
+      );
+      const pipeline = build({
+        taskSnapshot: {
+          ...snapshot,
+          acceptanceCriteria: texts.map((text) => `- ${text}`).join("\n"),
+          ...(storedIds
+            ? {
+                acceptanceCriteriaItems: texts
+                  .slice(0, 100)
+                  .map((text, i) => ({ id: `ac-${i + 40}`, text: text.slice(0, 10_000) })),
+              }
+            : {}),
+        },
+        sessions: [
+          session("verify", "verify", 10, {
+            acceptanceCriteriaResults: texts.slice(0, 100).map((_, i) => ({
+              id: `ac-${i + (storedIds ? 40 : 1)}`,
+              status: "passed",
+              evidence: "Checked",
+            })),
+          }),
+        ],
+      });
+      render(<PipelineTicketView pipeline={pipeline} />);
+      const criteria = screen.getAllByTestId("ticket-criterion");
+      expect(criteria).toHaveLength(120);
+      expect(criteria[0]?.textContent).toContain(long);
+      expect(
+        criteria.slice(0, 100).every((item) => item.getAttribute("data-status") === "passed"),
+      ).toBe(true);
+      expect(
+        criteria.slice(100).every((item) => item.getAttribute("data-status") === "unchecked"),
+      ).toBe(true);
+      expect(new Set(criteria.map((item) => item.getAttribute("data-criterion-id"))).size).toBe(
+        120,
+      );
+    },
+  );
+
   test("an older record without snapshot content explains the missing ticket", () => {
     render(
       <PipelineTicketView

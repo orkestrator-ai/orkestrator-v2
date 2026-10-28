@@ -98,6 +98,36 @@ describe("Kanban ticket sections", () => {
     });
   });
 
+  test("markdown-only creation retains parsed content in storage", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const task = await storage.kanban.addKanbanTask("project-1", "T", undefined, {
+        markdown: "Summary text\n\n## Acceptance criteria\n\n- Kept criterion",
+      });
+      expect(task.description).toBe("Summary text");
+      expect(task.acceptanceCriteria).toBe("- Kept criterion");
+      expect(task.sections).toEqual({
+        summary: "Summary text",
+        acceptanceCriteria: [{ id: "ac-1", text: "Kept criterion" }],
+      });
+      expect(
+        readStoredValue<Array<Record<string, unknown>>>(dataDir, "kanban.json")?.[0],
+      ).toMatchObject(task);
+      expect(await storage.kanban.getKanbanTask(task.id)).toEqual(task);
+    });
+  });
+
+  test("explicit text overrides on Markdown creation remain intentional", async () => {
+    await withStorage(async (storage) => {
+      const task = await storage.kanban.addKanbanTask("project-1", "T", "", {
+        markdown: "Summary\n\n## Acceptance criteria\n\n- Original",
+        acceptanceCriteria: "",
+      });
+      expect(task.description).toBe("");
+      expect(task.acceptanceCriteria).toBe("");
+      expect(task.sections).toEqual({});
+    });
+  });
+
   test("a markdown edit keeps the Verify result of an unchanged criterion only", async () => {
     await withStorage(async (storage) => {
       const created = await storage.kanban.addKanbanTask("project-1", "T", "", {

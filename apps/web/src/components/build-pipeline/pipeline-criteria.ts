@@ -6,6 +6,8 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   acceptanceCriteriaTally,
+  sectionsFromTicketText,
+  TICKET_SECTION_LIMITS,
   type AcceptanceCriterion,
 } from "@orkestrator/protocol/ticket-sections";
 
@@ -35,8 +37,28 @@ export function pipelineCriteriaView(pipeline: BuildPipeline): PipelineCriteriaV
     (verifySession?.acceptanceCriteriaResults ?? []).map((result) => [result.id, result]),
   );
   const checkedAt = verifySession?.completedAt ?? verifySession?.startedAt ?? pipeline.createdAt;
-  const criteria = taskSnapshotCriteria(snapshot).map(({ id, text }) => {
-    const result = results.get(id);
+  const verifiedCriteria = taskSnapshotCriteria(snapshot);
+  const reservedIds = new Set(verifiedCriteria.map(({ id }) => id));
+  const allCriteria =
+    sectionsFromTicketText(snapshot.description, snapshot.acceptanceCriteria, {
+      now: pipeline.createdAt,
+    }).acceptanceCriteria ?? [];
+  const criteria = allCriteria.map((criterion, index) => {
+    const verified = verifiedCriteria[index];
+    // Older snapshots stored only a prefix of long criteria. Keep the full
+    // original text visible while retaining the id used by that Verify turn.
+    const matches =
+      verified &&
+      (verified.text === criterion.text ||
+        (verified.text.length === TICKET_SECTION_LIMITS.maxCriterionLength &&
+          criterion.text.startsWith(verified.text)));
+    const id = matches
+      ? verified.id
+      : reservedIds.has(criterion.id)
+        ? `snapshot-unverified-${index}`
+        : criterion.id;
+    const text = criterion.text;
+    const result = matches ? results.get(id) : undefined;
     return result
       ? {
           id,

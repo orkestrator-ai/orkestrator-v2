@@ -286,7 +286,7 @@ function isTextSectionKey(key: string): key is TicketTextSectionKey {
 // Markdown parsing
 // ---------------------------------------------------------------------------
 
-const HEADING = /^##(?!#)[ \t]+(.+?)[ \t]*#*[ \t]*$/;
+const HEADING = /^##(?!#)[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 /** A top-level list item: at most one space of indent, so nested items stay in their parent. */
 const LIST_ITEM = /^( ?)([-*+]|\d{1,9}[.)])[ \t]+(?:\[([ xX])\][ \t]+)?(.*)$/;

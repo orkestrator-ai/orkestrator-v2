@@ -180,7 +180,9 @@ export class BuildPipelineRecovery {
     const criterionResults = verificationCriterionResults(criteria, result.value);
     const feedback = feedbackWithUnmetCriteria(rationale, criteria, criterionResults);
     session.structuredResultStatus = "accepted";
-    pipeline.verificationResult = complete ? "pass" : "fail";
+    const passed =
+      complete && !result.value.acceptanceCriteria?.some((item) => item.status === "failed");
+    pipeline.verificationResult = passed ? "pass" : "fail";
     pipeline.verificationFeedback = feedback;
     // The pipeline keeps only the newest verdict. The session's own copy is
     // what a rewind to the fix after this verification hands that fix.
@@ -189,12 +191,10 @@ export class BuildPipelineRecovery {
       feedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH
         ? feedback
         : `${feedback.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
-    if (criterionResults) {
-      session.acceptanceCriteriaResults = criterionResults;
-      await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
-    }
+    session.acceptanceCriteriaResults = criterionResults;
+    await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
-    if (complete) {
+    if (passed) {
       await this.updateKanbanLifecycle(pipeline, {
         comment: "✅ Validation complete",
       });

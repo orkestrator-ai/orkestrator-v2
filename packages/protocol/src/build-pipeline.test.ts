@@ -2138,8 +2138,12 @@ describe("verification verdict contract", () => {
       { id: "ac-1", status: "failed", evidence: `${"x".repeat(1_999)}…` },
       { id: "ac-2", status: "not-checked", evidence: "Verify did not report on this criterion." },
     ]);
-    expect(verificationCriterionResults(criteria, { complete: true, rationale: "r" })).toBe(
-      undefined,
+    expect(verificationCriterionResults(criteria, { complete: true, rationale: "r" })).toEqual(
+      criteria.map(({ id }) => ({
+        id,
+        status: "not-checked",
+        evidence: "Verify did not report on this criterion.",
+      })),
     );
   });
 

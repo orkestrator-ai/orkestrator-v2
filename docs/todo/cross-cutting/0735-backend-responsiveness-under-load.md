@@ -1,10 +1,9 @@
 # Backend stops answering under load or when its log reader stalls
 
-Checked against `main` at `7e3ceb7ce` (2026-10-28). This is task 3 of todo
-0734 ("Find what makes the backend's `/mcp` handshake slow"), which lives in
-`coordinator-and-multi-review/0734-codex-orkestrator-mcp-handshake-under-load.md`
-on the branch of PR #1381. It is filed separately so the two branches do not
-conflict; 0734's task 3 should point here once both have merged.
+Checked against `main` at `7e3ceb7ce` (2026-10-28). This is task 3 of
+[0734](../coordinator-and-multi-review/0734-codex-orkestrator-mcp-handshake-under-load.md)
+("Find what makes the backend's `/mcp` handshake slow"), filed separately
+because it reaches beyond the handshake.
 
 On arktech-mini on 2026-10-28 about ten Multi Reviews and several workers ran
 at once and the host load average was 100 to 140 (18 logical CPUs). Workers'

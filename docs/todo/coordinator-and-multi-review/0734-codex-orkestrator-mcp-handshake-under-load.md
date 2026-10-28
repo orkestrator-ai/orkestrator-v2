@@ -17,7 +17,7 @@ Analysed 2026-10-28 against `main` at `a6a3105f9`.
 
 1. **Give the handshake a budget that survives host load**: raise the Codex `startup_timeout_sec` for the Orkestrator servers and make the bridge's tool check wait past it. Status: done (2026-10-28).
 2. **Qualify under load**: rerun about ten concurrent Multi Reviews with Codex preparation and consolidation on a loaded host. Status: open.
-3. **Find what makes the backend's `/mcp` handshake slow**: the same backend also timed out agent `send_message` and `check_inbox` calls overnight, and `launch_multi_review` control calls. Status: open.
+3. **Find what makes the backend's `/mcp` handshake slow**: the same backend also timed out agent `send_message` and `check_inbox` calls overnight, and `launch_multi_review` control calls. Status: investigated (2026-10-28); remaining work moved to [0735](../cross-cutting/0735-backend-responsiveness-under-load.md).
 
 ### 1. Give the handshake a budget that survives host load
 
@@ -93,3 +93,13 @@ from the old timeout logs.
 **Problem.** An MCP handshake on localhost taking more than 3 s means the backend's event loop, or the host, was saturated. The longer budget hides that but does not remove it. The overnight agent mail timeouts and the `launch_multi_review` timeouts point the same way.
 
 **Context.** The agent MCP server shares the single backend process (`bun`) with every other client, bridge stream and SSE connection.
+
+**Findings (2026-10-28).** Investigated in
+[0735](../cross-cutting/0735-backend-responsiveness-under-load.md). The
+overnight mail timeouts were a 6 h 45 min freeze of the whole backend: the
+desktop stopped reading its stdout, and Bun's console blocks once that socket
+is full. The backend now writes console output without blocking, logs
+event-loop stalls, and no longer parses the whole mail store on every `/mcp`
+request except `initialize` and `server/discover`. What held the desktop main
+thread, and whether the 09:13Z handshake timeouts were backend stalls or host
+CPU, stay open there.

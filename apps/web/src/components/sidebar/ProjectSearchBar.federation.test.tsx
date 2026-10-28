@@ -350,11 +350,7 @@ describe("ProjectSearchBar across machines", () => {
     });
     expect(onSelectProject).not.toHaveBeenCalled();
     expect(onSelectEnvironment).not.toHaveBeenCalled();
-    // Its project is revealed in the sidebar so the environment row shows.
-    expect(onSelectMachineProject).toHaveBeenCalledWith(
-      expect.objectContaining({ connectionId: "bk_mbp3" }),
-      "ork-3",
-    );
+    expect(onSelectMachineProject).not.toHaveBeenCalled();
     expectDomAbsent(screen.queryByRole("combobox"), "palette after remote environment selection");
   });
 

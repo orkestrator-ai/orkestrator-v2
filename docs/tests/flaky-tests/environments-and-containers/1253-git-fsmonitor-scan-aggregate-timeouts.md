@@ -132,3 +132,31 @@ regression, the exact original repository command was rerun:
 `mise run test:logged -- --name review-repair-tests -- mise run test`.
 All four groups passed (exit 0, 204.1 seconds). The fsmonitor assertions and
 timeouts remain unchanged.
+
+## Remote project-search review recurrence — 2026-10-28
+
+Preparation at `8ac47666e` repeated the linked project-home scan (5,028.33 ms),
+transient `--get` (5,039.73 ms), and transient `--unset` (5,012.08 ms) deadlines.
+The default `mise run test` ran alongside component browser validation and
+failed its workspace group after 394.1 seconds; root, bridge, and protocol
+checks passed. Backend reported 10,163 passed, 87 skipped, three failed and
+three between-test errors. Evidence is `validation-04.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-567e75fe-4f47-4151-9031-8f6c94a373ce/`.
+
+The complete unchanged owner passed alone (exit 0, 7.1 seconds):
+
+```sh
+mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures
+```
+
+No fsmonitor implementation, assertion, deadline, or skip changed. Contention
+remains a hypothesis; this is an open recurrence, not an established fix.
+
+The exact recorded aggregate command then passed all four groups (exit 0,
+369.4 seconds):
+
+```sh
+mise run test:logged -- --name review-repair-tests -- mise run test
+```
+
+The passing aggregate does not establish a timing fix; this case remains open.

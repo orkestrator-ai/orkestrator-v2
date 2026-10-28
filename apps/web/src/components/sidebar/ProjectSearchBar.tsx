@@ -43,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineBadge, MachineDot, machineStatusText } from "@/components/federation/MachineDot";
+import { useExpandMachineProject } from "@/components/federation/useRevealMachineProject";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import type { Environment, Project } from "@/types";
 
@@ -413,6 +414,8 @@ export function ProjectSearchBar({
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
+  const expandMachineProject = useExpandMachineProject();
+
   const handleSelect = (hit: ProjectSearchHit) => {
     const other = hit.machine && !hit.machine.bound ? hit.machine : null;
     if (hit.type === "project") {
@@ -437,10 +440,9 @@ export function ProjectSearchBar({
         onSelectProject(hit.project.id);
       }
     } else if (other) {
-      // Its project is expanded in the sidebar so the row shows as selected,
-      // and it is opened on its machine, as its sidebar row opens it
-      // (offline included).
-      onSelectMachineProject?.(other, hit.environment.projectId);
+      // Make the environment visible without the project reveal's grouping
+      // change: activity view already renders environment rows directly.
+      expandMachineProject(other, hit.environment.projectId);
       openMachineWorkspace({
         connectionId: other.connectionId,
         projectId: hit.environment.projectId,

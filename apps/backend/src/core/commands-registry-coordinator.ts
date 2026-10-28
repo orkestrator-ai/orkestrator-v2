@@ -25,7 +25,10 @@ import {
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
-import { settleCoordinatorDeliverNow } from "./coordinator-deliver-now.js";
+import {
+  coordinatorDeliverNowResult,
+  settleCoordinatorDeliverNow,
+} from "./coordinator-deliver-now.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -391,13 +394,7 @@ export function registerCoordinatorCommands(
           coordinatorDelegationOpened: false,
           // A coordinator conversation is never steered: a side agent must not
           // cut into the main's turn with the user, nor the main into a side's.
-          ...(steer
-            ? {
-                deliverNow: "queued until idle" as const,
-                deliverNowNote:
-                  "deliverNow applies only to worker tabs; coordinator conversations receive mail when idle.",
-              }
-            : {}),
+          ...(steer ? coordinatorDeliverNowResult(message) : {}),
         };
       }
       if (tab.role === "side") {
@@ -485,7 +482,11 @@ export function registerCoordinatorCommands(
       });
       // Outside the admission lock: the delivery pass may need it.
       if (!steer) return admitted;
-      return { ...admitted, ...(await settleCoordinatorDeliverNow(context, admitted)) };
+      return {
+        ...(await settleCoordinatorDeliverNow(context, admitted)),
+        coordinatorDelegationOpened: admitted.coordinatorDelegationOpened,
+        ...(admitted.deliveryNote ? { deliveryNote: admitted.deliveryNote } : {}),
+      };
     },
   );
   register(

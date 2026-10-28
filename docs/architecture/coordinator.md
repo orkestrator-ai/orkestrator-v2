@@ -832,7 +832,13 @@ does) and returns `deliverNow` with a `deliverNowNote`
 | `queued until idle` | The steer did not happen (refused, too large, busy gate); it is delivered when the turn ends. |
 | `unsupported, queued` | The agent cannot take mail mid-turn (a tmux agent, which also gets the `steer-unsupported` hold note, or a provider without `steer`); delivered when the turn ends. |
 | `verifying` | The steer was handed off without an answer. It is checked against the steer journal and never offered twice. |
-| `not queued` | The message was bounced, stored or held by a budget; `deliverNow` changes nothing. |
+| `not queued` | The message was bounced, stored, held by a budget, or blocked by paused messaging or an unavailable environment; the note names the reason. |
+
+The result includes the post-drain placement, reason and injection provenance.
+Replaying a completed request ID returns its persisted success without another
+drain or delivery. An unused steer request expires after this one pass, including
+when messaging is paused or the environment is stopped or unready; later turns
+can receive the mail at idle but are never steered by that expired request.
 
 A steered message counts as delivered, so the delegation it opened or joined
 settles when the running turn ends and the coordinator is woken once, as for
@@ -845,11 +851,13 @@ Decisions:
   a coordinator: a worker steering its coordinator would bypass the
   delegation hold.
 - **Never into a coordinator conversation.** Main ↔ side mail ignores the
-  flag and reports `queued until idle`, so a side agent cannot cut into the
+  flag. Scheduled mail reports `queued until idle`; bounced, stored or
+  budget-held mail reports `not queued`, so a side agent cannot cut into the
   main's turn with the user.
 - **Not across a node link yet.** Mail routed to another node reports
-  `unsupported, queued` and is delivered at idle. Live qualification and the
-  node link are in
+  `unsupported, queued` only for scheduled pending mail. Stored, bounced and
+  budget-held mail reports `not queued`, with the leaf's placement and reason.
+  Live qualification and the node link are in
   [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
 
 `list_agents` (discovery) returns every agent tab in the project and what each

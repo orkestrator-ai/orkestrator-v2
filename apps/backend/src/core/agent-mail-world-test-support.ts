@@ -66,6 +66,9 @@ export class MailWorld {
   steerJournal: "dispatched" | "not-dispatched" | "unknown" = "unknown";
   /** Steer request ids the drain asked the journal about. */
   readonly reconciledSteers: string[] = [];
+  /** Lifecycle barriers for completion races, without waiting on the active drain. */
+  afterSteer?: () => Promise<void>;
+  beforeSteerJournal?: () => Promise<void>;
   private readonly steers = new Map<string, string[]>();
   private requestCounter = 0;
 
@@ -111,6 +114,7 @@ export class MailWorld {
         steerMailInject: async (input) => world().steer(input),
         reconcileMailSteer: async ({ requestId }) => {
           world().reconciledSteers.push(requestId);
+          await world().beforeSteerJournal?.();
           return world().steerJournal;
         },
       },
@@ -212,7 +216,7 @@ export class MailWorld {
   }
 
   /** A steer into the actor's running turn: applied if one is running. */
-  private steer(input: {
+  private async steer(input: {
     environmentId: string;
     logicalSessionKey: string;
     text: string;
@@ -225,7 +229,8 @@ export class MailWorld {
     }
     if (!this.busy.has(key)) return Promise.resolve({ outcome: "idle" });
     this.steers.set(key, [...(this.steers.get(key) ?? []), input.text]);
-    return Promise.resolve({ outcome: "applied" });
+    await this.afterSteer?.();
+    return { outcome: "applied" };
   }
 
   /** Message bodies steered into this actor's running turns, in order. */
@@ -404,7 +409,7 @@ export class MailWorld {
     from: MailActor,
     worker: MailActor,
     body: string,
-    options: { deliverNow?: boolean } = {},
+    options: { deliverNow?: boolean; requestId?: string; replyToMessageId?: string } = {},
   ): Promise<AgentMailMessage & Partial<CoordinatorDeliverNowResult>> {
     this.requestCounter += 1;
     const send = createCommandRegistry().get("send_coordinator_agent_mail")!;
@@ -413,7 +418,8 @@ export class MailWorld {
         projectId: this.projectId,
         coordinatorId: this.coordinatorId,
         conversationId: from.conversationId!,
-        requestId: `world-${this.requestCounter}`,
+        requestId: options.requestId ?? `world-${this.requestCounter}`,
+        ...(options.replyToMessageId ? { replyToMessageId: options.replyToMessageId } : {}),
         toEnvironmentId: worker.environmentId,
         toTabId: worker.tabId,
         body,
@@ -433,7 +439,7 @@ export class MailWorld {
   }
 
   /** The agent's turn ends; a worker's end settles what its coordinator was waiting on. */
-  async finishTurn(actor: MailActor): Promise<void> {
+  async finishTurn(actor: MailActor, options: { deliver?: boolean } = {}): Promise<void> {
     this.busy.delete(`${actor.environmentId}\0${actor.logicalSessionKey}`);
     if (actor.role === "worker" || actor.role === "peer") {
       await this.coordinator.settleWorkerDelegations({
@@ -442,7 +448,7 @@ export class MailWorld {
         state: "completed",
       });
     }
-    await this.deliver();
+    if (options.deliver !== false) await this.deliver();
   }
 
   /** Every message body delivered to this actor, in order, across all its turns. */

@@ -230,6 +230,11 @@ describe("agent Kanban tools", () => {
 
     expect(listed.response.status).toBe(200);
     expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual(ALL_AGENT_TOOL_NAMES);
+    for (const name of ["send_message", "reply_message"]) {
+      const tool = listed.body.result?.tools?.find((entry) => entry.name === name);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema?.properties).not.toHaveProperty("deliverNow");
+    }
     expect(
       listed.body.result?.tools?.find((tool) => tool.name === "get_ticket")?.annotations,
     ).toMatchObject({ readOnlyHint: true, destructiveHint: false });

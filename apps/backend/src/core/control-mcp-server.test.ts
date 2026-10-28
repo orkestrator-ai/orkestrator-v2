@@ -2764,6 +2764,75 @@ describe("Orkestrator control MCP server", () => {
     expect(routine.body.result?.structuredContent).not.toHaveProperty("deliverNow");
   });
 
+  for (const [placement, reason, outcome] of [
+    ["pending-inject", undefined, "unsupported, queued"],
+    ["stored", "inject-policy-off", "not queued"],
+    ["bounced", "recipient-muted", "not queued"],
+    ["inject-held", "loop-budget-exhausted", "not queued"],
+    ["inject-held", "hourly-limit", "not queued"],
+  ]) {
+    test(`remote deliverNow reports ${placement} ${reason ?? ""} without forwarding the flag`, async () => {
+      const credential = coordinatorCredential(["mail", "discovery"]);
+      overrides.set("get_node_status", () => ({
+        nodeId: "bk_cmd",
+        mode: "command",
+        controllers: [],
+      }));
+      overrides.set("get_node_summaries", () => ({
+        selfId: "bk_cmd",
+        nodes: [
+          {
+            nodeId: "bk_leaf",
+            available: true,
+            view: { displayName: "Build box" },
+            projects: [
+              {
+                ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+                repositoryHint: "example.invalid/secret/repo",
+              },
+            ],
+            environments: [],
+          },
+        ],
+      }));
+      overrides.set("send_coordinator_node_mail", (args) => ({
+        nodeId: args.nodeId,
+        messageId: "leaf-message",
+        placement,
+        placementReason: reason,
+      }));
+      const sent = await rpc(credential.url, credential.token, "tools/call", {
+        name: "send_message",
+        arguments: {
+          nodeId: "bk_leaf",
+          requestId: "remote-correction",
+          toEnvironmentId: "leaf-env",
+          body: "Correction.",
+          deliverNow: true,
+        },
+      });
+      expect(sent.body.result?.isError).not.toBe(true);
+      expect(sent.body.result?.structuredContent).toMatchObject({
+        deliverNow: outcome,
+        message: { messageId: "leaf-message", placement },
+      });
+      if (reason) expect(sent.body.result?.structuredContent?.deliverNowNote).toContain(reason);
+      const forwarded = invocations.findLast(
+        ({ command }) => command === "send_coordinator_node_mail",
+      );
+      expect(forwarded?.args).toMatchObject({ requestId: "remote-correction", nodeId: "bk_leaf" });
+      expect(forwarded?.args).not.toHaveProperty("deliverNow");
+    });
+  }
+
+  test("external send_message schema omits deliverNow", async () => {
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const listed = await rpc(descriptor.url, descriptor.token, "tools/list");
+    const send = listed.body.result?.tools?.find((tool) => tool.name === "send_message");
+    expect(send).toBeDefined();
+    expect(send?.inputSchema?.properties).not.toHaveProperty("deliverNow");
+  });
+
   test("reports an unavailable checkout base without calling git status", async () => {
     const issue = (workspace: Record<string, unknown>) => {
       overrides.set("get_project_coordinator", () => ({ workspace }));

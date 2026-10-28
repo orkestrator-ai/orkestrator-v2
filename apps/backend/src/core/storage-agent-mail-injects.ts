@@ -464,6 +464,29 @@ export class AgentMailInjects {
     });
   }
 
+  /** Expire an unused one-pass steer without disturbing a dispatch or its journal. */
+  async clearAgentMailSteerRequest(
+    environmentId: string,
+    tabId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    return this.store.enqueue(async () => {
+      const store = await this.store.load();
+      const entry = store.pendingInject.find((candidate) => {
+        const mailbox = store.mailboxes[candidate.mailboxId];
+        return (
+          mailbox?.environmentId === environmentId &&
+          mailbox.tabId === tabId &&
+          candidate.messageId === messageId
+        );
+      });
+      if (!entry?.steerRequested || entry.verifyRequestId) return false;
+      delete entry.steerRequested;
+      await this.store.save(store);
+      return true;
+    });
+  }
+
   async listPendingAgentMailInjects(
     limit = 100,
     options: { includeDeferred?: boolean; includeCoalescing?: boolean } = {},

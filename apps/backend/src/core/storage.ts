@@ -1733,6 +1733,14 @@ export class StorageService {
     );
   }
 
+  clearAgentMailSteerRequest(
+    environmentId: string,
+    tabId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    return this.repos.agentMailInjects.clearAgentMailSteerRequest(environmentId, tabId, messageId);
+  }
+
   retryAgentMailInject(
     environmentId: string,
     tabId: string,

@@ -4,6 +4,7 @@
  * coordinator-only workflow tools. `control-mcp-server.ts` owns the listener
  * and authentication; it rebuilds this server for every request.
  */
+import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
@@ -1822,11 +1823,7 @@ export async function createControlMcp(
             return toolResult({
               message: summary,
               ...(deliverNow === true
-                ? {
-                    deliverNow: "unsupported, queued",
-                    deliverNowNote:
-                      "deliverNow does not cross a node link yet; the message is delivered when the worker is idle.",
-                  }
+                ? coordinatorDeliverNowResult(summary, { unsupported: true })
                 : {}),
               ...(coordinatorDelegationOpened === true ? asyncDelegationResult() : {}),
             });

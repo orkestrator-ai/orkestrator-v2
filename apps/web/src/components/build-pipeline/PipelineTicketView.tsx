@@ -148,7 +148,7 @@ export function PipelineTicketView({ pipeline }: { pipeline: BuildPipeline }) {
         </Section>
       ) : null}
       <Dialog open={preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent size="4xl">
           <DialogTitle className="truncate text-sm">{preview?.filename}</DialogTitle>
           {preview ? (
             <img src={preview.url} alt={preview.filename} className="max-h-[75vh] object-contain" />

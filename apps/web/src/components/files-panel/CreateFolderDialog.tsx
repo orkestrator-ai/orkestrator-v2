@@ -72,7 +72,7 @@ export function CreateFolderDialog({
         if (!open && !isPending) onCancel();
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>New folder</DialogTitle>
           <DialogDescription>

@@ -79,8 +79,9 @@ export function MachineSettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        size="2xl"
         className={cn(
-          "flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:p-0 sm:max-w-[min(42rem,calc(100%-2rem))]",
+          "flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:p-0",
           Z_FULLSCREEN_DIALOG,
         )}
         overlayClassName={Z_FULLSCREEN_DIALOG}

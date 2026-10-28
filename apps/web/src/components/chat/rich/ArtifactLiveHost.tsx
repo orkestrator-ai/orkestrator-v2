@@ -227,7 +227,7 @@ export function ArtifactLiveHost() {
       {active ? <LiveHostSurface key={active.hostId} active={active} /> : null}
       {pendingSwitch && active ? (
         <Dialog open onOpenChange={(open) => (open ? undefined : cancelSwitch())}>
-          <DialogContent className="sm:max-w-md" data-artifact-live-switch="true">
+          <DialogContent size="md" data-artifact-live-switch="true">
             <DialogTitle>Switch interactive artifact?</DialogTitle>
             <DialogDescription>
               Only one interactive artifact runs per window. Stop “{active.target.title}” and run “

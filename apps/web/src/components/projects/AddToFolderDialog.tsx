@@ -84,7 +84,7 @@ export function AddToFolderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>Add to Folder</DialogTitle>
           <DialogDescription>

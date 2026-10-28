@@ -54,7 +54,7 @@ export function SshPromptDialog() {
   const confirmOnly = prompt?.kind === "confirm";
   return (
     <Dialog open={prompt !== null} onOpenChange={(open) => !open && respond(null)}>
-      <DialogContent className="max-w-md">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>
             {prompt?.kind === "passphrase"

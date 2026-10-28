@@ -180,7 +180,13 @@ export function AgentsMdApprovalDialog({
   return (
     // Like the other coordinator requests, it stays until approved or declined.
     <Dialog open>
-      <DialogContent className="max-w-2xl" data-testid="agents-md-request" showCloseButton={false}>
+      {/* Long tokens (paths, URLs) in entries and the diff wrap instead of widening the dialog. */}
+      <DialogContent
+        size="3xl"
+        className="wrap-anywhere"
+        data-testid="agents-md-request"
+        showCloseButton={false}
+      >
         <DialogHeader>
           <DialogTitle>Save decisions to AGENTS.md?</DialogTitle>
           <DialogDescription>
@@ -193,7 +199,7 @@ export function AgentsMdApprovalDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <section className="space-y-2" aria-label="Proposed entries">
+        <section className="min-w-0 space-y-2" aria-label="Proposed entries">
           {rows.map((row, index) => {
             const result = outcomeByRow.get(index);
             return (
@@ -259,7 +265,7 @@ export function AgentsMdApprovalDialog({
           ) : null}
         </section>
 
-        <section className="space-y-1" aria-label="Change to the section">
+        <section className="min-w-0 space-y-1" aria-label="Change to the section">
           {loadError ? (
             <div>
               <p className="flex items-center gap-2 text-sm text-destructive">
@@ -303,7 +309,7 @@ export function AgentsMdApprovalDialog({
                       key={index}
                       data-diff={line.type}
                       className={cn(
-                        "whitespace-pre-wrap break-words",
+                        "whitespace-pre-wrap",
                         line.type === "add" && "bg-emerald-500/10 text-emerald-300",
                         line.type === "remove" && "bg-red-500/10 text-red-300 line-through",
                         line.type === "same" && "text-muted-foreground",

@@ -181,7 +181,8 @@ export function HostPathPickerDialog() {
   return (
     <Dialog open={request !== null} onOpenChange={(open) => !open && settle(null)}>
       <DialogContent
-        className={cn("flex max-h-[80dvh] flex-col sm:max-w-xl", Z_FULLSCREEN_DIALOG)}
+        size="xl"
+        className={cn("flex max-h-[80dvh] flex-col", Z_FULLSCREEN_DIALOG)}
         overlayClassName={Z_FULLSCREEN_DIALOG}
         onEscapeKeyDown={(event) => {
           // Escape backs out of the new-folder form before it closes the picker.

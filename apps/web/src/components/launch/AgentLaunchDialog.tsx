@@ -234,7 +234,7 @@ export function AgentLaunchDialog({
       }}
     >
       <DialogContent
-        className="flex w-[min(calc(100%-1rem),34rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[34rem] sm:p-0"
+        className="flex flex-col gap-0 overflow-hidden p-0 [--modal-max-width:34rem] sm:p-0"
         onCloseAutoFocus={(event) => {
           const primaryTarget = returnFocusRef?.current;
           const focusTarget =

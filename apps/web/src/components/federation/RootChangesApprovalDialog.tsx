@@ -111,11 +111,7 @@ export function RootChangesApprovalDialog({
   return (
     // Like the other coordinator requests, it stays until approved or rejected.
     <Dialog open>
-      <DialogContent
-        className="max-w-xl"
-        data-testid="root-changes-request"
-        showCloseButton={false}
-      >
+      <DialogContent size="xl" data-testid="root-changes-request" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>Apply uncommitted changes to “{worker}”?</DialogTitle>
           <DialogDescription>

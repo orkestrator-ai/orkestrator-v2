@@ -292,7 +292,7 @@ export function NativeAgentResumePlatformDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>Resume a session</DialogTitle>
           <DialogDescription>

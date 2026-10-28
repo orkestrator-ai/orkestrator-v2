@@ -43,3 +43,17 @@ with
 `mise run test:logged -- --name merge-standalone-ready-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures`
 (exit 0, 0.7 s). This is consistent with the real-timer ordering race;
 no readiness implementation, assertion, timeout or skip changed.
+
+## Project landing-tab review — 2026-10-28
+
+Preparation's `mise run test` repeated the early SIGKILL assertion at line 90
+(94.28 ms), using the default concurrent workspace/root/bridges/protocol groups.
+The unchanged complete owner passed alone (exit 0, 1.0 s):
+
+```sh
+mise run test:logged -- --name prior-standalone-failure -- bun --cwd=apps/backend test ./tests/standalone-ready.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is `validation-05.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-715de670-9258-47de-9a56-3b5d32afcae9/`.
+No readiness code, assertions, timeouts or skips changed.

@@ -583,6 +583,34 @@ describe("searchProjectsAndEnvironments across machines", () => {
     ).toBe(false);
   });
 
+  test.each([
+    { transport: "connected", freshness: "current" },
+    { transport: "connected", freshness: "stale" },
+    { transport: "unreachable", freshness: "current" },
+  ] as const)("remote search readiness stays off without leaf monitor health: %j", (state) => {
+    const leaf = machineView(
+      "bk_leaf",
+      "leaf",
+      [{ id: "p", name: "repo" }],
+      [
+        {
+          id: "e",
+          projectId: "p",
+          name: "feature",
+          status: "running",
+          environmentType: "containerized",
+          prState: "open",
+          hasMergeConflicts: false,
+          prMergeability: "clean",
+        },
+      ],
+      state,
+    );
+    const results = search("feature", { sources: [machineSearchSource(leaf)] });
+    expect(results.environments).toHaveLength(1);
+    expect(results.environments[0]?.environment.readyToMerge).toBeUndefined();
+  });
+
   test("remote rows match on exactly the fields local rows match on", () => {
     const rawProject = {
       id: "p-parity",

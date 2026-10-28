@@ -15,8 +15,15 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
 
   const indicator = page.getByRole("status").filter({ hasText: "Codex is thinking..." });
   await expect(indicator).toHaveText("Codex is thinking...");
-  await expect(indicator).toHaveCSS("animation-name", "agent-thinking-shimmer");
-  await expect(indicator).toHaveCSS("color", "rgba(0, 0, 0, 0)");
+  await expect(indicator).toHaveCSS("animation-name", "text-shimmer");
+  // The glyphs are hidden by their fill, not their colour, so the sweep can
+  // start from the text's own colour.
+  await expect(indicator).toHaveCSS("color", "rgb(141, 146, 158)");
+  expect(
+    await indicator.evaluate((element) =>
+      getComputedStyle(element).getPropertyValue("-webkit-text-fill-color"),
+    ),
+  ).toBe("rgba(0, 0, 0, 0)");
   await expect(indicator).toHaveCSS("background-clip", "text");
   await expect(indicator).toHaveCSS("background-image", /linear-gradient/);
   await expect(page.getByTestId("chat-status-row")).toHaveCSS("height", "40px");
@@ -45,12 +52,14 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
       animationName: styles.animationName,
       backgroundImage: styles.backgroundImage,
       color: styles.color,
+      textFill: styles.getPropertyValue("-webkit-text-fill-color"),
     };
   });
   expect(forcedColorStyles.forcedColorsActive).toBe(true);
   expect(forcedColorStyles.animationName).toBe("none");
   expect(forcedColorStyles.backgroundImage).toBe("none");
   expect(forcedColorStyles.color).not.toBe("rgba(0, 0, 0, 0)");
+  expect(forcedColorStyles.textFill).not.toBe("rgba(0, 0, 0, 0)");
 });
 
 test("connecting NativeChatShell logo respects the reduced-motion preference", async ({

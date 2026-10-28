@@ -21,6 +21,8 @@ import { DOCKER_LABEL_OWNER } from "./constants.js";
 import { resolveGitHubRepository } from "./github.js";
 import type { Environment, PrState } from "./models.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
+import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
+import { mergeabilityFromMergeStateStatus } from "@orkestrator/protocol/pr-merge-readiness";
 import {
   isSafeLoopedReviewTargetBranch,
   REVIEW_PACKAGE_FORMAT,
@@ -52,6 +54,11 @@ export type PrDetectionResult = {
   url: string;
   state: PrState;
   hasMergeConflicts: boolean | null;
+  /**
+   * GitHub's merge state (`mergeStateStatus`, `isDraft`). Absent when the
+   * lookup did not ask for it; null when GitHub did not return it.
+   */
+  mergeability?: GitHubPullRequestMergeability | null;
   checkSummary: PrCheckSummary | null;
 };
 
@@ -69,6 +76,8 @@ export type GhPrListEntry = {
   url?: unknown;
   state?: unknown;
   mergeable?: unknown;
+  mergeStateStatus?: unknown;
+  isDraft?: unknown;
   updatedAt?: unknown;
 };
 
@@ -1413,6 +1422,9 @@ export function buildPrDetectionCandidate(
       state,
       hasMergeConflicts:
         mergeable === "CONFLICTING" ? true : mergeable === "MERGEABLE" ? false : null,
+      ...(entry.mergeStateStatus !== undefined || entry.isDraft !== undefined
+        ? { mergeability: mergeabilityFromMergeStateStatus(entry.mergeStateStatus, entry.isDraft) }
+        : {}),
       checkSummary: null,
     },
   };

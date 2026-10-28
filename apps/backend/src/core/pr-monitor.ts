@@ -13,6 +13,7 @@ import {
   type PrState,
 } from "@orkestrator/protocol/pr-monitor";
 import { recurringPriorityRank } from "@orkestrator/protocol/recurring-work";
+import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   AdmissionRejectedError,
@@ -103,6 +104,8 @@ export interface PrMonitorTarget {
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
+  /** Persisted GitHub merge state; absent from targets built before it existed. */
+  prMergeability?: GitHubPullRequestMergeability | null;
 }
 
 export interface PrDetection {
@@ -111,6 +114,11 @@ export interface PrDetection {
   state: PrState;
   /** Null means GitHub has not determined mergeability yet. */
   hasMergeConflicts: boolean | null;
+  /**
+   * GitHub's merge state (`mergeStateStatus`/`isDraft`), for the "ready to
+   * merge" shimmer. Absent when the observation did not include it.
+   */
+  mergeability?: GitHubPullRequestMergeability | null;
   /** Null means no usable rollup was returned. See {@link checkSummaryStatus}. */
   checkSummary: PrCheckSummary | null;
   /** Distinguishes a throttled/irrelevant query from an attempted query failure. */
@@ -527,11 +535,15 @@ export class PrMonitorService {
     if (!entry || !entry.active) return;
     entry.generation += 1;
     entry.active = false;
+    // GitHub can change while polling is paused. Resume must earn a new
+    // confirmation even when the persisted PR fields have not changed.
+    entry.lastSuccessfulCheckAt = null;
     entry.recheckRequested = false;
     entry.wake = null;
     this.options.cancel(entry.timer);
     entry.timer = undefined;
     this.abortAdmissionWait(entry);
+    this.emitState(entry);
   }
 
   /** Stops monitoring entirely; used when an environment is deleted. */
@@ -1157,6 +1169,8 @@ export class PrMonitorService {
       detection.url !== previous.prUrl ||
       detection.state !== previous.prState ||
       detection.hasMergeConflicts !== previous.hasMergeConflicts ||
+      (detection.mergeability !== undefined &&
+        detection.mergeability !== (previous.prMergeability ?? null)) ||
       (detection.baseBranch ?? null) !== (previous.prBaseBranch ?? null);
 
     const observedChanged =
@@ -1183,6 +1197,11 @@ export class PrMonitorService {
           prBaseBranch: detection.baseBranch ?? null,
           prState: detection.state,
           hasMergeConflicts: detection.hasMergeConflicts,
+          ...(detection.mergeability !== undefined
+            ? { prMergeability: detection.mergeability }
+            : detection.url !== previous.prUrl
+              ? { prMergeability: null }
+              : {}),
         };
         persisted = true;
         entry.persistencePending = false;
@@ -1306,6 +1325,7 @@ export class PrMonitorService {
         prBaseBranch: null,
         prState: null,
         hasMergeConflicts: null,
+        prMergeability: null,
       };
       entry.persistencePending = false;
       entry.observedPr = null;
@@ -1602,7 +1622,8 @@ function isSameTarget(a: PrMonitorTarget, b: PrMonitorTarget): boolean {
     a.prUrl === b.prUrl &&
     (a.prBaseBranch ?? null) === (b.prBaseBranch ?? null) &&
     a.prState === b.prState &&
-    a.hasMergeConflicts === b.hasMergeConflicts
+    a.hasMergeConflicts === b.hasMergeConflicts &&
+    (a.prMergeability ?? null) === (b.prMergeability ?? null)
   );
 }
 
@@ -1627,6 +1648,11 @@ function isSameObservableState(
     // by the lowered state; otherwise the dedupe strands clients on a spinner.
     a.checkInProgress === b.checkInProgress &&
     a.consecutiveErrors === b.consecutiveErrors &&
+    // The first answered check of an entry is announced once, so a client can
+    // tell a reading confirmed in this backend's lifetime from a restored one
+    // (the "ready to merge" shimmer waits for it). Later answered checks move
+    // the timestamp silently.
+    (a.lastSuccessfulCheckAt == null) === (b.lastSuccessfulCheckAt == null) &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&
     a.hasMergeConflicts === b.hasMergeConflicts &&

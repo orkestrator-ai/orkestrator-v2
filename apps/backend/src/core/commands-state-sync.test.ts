@@ -6443,7 +6443,7 @@ describe("pr monitor commands", () => {
       "--limit",
       "30",
       "--json",
-      "url,state,mergeable,updatedAt,baseRefName",
+      "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
     ]);
     expect(discovery.knownPrUrl).toBeNull();
     expect(discovery.shellCommand).not.toContain("statusCheckRollup");
@@ -6463,10 +6463,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "url,state,mergeable,baseRefName",
+      "url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
     ]);
     expect(known.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable,baseRefName",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
     );
     expect(
       parsePrMonitorDetectionResponse(
@@ -6520,6 +6520,31 @@ describe("pr monitor commands", () => {
       hasMergeConflicts: null,
       checkSummary: null,
     });
+    // The merge state feeds the "ready to merge" shimmer; a draft is never ready.
+    expect(
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/7",
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+          isDraft: false,
+        }),
+      ),
+    ).toMatchObject({ hasMergeConflicts: false, mergeability: "clean" });
+    expect(
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/7",
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "BLOCKED",
+          isDraft: true,
+        }),
+      ),
+    ).toMatchObject({ mergeability: "unavailable" });
     expect(() =>
       parsePrMonitorDetectionResponse(
         known,

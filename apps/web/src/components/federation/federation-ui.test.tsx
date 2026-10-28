@@ -598,6 +598,45 @@ describe("CL-05: machine identity visual rules", () => {
     expect(screen.getByText("app")).toBeTruthy();
   });
 
+  test("another machine's clean PR stays plain without leaf monitor health", () => {
+    const machine = machineView();
+    const ready: FederatedEnvironment = {
+      ...firstEnvironment(machine),
+      prState: "open",
+      prHasMergeConflicts: false,
+      prMergeability: "clean",
+    };
+    const { rerender } = render(<RemoteEnvironmentItem machine={machine} environment={ready} />);
+    const row = screen.getByRole("button", { name: /^feature, on Machine A, Working/ });
+    const name = within(row).getByText("feature");
+    expect(name.classList).not.toContain("text-shimmer");
+    expect(name.classList).not.toContain("merge-ready-name");
+    const describedBy = row.getAttribute("aria-describedby");
+    expect(describedBy).toBeNull();
+
+    // A failing check makes GitHub report the merge state as unstable.
+    rerender(
+      <RemoteEnvironmentItem
+        machine={machine}
+        environment={{ ...ready, prMergeability: "unstable" }}
+      />,
+    );
+    expect(within(row).getByText("feature").classList).not.toContain("text-shimmer");
+    expect(row.hasAttribute("aria-describedby")).toBe(false);
+
+    // A machine whose summaries are not current cannot vouch for the reading.
+    rerender(
+      <RemoteEnvironmentItem
+        machine={machineView({ transport: "unreachable" })}
+        environment={ready}
+      />,
+    );
+    expect(
+      within(screen.getByRole("button", { name: /^feature, on Machine A,/ })).getByText("feature")
+        .classList,
+    ).not.toContain("text-shimmer");
+  });
+
   for (const environmentType of ["local", "containerized"] as const) {
     for (const transport of ["connected", "unreachable"] as const) {
       for (const status of ["running", "stopped"] as const) {

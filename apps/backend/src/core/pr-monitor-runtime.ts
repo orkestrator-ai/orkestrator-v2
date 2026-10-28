@@ -244,6 +244,9 @@ export class PrMonitorRuntime {
             prBaseBranch: detection.baseBranch ?? null,
             prState: detection.state,
             hasMergeConflicts: detection.hasMergeConflicts,
+            ...(detection.mergeability !== undefined
+              ? { prMergeability: detection.mergeability }
+              : {}),
             ...(detection.state !== "open" || detection.hasMergeConflicts === false
               ? { prRecheckAfterAgentCompletionArmedAt: undefined }
               : {}),

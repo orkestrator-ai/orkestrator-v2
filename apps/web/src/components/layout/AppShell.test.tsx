@@ -15,6 +15,16 @@ import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { FederationProvider } from "@/components/federation/FederationProvider";
+import { portalStore } from "@/lib/portal/portal-store";
+import {
+  connectionList,
+  installDesktopFake,
+  remoteConnection,
+  sharedIdDataset,
+  uninstallDesktopFake,
+} from "@/test/federation-desktop-fake";
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
 import { useUIStore as realUIStore } from "@/stores/uiStore";
@@ -25,6 +35,7 @@ const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
 const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
 const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
+const INITIAL_PORTAL = portalStore.getState();
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
@@ -39,6 +50,8 @@ let isMobile = true;
 let selectedProjectId: string | null = "project-1";
 let selectedEnvironmentId: string | null = "environment-1";
 let filesPanelOpen = false;
+/** PR fields of the selected environment record, for the ready-to-merge title. */
+let selectedEnvironmentPr: Record<string, unknown> = {};
 let mountSearch = false;
 const startDraggingMock = mock(async () => undefined);
 
@@ -138,7 +151,11 @@ mock.module("@/stores", () => ({
   ) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
   useEnvironmentStore: <T,>(
     selector?: (state: { environments: Array<{ id: string; name: string }> }) => T,
-  ) => selectState({ environments: [{ id: "environment-1", name: "feature-auth" }] }, selector),
+  ) =>
+    selectState(
+      { environments: [{ id: "environment-1", name: "feature-auth", ...selectedEnvironmentPr }] },
+      selector,
+    ),
   useConfigStore: <T,>(
     selector?: (state: { config: { global: { terminalAppearance?: undefined } } }) => T,
   ) => selectState({ config: { global: {} } }, selector),
@@ -205,6 +222,8 @@ beforeEach(() => {
   selectedProjectId = "project-1";
   selectedEnvironmentId = "environment-1";
   filesPanelOpen = false;
+  selectedEnvironmentPr = {};
+  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
   uiStore.setState({ sidebarOpen: true });
   mountSearch = false;
   startDraggingMock.mockReset();
@@ -237,6 +256,120 @@ describe("AppShell", () => {
     expect(container.firstElementChild?.classList.contains("h-full")).toBe(true);
     expect(container.firstElementChild?.classList.contains("w-full")).toBe(true);
     expect(container.firstElementChild?.classList.contains("h-dvh")).toBe(false);
+  });
+
+  test("the mobile title shimmers the selected environment while its PR is ready to merge", () => {
+    const prUrl = "https://github.com/acme/pgstack1/pull/4";
+    selectedEnvironmentPr = {
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+      environmentType: "local",
+      status: "stopped",
+    };
+    usePrMonitorStore.setState({
+      syncStatus: "current",
+      states: new Map([
+        [
+          "environment-1",
+          {
+            environmentId: "environment-1",
+            mode: "normal",
+            checkInProgress: false,
+            consecutiveErrors: 0,
+            lastCheckAt: "2026-10-28T10:00:00.000Z",
+            lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
+            prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+            checkSummary: null,
+          },
+        ],
+      ]),
+    });
+    render(<AppShell>Workspace</AppShell>);
+
+    const title = screen.getByRole("button", { name: "pgstack1 - feature-auth", hidden: true });
+    expect(title.querySelector("[data-merge-ready]")?.textContent).toBe("feature-auth");
+    // The document title stays plain text.
+    expect(document.title).toBe("pgstack1 - feature-auth");
+
+    act(() =>
+      usePrMonitorStore.setState((state) => ({
+        states: new Map(
+          [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: true }]),
+        ),
+      })),
+    );
+    // No environment refresh follows: the monitor event must immediately veto
+    // the still-clean environment snapshot on its own.
+    expect(title.querySelector("[data-merge-ready]")).toBeNull();
+    act(() =>
+      usePrMonitorStore.setState((state) => ({
+        states: new Map(
+          [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: false }]),
+        ),
+      })),
+    );
+    expect(title.querySelector("[data-merge-ready]")).toBeTruthy();
+    act(() => usePrMonitorStore.getState().setSyncStatus("stale"));
+    expect(
+      screen
+        .getByRole("button", { name: "pgstack1 - feature-auth", hidden: true })
+        .querySelector("[data-merge-ready]"),
+    ).toBeNull();
+  });
+
+  test("remote mobile titles stay plain for current clean summaries without monitor health", async () => {
+    const data = sharedIdDataset("idle");
+    Object.assign(data.environments["project-1"]![0]!, {
+      prUrl: "https://github.com/acme/repo/pull/4",
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+      environmentType: "local",
+    });
+    installDesktopFake({
+      list: connectionList([remoteConnection("leaf", "Leaf", "teal")]),
+      datasets: { leaf: data },
+    });
+    useRemoteWorkspaceStore.setState({
+      active: { nodeId: "bk_leaf", projectId: "project-1", environmentId: "env-1" },
+    });
+    try {
+      render(
+        <FederationProvider>
+          <AppShell>Workspace</AppShell>
+        </FederationProvider>,
+      );
+      await waitFor(() => expect(portalStore.getState().nodes).toHaveLength(1));
+      const node = portalStore.getState().nodes[0]!;
+      expect(node.available).toBe(true);
+      expect(node.freshness).toBe("current");
+      expect(node.environments[0]?.prState).toBe("open");
+      expect(node.environments[0]?.prHasMergeConflicts).toBe(false);
+      expect(node.environments[0]?.prMergeability).toBe("clean");
+      const title = screen.getByRole("button", { name: "app - feature", hidden: true });
+      expect(document.title).toBe("app - feature");
+      expect(title.querySelector("[data-merge-ready]")).toBeNull();
+      // A freshly hydrated clean summary is also what a failed leaf monitor
+      // or a restarted leaf can return. Neither proves a successful PR check.
+      act(() =>
+        portalStore.store.setState({
+          nodes: portalStore.getState().nodes.map((node) => ({ ...node, freshness: "stale" })),
+        }),
+      );
+      expect(
+        screen
+          .getByRole("button", { name: "app - feature", hidden: true })
+          .querySelector("[data-merge-ready]"),
+      ).toBeNull();
+    } finally {
+      cleanup();
+      uninstallDesktopFake();
+      portalStore.store.setState(INITIAL_PORTAL, true);
+    }
   });
 
   test("derives the desktop title, uses the bar presentation, and starts window dragging", () => {

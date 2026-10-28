@@ -23,3 +23,18 @@ Aggregate evidence is in `orkestrator-test-run.Xy7MuA/bridges.log.gz` below
 the host temporary directory after completion. This confirms an intermittent
 failure; its cause is not established. No bridge implementation, assertion,
 timeout, or skip was changed.
+
+## Merge-readiness review recurrence — 2026-10-28
+
+The `mergeable-pr-environment-shimmer-09258728cf65` review rerun repeated the
+same missing `turnInFlight` assertion (62.44 ms) in `mise run test`.
+No bridge source or tests changed. The complete unchanged owner passed alone
+(exit 0, 2.2 s):
+
+```sh
+mise run test:logged -- --name claude-runtime-owner -- bun test --cwd bridges/claude-bridge ./src/services/session-manager-runtime-idle.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.fjlb7l/bridges.log.gz` in the host
+temporary directory. This remains an intermittent failure with no established
+cause; no assertions, deadlines or skips were changed.

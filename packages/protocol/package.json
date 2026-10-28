@@ -109,6 +109,7 @@
     "./reconnect-backoff": "./src/reconnect-backoff.ts",
     "./plan-usage": "./src/plan-usage.ts",
     "./pr-prompt": "./src/pr-prompt.ts",
+    "./pr-merge-readiness": "./src/pr-merge-readiness.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./preview-access": "./src/preview-access.ts",
     "./testing/preview-contract-fixtures": "./src/testing/preview-contract-fixtures.ts",

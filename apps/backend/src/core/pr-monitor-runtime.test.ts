@@ -1,4 +1,5 @@
 import { expect, mock, spyOn, test } from "bun:test";
+import type { PrMonitorEffects } from "./pr-monitor.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { environmentToPrMonitorTarget } from "./commands-pr-monitor.js";
@@ -108,3 +109,53 @@ for (const initialized of [false, true]) {
     }
   });
 }
+
+test("runtime persistence maps mergeability and leaves omitted observations untouched", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const updateEnvironment = mock(
+    async (_id: string, _updates: Record<string, unknown>) => undefined,
+  );
+  const context = {
+    runtime,
+    storage: { loadEnvironments: async () => [], updateEnvironment } as unknown as StorageService,
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+  } as CommandContext;
+  try {
+    await runtime.prMonitor.sync(context);
+    // Exercise the real composition-root effect, rather than the replacement
+    // persistence callback used by the monitor service harness.
+    const { effects } = (
+      runtime.prMonitor.service as unknown as {
+        options: { effects: PrMonitorEffects };
+      }
+    ).options;
+    const reading = {
+      url: "https://github.com/o/r/pull/1",
+      state: "open" as const,
+      hasMergeConflicts: false,
+      checkSummary: null,
+      checkSummaryStatus: "skipped" as const,
+    };
+    await effects.persistPr("env-1", { ...reading, mergeability: "clean" });
+    expect(updateEnvironment).toHaveBeenLastCalledWith(
+      "env-1",
+      expect.objectContaining({
+        prUrl: reading.url,
+        prState: "open",
+        prMergeability: "clean",
+      }),
+    );
+    await effects.persistPr("env-1", { ...reading, mergeability: null });
+    expect(updateEnvironment).toHaveBeenLastCalledWith(
+      "env-1",
+      expect.objectContaining({ prMergeability: null }),
+    );
+    await effects.persistPr("env-1", reading);
+    expect(updateEnvironment.mock.calls.at(-1)?.[1]).not.toHaveProperty("prMergeability");
+  } finally {
+    runtime.shutdown();
+  }
+});

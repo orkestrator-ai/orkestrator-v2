@@ -1,6 +1,6 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { projectLandingBoardTab, type RealmGrouping } from "@/lib/federation/workspace-realm";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -66,6 +66,8 @@ import {
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
 import { EnvironmentStatusMarker } from "@/components/environments/EnvironmentStatusMarker";
 import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
+import { MergeReadyMarker, MergeReadyName } from "@/components/environments/MergeReadyName";
+import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
@@ -759,6 +761,9 @@ export function RemoteEnvironmentItem({
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
     !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
+  // Decided here from the machine's relayed PR reading (pr-merge-readiness).
+  const readyToMerge = isNodeEnvironmentReadyToMerge(environment, machine);
+  const mergeReadyDescriptionId = useId();
 
   const menuItems: EnvironmentMenuItem[] = [
     {
@@ -849,6 +854,7 @@ export function RemoteEnvironmentItem({
               onFocus={tooltip.show}
               onBlur={tooltip.hide}
               aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
+              aria-describedby={readyToMerge ? mergeReadyDescriptionId : undefined}
               aria-current={shown ? "true" : undefined}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
@@ -872,7 +878,10 @@ export function RemoteEnvironmentItem({
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate font-medium leading-4">{environment.name}</span>
+                  <MergeReadyName ready={readyToMerge} className="truncate font-medium leading-4">
+                    {environment.name}
+                  </MergeReadyName>
+                  <MergeReadyMarker ready={readyToMerge} descriptionId={mergeReadyDescriptionId} />
                   {(environment.deleting || isTransitioning || busy) && (
                     <MachineDot
                       machineName={machine.name}
@@ -932,6 +941,7 @@ export function RemoteEnvironmentItem({
         >
           <EnvironmentTooltipBody
             name={environment.name}
+            readyToMerge={readyToMerge}
             machine={{
               name: machine.name,
               colorToken: machine.colorToken,

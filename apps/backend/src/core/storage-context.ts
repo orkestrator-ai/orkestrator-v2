@@ -10,7 +10,12 @@ import {
 } from "./storage-shared.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { BACKUP_CHECK_INTERVAL_MS, takeHourlySnapshotIfDue } from "./storage-backups.js";
+import {
+  BACKUP_CHECK_INTERVAL_MS,
+  BACKUP_FIRST_CHECK_DELAY_MS,
+  removeStaleBackupTemporaries,
+  takeHourlySnapshotIfDue,
+} from "./storage-backups.js";
 import { StorageChanges } from "./storage-changes.js";
 import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
 import {
@@ -80,13 +85,30 @@ export class StorageContext {
   /** Starts the hourly snapshot check, when snapshots are on. Idempotent. */
   startSnapshots(): void {
     if (!this.snapshots || this.snapshotTimers.length > 0) return;
-    // Off the start-up path; then a cheap "is one due?" check every few minutes.
-    const check = () => void takeHourlySnapshotIfDue(this.database, this.dataDir);
-    const first = setTimeout(check, 60_000);
-    const periodic = setInterval(check, BACKUP_CHECK_INTERVAL_MS);
+    // Copies an interrupted process left behind can be as large as the database.
+    try {
+      removeStaleBackupTemporaries(this.dataDir);
+    } catch {
+      // The hourly check retries the cleanup.
+    }
+    // Off the start-up path; then a cheap "is one due?" check every few
+    // minutes. A copy can outlast the interval, so checks never overlap.
+    let running = false;
+    const check = () => {
+      if (running) return;
+      running = true;
+      void takeHourlySnapshotIfDue(this.database, this.dataDir).finally(() => {
+        running = false;
+      });
+    };
+    const first = setTimeout(() => {
+      check();
+      const periodic = setInterval(check, BACKUP_CHECK_INTERVAL_MS);
+      periodic.unref?.();
+      this.snapshotTimers.push(periodic);
+    }, BACKUP_FIRST_CHECK_DELAY_MS);
     first.unref?.();
-    periodic.unref?.();
-    this.snapshotTimers = [first, periodic];
+    this.snapshotTimers = [first];
   }
 
   /**

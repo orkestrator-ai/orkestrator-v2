@@ -846,6 +846,35 @@ export class StorageDatabase {
     }
   }
 
+  /** Estimated compact copy size, including live pages currently in the WAL. */
+  livePageBytes(): number {
+    return this.transaction(() => {
+      const pages = (this.db.query("PRAGMA page_count").get() as { page_count: number }).page_count;
+      const free = (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number })
+        .freelist_count;
+      const size = (this.db.query("PRAGMA page_size").get() as { page_size: number }).page_size;
+      return Math.max(1, pages - free) * size;
+    });
+  }
+
+  /**
+   * Returns up to `maxPages` free pages to the filesystem (with incremental
+   * auto-vacuum; a no-op otherwise) and the number of free pages left. A
+   * bounded step, so a caller freeing much space can yield between steps.
+   */
+  releaseFreePages(maxPages = INCREMENTAL_VACUUM_PAGES): number {
+    try {
+      this.db.exec(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(maxPages))})`);
+    } catch {
+      // A concurrent writer holds the lock; the next step retries.
+    }
+    const { auto_vacuum } = this.db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number };
+    // Without incremental auto-vacuum free pages are only reused, never released.
+    if (auto_vacuum !== 2) return 0;
+    return (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number })
+      .freelist_count;
+  }
+
   private loadCached(store: string, use: StorageReadEvent): CachedStore | null {
     return this.db
       .transaction(() => {
@@ -945,7 +974,9 @@ export class StorageDatabase {
    * Writes a consistent, compacted copy of the database to `file` (which must
    * not exist) without blocking other connections' writers for the copy:
    * `VACUUM INTO` reads one snapshot. Synchronous; it blocks this event loop
-   * for roughly the time it takes to copy the file.
+   * for roughly the time it takes to copy the file, so only the pre-migration
+   * snapshot (which must finish before the open does) uses it. Hourly
+   * snapshots copy in a child process (`copyDatabaseInChildProcess`).
    */
   backupTo(file: string): void {
     this.db.query("VACUUM INTO ?").run(file);

@@ -55,3 +55,36 @@ Aggregate evidence is under the host temporary directory at
 The passing runner removes its log. Host contention is a hypothesis for these
 fixture deadlines, not a confirmed shared cause with the original baseline
 fence failure. No assertion, timeout, skip or product implementation changed.
+
+
+## Storage-maintenance review fixes observation (2026-10-27–28)
+
+On `local-env-disk-fccbc2f7869f-r1`, based on `55f7adb3e`,
+`mise run test:logged -- --name default-suite -- mise run test` (two backend
+workers) timed out in `a worker that takes in newer target history is retargeted
+to where its branch now leaves it` after 7590.15 ms against its 5000 ms deadline.
+
+The complete unchanged owner did not pass alone:
+
+```sh
+mise run test:logged -- --name diff-tracking-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/diff-stats-tracking.test.ts --parallel=1 --only-failures
+```
+
+It reported 19 passed, 2 failed and 2 between-test errors across 21 tests
+(55.33 s). The runtime-isolation case exceeded a hook deadline at 13066.21 ms,
+and the newer-target-history case exceeded a hook deadline at 15199.44 ms;
+the errors involved a removed Git fixture and a Git child terminated by SIGTERM.
+This observation does not establish an aggregate-only flake. The file and its
+implementation were unchanged. Evidence is under the host temporary directory:
+`orkestrator-test-run.V5WZYj/diff-tracking-owner.log.gz` and
+`orkestrator-test-run.ppPDQr/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The completed aggregate backend group reported 12,711 passed, 25 failed and
+123 skipped across 12,859 tests in 779 files (1025.56 s). The complete default
+run exited 1 after 1132.9 s; desktop, root and Claude bridge tests added six
+failures, all in files outside the storage-maintenance fixes. The new storage
+and retention regressions and the focused change-tracking suite passed, as did
+formatting, lint and typechecking. The run does not establish that every
+aggregate failure is pre-existing. Browser, Electron, Docker and iOS scenario
+suites were outside this backend-only follow-up's scope; production-scale
+maintenance timing and packaged/cross-platform copy behavior remain unmeasured.

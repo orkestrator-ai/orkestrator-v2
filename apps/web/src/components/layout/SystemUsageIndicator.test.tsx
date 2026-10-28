@@ -215,6 +215,20 @@ describe("SystemUsageIndicator", () => {
     expect(screen.getAllByRole("img")).toHaveLength(4);
   });
 
+  test("warns when the data directory's disk is almost full", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_system_usage" ? usageSnapshot({ diskPercent: 98.4 }) : undefined,
+    );
+    render(<SystemUsageIndicator />);
+
+    const disk = await screen.findByLabelText("Disk storage usage: 98%, almost full");
+    expect(disk.dataset.nearFull).toBe("true");
+    expect(disk.getAttribute("title")).toContain("database backups are skipped");
+    expect(screen.getByLabelText("Random-access memory (RAM) usage: 48%").dataset.nearFull).toBe(
+      undefined,
+    );
+  });
+
   test("shows unavailable readings until a snapshot arrives", async () => {
     nativeInvokeMock.mockImplementation(async () => undefined);
 

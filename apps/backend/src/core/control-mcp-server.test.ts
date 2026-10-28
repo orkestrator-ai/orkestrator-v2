@@ -14,9 +14,11 @@ import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-
 import {
   COORDINATOR_CONTROL_TOOL_NAMES,
   COORDINATOR_WORKFLOW_STATUS_WAKE,
+  COORDINATOR_PR_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_WORKER_NO_PR_INSTRUCTION,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
@@ -1372,6 +1374,23 @@ describe("Orkestrator control MCP server", () => {
     expect(names).not.toContain("send_message");
   });
 
+  test.each(["main", "side"] as const)(
+    "PR instructions are gated for the %s coordinator",
+    async (role) => {
+      const descriptor = coordinatorCredential(coordinatorRoleCapabilities(role));
+      const initialized = await rpc(descriptor.url, descriptor.token, "initialize", {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1" },
+      });
+      expect(initialized.body.error).toBeUndefined();
+      const instructions =
+        (initialized.body.result as { instructions?: string })?.instructions ?? "";
+      expect(instructions.length).toBeGreaterThan(0);
+      expect(instructions.includes(COORDINATOR_PR_RULE)).toBe(role === "main");
+    },
+  );
+
   test("validates and routes an idempotent job launch into an existing environment", async () => {
     const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
     const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
@@ -1409,6 +1428,7 @@ describe("Orkestrator control MCP server", () => {
     });
     // A coordinator's prompt is framed as a delegation around the original text.
     expect(String(launch?.prompt)).toContain("Diagnose and fix the failing test suite.");
+    expect(String(launch?.prompt)).toContain(COORDINATOR_WORKER_NO_PR_INSTRUCTION);
   });
 
   test("rejects disabled agents and invalid model or reasoning selections", async () => {

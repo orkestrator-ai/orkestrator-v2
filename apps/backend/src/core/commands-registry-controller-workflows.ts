@@ -28,6 +28,7 @@ import {
   runMultiReviewSurface,
   startMultiReviewAt,
 } from "./coordinator-review-actions.js";
+import { launchWorkerPr } from "./coordinator-pr.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
 
@@ -90,6 +91,21 @@ export function registerControllerWorkflowCommands(
       if (running.get(key) === next) running.delete(key);
     }
   };
+
+  register("create_controller_pr", async (args, context) => {
+    const targetBranch = args.targetBranch;
+    if (
+      targetBranch !== undefined &&
+      (typeof targetBranch !== "string" || !targetBranch.trim() || targetBranch.length > 500)
+    )
+      throw new Error("Expected targetBranch of 1-500 characters");
+    return launchWorkerPr(context, dependencies, {
+      projectId: asNonBlankString(args.projectId, "projectId"),
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      requestId: asNonBlankString(args.requestId, "requestId"),
+      ...(typeof targetBranch === "string" ? { targetBranch: targetBranch.trim() } : {}),
+    });
+  });
 
   /** A worker environment whose first prompt is shown as the coordinator's delegation. */
   register("create_controller_environment", async (args, context) => {

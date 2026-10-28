@@ -124,6 +124,7 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       // framing and presentation are its to give, not a workspace client's.
       "create_controller_environment",
       "start_controller_build_pipeline",
+      "create_controller_pr",
       "launch_controller_multi_review",
       "controller_multi_review_surface",
       "start_controller_multi_review",

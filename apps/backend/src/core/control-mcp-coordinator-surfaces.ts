@@ -306,11 +306,18 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Raise a worker's pull request (PR tab)",
       description:
-        "The Create PR button: open the worker's PR tab, whose agent commits, pushes and opens a pull request against targetBranch (default: the repository's PR base branch). It never merges. This is how a coordinator raises a pull request: call it only after the review and its fix have finished, and only when the review did not run with auto-PR. Refused for a build pipeline's worker, whose own PR step raises it; skipped when the worker already has a pull request. Omit targetBranch to use the PR base branch.",
+        "The Create PR button: open the worker's PR tab, whose agent commits, pushes and opens a pull request against targetBranch (default: the repository's PR base branch). It never merges. This is how a coordinator raises a pull request: call it only after the review and its fix have finished, and only when the review did not run with auto-PR. Refused while the worker's build pipeline still owns publication; skipped when the worker already has a pull request. Omit targetBranch to use the owning node's PR base branch. Pass nodeId for a worker on another connected node.",
       inputSchema: z
         .object({
           requestId,
           environmentId,
+          nodeId: z
+            .string()
+            .trim()
+            .min(1)
+            .max(200)
+            .optional()
+            .describe("The worker's nodeId from list_nodes; omit for this node."),
           targetBranch: z.string().trim().min(1).max(500).optional(),
         })
         .strict(),

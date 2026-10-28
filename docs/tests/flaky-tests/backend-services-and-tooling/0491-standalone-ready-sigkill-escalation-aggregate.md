@@ -43,3 +43,19 @@ with
 `mise run test:logged -- --name merge-standalone-ready-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures`
 (exit 0, 0.7 s). This is consistent with the real-timer ordering race;
 no readiness implementation, assertion, timeout or skip changed.
+
+## Coordinator PR-tab review — 2026-10-28
+
+Preparation's `mise run test` against `5800c3a3e` observed the same line-90
+assertion at 163.47 ms: expected `["SIGTERM"]`, received `["SIGTERM",
+"SIGKILL"]`. The unchanged readiness owner passed alone with
+`mise run test:logged -- --name readiness-owner -- bun test --cwd apps/backend ./tests/standalone-ready.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+(exit 0, 0.8 s). The owner also passed 100 repetitions on detached
+`origin/main` (`cc869af0c`) with independently installed dependencies.
+
+The PR-tab branch changes neither readiness implementation nor tests. The
+original diagnostic is in `validation-04.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-7fbfbe48-2f07-4bb1-be42-3d89516efbed/`;
+focused rerun outputs are in `.orkestrator/fix-validation/readiness-owner.log`
+and `baseline-readiness.log`. Keep the case open; isolated success does not
+establish that aggregate timing is fixed.

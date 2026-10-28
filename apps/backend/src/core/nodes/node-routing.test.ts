@@ -25,3 +25,9 @@ test.each([
   ).rejects.toThrow("cannot be run on another node");
   expect(invoke).not.toHaveBeenCalled();
 });
+
+test("controller PR publication is node-link only, never workspace-grant access", () => {
+  expect(isNodeExcludedCommand("create_controller_pr")).toBe(false);
+  expect(isWorkspaceExcludedCommand("create_controller_pr")).toBe(true);
+  expect(isNodeExcludedCommand("create_coordinator_pr")).toBe(true);
+});

@@ -13,6 +13,7 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
+  COORDINATOR_WORKER_NO_PR_INSTRUCTION,
   COORDINATOR_DELEGATION_PRESENTATION,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { parseBackendId } from "@orkestrator/protocol/federation";
@@ -164,6 +165,9 @@ describe("coordinator command registry", () => {
     expect(create).toHaveBeenCalledTimes(1);
     expect(String(create.mock.calls[0]![0]!.initialPrompt)).toContain(
       COORDINATOR_DELEGATION_FRAME_OPEN,
+    );
+    expect(String(create.mock.calls[0]![0]!.initialPrompt)).toContain(
+      COORDINATOR_WORKER_NO_PR_INSTRUCTION,
     );
     expect(await storage.getEnvironment("worker-1")).toMatchObject({
       initialPromptPresentation: {

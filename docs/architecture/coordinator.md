@@ -722,9 +722,13 @@ resolve conflicts:
   [Status wakes](#status-wakes)).
 - Otherwise the coordinator calls `create_pr` (see
   [Worker surfaces](#worker-surfaces)) once it has been told the review and
-  its fix finished.
+  its fix finished. Pass `nodeId` for a worker on a connected node; that node
+  validates its project and worker and uses its own PR base branch and agent
+  defaults. Retries reuse the same PR job on that node.
 - A build pipeline, feature builds included, has its own PR step;
-  `create_pr` refuses its worker.
+  `create_pr` refuses its own worker while the pipeline can still raise the PR.
+  Forks and workers left by a removed, failed, cancelled or completed pipeline
+  can use `create_pr`.
 
 The main coordinator's context carries this as `COORDINATOR_PR_RULE`
 (`packages/protocol/src/coordinator.ts`), also in the Control MCP

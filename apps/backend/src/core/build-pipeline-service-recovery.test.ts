@@ -851,8 +851,9 @@ describe("BuildPipelineService prompt dispatch", () => {
 
       const dispatched = await snapshot(storage, staged.id);
       expect(dispatched.pendingPromptAttempt).toBeUndefined();
-      // Same request id: the bridge deduplicates, so a turn the first attempt
-      // did start is joined rather than run a second time.
+      // Same request id, re-sent only because the fake provider's complete
+      // journal answers `absent` by default: proof the first send never
+      // arrived. Other answers park or fail instead (tests below).
       expect(provider.sent.map((entry) => entry.requestId)).toEqual([requestId]);
     });
   });

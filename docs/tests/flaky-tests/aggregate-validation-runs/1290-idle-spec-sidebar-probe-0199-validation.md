@@ -1,0 +1,48 @@
+# Idle-spec sidebar probe (todo 0199) branch validation
+
+- **ID:** 1290
+- **Status:** open
+- **Date observed:** 2026-10-28
+- **Branch:** `todo-0199-idle-spec-sidebar-probe-14c5f40807ee`. The branch
+  changes only `e2e/` helpers and specs, `tests/unit/components/EnvironmentItem.test.tsx`
+  and docs. No owner below changed.
+
+## Run 1: `mise run test` on base `6a6009a09`
+
+- **Host admission:** four worktrees ran aggregates at once, with a load
+  average of 37–44. Workspace and root waited 568 s for an exclusive resource
+  held by another worktree. Bridges never ran: the 1,800-second deadline in
+  `test:logged` expired while the group was still queued.
+- **Evidence:** `orkestrator-test-run.gMsRpq/summary.json` and the group logs
+  in `orkestrator-test-run.XvMSFe/`, under the host temporary directory.
+
+| Owner | Aggregate failure | Rerun |
+| --- | --- | --- |
+| `apps/backend/src/core/storage-writer-guards.test.ts` | `name the store they write` timed out at 7,312 ms (5,000 ms budget). Earlier observations: [1003](1003-legacy-migration-0058-validation.md), [1010](1010-environment-disk-cleanup-0023-validation.md), [1247](1247-pending-rename-recovery-validation.md). | Also timed out alone, at 7,203 ms, still under load. On a clean `origin/main` (`6a6009a09`) checkout it timed out the same way (6,088 ms), so it is load, not this branch. |
+| `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | Maximal-list filtering expected one projection read and saw two (3,919 ms). Recurrence of [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). | Passed alone: `bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.commands.test.tsx src/components/federation/node-action-requests.test.tsx` (the federation owner failed in that run, see below). |
+| `apps/web/src/components/federation/node-action-requests.test.tsx` | Over-limit root-change approval timed out at 8,610 ms. | Also timed out alone, at 7,295 ms, under load. It timed out the same way on clean `origin/main` (5,905 ms). |
+
+The bridges group was then run by itself, as `test-all.ts` runs it:
+`mise run test:logged -- --name bridges-group -- bunx turbo run test:bridge --cwd . --filter=./bridges/* --concurrency=2`
+passed (143 s). An earlier bare `bun test bridges --parallel=2 --only-failures`
+also ran the slow-tier `*-live.test.ts` and `*.live.test.ts` files, which the
+default tier excludes. Its 20 failures (the ACP bridge's process reaping,
+Claude's sandbox qualification and pinned-CLI structured output, scripted
+endpoints only) are outside `mise run test` and were not investigated.
+
+## Run 2: `mise run test` after rebasing on `92f8c25a7`
+
+- **Host admission:** load average about 14. Run with
+  `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS=3600000`. Root (394 s), bridges (252 s)
+  and the codex protocol lockfile (171 s) passed. The workspace group failed
+  on one test. The groups finished in 474 s.
+- **Evidence:** `orkestrator-test-run.QxwkSu/` under the host temporary
+  directory.
+
+| Owner | Aggregate failure | Rerun |
+| --- | --- | --- |
+| `apps/backend/tests/codex-subagent-cards.test.ts` | `each child keeps one card, its transcript and status across a fresh backend and a cold restart`: the cold projection read `recovering` instead of `idle` (1,145 ms). Recurrence of [0310](../native-agents-and-transcripts/0310-codex-subagent-cards-projection-wait-timeout.md). | `mise run test:logged -- --name codex-subagent-cards-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed. A second rerun with no filter showed 1 pass, 0 fail. |
+
+No implementation, assertion, wait, timeout or skip in these owners changed.
+The aggregate stays non-green. The two timeouts reproduced alone only under
+heavy load, and identically on `origin/main`.

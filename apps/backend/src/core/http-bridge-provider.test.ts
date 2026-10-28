@@ -2073,6 +2073,34 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("never forwards a stored Codex reasoning summary, which only Codex retired", async () => {
+    const stored = { summary: "detailed", audit: true };
+    const codex = httpProvider((url) => {
+      if (url.endsWith("/session/resume")) return Response.json({ sessionId: "codex-resumed" });
+      return Response.json({ status: "processing" });
+    }, codexConnection);
+    await codex.provider.send("codex-1", "Edit it", {
+      requestId: "request-1",
+      parameterValues: stored,
+    });
+    await codex.provider.resumeSession?.("codex-1", { parameterValues: stored });
+    expect(codex.requests.map((request) => request.url)).toEqual([
+      `${codexConnection.baseUrl}/session/codex-1/prompt`,
+      `${codexConnection.baseUrl}/session/resume`,
+    ]);
+    for (const request of codex.requests) {
+      expect(JSON.parse(String(request.init.body)).parameterValues).toEqual({ audit: true });
+    }
+
+    // The same id on another platform is that platform's own parameter.
+    const cursor = httpProvider(() => Response.json({ status: "processing" }), cursorConnection);
+    await cursor.provider.send("cursor-1", "Edit it", {
+      requestId: "request-1",
+      parameterValues: stored,
+    });
+    expect(JSON.parse(String(cursor.requests[0]!.init.body)).parameterValues).toEqual(stored);
+  });
+
   function codexConfigBridge(current: Record<string, unknown>, durable = true) {
     return httpProvider((url, init) => {
       if (url.endsWith("/config") && init.method === "POST") {

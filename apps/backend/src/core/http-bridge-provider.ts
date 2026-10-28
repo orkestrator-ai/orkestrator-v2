@@ -67,6 +67,7 @@ import {
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./http-bridge-prompt-body.js";
+import { withoutRetiredParameterValues } from "./native-agent-retired-parameters.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import {
   claudeBackgroundObservation,
@@ -1167,6 +1168,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     controls?: NativeAgentControlUpdate,
     policy?: NativeAgentExecutionPolicy,
   ): Promise<string> {
+    const parameterValues = withoutRetiredParameterValues(this.agent, controls?.parameterValues);
     if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
       const response = await bridgeFetch(
         this.connection,
@@ -1179,7 +1181,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(controls?.reasoningId ? { reasoningId: controls.reasoningId } : {}),
             ...(controls?.mode ? { mode: controls.mode } : {}),
             ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
-            ...(controls?.parameterValues ? { parameterValues: controls.parameterValues } : {}),
+            ...(parameterValues ? { parameterValues } : {}),
             ...(policy ? { policy } : {}),
           }),
         },
@@ -1223,7 +1225,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(controls?.reasoningId ? { modelReasoningEffort: controls.reasoningId } : {}),
           ...(controls?.mode ? { mode: controls.mode } : {}),
           ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
-          ...(controls?.parameterValues ? { parameterValues: controls.parameterValues } : {}),
+          ...(parameterValues ? { parameterValues } : {}),
           ...(policy ? { policy } : {}),
         }),
       },

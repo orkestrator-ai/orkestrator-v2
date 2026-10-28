@@ -191,21 +191,9 @@ function normalizedCodexModels(models: readonly CodexModelCatalogEntry[]): Agent
       defaultReasoningId:
         fallbackReasoningId(reasoning, model.defaultReasoningEffort) ??
         model.defaultReasoningEffort,
-      parameters: [
-        {
-          id: "summary",
-          label: "Reasoning summary",
-          kind: "select",
-          options: [
-            { id: "auto", label: "Automatic" },
-            { id: "concise", label: "Concise" },
-            { id: "detailed", label: "Detailed" },
-            { id: "none", label: "Hidden" },
-          ],
-          defaultValue: "auto",
-          scope: "turn",
-        },
-      ],
+      // No `parameters`: the Codex bridge honours no provider-only axis.
+      // `model/list` cannot say where a reasoning summary is supported, so
+      // none is offered; adding one means a descriptor the bridge applies.
       supportsSpeed: true,
       supportsMode: true,
     };

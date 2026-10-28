@@ -32,7 +32,7 @@ export function bridgePromptBody(
     attachments,
     outputSchema: options.schema,
     readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
-    parameterValues: withoutRetiredParameterValues(options.parameterValues),
+    parameterValues: withoutRetiredParameterValues(agent, options.parameterValues),
     persistDefaults: options.persistDefaults,
     ...(options.allowProviderCommands === undefined
       ? {}

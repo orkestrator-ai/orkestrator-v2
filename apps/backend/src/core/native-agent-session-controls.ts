@@ -1,7 +1,7 @@
 /** Merge a control update consistently for picker changes and admitted dispatches. */
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
 import type { PersistedNativeAgentSession } from "./models.js";
-import { RETIRED_PERMISSION_MODE_PARAMETER } from "./native-agent-retired-parameters.js";
+import { isRetiredParameter } from "./native-agent-retired-parameters.js";
 
 export function nativeAgentSessionWithControls(
   existing: PersistedNativeAgentSession,
@@ -13,8 +13,9 @@ export function nativeAgentSessionWithControls(
   // model changes. Claude's settings-backed values are session defaults:
   // unsupported models ignore context1m, and switching back must restore
   // the value the session started with rather than losing it permanently.
-  // A `permissionMode` value predates approval modes: no descriptor offers
-  // it any more, so any control update drops it.
+  // A retired value (Claude's pre-approval-mode `permissionMode`, Codex's
+  // reasoning `summary`) has no descriptor any more, so any control update
+  // drops it.
   const retainedParameterValues = modelChanged
     ? Object.fromEntries(
         Object.entries(existing.controls?.parameterValues ?? {}).filter(
@@ -26,7 +27,7 @@ export function nativeAgentSessionWithControls(
     : Object.fromEntries(
         Object.entries(existing.controls?.parameterValues ?? {}).filter(
           ([id]) =>
-            id !== RETIRED_PERMISSION_MODE_PARAMETER &&
+            !isRetiredParameter(existing.agent, id) &&
             !(
               existing.agent === "claude" &&
               id === "ultracode" &&

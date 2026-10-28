@@ -3120,8 +3120,16 @@ describe("NativeAgentService", () => {
       ["parameter:ultracode", "parameter:audit", "parameter:variant", "parameter:summary"],
     ],
     [
+      // Codex has no suppression entry: its catalogue no longer offers a
+      // reasoning summary, so the table has nothing to hide for it.
       "codex",
-      ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:variant"],
+      [
+        "parameter:thinking",
+        "parameter:context1m",
+        "parameter:audit",
+        "parameter:variant",
+        "parameter:summary",
+      ],
     ],
     [
       "cursor",
@@ -3245,6 +3253,43 @@ describe("NativeAgentService", () => {
       );
     },
   );
+
+  test("refuses a Codex reasoning summary that no catalogue row offers", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      return [{ platform: "codex", id: "gpt-codex", label: "GPT Codex" }] as T;
+    };
+    await withService(
+      {
+        prefix: "orkestrator-native-codex-no-summary-",
+        provider: async () => stub.provider,
+        invoke,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:codex-no-summary",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(
+          projection?.composerControls.filter((control) => control.id.startsWith("parameter:")),
+        ).toEqual([]);
+        await expect(
+          service.updateProjectionControls({
+            ...identity,
+            update: { parameterValues: { summary: "auto" } },
+          }),
+        ).rejects.toThrow("Native agent parameter summary is invalid");
+      },
+    );
+  });
 
   test("renders provider terminal states as uniform durable transcript rows", async () => {
     const stub = createProviderStub("opencode", {

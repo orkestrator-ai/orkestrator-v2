@@ -1,6 +1,7 @@
 # The backend still advertises a Codex reasoning-summary parameter, hidden only by a suppression entry
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `863b5782` (2026-10-27). Code fixed on 2026-10-28
+against `main` at `31b9c972`; only a live look at a Codex tab is left.
 
 [0004-composer-model-parameters.md](0004-composer-model-parameters.md) item 1
 records the Codex `parameter:summary` suppression entry as removed, with tests
@@ -20,9 +21,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Settle the intended behaviour**: confirm from 0004 and the PR history which of the doc and the code is wrong. Status: done (both are; see below).
-2. **Remove the descriptor at its source**: stop `normalizedCodexModels` emitting `summary`. Status: open.
-3. **Remove the suppression entry and flip the tests**: once nothing produces the control. Status: open (depends on 2).
-4. **Correct 0004's record**: item 1 and its test names. Status: open.
+2. **Remove the descriptor at its source**: stop `normalizedCodexModels` emitting `summary`. Status: done (2026-10-28).
+3. **Remove the suppression entry and flip the tests**: once nothing produces the control. Status: done (2026-10-28).
+4. **Correct 0004's record**: item 1 and its test names. Status: done (2026-10-28).
 
 ### 1. Settle the intended behaviour
 
@@ -176,36 +177,134 @@ control", which does not exist on `main`, and says the backend test expects
 
 ## Current state
 
-- `normalizedCodexModels` adds a `summary` select descriptor to every Codex model
-  (`apps/backend/src/core/commands-registry-projects.ts:193-206`).
-- `SUPPRESSED_COMPOSER_PARAMETERS.codex` is `["parameter:summary"]`
-  (`packages/protocol/src/native-agent.ts:976`); the comment above it no longer
-  mentions Codex (`:959-970`).
-- The backend projection test expects Codex's controls without
-  `parameter:summary` (`native-agent-service-projection.test.ts:3114-3127`); the
-  renderer test "hides unsupported Codex summary in a %s tab" expects it hidden
-  (`AgentNativeTab.test.tsx:6295-6312`).
-- The Codex bridge reads no `parameterValues`; control updates still accept a
-  `summary` value for Codex (`native-agent-service.ts:2523-2540`).
-- PR #1260's first commit removed the entry and its second commit restored it;
-  the squash message and 0004 describe the first.
+Fixed on 2026-10-28 (code and unit tests; see Assumptions and decisions).
+
+- `normalizedCodexModels` gives Codex catalogue rows no `parameters`
+  (`apps/backend/src/core/commands-registry-projects.ts`), on both the live
+  catalogue and the coordinator's cached one, since both go through it.
+  Tests: "resolves each provider's default reasoning id from what the model
+  offers" (`commands-state-sync.test.ts`) and "returns the Codex catalogue for
+  a live coordinator conversation" (`commands-registry-coordinator.test.ts`)
+  now also assert that Codex rows have no `parameters`.
+- `SUPPRESSED_COMPOSER_PARAMETERS` has no `codex` entry
+  (`packages/protocol/src/native-agent.ts`). Claude `thinking` / `context1m`
+  and Cursor `variant` remain.
+- The backend projection test "filters only provider-specific parameter
+  controls for %s at the backend boundary" expects Codex to pass
+  `parameter:summary` through, and the renderer test "suppresses no Codex
+  parameter control in a %s tab" (`AgentNativeTab.test.tsx`) expects
+  "Reasoning summary: Automatic" to render. Both use a synthetic Codex
+  descriptor, so a re-added Codex suppression entry fails them.
+- A control update that sets `summary` on a Codex session is refused ("Native
+  agent parameter summary is invalid"), because no catalogue row offers it.
+  Test: "refuses a Codex reasoning summary that no catalogue row offers"
+  (`native-agent-service-projection.test.ts`).
+- A `summary` value an older Codex session record still holds is retired for
+  Codex only (`native-agent-retired-parameters.ts`, now keyed by platform;
+  `permissionMode` stays retired on every platform, as before). The next
+  control update drops it (`native-agent-session-controls.ts`), and prompt and
+  resume bodies never forward it (`http-bridge-prompt-body.ts`,
+  `HttpBridgeProvider.resumeSession`). A Cursor or other platform's `summary`
+  is untouched. Tests: "drops a stored retired summary value for %s only on a
+  control update" (`storage-native-agent-sessions.test.ts`) and "never
+  forwards a stored Codex reasoning summary, which only Codex retired"
+  (`http-bridge-provider.test.ts`).
+- No renderer, protocol or settings path names a Codex summary: the renderer
+  has no Codex default parameter values (`configuredParameterValues` is
+  Claude-only in `AgentNativeTab.controller.tsx`), there is no Codex summary
+  setting, and the renderer's filter reads the same table.
+- 0004 item 1, its task 1 and "Current state" now describe this.
+- `docs/architecture/agent-engines.md` records the rule.
 
 ## Outstanding work
 
 ### Code
 
-1. Remove the `summary` descriptor from `normalizedCodexModels`, and add a test
-   that Codex catalogue models carry no `summary` parameter.
-2. Remove `codex` from `SUPPRESSED_COMPOSER_PARAMETERS`.
-3. Flip the backend projection test to expect `parameter:summary` to pass
+1. ~~Remove the `summary` descriptor from `normalizedCodexModels`, and add a
+   test that Codex catalogue models carry no `summary` parameter.~~ Done
+   2026-10-28.
+2. ~~Remove `codex` from `SUPPRESSED_COMPOSER_PARAMETERS`.~~ Done 2026-10-28.
+3. ~~Flip the backend projection test to expect `parameter:summary` to pass
    through for Codex, and rename the renderer test to "suppresses no Codex
-   parameter control in a %s tab", expecting the control rendered.
-4. Correct 0004 item 1 and its "Current state" in the same change.
+   parameter control in a %s tab", expecting the control rendered.~~ Done
+   2026-10-28.
+4. ~~Correct 0004 item 1 and its "Current state" in the same change.~~ Done
+   2026-10-28.
 
 ### Qualification
 
-- None beyond the tests in Code. A Codex tab in a `dev:test` profile should
-  show no "Reasoning summary" control before and after the change.
+- Open: a Codex tab in a `dev:test` profile shows no "Reasoning summary"
+  control and no other parameter control. Not run: this change was made
+  without live runs, and the Codex catalogue on a real profile needs a signed-in
+  Codex (or a seeded catalogue cache). Unit tests cover the catalogue, the
+  projection and the renderer separately.
+- Open, optional: a profile carried over from an older build, whose Codex
+  session record holds `parameterValues.summary`, still loads, sends, and
+  loses the value on its next control change. Covered only by unit tests.
+
+## Assumptions and decisions
+
+- **Codex model shape after the change (task 2).**
+  - Options: (a) omit `parameters`; (b) emit `parameters: []`.
+  - Choice: (a).
+  - Why: no consumer distinguishes an empty list from an absent one, and the
+    OpenCode normaliser sets no `parameters` either.
+  - Pros: the composer shows exactly what Codex honours; the shape matches
+    "no provider-only axis".
+  - Cons: a future Codex axis reintroduces the field (it would need a real,
+    bridge-honoured descriptor anyway).
+- **A `summary` value already stored on a Codex session (task 2).**
+  - Options: (a) leave it: no descriptor, so it is never shown, and the
+    bridge ignores it; (b) retire it through
+    `native-agent-retired-parameters.ts`, keyed by platform; (c) a one-off
+    migration of stored session records.
+  - Choice: (b).
+  - Why: the task asks that a stored preference is handled gracefully, and
+    0004 item 3 set the precedent for `permissionMode`: a value nothing may
+    act on should not keep travelling in prompt and resume bodies. Keying by
+    platform answers the analysis's objection, since `summary` can be a live
+    parameter id elsewhere (an ACP config option or a Cursor axis).
+    `permissionMode` keeps its existing every-platform rule, so its behaviour
+    does not change.
+  - Pros: no migration; the value is never forwarded and disappears on the
+    next control change; other platforms' `summary` parameters are unaffected.
+  - Cons: a record that never gets another control update keeps the dead
+    value on disk (harmless, never sent); the projection's
+    `composer.parameterValues` still echoes it until then (nothing renders
+    it, because controls iterate descriptors).
+- **Where the stored value is filtered.**
+  - Options: (a) prompt body and control updates only, as for
+    `permissionMode`; (b) also the resume body; (c) also the projection.
+  - Choice: (b).
+  - Why: Codex's `POST /session/resume` also carried stored
+    `parameterValues`, so (a) would still forward it on every resume. The
+    projection (c) is renderer-facing only and shows no control without a
+    descriptor, so filtering it would add a third call site for no visible
+    change.
+  - Pros: no bridge request carries a retired value.
+  - Cons: Cursor, Grok and Pi resume bodies now also drop a stored
+    `permissionMode`, which their bridges never read (no behaviour change).
+- **A control update that sets `summary` on Codex.**
+  - Options: (a) refuse it, as for any parameter no descriptor offers;
+    (b) accept and drop it silently for compatibility with an older renderer.
+  - Choice: (a), which needs no code: validation already rejects a parameter
+    the selected model does not describe.
+  - Why: every renderer since #688 hid the control, so no client in 0034's
+    window can send it from the input bar.
+  - Pros: an attempt to set an inert value fails loudly.
+  - Cons: a scripted client that still sends it gets an error rather than a
+    silent no-op.
+- **Tests after the flip (task 3).** As the analysis recommended: the
+  projection and renderer tests keep a synthetic Codex `summary` descriptor
+  and expect it through, so a re-added Codex suppression entry fails them,
+  and the catalogue tests pin the source. Deleting the fixtures was rejected
+  because nothing would then prove Codex has no entry.
+- **Tasks 2 and 3 together (task 3).** One change, as recommended: there is
+  no commit where the control is visible or the entry is dead.
+- **The file stays open.** Every code item is done, but the qualification
+  line needs a live Codex tab, which this change could not run. Finished stays
+  No until that look is recorded; then the file is deleted (the rule already
+  lives in `agent-engines.md`).
 
 ## Constraints and rationale
 

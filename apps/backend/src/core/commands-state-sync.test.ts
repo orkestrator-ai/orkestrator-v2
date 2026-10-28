@@ -1127,6 +1127,11 @@ describe("native agent model catalogue command", () => {
         if (!reasoning?.length) continue;
         expect(reasoning.map((option) => option.id)).toContain(model.defaultReasoningId as string);
       }
+      // The Codex bridge honours no provider-only axis, so the catalogue
+      // offers none (no reasoning-summary picker for the composer to hide).
+      const codexModels = models.filter((model) => model.platform === "codex");
+      expect(codexModels).toHaveLength(2);
+      for (const model of codexModels) expect(model).not.toHaveProperty("parameters");
     });
   });
 

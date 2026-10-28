@@ -1539,6 +1539,33 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  // Codex's catalogue once offered a reasoning `summary` the bridge never
+  // applied. The retirement is keyed by platform: another platform's model can
+  // still offer a live parameter with the same id.
+  test.each([
+    ["codex", { audit: true }],
+    ["cursor", { summary: "auto", audit: true }],
+  ] as const)(
+    "drops a stored retired summary value for %s only on a control update",
+    async (agent, expected) => {
+      await withStorage(async (first) => {
+        await first.adoptNativeAgentSession({
+          ...input,
+          agent,
+          providerSessionId: "provider-session",
+          controls: { modelId: "model-1", parameterValues: { summary: "auto", audit: true } },
+        });
+        const updated = await first.updateNativeAgentSessionControls(
+          input.key,
+          "provider-session",
+          { fastMode: true },
+        );
+        expect(updated.controls?.parameterValues).toEqual(expected);
+        expect(updated.controls?.fastMode).toBe(true);
+      });
+    },
+  );
+
   test("rejects a replacement expectation when no mapping exists", async () => {
     await withStorage(async (first) => {
       await expect(

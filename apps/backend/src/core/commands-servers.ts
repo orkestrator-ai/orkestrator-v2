@@ -28,7 +28,7 @@ import {
 } from "@orkestrator/protocol/terminal-agent-launch";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { existsSync, promises as seedFs } from "node:fs";
-import { seedFilesDir } from "./nodes/node-files.js";
+import { seedFilesDir } from "./nodes/index.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {

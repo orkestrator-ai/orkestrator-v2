@@ -5,22 +5,27 @@ import { HumanPromptRegistry } from "./human-prompt-registry.js";
 import { UserCommandService } from "./user-commands.js";
 import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
 import { workerSessionActivity } from "./worker-session-activity.js";
-import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
-import { defaultOwnerLabel, ScheduledJobService } from "./scheduled-jobs/service.js";
+import {
+  defaultOwnerLabel,
+  ScheduledJobExecutor,
+  ScheduledJobService,
+} from "./scheduled-jobs/index.js";
 import { publicActionHandlers } from "./public-api/registry.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
-import { coordinatorNodeContext } from "./nodes/node-context.js";
-import { NodeCoordination } from "./nodes/node-coordination.js";
-import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   bridgeRemoteCoordinatorEvents,
+  coordinatorNodeContext,
+  createNodeSshFactory,
+  errorCode,
+  NodeCoordination,
   NodeCoordinatorRemote,
-} from "./nodes/node-coordinator-remote.js";
-import { NodePortal } from "./nodes/node-portal.js";
+  NodePortal,
+  NodeService,
+  type NodeServiceOptions,
+} from "./nodes/index.js";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
-import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
-import { createNodeSshFactory } from "./nodes/node-ssh.js";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
@@ -95,13 +100,13 @@ import { StorageService } from "./storage.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
-import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
-import type { TranscriptArtifactRuntime } from "./transcript-artifacts/runtime.js";
 import {
   attachTranscriptArtifactRuntime,
   createTranscriptArtifactService,
-} from "./transcript-artifacts/runtime-wiring.js";
-import type { TranscriptArtifactToolHost } from "./transcript-artifacts/tools.js";
+  type TranscriptArtifactRuntime,
+  type TranscriptArtifactService,
+  type TranscriptArtifactToolHost,
+} from "./transcript-artifacts/index.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import {
@@ -163,7 +168,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
-import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
+import { createBackendChangeTracking } from "./change-tracking/index.js";
 import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,

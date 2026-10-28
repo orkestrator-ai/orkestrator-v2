@@ -25,6 +25,10 @@ export interface TranscriptSubagentPart {
   subagentModelId?: string;
   subagentReasoningEffort?: string;
   toolState: ToolState;
+  /** When the child's current run began, from its own rollout clock. */
+  createdAt?: string;
+  /** How long that run took, once the rollout records its end. */
+  toolDurationMs?: number;
 }
 
 export interface TranscriptRecord {
@@ -651,6 +655,13 @@ export interface ChildTranscriptSummary {
   state: ToolState;
   reopenedAfterTerminal: boolean;
   /**
+   * Rollout timestamps bounding the child's current run: its first record, or
+   * the record that reopened it after a terminal outcome. `endedAt` is the
+   * record that settled that run, absent while it is still going.
+   */
+  startedAt?: string;
+  endedAt?: string;
+  /**
    * Whether the whole rollout was read. `degraded` means some records were
    * unreadable (overlong or corrupt); `unavailable` means the file could not be
    * read at all. Neither is the same as a child that has done nothing yet.
@@ -670,6 +681,8 @@ export interface ChildTranscriptFoldState {
   state: ToolState;
   sawTerminalState: boolean;
   reopenedAfterTerminal: boolean;
+  startedAt?: string;
+  endedAt?: string;
   /** Rough retained size, for the transcript cache's byte accounting. */
   approxChars: number;
 }
@@ -706,12 +719,17 @@ export function foldChildTranscriptRecord(
 ): void {
   const markPending = (): void => {
     if (fold.sawTerminalState) fold.reopenedAfterTerminal = true;
+    // A reused child starts a new run: its clock restarts from here.
+    if (fold.state !== "pending" && record.timestamp) fold.startedAt = record.timestamp;
+    fold.endedAt = undefined;
     fold.state = "pending";
   };
   const markTerminal = (terminalState: "success" | "failure"): void => {
     fold.state = terminalState;
     fold.sawTerminalState = true;
+    if (record.timestamp) fold.endedAt = record.timestamp;
   };
+  fold.startedAt ??= record.timestamp;
 
   const payload = record.payload;
   if (!payload) {
@@ -879,6 +897,8 @@ export function childTranscriptSummary(
     ...(fold.reasoningEffort ? { reasoningEffort: fold.reasoningEffort } : {}),
     state: fold.state,
     reopenedAfterTerminal: fold.reopenedAfterTerminal,
+    ...(fold.startedAt ? { startedAt: fold.startedAt } : {}),
+    ...(fold.endedAt ? { endedAt: fold.endedAt } : {}),
     readStatus,
   };
 }
@@ -930,7 +950,25 @@ function partFromChildSummary(
     ...(summary.model ? { subagentModelId: summary.model } : {}),
     ...(summary.reasoningEffort ? { subagentReasoningEffort: summary.reasoningEffort } : {}),
     toolState: summary.state,
+    ...childRunClock(summary),
     reopenedAfterTerminal: summary.reopenedAfterTerminal,
+  };
+}
+
+/**
+ * The card's clock: the run's start, and its length once settled. A stamp that
+ * is unreadable or runs backwards is left out rather than shown as zero.
+ */
+function childRunClock(
+  summary: ChildTranscriptSummary,
+): Pick<TranscriptSubagentPart, "createdAt" | "toolDurationMs"> {
+  const startedAtMs = summary.startedAt ? Date.parse(summary.startedAt) : Number.NaN;
+  if (!Number.isFinite(startedAtMs)) return {};
+  const endedAtMs = summary.endedAt ? Date.parse(summary.endedAt) : Number.NaN;
+  const settled = summary.state !== "pending" && endedAtMs >= startedAtMs;
+  return {
+    createdAt: summary.startedAt,
+    ...(settled ? { toolDurationMs: endedAtMs - startedAtMs } : {}),
   };
 }
 

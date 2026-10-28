@@ -598,6 +598,59 @@ describe("reused child thread status", () => {
   });
 });
 
+describe("child run clock", () => {
+  const at = (seconds: number) => new Date(Date.UTC(2026, 9, 28, 0, 0, seconds)).toISOString();
+  const started: TranscriptRecord = {
+    timestamp: at(0),
+    type: "session_meta",
+    payload: { agent_nickname: "Zeno" },
+  };
+  const final = (seconds: number): TranscriptRecord => ({
+    timestamp: at(seconds),
+    type: "event_msg",
+    payload: { type: "agent_message", phase: "final_answer", message: "Done" },
+  });
+
+  test("starts a running child from its first record, with no duration yet", () => {
+    const part = deriveSingleSubagent([
+      started,
+      { timestamp: at(2), type: "turn_context", payload: { turn_id: "turn-1" } },
+    ]);
+    expect(part).toMatchObject({ toolState: "pending", createdAt: at(0) });
+    expect(part).not.toHaveProperty("toolDurationMs");
+  });
+
+  test("measures a settled child from its first record to its terminal one", () => {
+    expect(deriveSingleSubagent([started, final(42)])).toMatchObject({
+      toolState: "success",
+      createdAt: at(0),
+      toolDurationMs: 42_000,
+    });
+  });
+
+  test("restarts the clock when a reused child takes a follow-up", () => {
+    const followup: TranscriptRecord = {
+      timestamp: at(60),
+      type: "event_msg",
+      payload: { type: "user_message", message: "One more thing." },
+    };
+    const working = deriveSingleSubagent([started, final(42), followup]);
+    expect(working).toMatchObject({ toolState: "pending", createdAt: at(60) });
+    expect(working).not.toHaveProperty("toolDurationMs");
+
+    expect(deriveSingleSubagent([started, final(42), followup, final(75)])).toMatchObject({
+      createdAt: at(60),
+      toolDurationMs: 15_000,
+    });
+  });
+
+  test("leaves the clock out when the rollout has no timestamps", () => {
+    const part = deriveSingleSubagent([{ ...final(1), timestamp: undefined }]);
+    expect(part).not.toHaveProperty("createdAt");
+    expect(part).not.toHaveProperty("toolDurationMs");
+  });
+});
+
 describe("parseTranscriptRecords", () => {
   test("skips invalid lines and non-object payloads", () => {
     const records = parseTranscriptRecords([
@@ -900,6 +953,8 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
       subagentPrompt: "Inspect the Codex integration",
       subagentActionCount: 1,
       toolState: "success",
+      createdAt: "2026-04-16T11:17:23.681Z",
+      toolDurationMs: 96_438,
       subagentActions: [
         {
           type: "text",

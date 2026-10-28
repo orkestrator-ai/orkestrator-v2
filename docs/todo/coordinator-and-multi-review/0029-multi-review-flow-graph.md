@@ -11,7 +11,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Pi bridge-owned MCP extension in read-only sessions**: prove with a test that the inline `orkestrator-mcp` extension still loads when `noExtensions` is set. Status: open (behaviour confirmed correct; only the test is missing).
-2. **Read-only Grok and Pi consolidation turns declare their attempt**: newly found gap; a Multi Review consolidation on Grok or Pi is read-only but sends no `workflowResultKey`, so the bridge refuses its submit tool. Status: open.
+2. **Read-only Grok and Pi consolidation turns declare their attempt**: newly found gap; a Multi Review consolidation on Grok or Pi is read-only but sends no `workflowResultKey`, so the bridge refused its submit tool. Status: done in code 2026-10-28 by [0724](0724-multi-review-consolidation-grok-pi-result-key.md); the live check rides with task 3.
 3. **Live: read-only Grok and Pi reviewers submit their report**: qualification run in a packaged review. Status: open.
 4. **Live: `report_finding` on every provider**: one reviewer per provider, plus one container run. Status: open.
 5. **Real-device zoom, pan and error tooltip**: trackpad pinch in Electron, phone pinch, Safari gesture events. Status: open.
@@ -82,7 +82,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 - **What counts as a pass?**
   - **Each reviewer calls validate then submit with its own key, the workflow consolidates, and the stored report lists that reviewer as a source (recommended).**
     - Pros: proves the whole chain, including the backend accepting the attempt.
-    - Cons: needs a consolidation agent that is not Grok or Pi until task 2 is fixed.
+    - Cons: none left from task 2, whose code is fixed (0724); the run can now also consolidate on Grok or Pi.
   - **The submit call is allowed by the bridge (seen in the bridge log).**
     - Pros: cheaper and isolates the bridge.
     - Cons: misses a backend-side rejection or a provider that submits with the wrong key.
@@ -251,7 +251,9 @@ live findings on real providers and a few gaps found on the way.
   attempt's own tools through for calls naming its key: submit, validate,
   status and `report_finding` ("Attempt tools in read-only turns" in
   [agent-engines.md](../../architecture/agent-engines.md#attempt-tools-in-read-only-turns-grok-pi)).
-  Consolidation and Fix turns on Grok or Pi do not declare their attempt yet.
+  Since 2026-10-28 every Multi Review step (preparation, consolidation, Fix)
+  and Build Pipeline consolidation declare theirs too
+  ([0724](0724-multi-review-consolidation-grok-pi-result-key.md)).
 
 ## Outstanding work
 

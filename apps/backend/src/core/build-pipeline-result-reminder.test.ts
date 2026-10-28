@@ -128,10 +128,17 @@ describe("build pipeline consolidation result reminder", () => {
             state: "prepared",
           });
           expect(consolidation.restartContinuationSent).toBeUndefined();
-          const firstRequestIds = provider.sent
-            .filter((entry) => entry.sessionId === consolidation.providerSessionId)
-            .map((entry) => entry.requestId);
+          const firstSends = provider.sent.filter(
+            (entry) => entry.sessionId === consolidation.providerSessionId,
+          );
+          const firstRequestIds = firstSends.map((entry) => entry.requestId);
           expect(firstRequestIds).toHaveLength(1);
+          // Each turn declares its own attempt, so a bridge that gates tools
+          // (Grok, Pi) lets only that attempt's result tools through.
+          expect(firstSends[0]).toMatchObject({
+            workflowResultTool: "submit_consolidated_review",
+            workflowResultKey: firstRequestIds[0],
+          });
           expect(consolidation.requestId).not.toBe(firstRequestIds[0]);
           expect(await workflowResults!.status(scope, firstRequestIds[0]!)).toMatchObject({
             lifecycle: "superseded",
@@ -142,6 +149,8 @@ describe("build pipeline consolidation result reminder", () => {
           expect(reminder).toMatchObject({
             sessionId: consolidation.providerSessionId,
             requestId: consolidation.requestId,
+            workflowResultTool: "submit_consolidated_review",
+            workflowResultKey: consolidation.requestId,
           });
           expect(reminder.prompt).toContain("has not received your consolidated report");
           expect(reminder.prompt).toContain("submit_consolidated_review");

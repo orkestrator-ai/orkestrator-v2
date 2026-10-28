@@ -59,3 +59,9 @@ original diagnostic is in `validation-04.stdout.txt` under
 focused rerun outputs are in `.orkestrator/fix-validation/readiness-owner.log`
 and `baseline-readiness.log`. Keep the case open; isolated success does not
 establish that aggregate timing is fixed.
+
+The exact original command, `mise run test`, then passed on the fixed PR-tab
+branch (exit 0; 589.3 s including host admission). Its output is in
+`.orkestrator/fix-validation/default-suite-rerun.log`. No readiness code or
+assertions changed. A full detached `origin/main` run had a separate OpenCode
+agent-tool timing failure, with no readiness failure.

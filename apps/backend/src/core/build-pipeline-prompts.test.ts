@@ -558,19 +558,21 @@ describe("build pipeline prompts", () => {
     );
   });
 
-  test("verificationPrompt permits validation outputs but forbids source edits", () => {
+  test("verificationPrompt is a quick diff review that forbids validation reruns and source edits", () => {
     const prompt = verificationPrompt(pipeline(), "Use Bun.", "release/2026.07-hotfix");
 
-    expect(prompt).toContain("origin/release/2026.07-hotfix");
-    expect(prompt).toContain("This is an acceptance judgement, not another validation pass");
+    expect(prompt).toContain("git diff origin/release/2026.07-hotfix...HEAD");
+    expect(prompt).toContain("quick acceptance review of the diff, not another validation pass");
+    expect(prompt).toContain("should take minutes");
     expect(prompt).toContain(
-      "do not redundantly rerun passing full-suite, typecheck, lint, or build commands",
+      "Do not run the test suite, typecheck, lint, build, browser or Electron tests",
     );
-    expect(prompt).toContain("Do not install dependencies in this checkout");
     expect(prompt).toContain(
-      "installing dependencies in a temporary target-branch reproduction worktree is permitted",
+      "do not check out, build or test origin/release/2026.07-hotfix or any other baseline",
     );
+    expect(prompt).toContain("the single narrowest check that settles it");
     expect(prompt).toContain("may write generated artifacts and tool caches");
+    expect(prompt).toContain("create worktrees or install dependencies");
     expect(prompt).toContain("Do not edit source files or create commits");
     expect(prompt).toContain("If relevant work is uncommitted");
     expect(prompt).toContain("commentary or update channel");
@@ -601,32 +603,27 @@ describe("build pipeline prompts", () => {
     }
   });
 
-  test("verificationPrompt requires evidence to excuse unrelated failures", () => {
+  test("verificationPrompt judges recorded failures from the diff without reproducing them", () => {
     const prompt = verificationPrompt(pipeline(), "", "release/2026.07-hotfix");
 
-    expect(prompt).toContain(
-      "Only failures unrelated to the ticket acceptance criteria may be excused",
-    );
-    expect(prompt).toContain("git diff origin/release/2026.07-hotfix...HEAD");
-    expect(prompt).toContain("temporary detached worktree outside this checkout");
-    expect(prompt).toContain("Remove the worktree before finishing");
-    expect(prompt).toContain("fails verification unless a later commit fixed it");
-    expect(prompt).toContain(
-      "establish the evidence yourself even if the address report claims it already did",
-    );
-    expect(prompt).toContain("Independently confirm any claimed environmental cause");
-    expect(prompt).toContain("pre-existing or environmental");
+    expect(prompt).toContain("do not rerun or reproduce them");
+    expect(prompt).toContain("exercises code this branch changes");
+    expect(prompt).toContain("unless the diff contains a later commit that plausibly repairs it");
+    expect(prompt).toContain("accept a claimed repair only when the diff shows it");
+    expect(prompt).toContain("do not repeat its target-branch reproductions");
+    expect(prompt).not.toContain("git worktree add");
+    expect(prompt).not.toContain("temporary detached worktree");
+    expect(prompt).not.toContain("permitted even when that command is the full test suite");
     // The guidance precedes the output contract so the JSON stays the last word.
-    expect(
-      prompt.indexOf("Only failures unrelated to the ticket acceptance criteria"),
-    ).toBeLessThan(prompt.indexOf("make the final assistant response the only JSON object"));
+    expect(prompt.indexOf("**Recorded failures**")).toBeLessThan(
+      prompt.indexOf("make the final assistant response the only JSON object"),
+    );
   });
 
-  test("verificationPrompt keeps a temporary worktree from writing back into this checkout", () => {
+  test("verificationPrompt keeps the checkout's Git-visible state unchanged", () => {
     const prompt = verificationPrompt(pipeline(), "", "main");
 
     expect(prompt).toContain("Leave this checkout's Git-visible state exactly as you found it");
-    expect(prompt).toContain("`ln -s` then creates the link inside that directory");
     expect(prompt).toContain("git status --porcelain --untracked-files=all");
     expect(prompt.indexOf("Leave this checkout's Git-visible state")).toBeLessThan(
       prompt.indexOf("make the final assistant response the only JSON object"),
@@ -654,6 +651,8 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("against commit `validated-sha`");
     expect(prompt).toContain("`.orkestrator/review/package-1.json`");
     expect(prompt).toContain("read bounded relevant ranges");
+    expect(prompt).toContain("not a plan to rerun");
+    expect(prompt).not.toContain("capture rerun output separately");
     expect(prompt).not.toContain("none is available for this round");
   });
 
@@ -786,6 +785,7 @@ describe("build pipeline prompts", () => {
             "If diagnostics are unavailable or insufficient, report that limitation",
           );
         }
+        expect(verificationPrompt(value, "", "main")).toContain("instead of rerunning the command");
       });
     }
   }
@@ -829,12 +829,9 @@ describe("build pipeline prompts", () => {
         "After repairing a failed or incomplete recorded command, rerun that exact command, even when it is the full test suite, typecheck, lint, or build",
       );
       expect(address).not.toContain("do not rerun the full test suite");
-      expect(verify).toContain(
-        "rerun the relevant failed or incomplete command on the current branch",
-      );
-      expect(verify).toContain(
-        "This is permitted even when that command is the full test suite, typecheck, lint, or build",
-      );
+      expect(verify).toContain(command);
+      expect(verify).toContain("do not rerun or reproduce them");
+      expect(verify).not.toContain("rerun the relevant failed or incomplete command");
     });
   }
 
@@ -897,7 +894,7 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("git worktree add --detach");
     expect(prompt).toContain("rather than linking this checkout's");
     expect(prompt).toContain("End with a validation report as your final message");
-    expect(prompt).toContain("independently confirms recorded-failure repairs and excuses");
+    expect(prompt).toContain("The verifier does not rerun checks");
     // The contract stays inside the system frame, before the implementation-mode rules.
     expect(prompt.indexOf("End with a validation report")).toBeLessThan(
       prompt.indexOf("This is an implementation turn"),
@@ -920,8 +917,8 @@ describe("build pipeline prompts", () => {
     const fix = fixPrompt(ticket, "", "options.test.ts hangs on both refs.", "main");
     for (const prompt of [verification, fix]) {
       expect(prompt).toContain("Repair the runner hang in options.test.ts.");
-      expect(prompt).toContain("Only failures unrelated to the ticket acceptance criteria");
     }
+    expect(fix).toContain("Only failures unrelated to the ticket acceptance criteria");
     expect(verification).toContain("Ticket acceptance criteria take precedence");
     expect(verification).toContain(
       "a requested repair remains mandatory even if the failure also occurs on origin/main",
@@ -932,11 +929,8 @@ describe("build pipeline prompts", () => {
     expect(fix).toContain("including requested repairs that also fail on origin/main");
   });
 
-  test("timeouts and silent checks require target reproduction or a demonstrated missing tool", () => {
-    for (const prompt of [
-      verificationPrompt(pipeline(), "", "release"),
-      fixPrompt(pipeline(), "", "", "release"),
-    ]) {
+  test("fix excuses timeouts and silent checks only with target reproduction or a missing tool", () => {
+    for (const prompt of [fixPrompt(pipeline(), "", "", "release")]) {
       expect(prompt).toContain(
         "A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/release or the cause is demonstrably a missing tool",
       );
@@ -947,9 +941,6 @@ describe("build pipeline prompts", () => {
         "with the target-branch reproduction or demonstrated environmental-cause evidence",
       );
     }
-    expect(verificationPrompt(pipeline(), "", "release")).toContain(
-      "Without that evidence, report complete: false",
-    );
   });
 
   test("fixPrompt carries verification feedback into a committed fix request", () => {

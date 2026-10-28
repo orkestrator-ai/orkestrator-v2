@@ -1,6 +1,7 @@
 import { initialContainerHostReachability } from "@orkestrator/protocol/container-host-reachability";
 import { createSharedContainerLogReader } from "./container-log-snapshots.js";
 import { detectDockerTopology, getImageStatus } from "./docker-image.js";
+import { ensureEnvironmentImage } from "./host-maintenance-tasks.js";
 import {
   classify,
   loadProtection,
@@ -207,6 +208,7 @@ export function registerDockerCommands(
       if (!environment) throw new Error(`Environment not found: ${id}`);
       assertEnvironmentDeletionNotRequested(environment, environment.id);
       if (environment.containerId) return environment.containerId;
+      await ensureEnvironmentImage(context);
       const outcome = await runContainerOperation(context, id, "create", identity, async (op) => {
         const runtimeGeneration = nextRuntimeGeneration(environment);
         const image = await resolveOperationImage(context);

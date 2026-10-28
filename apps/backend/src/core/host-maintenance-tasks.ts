@@ -6,8 +6,13 @@ import { ensurePinnedToolchains, type ToolchainProgress } from "@orkestrator/too
 import { installPinnedToolchains, planToolchainInstall } from "@orkestrator/toolchain/install";
 import { isHostVersion, type HostReleasePins } from "@orkestrator/protocol/host-maintenance";
 import type { CommandContext } from "./commands-context.js";
-import { APP_VERSION } from "./constants.js";
-import { configuredImageRef, getImageStatus, resetImageManifestCache } from "./docker-image.js";
+import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
+import {
+  configuredImageRef,
+  getImageStatus,
+  resetImageManifestCache,
+  resolveDockerImage,
+} from "./docker-image.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { HostMaintenanceError, type HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, releaseImageReference } from "./host-maintenance-readers.js";
@@ -39,20 +44,28 @@ function serviceOf(context: CommandContext): HostMaintenanceService {
   return context.hostMaintenance;
 }
 
-/** Runs `work` as task `kind` in the background; returns the recorded task. */
-function background(
+/**
+ * Runs `work` as task `kind` in the background; returns the recorded task and
+ * its outcome. The outcome already has handlers, so awaiting it is optional.
+ */
+function runInBackground(
   service: HostMaintenanceService,
   kind: Parameters<HostMaintenanceService["startTask"]>[0],
   stage: string,
   work: (setStage: (stage: string) => void) => Promise<Record<string, unknown>>,
 ) {
   const task = service.startTask(kind, stage);
-  void work((next) => service.updateTask(task.id, { stage: next }))
-    .then((result) => service.updateTask(task.id, { state: "succeeded", result }))
-    .catch((error: unknown) =>
-      service.updateTask(task.id, { state: "failed", error: message(error) }),
-    );
-  return task;
+  const outcome = work((next) => service.updateTask(task.id, { stage: next }));
+  void outcome.then(
+    (result) => service.updateTask(task.id, { state: "succeeded", result }),
+    (error: unknown) => service.updateTask(task.id, { state: "failed", error: message(error) }),
+  );
+  return { task, outcome };
+}
+
+/** Runs `work` as task `kind` in the background; returns the recorded task. */
+function background(...args: Parameters<typeof runInBackground>) {
+  return runInBackground(...args).task;
 }
 
 /** Bounded HTTPS download from GitHub's release hosts. */
@@ -149,30 +162,85 @@ export function startImageUpdate(
   const service = serviceOf(context);
   const reference = releaseImageReference();
   const target = configuredImageRef(context);
-  return background(service, "image-update", `Pulling ${reference}`, async (stage) => {
-    await dependencies.run("docker", ["pull", reference], { timeoutMs: 45 * 60 * 1000 });
-    stage("Checking the image");
-    const status = await dependencies.status({ ...context, dockerImage: reference });
-    if (status.state !== "compatible") {
-      throw new Error(
-        `${reference} is not usable by this backend (${status.state})${
-          status.missingCapabilities.length
-            ? `: missing ${status.missingCapabilities.join(", ")}`
-            : ""
-        }`,
-      );
+  const { task, outcome } = runInBackground(
+    service,
+    "image-update",
+    `Downloading ${reference}`,
+    async (stage) => {
+      await dependencies.run("docker", ["pull", reference], { timeoutMs: 45 * 60 * 1000 });
+      stage("Checking the image");
+      const status = await dependencies.status({ ...context, dockerImage: reference });
+      if (status.state !== "compatible") {
+        throw new Error(
+          `${reference} is not usable by this backend (${status.state})${
+            status.missingCapabilities.length
+              ? `: missing ${status.missingCapabilities.join(", ")}`
+              : ""
+          }`,
+        );
+      }
+      stage(`Tagging it as ${target}`);
+      await dependencies.run("docker", ["tag", reference, target], { timeoutMs: 60_000 });
+      dependencies.reset();
+      const image = await dependencies.read(context);
+      return {
+        imageId: status.imageId,
+        reference,
+        tag: target,
+        outdatedEnvironments: image?.outdatedEnvironments ?? [],
+      };
+    },
+  );
+  imageUpdateInFlight = outcome;
+  const settle = () => {
+    if (imageUpdateInFlight === outcome) imageUpdateInFlight = null;
+  };
+  void outcome.then(settle, settle);
+  return task;
+}
+
+/**
+ * The image update this process is running. Process-wide on purpose, like the
+ * manifest cache: the image belongs to the Docker daemon, not to one backend.
+ */
+let imageUpdateInFlight: Promise<Record<string, unknown>> | null = null;
+
+/**
+ * Downloads the release image when the default environment image is missing,
+ * so a new or reset Docker engine needs no manual build before the first
+ * container. Joins an image update already running rather than starting a
+ * second one. A custom image (`--docker-image`) is the operator's to provide
+ * and is never pulled.
+ *
+ * Call it before taking a container admission slot: the download can take
+ * minutes and must not hold up starts that do not need it.
+ */
+export async function ensureEnvironmentImage(
+  context: CommandContext,
+  dependencies = { resolve: resolveDockerImage, start: startImageUpdate },
+): Promise<void> {
+  const imageRef = configuredImageRef(context);
+  if (imageRef !== DOCKER_IMAGE || !context.hostMaintenance) return;
+  if ((await dependencies.resolve(imageRef)).kind !== "missing") return;
+  if (!imageUpdateInFlight) {
+    try {
+      dependencies.start(context);
+    } catch (error) {
+      // Busy without an in-flight promise means another process's task; the
+      // create then reports the missing image as before.
+      if (!(error instanceof HostMaintenanceError)) throw error;
     }
-    stage(`Tagging it as ${target}`);
-    await dependencies.run("docker", ["tag", reference, target], { timeoutMs: 60_000 });
-    dependencies.reset();
-    const image = await dependencies.read(context);
-    return {
-      imageId: status.imageId,
-      reference,
-      tag: target,
-      outdatedEnvironments: image?.outdatedEnvironments ?? [],
-    };
-  });
+  }
+  const download = imageUpdateInFlight;
+  if (!download) return;
+  try {
+    await download;
+  } catch (error) {
+    // Keeps "No such image" so the lifecycle error is classified as an image problem.
+    throw new Error(
+      `No such image: ${imageRef}. Downloading ${releaseImageReference()} failed: ${message(error)}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

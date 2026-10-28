@@ -8,6 +8,7 @@ import { gitHubCli, setManagedGitHubCli } from "./github-cli-binary.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import {
   applyGhChannel,
+  ensureEnvironmentImage,
   fetchReleasePins,
   installedLatestGh,
   startGhUpdate,
@@ -204,6 +205,87 @@ test.each(["compatible", "incompatible", "pull-failure", "tag-failure"])(
     }
   },
 );
+
+describe("ensureEnvironmentImage", () => {
+  const compatible = {
+    state: "compatible" as const,
+    imageRef: "release",
+    imageId: "sha256:new",
+    registryDigest: null,
+    architecture: null,
+    manifest: null,
+    missingCapabilities: [],
+    remediation: null,
+  };
+
+  /** An image update whose `docker pull` waits for `release()`. */
+  function gatedDownload(fail = false) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[][] = [];
+    const start = mock((target: CommandContext) =>
+      startImageUpdate(target, {
+        run: async (_file, args = []) => {
+          calls.push(args);
+          if (args[0] === "pull") {
+            await gate;
+            if (fail) throw new Error("dial tcp: no route to host");
+          }
+          return { stdout: "", stderr: "" };
+        },
+        status: async () => compatible,
+        read: async () => null,
+        reset: () => undefined,
+      }),
+    );
+    return { start, calls, release };
+  }
+
+  test("downloads a missing default image once for concurrent creates", async () => {
+    const { start, calls, release } = gatedDownload();
+    const resolve = mock(async (imageRef: string) => ({ kind: "missing" as const, imageRef }));
+    const first = ensureEnvironmentImage(context(), { resolve, start });
+    const second = ensureEnvironmentImage(context(), { resolve, start });
+    await until(() => calls.length === 1);
+    release();
+    await Promise.all([first, second]);
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(calls.map((args) => args[0])).toEqual(["pull", "tag"]);
+    expect(calls[1]?.[2]).toBe("orkestrator-v2:latest");
+  });
+
+  test("a failed download reports the image as missing", async () => {
+    const { start, release } = gatedDownload(true);
+    const pending = ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+      start,
+    });
+    release();
+    await expect(pending).rejects.toThrow(/^No such image: orkestrator-v2:latest\..*no route/);
+  });
+
+  test("leaves a present image and a custom image alone", async () => {
+    const { start } = gatedDownload();
+    await ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({
+        kind: "present",
+        imageRef,
+        imageId: "sha256:old",
+        registryDigest: null,
+        architecture: null,
+      }),
+      start,
+    });
+    const resolve = mock(async (imageRef: string) => ({ kind: "missing" as const, imageRef }));
+    await ensureEnvironmentImage({ ...context(), dockerImage: "custom:dev" }, { resolve, start });
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+});
 
 test.each([false, true])(
   "desktop toolchain repair preserves activation and reports restartRequired=%s",

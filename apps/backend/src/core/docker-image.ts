@@ -232,7 +232,7 @@ export async function cleanupStaleManifestProbes(
 
 const REMEDIATION = {
   missing:
-    "The environment image is not installed. Build it with `mise run docker:build` or pull the release image.",
+    "Docker is running, but the environment image has not been downloaded yet. It downloads automatically when you create a container environment, or download it now.",
   legacy:
     "The environment image predates image manifests. Existing environments keep working; rebuild or pull a current image for new features.",
   incompatible:

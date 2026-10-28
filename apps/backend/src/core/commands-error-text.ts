@@ -33,7 +33,8 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   setupScript: "Environment setup script failed.",
   timedOut: "Environment start timed out. Check the container runtime and retry.",
   runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
-  imageUnavailable: "The environment image is unavailable. Rebuild it and retry.",
+  imageUnavailable:
+    "The environment image could not be downloaded. Check your network connection, or build it with `mise run docker:build`, and retry.",
   diskFull: "The host has run out of disk space. Free space and retry.",
   initializationFailed:
     "The container did not finish initializing. Check the container logs, then retry.",
